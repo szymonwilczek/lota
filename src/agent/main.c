@@ -28,6 +28,7 @@
 #include "../../include/lota.h"
 #include "bpf_loader.h"
 #include "iommu.h"
+#include "quote.h"
 #include "tpm.h"
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
@@ -220,6 +221,54 @@ static int test_tpm(void) {
             strerror(-ret));
   } else {
     print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
+  }
+
+  /* AIK provisioning test */
+  printf("\n=== AIK Provisioning Test ===\n\n");
+
+  printf("Checking/provisioning AIK at handle 0x%08X...\n", TPM_AIK_HANDLE);
+  ret = tpm_provision_aik(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "AIK provisioning failed: %s\n", strerror(-ret));
+    fprintf(stderr, "Note: May require owner hierarchy authorization\n");
+  } else {
+    printf("AIK ready\n");
+  }
+
+  /* TPM Quote test */
+  printf("\n=== TPM Quote Test ===\n\n");
+
+  if (ret == 0) {
+    struct tpm_quote_response quote_resp;
+    uint8_t test_nonce[LOTA_NONCE_SIZE];
+    uint32_t quote_pcr_mask;
+
+    /* Generate random nonce (TODO: from server) */
+    printf("Generating test nonce...\n");
+    for (size_t j = 0; j < LOTA_NONCE_SIZE; j++) {
+      test_nonce[j] = (uint8_t)(rand() & 0xFF);
+    }
+    print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
+
+    /* quote pcrs: 0,1,14 */
+    quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
+    printf("\nRequesting quote for PCRs 0, 1, %d...\n", LOTA_PCR_SELF);
+
+    ret = tpm_quote(&g_tpm_ctx, test_nonce, quote_pcr_mask, &quote_resp);
+    if (ret < 0) {
+      fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
+    } else {
+      printf("Quote generated successfully!\n\n");
+      printf("Attestation data size: %u bytes\n", quote_resp.attest_size);
+      printf("Signature algorithm: 0x%04X\n", quote_resp.sig_alg);
+      printf("Signature size: %u bytes\n", quote_resp.signature_size);
+      print_hex("Signature", quote_resp.signature, quote_resp.signature_size);
+      printf("\nPCR values in quote:\n");
+      print_hex("  PCR 0", quote_resp.pcr_values[0], LOTA_HASH_SIZE);
+      print_hex("  PCR 1", quote_resp.pcr_values[1], LOTA_HASH_SIZE);
+      print_hex("  PCR 14", quote_resp.pcr_values[LOTA_PCR_SELF],
+                LOTA_HASH_SIZE);
+    }
   }
 
   tpm_cleanup(&g_tpm_ctx);

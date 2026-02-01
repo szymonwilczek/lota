@@ -16,14 +16,19 @@
 
 #include "../../include/lota.h"
 
+struct tpm_quote_response;
+
 #define TPM_DEVICE_PATH "/dev/tpmrm0"
 
 /* * TODO: Implement dynamic AIK provisioning.
  * Currently using a hardcoded persistent handle for PoC purposes.
  * In the near future, this will be loaded via Tss2_Sys_Context or
  * retrieved from a trusted Key Broker Service, I'll explore it.
+ *
+ * Handle 0x81010002 chosen to avoid conflicts with existing keys
+ * (Windows Hello, BitLocker, something more; at 0x81010001).
  */
-#define TPM_AIK_HANDLE 0x81010001
+#define TPM_AIK_HANDLE 0x81010002
 
 /* Hash algorithm for PCR bank */
 #define TPM_HASH_ALG TPM2_ALG_SHA256
@@ -36,16 +41,6 @@ struct tpm_context {
   ESYS_CONTEXT *esys_ctx;
   TSS2_TCTI_CONTEXT *tcti_ctx;
   bool initialized;
-};
-
-/*
- * TPM Quote result - contains signed PCR values
- */
-struct tpm_quote_result {
-  uint8_t pcr_digest[LOTA_HASH_SIZE];   /* Hash of selected PCRs */
-  uint8_t signature[LOTA_MAX_SIG_SIZE]; /* TPM signature */
-  uint16_t signature_size;
-  uint8_t nonce[LOTA_NONCE_SIZE]; /* Echoed nonce from server */
 };
 
 /*
@@ -93,15 +88,40 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
  * @ctx: Initialized TPM context
  * @nonce: Server-provided nonce (LOTA_NONCE_SIZE bytes)
  * @pcr_mask: Bitmask of PCRs to include in quote
- * @result: Output quote result
+ * @response: Output quote response (see quote.h)
  *
  * Uses AIK at TPM_AIK_HANDLE to sign the quote.
- * The signature covers: PCR digest + nonce + clock info.
+ * AIK must be provisioned first via tpm_provision_aik().
  *
- * Returns: 0 on success, negative errno on failure
+ * Response contains:
+ *   - Raw TPMS_ATTEST data (signed by TPM)
+ *   - Signature over the attestation
+ *   - PCR values at time of quote
+ *
+ * Returns: 0 on success, -ENOKEY if AIK not provisioned, negative errno on
+ * failure
  */
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
-              struct tpm_quote_result *result);
+              struct tpm_quote_response *response);
+
+/*
+ * tpm_provision_aik - Create and persist Attestation Identity Key
+ * @ctx: Initialized TPM context
+ *
+ * Creates RSA 2048-bit restricted signing key under Endorsement Hierarchy
+ * and persists it at TPM_AIK_HANDLE (0x81010001).
+ *
+ * Properties:
+ *   - Restricted: Can only sign TPM-generated data (quotes/certify)
+ *   - Non-duplicable: Bound to this specific TPM
+ *   - RSASSA with SHA-256
+ *
+ * If AIK already exists at the handle, returns success without modification.
+ * Requires owner hierarchy authorization (empty password assumed).
+ *
+ * Returns: 0 on success (or already exists), negative errno on failure
+ */
+int tpm_provision_aik(struct tpm_context *ctx);
 
 /*
  * tpm_hash_file - Calculate SHA-256 hash of a file

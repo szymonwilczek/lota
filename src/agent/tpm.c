@@ -16,9 +16,11 @@
 #include <openssl/evp.h>
 
 #include <tss2/tss2_esys.h>
+#include <tss2/tss2_mu.h>
 #include <tss2/tss2_tcti.h>
 #include <tss2/tss2_tcti_device.h>
 
+#include "quote.h"
 #include "tpm.h"
 
 /* Read buffer size for file hashing */
@@ -195,9 +197,135 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
   return 0;
 }
 
-int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
-              struct tpm_quote_result *result) {
+/*
+ * Check if AIK exists at persistent handle.
+ * Returns: 1 if exists, 0 if not, negative errno on error
+ */
+static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
   TSS2_RC rc;
+  ESYS_TR key_handle = ESYS_TR_NONE;
+
+  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_AIK_HANDLE, ESYS_TR_NONE,
+                             ESYS_TR_NONE, ESYS_TR_NONE, &key_handle);
+  if (rc == TSS2_RC_SUCCESS) {
+    if (handle_out)
+      *handle_out = key_handle;
+    return 1;
+  }
+
+  /* TPM2_RC_HANDLE means object doesnt exist! */
+  if ((rc & 0xFF) == TPM2_RC_HANDLE)
+    return 0;
+
+  return tss2_rc_to_errno(rc);
+}
+
+int tpm_provision_aik(struct tpm_context *ctx) {
+  TSS2_RC rc;
+  int ret;
+  ESYS_TR primary_handle = ESYS_TR_NONE;
+  ESYS_TR persistent_handle = ESYS_TR_NONE;
+  TPM2B_PUBLIC *out_public = NULL;
+  TPM2B_CREATION_DATA *creation_data = NULL;
+  TPM2B_DIGEST *creation_hash = NULL;
+  TPMT_TK_CREATION *creation_ticket = NULL;
+
+  /*
+   * RSA 2048-bit signing key template for attestation.
+   *
+   * Properties overview:
+   *   - fixedTPM: Key cannot be duplicated
+   *   - fixedParent: Cannot be moved to different parent
+   *   - sensitiveDataOrigin: TPM generated the private portion
+   *   - userWithAuth: Requires auth for use
+   *   - restricted: Can only sign TPM-generated data (quotes)
+   *   - sign: Signing key (not encryption)
+   */
+  TPM2B_PUBLIC in_public = {
+      .size = 0,
+      .publicArea =
+          {
+              .type = TPM2_ALG_RSA,
+              .nameAlg = TPM2_ALG_SHA256,
+              .objectAttributes =
+                  (TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+                   TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
+                   TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_SIGN_ENCRYPT),
+              .authPolicy = {.size = 0},
+              .parameters.rsaDetail =
+                  {
+                      .symmetric = {.algorithm = TPM2_ALG_NULL},
+                      .scheme =
+                          {
+                              .scheme = TPM2_ALG_RSASSA,
+                              .details.rsassa.hashAlg = TPM2_ALG_SHA256,
+                          },
+                      .keyBits = 2048,
+                      .exponent = 0, /* default: 65537 */
+                  },
+              .unique.rsa = {.size = 0},
+          },
+  };
+
+  TPM2B_SENSITIVE_CREATE in_sensitive = {
+      .size = 0,
+      .sensitive =
+          {
+              .userAuth = {.size = 0}, /* empty auth */
+              .data = {.size = 0},
+          },
+  };
+
+  TPM2B_DATA outside_info = {.size = 0};
+  TPML_PCR_SELECTION creation_pcr = {.count = 0};
+
+  if (!ctx || !ctx->initialized)
+    return -EINVAL;
+
+  ret = aik_exists(ctx, NULL);
+  if (ret < 0)
+    return ret;
+  if (ret == 1) {
+    return 0;
+  }
+
+  /*
+   * Create primary key under Owner Hierarchy.
+   * Owner hierarchy allows unrestricted use of signing keys.
+   */
+  rc = Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
+                          ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
+                          &outside_info, &creation_pcr, &primary_handle,
+                          &out_public, &creation_data, &creation_hash,
+                          &creation_ticket);
+  if (rc != TSS2_RC_SUCCESS) {
+    return tss2_rc_to_errno(rc);
+  }
+
+  /*
+   * Make key persistent at TPM_AIK_HANDLE.
+   * Persistent keys survive TPM reset and power cycles.
+   */
+  rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, primary_handle,
+                         ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                         TPM_AIK_HANDLE, &persistent_handle);
+
+  Esys_FlushContext(ctx->esys_ctx, primary_handle);
+  Esys_Free(out_public);
+  Esys_Free(creation_data);
+  Esys_Free(creation_hash);
+  Esys_Free(creation_ticket);
+
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  return 0;
+}
+
+int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
+              struct tpm_quote_response *response) {
+  TSS2_RC rc;
+  int ret;
   ESYS_TR key_handle = ESYS_TR_NONE;
   TPM2B_DATA qualifying_data;
   TPMT_SIG_SCHEME in_scheme;
@@ -206,26 +334,42 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   TPMT_SIGNATURE *signature = NULL;
   uint32_t i;
 
-  if (!ctx || !ctx->initialized || !nonce || !result)
+  if (!ctx || !ctx->initialized || !nonce || !response)
     return -EINVAL;
 
-  memset(result, 0, sizeof(*result));
+  memset(response, 0, sizeof(*response));
+
+  ret = aik_exists(ctx, &key_handle);
+  if (ret < 0)
+    return ret;
+  if (ret == 0)
+    return -ENOKEY;
 
   /*
-   * Load the AIK (Attestation Identity Key) handle.
-   * In production, this key would be provisioned and stored
-   * in TPM NV or as a persistent handle.
+   * Set empty auth value for the AIK.
+   * LOTA AIK was created with empty userAuth.
    */
-  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_AIK_HANDLE, ESYS_TR_NONE,
-                             ESYS_TR_NONE, ESYS_TR_NONE, &key_handle);
-  if (rc != TSS2_RC_SUCCESS) {
-    return tss2_rc_to_errno(rc);
+  {
+    TPM2B_AUTH auth_value = {.size = 0};
+    rc = Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value);
+    if (rc != TSS2_RC_SUCCESS)
+      return tss2_rc_to_errno(rc);
   }
 
+  memcpy(response->nonce, nonce, LOTA_NONCE_SIZE);
+  response->pcr_mask = pcr_mask;
+  response->hash_alg = TPM_HASH_ALG;
+
+  /* current PCR values */
+  ret = tpm_read_pcrs_batch(ctx, pcr_mask, response->pcr_values);
+  if (ret < 0)
+    return ret;
+
+  /* qualifying data (nonce) */
   qualifying_data.size = LOTA_NONCE_SIZE;
   memcpy(qualifying_data.buffer, nonce, LOTA_NONCE_SIZE);
 
-  /* default signing scheme (RSASSA for RSA keys) */
+  /* TPM choose signing scheme based on key */
   in_scheme.scheme = TPM2_ALG_NULL;
 
   /* PCR selection from mask */
@@ -242,34 +386,43 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 
   /*
    * Generate Quote.
-   * TPM signs: PCR digest + qualifying data + clock info
+   * TPM signs: TPMS_ATTEST containing:
+   *   - magic (TPM_GENERATED)
+   *   - type (TPM_ST_ATTEST_QUOTE)
+   *   - qualifiedSigner (AIK name)
+   *   - extraData (nonce)
+   *   - clockInfo
+   *   - firmwareVersion
+   *   - quote (PCR selection + digest)
    */
   rc = Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
                   ESYS_TR_NONE, &qualifying_data, &in_scheme, &pcr_selection,
                   &quoted, &signature);
-
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
 
-  /* copy results */
-  memcpy(result->nonce, nonce, LOTA_NONCE_SIZE);
+  /* raw attestation data */
+  if (quoted->size <= LOTA_MAX_ATTEST_SIZE) {
+    memcpy(response->attest_data, quoted->attestationData, quoted->size);
+    response->attest_size = quoted->size;
+  }
 
-  /*
-   * Extract signature based on algorithm.
-   * LOTA support RSA signatures (RSASSA).
-   */
+  response->sig_alg = signature->sigAlg;
+
   if (signature->sigAlg == TPM2_ALG_RSASSA) {
     size_t sig_size = signature->signature.rsassa.sig.size;
     if (sig_size > LOTA_MAX_SIG_SIZE)
       sig_size = LOTA_MAX_SIG_SIZE;
-    memcpy(result->signature, signature->signature.rsassa.sig.buffer, sig_size);
-    result->signature_size = (uint16_t)sig_size;
+    memcpy(response->signature, signature->signature.rsassa.sig.buffer,
+           sig_size);
+    response->signature_size = (uint16_t)sig_size;
   } else if (signature->sigAlg == TPM2_ALG_RSAPSS) {
     size_t sig_size = signature->signature.rsapss.sig.size;
     if (sig_size > LOTA_MAX_SIG_SIZE)
       sig_size = LOTA_MAX_SIG_SIZE;
-    memcpy(result->signature, signature->signature.rsapss.sig.buffer, sig_size);
-    result->signature_size = (uint16_t)sig_size;
+    memcpy(response->signature, signature->signature.rsapss.sig.buffer,
+           sig_size);
+    response->signature_size = (uint16_t)sig_size;
   }
 
   Esys_Free(quoted);
