@@ -357,3 +357,47 @@ int tpm_get_current_kernel_path(char *buf, size_t buf_len) {
 
   return 0;
 }
+
+int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
+                   const uint8_t *digest) {
+  TSS2_RC rc;
+  ESYS_TR pcr_handle;
+  TPML_DIGEST_VALUES digests;
+
+  if (!ctx || !ctx->initialized || !digest)
+    return -EINVAL;
+
+  if (pcr_index >= LOTA_PCR_COUNT)
+    return -EINVAL;
+
+  /*
+   * PCR handles in ESAPI are predefined constants.
+   * ESYS_TR_PCR0 through ESYS_TR_PCR31 map directly to PCR indices.
+   */
+  pcr_handle = ESYS_TR_PCR0 + pcr_index;
+
+  /*
+   * Prepare digest structure.
+   * Extend with SHA-256 only (matching PCR bank).
+   */
+  memset(&digests, 0, sizeof(digests));
+  digests.count = 1;
+  digests.digests[0].hashAlg = TPM_HASH_ALG;
+  memcpy(digests.digests[0].digest.sha256, digest, LOTA_HASH_SIZE);
+
+  /*
+   * PCR_Extend operation.
+   * This cryptographically extends the PCR:
+   *   new_value = Hash(old_value || digest)
+   *
+   * PCRs 0-15 are typically locked after boot (platform auth).
+   * PCRs 16-23 are available for OS/application use.
+   * PCR 14 for LOTA self-measurement.
+   */
+  rc = Esys_PCR_Extend(ctx->esys_ctx, pcr_handle, ESYS_TR_PASSWORD,
+                       ESYS_TR_NONE, ESYS_TR_NONE, &digests);
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  return 0;
+}

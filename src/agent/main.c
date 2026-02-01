@@ -32,6 +32,9 @@
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 
+/* PCR index for LOTA agent self-measurement */
+#define LOTA_PCR_SELF 14
+
 /* Global state */
 static volatile sig_atomic_t g_running = 1;
 static struct tpm_context g_tpm_ctx;
@@ -59,6 +62,52 @@ static void print_hex(const char *label, const uint8_t *data, size_t len) {
 }
 
 /*
+ * Self-measurement: hash own binary and extend into PCR 14.
+ * This provides tamper evidence - if agent is modified, attestation fails.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+static int self_measure(struct tpm_context *ctx) {
+  char exe_path[LOTA_MAX_PATH_LEN];
+  uint8_t self_hash[LOTA_HASH_SIZE];
+  ssize_t len;
+  int ret;
+
+  if (!ctx || !ctx->initialized)
+    return -EINVAL;
+
+  /*
+   * Get path to own executable via /proc/self/exe.
+   * This symlink points to the actual binary on disk.
+   */
+  len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len < 0) {
+    return -errno;
+  }
+  exe_path[len] = '\0';
+
+  /*
+   * Hash the binary using SHA-256.
+   * This captures the complete executable state.
+   */
+  ret = tpm_hash_file(exe_path, self_hash);
+  if (ret < 0) {
+    return ret;
+  }
+
+  /*
+   * Extend hash into PCR 14.
+   * PCR 14 is in the range (8-15) typically reserved for OS use.
+   */
+  ret = tpm_pcr_extend(ctx, LOTA_PCR_SELF, self_hash);
+  if (ret < 0) {
+    return ret;
+  }
+
+  return 0;
+}
+
+/*
  * Test TPM operations
  */
 static int test_tpm(void) {
@@ -66,6 +115,9 @@ static int test_tpm(void) {
   uint8_t pcr_value[LOTA_HASH_SIZE];
   uint8_t kernel_hash[LOTA_HASH_SIZE];
   char kernel_path[256];
+  char exe_path[LOTA_MAX_PATH_LEN];
+  uint8_t self_hash[LOTA_HASH_SIZE];
+  ssize_t len;
 
   printf("=== TPM Test ===\n\n");
 
@@ -124,6 +176,50 @@ static int test_tpm(void) {
     } else {
       print_hex("Kernel SHA-256", kernel_hash, LOTA_HASH_SIZE);
     }
+  }
+
+  /* self-measurement test */
+  printf("\n=== Self-Measurement Test ===\n\n");
+
+  len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len < 0) {
+    fprintf(stderr, "Failed to read /proc/self/exe: %s\n", strerror(errno));
+  } else {
+    exe_path[len] = '\0';
+    printf("Agent binary: %s\n", exe_path);
+
+    ret = tpm_hash_file(exe_path, self_hash);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to hash agent: %s\n", strerror(-ret));
+    } else {
+      print_hex("Agent SHA-256", self_hash, LOTA_HASH_SIZE);
+    }
+  }
+
+  printf("\nReading PCR %d before extend...\n", LOTA_PCR_SELF);
+  ret = tpm_read_pcr(&g_tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
+            strerror(-ret));
+  } else {
+    print_hex("PCR 14 (before)", pcr_value, LOTA_HASH_SIZE);
+  }
+
+  printf("\nExtending self-hash into PCR %d...\n", LOTA_PCR_SELF);
+  ret = self_measure(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Self-measurement failed: %s\n", strerror(-ret));
+  } else {
+    printf("Self-measurement successful\n");
+  }
+
+  printf("\nReading PCR %d after extend...\n", LOTA_PCR_SELF);
+  ret = tpm_read_pcr(&g_tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
+            strerror(-ret));
+  } else {
+    print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
   }
 
   tpm_cleanup(&g_tpm_ctx);
@@ -206,6 +302,15 @@ static int run_daemon(const char *bpf_path) {
     fprintf(stderr, "Continuing without TPM support\n");
   } else {
     printf("TPM initialized\n");
+
+    printf("Performing self-measurement...\n");
+    ret = self_measure(&g_tpm_ctx);
+    if (ret < 0) {
+      fprintf(stderr, "Self-measurement failed: %s\n", strerror(-ret));
+      fprintf(stderr, "Warning: Continuing without self-measurement\n");
+    } else {
+      printf("Self-measurement complete (PCR %d extended)\n", LOTA_PCR_SELF);
+    }
   }
   printf("\n");
 

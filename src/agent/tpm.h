@@ -134,4 +134,18 @@ int tpm_get_current_kernel_path(char *buf, size_t buf_len);
  */
 int tpm_self_test(struct tpm_context *ctx);
 
+/*
+ * tpm_pcr_extend - Extend PCR with digest
+ * @ctx: Initialized TPM context
+ * @pcr_index: PCR index (0-23, typically 14-23 writable by OS)
+ * @digest: SHA-256 digest to extend (LOTA_HASH_SIZE bytes)
+ *
+ * Performs cryptographic extend: new = Hash(old || digest).
+ * Used for runtime measurements (e.g., self-measurement into PCR 14).
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
+                   const uint8_t *digest);
+
 #endif /* LOTA_TPM_H */
