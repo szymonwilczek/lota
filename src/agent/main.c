@@ -829,14 +829,25 @@ static int do_continuous_attest(const char *server, int port,
   int backoff_sec = 0;
   time_t last_success = 0;
   time_t now;
+  uint32_t status_flags = 0;
+  uint64_t valid_until = 0;
 
   printf("=== Continuous Attestation ===\n");
   printf("Server: %s:%d\n", server, port);
   printf("Interval: %d seconds\n\n", interval_sec);
 
+  printf("Starting IPC server...\n");
+  ret = ipc_init(&g_ipc_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: IPC init failed: %s\n", strerror(-ret));
+    fprintf(stderr, "Gaming clients will not be able to query status\n");
+  }
+  printf("\n");
+
   ret = net_init();
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize network: %s\n", strerror(-ret));
+    ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
 
@@ -845,8 +856,10 @@ static int do_continuous_attest(const char *server, int port,
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
     net_cleanup();
+    ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
+  status_flags |= LOTA_STATUS_TPM_OK;
 
   printf("Performing self-measurement...\n");
   ret = self_measure(&g_tpm_ctx);
@@ -860,8 +873,11 @@ static int do_continuous_attest(const char *server, int port,
     fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
     tpm_cleanup(&g_tpm_ctx);
     net_cleanup();
+    ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
+
+  ipc_update_status(&g_ipc_ctx, status_flags, 0);
 
   printf("Starting attestation loop (Ctrl+C to stop)...\n\n");
 
@@ -876,6 +892,12 @@ static int do_continuous_attest(const char *server, int port,
       consecutive_failures = 0;
       backoff_sec = 0;
       last_success = now;
+
+      /* update ipc: attestation successful */
+      status_flags |= LOTA_STATUS_ATTESTED;
+      valid_until = (uint64_t)(now + interval_sec + 60); /* buffer */
+      ipc_update_status(&g_ipc_ctx, status_flags, valid_until);
+      ipc_record_attestation(&g_ipc_ctx, true);
     } else {
       consecutive_failures++;
       /* exponential backoff: 10, 20, 40, 80, ... up to max */
@@ -890,19 +912,28 @@ static int do_continuous_attest(const char *server, int port,
         fprintf(stderr, "[%ld] Last success: %ld seconds ago\n", (long)now,
                 (long)(now - last_success));
       }
+
+      /* update ipc: clear attested flag after multiple failures */
+      if (consecutive_failures >= 3) {
+        status_flags &= ~LOTA_STATUS_ATTESTED;
+        ipc_update_status(&g_ipc_ctx, status_flags, 0);
+      }
+      ipc_record_attestation(&g_ipc_ctx, false);
     }
 
     int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
     printf("[%ld] Next attestation in %d seconds\n\n", (long)now, sleep_time);
 
     for (int i = 0; i < sleep_time && g_running; i++) {
-      sleep(1);
+      ipc_process(&g_ipc_ctx, 100); /* 100ms timeout */
+      usleep(900000);
     }
   }
 
   printf("\nShutting down continuous attestation...\n");
   tpm_cleanup(&g_tpm_ctx);
   net_cleanup();
+  ipc_cleanup(&g_ipc_ctx);
   return 0;
 }
 
