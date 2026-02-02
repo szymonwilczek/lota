@@ -168,4 +168,20 @@ int tpm_self_test(struct tpm_context *ctx);
 int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
                    const uint8_t *digest);
 
+/*
+ * tpm_get_aik_public - Export AIK public key in DER SPKI format
+ * @ctx: Initialized TPM context
+ * @buf: Output buffer for DER-encoded public key
+ * @buf_size: Size of output buffer (recommend LOTA_MAX_AIK_PUB_SIZE)
+ * @out_size: Actual size of exported key
+ *
+ * Exports the AIK public key in SubjectPublicKeyInfo (SPKI) DER format,
+ * compatible with x509.ParsePKIXPublicKey() in Go.
+ *
+ * Returns: 0 on success, -ENOKEY if AIK not provisioned, negative errno on
+ * failure
+ */
+int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
+                       size_t *out_size);
+
 #endif /* LOTA_TPM_H */

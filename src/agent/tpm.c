@@ -13,7 +13,11 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include <openssl/bn.h>
+#include <openssl/core_names.h>
+#include <openssl/encoder.h>
 #include <openssl/evp.h>
+#include <openssl/param_build.h>
 
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
@@ -553,4 +557,159 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
     return tss2_rc_to_errno(rc);
 
   return 0;
+}
+
+int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
+                       size_t *out_size) {
+  TSS2_RC rc;
+  int ret;
+  ESYS_TR key_handle = ESYS_TR_NONE;
+  TPM2B_PUBLIC *out_public = NULL;
+  TPM2B_NAME *name = NULL;
+  TPM2B_NAME *qualified_name = NULL;
+  EVP_PKEY *pkey = NULL;
+  EVP_PKEY_CTX *pctx = NULL;
+  OSSL_PARAM_BLD *bld = NULL;
+  OSSL_PARAM *params = NULL;
+  OSSL_ENCODER_CTX *ectx = NULL;
+  BIGNUM *n = NULL;
+  BIGNUM *e = NULL;
+  unsigned char *der_out = NULL;
+  size_t der_len = 0;
+
+  if (!ctx || !ctx->initialized || !buf || !out_size)
+    return -EINVAL;
+
+  *out_size = 0;
+
+  ret = aik_exists(ctx, &key_handle);
+  if (ret < 0)
+    return ret;
+  if (ret == 0)
+    return -ENOKEY;
+
+  /* read public portion of AIK */
+  rc = Esys_ReadPublic(ctx->esys_ctx, key_handle, ESYS_TR_NONE, ESYS_TR_NONE,
+                       ESYS_TR_NONE, &out_public, &name, &qualified_name);
+  if (rc != TSS2_RC_SUCCESS) {
+    ret = tss2_rc_to_errno(rc);
+    goto cleanup;
+  }
+
+  /* verify its RSA */
+  if (out_public->publicArea.type != TPM2_ALG_RSA) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
+
+  /*
+   * Convert TPM RSA public key to OpenSSL EVP_PKEY.
+   * TPM2B_PUBLIC contains:
+   *   - publicArea.unique.rsa.buffer: modulus (big-endian)
+   *   - publicArea.parameters.rsaDetail.exponent: e (0 means 65537)
+   */
+  n = BN_bin2bn(out_public->publicArea.unique.rsa.buffer,
+                out_public->publicArea.unique.rsa.size, NULL);
+  if (!n) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  uint32_t exp_val = out_public->publicArea.parameters.rsaDetail.exponent;
+  if (exp_val == 0)
+    exp_val = 65537; /* TPM default */
+
+  e = BN_new();
+  if (!e || !BN_set_word(e, exp_val)) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  bld = OSSL_PARAM_BLD_new();
+  if (!bld) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  if (!OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, n) ||
+      !OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, e)) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
+
+  params = OSSL_PARAM_BLD_to_param(bld);
+  if (!params) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  /* for RSA key generation from data */
+  pctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+  if (!pctx) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  if (EVP_PKEY_fromdata_init(pctx) <= 0) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
+
+  if (EVP_PKEY_fromdata(pctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) <= 0) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
+
+  /*
+   * Encode as DER SubjectPublicKeyInfo using OSSL_ENCODER.
+   */
+  ectx = OSSL_ENCODER_CTX_new_for_pkey(pkey, EVP_PKEY_PUBLIC_KEY, "DER",
+                                       "SubjectPublicKeyInfo", NULL);
+  if (!ectx) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  /* first call with null to get size */
+  if (!OSSL_ENCODER_to_data(ectx, &der_out, &der_len)) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
+
+  if (der_len > buf_size) {
+    OPENSSL_free(der_out);
+    ret = -ENOSPC;
+    goto cleanup;
+  }
+
+  memcpy(buf, der_out, der_len);
+  OPENSSL_free(der_out);
+  der_out = NULL;
+
+  *out_size = der_len;
+  ret = 0;
+
+cleanup:
+  if (ectx)
+    OSSL_ENCODER_CTX_free(ectx);
+  if (pctx)
+    EVP_PKEY_CTX_free(pctx);
+  if (params)
+    OSSL_PARAM_free(params);
+  if (bld)
+    OSSL_PARAM_BLD_free(bld);
+  if (pkey)
+    EVP_PKEY_free(pkey);
+  if (n)
+    BN_free(n);
+  if (e)
+    BN_free(e);
+  if (out_public)
+    Esys_Free(out_public);
+  if (name)
+    Esys_Free(name);
+  if (qualified_name)
+    Esys_Free(qualified_name);
+
+  return ret;
 }
