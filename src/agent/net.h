@@ -55,6 +55,7 @@ struct verifier_result {
 #define VERIFY_PCR_FAIL 3
 #define VERIFY_IOMMU_FAIL 4
 #define VERIFY_OLD_VERSION 5
+#define VERIFY_INTEGRITY_MISMATCH 6
 
 /*
  * Initialize network subsystem.

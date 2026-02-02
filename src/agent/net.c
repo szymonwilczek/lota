@@ -313,6 +313,8 @@ const char *net_result_str(uint32_t result) {
     return "FAIL - IOMMU requirement not met";
   case VERIFY_OLD_VERSION:
     return "FAIL - Protocol version mismatch";
+  case VERIFY_INTEGRITY_MISMATCH:
+    return "FAIL - Integrity mismatch (agent binary changed!)";
   default:
     return "FAIL - Unknown error";
   }

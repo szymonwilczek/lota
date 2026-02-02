@@ -36,12 +36,13 @@ const (
 
 // verification result codes
 const (
-	VerifyOK         uint32 = 0
-	VerifyNonceFail  uint32 = 1
-	VerifySigFail    uint32 = 2
-	VerifyPCRFail    uint32 = 3
-	VerifyIOMMUFail  uint32 = 4
-	VerifyOldVersion uint32 = 5
+	VerifyOK                uint32 = 0
+	VerifyNonceFail         uint32 = 1
+	VerifySigFail           uint32 = 2
+	VerifyPCRFail           uint32 = 3
+	VerifyIOMMUFail         uint32 = 4
+	VerifyOldVersion        uint32 = 5
+	VerifyIntegrityMismatch uint32 = 6
 )
 
 // struct lota_report_header (see: uapi/lota_report.h)
