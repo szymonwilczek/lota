@@ -1,3 +1,4 @@
 build
 lota-verifier.crt
 lota-verifier.key
+tests/sdk_demo
