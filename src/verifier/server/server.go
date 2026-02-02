@@ -127,9 +127,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clientAddr := conn.RemoteAddr().String()
 	log.Printf("[%s] New connection", clientAddr)
 
-	// Use client IP as client ID for now
-	// TODO: this could be extracted from TLS client certificate
-	clientID := clientAddr
+	// IP without port ensures same client gets same baseline across connections
+	clientIP, _, err := net.SplitHostPort(clientAddr)
+	if err != nil {
+		clientIP = clientAddr // fallback if no port
+	}
+	clientID := clientIP
 
 	challenge, err := s.verifier.GenerateChallenge(clientID)
 	if err != nil {

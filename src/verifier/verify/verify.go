@@ -24,9 +24,10 @@ import (
 
 // main verification engine
 type Verifier struct {
-	nonceStore  *NonceStore
-	pcrVerifier *PCRVerifier
-	aikStore    store.AIKStore
+	nonceStore    *NonceStore
+	pcrVerifier   *PCRVerifier
+	aikStore      store.AIKStore
+	baselineStore *BaselineStore
 
 	// configuration
 	nonceLifetime    time.Duration
@@ -61,6 +62,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceStore:       NewNonceStore(cfg.NonceLifetime),
 		pcrVerifier:      NewPCRVerifier(),
 		aikStore:         aikStore,
+		baselineStore:    NewBaselineStore(),
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
@@ -126,9 +128,42 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 		return result, err
 	}
 
+	// TOFU: check agent self-measurement against baseline
+	pcr14 := report.TPM.PCRValues[14]
+	tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
+	switch tofuResult {
+	case TOFUFirstUse:
+		log.Printf("[%s] TOFU: First attestation - PCR14 baseline established: %s",
+			clientID, FormatPCR14(pcr14))
+	case TOFUMatch:
+		log.Printf("[%s] TOFU: PCR14 matches baseline (attestation #%d)",
+			clientID, baseline.AttestCount)
+	case TOFUMismatch:
+		log.Printf("[%s] CRITICAL: Potential agent tampering detected! Expected PCR14: %s, Got: %s",
+			clientID, FormatPCR14(baseline.PCR14), FormatPCR14(pcr14))
+		result.Result = types.VerifyIntegrityMismatch
+		return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
+	}
+
 	if report.Header.Flags&types.FlagIOMMUOK == 0 {
 		log.Printf("[%s] IOMMU not verified", clientID)
 		// IMPORTANT: policy determines if this is required
+	}
+
+	secFlags := []string{}
+	if report.Header.Flags&types.FlagModuleSig != 0 {
+		secFlags = append(secFlags, "MODULE_SIG")
+	}
+	if report.Header.Flags&types.FlagLockdown != 0 {
+		secFlags = append(secFlags, "LOCKDOWN")
+	}
+	if report.Header.Flags&types.FlagSecureBoot != 0 {
+		secFlags = append(secFlags, "SECUREBOOT")
+	}
+	if len(secFlags) > 0 {
+		log.Printf("[%s] Security features: %v", clientID, secFlags)
+	} else {
+		log.Printf("[%s] WARNING: No module security features detected", clientID)
 	}
 
 	log.Printf("[%s] Verification successful", clientID)
