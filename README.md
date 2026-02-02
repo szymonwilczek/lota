@@ -11,11 +11,11 @@ LOTA establishes a cryptographic chain of trust from hardware (TPM 2.0) through 
 
 ```
 ┌──────────────┐     ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  TPM 2.0     │ ──▶ │ eBPF LSM    │ ──▶ │ LOTA Agent   │ ──▶ │ Remote       │
-│  Hardware    │     │ Kernel      │     │ User-space   │     │ Verifier     │
+│  TPM 2.0     │ ──▶│ eBPF LSM    │ ──▶│  LOTA Agent  │ ──▶│   Remote     │
+│  Hardware    │     │ Kernel      │     │  User-space  │     │   Verifier   │
 └──────────────┘     └─────────────┘     └──────────────┘     └──────────────┘
-     PCRs              Binary            Attestation            Validation
-                       Monitoring        Report
+     PCRs                Binary            Attestation           Validation
+                       Monitoring             Report
 ```
 
 ## Features
