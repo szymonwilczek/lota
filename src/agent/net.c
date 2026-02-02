@@ -1,0 +1,319 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA Agent - Network/TLS client implementation
+ *
+ * Uses OpenSSL for TLS 1.3 communication with verifier.
+ *
+ * Copyright (C) 2026 Szymon Wilczek
+ */
+
+#include "net.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netdb.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
+#include "../../include/uapi/lota_report.h"
+
+static int ssl_initialized = 0;
+
+int net_init(void) {
+  if (ssl_initialized)
+    return 0;
+
+  SSL_library_init();
+  SSL_load_error_strings();
+  OpenSSL_add_all_algorithms();
+
+  ssl_initialized = 1;
+  return 0;
+}
+
+void net_cleanup(void) {
+  if (!ssl_initialized)
+    return;
+
+  EVP_cleanup();
+  ERR_free_strings();
+  ssl_initialized = 0;
+}
+
+int net_context_init(struct net_context *ctx, const char *server, int port,
+                     const char *ca_cert_path) {
+  SSL_CTX *ssl_ctx;
+  const SSL_METHOD *method;
+
+  if (!ctx || !server)
+    return -EINVAL;
+
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->socket_fd = -1;
+
+  strncpy(ctx->server_addr, server, sizeof(ctx->server_addr) - 1);
+  ctx->server_port = port;
+
+  method = TLS_client_method();
+  ssl_ctx = SSL_CTX_new(method);
+  if (!ssl_ctx) {
+    return -ENOMEM;
+  }
+
+  SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
+
+  /* CA certificate if provided */
+  if (ca_cert_path) {
+    if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path, NULL) != 1) {
+      SSL_CTX_free(ssl_ctx);
+      return -EINVAL;
+    }
+    SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
+  } else {
+    /* For testing (will be changed): skip certificate verification */
+    SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
+  }
+
+  ctx->ssl_ctx = ssl_ctx;
+  return 0;
+}
+
+void net_context_cleanup(struct net_context *ctx) {
+  if (!ctx)
+    return;
+
+  net_disconnect(ctx);
+
+  if (ctx->ssl_ctx) {
+    SSL_CTX_free((SSL_CTX *)ctx->ssl_ctx);
+    ctx->ssl_ctx = NULL;
+  }
+}
+
+int net_connect(struct net_context *ctx) {
+  struct addrinfo hints, *result, *rp;
+  char port_str[16];
+  SSL *ssl;
+  int sock = -1;
+  int ret;
+
+  if (!ctx || !ctx->ssl_ctx)
+    return -EINVAL;
+
+  if (ctx->connected)
+    return 0;
+
+  /* resolve server address */
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  snprintf(port_str, sizeof(port_str), "%d", ctx->server_port);
+
+  ret = getaddrinfo(ctx->server_addr, port_str, &hints, &result);
+  if (ret != 0) {
+    return -EHOSTUNREACH;
+  }
+
+  for (rp = result; rp != NULL; rp = rp->ai_next) {
+    sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+    if (sock < 0)
+      continue;
+
+    if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0)
+      break;
+
+    close(sock);
+    sock = -1;
+  }
+
+  freeaddrinfo(result);
+
+  if (sock < 0) {
+    return -ECONNREFUSED;
+  }
+
+  ctx->socket_fd = sock;
+
+  ssl = SSL_new((SSL_CTX *)ctx->ssl_ctx);
+  if (!ssl) {
+    close(sock);
+    ctx->socket_fd = -1;
+    return -ENOMEM;
+  }
+
+  SSL_set_fd(ssl, sock);
+  SSL_set_tlsext_host_name(ssl, ctx->server_addr);
+
+  /* TLS handshake */
+  ret = SSL_connect(ssl);
+  if (ret != 1) {
+    SSL_free(ssl);
+    close(sock);
+    ctx->socket_fd = -1;
+    return -ECONNABORTED;
+  }
+
+  ctx->ssl = ssl;
+  ctx->connected = 1;
+
+  return 0;
+}
+
+void net_disconnect(struct net_context *ctx) {
+  if (!ctx)
+    return;
+
+  if (ctx->ssl) {
+    SSL_shutdown((SSL *)ctx->ssl);
+    SSL_free((SSL *)ctx->ssl);
+    ctx->ssl = NULL;
+  }
+
+  if (ctx->socket_fd >= 0) {
+    close(ctx->socket_fd);
+    ctx->socket_fd = -1;
+  }
+
+  ctx->connected = 0;
+}
+
+int net_recv_challenge(struct net_context *ctx,
+                       struct verifier_challenge *challenge) {
+  uint8_t buf[48];
+  int ret;
+  int total = 0;
+
+  if (!ctx || !ctx->connected || !challenge)
+    return -EINVAL;
+
+  while (total < (int)sizeof(buf)) {
+    ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
+    if (ret <= 0) {
+      return -EIO;
+    }
+    total += ret;
+  }
+
+  /* challenge parsing (little-endian) */
+  memcpy(&challenge->magic, buf + 0, 4);
+  memcpy(&challenge->version, buf + 4, 4);
+  memcpy(challenge->nonce, buf + 8, 32);
+  memcpy(&challenge->pcr_mask, buf + 40, 4);
+  memcpy(&challenge->flags, buf + 44, 4);
+
+  if (challenge->magic != LOTA_REPORT_MAGIC) {
+    return -EPROTO;
+  }
+
+  return 0;
+}
+
+int net_send_report(struct net_context *ctx, const void *report,
+                    size_t report_size) {
+  int ret;
+  size_t total = 0;
+
+  if (!ctx || !ctx->connected || !report || report_size == 0)
+    return -EINVAL;
+
+  while (total < report_size) {
+    ret = SSL_write((SSL *)ctx->ssl, (const uint8_t *)report + total,
+                    report_size - total);
+    if (ret <= 0) {
+      return -EIO;
+    }
+    total += ret;
+  }
+
+  return 0;
+}
+
+int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
+  uint8_t buf[56];
+  int ret;
+  int total = 0;
+
+  if (!ctx || !ctx->connected || !result)
+    return -EINVAL;
+
+  while (total < (int)sizeof(buf)) {
+    ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
+    if (ret <= 0) {
+      return -EIO;
+    }
+    total += ret;
+  }
+
+  /* result parsing (little-endian) */
+  memcpy(&result->magic, buf + 0, 4);
+  memcpy(&result->version, buf + 4, 4);
+  memcpy(&result->result, buf + 8, 4);
+  memcpy(&result->flags, buf + 12, 4);
+  memcpy(&result->valid_until, buf + 16, 8);
+  memcpy(result->session_token, buf + 24, 32);
+
+  if (result->magic != LOTA_REPORT_MAGIC) {
+    return -EPROTO;
+  }
+
+  return 0;
+}
+
+int net_attest(struct net_context *ctx, build_report_fn build_report,
+               void *user_data, struct verifier_result *result) {
+  struct verifier_challenge challenge;
+  void *report = NULL;
+  size_t report_size = 0;
+  int ret;
+
+  if (!ctx || !build_report || !result)
+    return -EINVAL;
+
+  ret = net_connect(ctx);
+  if (ret < 0)
+    return ret;
+
+  ret = net_recv_challenge(ctx, &challenge);
+  if (ret < 0)
+    goto out;
+
+  ret = build_report(&challenge, &report, &report_size, user_data);
+  if (ret < 0)
+    goto out;
+
+  ret = net_send_report(ctx, report, report_size);
+  if (ret < 0)
+    goto out;
+
+  ret = net_recv_result(ctx, result);
+
+out:
+  if (report)
+    free(report);
+  net_disconnect(ctx);
+  return ret;
+}
+
+const char *net_result_str(uint32_t result) {
+  switch (result) {
+  case VERIFY_OK:
+    return "OK - Attestation successful";
+  case VERIFY_NONCE_FAIL:
+    return "FAIL - Nonce/freshness verification failed";
+  case VERIFY_SIG_FAIL:
+    return "FAIL - TPM signature verification failed";
+  case VERIFY_PCR_FAIL:
+    return "FAIL - PCR values don't match policy";
+  case VERIFY_IOMMU_FAIL:
+    return "FAIL - IOMMU requirement not met";
+  case VERIFY_OLD_VERSION:
+    return "FAIL - Protocol version mismatch";
+  default:
+    return "FAIL - Unknown error";
+  }
+}
