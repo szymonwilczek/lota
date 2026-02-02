@@ -5,6 +5,11 @@
 
 Transparent system integrity framework that proves to remote servers (e.g., game servers) that a Linux system is untampered.
 
+# Read before anything else in this repository
+I am incredibly absorbed in creating this project and I hope that one day it will become the standard in the Linux gaming industry. Stallman said that maybe it is TiVoization, but any solution seems better to me than none at all. The project has a long way to go before it becomes functional in any way, but if it succeeds, welcome anti-cheats on Linux, which brings with it another cheer: welcome gaming on our beloved penguin! (Of course, if any game developer wants to implement such a solution, heh.)
+
+All corporations using anti-cheat software have rejected gaming on Linux because they are unable to trust us. I will try to ensure that there are no grounds for this.
+
 ## Overview
 
 LOTA establishes a cryptographic chain of trust from hardware (TPM 2.0) through the kernel (eBPF/LSM) to a user-space agent, and finally to a remote verifier.
