@@ -1,0 +1,579 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA Agent - IPC Server Implementation
+ * Unix socket server for local attestation queries.
+ */
+
+#include "ipc.h"
+#include "../../include/lota.h"
+#include "../../include/lota_ipc.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#define MAX_EVENTS 16
+#define MAX_CLIENTS 64
+#define SOCKET_DIR "/run/lota"
+
+/*
+ * Client connection state
+ */
+struct ipc_client {
+  int fd;
+  uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
+  size_t recv_len;
+  uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
+  size_t send_len;
+  size_t send_offset;
+};
+
+static struct ipc_client *clients[MAX_CLIENTS];
+static int client_count = 0;
+
+/*
+ * Set socket to non-blocking mode
+ */
+static int set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0)
+    return -errno;
+  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+    return -errno;
+  return 0;
+}
+
+/*
+ * Create socket directory if needed
+ */
+static int ensure_socket_dir(void) {
+  struct stat st;
+
+  if (stat(SOCKET_DIR, &st) == 0) {
+    if (!S_ISDIR(st.st_mode))
+      return -ENOTDIR;
+    return 0;
+  }
+
+  if (mkdir(SOCKET_DIR, 0755) < 0)
+    return -errno;
+
+  return 0;
+}
+
+/*
+ * Find or create client slot
+ */
+static struct ipc_client *client_create(int fd) {
+  struct ipc_client *client;
+
+  if (client_count >= MAX_CLIENTS)
+    return NULL;
+
+  client = calloc(1, sizeof(*client));
+  if (!client)
+    return NULL;
+
+  client->fd = fd;
+
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (!clients[i]) {
+      clients[i] = client;
+      client_count++;
+      return client;
+    }
+  }
+
+  free(client);
+  return NULL;
+}
+
+/*
+ * Find client by fd
+ */
+static struct ipc_client *client_find(int fd) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i] && clients[i]->fd == fd)
+      return clients[i];
+  }
+  return NULL;
+}
+
+/*
+ * Remove and free client
+ */
+static void client_destroy(struct ipc_client *client) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i] == client) {
+      clients[i] = NULL;
+      client_count--;
+      break;
+    }
+  }
+  close(client->fd);
+  free(client);
+}
+
+/*
+ * Build error response
+ */
+static void build_error_response(struct ipc_client *client, uint32_t result) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = result;
+  resp->payload_len = 0;
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE;
+  client->send_offset = 0;
+}
+
+/*
+ * Handle PING command
+ */
+static void handle_ping(struct ipc_context *ctx, struct ipc_client *client) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  struct lota_ipc_ping_response *ping;
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = sizeof(*ping);
+
+  ping = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+  ping->uptime_sec = (uint64_t)(time(NULL) - ctx->start_time);
+  ping->pid = (uint32_t)getpid();
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*ping);
+  client->send_offset = 0;
+}
+
+/*
+ * Handle GET_STATUS command
+ */
+static void handle_get_status(struct ipc_context *ctx,
+                              struct ipc_client *client) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  struct lota_ipc_status *status;
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = sizeof(*status);
+
+  status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+  status->flags = ctx->status_flags;
+  status->last_attest_time = ctx->last_attest_time;
+  status->valid_until = ctx->valid_until;
+  status->attest_count = ctx->attest_count;
+  status->fail_count = ctx->fail_count;
+  status->mode = ctx->mode;
+  memset(status->reserved, 0, sizeof(status->reserved));
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*status);
+  client->send_offset = 0;
+}
+
+/*
+ * Handle GET_TOKEN command
+ *
+ * TODO: proper token signing with AIK
+ * For now, it returns status information as unsigned "token"
+ */
+static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
+                             const uint8_t *payload, uint32_t payload_len) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  struct lota_ipc_token *token;
+  const struct lota_ipc_token_request *req = NULL;
+
+  if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
+    build_error_response(client, LOTA_IPC_ERR_NOT_ATTESTED);
+    return;
+  }
+
+  if (payload_len >= sizeof(*req))
+    req = (const void *)payload;
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = sizeof(*token);
+
+  token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+  token->issued_at = (uint64_t)time(NULL);
+  token->valid_until = ctx->valid_until;
+  token->flags = ctx->status_flags;
+
+  if (req)
+    memcpy(token->client_nonce, req->nonce, 32);
+  else
+    memset(token->client_nonce, 0, 32);
+
+  /* TODO: proper agent nonce */
+  memset(token->agent_nonce, 0, 32);
+
+  /* TODO: sign with AIK */
+  token->signature_len = 0;
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*token);
+  client->send_offset = 0;
+}
+
+/*
+ * Process complete request
+ */
+static void process_request(struct ipc_context *ctx,
+                            struct ipc_client *client) {
+  struct lota_ipc_request *req = (void *)client->recv_buf;
+  uint8_t *payload = client->recv_buf + LOTA_IPC_REQUEST_SIZE;
+  uint32_t payload_len = req->payload_len;
+
+  if (req->magic != LOTA_IPC_MAGIC) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+
+  /* dispatch command */
+  switch (req->cmd) {
+  case LOTA_IPC_CMD_PING:
+    handle_ping(ctx, client);
+    break;
+
+  case LOTA_IPC_CMD_GET_STATUS:
+    handle_get_status(ctx, client);
+    break;
+
+  case LOTA_IPC_CMD_GET_TOKEN:
+    handle_get_token(ctx, client, payload, payload_len);
+    break;
+
+  default:
+    build_error_response(client, LOTA_IPC_ERR_UNKNOWN_CMD);
+    break;
+  }
+}
+
+/*
+ * Handle client read event
+ */
+static int handle_client_read(struct ipc_context *ctx,
+                              struct ipc_client *client) {
+  ssize_t n;
+  size_t need;
+  struct lota_ipc_request *req;
+
+  /* read as much as possible */
+  need = sizeof(client->recv_buf) - client->recv_len;
+  n = recv(client->fd, client->recv_buf + client->recv_len, need, 0);
+
+  if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      return 0;
+    return -errno;
+  }
+
+  if (n == 0)
+    return -ECONNRESET; /* client disconnected */
+
+  client->recv_len += n;
+
+  /* complete header? */
+  if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
+    return 0;
+
+  req = (void *)client->recv_buf;
+
+  if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return 1; /* need to send response */
+  }
+
+  /* complete request? */
+  need = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+  if (client->recv_len < need)
+    return 0;
+
+  process_request(ctx, client);
+  client->recv_len = 0; /* reset for next request */
+
+  return 1; /* response ready */
+}
+
+/*
+ * Handle client write event
+ */
+static int handle_client_write(struct ipc_client *client) {
+  ssize_t n;
+  size_t remaining;
+
+  if (client->send_len == 0)
+    return 0;
+
+  remaining = client->send_len - client->send_offset;
+  n = send(client->fd, client->send_buf + client->send_offset, remaining,
+           MSG_NOSIGNAL);
+
+  if (n < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      return 0;
+    return -errno;
+  }
+
+  client->send_offset += n;
+
+  if (client->send_offset >= client->send_len) {
+    /* response complete, reset */
+    client->send_len = 0;
+    client->send_offset = 0;
+  }
+
+  return 0;
+}
+
+/*
+ * Accept new client
+ */
+static int accept_client(struct ipc_context *ctx) {
+  struct sockaddr_un addr;
+  socklen_t len = sizeof(addr);
+  struct ipc_client *client;
+  struct epoll_event ev;
+  int fd;
+  int ret;
+
+  fd = accept(ctx->listen_fd, (struct sockaddr *)&addr, &len);
+  if (fd < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+      return 0;
+    return -errno;
+  }
+
+  ret = set_nonblocking(fd);
+  if (ret < 0) {
+    close(fd);
+    return ret;
+  }
+
+  client = client_create(fd);
+  if (!client) {
+    close(fd);
+    return -ENOMEM;
+  }
+
+  ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+  ev.data.fd = fd;
+  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+    client_destroy(client);
+    return -errno;
+  }
+
+  return 0;
+}
+
+/*
+ * Initialize IPC server
+ */
+int ipc_init(struct ipc_context *ctx) {
+  struct sockaddr_un addr;
+  struct epoll_event ev;
+  int ret;
+
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->listen_fd = -1;
+  ctx->epoll_fd = -1;
+  ctx->start_time = time(NULL);
+
+  ret = ensure_socket_dir();
+  if (ret < 0) {
+    fprintf(stderr, "IPC: Failed to create %s: %s\n", SOCKET_DIR,
+            strerror(-ret));
+    return ret;
+  }
+
+  unlink(LOTA_IPC_SOCKET_PATH);
+
+  ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (ctx->listen_fd < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: socket() failed: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  ret = set_nonblocking(ctx->listen_fd);
+  if (ret < 0) {
+    fprintf(stderr, "IPC: set_nonblocking() failed: %s\n", strerror(-ret));
+    goto err_close;
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+  if (bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: bind(%s) failed: %s\n", LOTA_IPC_SOCKET_PATH,
+            strerror(-ret));
+    goto err_close;
+  }
+
+  /* group-writable for gaming apps */
+  chmod(LOTA_IPC_SOCKET_PATH, 0660);
+
+  if (listen(ctx->listen_fd, 16) < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: listen() failed: %s\n", strerror(-ret));
+    goto err_unlink;
+  }
+
+  ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+  if (ctx->epoll_fd < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: epoll_create1() failed: %s\n", strerror(-ret));
+    goto err_unlink;
+  }
+
+  ev.events = EPOLLIN;
+  ev.data.fd = ctx->listen_fd;
+  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: epoll_ctl() failed: %s\n", strerror(-ret));
+    goto err_epoll;
+  }
+
+  ctx->running = true;
+  ctx->status_flags = LOTA_STATUS_TPM_OK; /* will be updated */
+
+  printf("IPC: Listening on %s\n", LOTA_IPC_SOCKET_PATH);
+  return 0;
+
+err_epoll:
+  close(ctx->epoll_fd);
+err_unlink:
+  unlink(LOTA_IPC_SOCKET_PATH);
+err_close:
+  close(ctx->listen_fd);
+  ctx->listen_fd = -1;
+  ctx->epoll_fd = -1;
+  return ret;
+}
+
+/*
+ * Cleanup IPC server
+ */
+void ipc_cleanup(struct ipc_context *ctx) {
+  ctx->running = false;
+
+  /* close all clients */
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i]) {
+      client_destroy(clients[i]);
+      clients[i] = NULL;
+    }
+  }
+  client_count = 0;
+
+  if (ctx->epoll_fd >= 0) {
+    close(ctx->epoll_fd);
+    ctx->epoll_fd = -1;
+  }
+
+  if (ctx->listen_fd >= 0) {
+    close(ctx->listen_fd);
+    ctx->listen_fd = -1;
+  }
+
+  unlink(LOTA_IPC_SOCKET_PATH);
+  printf("IPC: Cleaned up\n");
+}
+
+/*
+ * Process IPC events
+ */
+int ipc_process(struct ipc_context *ctx, int timeout_ms) {
+  struct epoll_event events[MAX_EVENTS];
+  int nfds;
+  int processed = 0;
+
+  if (!ctx->running || ctx->epoll_fd < 0)
+    return -EINVAL;
+
+  nfds = epoll_wait(ctx->epoll_fd, events, MAX_EVENTS, timeout_ms);
+  if (nfds < 0) {
+    if (errno == EINTR)
+      return 0;
+    return -errno;
+  }
+
+  for (int i = 0; i < nfds; i++) {
+    int fd = events[i].data.fd;
+
+    if (fd == ctx->listen_fd) {
+      /* new connection */
+      accept_client(ctx);
+      processed++;
+    } else {
+      /* client event */
+      struct ipc_client *client = client_find(fd);
+      if (!client)
+        continue;
+
+      int ret = 0;
+
+      if (events[i].events & EPOLLIN) {
+        ret = handle_client_read(ctx, client);
+      }
+
+      if (events[i].events & EPOLLOUT) {
+        if (handle_client_write(client) < 0)
+          ret = -1;
+      }
+
+      if ((events[i].events & (EPOLLERR | EPOLLHUP)) || ret < 0) {
+        epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+        client_destroy(client);
+      }
+
+      processed++;
+    }
+  }
+
+  return processed;
+}
+
+/*
+ * Get epoll fd
+ */
+int ipc_get_fd(struct ipc_context *ctx) { return ctx->epoll_fd; }
+
+/*
+ * Update status
+ */
+void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
+                       uint64_t valid_until) {
+  ctx->status_flags = flags;
+  ctx->valid_until = valid_until;
+  ctx->last_attest_time = (uint64_t)time(NULL);
+}
+
+/*
+ * Record attestation attempt
+ */
+void ipc_record_attestation(struct ipc_context *ctx, bool success) {
+  if (success)
+    ctx->attest_count++;
+  else
+    ctx->fail_count++;
+}
+
+/*
+ * Set mode
+ */
+void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) { ctx->mode = mode; }
