@@ -1,0 +1,92 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA Agent - IPC Server Module
+ */
+
+#ifndef LOTA_AGENT_IPC_H
+#define LOTA_AGENT_IPC_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+/*
+ * IPC server context
+ */
+struct ipc_context {
+  int listen_fd; /* Listening socket */
+  int epoll_fd;  /* epoll instance */
+  bool running;
+  time_t start_time; /* For uptime calculation */
+
+  /* Attestation state */
+  uint32_t status_flags;
+  uint64_t last_attest_time;
+  uint64_t valid_until;
+  uint32_t attest_count;
+  uint32_t fail_count;
+  uint8_t mode;
+};
+
+/*
+ * ipc_init - Initialize IPC server
+ * @ctx: Context to initialize
+ *
+ * Creates Unix socket at /run/lota/lota.sock and
+ * sets up epoll for non-blocking operation.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int ipc_init(struct ipc_context *ctx);
+
+/*
+ * ipc_cleanup - Shutdown IPC server
+ * @ctx: Context to clean up
+ *
+ * Closes all connections and removes socket file.
+ */
+void ipc_cleanup(struct ipc_context *ctx);
+
+/*
+ * ipc_process - Process pending IPC events
+ * @ctx: Server context
+ * @timeout_ms: Max time to wait (-1 = block, 0 = poll)
+ *
+ * Non-blocking if timeout_ms is 0.
+ *
+ * Returns: Number of events processed, negative errno on error
+ */
+int ipc_process(struct ipc_context *ctx, int timeout_ms);
+
+/*
+ * ipc_get_fd - Get epoll fd for external select/poll
+ * @ctx: Server context
+ *
+ * Returns: epoll file descriptor, or -1 if not initialized
+ */
+int ipc_get_fd(struct ipc_context *ctx);
+
+/*
+ * ipc_update_status - Update attestation status
+ * @ctx: Server context
+ * @flags: New LOTA_STATUS_* flags
+ * @valid_until: Token validity timestamp
+ */
+void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
+                       uint64_t valid_until);
+
+/*
+ * ipc_record_attestation - Record attestation attempt
+ * @ctx: Server context
+ * @success: Whether attestation succeeded
+ */
+void ipc_record_attestation(struct ipc_context *ctx, bool success);
+
+/*
+ * ipc_set_mode - Update current mode
+ * @ctx: Server context
+ * @mode: New mode (enum lota_mode)
+ */
+void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
+
+#endif /* LOTA_AGENT_IPC_H */
