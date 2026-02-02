@@ -25,8 +25,8 @@ typedef __u64 uint64_t;
 #endif
 
 /* Protocol version */
-#define LOTA_VERSION_MAJOR 0
-#define LOTA_VERSION_MINOR 1
+#define LOTA_VERSION_MAJOR 1
+#define LOTA_VERSION_MINOR 0
 #define LOTA_VERSION ((LOTA_VERSION_MAJOR << 16) | LOTA_VERSION_MINOR)
 
 /* Magic number: "LOTA" in little-endian */
