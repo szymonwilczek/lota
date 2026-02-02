@@ -57,41 +57,6 @@ cat /sys/kernel/security/lsm
 # Expected: should contain "bpf"
 ```
 
-## Building
-
-```bash
-# Clone repository
-git clone https://github.com/youruser/lota.git
-cd lota
-
-# Generate vmlinux.h (if not present)
-bpftool btf dump file /sys/kernel/btf/vmlinux format c > include/vmlinux.h
-
-# Build
-make
-
-# Build outputs:
-#   build/lota-agent       - User-space daemon
-#   build/lota_lsm.bpf.o   - eBPF LSM program
-```
-
-## Usage
-
-### Test IOMMU Verification
-```bash
-sudo ./build/lota-agent --test-iommu
-```
-
-### Test TPM Operations
-```bash
-sudo ./build/lota-agent --test-tpm
-```
-
-### Run Agent (Monitor Mode)
-```bash
-sudo ./build/lota-agent --bpf ./build/lota_lsm.bpf.o
-```
-
 ## Security Model
 
 | Attack Vector | Protection |
@@ -102,10 +67,6 @@ sudo ./build/lota-agent --bpf ./build/lota_lsm.bpf.o
 | Replay attacks | Nonce in TPM Quote |
 | Boot parameter tampering | PCR 8/9 measurement |
 
-## License
-
-- User-space code: MIT License
-- eBPF/kernel code: GPL-2.0 (required for BPF)
 
 ## Status
 
