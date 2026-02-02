@@ -570,6 +570,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
     return ret;
   }
+  printf("TPM quote generated (sig: %u bytes, attest: %u bytes)\n",
+         quote_resp.signature_size, quote_resp.attest_size);
 
   /* copy TPM evidence */
   memcpy(report->tpm.pcr_values, quote_resp.pcr_values,
@@ -590,6 +592,25 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   if (quote_resp.attest_size <= LOTA_MAX_ATTEST_SIZE) {
     memcpy(report->tpm.attest_data, quote_resp.attest_data,
            quote_resp.attest_size);
+  }
+
+  /*
+   * Export AIK public key for TOFU registration.
+   * Verifier stores this on first attestation and uses it
+   * to verify signatures on subsequent attestations.
+   */
+  {
+    size_t aik_size = 0;
+    ret = tpm_get_aik_public(&g_tpm_ctx, report->tpm.aik_public,
+                             LOTA_MAX_AIK_PUB_SIZE, &aik_size);
+    if (ret == 0) {
+      report->tpm.aik_public_size = (uint16_t)aik_size;
+      printf("AIK public key exported (%zu bytes, DER SPKI)\n", aik_size);
+    } else {
+      fprintf(stderr, "Warning: Failed to export AIK public key: %s\n",
+              strerror(-ret));
+      report->tpm.aik_public_size = 0;
+    }
   }
 
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
