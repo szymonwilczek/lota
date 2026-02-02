@@ -67,6 +67,14 @@ struct lota_tpm_evidence {
   uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
   uint16_t attest_size;
 
+  /*
+   * AIK public key in DER-encoded SPKI format.
+   * Used by verifier for TOFU registration and signature verification.
+   * Format: SubjectPublicKeyInfo (x509.MarshalPKIXPublicKey compatible)
+   */
+  uint8_t aik_public[LOTA_MAX_AIK_PUB_SIZE];
+  uint16_t aik_public_size;
+
   /* Nonce from server */
   uint8_t nonce[LOTA_NONCE_SIZE];
 

@@ -19,6 +19,7 @@ const (
 	NonceSize       = 32   // Challenge nonce
 	MaxSigSize      = 512  // RSA-4096 signature
 	MaxAttestSize   = 1024 // TPMS_ATTEST blob
+	MaxAIKPubSize   = 512  // AIK public key (DER SPKI)
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
@@ -64,16 +65,20 @@ type ReportHeader struct {
 //	quote_sig_size          2 bytes
 //	attest_data[1024]    1024 bytes
 //	attest_size             2 bytes
+//	aik_public[512]       512 bytes
+//	aik_public_size         2 bytes
 //	nonce[32]              32 bytes
 //	reserved[2]             2 bytes
-//	TOTAL:               2346 bytes
+//	TOTAL:               2860 bytes
 type TPMEvidence struct {
 	PCRValues      [PCRCount][HashSize]byte // 768 bytes
 	PCRMask        uint32                   // 4 bytes
 	QuoteSignature [MaxSigSize]byte         // 512 bytes
 	QuoteSigSize   uint16                   // 2 bytes
-	AttestData     [MaxAttestSize]byte      // 1024 bytes - raw TPMS_ATTEST
+	AttestData     [MaxAttestSize]byte      // 1024 bytes
 	AttestSize     uint16                   // 2 bytes
+	AIKPublic      [MaxAIKPubSize]byte      // 512 bytes
+	AIKPublicSize  uint16                   // 2 bytes
 	Nonce          [NonceSize]byte          // 32 bytes
 	Reserved       [2]byte                  // 2 bytes alignment
 }
@@ -104,7 +109,7 @@ type BPFSummary struct {
 // struct lota_attestation_report (see: include/attestation.h)
 type AttestationReport struct {
 	Header ReportHeader      // 32 bytes
-	TPM    TPMEvidence       // 2346 bytes
+	TPM    TPMEvidence       // 2860 bytes
 	System SystemMeasurement // 364 bytes
 	BPF    BPFSummary        // 24 bytes
 }
@@ -136,8 +141,8 @@ var (
 )
 
 // expected binary size of AttestationReport
-// Header(32) + TPM(2346) + System(364) + BPF(24) = 2766
-const ExpectedReportSize = 2766
+// Header(32) + TPM(2860) + System(364) + BPF(24) = 3280
+const ExpectedReportSize = 3280
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -172,7 +177,7 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
-	// tpm evidence (2346 bytes)
+	// tpm evidence (2860 bytes)
 	// pcr values: 24 * 32 = 768 bytes
 	for i := 0; i < PCRCount; i++ {
 		copy(report.TPM.PCRValues[i][:], data[offset:offset+HashSize])
@@ -187,6 +192,10 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.TPM.AttestData[:], data[offset:offset+MaxAttestSize])
 	offset += MaxAttestSize
 	report.TPM.AttestSize = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	copy(report.TPM.AIKPublic[:], data[offset:offset+MaxAIKPubSize])
+	offset += MaxAIKPubSize
+	report.TPM.AIKPublicSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
