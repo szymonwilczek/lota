@@ -424,8 +424,12 @@ int ipc_init(struct ipc_context *ctx) {
     goto err_close;
   }
 
-  /* group-writable for gaming apps */
-  chmod(LOTA_IPC_SOCKET_PATH, 0660);
+  /*
+   * Allow any process to connect.
+   * TODO: systemd socket activation or a dedicated "lota"
+   * group should be used to restrict access to gaming applications.
+   */
+  chmod(LOTA_IPC_SOCKET_PATH, 0666);
 
   if (listen(ctx->listen_fd, 16) < 0) {
     ret = -errno;
