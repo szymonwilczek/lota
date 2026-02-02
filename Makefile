@@ -33,6 +33,7 @@ BUILD_DIR := build
 
 # Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
+VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 
 # Compiler flags
@@ -41,7 +42,7 @@ CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
 
 # Libraries for agent
-LDFLAGS := -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto
+LDFLAGS := -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
 
 # BPF compilation flags
 # -target bpf: Generate BPF bytecode
@@ -59,13 +60,14 @@ ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/iommu.c \
-              $(AGENT_DIR)/bpf_loader.c
+              $(AGENT_DIR)/bpf_loader.c \
+              $(AGENT_DIR)/net.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ)
+all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN)
 
 # build directories
 $(BUILD_DIR):
@@ -93,11 +95,18 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent clean install test
+.PHONY: bpf agent verifier clean install test
 
 bpf: $(BPF_OBJ)
 
 agent: $(AGENT_BIN)
+
+verifier: $(VERIFIER_BIN)
+
+# Go verifier
+$(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
+	cd $(SRC_DIR)/verifier && go build -o ../../$@ .
+	@echo "Built: $@"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -107,7 +116,9 @@ clean:
 install: all
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
+	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
+	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
@@ -125,12 +136,13 @@ test: all
 .PHONY: help
 help:
 	@echo "LOTA Makefile targets:"
-	@echo "  all      - Build agent and BPF program (default)"
+	@echo "  all      - Build agent, verifier and BPF program (default)"
 	@echo "  bpf      - Build only BPF program"
 	@echo "  agent    - Build only user-space agent"
+	@echo "  verifier - Build only Go verifier"
 	@echo "  clean    - Remove build artifacts"
 	@echo "  install  - Install to /usr (requires sudo)"
 	@echo "  test     - Run basic tests (requires sudo)"
 	@echo ""
 	@echo "Prerequisites (Fedora):"
-	@echo "  sudo dnf install clang llvm libbpf-devel tpm2-tss-devel openssl-devel bpftool"
+	@echo "  sudo dnf install clang llvm libbpf-devel tpm2-tss-devel openssl-devel bpftool golang"
