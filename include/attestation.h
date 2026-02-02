@@ -3,7 +3,7 @@
  * LOTA - Attestation Report Schema
  * Defines the structure sent to remote verifier
  *
- * Copyright (C) 2026 Szymon Wilczek 
+ * Copyright (C) 2026 Szymon Wilczek
  */
 
 #ifndef LOTA_ATTESTATION_H
@@ -30,6 +30,9 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_TPM_QUOTE_OK (1U << 1) /* TPM quote succeeded */
 #define LOTA_REPORT_FLAG_KERNEL_HASH_OK (1U << 2) /* Kernel hash computed */
 #define LOTA_REPORT_FLAG_BPF_ACTIVE (1U << 3)     /* eBPF LSM is loaded */
+#define LOTA_REPORT_FLAG_MODULE_SIG (1U << 4) /* Kernel enforces module sigs*/
+#define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
+#define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
 
 /*
  * TPM evidence section
