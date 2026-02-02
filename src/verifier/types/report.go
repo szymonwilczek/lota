@@ -15,10 +15,11 @@ const (
 	ReportMagic   uint32 = 0x41544F4C // "LOTA" little-endian
 	ReportVersion uint32 = 0x00010000 // 1.0.0
 
-	HashSize        = 32  // SHA-256
-	NonceSize       = 32  // Challenge nonce
-	MaxSigSize      = 512 // RSA-4096 signature
-	PCRCount        = 24  // TPM PCR bank size
+	HashSize        = 32   // SHA-256
+	NonceSize       = 32   // Challenge nonce
+	MaxSigSize      = 512  // RSA-4096 signature
+	MaxAttestSize   = 1024 // TPMS_ATTEST blob
+	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
 )
@@ -55,13 +56,24 @@ type ReportHeader struct {
 	Flags       uint32 // offset 28
 }
 
-// struct lota_tpm_evidence (see: uapi/lota_report.h)
-// pcr_values[24][32](768) + pcr_mask(4) + quote_signature[512] + quote_sig_size(2) + nonce[32] + reserved(2)
+// struct lota_tpm_evidence (see: include/attestation.h)
+//
+//	pcr_values[24][32]    768 bytes
+//	pcr_mask                4 bytes
+//	quote_signature[512]  512 bytes
+//	quote_sig_size          2 bytes
+//	attest_data[1024]    1024 bytes
+//	attest_size             2 bytes
+//	nonce[32]              32 bytes
+//	reserved[2]             2 bytes
+//	TOTAL:               2346 bytes
 type TPMEvidence struct {
 	PCRValues      [PCRCount][HashSize]byte // 768 bytes
 	PCRMask        uint32                   // 4 bytes
 	QuoteSignature [MaxSigSize]byte         // 512 bytes
 	QuoteSigSize   uint16                   // 2 bytes
+	AttestData     [MaxAttestSize]byte      // 1024 bytes - raw TPMS_ATTEST
+	AttestSize     uint16                   // 2 bytes
 	Nonce          [NonceSize]byte          // 32 bytes
 	Reserved       [2]byte                  // 2 bytes alignment
 }
@@ -89,10 +101,10 @@ type BPFSummary struct {
 	LastEventTS     uint64 // 8 bytes
 }
 
-// struct lota_attestation_report (see: uapi/lota_report.h)
+// struct lota_attestation_report (see: include/attestation.h)
 type AttestationReport struct {
 	Header ReportHeader      // 32 bytes
-	TPM    TPMEvidence       // 1320 bytes
+	TPM    TPMEvidence       // 2346 bytes
 	System SystemMeasurement // 364 bytes
 	BPF    BPFSummary        // 24 bytes
 }
@@ -124,7 +136,8 @@ var (
 )
 
 // expected binary size of AttestationReport
-const ExpectedReportSize = 1740
+// Header(32) + TPM(2346) + System(364) + BPF(24) = 2766
+const ExpectedReportSize = 2766
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -159,7 +172,7 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
-	// tpm evidence (1320 bytes)
+	// tpm evidence (2346 bytes)
 	// pcr values: 24 * 32 = 768 bytes
 	for i := 0; i < PCRCount; i++ {
 		copy(report.TPM.PCRValues[i][:], data[offset:offset+HashSize])
@@ -170,6 +183,10 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.TPM.QuoteSignature[:], data[offset:offset+MaxSigSize])
 	offset += MaxSigSize
 	report.TPM.QuoteSigSize = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	copy(report.TPM.AttestData[:], data[offset:offset+MaxAttestSize])
+	offset += MaxAttestSize
+	report.TPM.AttestSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize

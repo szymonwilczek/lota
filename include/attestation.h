@@ -35,7 +35,19 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
 
 /*
- * TPM evidence section
+ * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.
+ * Contains: magic, type, qualifiedSigner, extraData (nonce),
+ * clockInfo, firmwareVersion, and quote info (PCR selection + digest).
+ */
+#define LOTA_MAX_ATTEST_SIZE 1024
+
+/*
+ * Contains the raw TPMS_ATTEST blob which is cryptographically signed by TPM.
+ * The verifier MUST verify the signature over attest_data, then parse it
+ * to extract the nonce (extraData) and PCR digest for validation.
+ *
+ * TODO: 'nonce' field is a convenience copy, use the nonce embedded in
+ * attest_data.
  */
 struct lota_tpm_evidence {
   /* PCR values - all 24 PCRs, SHA-256 */
@@ -44,11 +56,18 @@ struct lota_tpm_evidence {
   /* Which PCRs are included (bitmask) */
   uint32_t pcr_mask;
 
-  /* TPM Quote signature */
+  /* TPM Quote signature over attest_data */
   uint8_t quote_signature[LOTA_MAX_SIG_SIZE];
   uint16_t quote_sig_size;
 
-  /* Nonce from server (echoed back) */
+  /*
+   * Raw TPMS_ATTEST blob from TPM2_Quote.
+   * Verifier must: SHA256(attest_data) == signed_digest
+   */
+  uint8_t attest_data[LOTA_MAX_ATTEST_SIZE];
+  uint16_t attest_size;
+
+  /* Nonce from server */
   uint8_t nonce[LOTA_NONCE_SIZE];
 
   /* Reserved for alignment */

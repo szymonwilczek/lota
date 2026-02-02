@@ -580,6 +580,18 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
            quote_resp.signature_size);
   }
 
+  /*
+   * Copy raw TPMS_ATTEST blob for signature verification.
+   * Verifier will: 1) verify signature over this data
+   *                2) parse extraData to extract nonce
+   *                3) compare with challenge nonce
+   */
+  report->tpm.attest_size = quote_resp.attest_size;
+  if (quote_resp.attest_size <= LOTA_MAX_ATTEST_SIZE) {
+    memcpy(report->tpm.attest_data, quote_resp.attest_data,
+           quote_resp.attest_size);
+  }
+
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
 
   /* system info: kernel hash */
