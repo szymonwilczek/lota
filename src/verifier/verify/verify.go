@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: MIT
+// LOTA Verifier - Main verification orchestrator
+//
+// Coordinates all verification steps:
+//   1. Parse and validate report structure
+//   2. Verify nonce (freshness/anti-replay)
+//   3. Verify TPM quote signature
+//   4. Verify PCR values against policy
+//   5. Generate verification result
+
+package verify
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/pufferffish/lota/verifier/store"
+	"github.com/pufferffish/lota/verifier/types"
+)
+
+// main verification engine
+type Verifier struct {
+	nonceStore  *NonceStore
+	pcrVerifier *PCRVerifier
+	aikStore    store.AIKStore
+
+	// configuration
+	nonceLifetime    time.Duration
+	timestampMaxAge  time.Duration
+	sessionTokenLife time.Duration
+}
+
+// holds verifier configuration
+type VerifierConfig struct {
+	// how long a challenge nonce is valid
+	NonceLifetime time.Duration
+
+	// maximum age of report timestamp
+	TimestampMaxAge time.Duration
+
+	// how long issued tokens are valid
+	SessionTokenLife time.Duration
+}
+
+// returns sensible defaults for verifier
+func DefaultConfig() VerifierConfig {
+	return VerifierConfig{
+		NonceLifetime:    5 * time.Minute,
+		TimestampMaxAge:  2 * time.Minute,
+		SessionTokenLife: 1 * time.Hour,
+	}
+}
+
+// creates a new verification engine
+func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
+	return &Verifier{
+		nonceStore:       NewNonceStore(cfg.NonceLifetime),
+		pcrVerifier:      NewPCRVerifier(),
+		aikStore:         aikStore,
+		nonceLifetime:    cfg.NonceLifetime,
+		timestampMaxAge:  cfg.TimestampMaxAge,
+		sessionTokenLife: cfg.SessionTokenLife,
+	}
+}
+
+// creates a challenge for client attestation
+func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
+	// PCR selection: 0 (SRTM), 1 (BIOS config), 14 (LOTA self)
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+
+	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
+}
+
+// performs full verification of attestation report
+// returns verification result ready to send back to client
+func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.VerifyResult, error) {
+	result := &types.VerifyResult{
+		Magic:   types.ReportMagic,
+		Version: types.ReportVersion,
+	}
+
+	report, err := types.ParseReport(reportData)
+	if err != nil {
+		log.Printf("[%s] Report parse failed: %v", clientID, err)
+		result.Result = types.VerifyOldVersion
+		return result, err
+	}
+
+	if err := v.nonceStore.VerifyNonce(report, clientID); err != nil {
+		log.Printf("[%s] Nonce verification failed: %v", clientID, err)
+		result.Result = types.VerifyNonceFail
+		return result, err
+	}
+
+	if err := VerifyTimestamp(report, v.timestampMaxAge); err != nil {
+		log.Printf("[%s] Timestamp verification failed: %v", clientID, err)
+		result.Result = types.VerifyNonceFail
+		return result, err
+	}
+
+	aikPubKey, err := v.getAIKForClient(clientID, report)
+	if err != nil {
+		// TOFU mode: first connection from this client
+		// skip signature verification but log warning
+		log.Printf("[%s] WARNING: AIK not registered, skipping signature verification (TOFU first-use)", clientID)
+
+		// TODO: either:
+		// Require out-of-band AIK registration
+		// Extract AIK from TPM certificate chain
+		// Use Privacy CA attestation
+	} else {
+		if err := VerifyReportSignature(report, aikPubKey); err != nil {
+			log.Printf("[%s] Signature verification failed: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, err
+		}
+	}
+
+	if err := v.pcrVerifier.VerifyReport(report); err != nil {
+		log.Printf("[%s] PCR verification failed: %v", clientID, err)
+		result.Result = types.VerifyPCRFail
+		return result, err
+	}
+
+	if report.Header.Flags&types.FlagIOMMUOK == 0 {
+		log.Printf("[%s] IOMMU not verified", clientID)
+		// IMPORTANT: policy determines if this is required
+	}
+
+	log.Printf("[%s] Verification successful", clientID)
+
+	result.Result = types.VerifyOK
+	result.ValidUntil = uint64(time.Now().Add(v.sessionTokenLife).Unix())
+
+	// generate session token
+	if _, err := rand.Read(result.SessionToken[:]); err != nil {
+		return nil, fmt.Errorf("failed to generate session token: %w", err)
+	}
+
+	return result, nil
+}
+
+// retrieves or registers AIK for client
+// implements tofu (trust on first use) model
+func (v *Verifier) getAIKForClient(clientID string, report *types.AttestationReport) (*rsa.PublicKey, error) {
+	// TODO: parse TPMS_ATTEST to get the key
+
+	aikPubKey, err := v.aikStore.GetAIK(clientID)
+	if err == nil {
+		return aikPubKey, nil
+	}
+
+	return nil, errors.New("AIK not found for client - registration required")
+}
+
+// loads a PCR policy file
+func (v *Verifier) LoadPolicy(path string) error {
+	return v.pcrVerifier.LoadPolicy(path)
+}
+
+// adds a policy programmatically
+func (v *Verifier) AddPolicy(policy *PCRPolicy) {
+	v.pcrVerifier.AddPolicy(policy)
+}
+
+// sets which policy to use
+func (v *Verifier) SetActivePolicy(name string) error {
+	return v.pcrVerifier.SetActivePolicy(name)
+}
+
+// returns verifier statistics
+type Stats struct {
+	PendingChallenges int
+	ActivePolicy      string
+	LoadedPolicies    []string
+}
+
+func (v *Verifier) Stats() Stats {
+	return Stats{
+		PendingChallenges: v.nonceStore.PendingCount(),
+		ActivePolicy:      v.pcrVerifier.GetActivePolicy(),
+		LoadedPolicies:    v.pcrVerifier.ListPolicies(),
+	}
+}
