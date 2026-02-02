@@ -12,7 +12,6 @@ package verify
 
 import (
 	"crypto/rand"
-	"crypto/rsa"
 	"errors"
 	"fmt"
 	"log"
@@ -104,7 +103,7 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 		return result, err
 	}
 
-	aikPubKey, err := v.getAIKForClient(clientID, report)
+	aikPubKey, err := v.aikStore.GetAIK(clientID)
 	if err != nil {
 		// TOFU mode: first connection from this client
 		// extract AIK from report and register it
@@ -201,19 +200,6 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 	}
 
 	return result, nil
-}
-
-// retrieves or registers AIK for client
-// implements tofu (trust on first use) model
-func (v *Verifier) getAIKForClient(clientID string, report *types.AttestationReport) (*rsa.PublicKey, error) {
-	// TODO: parse TPMS_ATTEST to get the key
-
-	aikPubKey, err := v.aikStore.GetAIK(clientID)
-	if err == nil {
-		return aikPubKey, nil
-	}
-
-	return nil, errors.New("AIK not found for client - registration required")
 }
 
 // loads a PCR policy file

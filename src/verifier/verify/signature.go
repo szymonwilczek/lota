@@ -107,24 +107,37 @@ func SelectVerifier(sigAlg uint16) SignatureVerifier {
 
 // verifies the TPM quote signature in the report
 //
-// NOTE(IMPORTANT): Current C struct doesn't include raw attestation data (TPMS_ATTEST),
-// only the signature. For MVP, it will verify whether the signature exists but cannot
-// perform full cryptographic verification without the attestation blob.
-// TODO: Add attest_data field to lota_tpm_evidence!!!
+// Verification flow:
+// - Extract signature and attest_data from report
+// - Hash attest_data with SHA-256
+// - Verify signature over hash using AIK public key
+// TODO: Parse attest_data to verify nonce matches challenge
 func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.PublicKey) error {
 	if report.TPM.QuoteSigSize == 0 {
 		return errors.New("no signature in report")
 	}
 
-	// TODO: full verification:
-	// 1. uint8_t attest_data[1024] and uint16_t attest_size to C struct
-	// 2. Copy attestation blob from tpm_quote_response in agent
-	// 3. Verify signature is over SHA256(attest_data)
-	// 4. Parse attest_data to extract nonce and verify PCR digest
+	if report.TPM.AttestSize == 0 {
+		return errors.New("no attestation data in report")
+	}
 
-	_ = aikPubKey // will be used when i'll write the patch
+	if aikPubKey == nil {
+		return errors.New("AIK public key is nil")
+	}
 
-	// real verification disabled until c struct is extended
+	// extract actual data
+	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
+	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
+
+	verifier := NewRSASSAVerifier()
+	if err := verifier.VerifyQuoteSignature(attestData, signature, aikPubKey); err != nil {
+		return fmt.Errorf("TPM quote signature invalid: %w", err)
+	}
+
+	// TODO: TPMS_ATTEST structure to verify:
+	// - extraData matches challenge nonce
+	// - PCR digest matches reported PCR values
+
 	return nil
 }
 
