@@ -107,19 +107,43 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 	aikPubKey, err := v.getAIKForClient(clientID, report)
 	if err != nil {
 		// TOFU mode: first connection from this client
-		// skip signature verification but log warning
-		log.Printf("[%s] WARNING: AIK not registered, skipping signature verification (TOFU first-use)", clientID)
+		// extract AIK from report and register it
+		if report.TPM.AIKPublicSize == 0 {
+			log.Printf("[%s] ERROR: No AIK public key in report", clientID)
+			result.Result = types.VerifySigFail
+			return result, errors.New("no AIK public key in report")
+		}
 
-		// TODO: either:
-		// Require out-of-band AIK registration
-		// Extract AIK from TPM certificate chain
-		// Use Privacy CA attestation
-	} else {
+		aikData := report.TPM.AIKPublic[:report.TPM.AIKPublicSize]
+		aikPubKey, err = ParseRSAPublicKey(aikData)
+		if err != nil {
+			log.Printf("[%s] ERROR: Failed to parse AIK public key: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("failed to parse AIK: %w", err)
+		}
+
+		// verify signature before registering
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
 			log.Printf("[%s] Signature verification failed: %v", clientID, err)
 			result.Result = types.VerifySigFail
 			return result, err
 		}
+
+		// valid - register AIK for future use
+		if err := v.aikStore.RegisterAIK(clientID, aikPubKey); err != nil {
+			log.Printf("[%s] WARNING: Failed to register AIK: %v", clientID, err)
+		} else {
+			log.Printf("[%s] TOFU: AIK registered (fingerprint: %s)",
+				clientID, AIKFingerprint(aikPubKey))
+		}
+	} else {
+		// already registered - verify signature
+		if err := VerifyReportSignature(report, aikPubKey); err != nil {
+			log.Printf("[%s] Signature verification failed: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, err
+		}
+		log.Printf("[%s] Signature verified with registered AIK", clientID)
 	}
 
 	if err := v.pcrVerifier.VerifyReport(report); err != nil {
@@ -128,7 +152,7 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 		return result, err
 	}
 
-	// TOFU: check agent self-measurement against baseline
+	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
 	switch tofuResult {
