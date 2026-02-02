@@ -181,9 +181,20 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// NOTE(IMPORTANT): AgentHash not in current C wire format (lota_system_measurement)
-	// Skip agent hash verification until wire format is extended
-	// MARKED AS TODO
+	// verify agent binary hash if policy specifies allowed hashes
+	if len(policy.AgentHashes) > 0 {
+		agentHashHex := hex.EncodeToString(report.System.AgentHash[:])
+		found := false
+		for _, allowed := range policy.AgentHashes {
+			if agentHashHex == allowed {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("agent hash not in allowed list: %s", agentHashHex)
+		}
+	}
 
 	// check iommu requirement
 	if policy.RequireIOMMU {
