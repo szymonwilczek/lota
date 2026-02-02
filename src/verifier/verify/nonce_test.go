@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 func TestNonceStore_GenerateAndVerify(t *testing.T) {

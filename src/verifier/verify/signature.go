@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // handles TPM quote signature verification

@@ -1,4 +1,4 @@
-module github.com/pufferffish/lota/verifier
+module github.com/szymonwilczek/lota/verifier
 
 go 1.22
 

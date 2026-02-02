@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // stores known-good measurements for a client

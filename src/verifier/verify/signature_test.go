@@ -12,7 +12,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 var testKeyPair *rsa.PrivateKey

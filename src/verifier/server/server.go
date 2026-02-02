@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/types"
-	"github.com/pufferffish/lota/verifier/verify"
+	"github.com/szymonwilczek/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 type Server struct {

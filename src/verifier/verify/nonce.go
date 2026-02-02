@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // manages outstanding challenges and prevents replay attacks

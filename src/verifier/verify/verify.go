@@ -17,8 +17,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/store"
-	"github.com/pufferffish/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/store"
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // main verification engine

@@ -30,9 +30,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pufferffish/lota/verifier/server"
-	"github.com/pufferffish/lota/verifier/store"
-	"github.com/pufferffish/lota/verifier/verify"
+	"github.com/szymonwilczek/lota/verifier/server"
+	"github.com/szymonwilczek/lota/verifier/store"
+	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 var (
