@@ -34,6 +34,9 @@
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define DEFAULT_VERIFIER_PORT 8443
+#define DEFAULT_ATTEST_INTERVAL 300 /* 5 minutes */
+#define MIN_ATTEST_INTERVAL 10      /* 10 seconds */
+#define MAX_BACKOFF_SECONDS 300     /* Max retry delay */
 
 /* PCR index for LOTA agent self-measurement */
 #define LOTA_PCR_SELF 14
@@ -486,6 +489,57 @@ static int parse_mode(const char *mode_str) {
 }
 
 /*
+ * Check kernel module security status.
+ * Returns: bitmask of LOTA_REPORT_FLAG_* for module security
+ *
+ * Checks:
+ *   - /sys/module/module/parameters/sig_enforce - module signature enforcement
+ *   - /sys/kernel/security/lockdown - kernel lockdown mode
+ *   - /sys/firmware/efi/efivars or dmesg for Secure Boot
+ */
+static uint32_t check_module_security(void) {
+  uint32_t flags = 0;
+  char buf[64];
+  FILE *f;
+  ssize_t n;
+
+  f = fopen("/sys/module/module/parameters/sig_enforce", "r");
+  if (f) {
+    if (fgets(buf, sizeof(buf), f)) {
+      if (buf[0] == 'Y' || buf[0] == '1') {
+        flags |= LOTA_REPORT_FLAG_MODULE_SIG;
+      }
+    }
+    fclose(f);
+  }
+
+  f = fopen("/sys/kernel/security/lockdown", "r");
+  if (f) {
+    if (fgets(buf, sizeof(buf), f)) {
+      if (strstr(buf, "[integrity]") || strstr(buf, "[confidentiality]")) {
+        flags |= LOTA_REPORT_FLAG_LOCKDOWN;
+      }
+    }
+    fclose(f);
+  }
+
+  /* secure boot status via efi variable */
+  f = fopen("/sys/firmware/efi/efivars/"
+            "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+            "rb");
+  if (f) {
+    uint8_t efi_buf[5];
+    n = fread(efi_buf, 1, sizeof(efi_buf), f);
+    if (n == 5 && efi_buf[4] == 1) {
+      flags |= LOTA_REPORT_FLAG_SECUREBOOT;
+    }
+    fclose(f);
+  }
+
+  return flags;
+}
+
+/*
  * Build attestation report for verifier
  */
 static int build_attestation_report(const struct verifier_challenge *challenge,
@@ -550,17 +604,101 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
   memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
 
+  report->header.flags |= check_module_security();
+
   return 0;
 }
 
 /*
  * Perform remote attestation
  */
-static int do_attest(const char *server, int port) {
+/*
+ * Perform single attestation round.
+ * TPM and network must be initialized before calling.
+ * Returns: 0 on success, negative errno on failure
+ */
+static int attest_once(const char *server, int port, int verbose) {
   struct net_context net_ctx;
   struct verifier_challenge challenge;
   struct verifier_result result;
   struct lota_attestation_report report;
+  int ret;
+
+  if (verbose)
+    printf("Connecting to verifier at %s:%d...\n", server, port);
+
+  ret = net_context_init(&net_ctx, server, port, NULL);
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  ret = net_connect(&net_ctx);
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to connect to verifier: %s\n", strerror(-ret));
+    net_context_cleanup(&net_ctx);
+    return ret;
+  }
+
+  if (verbose)
+    printf("Connected, waiting for challenge...\n");
+
+  ret = net_recv_challenge(&net_ctx, &challenge);
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to receive challenge: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  if (verbose) {
+    printf("Challenge received (PCR mask: 0x%08X)\n", challenge.pcr_mask);
+    print_hex("  Nonce", challenge.nonce, LOTA_NONCE_SIZE);
+  }
+
+  ret = build_attestation_report(&challenge, &report);
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to build report: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  if (verbose)
+    printf("Sending report (%u bytes)...\n", report.header.report_size);
+
+  ret = net_send_report(&net_ctx, &report, sizeof(report));
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to send report: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  ret = net_recv_result(&net_ctx, &result);
+  if (ret < 0) {
+    if (verbose)
+      fprintf(stderr, "Failed to receive result: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  if (verbose) {
+    printf("Result: %s\n", net_result_str(result.result));
+    if (result.result == VERIFY_OK) {
+      printf("Valid until: %lu\n", (unsigned long)result.valid_until);
+    }
+  }
+
+  ret = (result.result == VERIFY_OK) ? 0 : 1;
+
+cleanup:
+  net_context_cleanup(&net_ctx);
+  return ret;
+}
+
+/*
+ * One-shot remote attestation
+ */
+static int do_attest(const char *server, int port) {
   int ret;
 
   printf("=== Remote Attestation ===\n\n");
@@ -696,23 +834,26 @@ int main(int argc, char *argv[]) {
   int test_tpm_flag = 0;
   int test_iommu_flag = 0;
   int attest_flag = 0;
+  int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   int mode = LOTA_MODE_MONITOR;
   const char *bpf_path = DEFAULT_BPF_PATH;
   const char *server_addr = "localhost";
   int server_port = DEFAULT_VERIFIER_PORT;
 
-  static struct option long_options[] = {{"test-tpm", no_argument, 0, 't'},
-                                         {"test-iommu", no_argument, 0, 'i'},
-                                         {"attest", no_argument, 0, 'a'},
-                                         {"server", required_argument, 0, 's'},
-                                         {"port", required_argument, 0, 'p'},
-                                         {"bpf", required_argument, 0, 'b'},
-                                         {"mode", required_argument, 0, 'm'},
-                                         {"help", no_argument, 0, 'h'},
-                                         {0, 0, 0, 0}};
+  static struct option long_options[] = {
+      {"test-tpm", no_argument, 0, 't'},
+      {"test-iommu", no_argument, 0, 'i'},
+      {"attest", no_argument, 0, 'a'},
+      {"attest-interval", required_argument, 0, 'I'},
+      {"server", required_argument, 0, 's'},
+      {"port", required_argument, 0, 'p'},
+      {"bpf", required_argument, 0, 'b'},
+      {"mode", required_argument, 0, 'm'},
+      {"help", no_argument, 0, 'h'},
+      {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "tias:p:b:m:h", long_options, NULL)) !=
-         -1) {
+  while ((opt = getopt_long(argc, argv, "tiaI:s:p:b:m:h", long_options,
+                            NULL)) != -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
