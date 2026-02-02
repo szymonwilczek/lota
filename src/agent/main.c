@@ -941,6 +941,7 @@ int main(int argc, char *argv[]) {
   int opt;
   int test_tpm_flag = 0;
   int test_iommu_flag = 0;
+  int test_ipc_flag = 0;
   int attest_flag = 0;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   int mode = LOTA_MODE_MONITOR;
@@ -951,6 +952,7 @@ int main(int argc, char *argv[]) {
   static struct option long_options[] = {
       {"test-tpm", no_argument, 0, 't'},
       {"test-iommu", no_argument, 0, 'i'},
+      {"test-ipc", no_argument, 0, 'c'},
       {"attest", no_argument, 0, 'a'},
       {"attest-interval", required_argument, 0, 'I'},
       {"server", required_argument, 0, 's'},
@@ -960,7 +962,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "tiaI:s:p:b:m:h", long_options,
+  while ((opt = getopt_long(argc, argv, "ticaI:s:p:b:m:h", long_options,
                             NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -968,6 +970,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'i':
       test_iommu_flag = 1;
+      break;
+    case 'c':
+      test_ipc_flag = 1;
       break;
     case 'a':
       attest_flag = 1;
@@ -1015,6 +1020,38 @@ int main(int argc, char *argv[]) {
 
   if (test_iommu_flag)
     return test_iommu();
+
+  if (test_ipc_flag) {
+    int ret;
+    uint64_t valid_until;
+    printf("=== IPC Test Server ===\n\n");
+    printf("Starting IPC server for testing...\n");
+    ret = ipc_init(&g_ipc_ctx);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
+      return 1;
+    }
+
+    valid_until = (uint64_t)(time(NULL) + 3600);
+    ipc_update_status(&g_ipc_ctx,
+                      LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
+                          LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+                      valid_until);
+    ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
+    ipc_record_attestation(&g_ipc_ctx, true);
+
+    printf("IPC server running (simulated ATTESTED state).\n");
+    printf("Press Ctrl+C to stop.\n");
+    printf("Test with: ./build/lota-ipc-test [ping|status|token]\n\n");
+
+    while (g_running) {
+      ipc_process(&g_ipc_ctx, 1000);
+    }
+
+    printf("\nShutting down IPC test server...\n");
+    ipc_cleanup(&g_ipc_ctx);
+    return 0;
+  }
 
   if (attest_flag) {
     if (attest_interval > 0)
