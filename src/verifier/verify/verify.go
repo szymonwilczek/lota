@@ -96,6 +96,7 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 		result.Result = types.VerifyNonceFail
 		return result, err
 	}
+	log.Printf("[%s] Nonce verified (challenge-response + TPMS_ATTEST binding)", clientID)
 
 	if err := VerifyTimestamp(report, v.timestampMaxAge); err != nil {
 		log.Printf("[%s] Timestamp verification failed: %v", clientID, err)
