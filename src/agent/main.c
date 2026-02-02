@@ -632,6 +632,25 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     }
   }
 
+  /*
+   * Agent self-hash: hash LOTA own binary for integrity verification.
+   * Verifier can compare this against known-good agent hashes.
+   */
+  {
+    char agent_path[256];
+    ssize_t len =
+        readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
+    if (len > 0) {
+      agent_path[len] = '\0';
+      ret = tpm_hash_file(agent_path, report->system.agent_hash);
+      if (ret == 0) {
+        printf("Agent binary hashed: %s\n", agent_path);
+      } else {
+        fprintf(stderr, "Warning: Failed to hash agent binary\n");
+      }
+    }
+  }
+
   if (iommu_verify_full(&iommu_status)) {
     report->header.flags |= LOTA_REPORT_FLAG_IOMMU_OK;
   }
