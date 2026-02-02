@@ -26,8 +26,10 @@
 
 #include "../../include/attestation.h"
 #include "../../include/lota.h"
+#include "../../include/lota_ipc.h"
 #include "bpf_loader.h"
 #include "iommu.h"
+#include "ipc.h"
 #include "net.h"
 #include "quote.h"
 #include "tpm.h"
@@ -45,6 +47,7 @@
 static volatile sig_atomic_t g_running = 1;
 static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
+static struct ipc_context g_ipc_ctx;
 
 /*
  * Signal handler for graceful shutdown
@@ -367,14 +370,28 @@ static const char *mode_to_string(int mode) {
 
 static int run_daemon(const char *bpf_path, int mode) {
   int ret;
+  uint32_t status_flags = 0;
 
   printf("=== LOTA Agent ===\n\n");
+
+  /* IPC server first */
+  printf("Starting IPC server...\n");
+  ret = ipc_init(&g_ipc_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
+    fprintf(stderr, "Continuing without IPC support\n");
+  } else {
+    ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
+  }
+  printf("\n");
 
   printf("Verifying IOMMU...\n");
   ret = test_iommu();
   if (ret != 0) {
     fprintf(stderr, "Warning: IOMMU verification failed\n");
     /* continue anyway for testing - ill handle it later */
+  } else {
+    status_flags |= LOTA_STATUS_IOMMU_OK;
   }
   printf("\n");
 
@@ -385,6 +402,7 @@ static int run_daemon(const char *bpf_path, int mode) {
     fprintf(stderr, "Continuing without TPM support\n");
   } else {
     printf("TPM initialized\n");
+    status_flags |= LOTA_STATUS_TPM_OK;
 
     printf("Performing self-measurement...\n");
     ret = self_measure(&g_tpm_ctx);
@@ -410,6 +428,7 @@ static int run_daemon(const char *bpf_path, int mode) {
     goto cleanup_bpf;
   }
   printf("BPF program loaded\n");
+  status_flags |= LOTA_STATUS_BPF_LOADED;
 
   ret = bpf_loader_set_mode(&g_bpf_ctx, mode);
   if (ret < 0) {
@@ -428,10 +447,15 @@ static int run_daemon(const char *bpf_path, int mode) {
   }
   printf("Ring buffer ready\n\n");
 
+  ipc_update_status(&g_ipc_ctx, status_flags, 0);
+
   printf("Monitoring binary executions (Ctrl+C to stop)...\n\n");
 
   /* main loop */
   while (g_running) {
+    /* non-blocking */
+    ipc_process(&g_ipc_ctx, 0);
+
     ret = bpf_loader_poll(&g_bpf_ctx, 100); /* 100ms timeout */
     if (ret < 0 && ret != -EINTR) {
       fprintf(stderr, "Poll error: %s\n", strerror(-ret));
@@ -452,6 +476,7 @@ cleanup_bpf:
   bpf_loader_cleanup(&g_bpf_ctx);
 cleanup_tpm:
   tpm_cleanup(&g_tpm_ctx);
+  ipc_cleanup(&g_ipc_ctx);
   return ret;
 }
 
