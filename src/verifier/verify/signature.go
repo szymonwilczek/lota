@@ -111,7 +111,6 @@ func SelectVerifier(sigAlg uint16) SignatureVerifier {
 // - Extract signature and attest_data from report
 // - Hash attest_data with SHA-256
 // - Verify signature over hash using AIK public key
-// TODO: Parse attest_data to verify nonce matches challenge
 func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.PublicKey) error {
 	if report.TPM.QuoteSigSize == 0 {
 		return errors.New("no signature in report")
@@ -133,10 +132,6 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	if err := verifier.VerifyQuoteSignature(attestData, signature, aikPubKey); err != nil {
 		return fmt.Errorf("TPM quote signature invalid: %w", err)
 	}
-
-	// TODO: TPMS_ATTEST structure to verify:
-	// - extraData matches challenge nonce
-	// - PCR digest matches reported PCR values
 
 	return nil
 }
