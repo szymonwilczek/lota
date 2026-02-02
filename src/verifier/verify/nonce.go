@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -72,6 +73,10 @@ func (ns *NonceStore) GenerateChallenge(clientID string, pcrMask uint32) (*types
 
 // checks if the nonce in report matches an outstanding challenge
 // nonce is consumed (one-time use) to prevent replay
+//
+// SECURITY: This verifies TWO things:
+// - report.TPM.Nonce matches stored challenge
+// - Nonce inside TPMS_ATTEST (signed by TPM) matches stored challenge
 func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID string) error {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
@@ -96,9 +101,19 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 		return errors.New("nonce bound to different client")
 	}
 
-	// verify nonce matches whats in report
+	// verify nonce matches whats in report header
 	if !bytes.Equal(entry.nonce[:], report.TPM.Nonce[:]) {
-		return errors.New("nonce mismatch")
+		return errors.New("nonce mismatch in report header")
+	}
+
+	// verify nonce inside tpms_attest (signed by tpm)
+	if report.TPM.AttestSize == 0 {
+		return errors.New("no attestation data - cannot verify nonce binding")
+	}
+
+	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
+	if err := VerifyNonceInAttest(attestData, entry.nonce[:]); err != nil {
+		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
 	}
 
 	return nil
