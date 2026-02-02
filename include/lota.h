@@ -58,10 +58,25 @@ typedef __u64 uint64_t;
 
 /* Event types for ring buffer */
 enum lota_event_type {
-  LOTA_EVENT_EXEC = 1,    /* Binary execution */
-  LOTA_EVENT_MODULE_LOAD, /* Kernel module load */
-  LOTA_EVENT_MMAP_EXEC,   /* Executable mmap */
+  LOTA_EVENT_EXEC = 1,       /* Binary execution */
+  LOTA_EVENT_MODULE_LOAD,    /* Kernel module load */
+  LOTA_EVENT_MMAP_EXEC,      /* Executable mmap */
+  LOTA_EVENT_MODULE_BLOCKED, /* Module load blocked by policy */
 };
+
+/*
+ * LOTA enforcement modes
+ * Controls whether LSM hooks block or just monitor
+ */
+enum lota_mode {
+  LOTA_MODE_MONITOR = 0,     /* Log only, allow everything */
+  LOTA_MODE_ENFORCE = 1,     /* Block unauthorized operations */
+  LOTA_MODE_MAINTENANCE = 2, /* Temporarily allow all (for updates) */
+};
+
+/* Config map keys */
+#define LOTA_CFG_MODE 0 /* enum lota_mode */
+#define LOTA_CFG_MAX_ENTRIES 8
 
 /*
  * Execution event - sent from eBPF to user-space via ring buffer.
