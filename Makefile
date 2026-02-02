@@ -35,6 +35,8 @@ BUILD_DIR := build
 AGENT_BIN := $(BUILD_DIR)/lota-agent
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
+SDK_LIB := $(BUILD_DIR)/liblotagaming.so
+SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 
 # Compiler flags
 CFLAGS := -Wall -Wextra -Werror -O2 -g
@@ -66,9 +68,14 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
+# SDK source files
+SDK_DIR := $(SRC_DIR)/sdk
+SDK_SRCS := $(SDK_DIR)/lota_gaming.c
+SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN)
+all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -84,6 +91,21 @@ $(BUILD_DIR)/agent/%.o: $(AGENT_DIR)/%.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# compile SDK
+$(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+
+# build SDK shared library
+$(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
+	$(CC) -shared -o $@ $^
+	@echo "Built: $@"
+
+# build SDK static library
+$(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
+	$(AR) rcs $@ $^
+	@echo "Built: $@"
+
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
@@ -96,13 +118,15 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent verifier clean install test
+.PHONY: bpf agent verifier sdk clean install test
 
 bpf: $(BPF_OBJ)
 
 agent: $(AGENT_BIN)
 
 verifier: $(VERIFIER_BIN)
+
+sdk: $(SDK_LIB) $(SDK_STATIC)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -117,10 +141,15 @@ clean:
 install: all
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
+	install -d $(DESTDIR)/usr/lib64
+	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
+	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
+	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Basic tests (requires root for TPM/BPF)
@@ -137,10 +166,11 @@ test: all
 .PHONY: help
 help:
 	@echo "LOTA Makefile targets:"
-	@echo "  all      - Build agent, verifier and BPF program (default)"
+	@echo "  all      - Build agent, verifier, SDK and BPF program (default)"
 	@echo "  bpf      - Build only BPF program"
 	@echo "  agent    - Build only user-space agent"
 	@echo "  verifier - Build only Go verifier"
+	@echo "  sdk      - Build only gaming SDK library"
 	@echo "  clean    - Remove build artifacts"
 	@echo "  install  - Install to /usr (requires sudo)"
 	@echo "  test     - Run basic tests (requires sudo)"
