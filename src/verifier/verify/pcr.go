@@ -41,6 +41,15 @@ type PCRPolicy struct {
 
 	// if true, fails if LSM not in enforce mode
 	RequireEnforce bool `yaml:"require_enforce"`
+
+	// if true, fails if kernel module signature enforcement disabled
+	RequireModuleSig bool `yaml:"require_module_sig"`
+
+	// if true, fails if Secure Boot not enabled
+	RequireSecureBoot bool `yaml:"require_secureboot"`
+
+	// if true, fails if kernel lockdown not enabled
+	RequireLockdown bool `yaml:"require_lockdown"`
 }
 
 // manages PCR policies and verification
@@ -183,9 +192,26 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// NOTE(IMPORTANTE): LSMMode not in current C wire format (lota_system_measurement)
-	// Skip LSM mode check until wire format is extended
-	// MARKED AS TODO
+	// check module signing enforcement
+	if policy.RequireModuleSig {
+		if report.Header.Flags&types.FlagModuleSig == 0 {
+			return errors.New("kernel module signature enforcement not enabled")
+		}
+	}
+
+	// check secure boot
+	if policy.RequireSecureBoot {
+		if report.Header.Flags&types.FlagSecureBoot == 0 {
+			return errors.New("Secure Boot not enabled")
+		}
+	}
+
+	// check kernel lockdown
+	if policy.RequireLockdown {
+		if report.Header.Flags&types.FlagLockdown == 0 {
+			return errors.New("kernel lockdown not active")
+		}
+	}
 
 	return nil
 }
