@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# LOTA gaming integration policy
+#
+# Provides access for Steam, Proton/Wine, and games to query
+# LOTA attestation status. Rules are conditional on type existence.
+#
+
+policy_module(lota_gaming, 1.0.0)
+
+#
+# Tunables
+#
+
+## <desc>
+## <p>Allow Steam to query LOTA status.</p>
+## </desc>
+gen_tunable(lota_steam_attest, true)
+
+## <desc>
+## <p>Allow Wine/Proton to query LOTA status.</p>
+## </desc>
+gen_tunable(lota_wine_attest, true)
+
+## <desc>
+## <p>Allow anti-cheat extended access.</p>
+## </desc>
+gen_tunable(lota_anticheat_extended, true)
+
+#
+# Required types
+#
+gen_require(`
+        type lota_agent_t;
+        type lota_var_t;
+        type lota_etc_t;
+')
+
+#
+# Steam
+#
+optional_policy(`
+        gen_require(`
+                type steam_t;
+        ')
+
+        allow steam_t lota_var_t:dir search_dir_perms;
+        allow steam_t lota_var_t:sock_file write;
+        allow steam_t lota_agent_t:unix_stream_socket connectto;
+        allow steam_t lota_var_t:file read_file_perms;
+        allow steam_t lota_etc_t:dir search_dir_perms;
+        allow steam_t lota_etc_t:file read_file_perms;
+
+        allow lota_agent_t steam_t:unix_stream_socket { accept read write getattr };
+        allow lota_agent_t steam_t:process { getattr getpgid };
+        allow steam_t lota_agent_t:process signal;
+')
+
+#
+# Wine/Proton
+#
+optional_policy(`
+        gen_require(`
+                type wine_t;
+        ')
+
+        allow wine_t lota_var_t:dir search_dir_perms;
+        allow wine_t lota_var_t:sock_file write;
+        allow wine_t lota_agent_t:unix_stream_socket connectto;
+        allow wine_t lota_var_t:file read_file_perms;
+
+        allow lota_agent_t wine_t:unix_stream_socket { accept read write getattr };
+        allow lota_agent_t wine_t:process { getattr getpgid };
+        allow wine_t lota_agent_t:process signal;
+        allow wine_t lota_etc_t:dir list_dir_perms;
+        allow wine_t lota_etc_t:file read_file_perms;
+')
+
+#
+# Generic games
+#
+optional_policy(`
+        gen_require(`
+                type games_t;
+        ')
+
+        allow games_t lota_var_t:dir search_dir_perms;
+        allow games_t lota_var_t:sock_file write;
+        allow games_t lota_agent_t:unix_stream_socket connectto;
+        allow games_t lota_var_t:file read_file_perms;
+
+        allow lota_agent_t games_t:unix_stream_socket { accept read write getattr };
+        allow lota_agent_t games_t:process { getattr getpgid };
+')
+
+#
+# X server
+#
+optional_policy(`
+        gen_require(`
+                type xserver_t;
+        ')
+
+        dontaudit lota_agent_t xserver_t:process signal;
+')
+
+#
+# User domain
+#
+optional_policy(`
+        gen_require(`
+                type user_t;
+                role user_r;
+        ')
+
+        allow user_t lota_var_t:dir search_dir_perms;
+        allow user_t lota_var_t:sock_file write;
+        allow user_t lota_agent_t:unix_stream_socket connectto;
+        allow user_t lota_var_t:file read_file_perms;
+
+        allow lota_agent_t user_t:unix_stream_socket { accept read write getattr };
+')
+
+#
+# Unconfined domain
+#
+optional_policy(`
+        gen_require(`
+                type unconfined_t;
+        ')
+
+        allow unconfined_t lota_var_t:dir search_dir_perms;
+        allow unconfined_t lota_var_t:sock_file write;
+        allow unconfined_t lota_agent_t:unix_stream_socket connectto;
+        allow unconfined_t lota_var_t:file read_file_perms;
+
+        allow lota_agent_t unconfined_t:unix_stream_socket { accept read write getattr };
+')
