@@ -459,6 +459,10 @@ static void print_usage(const char *prog) {
   printf("  --test-tpm        Test TPM operations and exit\n");
   printf("  --test-iommu      Test IOMMU verification and exit\n");
   printf("  --attest          Perform remote attestation and exit\n");
+  printf("  --attest-interval SECS\n");
+  printf("                    Continuous attestation interval in seconds\n");
+  printf("                    (default: %d, min: %d, 0=one-shot)\n",
+         DEFAULT_ATTEST_INTERVAL, MIN_ATTEST_INTERVAL);
   printf("  --server HOST     Verifier server address (default: localhost)\n");
   printf("  --port PORT       Verifier server port (default: %d)\n",
          DEFAULT_VERIFIER_PORT);
@@ -585,73 +589,106 @@ static int do_attest(const char *server, int port) {
   ret = tpm_provision_aik(&g_tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
-    goto cleanup;
+    tpm_cleanup(&g_tpm_ctx);
+    net_cleanup();
+    return ret;
   }
 
-  printf("Connecting to verifier at %s:%d...\n", server, port);
-  ret = net_context_init(&net_ctx, server, port,
-                         NULL); /* NULL = skip cert verify for testing */
-  if (ret < 0) {
-    fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
-    goto cleanup;
-  }
+  ret = attest_once(server, port, 1);
 
-  ret = net_connect(&net_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to connect to verifier: %s\n", strerror(-ret));
-    goto cleanup_net;
-  }
-  printf("Connected!\n");
+  printf("\n=== Attestation %s ===\n", ret == 0 ? "Successful" : "Failed");
 
-  printf("Waiting for challenge...\n");
-  ret = net_recv_challenge(&net_ctx, &challenge);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to receive challenge: %s\n", strerror(-ret));
-    goto cleanup_net;
-  }
-  printf("Challenge received (PCR mask: 0x%08X)\n", challenge.pcr_mask);
-  print_hex("  Nonce", challenge.nonce, LOTA_NONCE_SIZE);
-
-  printf("Building attestation report...\n");
-  ret = build_attestation_report(&challenge, &report);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to build report: %s\n", strerror(-ret));
-    goto cleanup_net;
-  }
-  printf("Report built (%u bytes)\n", report.header.report_size);
-
-  printf("Sending report to verifier...\n");
-  ret = net_send_report(&net_ctx, &report, sizeof(report));
-  if (ret < 0) {
-    fprintf(stderr, "Failed to send report: %s\n", strerror(-ret));
-    goto cleanup_net;
-  }
-
-  printf("Waiting for verification result...\n");
-  ret = net_recv_result(&net_ctx, &result);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to receive result: %s\n", strerror(-ret));
-    goto cleanup_net;
-  }
-
-  printf("\n=== Attestation Result ===\n");
-  printf("Status: %s\n", net_result_str(result.result));
-
-  if (result.result == VERIFY_OK) {
-    printf("Valid until: %lu (Unix timestamp)\n",
-           (unsigned long)result.valid_until);
-    print_hex("Session token", result.session_token, 32);
-    ret = 0;
-  } else {
-    ret = 1;
-  }
-
-cleanup_net:
-  net_context_cleanup(&net_ctx);
-cleanup:
   tpm_cleanup(&g_tpm_ctx);
   net_cleanup();
   return ret;
+}
+
+/*
+ * Continuous attestation loop.
+ * Re-attests every interval_sec seconds with exponential backoff on failure.
+ */
+static int do_continuous_attest(const char *server, int port,
+                                int interval_sec) {
+  int ret;
+  int consecutive_failures = 0;
+  int backoff_sec = 0;
+  time_t last_success = 0;
+  time_t now;
+
+  printf("=== Continuous Attestation ===\n");
+  printf("Server: %s:%d\n", server, port);
+  printf("Interval: %d seconds\n\n", interval_sec);
+
+  ret = net_init();
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize network: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  printf("Initializing TPM...\n");
+  ret = tpm_init(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    net_cleanup();
+    return ret;
+  }
+
+  printf("Performing self-measurement...\n");
+  ret = self_measure(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
+  }
+
+  printf("Checking AIK...\n");
+  ret = tpm_provision_aik(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
+    tpm_cleanup(&g_tpm_ctx);
+    net_cleanup();
+    return ret;
+  }
+
+  printf("Starting attestation loop (Ctrl+C to stop)...\n\n");
+
+  while (g_running) {
+    now = time(NULL);
+
+    printf("[%ld] Attestation round starting...\n", (long)now);
+    ret = attest_once(server, port, 0);
+
+    if (ret == 0) {
+      printf("[%ld] Attestation successful\n", (long)now);
+      consecutive_failures = 0;
+      backoff_sec = 0;
+      last_success = now;
+    } else {
+      consecutive_failures++;
+      /* exponential backoff: 10, 20, 40, 80, ... up to max */
+      backoff_sec = MIN_ATTEST_INTERVAL * (1 << (consecutive_failures - 1));
+      if (backoff_sec > MAX_BACKOFF_SECONDS)
+        backoff_sec = MAX_BACKOFF_SECONDS;
+
+      fprintf(stderr, "[%ld] Attestation FAILED (attempt %d, backoff %ds)\n",
+              (long)now, consecutive_failures, backoff_sec);
+
+      if (last_success > 0) {
+        fprintf(stderr, "[%ld] Last success: %ld seconds ago\n", (long)now,
+                (long)(now - last_success));
+      }
+    }
+
+    int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
+    printf("[%ld] Next attestation in %d seconds\n\n", (long)now, sleep_time);
+
+    for (int i = 0; i < sleep_time && g_running; i++) {
+      sleep(1);
+    }
+  }
+
+  printf("\nShutting down continuous attestation...\n");
+  tpm_cleanup(&g_tpm_ctx);
+  net_cleanup();
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -685,6 +722,16 @@ int main(int argc, char *argv[]) {
       break;
     case 'a':
       attest_flag = 1;
+      break;
+    case 'I':
+      attest_flag = 1;
+      attest_interval = atoi(optarg);
+      if (attest_interval < MIN_ATTEST_INTERVAL) {
+        fprintf(stderr,
+                "Warning: interval %d too low, using minimum %d seconds\n",
+                attest_interval, MIN_ATTEST_INTERVAL);
+        attest_interval = MIN_ATTEST_INTERVAL;
+      }
       break;
     case 's':
       server_addr = optarg;
@@ -720,8 +767,12 @@ int main(int argc, char *argv[]) {
   if (test_iommu_flag)
     return test_iommu();
 
-  if (attest_flag)
-    return do_attest(server_addr, server_port);
+  if (attest_flag) {
+    if (attest_interval > 0)
+      return do_continuous_attest(server_addr, server_port, attest_interval);
+    else
+      return do_attest(server_addr, server_port);
+  }
 
   return run_daemon(bpf_path, mode);
 }
