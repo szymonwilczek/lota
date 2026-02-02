@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: MIT
+// LOTA Verifier - TPMS_ATTEST parser
+//
+// Parses the raw TPMS_ATTEST structure from TPM2_Quote response.
+// Reference: TCG TPM 2.0 Library Specification, Part 2, Section 10.12
+
+package verify
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+)
+
+// TPM constants
+const (
+	TPMGeneratedValue = 0xff544347 // TPM_GENERATED_VALUE
+	TPMSTAttestQuote  = 0x8018     // TPM_ST_ATTEST_QUOTE
+)
+
+type TPMSAttest struct {
+	Magic           uint32
+	Type            uint16
+	QualifiedSigner []byte // TPM2B_NAME
+	ExtraData       []byte // TPM2B_DATA (IMPORTANT: contains the nonce!!!)
+	ClockInfo       ClockInfo
+	FirmwareVersion uint64
+	QuoteInfo       *QuoteInfo // only if Type == TPM_ST_ATTEST_QUOTE
+}
+
+// TPMS_CLOCK_INFO
+type ClockInfo struct {
+	Clock        uint64
+	ResetCount   uint32
+	RestartCount uint32
+	Safe         bool
+}
+
+// TPMS_QUOTE_INFO
+type QuoteInfo struct {
+	PCRSelect []byte // TPML_PCR_SELECTION
+	PCRDigest []byte // TPM2B_DIGEST - hash of selected PCR values
+}
+
+// parses raw TPMS_ATTEST blob from TPM
+func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
+	if len(data) < 20 {
+		return nil, errors.New("attest data too short")
+	}
+
+	r := bytes.NewReader(data)
+	attest := &TPMSAttest{}
+
+	// magic (4 bytes)
+	if err := binary.Read(r, binary.BigEndian, &attest.Magic); err != nil {
+		return nil, fmt.Errorf("failed to read magic: %w", err)
+	}
+	if attest.Magic != TPMGeneratedValue {
+		return nil, fmt.Errorf("invalid TPM magic: 0x%08X (expected 0x%08X)",
+			attest.Magic, TPMGeneratedValue)
+	}
+
+	// type (2 bytes)
+	if err := binary.Read(r, binary.BigEndian, &attest.Type); err != nil {
+		return nil, fmt.Errorf("failed to read type: %w", err)
+	}
+
+	// qualifiedSigner (TPM2B_NAME: 2 bytes size + data)
+	var signerSize uint16
+	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
+		return nil, fmt.Errorf("failed to read signer size: %w", err)
+	}
+	attest.QualifiedSigner = make([]byte, signerSize)
+	if _, err := r.Read(attest.QualifiedSigner); err != nil {
+		return nil, fmt.Errorf("failed to read signer: %w", err)
+	}
+
+	// extraData (TPM2B_DATA: 2 bytes size + data) - nonce
+	var extraDataSize uint16
+	if err := binary.Read(r, binary.BigEndian, &extraDataSize); err != nil {
+		return nil, fmt.Errorf("failed to read extraData size: %w", err)
+	}
+	attest.ExtraData = make([]byte, extraDataSize)
+	if _, err := r.Read(attest.ExtraData); err != nil {
+		return nil, fmt.Errorf("failed to read extraData: %w", err)
+	}
+
+	// clockInfo (17 bytes total)
+	if err := binary.Read(r, binary.BigEndian, &attest.ClockInfo.Clock); err != nil {
+		return nil, fmt.Errorf("failed to read clock: %w", err)
+	}
+	if err := binary.Read(r, binary.BigEndian, &attest.ClockInfo.ResetCount); err != nil {
+		return nil, fmt.Errorf("failed to read resetCount: %w", err)
+	}
+	if err := binary.Read(r, binary.BigEndian, &attest.ClockInfo.RestartCount); err != nil {
+		return nil, fmt.Errorf("failed to read restartCount: %w", err)
+	}
+	var safeByte uint8
+	if err := binary.Read(r, binary.BigEndian, &safeByte); err != nil {
+		return nil, fmt.Errorf("failed to read safe: %w", err)
+	}
+	attest.ClockInfo.Safe = safeByte != 0
+
+	// firmwareVersion (8 bytes)
+	if err := binary.Read(r, binary.BigEndian, &attest.FirmwareVersion); err != nil {
+		return nil, fmt.Errorf("failed to read firmwareVersion: %w", err)
+	}
+
+	// parse quote-specific data if this is a quote
+	if attest.Type == TPMSTAttestQuote {
+		quoteInfo, err := parseQuoteInfo(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse quote info: %w", err)
+		}
+		attest.QuoteInfo = quoteInfo
+	}
+
+	return attest, nil
+}
+
+// parses TPMS_QUOTE_INFO from reader
+func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
+	qi := &QuoteInfo{}
+
+	// TPML_PCR_SELECTION
+	// count (4 bytes) + array of TPMS_PCR_SELECTION
+	var count uint32
+	if err := binary.Read(r, binary.BigEndian, &count); err != nil {
+		return nil, fmt.Errorf("failed to read PCR selection count: %w", err)
+	}
+
+	// each is: hash alg (2) + sizeofSelect (1) + select bytes
+	pcrSelectStart := r.Len()
+	for i := uint32(0); i < count; i++ {
+		var hashAlg uint16
+		var sizeOfSelect uint8
+		if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(r, binary.BigEndian, &sizeOfSelect); err != nil {
+			return nil, err
+		}
+		// skip select bytes
+		selectBytes := make([]byte, sizeOfSelect)
+		if _, err := r.Read(selectBytes); err != nil {
+			return nil, err
+		}
+	}
+	pcrSelectEnd := r.Len()
+
+	pcrSelectLen := pcrSelectStart - pcrSelectEnd + 4 // +4 for count
+	qi.PCRSelect = make([]byte, pcrSelectLen)
+	// IMPORTANT: For now, just note the selection was parsed
+
+	// PCR digest (TPM2B_DIGEST: 2 bytes size + data)
+	var digestSize uint16
+	if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
+		return nil, fmt.Errorf("failed to read PCR digest size: %w", err)
+	}
+	qi.PCRDigest = make([]byte, digestSize)
+	if _, err := r.Read(qi.PCRDigest); err != nil {
+		return nil, fmt.Errorf("failed to read PCR digest: %w", err)
+	}
+
+	return qi, nil
+}
+
+// verifies that extraData in TPMS_ATTEST matches expected nonce
+func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
+	attest, err := ParseTPMSAttest(attestData)
+	if err != nil {
+		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
+	}
+
+	if !bytes.Equal(attest.ExtraData, expectedNonce) {
+		return fmt.Errorf("nonce mismatch: TPMS_ATTEST extraData does not match challenge nonce")
+	}
+
+	return nil
+}
+
+// extracts nonce (extraData) from TPMS_ATTEST
+func GetNonceFromAttest(attestData []byte) ([]byte, error) {
+	attest, err := ParseTPMSAttest(attestData)
+	if err != nil {
+		return nil, err
+	}
+	return attest.ExtraData, nil
+}
