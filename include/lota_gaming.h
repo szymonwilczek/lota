@@ -1,0 +1,212 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA Gaming SDK
+ *
+ * Client library for games to query local attestation status.
+ * Link with -llotagaming.
+ *
+ * Example usage:
+ *
+ *   struct lota_client *client = lota_connect();
+ *   if (!client) {
+ *       // LOTA agent not running or not installed
+ *       return;
+ *   }
+ *
+ *   if (lota_is_attested(client)) {
+ *       struct lota_token token;
+ *       if (lota_get_token(client, NULL, &token) == LOTA_OK) {
+ *           // Send token.data (token.data_len bytes) to game server
+ *       }
+ *   }
+ *
+ *   lota_disconnect(client);
+ */
+
+#ifndef LOTA_GAMING_H
+#define LOTA_GAMING_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * SDK version
+ */
+#define LOTA_SDK_VERSION_MAJOR 1
+#define LOTA_SDK_VERSION_MINOR 0
+#define LOTA_SDK_VERSION_PATCH 0
+
+/*
+ * Error codes
+ */
+enum lota_error {
+  LOTA_OK = 0,
+  LOTA_ERR_NOT_CONNECTED = -1,
+  LOTA_ERR_CONNECTION_FAILED = -2,
+  LOTA_ERR_TIMEOUT = -3,
+  LOTA_ERR_PROTOCOL = -4,
+  LOTA_ERR_NOT_ATTESTED = -5,
+  LOTA_ERR_INVALID_ARG = -6,
+  LOTA_ERR_BUFFER_TOO_SMALL = -7,
+  LOTA_ERR_AGENT_ERROR = -8,
+  LOTA_ERR_NO_MEMORY = -9,
+};
+
+/*
+ * Status flags
+ */
+#define LOTA_FLAG_ATTESTED (1 << 0)
+#define LOTA_FLAG_TPM_OK (1 << 1)
+#define LOTA_FLAG_IOMMU_OK (1 << 2)
+#define LOTA_FLAG_BPF_LOADED (1 << 3)
+#define LOTA_FLAG_SECURE_BOOT (1 << 4)
+
+/*
+ * Opaque client handle
+ */
+struct lota_client;
+
+/*
+ * Status information
+ */
+struct lota_status {
+  uint32_t flags;            /* LOTA_FLAG_* bitmask */
+  uint64_t last_attest_time; /* Unix timestamp of last successful attestation */
+  uint64_t valid_until;      /* Token validity expiration (Unix timestamp) */
+  uint32_t attest_count;     /* Total successful attestations */
+  uint32_t fail_count;       /* Total failed attestations */
+};
+
+/*
+ * Attestation token
+ *
+ * This token should be sent to the game server for verification.
+ * The server can validate the signature using the LOTA verifier.
+ */
+struct lota_token {
+  uint64_t issued_at;      /* When the token was issued (Unix timestamp) */
+  uint64_t valid_until;    /* Token expiration (Unix timestamp) */
+  uint32_t flags;          /* Status flags at issue time */
+  uint8_t nonce[32];       /* Client nonce (if provided) */
+  uint8_t agent_nonce[32]; /* Agent-generated nonce */
+  uint8_t *signature;      /* Token signature (heap allocated) */
+  size_t signature_len;    /* Signature length in bytes */
+};
+
+/*
+ * Connection options
+ */
+struct lota_connect_opts {
+  const char *socket_path; /* Custom socket path (NULL = default) */
+  int timeout_ms;          /* Connection timeout in ms (0 = default 5000) */
+};
+
+/*
+ * lota_connect - Connect to the LOTA agent
+ *
+ * Establishes a connection to the local LOTA agent.
+ * Returns NULL if the agent is not running or connection fails.
+ *
+ * IMPORTANT: Returned handle must be freed with lota_disconnect().
+ */
+struct lota_client *lota_connect(void);
+
+/*
+ * lota_connect_opts - Connect with custom options
+ *
+ * Same as lota_connect() but allows specifying custom socket path
+ * and timeout.
+ */
+struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
+
+/*
+ * lota_disconnect - Disconnect from the LOTA agent
+ *
+ * Closes the connection and frees resources.
+ * Safe to call with NULL.
+ */
+void lota_disconnect(struct lota_client *client);
+
+/*
+ * lota_ping - Check if agent is responsive
+ *
+ * Returns LOTA_OK if the agent responds, error code otherwise.
+ * Optionally returns agent uptime in seconds.
+ */
+int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
+
+/*
+ * lota_get_status - Get current attestation status
+ *
+ * Retrieves the current status from the agent.
+ * The status structure is filled with current values.
+ */
+int lota_get_status(struct lota_client *client, struct lota_status *status);
+
+/*
+ * lota_is_attested - Quick attestation check
+ *
+ * Returns 1 if currently attested, 0 otherwise.
+ * This is a convenience wrapper around lota_get_status().
+ */
+int lota_is_attested(struct lota_client *client);
+
+/*
+ * lota_get_token - Get attestation token for server verification
+ * @client: Client handle
+ * @nonce: Optional 32-byte nonce from game server (NULL = none)
+ * @token: Output token structure
+ *
+ * Retrieves a signed attestation token that can be sent to
+ * the game server for verification. The server must use the
+ * LOTA verifier to validate the token.
+ *
+ * Returns LOTA_ERR_NOT_ATTESTED if no valid attestation exists.
+ *
+ * The caller must call lota_token_free() to free the token
+ * when done.
+ */
+int lota_get_token(struct lota_client *client, const uint8_t *nonce,
+                   struct lota_token *token);
+
+/*
+ * lota_token_free - Free token resources
+ *
+ * Frees the signature buffer allocated by lota_get_token().
+ * Safe to call with uninitialized token (signature = NULL).
+ */
+void lota_token_free(struct lota_token *token);
+
+/*
+ * lota_strerror - Get error message for error code
+ */
+const char *lota_strerror(int error);
+
+/*
+ * lota_sdk_version - Get SDK version string
+ *
+ * Returns a static string like "1.0.0".
+ */
+const char *lota_sdk_version(void);
+
+/*
+ * lota_flags_to_string - Convert flags to human-readable string
+ * @flags: LOTA_FLAG_* bitmask
+ * @buf: Output buffer
+ * @buflen: Buffer size
+ *
+ * Writes a string like "ATTESTED,TPM_OK,BPF_LOADED" to buf.
+ * Returns number of bytes written (excluding null terminator),
+ * or negative error if buffer too small.
+ */
+int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LOTA_GAMING_H */
