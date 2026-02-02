@@ -28,10 +28,12 @@
 #include "../../include/lota.h"
 #include "bpf_loader.h"
 #include "iommu.h"
+#include "net.h"
 #include "quote.h"
 #include "tpm.h"
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
+#define DEFAULT_VERIFIER_PORT 8443
 
 /* PCR index for LOTA agent self-measurement */
 #define LOTA_PCR_SELF 14
@@ -456,6 +458,10 @@ static void print_usage(const char *prog) {
   printf("Options:\n");
   printf("  --test-tpm        Test TPM operations and exit\n");
   printf("  --test-iommu      Test IOMMU verification and exit\n");
+  printf("  --attest          Perform remote attestation and exit\n");
+  printf("  --server HOST     Verifier server address (default: localhost)\n");
+  printf("  --port PORT       Verifier server port (default: %d)\n",
+         DEFAULT_VERIFIER_PORT);
   printf("  --bpf PATH        Path to BPF object file\n");
   printf("                    (default: %s)\n", DEFAULT_BPF_PATH);
   printf("  --mode MODE       Set enforcement mode:\n");
@@ -475,25 +481,216 @@ static int parse_mode(const char *mode_str) {
   return -1;
 }
 
+/*
+ * Build attestation report for verifier
+ */
+static int build_attestation_report(const struct verifier_challenge *challenge,
+                                    struct lota_attestation_report *report) {
+  struct tpm_quote_response quote_resp;
+  struct iommu_status iommu_status;
+  char kernel_path[LOTA_MAX_PATH_LEN];
+  int ret;
+
+  memset(report, 0, sizeof(*report));
+
+  report->header.magic = LOTA_MAGIC;
+  report->header.version = LOTA_VERSION;
+  report->header.report_size = sizeof(*report);
+
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  report->header.timestamp = ts.tv_sec;
+  report->header.timestamp_ns = ts.tv_nsec;
+
+  /* nonce from challenge */
+  memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
+  report->tpm.pcr_mask = challenge->pcr_mask;
+
+  ret =
+      tpm_quote(&g_tpm_ctx, challenge->nonce, challenge->pcr_mask, &quote_resp);
+  if (ret < 0) {
+    fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  /* copy TPM evidence */
+  memcpy(report->tpm.pcr_values, quote_resp.pcr_values,
+         sizeof(report->tpm.pcr_values));
+  report->tpm.quote_sig_size = quote_resp.signature_size;
+  if (quote_resp.signature_size <= LOTA_MAX_SIG_SIZE) {
+    memcpy(report->tpm.quote_signature, quote_resp.signature,
+           quote_resp.signature_size);
+  }
+
+  report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
+
+  /* system info: kernel hash */
+  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+  if (ret == 0) {
+    size_t kpath_len = strlen(kernel_path);
+    if (kpath_len >= sizeof(report->system.kernel_path))
+      kpath_len = sizeof(report->system.kernel_path) - 1;
+    memcpy(report->system.kernel_path, kernel_path, kpath_len);
+    report->system.kernel_path[kpath_len] = '\0';
+
+    ret = tpm_hash_file(kernel_path, report->system.kernel_hash);
+    if (ret == 0) {
+      report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
+    } else {
+      fprintf(stderr, "Warning: Failed to hash kernel\n");
+    }
+  }
+
+  if (iommu_verify_full(&iommu_status)) {
+    report->header.flags |= LOTA_REPORT_FLAG_IOMMU_OK;
+  }
+  memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
+
+  return 0;
+}
+
+/*
+ * Perform remote attestation
+ */
+static int do_attest(const char *server, int port) {
+  struct net_context net_ctx;
+  struct verifier_challenge challenge;
+  struct verifier_result result;
+  struct lota_attestation_report report;
+  int ret;
+
+  printf("=== Remote Attestation ===\n\n");
+
+  ret = net_init();
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize network: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  printf("Initializing TPM...\n");
+  ret = tpm_init(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    net_cleanup();
+    return ret;
+  }
+
+  printf("Performing self-measurement...\n");
+  ret = self_measure(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
+  }
+
+  printf("Checking AIK...\n");
+  ret = tpm_provision_aik(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  printf("Connecting to verifier at %s:%d...\n", server, port);
+  ret = net_context_init(&net_ctx, server, port,
+                         NULL); /* NULL = skip cert verify for testing */
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
+    goto cleanup;
+  }
+
+  ret = net_connect(&net_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to connect to verifier: %s\n", strerror(-ret));
+    goto cleanup_net;
+  }
+  printf("Connected!\n");
+
+  printf("Waiting for challenge...\n");
+  ret = net_recv_challenge(&net_ctx, &challenge);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to receive challenge: %s\n", strerror(-ret));
+    goto cleanup_net;
+  }
+  printf("Challenge received (PCR mask: 0x%08X)\n", challenge.pcr_mask);
+  print_hex("  Nonce", challenge.nonce, LOTA_NONCE_SIZE);
+
+  printf("Building attestation report...\n");
+  ret = build_attestation_report(&challenge, &report);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to build report: %s\n", strerror(-ret));
+    goto cleanup_net;
+  }
+  printf("Report built (%u bytes)\n", report.header.report_size);
+
+  printf("Sending report to verifier...\n");
+  ret = net_send_report(&net_ctx, &report, sizeof(report));
+  if (ret < 0) {
+    fprintf(stderr, "Failed to send report: %s\n", strerror(-ret));
+    goto cleanup_net;
+  }
+
+  printf("Waiting for verification result...\n");
+  ret = net_recv_result(&net_ctx, &result);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to receive result: %s\n", strerror(-ret));
+    goto cleanup_net;
+  }
+
+  printf("\n=== Attestation Result ===\n");
+  printf("Status: %s\n", net_result_str(result.result));
+
+  if (result.result == VERIFY_OK) {
+    printf("Valid until: %lu (Unix timestamp)\n",
+           (unsigned long)result.valid_until);
+    print_hex("Session token", result.session_token, 32);
+    ret = 0;
+  } else {
+    ret = 1;
+  }
+
+cleanup_net:
+  net_context_cleanup(&net_ctx);
+cleanup:
+  tpm_cleanup(&g_tpm_ctx);
+  net_cleanup();
+  return ret;
+}
+
 int main(int argc, char *argv[]) {
   int opt;
   int test_tpm_flag = 0;
   int test_iommu_flag = 0;
+  int attest_flag = 0;
   int mode = LOTA_MODE_MONITOR;
   const char *bpf_path = DEFAULT_BPF_PATH;
+  const char *server_addr = "localhost";
+  int server_port = DEFAULT_VERIFIER_PORT;
 
-  static struct option long_options[] = {
-      {"test-tpm", no_argument, 0, 't'},  {"test-iommu", no_argument, 0, 'i'},
-      {"bpf", required_argument, 0, 'b'}, {"mode", required_argument, 0, 'm'},
-      {"help", no_argument, 0, 'h'},      {0, 0, 0, 0}};
+  static struct option long_options[] = {{"test-tpm", no_argument, 0, 't'},
+                                         {"test-iommu", no_argument, 0, 'i'},
+                                         {"attest", no_argument, 0, 'a'},
+                                         {"server", required_argument, 0, 's'},
+                                         {"port", required_argument, 0, 'p'},
+                                         {"bpf", required_argument, 0, 'b'},
+                                         {"mode", required_argument, 0, 'm'},
+                                         {"help", no_argument, 0, 'h'},
+                                         {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "tib:m:h", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "tias:p:b:m:h", long_options, NULL)) !=
+         -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
       break;
     case 'i':
       test_iommu_flag = 1;
+      break;
+    case 'a':
+      attest_flag = 1;
+      break;
+    case 's':
+      server_addr = optarg;
+      break;
+    case 'p':
+      server_port = atoi(optarg);
       break;
     case 'b':
       bpf_path = optarg;
@@ -522,6 +719,9 @@ int main(int argc, char *argv[]) {
 
   if (test_iommu_flag)
     return test_iommu();
+
+  if (attest_flag)
+    return do_attest(server_addr, server_port);
 
   return run_daemon(bpf_path, mode);
 }
