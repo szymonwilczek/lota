@@ -23,12 +23,15 @@ const (
 	CmdlineParamMax = 64
 )
 
-// report flags
+// report flags (see: include/attestation.h)
 const (
 	FlagIOMMUOK      uint32 = 1 << 0 // IOMMU verification passed
 	FlagTPMQuoteOK   uint32 = 1 << 1 // TPM quote succeeded
 	FlagKernelHashOK uint32 = 1 << 2 // Kernel hash computed
 	FlagBPFActive    uint32 = 1 << 3 // eBPF LSM is loaded
+	FlagModuleSig    uint32 = 1 << 4 // Kernel enforces module sigs
+	FlagLockdown     uint32 = 1 << 5 // Kernel lockdown active
+	FlagSecureBoot   uint32 = 1 << 6 // Secure Boot enabled
 )
 
 // verification result codes
