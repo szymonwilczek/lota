@@ -94,6 +94,7 @@ type IOMMUStatus struct {
 // struct lota_system_measurement (see: include/attestation.h)
 type SystemMeasurement struct {
 	KernelHash [HashSize]byte      // 32 bytes
+	AgentHash  [HashSize]byte      // 32 bytes
 	KernelPath [MaxKernelPath]byte // 256 bytes
 	IOMMU      IOMMUStatus         // 76 bytes
 }
@@ -110,7 +111,7 @@ type BPFSummary struct {
 type AttestationReport struct {
 	Header ReportHeader      // 32 bytes
 	TPM    TPMEvidence       // 2860 bytes
-	System SystemMeasurement // 364 bytes
+	System SystemMeasurement // 396 bytes (364 + 32 for agent_hash)
 	BPF    BPFSummary        // 24 bytes
 }
 
@@ -141,8 +142,8 @@ var (
 )
 
 // expected binary size of AttestationReport
-// Header(32) + TPM(2860) + System(364) + BPF(24) = 3280
-const ExpectedReportSize = 3280
+// Header(32) + TPM(2860) + System(396) + BPF(24) = 3312
+const ExpectedReportSize = 3312
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -201,8 +202,10 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += NonceSize
 	offset += 2 // reserved
 
-	// system measurement (364 bytes)
+	// system measurement (396 bytes)
 	copy(report.System.KernelHash[:], data[offset:offset+HashSize])
+	offset += HashSize
+	copy(report.System.AgentHash[:], data[offset:offset+HashSize])
 	offset += HashSize
 	copy(report.System.KernelPath[:], data[offset:offset+MaxKernelPath])
 	offset += MaxKernelPath

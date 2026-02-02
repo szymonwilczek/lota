@@ -89,6 +89,9 @@ struct lota_system_measurement {
   /* SHA-256 of running kernel image */
   uint8_t kernel_hash[LOTA_HASH_SIZE];
 
+  /* SHA-256 of lota-agent binary (self-measurement) */
+  uint8_t agent_hash[LOTA_HASH_SIZE];
+
   /* Path to kernel image (for reference) */
   char kernel_path[256];
 
