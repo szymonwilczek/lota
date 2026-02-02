@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# LOTA file contexts
+#
+
+#
+# Executables
+#
+/usr/bin/lota-agent			--	gen_context(system_u:object_r:lota_agent_exec_t,s0)
+/usr/sbin/lota-agent			--	gen_context(system_u:object_r:lota_agent_exec_t,s0)
+/usr/local/bin/lota-agent		--	gen_context(system_u:object_r:lota_agent_exec_t,s0)
+/home/[^/]+/\.local/bin/lota-agent	--	gen_context(system_u:object_r:lota_agent_exec_t,s0)
+
+#
+# BPF objects
+#
+/usr/lib/lota(/.*)?				gen_context(system_u:object_r:lota_bpf_t,s0)
+/usr/lib/lota/lota_lsm\.bpf\.o		--	gen_context(system_u:object_r:lota_bpf_t,s0)
+/usr/lib64/lota(/.*)?				gen_context(system_u:object_r:lota_bpf_t,s0)
+/usr/lib64/lota/lota_lsm\.bpf\.o	--	gen_context(system_u:object_r:lota_bpf_t,s0)
+/sys/fs/bpf/lota(/.*)?				gen_context(system_u:object_r:lota_bpf_t,s0)
+
+#
+# Configuration
+#
+/etc/lota(/.*)?					gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/lota\.conf			--	gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/lota\.yaml			--	gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/policies(/.*)?			gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/policies/.*\.yaml		--	gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/modules\.allow		--	gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/ca(/.*)?				gen_context(system_u:object_r:lota_etc_t,s0)
+/etc/lota/ca/.*\.pem			--	gen_context(system_u:object_r:lota_etc_t,s0)
+
+#
+# State and AIK storage
+#
+/var/lib/lota(/.*)?				gen_context(system_u:object_r:lota_var_t,s0)
+/var/lib/lota/aik(/.*)?				gen_context(system_u:object_r:lota_var_t,s0)
+/var/lib/lota/aik/.*\.pem		--	gen_context(system_u:object_r:lota_var_t,s0)
+/var/lib/lota/state(/.*)?			gen_context(system_u:object_r:lota_var_t,s0)
+/var/lib/lota/baseline(/.*)?			gen_context(system_u:object_r:lota_var_t,s0)
+
+#
+# Logs
+#
+/var/log/lota(/.*)?				gen_context(system_u:object_r:lota_log_t,s0)
+/var/log/lota/lota\.log			--	gen_context(system_u:object_r:lota_log_t,s0)
+/var/log/lota/attest\.log		--	gen_context(system_u:object_r:lota_log_t,s0)
+/var/log/lota/events\.log		--	gen_context(system_u:object_r:lota_log_t,s0)
+
+#
+# Runtime
+#
+/run/lota(/.*)?					gen_context(system_u:object_r:lota_var_t,s0)
+/run/lota/lota-agent\.pid		--	gen_context(system_u:object_r:lota_var_t,s0)
+/run/lota/lota\.sock			-s	gen_context(system_u:object_r:lota_var_t,s0)
+/var/run/lota(/.*)?				gen_context(system_u:object_r:lota_var_t,s0)
+
+#
+# Temp
+#
+/tmp/lota(/.*)?					gen_context(system_u:object_r:lota_tmp_t,s0)
+/var/tmp/lota(/.*)?				gen_context(system_u:object_r:lota_tmp_t,s0)

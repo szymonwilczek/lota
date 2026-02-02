@@ -1,0 +1,278 @@
+## SPDX-License-Identifier: GPL-2.0-only
+##
+## LOTA SELinux interfaces
+##
+
+########################################
+## <summary>
+##      Execute lota-agent with domain transition.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to transition.
+##      </summary>
+## </param>
+#
+interface(`lota_domtrans',`
+        gen_require(`
+                type lota_agent_t, lota_agent_exec_t;
+        ')
+
+        corecmd_search_bin($1)
+        domtrans_pattern($1, lota_agent_exec_t, lota_agent_t)
+')
+
+########################################
+## <summary>
+##      Execute lota-agent without transition.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to execute.
+##      </summary>
+## </param>
+#
+interface(`lota_exec',`
+        gen_require(`
+                type lota_agent_exec_t;
+        ')
+
+        corecmd_search_bin($1)
+        can_exec($1, lota_agent_exec_t)
+')
+
+########################################
+## <summary>
+##      Query LOTA attestation status via socket.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to query.
+##      </summary>
+## </param>
+#
+interface(`lota_query_status',`
+        gen_require(`
+                type lota_agent_t;
+                type lota_var_t;
+        ')
+
+        allow $1 lota_var_t:dir search_dir_perms;
+        allow $1 lota_var_t:sock_file write;
+        allow $1 lota_agent_t:unix_stream_socket connectto;
+        allow $1 lota_var_t:file read_file_perms;
+')
+
+########################################
+## <summary>
+##      Request attestation from LOTA.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to request.
+##      </summary>
+## </param>
+#
+interface(`lota_request_attest',`
+        gen_require(`
+                type lota_agent_t;
+                type lota_var_t;
+        ')
+
+        lota_query_status($1)
+        allow $1 lota_agent_t:process signal;
+')
+
+########################################
+## <summary>
+##      Read LOTA configuration.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to read.
+##      </summary>
+## </param>
+#
+interface(`lota_read_config',`
+        gen_require(`
+                type lota_etc_t;
+        ')
+
+        files_search_etc($1)
+        allow $1 lota_etc_t:dir list_dir_perms;
+        allow $1 lota_etc_t:file read_file_perms;
+')
+
+########################################
+## <summary>
+##      Read LOTA logs.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to read.
+##      </summary>
+## </param>
+#
+interface(`lota_read_log',`
+        gen_require(`
+                type lota_log_t;
+        ')
+
+        logging_search_logs($1)
+        allow $1 lota_log_t:dir list_dir_perms;
+        allow $1 lota_log_t:file read_file_perms;
+')
+
+########################################
+## <summary>
+##      Administrate LOTA.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain to grant admin access.
+##      </summary>
+## </param>
+## <param name="role">
+##      <summary>
+##      Role allowed access.
+##      </summary>
+## </param>
+## <rolecap/>
+#
+interface(`lota_admin',`
+        gen_require(`
+                type lota_agent_t;
+                type lota_agent_exec_t;
+                type lota_etc_t;
+                type lota_var_t;
+                type lota_log_t;
+                type lota_bpf_t;
+                type lota_tmp_t;
+        ')
+
+        allow $1 lota_agent_t:process { ptrace signal_perms };
+        ps_process_pattern($1, lota_agent_t)
+
+        lota_domtrans($1)
+        role $2 types lota_agent_t;
+
+        files_search_etc($1)
+        admin_pattern($1, lota_etc_t)
+
+        files_search_var_lib($1)
+        admin_pattern($1, lota_var_t)
+
+        logging_search_logs($1)
+        admin_pattern($1, lota_log_t)
+
+        files_search_usr($1)
+        admin_pattern($1, lota_bpf_t)
+
+        files_search_tmp($1)
+        admin_pattern($1, lota_tmp_t)
+')
+
+########################################
+## <summary>
+##      Read LOTA attestation state.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to verify.
+##      </summary>
+## </param>
+#
+interface(`lota_verify_integrity',`
+        gen_require(`
+                type lota_var_t;
+        ')
+
+        files_search_var_lib($1)
+        allow $1 lota_var_t:dir search_dir_perms;
+        allow $1 lota_var_t:file { getattr open read };
+')
+
+########################################
+## <summary>
+##      Gaming client interface.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Gaming domain.
+##      </summary>
+## </param>
+#
+interface(`lota_gaming_client',`
+        lota_query_status($1)
+        lota_verify_integrity($1)
+')
+
+########################################
+## <summary>
+##      Anti-cheat client interface.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Anti-cheat domain.
+##      </summary>
+## </param>
+#
+interface(`lota_anticheat_client',`
+        lota_gaming_client($1)
+        lota_request_attest($1)
+        lota_read_config($1)
+')
+
+########################################
+## <summary>
+##      LOTA role types.
+## </summary>
+## <param name="role">
+##      <summary>
+##      Role to assign.
+##      </summary>
+## </param>
+#
+interface(`lota_role_types',`
+        gen_require(`
+                type lota_agent_t;
+        ')
+
+        role $1 types lota_agent_t;
+')
+
+########################################
+## <summary>
+##      Connect to LOTA network port.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to connect.
+##      </summary>
+## </param>
+#
+interface(`corenet_tcp_connect_lota_port',`
+        gen_require(`
+                type lota_port_t;
+        ')
+
+        allow $1 lota_port_t:tcp_socket name_connect;
+')
+
+########################################
+## <summary>
+##      Bind to LOTA network port.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to bind.
+##      </summary>
+## </param>
+#
+interface(`corenet_tcp_bind_lota_port',`
+        gen_require(`
+                type lota_port_t;
+        ')
+
+        allow $1 lota_port_t:tcp_socket name_bind;
+')

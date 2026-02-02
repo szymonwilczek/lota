@@ -1,0 +1,170 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# LOTA SELinux policy - type enforcement
+#
+
+policy_module(lota, 1.0.0)
+
+#
+# Tunables
+#
+
+## <desc>
+## <p>Allow network access for remote attestation.</p>
+## </desc>
+gen_tunable(lota_network_attest, true)
+
+## <desc>
+## <p>Allow BPF program loading.</p>
+## </desc>
+gen_tunable(lota_bpf_load, true)
+
+## <desc>
+## <p>Allow interaction with module loading subsystem.</p>
+## </desc>
+gen_tunable(lota_module_enforce, false)
+
+#
+# Type declarations
+#
+
+type lota_agent_t;
+type lota_agent_exec_t;
+init_daemon_domain(lota_agent_t, lota_agent_exec_t)
+
+type lota_var_t;
+files_type(lota_var_t)
+
+type lota_etc_t;
+files_config_file(lota_etc_t)
+
+type lota_bpf_t;
+files_type(lota_bpf_t)
+
+type lota_log_t;
+logging_log_file(lota_log_t)
+
+type lota_tmp_t;
+files_tmp_file(lota_tmp_t)
+
+type lota_port_t;
+corenet_port(lota_port_t)
+
+#
+# lota_agent_t policy
+#
+
+allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_rawio ipc_lock };
+allow lota_agent_t self:capability2 { bpf perfmon };
+allow lota_agent_t self:process { signal signull setcap setrlimit };
+allow lota_agent_t self:fifo_file rw_fifo_file_perms;
+allow lota_agent_t self:unix_stream_socket create_stream_socket_perms;
+allow lota_agent_t self:unix_dgram_socket create_socket_perms;
+
+# /etc/lota - read only
+allow lota_agent_t lota_etc_t:dir list_dir_perms;
+allow lota_agent_t lota_etc_t:file read_file_perms;
+
+# /var/lib/lota - read/write
+allow lota_agent_t lota_var_t:dir manage_dir_perms;
+allow lota_agent_t lota_var_t:file manage_file_perms;
+
+# /usr/lib/lota/*.bpf.o
+allow lota_agent_t lota_bpf_t:dir list_dir_perms;
+allow lota_agent_t lota_bpf_t:file { read_file_perms execute map };
+
+# /var/log/lota
+allow lota_agent_t lota_log_t:dir { create_dir_perms add_entry_dir_perms };
+allow lota_agent_t lota_log_t:file { create_file_perms append_file_perms };
+logging_log_filetrans(lota_agent_t, lota_log_t, file)
+
+# /tmp/lota
+allow lota_agent_t lota_tmp_t:dir manage_dir_perms;
+allow lota_agent_t lota_tmp_t:file manage_file_perms;
+files_tmp_filetrans(lota_agent_t, lota_tmp_t, { file dir })
+
+#
+# Hardware access
+#
+
+# /dev/tpmrm0, /dev/tpm0
+dev_rw_tpm(lota_agent_t)
+dev_read_raw_memory(lota_agent_t)
+
+# /dev/urandom
+dev_read_urand(lota_agent_t)
+dev_read_rand(lota_agent_t)
+
+#
+# BPF subsystem
+#
+
+fs_manage_bpf_files(lota_agent_t)
+fs_manage_bpf_dirs(lota_agent_t)
+kernel_read_system_state(lota_agent_t)
+
+tunable_policy(`lota_bpf_load',`
+        allow lota_agent_t self:bpf { map_create map_read map_write prog_load prog_run };
+        allow lota_agent_t self:perf_event { open read write };
+')
+
+#
+# System state reads
+#
+
+# /proc
+domain_read_all_domains_state(lota_agent_t)
+kernel_read_proc_symlinks(lota_agent_t)
+
+# /boot/vmlinuz-*
+files_read_boot_files(lota_agent_t)
+files_read_boot_symlinks(lota_agent_t)
+
+# /sys
+dev_read_sysfs(lota_agent_t)
+
+# /sys/firmware/efi/efivars
+fs_read_efivarfs_files(lota_agent_t)
+
+# /sys/fs/selinux
+selinux_get_fs_mount(lota_agent_t)
+selinux_compute_access_vector(lota_agent_t)
+
+# dmesg
+kernel_read_ring_buffer(lota_agent_t)
+
+# /proc/cmdline
+kernel_read_kernel_sysctls(lota_agent_t)
+
+#
+# Network
+#
+
+corenet_tcp_connect_http_port(lota_agent_t)
+corenet_tcp_connect_http_cache_port(lota_agent_t)
+sysnet_dns_name_resolve(lota_agent_t)
+
+tunable_policy(`lota_network_attest',`
+        allow lota_agent_t lota_port_t:tcp_socket name_connect;
+        allow lota_agent_t self:tcp_socket create_stream_socket_perms;
+        allow lota_agent_t self:udp_socket create_socket_perms;
+        allow lota_agent_t self:netlink_route_socket { create bind getattr nlmsg_read };
+')
+
+#
+# Module subsystem
+#
+
+tunable_policy(`lota_module_enforce',`
+        modutils_read_module_deps(lota_agent_t)
+')
+
+#
+# Misc
+#
+
+files_read_etc_files(lota_agent_t)
+miscfiles_read_localization(lota_agent_t)
+init_use_fds(lota_agent_t)
+init_read_state(lota_agent_t)
+files_pid_filetrans(lota_agent_t, lota_var_t, file, "lota-agent.pid")
