@@ -316,14 +316,30 @@ static int test_iommu(void) {
  */
 static int handle_exec_event(void *ctx, void *data, size_t len) {
   struct lota_exec_event *event = data;
+  const char *event_type_str;
   (void)ctx;
 
   if (len < sizeof(*event))
     return 0;
 
-  printf("[%llu] %s: %s (pid=%u, uid=%u)\n",
-         (unsigned long long)event->timestamp_ns, event->comm, event->filename,
-         event->pid, event->uid);
+  switch (event->event_type) {
+  case LOTA_EVENT_EXEC:
+    event_type_str = "EXEC";
+    break;
+  case LOTA_EVENT_MODULE_LOAD:
+    event_type_str = "MODULE";
+    break;
+  case LOTA_EVENT_MODULE_BLOCKED:
+    event_type_str = "BLOCKED";
+    break;
+  default:
+    event_type_str = "UNKNOWN";
+    break;
+  }
+
+  printf("[%llu] %s %s: %s (pid=%u, uid=%u)\n",
+         (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
+         event->filename, event->pid, event->uid);
 
   return 0;
 }
@@ -331,7 +347,20 @@ static int handle_exec_event(void *ctx, void *data, size_t len) {
 /*
  * Main daemon loop
  */
-static int run_daemon(const char *bpf_path) {
+static const char *mode_to_string(int mode) {
+  switch (mode) {
+  case LOTA_MODE_MAINTENANCE:
+    return "MAINTENANCE";
+  case LOTA_MODE_MONITOR:
+    return "MONITOR";
+  case LOTA_MODE_ENFORCE:
+    return "ENFORCE";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+static int run_daemon(const char *bpf_path, int mode) {
   int ret;
 
   printf("=== LOTA Agent ===\n\n");
@@ -377,6 +406,16 @@ static int run_daemon(const char *bpf_path) {
   }
   printf("BPF program loaded\n");
 
+  ret = bpf_loader_set_mode(&g_bpf_ctx, mode);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Failed to set mode: %s\n", strerror(-ret));
+  } else {
+    printf("Mode: %s\n", mode_to_string(mode));
+  }
+  if (mode == LOTA_MODE_ENFORCE) {
+    printf("\n*** WARNING: ENFORCE mode active - module loading BLOCKED ***\n");
+  }
+
   ret = bpf_loader_setup_ringbuf(&g_bpf_ctx, handle_exec_event, NULL);
   if (ret < 0) {
     fprintf(stderr, "Failed to setup ring buffer: %s\n", strerror(-ret));
@@ -415,26 +454,40 @@ static void print_usage(const char *prog) {
   printf("Usage: %s [options]\n", prog);
   printf("\n");
   printf("Options:\n");
-  printf("  --test-tpm      Test TPM operations and exit\n");
-  printf("  --test-iommu    Test IOMMU verification and exit\n");
-  printf("  --bpf PATH      Path to BPF object file\n");
-  printf("                  (default: %s)\n", DEFAULT_BPF_PATH);
-  printf("  --help          Show this help\n");
+  printf("  --test-tpm        Test TPM operations and exit\n");
+  printf("  --test-iommu      Test IOMMU verification and exit\n");
+  printf("  --bpf PATH        Path to BPF object file\n");
+  printf("                    (default: %s)\n", DEFAULT_BPF_PATH);
+  printf("  --mode MODE       Set enforcement mode:\n");
+  printf("                      monitor     - log events only (default)\n");
+  printf("                      enforce     - block unauthorized modules\n");
+  printf("                      maintenance - allow all, minimal logging\n");
+  printf("  --help            Show this help\n");
+}
+
+static int parse_mode(const char *mode_str) {
+  if (strcmp(mode_str, "monitor") == 0)
+    return LOTA_MODE_MONITOR;
+  if (strcmp(mode_str, "enforce") == 0)
+    return LOTA_MODE_ENFORCE;
+  if (strcmp(mode_str, "maintenance") == 0)
+    return LOTA_MODE_MAINTENANCE;
+  return -1;
 }
 
 int main(int argc, char *argv[]) {
   int opt;
   int test_tpm_flag = 0;
   int test_iommu_flag = 0;
+  int mode = LOTA_MODE_MONITOR;
   const char *bpf_path = DEFAULT_BPF_PATH;
 
-  static struct option long_options[] = {{"test-tpm", no_argument, 0, 't'},
-                                         {"test-iommu", no_argument, 0, 'i'},
-                                         {"bpf", required_argument, 0, 'b'},
-                                         {"help", no_argument, 0, 'h'},
-                                         {0, 0, 0, 0}};
+  static struct option long_options[] = {
+      {"test-tpm", no_argument, 0, 't'},  {"test-iommu", no_argument, 0, 'i'},
+      {"bpf", required_argument, 0, 'b'}, {"mode", required_argument, 0, 'm'},
+      {"help", no_argument, 0, 'h'},      {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "tib:h", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "tib:m:h", long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
@@ -444,6 +497,14 @@ int main(int argc, char *argv[]) {
       break;
     case 'b':
       bpf_path = optarg;
+      break;
+    case 'm':
+      mode = parse_mode(optarg);
+      if (mode < 0) {
+        fprintf(stderr, "Invalid mode: %s\n", optarg);
+        fprintf(stderr, "Valid modes: monitor, enforce, maintenance\n");
+        return 1;
+      }
       break;
     case 'h':
     default:
@@ -462,5 +523,5 @@ int main(int argc, char *argv[]) {
   if (test_iommu_flag)
     return test_iommu();
 
-  return run_daemon(bpf_path);
+  return run_daemon(bpf_path, mode);
 }

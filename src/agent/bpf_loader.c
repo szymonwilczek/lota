@@ -22,6 +22,7 @@
 #define STAT_EVENTS_SENT 1
 #define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
+#define STAT_MODULES_BLOCKED 4
 
 /*
  * libbpf print callback - redirect to stderr with prefix
@@ -100,6 +101,11 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
   if (ctx->stats_fd < 0) {
     ctx->stats_fd = -1; // stats map is optional
+  }
+
+  ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
+  if (ctx->config_fd < 0) {
+    ctx->config_fd = -1;
   }
 
   ctx->loaded = true;
@@ -194,4 +200,33 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->loaded = false;
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
+  ctx->config_fd = -1;
+}
+
+int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode) {
+  uint32_t key = LOTA_CFG_MODE;
+
+  if (!ctx || !ctx->loaded || ctx->config_fd < 0)
+    return -EINVAL;
+
+  if (mode > LOTA_MODE_MAINTENANCE)
+    return -EINVAL;
+
+  return bpf_map_update_elem(ctx->config_fd, &key, &mode, BPF_ANY);
+}
+
+int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode) {
+  uint32_t key = LOTA_CFG_MODE;
+  uint32_t value;
+  int err;
+
+  if (!ctx || !ctx->loaded || ctx->config_fd < 0 || !mode)
+    return -EINVAL;
+
+  err = bpf_map_lookup_elem(ctx->config_fd, &key, &value);
+  if (err < 0)
+    return err;
+
+  *mode = value;
+  return 0;
 }

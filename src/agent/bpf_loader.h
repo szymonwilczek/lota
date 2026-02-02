@@ -23,6 +23,7 @@ struct bpf_loader_ctx {
   struct ring_buffer *ringbuf; /* Ring buffer for events */
   int ringbuf_fd;              /* Ring buffer map fd */
   int stats_fd;                /* Stats map fd */
+  int config_fd;               /* Config map fd */
   bool loaded;                 /* Program is loaded and attached */
 };
 
@@ -85,6 +86,26 @@ int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms);
 int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
                          uint64_t *events_sent, uint64_t *errors,
                          uint64_t *drops);
+
+/*
+ * bpf_loader_set_mode - Set enforcement mode
+ * @ctx: Loaded context
+ * @mode: enum lota_mode value (MONITOR, ENFORCE, MAINTENANCE)
+ *
+ * Controls whether LSM hooks block or just monitor.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode);
+
+/*
+ * bpf_loader_get_mode - Get current enforcement mode
+ * @ctx: Loaded context
+ * @mode: Output - current mode
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode);
 
 /*
  * bpf_loader_cleanup - Unload BPF program and clean up
