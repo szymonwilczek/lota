@@ -48,12 +48,21 @@ static void print_token(const struct lota_token *token) {
   printf("  Valid until: %s", ctime(&valid));
   printf("  Flags: 0x%08X (%s)\n", token->flags,
          flags_str[0] ? flags_str : "none");
-  printf("  Signature: %zu bytes\n", token->signature_len);
+  printf("  TPM Quote:\n");
+  printf("    Attest data: %zu bytes\n", token->attest_size);
+  printf("    Signature: %zu bytes\n", token->signature_len);
+  if (token->attest_size > 0) {
+    printf("    Sig algorithm: 0x%04X\n", token->sig_alg);
+    printf("    Hash algorithm: 0x%04X\n", token->hash_alg);
+    printf("    PCR mask: 0x%08X\n", token->pcr_mask);
+  } else {
+    printf("    (unsigned token - no TPM context)\n");
+  }
 
-  /* IMPORTANT NOTE: In a real game, send the token to the server
-   * here: send_to_server(token->issued_at, token->valid_until, token->flags,
-   * token->nonce, token->agent_nonce, token->signature, token->signature_len);
-   * just as my drafts, don't mind this for now
+  /*
+   * IMPORTANT NOTE: In a real game, send the token to the server for
+   * verification: send_to_server(token); The server uses lota-verifier to
+   * validate the TPM signature.
    */
 }
 
