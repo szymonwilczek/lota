@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# LOTA PCR Policy - Testing Environment
+#
+# Minimal policy for development and testing.
+# Disables most security requirements to allow testing on non-production systems.
+# DO NOT USE IN PRODUCTION!
+
+name: testing
+description: "Testing policy - minimal requirements for development"
+
+# No PCR value checks - all measurements accepted
+# PCR 14 (LOTA self-measurement) is still verified via TOFU
+pcrs: {}
+
+# Accept any kernel and agent hashes
+kernel_hashes: []
+agent_hashes: []
+
+# Disable all hardware/security requirements for test environments
+require_iommu: false
+require_enforce: false
+require_module_sig: false
+require_secureboot: false
+require_lockdown: false

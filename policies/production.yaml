@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# LOTA PCR Policy - Production Template
+#
+# Template for production deployments. You MUST customize the PCR values
+# and hash lists for your specific environment before use.
+#
+# How to collect values:
+#   PCR values:    lota-agent --export-pcr-baseline > my-baseline.txt
+#   Kernel hash:   sha256sum /boot/vmlinuz-$(uname -r) | cut -d' ' -f1
+#   Agent hash:    sha256sum /usr/sbin/lota-agent | cut -d' ' -f1
+#
+# PCR meanings (SHA-256):
+#   PCR 0:   SRTM, BIOS/UEFI firmware measurements
+#   PCR 7:   Secure Boot state (policies and certificates)
+#   PCR 14:  LOTA agent self-measurement (handled by TOFU)
+
+name: production
+description: "Production policy - customize PCR values for your environment"
+
+# Expected PCR values (SHA-256 hex-encoded, 64 chars)
+# Only listed PCRs are verified; PCR 14 uses TOFU baseline
+pcrs:
+  # Uncomment and set real values from your system:
+  # 0: "aaaa..."  # Firmware - stable per hardware/firmware version
+  # 7: "bbbb..."  # Secure Boot - stable until certificates change
+
+# Allowed kernel image hashes (SHA-256)
+# Add all kernels that should be permitted to boot
+kernel_hashes:
+  # - "sha256_of_vmlinuz_version_1"
+  # - "sha256_of_vmlinuz_version_2"
+
+# Allowed LOTA agent binary hashes (SHA-256)
+# Update when deploying new agent versions
+agent_hashes:
+  # - "sha256_of_lota_agent_v1"
+
+# Security requirements - enable what your infrastructure supports
+require_iommu: true # DMA protection via IOMMU/VT-d
+require_enforce: true # LSM (SELinux/AppArmor) in enforce mode
+require_module_sig: false # Signed kernel modules (distribution-dependent)
+require_secureboot: false # UEFI Secure Boot (requires hardware support)
+require_lockdown: false # Kernel lockdown mode

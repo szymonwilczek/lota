@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# LOTA PCR Policy - Strict Security
+#
+# High-security policy requiring ALL security features enabled.
+# Suitable for competitive gaming, esports, and money tournaments.
+#
+# Requirements:
+#   - IOMMU/VT-d enabled in BIOS and kernel
+#   - SELinux or AppArmor in enforce mode
+#   - Kernel module signature enforcement enabled
+#   - UEFI Secure Boot enabled
+#   - Kernel lockdown mode active
+#
+# Before deployment, verify system meets requirements:
+#   lota-agent --verify-security-state
+
+name: strict
+description: "Strict security policy - all protections required"
+
+# Critical PCR values that MUST match
+# Customize for your specific hardware and software stack
+pcrs:
+  # PCR 0: Firmware - changes indicate firmware tampering/update
+  # 0: "REPLACE_WITH_YOUR_FIRMWARE_MEASUREMENT"
+
+  # PCR 7: Secure Boot - changes indicate Secure Boot state modification
+  # 7: "REPLACE_WITH_YOUR_SECUREBOOT_STATE"
+
+# Only specifically approved kernel versions
+kernel_hashes:
+  # Add SHA-256 hashes of approved kernels
+
+# Only specifically approved agent versions
+agent_hashes:
+  # Add SHA-256 hashes of approved agent builds
+
+# ALL SECURITY FEATURES REQUIRED
+require_iommu: true
+require_enforce: true
+require_module_sig: true
+require_secureboot: true
+require_lockdown: true
