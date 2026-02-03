@@ -109,18 +109,39 @@ struct lota_ipc_token_request {
 /*
  * GET_TOKEN response payload
  *
- * Contains a signed attestation statement that is presented
- * to game servers as proof of system integrity.
+ * Contains a signed attestation statement using TPM Quote.
+ * Verification:
+ * - Compute expected_nonce = SHA256(issued_at || valid_until || flags ||
+ *                                     client_nonce)
+ * - Verify TPM signature over attest_data using AIK public key
+ * - Parse attest_data, check extraData == expected_nonce
+ * - Check PCR digest in attest_data matches expected policy
  */
 struct lota_ipc_token {
   uint64_t issued_at;       /* Unix timestamp */
   uint64_t valid_until;     /* Unix timestamp */
   uint32_t flags;           /* LOTA_STATUS_* at issue time */
   uint8_t client_nonce[32]; /* Echo of client nonce */
-  uint8_t agent_nonce[32];  /* Agent-generated nonce */
-  uint32_t signature_len;
+
+  /* TPM Quote data */
+  uint16_t attest_size; /* Size of TPMS_ATTEST blob */
+  uint16_t sig_size;    /* Size of signature */
+  uint16_t sig_alg;     /* TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS */
+  uint16_t hash_alg;    /* TPM2_ALG_SHA256 */
+  uint32_t pcr_mask;    /* PCRs included in quote */
+
+  /*
+   * Variable-length data follows:
+   *   - attest_data[attest_size]  (TPMS_ATTEST)
+   *   - signature[sig_size]       (RSA signature)
+   */
 } __attribute__((packed));
 
+#define LOTA_IPC_TOKEN_HEADER_SIZE sizeof(struct lota_ipc_token)
+#define LOTA_IPC_TOKEN_MAX_ATTEST 1024
 #define LOTA_IPC_TOKEN_MAX_SIG 512
+#define LOTA_IPC_TOKEN_MAX_SIZE                                                \
+  (LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST +                    \
+   LOTA_IPC_TOKEN_MAX_SIG)
 
 #endif /* LOTA_IPC_H */
