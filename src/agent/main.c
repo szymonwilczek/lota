@@ -49,6 +49,9 @@ static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
 
+static uint32_t check_module_security(void);
+static int self_measure(struct tpm_context *ctx);
+
 /*
  * Signal handler for graceful shutdown
  */
@@ -502,6 +505,8 @@ static void print_usage(const char *prog) {
   printf("  --test-signed     Run IPC server with TPM-signed tokens\n");
   printf(
       "                    (requires TPM, for token verification testing)\n");
+  printf("  --export-baseline Export PCR values for policy creation\n");
+  printf("                    (outputs YAML fragment to stdout)\n");
   printf("  --attest          Perform remote attestation and exit\n");
   printf("  --attest-interval SECS\n");
   printf("                    Continuous attestation interval in seconds\n");
@@ -527,6 +532,149 @@ static int parse_mode(const char *mode_str) {
   if (strcmp(mode_str, "maintenance") == 0)
     return LOTA_MODE_MAINTENANCE;
   return -1;
+}
+
+/*
+ * Export PCR baseline values for policy creation.
+ * Outputs a YAML fragment that can be used in policy files.
+ *
+ * Exported PCRs:
+ *   - PCR 0:  Firmware/SRTM measurement
+ *   - PCR 1:  BIOS configuration
+ *   - PCR 7:  Secure Boot state
+ *   - PCR 14: LOTA self-measurement
+ *
+ * Also exports kernel and agent hashes.
+ */
+static int export_pcr_baseline(void) {
+  int ret;
+  uint8_t pcr_value[LOTA_HASH_SIZE];
+  uint8_t hash[LOTA_HASH_SIZE];
+  char kernel_path[LOTA_MAX_PATH_LEN];
+  char agent_path[LOTA_MAX_PATH_LEN];
+  ssize_t len;
+  size_t i;
+
+  static const int pcrs_to_export[] = {0, 1, 7, 14};
+  static const char *pcr_descriptions[] = {
+      "SRTM/firmware measurement",
+      "BIOS/UEFI configuration",
+      "Secure Boot state",
+      "LOTA agent self-measurement",
+  };
+
+  fprintf(stderr, "Initializing TPM...\n");
+  ret = tpm_init(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  /*
+   * Perform self-measurement before export.
+   * This ensures PCR 14 contains the agent measurement.
+   */
+  fprintf(stderr, "Performing self-measurement...\n");
+  ret = self_measure(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
+    fprintf(stderr, "PCR 14 may not contain agent measurement\n");
+  }
+
+  printf("# LOTA PCR Baseline Export\n");
+  printf("# Generated from: %s\n", "lota-agent --export-baseline");
+  printf("# Date: ");
+  fflush(stdout);
+  system("date -Iseconds");
+  printf("#\n");
+  printf("# Copy relevant sections to your policy YAML file.\n");
+  printf("# Review and verify values before production use!\n");
+  printf("\n");
+
+  printf("# PCR Values (SHA-256)\n");
+  printf("pcrs:\n");
+
+  for (i = 0; i < sizeof(pcrs_to_export) / sizeof(pcrs_to_export[0]); i++) {
+    int pcr_idx = pcrs_to_export[i];
+    ret = tpm_read_pcr(&g_tpm_ctx, pcr_idx, TPM2_ALG_SHA256, pcr_value);
+    if (ret < 0) {
+      fprintf(stderr, "Warning: Failed to read PCR %d: %s\n", pcr_idx,
+              strerror(-ret));
+      continue;
+    }
+
+    printf("  %d: \"", pcr_idx);
+    for (size_t j = 0; j < LOTA_HASH_SIZE; j++) {
+      printf("%02x", pcr_value[j]);
+    }
+    printf("\"  # %s\n", pcr_descriptions[i]);
+  }
+
+  printf("\n");
+
+  printf("# Kernel Image Hash\n");
+  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+  if (ret == 0) {
+    printf("# Path: %s\n", kernel_path);
+    ret = tpm_hash_file(kernel_path, hash);
+    if (ret == 0) {
+      printf("kernel_hashes:\n");
+      printf("  - \"");
+      for (i = 0; i < LOTA_HASH_SIZE; i++) {
+        printf("%02x", hash[i]);
+      }
+      printf("\"\n");
+    } else {
+      fprintf(stderr, "Warning: Failed to hash kernel: %s\n", strerror(-ret));
+    }
+  } else {
+    fprintf(stderr, "Warning: Failed to find kernel: %s\n", strerror(-ret));
+  }
+
+  printf("\n");
+
+  printf("# LOTA Agent Binary Hash\n");
+  len = readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
+  if (len > 0) {
+    agent_path[len] = '\0';
+    printf("# Path: %s\n", agent_path);
+    ret = tpm_hash_file(agent_path, hash);
+    if (ret == 0) {
+      printf("agent_hashes:\n");
+      printf("  - \"");
+      for (i = 0; i < LOTA_HASH_SIZE; i++) {
+        printf("%02x", hash[i]);
+      }
+      printf("\"\n");
+    } else {
+      fprintf(stderr, "Warning: Failed to hash agent: %s\n", strerror(-ret));
+    }
+  } else {
+    fprintf(stderr, "Warning: Failed to read agent path\n");
+  }
+
+  printf("\n");
+
+  printf("# Security Features (auto-detected)\n");
+  {
+    uint32_t flags = check_module_security();
+    struct iommu_status iommu_status;
+    bool iommu_ok = iommu_verify_full(&iommu_status);
+
+    printf("require_iommu: %s      # DMA protection\n",
+           iommu_ok ? "true" : "false");
+    printf("require_enforce: true        # LSM enforce mode (recommended)\n");
+    printf("require_module_sig: %s  # Signed kernel modules\n",
+           (flags & LOTA_REPORT_FLAG_MODULE_SIG) ? "true" : "false");
+    printf("require_secureboot: %s  # UEFI Secure Boot\n",
+           (flags & LOTA_REPORT_FLAG_SECUREBOOT) ? "true" : "false");
+    printf("require_lockdown: %s    # Kernel lockdown\n",
+           (flags & LOTA_REPORT_FLAG_LOCKDOWN) ? "true" : "false");
+  }
+
+  tpm_cleanup(&g_tpm_ctx);
+  fprintf(stderr, "\nBaseline export complete.\n");
+  return 0;
 }
 
 /*
@@ -962,6 +1110,7 @@ int main(int argc, char *argv[]) {
   int test_iommu_flag = 0;
   int test_ipc_flag = 0;
   int test_signed_flag = 0;
+  int export_baseline_flag = 0;
   int attest_flag = 0;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   int mode = LOTA_MODE_MONITOR;
@@ -974,6 +1123,7 @@ int main(int argc, char *argv[]) {
       {"test-iommu", no_argument, 0, 'i'},
       {"test-ipc", no_argument, 0, 'c'},
       {"test-signed", no_argument, 0, 'S'},
+      {"export-baseline", no_argument, 0, 'E'},
       {"attest", no_argument, 0, 'a'},
       {"attest-interval", required_argument, 0, 'I'},
       {"server", required_argument, 0, 's'},
@@ -983,7 +1133,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSaI:s:p:b:m:h", long_options,
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:b:m:h", long_options,
                             NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -997,6 +1147,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'S':
       test_signed_flag = 1;
+      break;
+    case 'E':
+      export_baseline_flag = 1;
       break;
     case 'a':
       attest_flag = 1;
@@ -1044,6 +1197,9 @@ int main(int argc, char *argv[]) {
 
   if (test_iommu_flag)
     return test_iommu();
+
+  if (export_baseline_flag)
+    return export_pcr_baseline();
 
   if (test_ipc_flag) {
     int ret;
