@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <time.h>
 
+struct tpm_context;
+
 /*
  * IPC server context
  */
@@ -18,6 +20,10 @@ struct ipc_context {
   int epoll_fd;  /* epoll instance */
   bool running;
   time_t start_time; /* For uptime calculation */
+
+  /* TPM context for token signing */
+  struct tpm_context *tpm;
+  uint32_t quote_pcr_mask;
 
   /* Attestation state */
   uint32_t status_flags;
@@ -88,5 +94,18 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success);
  * @mode: New mode (enum lota_mode)
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
+
+/*
+ * ipc_set_tpm - Set TPM context for token signing
+ * @ctx: Server context
+ * @tpm: Initialized TPM context (or NULL to disable signing)
+ * @pcr_mask: PCRs to include in token quotes
+ *
+ * When TPM context is set, GET_TOKEN will generate fresh
+ * TPM quotes signed by the AIK. Without TPM context,
+ * GET_TOKEN returns unsigned tokens (for testing only!).
+ */
+void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
+                 uint32_t pcr_mask);
 
 #endif /* LOTA_AGENT_IPC_H */
