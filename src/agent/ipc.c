@@ -7,9 +7,12 @@
 #include "ipc.h"
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+#include "quote.h"
+#include "tpm.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -183,16 +186,50 @@ static void handle_get_status(struct ipc_context *ctx,
 }
 
 /*
+ * Compute binding nonce for token
+ *
+ * Creates a SHA-256 hash of token header fields to use as TPM quote nonce.
+ * This binds the TPM signature to the specific token data.
+ */
+static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
+                                uint32_t flags, const uint8_t *client_nonce,
+                                uint8_t *out_nonce) {
+  EVP_MD_CTX *mdctx;
+  unsigned int len;
+
+  mdctx = EVP_MD_CTX_new();
+  if (!mdctx) {
+    memset(out_nonce, 0, LOTA_NONCE_SIZE);
+    return;
+  }
+
+  EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
+  EVP_DigestUpdate(mdctx, &issued_at, sizeof(issued_at));
+  EVP_DigestUpdate(mdctx, &valid_until, sizeof(valid_until));
+  EVP_DigestUpdate(mdctx, &flags, sizeof(flags));
+  EVP_DigestUpdate(mdctx, client_nonce, 32);
+  EVP_DigestFinal_ex(mdctx, out_nonce, &len);
+  EVP_MD_CTX_free(mdctx);
+}
+
+/*
  * Handle GET_TOKEN command
  *
- * TODO: proper token signing with AIK
- * For now, it returns status information as unsigned "token"
+ * Generates a signed attestation token using TPM Quote.
+ * The TPM signs over a hash of (token_header + client_nonce),
+ * binding the signature to both the attestation state and the
+ * client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
                              const uint8_t *payload, uint32_t payload_len) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
   struct lota_ipc_token *token;
   const struct lota_ipc_token_request *req = NULL;
+  uint8_t binding_nonce[LOTA_NONCE_SIZE];
+  struct tpm_quote_response quote;
+  uint8_t *data_ptr;
+  size_t total_size;
+  int ret;
 
   if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
     build_error_response(client, LOTA_IPC_ERR_NOT_ATTESTED);
@@ -202,11 +239,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   if (payload_len >= sizeof(*req))
     req = (const void *)payload;
 
-  resp->magic = LOTA_IPC_MAGIC;
-  resp->version = LOTA_IPC_VERSION;
-  resp->result = LOTA_IPC_OK;
-  resp->payload_len = sizeof(*token);
-
+  /* build token header */
   token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
   token->issued_at = (uint64_t)time(NULL);
   token->valid_until = ctx->valid_until;
@@ -217,13 +250,63 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   else
     memset(token->client_nonce, 0, 32);
 
-  /* TODO: proper agent nonce */
-  memset(token->agent_nonce, 0, 32);
+  /* if no TPM context, return unsigned token (for testing!!!) */
+  if (!ctx->tpm) {
+    token->attest_size = 0;
+    token->sig_size = 0;
+    token->sig_alg = 0;
+    token->hash_alg = 0;
+    token->pcr_mask = 0;
 
-  /* TODO: sign with AIK */
-  token->signature_len = 0;
+    resp->magic = LOTA_IPC_MAGIC;
+    resp->version = LOTA_IPC_VERSION;
+    resp->result = LOTA_IPC_OK;
+    resp->payload_len = LOTA_IPC_TOKEN_HEADER_SIZE;
 
-  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*token);
+    client->send_len = LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
+    client->send_offset = 0;
+    return;
+  }
+
+  compute_token_nonce(token->issued_at, token->valid_until, token->flags,
+                      token->client_nonce, binding_nonce);
+
+  ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
+  if (ret < 0) {
+    fprintf(stderr, "IPC: tpm_quote failed: %s\n", strerror(-ret));
+    build_error_response(client, LOTA_IPC_ERR_TPM_FAILURE);
+    return;
+  }
+
+  /* check buffer space */
+  total_size =
+      LOTA_IPC_TOKEN_HEADER_SIZE + quote.attest_size + quote.signature_size;
+  if (total_size > LOTA_IPC_MAX_PAYLOAD) {
+    fprintf(stderr, "IPC: token too large (%zu bytes)\n", total_size);
+    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+    return;
+  }
+
+  token->attest_size = quote.attest_size;
+  token->sig_size = quote.signature_size;
+  token->sig_alg = quote.sig_alg;
+  token->hash_alg = quote.hash_alg;
+  token->pcr_mask = quote.pcr_mask;
+
+  /* copy attest data and signature */
+  data_ptr =
+      client->send_buf + LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
+  memcpy(data_ptr, quote.attest_data, quote.attest_size);
+  data_ptr += quote.attest_size;
+  memcpy(data_ptr, quote.signature, quote.signature_size);
+
+  /* build response */
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = (uint32_t)total_size;
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + total_size;
   client->send_offset = 0;
 }
 
@@ -581,3 +664,12 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success) {
  * Set mode
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) { ctx->mode = mode; }
+
+/*
+ * Set TPM context for token signing
+ */
+void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
+                 uint32_t pcr_mask) {
+  ctx->tpm = tpm;
+  ctx->quote_pcr_mask = pcr_mask;
+}
