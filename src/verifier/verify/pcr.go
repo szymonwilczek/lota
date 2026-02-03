@@ -246,18 +246,24 @@ func (v *PCRVerifier) ListPolicies() []string {
 	return names
 }
 
-// creates a minimal default policy
-// TODO: this should be replaced with actual measurements.
+// creates the built-in default policy with baseline security requirements.
+// IMPORTANT NOTE: For production deployments, use a custom YAML policy with explicit PCR values.
+// This policy enforces fundamental security requirements without PCR value checks,
+// suitable for initial deployment before collecting site-specific baselines.
 func DefaultPolicy() *PCRPolicy {
 	return &PCRPolicy{
 		Name:        "default",
-		Description: "Default policy - allows any measurements (TESTING ONLY)",
-		PCRs:        map[int]string{},
-		// empty lists = allow any
-		KernelHashes:   []string{},
-		AgentHashes:    []string{},
-		RequireIOMMU:   false,
-		RequireEnforce: false,
+		Description: "Built-in baseline policy - enforces security requirements without specific PCR values",
+		// PCR values intentionally empty - use TOFU for PCR14!
+		// Site-specific PCR0/PCR7 values should be defined in custom YAML policies
+		PCRs:              map[int]string{},
+		KernelHashes:      []string{}, // defined in site-specific policy
+		AgentHashes:       []string{}, // defined in site-specific policy
+		RequireIOMMU:      false,      // not all systems have IOMMU
+		RequireEnforce:    true,       // LSM must be in enforce mode
+		RequireModuleSig:  false,      // distribution-dependent
+		RequireSecureBoot: false,      // optional hardware feature
+		RequireLockdown:   false,      // optional kernel feature
 	}
 }
 
