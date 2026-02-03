@@ -77,7 +77,7 @@ func main() {
 	verifier := verify.NewVerifier(verifierCfg, aikStore)
 
 	verifier.AddPolicy(verify.DefaultPolicy())
-	log.Println("Loaded default policy (permissive - TESTING ONLY)")
+	log.Println("Loaded default policy (baseline security requirements)")
 
 	// custom policy if specified
 	if *policyFile != "" {
