@@ -152,8 +152,15 @@ install: all
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
+# Build test binary
+TEST_SDK_BIN := $(BUILD_DIR)/test_sdk_ipc
+
+$(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
+	@echo "Built: $@"
+
 # Basic tests (requires root for TPM/BPF)
-test: all
+test: all $(TEST_SDK_BIN)
 	@echo "=== Testing IOMMU verification ==="
 	sudo $(AGENT_BIN) --test-iommu
 	@echo ""
@@ -161,6 +168,11 @@ test: all
 	sudo $(AGENT_BIN) --test-tpm
 	@echo ""
 	@echo "Tests complete"
+
+test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
+	@echo "=== SDK Integration Test ==="
+	@echo "Start agent in another terminal: sudo ./build/lota-agent --test-ipc"
+	@echo "Then run: ./build/test_sdk_ipc"
 
 # Help target
 .PHONY: help
