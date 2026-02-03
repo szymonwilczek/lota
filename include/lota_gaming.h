@@ -84,17 +84,29 @@ struct lota_status {
 /*
  * Attestation token
  *
- * This token should be sent to the game server for verification.
- * The server can validate the signature using the LOTA verifier.
+ * Contains a TPM Quote-based attestation statement.
+ * The server validates by:
+ * - Computing expected_nonce = SHA256(issued_at || valid_until || flags ||
+ * nonce)
+ * - Verifying TPM signature over attest_data using AIK public key
+ * - Checking extraData in TPMS_ATTEST matches expected_nonce
+ * - Verifying PCR digest matches expected policy
  */
 struct lota_token {
-  uint64_t issued_at;      /* When the token was issued (Unix timestamp) */
-  uint64_t valid_until;    /* Token expiration (Unix timestamp) */
-  uint32_t flags;          /* Status flags at issue time */
-  uint8_t nonce[32];       /* Client nonce (if provided) */
-  uint8_t agent_nonce[32]; /* Agent-generated nonce */
-  uint8_t *signature;      /* Token signature (heap allocated) */
-  size_t signature_len;    /* Signature length in bytes */
+  uint64_t issued_at;   /* When the token was issued (Unix timestamp) */
+  uint64_t valid_until; /* Token expiration (Unix timestamp) */
+  uint32_t flags;       /* Status flags at issue time */
+  uint8_t nonce[32];    /* Client nonce (if provided) */
+
+  /* TPM Quote data */
+  uint16_t sig_alg;  /* Signature algorithm (TPM2_ALG_RSASSA/RSAPSS) */
+  uint16_t hash_alg; /* Hash algorithm (TPM2_ALG_SHA256) */
+  uint32_t pcr_mask; /* PCRs included in quote */
+
+  uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
+  size_t attest_size;   /* Size of attest_data */
+  uint8_t *signature;   /* TPM signature (heap allocated) */
+  size_t signature_len; /* Signature length in bytes */
 };
 
 /*
