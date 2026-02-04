@@ -20,6 +20,8 @@ const (
 	MaxSigSize      = 512  // RSA-4096 signature
 	MaxAttestSize   = 1024 // TPMS_ATTEST blob
 	MaxAIKPubSize   = 512  // AIK public key (DER SPKI)
+	MaxAIKCertSize  = 2048 // AIK certificate (DER X.509)
+	MaxEKCertSize   = 2048 // EK certificate (DER X.509)
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
@@ -59,17 +61,21 @@ type ReportHeader struct {
 
 // struct lota_tpm_evidence (see: include/attestation.h)
 //
-//	pcr_values[24][32]    768 bytes
-//	pcr_mask                4 bytes
-//	quote_signature[512]  512 bytes
-//	quote_sig_size          2 bytes
-//	attest_data[1024]    1024 bytes
-//	attest_size             2 bytes
-//	aik_public[512]       512 bytes
-//	aik_public_size         2 bytes
-//	nonce[32]              32 bytes
-//	reserved[2]             2 bytes
-//	TOTAL:               2860 bytes
+//	pcr_values[24][32]     768 bytes
+//	pcr_mask                 4 bytes
+//	quote_signature[512]   512 bytes
+//	quote_sig_size           2 bytes
+//	attest_data[1024]     1024 bytes
+//	attest_size              2 bytes
+//	aik_public[512]        512 bytes
+//	aik_public_size          2 bytes
+//	aik_certificate[2048] 2048 bytes
+//	aik_cert_size            2 bytes
+//	ek_certificate[2048]  2048 bytes
+//	ek_cert_size             2 bytes
+//	nonce[32]               32 bytes
+//	reserved[2]              2 bytes
+//	TOTAL:                6960 bytes
 type TPMEvidence struct {
 	PCRValues      [PCRCount][HashSize]byte // 768 bytes
 	PCRMask        uint32                   // 4 bytes
@@ -79,6 +85,10 @@ type TPMEvidence struct {
 	AttestSize     uint16                   // 2 bytes
 	AIKPublic      [MaxAIKPubSize]byte      // 512 bytes
 	AIKPublicSize  uint16                   // 2 bytes
+	AIKCertificate [MaxAIKCertSize]byte     // 2048 bytes
+	AIKCertSize    uint16                   // 2 bytes
+	EKCertificate  [MaxEKCertSize]byte      // 2048 bytes
+	EKCertSize     uint16                   // 2 bytes
 	Nonce          [NonceSize]byte          // 32 bytes
 	Reserved       [2]byte                  // 2 bytes alignment
 }
@@ -142,8 +152,8 @@ var (
 )
 
 // expected binary size of AttestationReport
-// Header(32) + TPM(2860) + System(396) + BPF(24) = 3312
-const ExpectedReportSize = 3312
+// Header(32) + TPM(6960) + System(396) + BPF(24) = 7412
+const ExpectedReportSize = 7412
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -178,7 +188,7 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
-	// tpm evidence (2860 bytes)
+	// tpm evidence (6960 bytes)
 	// pcr values: 24 * 32 = 768 bytes
 	for i := 0; i < PCRCount; i++ {
 		copy(report.TPM.PCRValues[i][:], data[offset:offset+HashSize])
@@ -197,6 +207,14 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	copy(report.TPM.AIKPublic[:], data[offset:offset+MaxAIKPubSize])
 	offset += MaxAIKPubSize
 	report.TPM.AIKPublicSize = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	copy(report.TPM.AIKCertificate[:], data[offset:offset+MaxAIKCertSize])
+	offset += MaxAIKCertSize
+	report.TPM.AIKCertSize = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	copy(report.TPM.EKCertificate[:], data[offset:offset+MaxEKCertSize])
+	offset += MaxEKCertSize
+	report.TPM.EKCertSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
