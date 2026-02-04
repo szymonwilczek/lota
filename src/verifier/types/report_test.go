@@ -63,6 +63,16 @@ func createTestReportBytes() []byte {
 	// aik_public_size
 	binary.LittleEndian.PutUint16(buf[offset:], 294)
 	offset += 2
+	// aik_certificate (2048 bytes, optional - leave empty)
+	offset += MaxAIKCertSize
+	// aik_cert_size
+	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	offset += 2
+	// ek_certificate (2048 bytes, optional - leave empty)
+	offset += MaxEKCertSize
+	// ek_cert_size
+	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	offset += 2
 	// nonce (32 bytes)
 	for i := 0; i < NonceSize; i++ {
 		buf[offset+i] = byte(0xAA ^ i)
@@ -270,6 +280,7 @@ func TestParseReport_Alignment(t *testing.T) {
 
 	// These offsets MUST match C struct with __attribute__((packed))
 	// See include/attestation.h
+	// TPM evidence section: 6960 bytes (with certificates)
 	expectedOffsets := map[string]int{
 		"Header.Magic":       0,
 		"Header.Version":     4,
@@ -285,12 +296,16 @@ func TestParseReport_Alignment(t *testing.T) {
 		"TPM.AttestSize":     32 + 768 + 4 + 512 + 2 + 1024,
 		"TPM.AIKPublic":      32 + 768 + 4 + 512 + 2 + 1024 + 2,
 		"TPM.AIKPublicSize":  32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512,
-		"TPM.Nonce":          32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2,
-		"System.KernelHash":  32 + 2860,
-		"System.AgentHash":   32 + 2860 + 32,
-		"System.KernelPath":  32 + 2860 + 64,
-		"System.IOMMU":       32 + 2860 + 64 + 256,
-		"BPF.TotalExec":      32 + 2860 + 396,
+		"TPM.AIKCertificate": 32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2,
+		"TPM.AIKCertSize":    32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048,
+		"TPM.EKCertificate":  32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2,
+		"TPM.EKCertSize":     32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
+		"TPM.Nonce":          32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
+		"System.KernelHash":  32 + 6960,
+		"System.AgentHash":   32 + 6960 + 32,
+		"System.KernelPath":  32 + 6960 + 64,
+		"System.IOMMU":       32 + 6960 + 64 + 256,
+		"BPF.TotalExec":      32 + 6960 + 396,
 	}
 
 	data := createTestReportBytes()
@@ -305,9 +320,9 @@ func TestParseReport_Alignment(t *testing.T) {
 		})
 	}
 
-	// final check: total size
-	if ExpectedReportSize != 3312 {
-		t.Errorf("ExpectedReportSize: got %d, want 3312", ExpectedReportSize)
+	// final check: total size (with certificates)
+	if ExpectedReportSize != 7412 {
+		t.Errorf("ExpectedReportSize: got %d, want 7412", ExpectedReportSize)
 	}
 	t.Logf("✓ Total report size: %d bytes", ExpectedReportSize)
 }
