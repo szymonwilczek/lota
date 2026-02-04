@@ -6,7 +6,9 @@
 Transparent system integrity framework that proves to remote servers (e.g., game servers) that a Linux system is untampered.
 
 # Read before anything else in this repository
-I am incredibly absorbed in creating this project and I hope that one day it will become the standard in the Linux gaming industry. Stallman said that maybe it is TiVoization, but any solution seems better to me than none at all. The project has a long way to go before it becomes functional in any way, but if it succeeds, welcome anti-cheats on Linux, which brings with it another cheer: welcome gaming on our beloved penguin! (Of course, if any game developer wants to implement such a solution, heh.)
+I am incredibly absorbed in creating this project and I hope that one day it will become the standard in the Linux gaming industry. Stallman said that maybe it is TiVoization, but any solution seems better to me than none at all. In the end I really *don't care** about the politics around, just on the technology behind it. You want it? You have it (when it will be ready), you don't want it? Fine, then no gaming or some sort. It's just an option, not a required way to run a fully blown distro. Linux will always be fully open-source, so if you don't want to give up the tinkering with the kernel - just have 2 of those and pick it up through GRUB or your desired bootloader. It's that simple.
+
+The project has a long way to go before it becomes functional in any way, but if it succeeds, (maybe) welcome anti-cheats on Linux, which brings with it another cheer: welcome gaming on our beloved penguin! (Of course, if any game developer wants to implement such a solution, heh.)
 
 All corporations using anti-cheat software have rejected gaming on Linux because they are unable to trust us. I will try to ensure that there are no grounds for this.
 
@@ -14,14 +16,8 @@ All corporations using anti-cheat software have rejected gaming on Linux because
 
 LOTA establishes a cryptographic chain of trust from hardware (TPM 2.0) through the kernel (eBPF/LSM) to a user-space agent, and finally to a remote verifier.
 
-```
-┌──────────────┐     ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  TPM 2.0     │ ──▶│ eBPF LSM    │ ──▶│  LOTA Agent  │ ──▶│   Remote     │
-│  Hardware    │     │ Kernel      │     │  User-space  │     │   Verifier   │
-└──────────────┘     └─────────────┘     └──────────────┘     └──────────────┘
-     PCRs                Binary            Attestation           Validation
-                       Monitoring             Report
-```
+
+TPM 2.0 (Hardware: PCRs) -> eBPF LSM Kernel (Binary Monitoring) -> LOTA Agent User-Space (Attestation Report) -> Remote Verifier (Validation)
 
 ## Features
 
@@ -43,25 +39,6 @@ LOTA establishes a cryptographic chain of trust from hardware (TPM 2.0) through 
   - `CONFIG_DEBUG_INFO_BTF=y`
   - LSM includes `bpf` (check `/sys/kernel/security/lsm`)
 
-### Fedora Dependencies
-
-```bash
-# Install development packages
-sudo dnf install -y \
-    clang llvm \
-    libbpf-devel \
-    tpm2-tss-devel \
-    openssl-devel \
-    bpftool
-
-# Verify kernel configuration
-grep CONFIG_BPF_LSM /boot/config-$(uname -r)
-# Expected: CONFIG_BPF_LSM=y
-
-cat /sys/kernel/security/lsm
-# Expected: should contain "bpf"
-```
-
 ## Security Model
 
 | Attack Vector | Protection |
@@ -75,4 +52,10 @@ cat /sys/kernel/security/lsm
 
 ## Status
 
-⚠️ **Definetly** `Not` ready for production use yet.
+⚠️ **Heavily** in `development`. 
+
+I don't even want to give up the setting up this project in the README right now (of course it can be done, I documented it inside the code), but it instantly reducing the number of people trying to get this to work on right now.
+
+
+
+
