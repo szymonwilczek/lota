@@ -75,6 +75,23 @@ struct lota_tpm_evidence {
   uint8_t aik_public[LOTA_MAX_AIK_PUB_SIZE];
   uint16_t aik_public_size;
 
+  /*
+   * AIK certificate in DER-encoded X.509 format (optional).
+   * If present (aik_cert_size > 0), verifier validates the certificate
+   * chain against trusted CAs before accepting the AIK.
+   * If absent, TOFU mode is used for AIK registration.
+   */
+  uint8_t aik_certificate[LOTA_MAX_AIK_CERT_SIZE];
+  uint16_t aik_cert_size;
+
+  /*
+   * EK certificate in DER-encoded X.509 format (optional).
+   * Used for TPM identity verification. The EK certificate is issued
+   * by the TPM manufacturer and proves the TPM is genuine.
+   */
+  uint8_t ek_certificate[LOTA_MAX_EK_CERT_SIZE];
+  uint16_t ek_cert_size;
+
   /* Nonce from server */
   uint8_t nonce[LOTA_NONCE_SIZE];
 
