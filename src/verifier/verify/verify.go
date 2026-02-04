@@ -129,11 +129,29 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 			return result, err
 		}
 
-		// valid - register AIK for future use
-		if err := v.aikStore.RegisterAIK(clientID, aikPubKey); err != nil {
-			log.Printf("[%s] WARNING: Failed to register AIK: %v", clientID, err)
+		// extract AIK and EK certificates if provided
+		var aikCert, ekCert []byte
+		if report.TPM.AIKCertSize > 0 {
+			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
+			log.Printf("[%s] AIK certificate provided (%d bytes)", clientID, report.TPM.AIKCertSize)
+		}
+		if report.TPM.EKCertSize > 0 {
+			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
+			log.Printf("[%s] EK certificate provided (%d bytes)", clientID, report.TPM.EKCertSize)
+		}
+
+		// register AIK with certificate verification (if certs provided)
+		if err := v.aikStore.RegisterAIKWithCert(clientID, aikPubKey, aikCert, ekCert); err != nil {
+			log.Printf("[%s] ERROR: Failed to register AIK: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("AIK registration failed: %w", err)
+		}
+
+		if len(aikCert) > 0 || len(ekCert) > 0 {
+			log.Printf("[%s] AIK registered with certificate verification (fingerprint: %s)",
+				clientID, AIKFingerprint(aikPubKey))
 		} else {
-			log.Printf("[%s] TOFU: AIK registered (fingerprint: %s)",
+			log.Printf("[%s] TOFU: AIK registered without certificate (fingerprint: %s)",
 				clientID, AIKFingerprint(aikPubKey))
 		}
 	} else {

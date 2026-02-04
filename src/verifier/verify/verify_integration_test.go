@@ -96,6 +96,16 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikPub)))
 	offset += 2
 
+	// AIK certificate (optional, leave empty)
+	offset += types.MaxAIKCertSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0) // no AIK cert
+	offset += 2
+
+	// EK certificate (optional, leave empty)
+	offset += types.MaxEKCertSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0) // no EK cert
+	offset += 2
+
 	// nonce
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
@@ -536,6 +546,16 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	copy(buf[offset:], aikDER)
 	offset += types.MaxAIKPubSize
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikDER)))
+	offset += 2
+
+	// AIK certificate (optional, leave empty)
+	offset += types.MaxAIKCertSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0) // no AIK cert
+	offset += 2
+
+	// EK certificate (optional, leave empty)
+	offset += types.MaxEKCertSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0) // no EK cert
 	offset += 2
 
 	copy(buf[offset:], nonce[:])
