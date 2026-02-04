@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type AIKStore interface {
@@ -25,6 +26,9 @@ type AIKStore interface {
 
 	// stores AIK public key for client (TOFU)
 	RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
+
+	// stores AIK with certificate verification
+	RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error
 
 	// removes trust for client's AIK
 	RevokeAIK(clientID string) error
@@ -183,6 +187,11 @@ func (fs *FileStore) ListClients() []string {
 	return clients
 }
 
+// falls back to TOFU (no cert verification)
+func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
+	return fs.RegisterAIK(clientID, pubKey)
+}
+
 // compares two RSA public keys
 func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	if a.N.Cmp(b.N) != 0 {
@@ -255,23 +264,44 @@ func (ms *MemoryStore) ListClients() []string {
 	return clients
 }
 
+// for MemoryStore falls back to TOFU (no cert verification)
+func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
+	return ms.RegisterAIK(clientID, pubKey)
+}
+
 // currently a placeholder
 type CertificateStore struct {
-	fileStore  *FileStore
-	trustedCAs []*x509.Certificate
+	fileStore    *FileStore
+	trustedCAs   []*x509.Certificate
+	caPool       *x509.CertPool
+	requireCerts bool
 }
+
+// certificate verification errors
+var (
+	ErrNoCertificate       = errors.New("certificate required but not provided")
+	ErrInvalidCertificate  = errors.New("failed to parse certificate")
+	ErrCertificateChain    = errors.New("certificate chain verification failed")
+	ErrCertificateKeyMatch = errors.New("certificate public key does not match AIK")
+	ErrCertificateExpired  = errors.New("certificate has expired")
+	ErrCertificateNotYet   = errors.New("certificate not yet valid")
+	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
+)
 
 // creates a certificate-based store
 // caCertPaths: paths to trusted CA certificates (TPM manufacturers, Privacy CAs)
-func NewCertificateStore(storePath string, caCertPaths []string) (*CertificateStore, error) {
+// requireCerts: if true, reject registrations without valid certificates
+func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bool) (*CertificateStore, error) {
 	fs, err := NewFileStore(storePath)
 	if err != nil {
 		return nil, err
 	}
 
 	cs := &CertificateStore{
-		fileStore:  fs,
-		trustedCAs: make([]*x509.Certificate, 0),
+		fileStore:    fs,
+		trustedCAs:   make([]*x509.Certificate, 0),
+		caPool:       x509.NewCertPool(),
+		requireCerts: requireCerts,
 	}
 
 	// load ca certificates
@@ -281,6 +311,7 @@ func NewCertificateStore(storePath string, caCertPaths []string) (*CertificateSt
 			return nil, fmt.Errorf("failed to load CA cert %s: %w", path, err)
 		}
 		cs.trustedCAs = append(cs.trustedCAs, cert)
+		cs.caPool.AddCert(cert)
 	}
 
 	return cs, nil
@@ -305,8 +336,116 @@ func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 }
 
 func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	// TODO: verify AIK certificate chain before registering
+	// TOFU fallback when no certificates provided
+	if cs.requireCerts {
+		return ErrNoCertificate
+	}
 	return cs.fileStore.RegisterAIK(clientID, pubKey)
+}
+
+// verifies AIK certificate chain before registering
+func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
+	// if no certificates provided, fall back to TOFU (if allowed)
+	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
+		return cs.RegisterAIK(clientID, pubKey)
+	}
+
+	// parse and verify AIK certificate if provided
+	if len(aikCertDER) > 0 {
+		if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
+			return fmt.Errorf("AIK certificate verification failed: %w", err)
+		}
+	}
+
+	// parse and verify EK certificate if provided (validates TPM authenticity)
+	if len(ekCertDER) > 0 {
+		if err := cs.verifyEKCertificate(ekCertDER); err != nil {
+			return fmt.Errorf("EK certificate verification failed: %w", err)
+		}
+	}
+
+	return cs.fileStore.RegisterAIK(clientID, pubKey)
+}
+
+// validates AIK certificate against trusted CAs
+func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey *rsa.PublicKey) error {
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
+	}
+
+	// verify certificate time validity
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return ErrCertificateNotYet
+	}
+	if now.After(cert.NotAfter) {
+		return ErrCertificateExpired
+	}
+
+	// verify certificate chain against trusted CAs
+	if len(cs.trustedCAs) > 0 {
+		opts := x509.VerifyOptions{
+			Roots:       cs.caPool,
+			CurrentTime: now,
+			KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		}
+
+		if _, err := cert.Verify(opts); err != nil {
+			return fmt.Errorf("%w: %v", ErrCertificateChain, err)
+		}
+	} else if cs.requireCerts {
+		return ErrNoTrustedCAs
+	}
+
+	// verify that certificate public key matches the AIK from attestation
+	certRSAPubKey, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("%w: certificate does not contain RSA key", ErrCertificateKeyMatch)
+	}
+
+	if !publicKeysEqual(certRSAPubKey, expectedPubKey) {
+		return fmt.Errorf("%w: public key mismatch", ErrCertificateKeyMatch)
+	}
+
+	return nil
+}
+
+// validates EK certificate (proves TPM authenticity)
+func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCertificate, err)
+	}
+
+	// verify certificate time validity
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return ErrCertificateNotYet
+	}
+	if now.After(cert.NotAfter) {
+		return ErrCertificateExpired
+	}
+
+	// verify certificate chain against trusted CAs (TPM manufacturer CAs)
+	if len(cs.trustedCAs) > 0 {
+		opts := x509.VerifyOptions{
+			Roots:       cs.caPool,
+			CurrentTime: now,
+			KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		}
+
+		if _, err := cert.Verify(opts); err != nil {
+			return fmt.Errorf("%w: %v", ErrCertificateChain, err)
+		}
+	}
+
+	// EK certificate should contain specific OIDs for TPM 2.0
+	// TCG EK Credential Profile defines OID 2.23.133.8.1 for TPM 2.0 EK
+	// For now, I just validate the chain - OID checking can (will) be added later
+	// marked as TODO
+
+	return nil
 }
 
 func (cs *CertificateStore) RevokeAIK(clientID string) error {
