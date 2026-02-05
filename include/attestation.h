@@ -95,6 +95,14 @@ struct lota_tpm_evidence {
   /* Nonce from server */
   uint8_t nonce[LOTA_NONCE_SIZE];
 
+  /*
+   * Hardware identity derived from Endorsement Key.
+   * SHA-256(EK public key) provides a unique, stable identifier
+   * that is bound to the physical TPM and cannot be forged.
+   * Used by verifier to detect hardware changes or cloning attempts.
+   */
+  uint8_t hardware_id[LOTA_HARDWARE_ID_SIZE];
+
   /* Reserved for alignment */
   uint8_t _reserved[2];
 } __attribute__((packed));
