@@ -39,6 +39,7 @@ typedef __u64 uint64_t;
 #define LOTA_MAX_AIK_PUB_SIZE 512   /* Max AIK public key (DER SPKI format) */
 #define LOTA_MAX_AIK_CERT_SIZE 2048 /* Max AIK certificate size (DER X.509) */
 #define LOTA_MAX_EK_CERT_SIZE 2048  /* Max EK certificate size (DER X.509) */
+#define LOTA_HARDWARE_ID_SIZE 32    /* SHA-256 of EK public key */
 
 /* PCR indices code care about */
 #define LOTA_PCR_BIOS_CODE 0      /* SRTM, firmware code */
