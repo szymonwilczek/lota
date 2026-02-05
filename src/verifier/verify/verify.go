@@ -12,9 +12,11 @@ package verify
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/store"
@@ -32,6 +34,12 @@ type Verifier struct {
 	nonceLifetime    time.Duration
 	timestampMaxAge  time.Duration
 	sessionTokenLife time.Duration
+
+	// monitoring
+	startTime      time.Time
+	totalAttests   atomic.Int64
+	successAttests atomic.Int64
+	failedAttests  atomic.Int64
 }
 
 // holds verifier configuration
@@ -65,6 +73,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
+		startTime:        time.Now(),
 	}
 }
 
@@ -78,7 +87,16 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 
 // performs full verification of attestation report
 // returns verification result ready to send back to client
-func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.VerifyResult, error) {
+func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+	v.totalAttests.Add(1)
+	defer func() {
+		if retErr != nil {
+			v.failedAttests.Add(1)
+		} else {
+			v.successAttests.Add(1)
+		}
+	}()
+
 	result := &types.VerifyResult{
 		Magic:   types.ReportMagic,
 		Version: types.ReportVersion,
@@ -267,6 +285,11 @@ type Stats struct {
 	UsedNonces        int
 	ActivePolicy      string
 	LoadedPolicies    []string
+	RegisteredClients int
+	TotalAttestations int64
+	SuccessAttests    int64
+	FailedAttests     int64
+	Uptime            time.Duration
 }
 
 func (v *Verifier) Stats() Stats {
@@ -275,5 +298,80 @@ func (v *Verifier) Stats() Stats {
 		UsedNonces:        v.nonceStore.UsedCount(),
 		ActivePolicy:      v.pcrVerifier.GetActivePolicy(),
 		LoadedPolicies:    v.pcrVerifier.ListPolicies(),
+		RegisteredClients: len(v.aikStore.ListClients()),
+		TotalAttestations: v.totalAttests.Load(),
+		SuccessAttests:    v.successAttests.Load(),
+		FailedAttests:     v.failedAttests.Load(),
+		Uptime:            time.Since(v.startTime),
 	}
+}
+
+// per-client information for monitoring API
+type ClientInfo struct {
+	ClientID          string
+	HasAIK            bool
+	HardwareID        string // hex-encoded
+	LastAttestation   time.Time
+	AttestCount       uint64
+	MonotonicCounter  uint64
+	PendingChallenges int
+	PCR14Baseline     string // hex-encoded
+	FirstSeen         time.Time
+}
+
+// returns aggregated information about a specific client
+func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
+	info := &ClientInfo{
+		ClientID: clientID,
+	}
+
+	// check AIK store
+	_, err := v.aikStore.GetAIK(clientID)
+	info.HasAIK = err == nil
+
+	// hardware ID
+	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
+		info.HardwareID = hex.EncodeToString(hwid[:])
+	}
+
+	// nonce store data
+	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
+	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
+	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
+
+	// baseline store data
+	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
+		info.AttestCount = baseline.AttestCount
+		info.FirstSeen = baseline.FirstSeen
+	}
+
+	// check if client exists in any store
+	if !info.HasAIK && info.MonotonicCounter == 0 {
+		return nil, false
+	}
+
+	return info, true
+}
+
+// returns all known client IDs (note for myself: union of AIK store and nonce store)
+func (v *Verifier) ListClients() []string {
+	seen := make(map[string]struct{})
+	var clients []string
+
+	for _, id := range v.aikStore.ListClients() {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			clients = append(clients, id)
+		}
+	}
+
+	for _, id := range v.nonceStore.ListActiveClients() {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			clients = append(clients, id)
+		}
+	}
+
+	return clients
 }
