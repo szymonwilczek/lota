@@ -184,4 +184,17 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
                        size_t *out_size);
 
+/*
+ * tpm_get_hardware_id - Compute unique hardware identifier
+ * @ctx: Initialized TPM context
+ * @hardware_id: Output buffer (LOTA_HARDWARE_ID_SIZE bytes)
+ *
+ * Computes SHA-256(EK public key) as a stable hardware identifier.
+ * The Endorsement Key is unique per TPM and cannot be modified,
+ * making it ideal for hardware binding.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
+
 #endif /* LOTA_TPM_H */
