@@ -154,6 +154,19 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 			log.Printf("[%s] TOFU: AIK registered without certificate (fingerprint: %s)",
 				clientID, AIKFingerprint(aikPubKey))
 		}
+
+		// register hardware ID (TOFU for new clients)
+		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
+			if errors.Is(err, store.ErrHardwareIDMismatch) {
+				log.Printf("[%s] CRITICAL: Hardware identity mismatch - possible cloning or hardware change", clientID)
+				result.Result = types.VerifySigFail
+				return result, fmt.Errorf("hardware identity verification failed: %w", err)
+			}
+			log.Printf("[%s] ERROR: Failed to register hardware ID: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("hardware ID registration failed: %w", err)
+		}
+		log.Printf("[%s] Hardware ID registered: %x", clientID, report.TPM.HardwareID[:8])
 	} else {
 		// already registered - verify signature
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
@@ -162,6 +175,18 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (*types.Veri
 			return result, err
 		}
 		log.Printf("[%s] Signature verified with registered AIK", clientID)
+
+		// verify hardware ID matches registered value
+		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
+			if errors.Is(err, store.ErrHardwareIDMismatch) {
+				log.Printf("[%s] CRITICAL: Hardware identity mismatch - possible cloning or hardware change", clientID)
+				result.Result = types.VerifySigFail
+				return result, fmt.Errorf("hardware identity verification failed: %w", err)
+			}
+			log.Printf("[%s] ERROR: Hardware ID verification failed: %v", clientID, err)
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("hardware ID verification failed: %w", err)
+		}
 	}
 
 	if err := v.pcrVerifier.VerifyReport(report); err != nil {
