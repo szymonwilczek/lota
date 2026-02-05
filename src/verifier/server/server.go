@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -32,14 +33,21 @@ type Server struct {
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 
+	// http monitoring api
+	httpServer *http.Server
+	httpAddr   string
+
 	// timeouts
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 }
 
 type ServerConfig struct {
-	// address to listen on
+	// address to listen on (binary TLS protocol)
 	Address string
+
+	// address for HTTP monitoring API (empty = disabled)
+	HTTPAddress string
 
 	// tls certificate and key paths
 	CertFile string
@@ -53,6 +61,7 @@ type ServerConfig struct {
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
 		Address:      ":8443",
+		HTTPAddress:  "",
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -74,6 +83,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		verifier:     verifier,
 		tlsConfig:    tlsConfig,
 		addr:         cfg.Address,
+		httpAddr:     cfg.HTTPAddress,
 		shutdownCh:   make(chan struct{}),
 		readTimeout:  cfg.ReadTimeout,
 		writeTimeout: cfg.WriteTimeout,
@@ -91,11 +101,57 @@ func (s *Server) Start() error {
 
 	go s.acceptLoop()
 
+	if s.httpAddr != "" {
+		if err := s.startHTTP(); err != nil {
+			return fmt.Errorf("failed to start HTTP API: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// starts the HTTP monitoring API server
+func (s *Server) startHTTP() error {
+	mux := http.NewServeMux()
+	NewAPIHandler(mux, s.verifier, s)
+
+	s.httpServer = &http.Server{
+		Addr:         s.httpAddr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", s.httpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", s.httpAddr, err)
+	}
+
+	log.Printf("LOTA Monitoring API listening on http://%s", s.httpAddr)
+	log.Printf("  GET /health              - Health check")
+	log.Printf("  GET /api/v1/stats        - Verification statistics")
+	log.Printf("  GET /api/v1/clients      - List clients")
+	log.Printf("  GET /api/v1/clients/{id} - Client details")
+	log.Printf("  GET /metrics             - Prometheus metrics")
+
+	go func() {
+		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+
 	return nil
 }
 
 func (s *Server) Stop() {
 	close(s.shutdownCh)
+
+	// graceful HTTP shutdown
+	if s.httpServer != nil {
+		s.httpServer.Close()
+	}
+
 	if s.listener != nil {
 		s.listener.Close()
 	}
