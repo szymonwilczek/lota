@@ -261,6 +261,30 @@ func (ns *NonceStore) checkRateLimit(clientID string) error {
 
 	return nil
 }
+
+// records nonce as used to prevent future reuse
+// implements bounded history (evicts oldest when full)
+func (ns *NonceStore) recordUsedNonce(key string) {
+	// evict oldest if at capacity
+	if len(ns.usedNonces) >= ns.usedNoncesMax {
+		var oldestKey string
+		var oldestTime time.Time
+
+		for k, t := range ns.usedNonces {
+			if oldestTime.IsZero() || t.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = t
+			}
+		}
+
+		if oldestKey != "" {
+			delete(ns.usedNonces, oldestKey)
+		}
+	}
+
+	ns.usedNonces[key] = time.Now()
+}
+
 // periodically removes expired nonces
 func (ns *NonceStore) cleanupLoop() {
 	ticker := time.NewTicker(ns.lifetime / 2)
@@ -276,9 +300,27 @@ func (ns *NonceStore) cleanup() {
 	defer ns.mu.Unlock()
 
 	now := time.Now()
+
+	// clean expired pending nonces
 	for key, entry := range ns.pending {
 		if now.Sub(entry.createdAt) > ns.lifetime {
+			// decrement client pending count
+			if cs, ok := ns.clientChallenges[entry.clientID]; ok {
+				cs.pendingCount--
+				if cs.pendingCount < 0 {
+					cs.pendingCount = 0
+				}
+				ns.clientChallenges[entry.clientID] = cs
+			}
 			delete(ns.pending, key)
+		}
+	}
+
+	// clean old used nonce entries
+	usedLifetime := ns.lifetime * 3 // keep used 3x longer than lifetime
+	for key, usedAt := range ns.usedNonces {
+		if now.Sub(usedAt) > usedLifetime {
+			delete(ns.usedNonces, key)
 		}
 	}
 }
