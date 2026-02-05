@@ -78,6 +78,11 @@ func createTestReportBytes() []byte {
 		buf[offset+i] = byte(0xAA ^ i)
 	}
 	offset += NonceSize
+	// hardware_id (32 bytes) - SHA-256 of EK public key
+	for i := 0; i < HardwareIDSize; i++ {
+		buf[offset+i] = byte(0xDD ^ i)
+	}
+	offset += HardwareIDSize
 	// reserved (2 bytes)
 	offset += 2
 
@@ -280,7 +285,7 @@ func TestParseReport_Alignment(t *testing.T) {
 
 	// These offsets MUST match C struct with __attribute__((packed))
 	// See include/attestation.h
-	// TPM evidence section: 6960 bytes (with certificates)
+	// TPM evidence section: 6992 bytes
 	expectedOffsets := map[string]int{
 		"Header.Magic":       0,
 		"Header.Version":     4,
@@ -301,11 +306,12 @@ func TestParseReport_Alignment(t *testing.T) {
 		"TPM.EKCertificate":  32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2,
 		"TPM.EKCertSize":     32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
 		"TPM.Nonce":          32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
-		"System.KernelHash":  32 + 6960,
-		"System.AgentHash":   32 + 6960 + 32,
-		"System.KernelPath":  32 + 6960 + 64,
-		"System.IOMMU":       32 + 6960 + 64 + 256,
-		"BPF.TotalExec":      32 + 6960 + 396,
+		"TPM.HardwareID":     32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32,
+		"System.KernelHash":  32 + 6992,
+		"System.AgentHash":   32 + 6992 + 32,
+		"System.KernelPath":  32 + 6992 + 64,
+		"System.IOMMU":       32 + 6992 + 64 + 256,
+		"BPF.TotalExec":      32 + 6992 + 396,
 	}
 
 	data := createTestReportBytes()
@@ -320,9 +326,9 @@ func TestParseReport_Alignment(t *testing.T) {
 		})
 	}
 
-	// final check: total size (with certificates)
-	if ExpectedReportSize != 7412 {
-		t.Errorf("ExpectedReportSize: got %d, want 7412", ExpectedReportSize)
+	// final check: total size (with certificates and hardware_id)
+	if ExpectedReportSize != 7444 {
+		t.Errorf("ExpectedReportSize: got %d, want 7444", ExpectedReportSize)
 	}
 	t.Logf("✓ Total report size: %d bytes", ExpectedReportSize)
 }
