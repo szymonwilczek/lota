@@ -361,6 +361,29 @@ func (ns *NonceStore) ClientPendingCount(clientID string) int {
 	return 0
 }
 
+// returns time of client's last successful attestation
+func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	if cs, ok := ns.clientChallenges[clientID]; ok {
+		return cs.lastAttestation
+	}
+	return time.Time{}
+}
+
+// returns all client IDs with active challenge state
+func (ns *NonceStore) ListActiveClients() []string {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	clients := make([]string, 0, len(ns.clientChallenges))
+	for id := range ns.clientChallenges {
+		clients = append(clients, id)
+	}
+	return clients
+}
+
 // checks report timestamp is recent
 // this is an additional freshness check beyond nonce
 func VerifyTimestamp(report *types.AttestationReport, maxAge time.Duration) error {
