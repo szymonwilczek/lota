@@ -117,20 +117,37 @@ func NewNonceStore(lifetime time.Duration) *NonceStore {
 // creates a new challenge with random nonce
 // returns challenge ready to send to agent
 func (ns *NonceStore) GenerateChallenge(clientID string, pcrMask uint32) (*types.Challenge, error) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	// enforce per-client rate limiting
+	if err := ns.checkRateLimit(clientID); err != nil {
+		return nil, err
+	}
+
 	var nonce [types.NonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
 
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
-	// nonce as key (TO THINK ON: hex would be cleaner but this is faster)
 	key := string(nonce[:])
+
+	// paranoid check: ensure nonce was never used before
+	if _, used := ns.usedNonces[key]; used {
+		return nil, errors.New("nonce collision with used nonce - entropy failure")
+	}
+
+	// get and increment client counter
+	cs := ns.clientChallenges[clientID]
+	cs.attestCounter++
+	cs.pendingCount++
+	ns.clientChallenges[clientID] = cs
+
 	ns.pending[key] = nonceEntry{
 		nonce:     nonce,
 		createdAt: time.Now(),
 		clientID:  clientID,
+		counter:   cs.attestCounter,
 	}
 
 	return &types.Challenge{
@@ -153,14 +170,32 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	defer ns.mu.Unlock()
 
 	key := string(report.TPM.Nonce[:])
-	entry, exists := ns.pending[key]
 
+	// check used nonce history first (detects replays after restart)
+	if _, used := ns.usedNonces[key]; used {
+		return errors.New("nonce already used - replay attack detected")
+	}
+
+	entry, exists := ns.pending[key]
 	if !exists {
 		return errors.New("unknown nonce - possible replay attack")
 	}
 
 	// remove nonce (one-time use)
 	delete(ns.pending, key)
+
+	// record as used (prevents reuse)
+	ns.recordUsedNonce(key)
+
+	// decrement client pending count
+	if cs, ok := ns.clientChallenges[entry.clientID]; ok {
+		cs.pendingCount--
+		if cs.pendingCount < 0 {
+			cs.pendingCount = 0
+		}
+		cs.lastAttestation = time.Now()
+		ns.clientChallenges[entry.clientID] = cs
+	}
 
 	// check lifetime
 	if time.Since(entry.createdAt) > ns.lifetime {
@@ -190,6 +225,42 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	return nil
 }
 
+// enforces per-client challenge rate limiting
+func (ns *NonceStore) checkRateLimit(clientID string) error {
+	cs, exists := ns.clientChallenges[clientID]
+
+	if exists {
+		// check outstanding challenge limit
+		if cs.pendingCount >= ns.maxPending {
+			return fmt.Errorf("too many outstanding challenges for client %s (%d/%d)",
+				clientID, cs.pendingCount, ns.maxPending)
+		}
+
+		// check rate limit window
+		now := time.Now()
+		if now.Sub(cs.windowStart) > ns.rateLimitWindow {
+			// reset window
+			cs.windowStart = now
+			cs.windowCount = 0
+			ns.clientChallenges[clientID] = cs
+		} else if cs.windowCount >= ns.rateLimitMax {
+			return fmt.Errorf("rate limit exceeded for client %s (%d/%d per %v)",
+				clientID, cs.windowCount, ns.rateLimitMax, ns.rateLimitWindow)
+		}
+
+		// increment window counter
+		cs.windowCount++
+		ns.clientChallenges[clientID] = cs
+	} else {
+		// new client - initialize state
+		ns.clientChallenges[clientID] = clientState{
+			windowStart: time.Now(),
+			windowCount: 1,
+		}
+	}
+
+	return nil
+}
 // periodically removes expired nonces
 func (ns *NonceStore) cleanupLoop() {
 	ticker := time.NewTicker(ns.lifetime / 2)
