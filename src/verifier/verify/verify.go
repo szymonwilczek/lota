@@ -264,6 +264,7 @@ func (v *Verifier) SetActivePolicy(name string) error {
 // returns verifier statistics
 type Stats struct {
 	PendingChallenges int
+	UsedNonces        int
 	ActivePolicy      string
 	LoadedPolicies    []string
 }
@@ -271,6 +272,7 @@ type Stats struct {
 func (v *Verifier) Stats() Stats {
 	return Stats{
 		PendingChallenges: v.nonceStore.PendingCount(),
+		UsedNonces:        v.nonceStore.UsedCount(),
 		ActivePolicy:      v.pcrVerifier.GetActivePolicy(),
 		LoadedPolicies:    v.pcrVerifier.ListPolicies(),
 	}
