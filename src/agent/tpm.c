@@ -713,3 +713,120 @@ cleanup:
 
   return ret;
 }
+
+/*
+ * Standard EK template handle for RSA 2048.
+ * TCG EK Credential Profile specifies this as the standard location.
+ */
+#define TPM_EK_RSA_HANDLE 0x81010001
+
+int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
+  TSS2_RC rc;
+  ESYS_TR ek_handle = ESYS_TR_NONE;
+  TPM2B_PUBLIC *ek_public = NULL;
+  TPM2B_NAME *ek_name = NULL;
+  TPM2B_NAME *ek_qualified_name = NULL;
+  EVP_MD_CTX *md_ctx = NULL;
+  unsigned int hash_len;
+  int ret = 0;
+
+  if (!ctx || !ctx->initialized || !hardware_id)
+    return -EINVAL;
+
+  memset(hardware_id, 0, LOTA_HARDWARE_ID_SIZE);
+
+  /*
+   * Try to read EK from standard persistent handle.
+   * Most TPMs have EK provisioned at 0x81010001.
+   */
+  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE, ESYS_TR_NONE,
+                             ESYS_TR_NONE, ESYS_TR_NONE, &ek_handle);
+  if (rc != TSS2_RC_SUCCESS) {
+    /*
+     * EK not at standard handle - this is common.
+     * Fall back to using AIK fingerprint as hardware ID.
+     * Less ideal but still unique per TPM installation. I'll think on it.
+     */
+    uint8_t aik_buf[LOTA_MAX_AIK_PUB_SIZE];
+    size_t aik_size;
+
+    ret = tpm_get_aik_public(ctx, aik_buf, sizeof(aik_buf), &aik_size);
+    if (ret < 0)
+      return ret;
+
+    md_ctx = EVP_MD_CTX_new();
+    if (!md_ctx)
+      return -ENOMEM;
+
+    if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1 ||
+        EVP_DigestUpdate(md_ctx, aik_buf, aik_size) != 1 ||
+        EVP_DigestFinal_ex(md_ctx, hardware_id, &hash_len) != 1) {
+      EVP_MD_CTX_free(md_ctx);
+      return -EIO;
+    }
+
+    EVP_MD_CTX_free(md_ctx);
+    return 0;
+  }
+
+  rc = Esys_ReadPublic(ctx->esys_ctx, ek_handle, ESYS_TR_NONE, ESYS_TR_NONE,
+                       ESYS_TR_NONE, &ek_public, &ek_name, &ek_qualified_name);
+  if (rc != TSS2_RC_SUCCESS) {
+    ret = tss2_rc_to_errno(rc);
+    goto cleanup;
+  }
+
+  /*
+   * Hash the EK public key modulus.
+   * For RSA, the modulus is the unique part.
+   */
+  md_ctx = EVP_MD_CTX_new();
+  if (!md_ctx) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
+
+  if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1) {
+    ret = -EIO;
+    goto cleanup;
+  }
+
+  if (ek_public->publicArea.type == TPM2_ALG_RSA) {
+    if (EVP_DigestUpdate(md_ctx, ek_public->publicArea.unique.rsa.buffer,
+                         ek_public->publicArea.unique.rsa.size) != 1) {
+      ret = -EIO;
+      goto cleanup;
+    }
+  } else if (ek_public->publicArea.type == TPM2_ALG_ECC) {
+    /* ECC: hash both X and Y coordinates */
+    if (EVP_DigestUpdate(md_ctx, ek_public->publicArea.unique.ecc.x.buffer,
+                         ek_public->publicArea.unique.ecc.x.size) != 1 ||
+        EVP_DigestUpdate(md_ctx, ek_public->publicArea.unique.ecc.y.buffer,
+                         ek_public->publicArea.unique.ecc.y.size) != 1) {
+      ret = -EIO;
+      goto cleanup;
+    }
+  } else {
+    ret = -ENOTSUP;
+    goto cleanup;
+  }
+
+  if (EVP_DigestFinal_ex(md_ctx, hardware_id, &hash_len) != 1) {
+    ret = -EIO;
+    goto cleanup;
+  }
+
+  ret = 0;
+
+cleanup:
+  if (md_ctx)
+    EVP_MD_CTX_free(md_ctx);
+  if (ek_public)
+    Esys_Free(ek_public);
+  if (ek_name)
+    Esys_Free(ek_name);
+  if (ek_qualified_name)
+    Esys_Free(ek_qualified_name);
+
+  return ret;
+}
