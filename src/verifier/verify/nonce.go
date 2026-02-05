@@ -332,6 +332,35 @@ func (ns *NonceStore) PendingCount() int {
 	return len(ns.pending)
 }
 
+// returns number of used nonces in history (for monitoring)
+func (ns *NonceStore) UsedCount() int {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+	return len(ns.usedNonces)
+}
+
+// returns per-client attestation counter (for monitoring)
+func (ns *NonceStore) ClientCounter(clientID string) uint64 {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	if cs, ok := ns.clientChallenges[clientID]; ok {
+		return cs.attestCounter
+	}
+	return 0
+}
+
+// returns per-client pending challenge count
+func (ns *NonceStore) ClientPendingCount(clientID string) int {
+	ns.mu.RLock()
+	defer ns.mu.RUnlock()
+
+	if cs, ok := ns.clientChallenges[clientID]; ok {
+		return cs.pendingCount
+	}
+	return 0
+}
+
 // checks report timestamp is recent
 // this is an additional freshness check beyond nonce
 func VerifyTimestamp(report *types.AttestationReport, maxAge time.Duration) error {
