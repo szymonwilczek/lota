@@ -5,7 +5,8 @@
 //   lota-verifier [options]
 //
 // Options:
-//   --addr ADDR        Listen address (default: :8443)
+//   --addr ADDR        Listen address for TLS attestation protocol (default: :8443)
+//   --http-addr ADDR   Listen address for HTTP monitoring API (default: disabled)
 //   --cert FILE        TLS certificate file
 //   --key FILE         TLS private key file
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
@@ -36,7 +37,8 @@ import (
 )
 
 var (
-	addr         = flag.String("addr", ":8443", "Listen address")
+	addr         = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
+	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
@@ -90,6 +92,7 @@ func main() {
 	// initialize tls server
 	serverCfg := server.ServerConfig{
 		Address:      *addr,
+		HTTPAddress:  *httpAddr,
 		CertFile:     *certFile,
 		KeyFile:      *keyFile,
 		ReadTimeout:  30 * time.Second,
