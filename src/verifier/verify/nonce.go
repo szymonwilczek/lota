@@ -3,6 +3,15 @@
 //
 // Ensures attestation reports are fresh and not replays.
 // The nonce is included in TPM quote's extraData field.
+//
+// Anti-replay protections (for now, i keep track of them here):
+//   - One-time nonce consumption (generate -> verify -> delete)
+//   - Nonce TTL expiration (configurable lifetime)
+//   - Client binding (nonce tied to specific client ID)
+//   - Per-client rate limiting (prevents challenge flooding)
+//   - Monotonic counter per client (detects reordering)
+//   - Used nonce history (prevents reuse after restart)
+//   - TPMS_ATTEST nonce binding (cryptographic proof from TPM)
 
 package verify
 
@@ -22,25 +31,87 @@ type NonceStore struct {
 	mu       sync.RWMutex
 	pending  map[string]nonceEntry
 	lifetime time.Duration
+
+	// anti-replay: remember used nonces to prevent reuse across restarts
+	usedNonces    map[string]time.Time
+	usedNoncesMax int
+
+	// per-client rate limiting
+	clientChallenges map[string]clientState
+	maxPending       int           // max outstanding challenges per client
+	rateLimitWindow  time.Duration // rate limit window duration
+	rateLimitMax     int           // max challenges per window
 }
 
 type nonceEntry struct {
 	nonce     [types.NonceSize]byte
 	createdAt time.Time
 	clientID  string // optional: bind nonce to specific client
+	counter   uint64 // monotonic counter for ordering
 }
 
-// creates a new nonce store with specified lifetime
+// tracks per-client challenge state for rate limiting
+type clientState struct {
+	pendingCount    int       // outstanding challenges
+	windowStart     time.Time // current rate limit window start
+	windowCount     int       // challenges issued in current window
+	attestCounter   uint64    // monotonic attestation counter
+	lastAttestation time.Time // time of last successful attestation
+}
+
+// configuration for nonce store
+type NonceStoreConfig struct {
+	// how long a nonce remains valid
+	Lifetime time.Duration
+
+	// max outstanding challenges per client
+	MaxPendingPerClient int
+
+	// rate limit: max challenges per window
+	RateLimitMax int
+
+	// rate limit window duration
+	RateLimitWindow time.Duration
+
+	// max used nonces to remember (ring buffer)
+	UsedNonceHistory int
+}
+
+// returns sensible defaults
+func DefaultNonceStoreConfig() NonceStoreConfig {
+	return NonceStoreConfig{
+		Lifetime:            5 * time.Minute,
+		MaxPendingPerClient: 5,
+		RateLimitMax:        30,
+		RateLimitWindow:     time.Minute,
+		UsedNonceHistory:    10000,
+	}
+}
+
+// creates a new nonce store from config
 // IMPORTANT: Nonces older than lifetime are automatically rejected
-func NewNonceStore(lifetime time.Duration) *NonceStore {
+func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	ns := &NonceStore{
-		pending:  make(map[string]nonceEntry),
-		lifetime: lifetime,
+		pending:          make(map[string]nonceEntry),
+		lifetime:         cfg.Lifetime,
+		usedNonces:       make(map[string]time.Time, cfg.UsedNonceHistory),
+		usedNoncesMax:    cfg.UsedNonceHistory,
+		clientChallenges: make(map[string]clientState),
+		maxPending:       cfg.MaxPendingPerClient,
+		rateLimitWindow:  cfg.RateLimitWindow,
+		rateLimitMax:     cfg.RateLimitMax,
 	}
 
 	go ns.cleanupLoop()
 
 	return ns
+}
+
+// creates a new nonce store with specified lifetime
+func NewNonceStore(lifetime time.Duration) *NonceStore {
+	cfg := DefaultNonceStoreConfig()
+	cfg.Lifetime = lifetime
+	return NewNonceStoreFromConfig(cfg)
 }
 
 // creates a new challenge with random nonce
