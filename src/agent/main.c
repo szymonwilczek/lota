@@ -753,6 +753,21 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
   report->tpm.pcr_mask = challenge->pcr_mask;
 
+  /*
+   * Get hardware identity (SHA-256 of EK public key).
+   * This provides a unique, immutable identifier for this TPM.
+   * Used by verifier to detect unauthorized hardware changes.
+   */
+  ret = tpm_get_hardware_id(&g_tpm_ctx, report->tpm.hardware_id);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Failed to get hardware ID: %s\n", strerror(-ret));
+    /* continue with zero hardware ID - verifier may reject */
+    memset(report->tpm.hardware_id, 0, sizeof(report->tpm.hardware_id));
+  } else {
+    printf("Hardware ID derived from %s\n",
+           ret == 1 ? "AIK (EK not available)" : "EK");
+  }
+
   ret =
       tpm_quote(&g_tpm_ctx, challenge->nonce, challenge->pcr_mask, &quote_resp);
   if (ret < 0) {
