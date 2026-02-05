@@ -30,6 +30,12 @@ type AIKStore interface {
 	// stores AIK with certificate verification
 	RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error
 
+	// registers or validates hardware ID for client
+	RegisterHardwareID(clientID string, hardwareID [32]byte) error
+
+	// retrieves stored hardware ID for client
+	GetHardwareID(clientID string) ([32]byte, error)
+
 	// removes trust for client's AIK
 	RevokeAIK(clientID string) error
 
@@ -38,10 +44,12 @@ type AIKStore interface {
 }
 
 // keys are stored as PEM files: {storePath}/{clientID}.pem
+// hardware IDs are stored as: {storePath}/{clientID}.hwid
 type FileStore struct {
-	mu        sync.RWMutex
-	storePath string
-	cache     map[string]*rsa.PublicKey
+	mu          sync.RWMutex
+	storePath   string
+	cache       map[string]*rsa.PublicKey
+	hardwareIDs map[string][32]byte
 }
 
 // creates a new file-based AIK store
@@ -51,8 +59,9 @@ func NewFileStore(storePath string) (*FileStore, error) {
 	}
 
 	fs := &FileStore{
-		storePath: storePath,
-		cache:     make(map[string]*rsa.PublicKey),
+		storePath:   storePath,
+		cache:       make(map[string]*rsa.PublicKey),
+		hardwareIDs: make(map[string][32]byte),
 	}
 
 	// load existing keys into cache
@@ -70,18 +79,31 @@ func (fs *FileStore) loadAll() error {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".pem" {
+		if entry.IsDir() {
 			continue
 		}
 
-		clientID := entry.Name()[:len(entry.Name())-4] // remove .pem
-		pubKey, err := fs.loadKey(clientID)
-		if err != nil {
-			fmt.Printf("Warning: failed to load key for %s: %v\n", clientID, err)
-			continue
-		}
+		name := entry.Name()
+		ext := filepath.Ext(name)
+		clientID := name[:len(name)-len(ext)]
 
-		fs.cache[clientID] = pubKey
+		switch ext {
+		case ".pem":
+			pubKey, err := fs.loadKey(clientID)
+			if err != nil {
+				fmt.Printf("Warning: failed to load key for %s: %v\n", clientID, err)
+				continue
+			}
+			fs.cache[clientID] = pubKey
+
+		case ".hwid":
+			hwid, err := fs.loadHardwareID(clientID)
+			if err != nil {
+				fmt.Printf("Warning: failed to load hardware ID for %s: %v\n", clientID, err)
+				continue
+			}
+			fs.hardwareIDs[clientID] = hwid
+		}
 	}
 
 	return nil
@@ -110,6 +132,23 @@ func (fs *FileStore) loadKey(clientID string) (*rsa.PublicKey, error) {
 	}
 
 	return rsaPub, nil
+}
+
+func (fs *FileStore) loadHardwareID(clientID string) ([32]byte, error) {
+	var hwid [32]byte
+	path := filepath.Join(fs.storePath, clientID+".hwid")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return hwid, err
+	}
+
+	if len(data) != 32 {
+		return hwid, fmt.Errorf("invalid hardware ID size: %d", len(data))
+	}
+
+	copy(hwid[:], data)
+	return hwid, nil
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
@@ -192,6 +231,42 @@ func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey,
 	return fs.RegisterAIK(clientID, pubKey)
 }
 
+// registers hardware ID for client or validates against existing
+// implements TOFU: first registration stores the ID, subsequent calls verify match
+func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	// check if hardware ID already registered
+	if existing, exists := fs.hardwareIDs[clientID]; exists {
+		if existing != hardwareID {
+			return ErrHardwareIDMismatch
+		}
+		return nil // same hardware ID, all good
+	}
+
+	// store new hardware ID to file
+	path := filepath.Join(fs.storePath, clientID+".hwid")
+	if err := os.WriteFile(path, hardwareID[:], 0600); err != nil {
+		return fmt.Errorf("failed to store hardware ID: %w", err)
+	}
+
+	fs.hardwareIDs[clientID] = hardwareID
+	return nil
+}
+
+// retrieves stored hardware ID for client
+func (fs *FileStore) GetHardwareID(clientID string) ([32]byte, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	hwid, exists := fs.hardwareIDs[clientID]
+	if !exists {
+		return [32]byte{}, ErrHardwareIDNotFound
+	}
+	return hwid, nil
+}
+
 // compares two RSA public keys
 func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	if a.N.Cmp(b.N) != 0 {
@@ -209,13 +284,15 @@ func Fingerprint(pubKey *rsa.PublicKey) string {
 
 // implements AIKStore in-memory (for testing only right now).
 type MemoryStore struct {
-	mu   sync.RWMutex
-	keys map[string]*rsa.PublicKey
+	mu          sync.RWMutex
+	keys        map[string]*rsa.PublicKey
+	hardwareIDs map[string][32]byte
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		keys: make(map[string]*rsa.PublicKey),
+		keys:        make(map[string]*rsa.PublicKey),
+		hardwareIDs: make(map[string][32]byte),
 	}
 }
 
@@ -269,6 +346,34 @@ func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKe
 	return ms.RegisterAIK(clientID, pubKey)
 }
 
+// registers hardware ID for client or validates against existing
+func (ms *MemoryStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if existing, exists := ms.hardwareIDs[clientID]; exists {
+		if existing != hardwareID {
+			return ErrHardwareIDMismatch
+		}
+		return nil
+	}
+
+	ms.hardwareIDs[clientID] = hardwareID
+	return nil
+}
+
+// retrieves stored hardware ID for client
+func (ms *MemoryStore) GetHardwareID(clientID string) ([32]byte, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	hwid, exists := ms.hardwareIDs[clientID]
+	if !exists {
+		return [32]byte{}, ErrHardwareIDNotFound
+	}
+	return hwid, nil
+}
+
 // currently a placeholder
 type CertificateStore struct {
 	fileStore    *FileStore
@@ -286,6 +391,12 @@ var (
 	ErrCertificateExpired  = errors.New("certificate has expired")
 	ErrCertificateNotYet   = errors.New("certificate not yet valid")
 	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
+)
+
+// hardware identity errors
+var (
+	ErrHardwareIDMismatch = errors.New("hardware identity mismatch - possible cloning or hardware change")
+	ErrHardwareIDNotFound = errors.New("hardware identity not registered")
 )
 
 // creates a certificate-based store
@@ -454,4 +565,12 @@ func (cs *CertificateStore) RevokeAIK(clientID string) error {
 
 func (cs *CertificateStore) ListClients() []string {
 	return cs.fileStore.ListClients()
+}
+
+func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
+	return cs.fileStore.RegisterHardwareID(clientID, hardwareID)
+}
+
+func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
+	return cs.fileStore.GetHardwareID(clientID)
 }
