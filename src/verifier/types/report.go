@@ -17,6 +17,7 @@ const (
 
 	HashSize        = 32   // SHA-256
 	NonceSize       = 32   // Challenge nonce
+	HardwareIDSize  = 32   // SHA-256 of EK public key
 	MaxSigSize      = 512  // RSA-4096 signature
 	MaxAttestSize   = 1024 // TPMS_ATTEST blob
 	MaxAIKPubSize   = 512  // AIK public key (DER SPKI)
@@ -74,8 +75,9 @@ type ReportHeader struct {
 //	ek_certificate[2048]  2048 bytes
 //	ek_cert_size             2 bytes
 //	nonce[32]               32 bytes
+//	hardware_id[32]         32 bytes
 //	reserved[2]              2 bytes
-//	TOTAL:                6960 bytes
+//	TOTAL:                6992 bytes
 type TPMEvidence struct {
 	PCRValues      [PCRCount][HashSize]byte // 768 bytes
 	PCRMask        uint32                   // 4 bytes
@@ -90,6 +92,7 @@ type TPMEvidence struct {
 	EKCertificate  [MaxEKCertSize]byte      // 2048 bytes
 	EKCertSize     uint16                   // 2 bytes
 	Nonce          [NonceSize]byte          // 32 bytes
+	HardwareID     [HardwareIDSize]byte     // 32 bytes
 	Reserved       [2]byte                  // 2 bytes alignment
 }
 
@@ -152,8 +155,8 @@ var (
 )
 
 // expected binary size of AttestationReport
-// Header(32) + TPM(6960) + System(396) + BPF(24) = 7412
-const ExpectedReportSize = 7412
+// Header(32) + TPM(6992) + System(396) + BPF(24) = 7444
+const ExpectedReportSize = 7444
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -188,7 +191,7 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 
-	// tpm evidence (6960 bytes)
+	// tpm evidence (6992 bytes)
 	// pcr values: 24 * 32 = 768 bytes
 	for i := 0; i < PCRCount; i++ {
 		copy(report.TPM.PCRValues[i][:], data[offset:offset+HashSize])
@@ -218,6 +221,8 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += 2
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
+	copy(report.TPM.HardwareID[:], data[offset:offset+HardwareIDSize])
+	offset += HardwareIDSize
 	offset += 2 // reserved
 
 	// system measurement (396 bytes)
