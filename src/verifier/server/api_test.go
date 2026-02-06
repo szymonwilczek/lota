@@ -45,6 +45,9 @@ func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 
 	aikStore := store.NewMemoryStore()
 	cfg := verify.DefaultConfig()
+	auditLog := store.NewMemoryAuditLog()
+	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
+	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	v := verify.NewVerifier(cfg, aikStore)
 	v.AddPolicy(verify.DefaultPolicy())
 
@@ -55,7 +58,7 @@ func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv)
+	NewAPIHandler(mux, v, srv, auditLog)
 
 	return mux, v
 }
@@ -66,6 +69,9 @@ func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 
 	aikStore := store.NewMemoryStore()
 	cfg := verify.DefaultConfig()
+	auditLog := store.NewMemoryAuditLog()
+	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
+	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	v := verify.NewVerifier(cfg, aikStore)
 	v.AddPolicy(verify.DefaultPolicy())
 
@@ -82,7 +88,7 @@ func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv)
+	NewAPIHandler(mux, v, srv, auditLog)
 
 	return mux, v
 }
