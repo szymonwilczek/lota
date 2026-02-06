@@ -15,6 +15,24 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
+// defines the interface for PCR baseline stores
+type BaselineStorer interface {
+	// performs TOFU validation for PCR 14
+	CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline)
+
+	// returns the stored baseline for a client (nil if not found)
+	GetBaseline(clientID string) *ClientBaseline
+
+	// removes stored baseline for a client
+	ClearBaseline(clientID string)
+
+	// returns all known client IDs
+	ListClients() []string
+
+	// returns baseline store statistics
+	Stats() BaselineStats
+}
+
 // stores known-good measurements for a client
 type ClientBaseline struct {
 	// agent self-measurement hash
