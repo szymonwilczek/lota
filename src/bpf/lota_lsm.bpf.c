@@ -304,6 +304,76 @@ static __always_inline int is_module_whitelisted(const unsigned char *name) {
 }
 
 /*
+ * Check if dentry is under a trusted library directory.
+ * Walks up dentry parents looking for patterns like:
+ *   .../usr/lib/...   .../usr/lib64/...
+ *   .../lib/...       .../lib64/...
+ *   .../usr/bin/...   .../usr/sbin/...
+ *   .../bin/...       .../sbin/...
+ *
+ * Returns 1 if file appears to be in a trusted system directory.
+ */
+static __always_inline int is_trusted_system_path(struct dentry *dentry) {
+  struct dentry *parent;
+  const unsigned char *pname;
+  char buf[12];
+
+  if (!dentry)
+    return 0;
+
+  parent = BPF_CORE_READ(dentry, d_parent);
+
+#pragma unroll
+  for (int i = 0; i < 8 && parent; i++) {
+    pname = BPF_CORE_READ(parent, d_name.name);
+    if (!pname)
+      goto next_trusted;
+
+    if (bpf_probe_read_kernel_str(buf, sizeof(buf), pname) < 0)
+      goto next_trusted;
+
+    /* "lib64" */
+    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '6' &&
+        buf[4] == '4' && buf[5] == '\0') {
+      return 1;
+    }
+
+    /* "libexec" - (/usr/libexec/) */
+    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == 'e' &&
+        buf[4] == 'x' && buf[5] == 'e' && buf[6] == 'c' && buf[7] == '\0') {
+      return 1;
+    }
+
+    /* "lib" */
+    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '\0') {
+      return 1;
+    }
+
+    /* "bin" */
+    if (buf[0] == 'b' && buf[1] == 'i' && buf[2] == 'n' && buf[3] == '\0') {
+      return 1;
+    }
+
+    /* "sbin" */
+    if (buf[0] == 's' && buf[1] == 'b' && buf[2] == 'i' && buf[3] == 'n' &&
+        buf[4] == '\0') {
+      return 1;
+    }
+
+    /* "modules" (for kernel module compat) */
+    if (buf[0] == 'm' && buf[1] == 'o' && buf[2] == 'd' && buf[3] == 'u' &&
+        buf[4] == 'l' && buf[5] == 'e' && buf[6] == 's' && buf[7] == '\0') {
+      return 1;
+    }
+
+  next_trusted:
+    parent = BPF_CORE_READ(parent, d_parent);
+  }
+
+  return 0;
+}
+
+/*
  * Try to determine if module is from standard location.
  * Walks up dentry parents looking for "modules" directory.
  *
@@ -752,17 +822,15 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
       blocked = 0;
     } else if (is_trusted_lib_path((const char *)name)) {
       blocked = 0;
-    } else {
+    } else if (is_trusted_system_path(dentry)) {
       /*
-       * try to resolve via dentry walk if direct name check failed
-       * dentry name might be just the filename, not full path!
-       * check if any parent directory indicates a standard location
+       * dentry walk: check if any parent directory is a trusted
+       * system directory. This handles the case where
+       * d_name.name is just the filename.
        */
-      if (is_standard_module_location(dentry)) {
-        blocked = 0;
-      } else {
-        blocked = 1;
-      }
+      blocked = 0;
+    } else {
+      blocked = 1;
     }
   }
 
