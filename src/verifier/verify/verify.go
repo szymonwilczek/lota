@@ -28,7 +28,7 @@ type Verifier struct {
 	nonceStore    *NonceStore
 	pcrVerifier   *PCRVerifier
 	aikStore      store.AIKStore
-	baselineStore *BaselineStore
+	baselineStore BaselineStorer
 
 	// configuration
 	nonceLifetime    time.Duration
@@ -52,6 +52,12 @@ type VerifierConfig struct {
 
 	// how long issued tokens are valid
 	SessionTokenLife time.Duration
+
+	// optional: persistent baseline store (nil = in-memory)
+	BaselineStore BaselineStorer
+
+	// optional: persistent used nonce backend (nil = in-memory)
+	UsedNonceBackend UsedNonceBackend
 }
 
 // returns sensible defaults for verifier
@@ -65,11 +71,20 @@ func DefaultConfig() VerifierConfig {
 
 // creates a new verification engine
 func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
+	nonceCfg := DefaultNonceStoreConfig()
+	nonceCfg.Lifetime = cfg.NonceLifetime
+	nonceCfg.UsedBackend = cfg.UsedNonceBackend
+
+	baselineStore := cfg.BaselineStore
+	if baselineStore == nil {
+		baselineStore = NewBaselineStore()
+	}
+
 	return &Verifier{
-		nonceStore:       NewNonceStore(cfg.NonceLifetime),
+		nonceStore:       NewNonceStoreFromConfig(nonceCfg),
 		pcrVerifier:      NewPCRVerifier(),
 		aikStore:         aikStore,
-		baselineStore:    NewBaselineStore(),
+		baselineStore:    baselineStore,
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
