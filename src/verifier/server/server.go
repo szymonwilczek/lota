@@ -21,12 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 type Server struct {
 	verifier   *verify.Verifier
+	auditLog   store.AuditLog
 	listener   net.Listener
 	tlsConfig  *tls.Config
 	addr       string
@@ -52,6 +54,9 @@ type ServerConfig struct {
 	// tls certificate and key paths
 	CertFile string
 	KeyFile  string
+
+	// optional: audit log for revocation/ban API
+	AuditLog store.AuditLog
 
 	// timeouts
 	ReadTimeout  time.Duration
@@ -81,6 +86,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 
 	return &Server{
 		verifier:     verifier,
+		auditLog:     cfg.AuditLog,
 		tlsConfig:    tlsConfig,
 		addr:         cfg.Address,
 		httpAddr:     cfg.HTTPAddress,
@@ -113,7 +119,7 @@ func (s *Server) Start() error {
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, s.verifier, s)
+	NewAPIHandler(mux, s.verifier, s, s.auditLog)
 
 	s.httpServer = &http.Server{
 		Addr:         s.httpAddr,
@@ -133,6 +139,13 @@ func (s *Server) startHTTP() error {
 	log.Printf("  GET /api/v1/stats        - Verification statistics")
 	log.Printf("  GET /api/v1/clients      - List clients")
 	log.Printf("  GET /api/v1/clients/{id} - Client details")
+	log.Printf("  POST   /api/v1/clients/{id}/revoke - Revoke client AIK")
+	log.Printf("  DELETE /api/v1/clients/{id}/revoke - Unrevoke client")
+	log.Printf("  GET /api/v1/revocations  - List revocations")
+	log.Printf("  POST   /api/v1/bans      - Ban hardware ID")
+	log.Printf("  DELETE /api/v1/bans/{id} - Unban hardware ID")
+	log.Printf("  GET /api/v1/bans         - List hardware bans")
+	log.Printf("  GET /api/v1/audit        - Audit log")
 	log.Printf("  GET /metrics             - Prometheus metrics")
 
 	go func() {

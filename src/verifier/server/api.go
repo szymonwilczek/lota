@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
@@ -25,14 +27,16 @@ import (
 type APIHandler struct {
 	verifier  *verify.Verifier
 	server    *Server
+	auditLog  store.AuditLog
 	startTime time.Time
 }
 
 // creates a new API handler and registers routes on the given mux
-func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server) *APIHandler {
+func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog) *APIHandler {
 	h := &APIHandler{
 		verifier:  verifier,
 		server:    srv,
+		auditLog:  auditLog,
 		startTime: time.Now(),
 	}
 
@@ -41,6 +45,19 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server) *
 	mux.HandleFunc("GET /api/v1/clients", h.handleListClients)
 	mux.HandleFunc("GET /api/v1/clients/", h.handleClientInfo)
 	mux.HandleFunc("GET /metrics", h.handleMetrics)
+
+	// revocation management
+	mux.HandleFunc("POST /api/v1/clients/", h.handleClientAction)
+	mux.HandleFunc("DELETE /api/v1/clients/", h.handleClientAction)
+	mux.HandleFunc("GET /api/v1/revocations", h.handleListRevocations)
+
+	// hardware ban management
+	mux.HandleFunc("POST /api/v1/bans", h.handleBanHardware)
+	mux.HandleFunc("DELETE /api/v1/bans/", h.handleUnbanHardware)
+	mux.HandleFunc("GET /api/v1/bans", h.handleListBans)
+
+	// audit log
+	mux.HandleFunc("GET /api/v1/audit", h.handleAuditLog)
 
 	return h
 }
@@ -65,6 +82,10 @@ type statsResponse struct {
 	TotalAttestations int64    `json:"total_attestations"`
 	SuccessfulAttests int64    `json:"successful_attestations"`
 	FailedAttests     int64    `json:"failed_attestations"`
+	RevokedAttests    int64    `json:"revoked_attestations"`
+	BannedAttests     int64    `json:"banned_attestations"`
+	ActiveRevocations int      `json:"active_revocations"`
+	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
 	UptimeSec         int64    `json:"uptime_sec"`
 }
@@ -78,6 +99,8 @@ type clientInfoResponse struct {
 	ClientID          string `json:"client_id"`
 	HasAIK            bool   `json:"has_aik"`
 	HardwareID        string `json:"hardware_id,omitempty"`
+	Revoked           bool   `json:"revoked"`
+	RevocationReason  string `json:"revocation_reason,omitempty"`
 	LastAttestation   string `json:"last_attestation,omitempty"`
 	LastAttestUnix    int64  `json:"last_attestation_unix,omitempty"`
 	AttestCount       uint64 `json:"attestation_count"`
@@ -128,6 +151,10 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalAttestations: stats.TotalAttestations,
 		SuccessfulAttests: stats.SuccessAttests,
 		FailedAttests:     stats.FailedAttests,
+		RevokedAttests:    stats.RevokedAttests,
+		BannedAttests:     stats.BannedAttests,
+		ActiveRevocations: stats.ActiveRevocations,
+		ActiveBans:        stats.ActiveBans,
 		Uptime:            stats.Uptime.Truncate(time.Second).String(),
 		UptimeSec:         int64(stats.Uptime.Seconds()),
 	}
@@ -176,6 +203,8 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		ClientID:          info.ClientID,
 		HasAIK:            info.HasAIK,
 		HardwareID:        info.HardwareID,
+		Revoked:           info.Revoked,
+		RevocationReason:  info.RevocationReason,
 		AttestCount:       info.AttestCount,
 		MonotonicCounter:  info.MonotonicCounter,
 		PendingChallenges: info.PendingChallenges,
@@ -224,6 +253,22 @@ func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# TYPE lota_attestations_failed_total counter\n")
 	fmt.Fprintf(w, "lota_attestations_failed_total %d\n\n", stats.FailedAttests)
 
+	fmt.Fprintf(w, "# HELP lota_attestations_revoked_total Total attestation attempts rejected due to revocation\n")
+	fmt.Fprintf(w, "# TYPE lota_attestations_revoked_total counter\n")
+	fmt.Fprintf(w, "lota_attestations_revoked_total %d\n\n", stats.RevokedAttests)
+
+	fmt.Fprintf(w, "# HELP lota_attestations_banned_total Total attestation attempts rejected due to hardware ban\n")
+	fmt.Fprintf(w, "# TYPE lota_attestations_banned_total counter\n")
+	fmt.Fprintf(w, "lota_attestations_banned_total %d\n\n", stats.BannedAttests)
+
+	fmt.Fprintf(w, "# HELP lota_active_revocations Number of currently revoked client AIKs\n")
+	fmt.Fprintf(w, "# TYPE lota_active_revocations gauge\n")
+	fmt.Fprintf(w, "lota_active_revocations %d\n\n", stats.ActiveRevocations)
+
+	fmt.Fprintf(w, "# HELP lota_active_bans Number of currently banned hardware IDs\n")
+	fmt.Fprintf(w, "# TYPE lota_active_bans gauge\n")
+	fmt.Fprintf(w, "lota_active_bans %d\n\n", stats.ActiveBans)
+
 	fmt.Fprintf(w, "# HELP lota_uptime_seconds Verifier uptime in seconds\n")
 	fmt.Fprintf(w, "# TYPE lota_uptime_seconds gauge\n")
 	fmt.Fprintf(w, "lota_uptime_seconds %.0f\n\n", stats.Uptime.Seconds())
@@ -231,6 +276,357 @@ func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP lota_loaded_policies Number of loaded PCR policies\n")
 	fmt.Fprintf(w, "# TYPE lota_loaded_policies gauge\n")
 	fmt.Fprintf(w, "lota_loaded_policies %d\n", len(stats.LoadedPolicies))
+}
+
+// JSON request for revoke/unrevoke actions
+type revokeRequest struct {
+	Reason string `json:"reason"` // cheating|compromised|hardware_change|admin
+	Actor  string `json:"actor"`  // administrator identifier
+	Note   string `json:"note"`   // free-form justification
+}
+
+// JSON response for revocation entries
+type revocationResponse struct {
+	ClientID  string `json:"client_id"`
+	Reason    string `json:"reason"`
+	RevokedAt string `json:"revoked_at"`
+	RevokedBy string `json:"revoked_by"`
+	Note      string `json:"note"`
+}
+
+// handles POST/DELETE on /api/v1/clients/{id}/revoke
+func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/clients/")
+	parts := strings.SplitN(path, "/", 2)
+
+	clientID := parts[0]
+	if clientID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "missing client ID"})
+		return
+	}
+
+	// determine sub-action
+	action := ""
+	if len(parts) > 1 {
+		action = strings.TrimRight(parts[1], "/")
+	}
+
+	switch {
+	case action == "revoke" && r.Method == http.MethodPost:
+		h.handleRevokeClient(w, r, clientID)
+	case action == "revoke" && r.Method == http.MethodDelete:
+		h.handleUnrevokeClient(w, r, clientID)
+	default:
+		if r.Method == http.MethodGet {
+			h.handleClientInfo(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, errorResponse{Error: "unknown action"})
+	}
+}
+
+// POST /api/v1/clients/{id}/revoke - revoke a client's AIK
+func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
+	revStore := h.verifier.RevocationStore()
+	if revStore == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		return
+	}
+
+	var req revokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if !store.IsValidReason(req.Reason) {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
+		return
+	}
+
+	if req.Actor == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "actor is required"})
+		return
+	}
+
+	err := revStore.Revoke(clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	if err != nil {
+		if err == store.ErrAlreadyRevoked {
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, errorResponse{Error: "client is already revoked"})
+			return
+		}
+		log.Printf("Revocation failed for %s: %v", clientID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, errorResponse{Error: "internal error"})
+		return
+	}
+
+	log.Printf("[REVOKE] Client %s revoked by %s (reason=%s, note=%q)", clientID, req.Actor, req.Reason, req.Note)
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{
+		"status":    "revoked",
+		"client_id": clientID,
+		"reason":    req.Reason,
+	})
+}
+
+// DELETE /api/v1/clients/{id}/revoke - unrevoke a client
+func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
+	revStore := h.verifier.RevocationStore()
+	if revStore == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		return
+	}
+
+	err := revStore.Unrevoke(clientID)
+	if err != nil {
+		if err == store.ErrNotRevoked {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, errorResponse{Error: "client is not revoked"})
+			return
+		}
+		log.Printf("Unrevoke failed for %s: %v", clientID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, errorResponse{Error: "internal error"})
+		return
+	}
+
+	log.Printf("[UNREVOKE] Client %s unrevoked", clientID)
+
+	writeJSON(w, map[string]string{
+		"status":    "unrevoked",
+		"client_id": clientID,
+	})
+}
+
+// GET /api/v1/revocations - list all active revocations
+func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Request) {
+	revStore := h.verifier.RevocationStore()
+	if revStore == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		return
+	}
+
+	entries := revStore.ListRevocations()
+	resp := make([]revocationResponse, len(entries))
+	for i, e := range entries {
+		resp[i] = revocationResponse{
+			ClientID:  e.ClientID,
+			Reason:    string(e.Reason),
+			RevokedAt: e.RevokedAt.UTC().Format(time.RFC3339),
+			RevokedBy: e.RevokedBy,
+			Note:      e.Note,
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"revocations": resp,
+		"count":       len(resp),
+	})
+}
+
+// JSON request for ban actions
+type banRequest struct {
+	HardwareID string `json:"hardware_id"` // hex-encoded 32 bytes
+	Reason     string `json:"reason"`      // cheating|compromised|hardware_change|admin
+	Actor      string `json:"actor"`       // administrator identifier
+	Note       string `json:"note"`        // free-form justification
+}
+
+// JSON response for ban entries
+type banResponse struct {
+	HardwareID string `json:"hardware_id"`
+	Reason     string `json:"reason"`
+	BannedAt   string `json:"banned_at"`
+	BannedBy   string `json:"banned_by"`
+	Note       string `json:"note"`
+}
+
+// POST /api/v1/bans - ban a hardware identity
+func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
+	banStr := h.verifier.BanStore()
+	if banStr == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		return
+	}
+
+	var req banRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
+		return
+	}
+
+	hwid, err := store.ParseHardwareID(req.HardwareID)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "invalid hardware_id: " + err.Error()})
+		return
+	}
+
+	if !store.IsValidReason(req.Reason) {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
+		return
+	}
+
+	if req.Actor == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "actor is required"})
+		return
+	}
+
+	err = banStr.BanHardware(hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	if err != nil {
+		if err == store.ErrAlreadyBanned {
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, errorResponse{Error: "hardware ID is already banned"})
+			return
+		}
+		log.Printf("Ban failed for %s: %v", req.HardwareID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, errorResponse{Error: "internal error"})
+		return
+	}
+
+	log.Printf("[BAN] Hardware %s banned by %s (reason=%s)", req.HardwareID[:16]+"...", req.Actor, req.Reason)
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{
+		"status":      "banned",
+		"hardware_id": req.HardwareID,
+		"reason":      req.Reason,
+	})
+}
+
+// DELETE /api/v1/bans/{hwid} - unban a hardware identity
+func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request) {
+	banStr := h.verifier.BanStore()
+	if banStr == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		return
+	}
+
+	hwidHex := strings.TrimPrefix(r.URL.Path, "/api/v1/bans/")
+	hwidHex = strings.TrimRight(hwidHex, "/")
+
+	if hwidHex == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "missing hardware ID"})
+		return
+	}
+
+	hwid, err := store.ParseHardwareID(hwidHex)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, errorResponse{Error: "invalid hardware_id: " + err.Error()})
+		return
+	}
+
+	err = banStr.UnbanHardware(hwid)
+	if err != nil {
+		if err == store.ErrNotBanned {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, errorResponse{Error: "hardware ID is not banned"})
+			return
+		}
+		log.Printf("Unban failed for %s: %v", hwidHex, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, errorResponse{Error: "internal error"})
+		return
+	}
+
+	log.Printf("[UNBAN] Hardware %s unbanned", hwidHex[:16]+"...")
+
+	writeJSON(w, map[string]string{
+		"status":      "unbanned",
+		"hardware_id": hwidHex,
+	})
+}
+
+// GET /api/v1/bans - list all active hardware bans
+func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
+	banStr := h.verifier.BanStore()
+	if banStr == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		return
+	}
+
+	entries := banStr.ListBans()
+	resp := make([]banResponse, len(entries))
+	for i, e := range entries {
+		resp[i] = banResponse{
+			HardwareID: store.FormatHardwareID(e.HardwareID),
+			Reason:     string(e.Reason),
+			BannedAt:   e.BannedAt.UTC().Format(time.RFC3339),
+			BannedBy:   e.BannedBy,
+			Note:       e.Note,
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"bans":  resp,
+		"count": len(resp),
+	})
+}
+
+// JSON response for audit entries
+type auditResponse struct {
+	ID        int64  `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Action    string `json:"action"`
+	TargetID  string `json:"target_id"`
+	Reason    string `json:"reason,omitempty"`
+	Actor     string `json:"actor,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+// GET /api/v1/audit?limit=N - query audit log
+func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
+	if h.auditLog == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "audit log not configured"})
+		return
+	}
+
+	limit := 100 // default
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	entries := h.auditLog.Query(limit)
+	resp := make([]auditResponse, len(entries))
+	for i, e := range entries {
+		resp[i] = auditResponse{
+			ID:        e.ID,
+			Timestamp: e.Timestamp.UTC().Format(time.RFC3339),
+			Action:    e.Action,
+			TargetID:  e.TargetID,
+			Reason:    e.Reason,
+			Actor:     e.Actor,
+			Note:      e.Note,
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"entries": resp,
+		"count":   len(resp),
+	})
 }
 
 // writes JSON response with proper headers
