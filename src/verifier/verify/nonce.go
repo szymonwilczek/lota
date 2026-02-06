@@ -26,15 +26,85 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
+// abstracts used nonce storage for anti-replay protection
+// memory backend is used by default; SQLite backend provides persistence
+// across verifier restarts for production deployments
+// (ill double check it in the near future)
+type UsedNonceBackend interface {
+	// stores a nonce key as used at the given time
+	Record(nonceKey string, usedAt time.Time) error
+
+	// returns true if the nonce key has been recorded as used
+	Contains(nonceKey string) bool
+
+	// returns the number of stored used nonces
+	Count() int
+
+	// removes entries with usedAt older than the given cutoff
+	Cleanup(olderThan time.Time)
+}
+
+// implements UsedNonceBackend using an in-memory map
+// bounded by maxSize - evicts oldest entries when capacity is reached
+type memoryUsedNonceBackend struct {
+	nonces  map[string]time.Time
+	maxSize int
+}
+
+func newMemoryUsedNonceBackend(maxSize int) *memoryUsedNonceBackend {
+	return &memoryUsedNonceBackend{
+		nonces:  make(map[string]time.Time, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error {
+	// evict oldest if at capacity
+	if len(m.nonces) >= m.maxSize {
+		var oldestKey string
+		var oldestTime time.Time
+
+		for k, t := range m.nonces {
+			if oldestTime.IsZero() || t.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = t
+			}
+		}
+
+		if oldestKey != "" {
+			delete(m.nonces, oldestKey)
+		}
+	}
+
+	m.nonces[nonceKey] = usedAt
+	return nil
+}
+
+func (m *memoryUsedNonceBackend) Contains(nonceKey string) bool {
+	_, exists := m.nonces[nonceKey]
+	return exists
+}
+
+func (m *memoryUsedNonceBackend) Count() int {
+	return len(m.nonces)
+}
+
+func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
+	for key, usedAt := range m.nonces {
+		if usedAt.Before(olderThan) {
+			delete(m.nonces, key)
+		}
+	}
+}
+
 // manages outstanding challenges and prevents replay attacks
 type NonceStore struct {
 	mu       sync.RWMutex
 	pending  map[string]nonceEntry
 	lifetime time.Duration
 
-	// anti-replay: remember used nonces to prevent reuse across restarts
-	usedNonces    map[string]time.Time
-	usedNoncesMax int
+	// anti-replay: pluggable backend for used nonce history
+	usedBackend UsedNonceBackend
 
 	// per-client rate limiting
 	clientChallenges map[string]clientState
@@ -73,8 +143,11 @@ type NonceStoreConfig struct {
 	// rate limit window duration
 	RateLimitWindow time.Duration
 
-	// max used nonces to remember (ring buffer)
+	// max used nonces to remember (memory backend only)
 	UsedNonceHistory int
+
+	// pluggable used nonce backend (nil = in-memory with UsedNonceHistory cap)
+	UsedBackend UsedNonceBackend
 }
 
 // returns sensible defaults
@@ -91,11 +164,15 @@ func DefaultNonceStoreConfig() NonceStoreConfig {
 // creates a new nonce store from config
 // IMPORTANT: Nonces older than lifetime are automatically rejected
 func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
+	backend := cfg.UsedBackend
+	if backend == nil {
+		backend = newMemoryUsedNonceBackend(cfg.UsedNonceHistory)
+	}
+
 	ns := &NonceStore{
 		pending:          make(map[string]nonceEntry),
 		lifetime:         cfg.Lifetime,
-		usedNonces:       make(map[string]time.Time, cfg.UsedNonceHistory),
-		usedNoncesMax:    cfg.UsedNonceHistory,
+		usedBackend:      backend,
 		clientChallenges: make(map[string]clientState),
 		maxPending:       cfg.MaxPendingPerClient,
 		rateLimitWindow:  cfg.RateLimitWindow,
@@ -133,7 +210,7 @@ func (ns *NonceStore) GenerateChallenge(clientID string, pcrMask uint32) (*types
 	key := string(nonce[:])
 
 	// paranoid check: ensure nonce was never used before
-	if _, used := ns.usedNonces[key]; used {
+	if ns.usedBackend.Contains(key) {
 		return nil, errors.New("nonce collision with used nonce - entropy failure")
 	}
 
@@ -172,7 +249,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	key := string(report.TPM.Nonce[:])
 
 	// check used nonce history first (detects replays after restart)
-	if _, used := ns.usedNonces[key]; used {
+	if ns.usedBackend.Contains(key) {
 		return errors.New("nonce already used - replay attack detected")
 	}
 
@@ -185,7 +262,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	delete(ns.pending, key)
 
 	// record as used (prevents reuse)
-	ns.recordUsedNonce(key)
+	ns.usedBackend.Record(key, time.Now())
 
 	// decrement client pending count
 	if cs, ok := ns.clientChallenges[entry.clientID]; ok {
@@ -262,29 +339,6 @@ func (ns *NonceStore) checkRateLimit(clientID string) error {
 	return nil
 }
 
-// records nonce as used to prevent future reuse
-// implements bounded history (evicts oldest when full)
-func (ns *NonceStore) recordUsedNonce(key string) {
-	// evict oldest if at capacity
-	if len(ns.usedNonces) >= ns.usedNoncesMax {
-		var oldestKey string
-		var oldestTime time.Time
-
-		for k, t := range ns.usedNonces {
-			if oldestTime.IsZero() || t.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = t
-			}
-		}
-
-		if oldestKey != "" {
-			delete(ns.usedNonces, oldestKey)
-		}
-	}
-
-	ns.usedNonces[key] = time.Now()
-}
-
 // periodically removes expired nonces
 func (ns *NonceStore) cleanupLoop() {
 	ticker := time.NewTicker(ns.lifetime / 2)
@@ -316,13 +370,9 @@ func (ns *NonceStore) cleanup() {
 		}
 	}
 
-	// clean old used nonce entries
-	usedLifetime := ns.lifetime * 3 // keep used 3x longer than lifetime
-	for key, usedAt := range ns.usedNonces {
-		if now.Sub(usedAt) > usedLifetime {
-			delete(ns.usedNonces, key)
-		}
-	}
+	// clean old used nonce entries via backend
+	usedCutoff := now.Add(-ns.lifetime * 3) // keep used 3x longer than lifetime
+	ns.usedBackend.Cleanup(usedCutoff)
 }
 
 // returns number of outstanding challenges (for monitoring)
@@ -336,7 +386,7 @@ func (ns *NonceStore) PendingCount() int {
 func (ns *NonceStore) UsedCount() int {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
-	return len(ns.usedNonces)
+	return ns.usedBackend.Count()
 }
 
 // returns per-client attestation counter (for monitoring)
