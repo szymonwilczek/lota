@@ -72,6 +72,7 @@ func main() {
 
 	// initialize stores
 	var aikStore store.AIKStore
+	var auditLog store.AuditLog
 	verifierCfg := verify.DefaultConfig()
 
 	if *dbPath != "" {
@@ -85,6 +86,11 @@ func main() {
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
+		// enforcement stores - revocation, bans, audit log
+		auditLog = store.NewSQLiteAuditLog(db)
+		verifierCfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
+		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
+
 		ver, _ := store.SchemaVersion(db)
 		log.Printf("SQLite store: %s (schema v%d)", *dbPath, ver)
 	} else {
@@ -95,6 +101,12 @@ func main() {
 			log.Fatalf("Failed to initialize AIK store: %v", err)
 		}
 		aikStore = fileStore
+
+		// in-memory enforcement stores
+		auditLog = store.NewMemoryAuditLog()
+		verifierCfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
+		verifierCfg.BanStore = store.NewMemoryBanStore(auditLog)
+
 		log.Printf("AIK store: %s (%d registered clients)", *aikStorePath, len(fileStore.ListClients()))
 	}
 
@@ -117,6 +129,7 @@ func main() {
 		HTTPAddress:  *httpAddr,
 		CertFile:     *certFile,
 		KeyFile:      *keyFile,
+		AuditLog:     auditLog,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
