@@ -24,6 +24,8 @@ struct bpf_loader_ctx {
   int ringbuf_fd;              /* Ring buffer map fd */
   int stats_fd;                /* Stats map fd */
   int config_fd;               /* Config map fd */
+  int trusted_libs_fd;         /* Trusted library whitelist map fd */
+  int protected_pids_fd;       /* Protected PIDs map fd */
   bool loaded;                 /* Program is loaded and attached */
 };
 
@@ -106,6 +108,83 @@ int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode);
+
+/*
+ * bpf_loader_set_config - Set a runtime configuration value
+ * @ctx: Loaded context
+ * @key: Config key (LOTA_CFG_*)
+ * @value: Config value
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
+                          uint32_t value);
+
+/*
+ * bpf_loader_protect_pid - Add a PID to the protected set
+ * @ctx: Loaded context
+ * @pid: Process ID to protect
+ *
+ * Protected PIDs get extra security in ENFORCE mode:
+ *   - ptrace on these PIDs is blocked
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
+
+/*
+ * bpf_loader_unprotect_pid - Remove a PID from the protected set
+ * @ctx: Loaded context
+ * @pid: Process ID to unprotect
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
+
+/*
+ * bpf_loader_trust_lib - Add a library path to the trusted whitelist
+ * @ctx: Loaded context
+ * @path: Full path to the shared library
+ *
+ * Trusted libraries are allowed to be loaded via mmap(PROT_EXEC)
+ * even when strict mmap enforcement is enabled.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
+
+/*
+ * bpf_loader_untrust_lib - Remove a library path from the trusted whitelist
+ * @ctx: Loaded context
+ * @path: Full path to the shared library
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
+
+/*
+ * bpf_loader_get_extended_stats - Get all statistics including new hooks
+ * @ctx: Loaded context
+ * @total_execs: Output - total exec events
+ * @events_sent: Output - events sent to ring buffer
+ * @errors: Output - error count
+ * @drops: Output - ring buffer drops
+ * @modules_blocked: Output - modules blocked
+ * @mmap_execs: Output - executable mmaps
+ * @mmap_blocked: Output - mmaps blocked
+ * @ptrace_attempts: Output - ptrace attempts
+ * @ptrace_blocked: Output - ptrace blocked
+ * @setuid_events: Output - setuid transitions
+ *
+ * Any output pointer may be NULL if that stat is not needed.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_get_extended_stats(
+    struct bpf_loader_ctx *ctx, uint64_t *total_execs, uint64_t *events_sent,
+    uint64_t *errors, uint64_t *drops, uint64_t *modules_blocked,
+    uint64_t *mmap_execs, uint64_t *mmap_blocked, uint64_t *ptrace_attempts,
+    uint64_t *ptrace_blocked, uint64_t *setuid_events);
 
 /*
  * bpf_loader_cleanup - Unload BPF program and clean up

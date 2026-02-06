@@ -23,6 +23,11 @@
 #define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
+#define STAT_MMAP_EXECS 5
+#define STAT_MMAP_BLOCKED 6
+#define STAT_PTRACE_ATTEMPTS 7
+#define STAT_PTRACE_BLOCKED 8
+#define STAT_SETUID_EVENTS 9
 
 /*
  * libbpf print callback - redirect to stderr with prefix
@@ -106,6 +111,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
   if (ctx->config_fd < 0) {
     ctx->config_fd = -1;
+  }
+
+  /* Get trusted libraries map fd */
+  ctx->trusted_libs_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
+  if (ctx->trusted_libs_fd < 0) {
+    ctx->trusted_libs_fd = -1; /* optional map */
+  }
+
+  /* Get protected PIDs map fd */
+  ctx->protected_pids_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
+  if (ctx->protected_pids_fd < 0) {
+    ctx->protected_pids_fd = -1; /* optional map */
   }
 
   ctx->loaded = true;
@@ -201,6 +220,8 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
+  ctx->trusted_libs_fd = -1;
+  ctx->protected_pids_fd = -1;
 }
 
 int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode) {
@@ -228,5 +249,120 @@ int bpf_loader_get_mode(struct bpf_loader_ctx *ctx, uint32_t *mode) {
     return err;
 
   *mode = value;
+  return 0;
+}
+
+int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
+                          uint32_t value) {
+  if (!ctx || !ctx->loaded || ctx->config_fd < 0)
+    return -EINVAL;
+
+  return bpf_map_update_elem(ctx->config_fd, &key, &value, BPF_ANY);
+}
+
+int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
+  uint32_t value = 1;
+
+  if (!ctx || !ctx->loaded)
+    return -EINVAL;
+
+  if (ctx->protected_pids_fd < 0)
+    return -ENOTSUP;
+
+  return bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY);
+}
+
+int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
+  if (!ctx || !ctx->loaded)
+    return -EINVAL;
+
+  if (ctx->protected_pids_fd < 0)
+    return -ENOTSUP;
+
+  return bpf_map_delete_elem(ctx->protected_pids_fd, &pid);
+}
+
+int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
+  char key[LOTA_MAX_PATH_LEN];
+  uint32_t value = 1;
+  size_t len;
+
+  if (!ctx || !ctx->loaded || !path)
+    return -EINVAL;
+
+  if (ctx->trusted_libs_fd < 0)
+    return -ENOTSUP;
+
+  len = strlen(path);
+  if (len == 0 || len >= LOTA_MAX_PATH_LEN)
+    return -EINVAL;
+
+  memset(key, 0, sizeof(key));
+  memcpy(key, path, len);
+
+  return bpf_map_update_elem(ctx->trusted_libs_fd, key, &value, BPF_ANY);
+}
+
+int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
+  char key[LOTA_MAX_PATH_LEN];
+  size_t len;
+
+  if (!ctx || !ctx->loaded || !path)
+    return -EINVAL;
+
+  if (ctx->trusted_libs_fd < 0)
+    return -ENOTSUP;
+
+  len = strlen(path);
+  if (len == 0 || len >= LOTA_MAX_PATH_LEN)
+    return -EINVAL;
+
+  memset(key, 0, sizeof(key));
+  memcpy(key, path, len);
+
+  return bpf_map_delete_elem(ctx->trusted_libs_fd, key);
+}
+
+/*
+ * read a single stat counter from the stats map
+ */
+static int read_stat(int stats_fd, uint32_t key, uint64_t *out) {
+  uint64_t value;
+  int err;
+
+  err = bpf_map_lookup_elem(stats_fd, &key, &value);
+  *out = (err == 0) ? value : 0;
+  return 0;
+}
+
+int bpf_loader_get_extended_stats(
+    struct bpf_loader_ctx *ctx, uint64_t *total_execs, uint64_t *events_sent,
+    uint64_t *errors, uint64_t *drops, uint64_t *modules_blocked,
+    uint64_t *mmap_execs, uint64_t *mmap_blocked, uint64_t *ptrace_attempts,
+    uint64_t *ptrace_blocked, uint64_t *setuid_events) {
+  if (!ctx || !ctx->loaded || ctx->stats_fd < 0)
+    return -EINVAL;
+
+  if (total_execs)
+    read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, total_execs);
+  if (events_sent)
+    read_stat(ctx->stats_fd, STAT_EVENTS_SENT, events_sent);
+  if (errors)
+    read_stat(ctx->stats_fd, STAT_ERRORS, errors);
+  if (drops)
+    read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, drops);
+  if (modules_blocked)
+    read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, modules_blocked);
+  if (mmap_execs)
+    read_stat(ctx->stats_fd, STAT_MMAP_EXECS, mmap_execs);
+  if (mmap_blocked)
+    read_stat(ctx->stats_fd, STAT_MMAP_BLOCKED, mmap_blocked);
+  if (ptrace_attempts)
+    read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, ptrace_attempts);
+  if (ptrace_blocked)
+    read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, ptrace_blocked);
+  if (setuid_events)
+    read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, setuid_events);
+
   return 0;
 }
