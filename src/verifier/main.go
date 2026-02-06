@@ -10,6 +10,7 @@
 //   --cert FILE        TLS certificate file
 //   --key FILE         TLS private key file
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
+//   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
 //   --generate-cert    Generate self-signed certificate for testing
 
@@ -42,6 +43,7 @@ var (
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
+	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
 )
@@ -68,14 +70,34 @@ func main() {
 		log.Fatal("TLS certificate and key required. Use --generate-cert for testing.")
 	}
 
-	// initialize aik store
-	aikStore, err := store.NewFileStore(*aikStorePath)
-	if err != nil {
-		log.Fatalf("Failed to initialize AIK store: %v", err)
-	}
-	log.Printf("AIK store: %s (%d registered clients)", *aikStorePath, len(aikStore.ListClients()))
-
+	// initialize stores
+	var aikStore store.AIKStore
 	verifierCfg := verify.DefaultConfig()
+
+	if *dbPath != "" {
+		db, err := store.OpenDB(*dbPath)
+		if err != nil {
+			log.Fatalf("Failed to open database: %v", err)
+		}
+		defer db.Close()
+
+		aikStore = store.NewSQLiteAIKStore(db)
+		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
+		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
+
+		ver, _ := store.SchemaVersion(db)
+		log.Printf("SQLite store: %s (schema v%d)", *dbPath, ver)
+	} else {
+		// file-based AIK store + in-memory baseline/nonce stores
+		var err error
+		fileStore, err := store.NewFileStore(*aikStorePath)
+		if err != nil {
+			log.Fatalf("Failed to initialize AIK store: %v", err)
+		}
+		aikStore = fileStore
+		log.Printf("AIK store: %s (%d registered clients)", *aikStorePath, len(fileStore.ListClients()))
+	}
+
 	verifier := verify.NewVerifier(verifierCfg, aikStore)
 
 	verifier.AddPolicy(verify.DefaultPolicy())
