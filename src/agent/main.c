@@ -49,6 +49,12 @@ static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
 
+/* Runtime config from CLI */
+static uint32_t g_protect_pids[64];
+static int g_protect_pid_count;
+static const char *g_trust_libs[64];
+static int g_trust_lib_count;
+
 static uint32_t check_module_security(void);
 static int self_measure(struct tpm_context *ctx);
 
@@ -343,6 +349,29 @@ static int handle_exec_event(void *ctx, void *data, size_t len) {
   case LOTA_EVENT_MODULE_BLOCKED:
     event_type_str = "BLOCKED";
     break;
+  case LOTA_EVENT_MMAP_EXEC:
+    event_type_str = "MMAP_EXEC";
+    break;
+  case LOTA_EVENT_MMAP_BLOCKED:
+    event_type_str = "MMAP_BLOCKED";
+    break;
+  case LOTA_EVENT_PTRACE:
+    event_type_str = "PTRACE";
+    printf("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)\n",
+           (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
+           event->target_pid, event->filename, event->pid, event->uid);
+    return 0;
+  case LOTA_EVENT_PTRACE_BLOCKED:
+    event_type_str = "PTRACE_BLOCKED";
+    printf("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)\n",
+           (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
+           event->target_pid, event->filename, event->pid, event->uid);
+    return 0;
+  case LOTA_EVENT_SETUID:
+    printf("[%llu] SETUID %s: uid %u -> %u (pid=%u)\n",
+           (unsigned long long)event->timestamp_ns, event->comm, event->uid,
+           event->target_pid, event->pid);
+    return 0;
   default:
     event_type_str = "UNKNOWN";
     break;
@@ -371,7 +400,8 @@ static const char *mode_to_string(int mode) {
   }
 }
 
-static int run_daemon(const char *bpf_path, int mode) {
+static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
+                      bool block_ptrace) {
   int ret;
   uint32_t status_flags = 0;
 
@@ -454,6 +484,47 @@ static int run_daemon(const char *bpf_path, int mode) {
     printf("\n*** WARNING: ENFORCE mode active - module loading BLOCKED ***\n");
   }
 
+  /* apply runtime config flags */
+  if (strict_mmap) {
+    ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP, 1);
+    if (ret < 0)
+      fprintf(stderr, "Warning: Failed to enable strict mmap: %s\n",
+              strerror(-ret));
+    else
+      printf("Strict mmap enforcement: ON\n");
+  }
+
+  if (block_ptrace) {
+    ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE, 1);
+    if (ret < 0)
+      fprintf(stderr, "Warning: Failed to enable ptrace blocking: %s\n",
+              strerror(-ret));
+    else
+      printf("Global ptrace blocking: ON\n");
+  }
+
+  /* apply protected PIDs from CLI */
+  for (int i = 0; i < g_protect_pid_count; i++) {
+    ret = bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]);
+    if (ret < 0) {
+      fprintf(stderr, "Warning: Failed to protect PID %u: %s\n",
+              g_protect_pids[i], strerror(-ret));
+    } else {
+      printf("Protected PID: %u\n", g_protect_pids[i]);
+    }
+  }
+
+  /* apply trusted libraries from CLI */
+  for (int i = 0; i < g_trust_lib_count; i++) {
+    ret = bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]);
+    if (ret < 0) {
+      fprintf(stderr, "Warning: Failed to trust lib %s: %s\n", g_trust_libs[i],
+              strerror(-ret));
+    } else {
+      printf("Trusted lib: %s\n", g_trust_libs[i]);
+    }
+  }
+
   ret = bpf_loader_setup_ringbuf(&g_bpf_ctx, handle_exec_event, NULL);
   if (ret < 0) {
     fprintf(stderr, "Failed to setup ring buffer: %s\n", strerror(-ret));
@@ -478,12 +549,21 @@ static int run_daemon(const char *bpf_path, int mode) {
   }
 
   uint64_t total, sent, errs, drops;
-  if (bpf_loader_get_stats(&g_bpf_ctx, &total, &sent, &errs, &drops) == 0) {
+  uint64_t mblocked, mmexec, mmblock, ptratt, ptrblk, setuid_ev;
+  if (bpf_loader_get_extended_stats(&g_bpf_ctx, &total, &sent, &errs, &drops,
+                                    &mblocked, &mmexec, &mmblock, &ptratt,
+                                    &ptrblk, &setuid_ev) == 0) {
     printf("\n=== Statistics ===\n");
     printf("Total executions: %lu\n", total);
     printf("Events sent: %lu\n", sent);
     printf("Errors: %lu\n", errs);
     printf("Ring buffer drops: %lu\n", drops);
+    printf("Modules blocked: %lu\n", mblocked);
+    printf("Executable mmaps: %lu\n", mmexec);
+    printf("Mmaps blocked: %lu\n", mmblock);
+    printf("Ptrace attempts: %lu\n", ptratt);
+    printf("Ptrace blocked: %lu\n", ptrblk);
+    printf("Setuid transitions: %lu\n", setuid_ev);
   }
 
 cleanup_bpf:
@@ -521,6 +601,12 @@ static void print_usage(const char *prog) {
   printf("                      monitor     - log events only (default)\n");
   printf("                      enforce     - block unauthorized modules\n");
   printf("                      maintenance - allow all, minimal logging\n");
+  printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted libraries\n");
+  printf("                    (requires --mode enforce)\n");
+  printf("  --block-ptrace    Block all ptrace attach attempts\n");
+  printf("                    (requires --mode enforce)\n");
+  printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
+  printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
   printf("  --help            Show this help\n");
 }
 
@@ -1129,6 +1215,8 @@ int main(int argc, char *argv[]) {
   int attest_flag = 0;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   int mode = LOTA_MODE_MONITOR;
+  bool strict_mmap = false;
+  bool block_ptrace = false;
   const char *bpf_path = DEFAULT_BPF_PATH;
   const char *server_addr = "localhost";
   int server_port = DEFAULT_VERIFIER_PORT;
@@ -1145,10 +1233,14 @@ int main(int argc, char *argv[]) {
       {"port", required_argument, 0, 'p'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
+      {"strict-mmap", no_argument, 0, 'M'},
+      {"block-ptrace", no_argument, 0, 'P'},
+      {"protect-pid", required_argument, 0, 'R'},
+      {"trust-lib", required_argument, 0, 'L'},
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:b:m:h", long_options,
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:b:m:MPR:L:h", long_options,
                             NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1194,6 +1286,26 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Invalid mode: %s\n", optarg);
         fprintf(stderr, "Valid modes: monitor, enforce, maintenance\n");
         return 1;
+      }
+      break;
+    case 'M':
+      strict_mmap = true;
+      break;
+    case 'P':
+      block_ptrace = true;
+      break;
+    case 'R':
+      if (g_protect_pid_count < 64) {
+        g_protect_pids[g_protect_pid_count++] = (uint32_t)atoi(optarg);
+      } else {
+        fprintf(stderr, "Too many --protect-pid entries (max 64)\n");
+      }
+      break;
+    case 'L':
+      if (g_trust_lib_count < 64) {
+        g_trust_libs[g_trust_lib_count++] = optarg;
+      } else {
+        fprintf(stderr, "Too many --trust-lib entries (max 64)\n");
       }
       break;
     case 'h':
@@ -1311,5 +1423,5 @@ int main(int argc, char *argv[]) {
       return do_attest(server_addr, server_port);
   }
 
-  return run_daemon(bpf_path, mode);
+  return run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
 }
