@@ -64,8 +64,12 @@ typedef __u64 uint64_t;
 enum lota_event_type {
   LOTA_EVENT_EXEC = 1,       /* Binary execution */
   LOTA_EVENT_MODULE_LOAD,    /* Kernel module load */
-  LOTA_EVENT_MMAP_EXEC,      /* Executable mmap */
   LOTA_EVENT_MODULE_BLOCKED, /* Module load blocked by policy */
+  LOTA_EVENT_MMAP_EXEC,      /* Executable mmap (library load) */
+  LOTA_EVENT_MMAP_BLOCKED,   /* Executable mmap blocked by policy */
+  LOTA_EVENT_PTRACE,         /* ptrace access attempt */
+  LOTA_EVENT_PTRACE_BLOCKED, /* ptrace access blocked by policy */
+  LOTA_EVENT_SETUID,         /* Privilege escalation (setuid) */
 };
 
 /*
@@ -79,12 +83,22 @@ enum lota_mode {
 };
 
 /* Config map keys */
-#define LOTA_CFG_MODE 0 /* enum lota_mode */
+#define LOTA_CFG_MODE 0         /* enum lota_mode */
+#define LOTA_CFG_STRICT_MMAP 1  /* 1 = block mmap from untrusted paths */
+#define LOTA_CFG_BLOCK_PTRACE 2 /* 1 = block ptrace on protected pids */
 #define LOTA_CFG_MAX_ENTRIES 8
 
 /*
  * Execution event - sent from eBPF to user-space via ring buffer.
  * Packed to ensure consistent layout across architectures.
+ *
+ * Fields used per event type:
+ *   EXEC:           pid, uid, comm, filename, hash
+ *   MODULE_LOAD:    pid, comm, filename
+ *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
+ *   PTRACE:         pid, uid, comm, target_pid
+ *   SETUID:         pid, uid, comm, target_pid (new uid)
+ *   *_BLOCKED:      same as base type
  */
 struct lota_exec_event {
   uint64_t timestamp_ns; /* ktime_get_ns() */
@@ -93,17 +107,45 @@ struct lota_exec_event {
   uint32_t tgid;
   uint32_t uid;
   uint32_t gid;
+  uint32_t target_pid;              /* ptrace target / setuid new_uid */
+  uint32_t _pad0;                   /* alignment */
   uint8_t hash[LOTA_HASH_SIZE];     /* SHA-256 of binary (partial) */
   char comm[LOTA_MAX_COMM_LEN];     /* Process name */
-  char filename[LOTA_MAX_PATH_LEN]; /* Binary path */
+  char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
 } __attribute__((packed));
 
 /*
  * Partial hash calculation:
  * Due to eBPF instruction limits, entire files cannot be cached.
- * What is hashedh: first 4KB + file size + inode number.
+ * What is hashed: first 4KB + file size + inode number.
  * This provides a "fingerprint" that changes if binary is modified.
  */
 #define LOTA_HASH_SAMPLE_SIZE 4096
+
+/*
+ * Trusted library path prefixes.
+ * Libraries loaded via mmap(PROT_EXEC) from these paths are allowed
+ * in ENFORCE mode. All other executable mmaps are blocked.
+ * Paths are checked with string prefix matching in BPF.
+ */
+#define LOTA_TRUSTED_LIB_PREFIX_1 "/usr/lib/"
+#define LOTA_TRUSTED_LIB_PREFIX_2 "/usr/lib64/"
+#define LOTA_TRUSTED_LIB_PREFIX_3 "/lib/"
+#define LOTA_TRUSTED_LIB_PREFIX_4 "/lib64/"
+
+/*
+ * Protected PID map maximum entries.
+ * Processes can be added to this map to receive extra protection:
+ *   - ptrace on these PIDs is blocked in ENFORCE mode
+ *   - mmap(PROT_EXEC) by these PIDs is logged with higher priority
+ */
+#define LOTA_MAX_PROTECTED_PIDS 1024
+
+/*
+ * Trusted library whitelist maximum entries.
+ * Specific library paths (for example game-specific .so files) that
+ * are allowed in ENFORCE mode even if not in standard paths.
+ */
+#define LOTA_MAX_TRUSTED_LIBS 512
 
 #endif /* LOTA_H */
