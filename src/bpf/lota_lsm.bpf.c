@@ -1,12 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * LOTA - eBPF LSM Program
- * Hooks security_bprm_check to monitor binary executions
- *
- * This program runs in kernel space and sends events to user-space
- * via BPF ring buffer.
+ * Runtime memory integrity monitoring and enforcement
  *
  * Copyright (C) 2026 Szymon Wilczek
+ *
+ * This program runs in kernel space and sends events to user-space
+ * via BPF ring buffer. It hooks multiple LSM points to monitor:
+ *
+ *   - Binary execution (bprm_check_security)
+ *   - Kernel module loading (kernel_module_request, kernel_read_file,
+ *     kernel_load_data)
+ *   - Library loading / executable mmap (security_mmap_file)
+ *   - Debugger attachment (security_ptrace_access_check)
+ *   - Privilege escalation (task_fix_setuid)
+ *
+ * In ENFORCE mode, unauthorized operations are blocked:
+ *   - Modules from non-standard paths
+ *   - Executable mmaps from untrusted locations
+ *   - ptrace on protected processes
  *
  * Build requirements:
  *   - CONFIG_BPF_LSM=y
@@ -49,11 +61,12 @@ struct {
 } event_scratch SEC(".maps");
 
 /*
- * Statistics counters
+ * Statistics counters.
+ * Extended to 16 entries for new hooks.
  */
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
-  __uint(max_entries, 8);
+  __uint(max_entries, 16);
   __type(key, u32);
   __type(value, u64);
 } stats SEC(".maps");
@@ -63,6 +76,11 @@ struct {
 #define STAT_ERRORS 2
 #define STAT_RINGBUF_DROPS 3
 #define STAT_MODULES_BLOCKED 4
+#define STAT_MMAP_EXECS 5
+#define STAT_MMAP_BLOCKED 6
+#define STAT_PTRACE_ATTEMPTS 7
+#define STAT_PTRACE_BLOCKED 8
+#define STAT_SETUID_EVENTS 9
 
 /*
  * Configuration map for runtime policy control.
@@ -91,6 +109,39 @@ struct {
 } module_whitelist SEC(".maps");
 
 /*
+ * Trusted library whitelist map.
+ * Key: library path (eg: "/opt/game/lib/libanticheat.so")
+ * Value: 1 = allowed
+ *
+ * Userspace populates this to allow game-specific libraries
+ * in ENFORCE mode, beyond the standard /usr/lib paths.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, LOTA_MAX_TRUSTED_LIBS);
+  __type(key, char[LOTA_MAX_PATH_LEN]);
+  __type(value, u32);
+} trusted_libs SEC(".maps");
+
+/*
+ * Protected PID map.
+ * Key: PID (u32)
+ * Value: 1 = protected
+ *
+ * Processes in this map receive extra protection in ENFORCE mode:
+ *   - ptrace attach is blocked
+ *   - All executable mmaps are logged
+ *
+ * Userspace should add game server PIDs here.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, LOTA_MAX_PROTECTED_PIDS);
+  __type(key, u32);
+  __type(value, u32);
+} protected_pids SEC(".maps");
+
+/*
  * Increment a statistics counter
  */
 static __always_inline void inc_stat(u32 idx) {
@@ -106,6 +157,92 @@ static __always_inline u32 get_mode(void) {
   u32 key = LOTA_CFG_MODE;
   u32 *mode = bpf_map_lookup_elem(&lota_config, &key);
   return mode ? *mode : LOTA_MODE_MONITOR;
+}
+
+/*
+ * Get a boolean config value, defaults to 0 (disabled).
+ */
+static __always_inline u32 get_config(u32 key) {
+  u32 *val = bpf_map_lookup_elem(&lota_config, &key);
+  return val ? *val : 0;
+}
+
+/*
+ * Check if a PID is in the protected set.
+ */
+static __always_inline int is_protected_pid(u32 pid) {
+  u32 *val = bpf_map_lookup_elem(&protected_pids, &pid);
+  return val && *val;
+}
+
+/*
+ * Check if a library path is in the trusted whitelist.
+ */
+static __always_inline int is_trusted_lib(const char *path) {
+  char key[LOTA_MAX_PATH_LEN] = {};
+  u32 *allowed;
+  int ret;
+
+  if (!path)
+    return 0;
+
+  ret = bpf_probe_read_kernel_str(key, sizeof(key), path);
+  if (ret < 0)
+    return 0;
+
+  allowed = bpf_map_lookup_elem(&trusted_libs, key);
+  return allowed && *allowed;
+}
+
+/*
+ * Check if path starts with a trusted library directory.
+ *
+ * Trusted prefixes (covers Fedora - not tested in the others for now):
+ *   /usr/lib/      - Standard library location
+ *   /usr/lib64/    - 64-bit libraries
+ *   /lib/          - Essential libraries
+ *   /lib64/        - Essential 64-bit libraries
+ *
+ * Uses byte-by-byte comparison because BPF cannot call strncmp.
+ */
+static __always_inline int is_trusted_lib_path(const char *path) {
+  char buf[LOTA_MAX_PATH_LEN];
+  int ret;
+
+  if (!path)
+    return 0;
+
+  ret = bpf_probe_read_kernel_str(buf, sizeof(buf), path);
+  if (ret < 0)
+    return 0;
+
+  /* /usr/lib64/ */
+  if (buf[0] == '/' && buf[1] == 'u' && buf[2] == 's' && buf[3] == 'r' &&
+      buf[4] == '/' && buf[5] == 'l' && buf[6] == 'i' && buf[7] == 'b' &&
+      buf[8] == '6' && buf[9] == '4' && buf[10] == '/') {
+    return 1;
+  }
+
+  /* /usr/lib/ */
+  if (buf[0] == '/' && buf[1] == 'u' && buf[2] == 's' && buf[3] == 'r' &&
+      buf[4] == '/' && buf[5] == 'l' && buf[6] == 'i' && buf[7] == 'b' &&
+      buf[8] == '/') {
+    return 1;
+  }
+
+  /* /lib64/ */
+  if (buf[0] == '/' && buf[1] == 'l' && buf[2] == 'i' && buf[3] == 'b' &&
+      buf[4] == '6' && buf[5] == '4' && buf[6] == '/') {
+    return 1;
+  }
+
+  /* /lib/ */
+  if (buf[0] == '/' && buf[1] == 'l' && buf[2] == 'i' && buf[3] == 'b' &&
+      buf[4] == '/') {
+    return 1;
+  }
+
+  return 0;
 }
 
 /*
@@ -545,5 +682,277 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     return -1; /* -EPERM */
   }
 
+  return 0;
+}
+
+/* ======================================================================
+ * LSM hook: security_mmap_file
+ *
+ * Called when a file is being memory-mapped with executable permission.
+ * This is the primary entry point for shared library loading (ld.so calls
+ * mmap(PROT_READ|PROT_EXEC) for every .so it opens).
+ *
+ * In ENFORCE mode, LOTA blocks executable mmaps from untrusted paths.
+ * This defeats:
+ *   - LD_PRELOAD injection (cheat libraries)
+ *   - dlopen() of unauthorized .so files
+ *   - Manual mmap of shellcode from files
+ *
+ * @file: The file being mapped (NULL for anonymous mappings)
+ * @reqprot: Requested protection flags
+ * @prot: Actual protection flags (may differ from reqprot)
+ * @flags: MAP_* flags
+ *
+ * Return: 0 to allow, -EPERM to deny
+ * ====================================================================== */
+SEC("lsm/mmap_file")
+int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
+             unsigned long prot, unsigned long flags, int ret) {
+  struct lota_exec_event *event;
+  struct dentry *dentry;
+  const unsigned char *name;
+  u32 key = 0;
+  u32 mode;
+  int blocked = 0;
+
+  /* dont interfere with previous hook denial */
+  if (ret != 0)
+    return ret;
+
+  /*
+   * only care about executable mappings.
+   */
+  if (!(prot & 0x4))
+    return 0;
+
+  /* anonymous executable mappings (JIT, etc) - log but dont block */
+  if (!file)
+    return 0;
+
+  inc_stat(STAT_MMAP_EXECS);
+
+  mode = get_mode();
+
+  if (mode == LOTA_MODE_MAINTENANCE)
+    return 0;
+
+  /* get the file path for policy decision */
+  dentry = BPF_CORE_READ(file, f_path.dentry);
+  name = BPF_CORE_READ(dentry, d_name.name);
+
+  /*
+   * In ENFORCE mode with strict mmap enabled, block libs from
+   * untrusted paths. Allow if:
+   *  - library is in trusted_libs whitelist map (game-specific)
+   *  - library is from standard system paths (/usr/lib, etc)
+   *  - otherwise -> block
+   */
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
+    if (is_trusted_lib((const char *)name)) {
+      blocked = 0;
+    } else if (is_trusted_lib_path((const char *)name)) {
+      blocked = 0;
+    } else {
+      /*
+       * try to resolve via dentry walk if direct name check failed
+       * dentry name might be just the filename, not full path!
+       * check if any parent directory indicates a standard location
+       */
+      if (is_standard_module_location(dentry)) {
+        blocked = 0;
+      } else {
+        blocked = 1;
+      }
+    }
+  }
+
+  /* for logging */
+  event = bpf_map_lookup_elem(&event_scratch, &key);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type =
+        blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+    if (name) {
+      bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
+    }
+
+    /* compute fingerprint of mapped file */
+    compute_partial_hash(file, event->hash);
+
+    struct lota_exec_event *rb_event;
+    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (rb_event) {
+      __builtin_memcpy(rb_event, event, sizeof(*event));
+      bpf_ringbuf_submit(rb_event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
+    }
+  }
+
+  if (blocked) {
+    inc_stat(STAT_MMAP_BLOCKED);
+    return -1; /* -EPERM */
+  }
+
+  return 0;
+}
+
+/* ======================================================================
+ * LSM hook: security_ptrace_access_check
+ *
+ * Called when one process attempts to trace/debug another via ptrace.
+ *
+ * In ENFORCE mode, ptrace on protected PIDs is blocked entirely.
+ * In MONITOR mode, all ptrace attempts are logged for forensic review.
+ *
+ * @child: The process being traced (target)
+ * @mode: PTRACE_MODE_* flags (read, attach, etc)
+ *
+ * Return: 0 to allow, -EPERM to deny
+ * ====================================================================== */
+SEC("lsm/ptrace_access_check")
+int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
+             unsigned int mode, int ret) {
+  struct lota_exec_event *event;
+  u32 key = 0;
+  u32 lota_mode;
+  u32 child_pid;
+  int blocked = 0;
+
+  /* dont interfere with previous hook denial */
+  if (ret != 0)
+    return ret;
+
+  inc_stat(STAT_PTRACE_ATTEMPTS);
+
+  lota_mode = get_mode();
+
+  if (lota_mode == LOTA_MODE_MAINTENANCE)
+    return 0;
+
+  child_pid = BPF_CORE_READ(child, pid);
+
+  /*
+   * In ENFORCE mode, block ptrace on protected PIDs.
+   * Protected PIDs are managed by user-space.
+   *
+   * Also block if LOTA_CFG_BLOCK_PTRACE is set.
+   */
+  if (lota_mode == LOTA_MODE_ENFORCE) {
+    if (is_protected_pid(child_pid)) {
+      blocked = 1;
+    } else if (get_config(LOTA_CFG_BLOCK_PTRACE)) {
+      blocked = 1;
+    }
+  }
+
+  /* for logging */
+  event = bpf_map_lookup_elem(&event_scratch, &key);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type = blocked ? LOTA_EVENT_PTRACE_BLOCKED : LOTA_EVENT_PTRACE;
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+    event->target_pid = child_pid;
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+    /* try to get the target process name */
+    const char *child_comm = BPF_CORE_READ(child, comm);
+    if (child_comm) {
+      bpf_probe_read_kernel_str(event->filename, LOTA_MAX_COMM_LEN, child_comm);
+    }
+
+    struct lota_exec_event *rb_event;
+    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (rb_event) {
+      __builtin_memcpy(rb_event, event, sizeof(*event));
+      bpf_ringbuf_submit(rb_event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
+    }
+  }
+
+  if (blocked) {
+    inc_stat(STAT_PTRACE_BLOCKED);
+    return -1; /* -EPERM */
+  }
+
+  return 0;
+}
+
+/* ======================================================================
+ * LSM hook: task_fix_setuid
+ *
+ * Called when a process changes its effective UID (privilege escalation).
+ * This monitors setuid/setgid transitions and is for detecting:
+ *  - unauthorized privilege escalation
+ *  - SUID binary abuse
+ *  - container escape attempts
+ *
+ * @new: New credentials being applied
+ * @old: Current credentials of the task
+ * @flags: LSM_SETID_* flags indicating what changed
+ *
+ * Return: 0 (always allow - just monitoring)
+ * ====================================================================== */
+SEC("lsm/task_fix_setuid")
+int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
+             int flags, int ret) {
+  struct lota_exec_event *event;
+  u32 key = 0;
+  u32 old_uid, new_uid;
+
+  /* dont interfere with previous hook denial */
+  if (ret != 0)
+    return ret;
+
+  old_uid = BPF_CORE_READ(old, uid.val);
+  new_uid = BPF_CORE_READ(new, uid.val);
+
+  /* only log actual UID changes, not no-ops */
+  if (old_uid == new_uid)
+    return 0;
+
+  inc_stat(STAT_SETUID_EVENTS);
+
+  if (get_mode() == LOTA_MODE_MAINTENANCE)
+    return 0;
+
+  event = bpf_map_lookup_elem(&event_scratch, &key);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type = LOTA_EVENT_SETUID;
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = old_uid;
+    event->target_pid = new_uid; /* reuse target_pid for new UID */
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+    struct lota_exec_event *rb_event;
+    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (rb_event) {
+      __builtin_memcpy(rb_event, event, sizeof(*event));
+      bpf_ringbuf_submit(rb_event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
+    }
+  }
+
+  /* kernel handles setuid policy via capabilities */
   return 0;
 }
