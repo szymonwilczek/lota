@@ -48,6 +48,8 @@ const (
 	VerifyIOMMUFail         uint32 = 4
 	VerifyOldVersion        uint32 = 5
 	VerifyIntegrityMismatch uint32 = 6
+	VerifyRevoked           uint32 = 7 // AIK revoked by administrator
+	VerifyBanned            uint32 = 8 // hardware ID banned
 )
 
 // struct lota_report_header (see: uapi/lota_report.h)
