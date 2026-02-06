@@ -30,6 +30,10 @@ type Verifier struct {
 	aikStore      store.AIKStore
 	baselineStore BaselineStorer
 
+	// enforcement stores (nil = no enforcement)
+	revocationStore store.RevocationStore
+	banStore        store.BanStore
+
 	// configuration
 	nonceLifetime    time.Duration
 	timestampMaxAge  time.Duration
@@ -40,6 +44,8 @@ type Verifier struct {
 	totalAttests   atomic.Int64
 	successAttests atomic.Int64
 	failedAttests  atomic.Int64
+	revokedAttests atomic.Int64
+	bannedAttests  atomic.Int64
 }
 
 // holds verifier configuration
@@ -58,6 +64,12 @@ type VerifierConfig struct {
 
 	// optional: persistent used nonce backend (nil = in-memory)
 	UsedNonceBackend UsedNonceBackend
+
+	// optional: revocation enforcement (nil = no revocation checks)
+	RevocationStore store.RevocationStore
+
+	// optional: hardware ban enforcement (nil = no ban checks)
+	BanStore store.BanStore
 }
 
 // returns sensible defaults for verifier
@@ -85,6 +97,8 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		pcrVerifier:      NewPCRVerifier(),
 		aikStore:         aikStore,
 		baselineStore:    baselineStore,
+		revocationStore:  cfg.RevocationStore,
+		banStore:         cfg.BanStore,
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
@@ -122,6 +136,30 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		log.Printf("[%s] Report parse failed: %v", clientID, err)
 		result.Result = types.VerifyOldVersion
 		return result, err
+	}
+
+	// check revocation BEFORE consuming nonce
+	// Why? This prevents wasting nonces on known-revoked clients
+	// and avoids any crypto operations for identities that should be rejected.
+	if v.revocationStore != nil {
+		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+			v.revokedAttests.Add(1)
+			log.Printf("[%s] REJECTED: AIK revoked (reason=%s, by=%s, note=%q)",
+				clientID, entry.Reason, entry.RevokedBy, entry.Note)
+			result.Result = types.VerifyRevoked
+			return result, fmt.Errorf("client AIK revoked: %s", entry.Reason)
+		}
+	}
+
+	// check hardware ban BEFORE consuming nonce
+	if v.banStore != nil {
+		if entry, banned := v.banStore.IsBanned(report.TPM.HardwareID); banned {
+			v.bannedAttests.Add(1)
+			log.Printf("[%s] REJECTED: Hardware banned (hwid=%x, reason=%s, by=%s)",
+				clientID, report.TPM.HardwareID[:8], entry.Reason, entry.BannedBy)
+			result.Result = types.VerifyBanned
+			return result, fmt.Errorf("hardware banned: %s", entry.Reason)
+		}
 	}
 
 	if err := v.nonceStore.VerifyNonce(report, clientID); err != nil {
@@ -304,11 +342,15 @@ type Stats struct {
 	TotalAttestations int64
 	SuccessAttests    int64
 	FailedAttests     int64
+	RevokedAttests    int64
+	BannedAttests     int64
+	ActiveRevocations int
+	ActiveBans        int
 	Uptime            time.Duration
 }
 
 func (v *Verifier) Stats() Stats {
-	return Stats{
+	s := Stats{
 		PendingChallenges: v.nonceStore.PendingCount(),
 		UsedNonces:        v.nonceStore.UsedCount(),
 		ActivePolicy:      v.pcrVerifier.GetActivePolicy(),
@@ -317,8 +359,19 @@ func (v *Verifier) Stats() Stats {
 		TotalAttestations: v.totalAttests.Load(),
 		SuccessAttests:    v.successAttests.Load(),
 		FailedAttests:     v.failedAttests.Load(),
+		RevokedAttests:    v.revokedAttests.Load(),
+		BannedAttests:     v.bannedAttests.Load(),
 		Uptime:            time.Since(v.startTime),
 	}
+
+	if v.revocationStore != nil {
+		s.ActiveRevocations = len(v.revocationStore.ListRevocations())
+	}
+	if v.banStore != nil {
+		s.ActiveBans = len(v.banStore.ListBans())
+	}
+
+	return s
 }
 
 // per-client information for monitoring API
@@ -326,6 +379,8 @@ type ClientInfo struct {
 	ClientID          string
 	HasAIK            bool
 	HardwareID        string // hex-encoded
+	Revoked           bool
+	RevocationReason  string
 	LastAttestation   time.Time
 	AttestCount       uint64
 	MonotonicCounter  uint64
@@ -347,6 +402,14 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	// hardware ID
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
 		info.HardwareID = hex.EncodeToString(hwid[:])
+	}
+
+	// revocation status
+	if v.revocationStore != nil {
+		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
+			info.Revoked = true
+			info.RevocationReason = string(entry.Reason)
+		}
 	}
 
 	// nonce store data
@@ -389,4 +452,14 @@ func (v *Verifier) ListClients() []string {
 	}
 
 	return clients
+}
+
+// returns the configured revocation store
+func (v *Verifier) RevocationStore() store.RevocationStore {
+	return v.revocationStore
+}
+
+// returns the configured hardware ban store
+func (v *Verifier) BanStore() store.BanStore {
+	return v.banStore
 }
