@@ -26,11 +26,12 @@ func TestOpenDB_InMemory(t *testing.T) {
 		t.Fatalf("SchemaVersion failed: %v", err)
 	}
 
-	if version != 1 {
-		t.Errorf("Schema version: got %d, want 1", version)
+	expectedVersion := len(migrations)
+	if version != expectedVersion {
+		t.Errorf("Schema version: got %d, want %d", version, expectedVersion)
 	}
 
-	t.Log("✓ In-memory database opened with schema v1")
+	t.Logf("✓ In-memory database opened with schema v%d", expectedVersion)
 }
 
 func TestOpenDB_FileSystem(t *testing.T) {
@@ -63,8 +64,9 @@ func TestOpenDB_FileSystem(t *testing.T) {
 	defer db2.Close()
 
 	version, _ := SchemaVersion(db2)
-	if version != 1 {
-		t.Errorf("Schema version after reopen: got %d, want 1", version)
+	expectedVersion := len(migrations)
+	if version != expectedVersion {
+		t.Errorf("Schema version after reopen: got %d, want %d", version, expectedVersion)
 	}
 
 	t.Log("✓ File-based database created and reopened successfully")
@@ -86,8 +88,9 @@ func TestMigrations_Idempotent(t *testing.T) {
 	}
 
 	version, _ := SchemaVersion(db)
-	if version != 1 {
-		t.Errorf("Schema version after double migration: got %d, want 1", version)
+	expectedVersion := len(migrations)
+	if version != expectedVersion {
+		t.Errorf("Schema version after double migration: got %d, want %d", version, expectedVersion)
 	}
 
 	t.Log("✓ Migrations are idempotent")
@@ -102,7 +105,7 @@ func TestMigrations_TablesExist(t *testing.T) {
 	}
 	defer db.Close()
 
-	expectedTables := []string{"schema_version", "clients", "baselines", "used_nonces"}
+	expectedTables := []string{"schema_version", "clients", "baselines", "used_nonces", "revocations", "hardware_bans", "audit_log"}
 
 	for _, table := range expectedTables {
 		t.Run(table, func(t *testing.T) {

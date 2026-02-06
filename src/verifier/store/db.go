@@ -57,6 +57,40 @@ var migrations = []migration{
 			CREATE INDEX idx_used_nonces_used_at ON used_nonces(used_at);
 		`,
 	},
+	{
+		version:     2,
+		description: "revocation and hardware ban tables with audit log",
+		sql: `
+			CREATE TABLE revocations (
+				client_id  TEXT PRIMARY KEY,
+				reason     TEXT NOT NULL,
+				revoked_at TIMESTAMP NOT NULL,
+				revoked_by TEXT NOT NULL DEFAULT '',
+				note       TEXT NOT NULL DEFAULT ''
+			);
+
+			CREATE TABLE hardware_bans (
+				hardware_id BLOB PRIMARY KEY CHECK(length(hardware_id) = 32),
+				reason      TEXT NOT NULL,
+				banned_at   TIMESTAMP NOT NULL,
+				banned_by   TEXT NOT NULL DEFAULT '',
+				note        TEXT NOT NULL DEFAULT ''
+			);
+
+			CREATE TABLE audit_log (
+				id        INTEGER PRIMARY KEY AUTOINCREMENT,
+				timestamp TIMESTAMP NOT NULL,
+				action    TEXT NOT NULL,
+				target_id TEXT NOT NULL,
+				reason    TEXT NOT NULL DEFAULT '',
+				actor     TEXT NOT NULL DEFAULT '',
+				note      TEXT NOT NULL DEFAULT ''
+			);
+
+			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
+			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path
