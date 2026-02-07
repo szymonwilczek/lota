@@ -33,6 +33,7 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_MODULE_SIG (1U << 4) /* Kernel enforces module sigs*/
 #define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
+#define LOTA_REPORT_FLAG_ENFORCE (1U << 7)    /* LSM enforce mode active */
 
 /*
  * Maximum size of TPMS_ATTEST structure returned by TPM2_Quote.

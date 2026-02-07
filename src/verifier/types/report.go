@@ -37,6 +37,7 @@ const (
 	FlagModuleSig    uint32 = 1 << 4 // Kernel enforces module sigs
 	FlagLockdown     uint32 = 1 << 5 // Kernel lockdown active
 	FlagSecureBoot   uint32 = 1 << 6 // Secure Boot enabled
+	FlagEnforce      uint32 = 1 << 7 // LSM enforce mode active
 )
 
 // verification result codes
