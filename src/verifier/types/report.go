@@ -52,7 +52,7 @@ const (
 	VerifyBanned            uint32 = 8 // hardware ID banned
 )
 
-// struct lota_report_header (see: uapi/lota_report.h)
+// struct lota_report_header (see: include/attestation.h)
 type ReportHeader struct {
 	Magic       uint32 // offset 0
 	Version     uint32 // offset 4
@@ -114,7 +114,7 @@ type SystemMeasurement struct {
 	IOMMU      IOMMUStatus         // 76 bytes
 }
 
-// struct lota_bpf_summary (see: uapi/lota_report.h)
+// struct lota_bpf_summary (see: include/attestation.h)
 type BPFSummary struct {
 	TotalExecEvents uint32 // 4 bytes
 	UniqueBinaries  uint32 // 4 bytes
