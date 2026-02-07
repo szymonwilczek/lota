@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -41,15 +42,31 @@ type AIKStore interface {
 
 	// returns all registered client IDs
 	ListClients() []string
+
+	// returns when the AIK was first registered for the client
+	// falls back to file modification time for legacy entries without metadata
+	GetRegisteredAt(clientID string) (time.Time, error)
+
+	// replaces the AIK for an existing client (key rotation)
+	// preserves hardware ID binding. updates registration timestamp
+	RotateAIK(clientID string, newKey *rsa.PublicKey) error
+}
+
+// metadata persisted alongside AIK public keys for lifecycle management
+// used by FileStore to track registration time in a sidecar JSON file
+type aikMeta struct {
+	RegisteredAt time.Time `json:"registered_at"`
 }
 
 // keys are stored as PEM files: {storePath}/{clientID}.pem
+// registration metadata: {storePath}/{clientID}.meta (JSON)
 // hardware IDs are stored as: {storePath}/{clientID}.hwid
 type FileStore struct {
-	mu          sync.RWMutex
-	storePath   string
-	cache       map[string]*rsa.PublicKey
-	hardwareIDs map[string][32]byte
+	mu           sync.RWMutex
+	storePath    string
+	cache        map[string]*rsa.PublicKey
+	hardwareIDs  map[string][32]byte
+	registeredAt map[string]time.Time
 }
 
 // creates a new file-based AIK store
@@ -59,9 +76,10 @@ func NewFileStore(storePath string) (*FileStore, error) {
 	}
 
 	fs := &FileStore{
-		storePath:   storePath,
-		cache:       make(map[string]*rsa.PublicKey),
-		hardwareIDs: make(map[string][32]byte),
+		storePath:    storePath,
+		cache:        make(map[string]*rsa.PublicKey),
+		hardwareIDs:  make(map[string][32]byte),
+		registeredAt: make(map[string]time.Time),
 	}
 
 	// load existing keys into cache
@@ -226,6 +244,59 @@ func (fs *FileStore) ListClients() []string {
 	return clients
 }
 
+func (fs *FileStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	if t, ok := fs.registeredAt[clientID]; ok {
+		return t, nil
+	}
+	return time.Time{}, errors.New("registration time not found")
+}
+
+// replaces expired AIK with a new key, preserving hardware ID binding
+func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	if _, exists := fs.cache[clientID]; !exists {
+		return errors.New("client not registered")
+	}
+
+	keyBytes, err := x509.MarshalPKIXPublicKey(newKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	pemBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: keyBytes,
+	}
+
+	// overwrite existing PEM file
+	path := filepath.Join(fs.storePath, clientID+".pem")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write key file: %w", err)
+	}
+	defer file.Close()
+
+	if err := pem.Encode(file, pemBlock); err != nil {
+		return fmt.Errorf("failed to encode key: %w", err)
+	}
+
+	// update metadata with new registration time
+	now := time.Now()
+	if err := fs.saveMeta(clientID, now); err != nil {
+		fmt.Printf("Warning: failed to save metadata for %s: %v\n", clientID, err)
+	}
+
+	fs.cache[clientID] = newKey
+	fs.registeredAt[clientID] = now
+
+	return nil
+}
+
 // falls back to TOFU (no cert verification)
 func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return fs.RegisterAIK(clientID, pubKey)
@@ -287,15 +358,17 @@ func Fingerprint(pubKey *rsa.PublicKey) string {
 
 // implements AIKStore in-memory (for testing only right now).
 type MemoryStore struct {
-	mu          sync.RWMutex
-	keys        map[string]*rsa.PublicKey
-	hardwareIDs map[string][32]byte
+	mu           sync.RWMutex
+	keys         map[string]*rsa.PublicKey
+	hardwareIDs  map[string][32]byte
+	registeredAt map[string]time.Time
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		keys:        make(map[string]*rsa.PublicKey),
-		hardwareIDs: make(map[string][32]byte),
+		keys:         make(map[string]*rsa.PublicKey),
+		hardwareIDs:  make(map[string][32]byte),
+		registeredAt: make(map[string]time.Time),
 	}
 }
 
@@ -347,6 +420,30 @@ func (ms *MemoryStore) ListClients() []string {
 // for MemoryStore falls back to TOFU (no cert verification)
 func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return ms.RegisterAIK(clientID, pubKey)
+}
+
+func (ms *MemoryStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	if t, ok := ms.registeredAt[clientID]; ok {
+		return t, nil
+	}
+	return time.Time{}, errors.New("registration time not found")
+}
+
+// replaces expired AIK with a new key, preserving hardware ID binding
+func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if _, exists := ms.keys[clientID]; !exists {
+		return errors.New("client not registered")
+	}
+
+	ms.keys[clientID] = newKey
+	ms.registeredAt[clientID] = time.Now()
+	return nil
 }
 
 // registers hardware ID for client or validates against existing
@@ -576,4 +673,12 @@ func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]b
 
 func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
 	return cs.fileStore.GetHardwareID(clientID)
+}
+
+func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	return cs.fileStore.GetRegisteredAt(clientID)
+}
+
+func (cs *CertificateStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
+	return cs.fileStore.RotateAIK(clientID, newKey)
 }
