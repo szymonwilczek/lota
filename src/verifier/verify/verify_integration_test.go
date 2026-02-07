@@ -50,7 +50,7 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	offset += 8
 	binary.LittleEndian.PutUint32(buf[offset:], types.ExpectedReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig)
+	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
 	offset += 4
 
 	// TPM Evidence - PCR values
@@ -510,7 +510,7 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	offset += 8 // timestamp_ns
 	binary.LittleEndian.PutUint32(buf[offset:], types.ExpectedReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig)
+	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
 	offset += 4
 
 	// PCRs

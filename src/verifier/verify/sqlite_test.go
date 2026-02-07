@@ -702,7 +702,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	offset += 8 // timestamp_ns
 	binary.LittleEndian.PutUint32(buf[offset:], types.ExpectedReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig)
+	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
 	offset += 4
 
 	// PCR values
