@@ -109,7 +109,7 @@ struct lota_exec_event {
   uint32_t gid;
   uint32_t target_pid;              /* ptrace target / setuid new_uid */
   uint32_t _pad0;                   /* alignment */
-  uint8_t hash[LOTA_HASH_SIZE];     /* SHA-256 of binary (partial) */
+  uint8_t hash[LOTA_HASH_SIZE];     /* inode metadata fingerprint (BPF) */
   char comm[LOTA_MAX_COMM_LEN];     /* Process name */
   char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
 } __attribute__((packed));
