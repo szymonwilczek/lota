@@ -11,6 +11,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -34,10 +35,14 @@ type APIHandler struct {
 	log            *slog.Logger
 	metrics        *metrics.Metrics
 	startTime      time.Time
+	adminAPIKey    string // if non-empty, required for mutating endpoints
 }
 
 // creates a new API handler and registers routes on the given mux
-func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog) *APIHandler {
+// adminAPIKey controls access to mutating endpoints (revoke, ban):
+//   - non-empty: requires Authorization: Bearer <key> header
+//   - empty: all mutating endpoints return 403
+func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey string) *APIHandler {
 	if logger == nil {
 		logger = logging.Nop()
 	}
@@ -53,31 +58,78 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 		log:            logger.With("component", "api"),
 		metrics:        m,
 		startTime:      time.Now(),
+		adminAPIKey:    adminAPIKey,
 	}
 
+	// read-only monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /health", h.handleHealth)
 	mux.HandleFunc("GET /api/v1/stats", h.handleStats)
 	mux.HandleFunc("GET /api/v1/clients", h.handleListClients)
 	mux.HandleFunc("GET /api/v1/clients/", h.handleClientInfo)
 	mux.HandleFunc("GET /metrics", h.handleMetrics)
 
-	// revocation management
-	mux.HandleFunc("POST /api/v1/clients/", h.handleClientAction)
-	mux.HandleFunc("DELETE /api/v1/clients/", h.handleClientAction)
+	// revocation management (admin auth required)
+	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 	mux.HandleFunc("GET /api/v1/revocations", h.handleListRevocations)
 
-	// hardware ban management
-	mux.HandleFunc("POST /api/v1/bans", h.handleBanHardware)
-	mux.HandleFunc("DELETE /api/v1/bans/", h.handleUnbanHardware)
+	// hardware ban management (admin auth required)
+	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
+	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
 	mux.HandleFunc("GET /api/v1/bans", h.handleListBans)
 
-	// audit log
+	// audit log (read-only)
 	mux.HandleFunc("GET /api/v1/audit", h.handleAuditLog)
 
-	// attestation decision log
+	// attestation decision log (read-only)
 	mux.HandleFunc("GET /api/v1/attestations", h.handleAttestationLog)
 
 	return h
+}
+
+// wraps a handler with Bearer token authentication
+// if no admin API key is configured, all mutating requests are rejected
+func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.adminAPIKey == "" {
+			h.log.Warn("admin endpoint called but no API key configured",
+				"method", r.Method, "path", r.URL.Path,
+				"remote_addr", r.RemoteAddr)
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, errorResponse{Error: "admin API key not configured"})
+			return
+		}
+
+		token := extractBearerToken(r)
+		if token == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="lota-admin"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, errorResponse{Error: "missing Authorization header"})
+			return
+		}
+
+		// constant-time comparison to prevent timing side-channels
+		if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminAPIKey)) != 1 {
+			logging.Security(h.log, "admin auth failed",
+				"method", r.Method, "path", r.URL.Path,
+				"remote_addr", r.RemoteAddr)
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, errorResponse{Error: "invalid API key"})
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+// extracts the Bearer token from the Authorization header
+func extractBearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(auth[len(prefix):])
 }
 
 // response structs (JSON serialization)
