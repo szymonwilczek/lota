@@ -15,10 +15,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/logging"
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
@@ -33,6 +35,11 @@ type Verifier struct {
 	// enforcement stores (nil = no enforcement)
 	revocationStore store.RevocationStore
 	banStore        store.BanStore
+
+	// structured logging and telemetry
+	log            *slog.Logger
+	metrics        *metrics.Metrics
+	attestationLog store.AttestationLog
 
 	// configuration
 	nonceLifetime    time.Duration
@@ -70,6 +77,15 @@ type VerifierConfig struct {
 
 	// optional: hardware ban enforcement (nil = no ban checks)
 	BanStore store.BanStore
+
+	// optional: structured logger (nil = default stderr text logger)
+	Logger *slog.Logger
+
+	// optional: Prometheus metrics (nil = no metrics)
+	Metrics *metrics.Metrics
+
+	// optional: attestation decision log (nil = no attestation audit)
+	AttestationLog store.AttestationLog
 }
 
 // returns sensible defaults for verifier
@@ -92,6 +108,16 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		baselineStore = NewBaselineStore()
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = logging.Nop()
+	}
+
+	m := cfg.Metrics
+	if m == nil {
+		m = metrics.New()
+	}
+
 	return &Verifier{
 		nonceStore:       NewNonceStoreFromConfig(nonceCfg),
 		pcrVerifier:      NewPCRVerifier(),
@@ -99,6 +125,9 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		baselineStore:    baselineStore,
 		revocationStore:  cfg.RevocationStore,
 		banStore:         cfg.BanStore,
+		log:              logger,
+		metrics:          m,
+		attestationLog:   cfg.AttestationLog,
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
@@ -117,12 +146,37 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 // performs full verification of attestation report
 // returns verification result ready to send back to client
 func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+	startTime := time.Now()
 	v.totalAttests.Add(1)
+	v.metrics.AttestationTotal.Inc()
+
+	clog := logging.WithClient(v.log, clientID)
+	var pcr14Hex string
+	var hwID string
+
 	defer func() {
+		duration := time.Since(startTime)
+		v.metrics.VerifyDuration.Observe(duration.Seconds())
 		if retErr != nil {
 			v.failedAttests.Add(1)
+			v.metrics.AttestationFail.Inc()
 		} else {
 			v.successAttests.Add(1)
+			v.metrics.AttestationOK.Inc()
+		}
+		if v.attestationLog != nil {
+			resultStr := "OK"
+			if retErr != nil {
+				resultStr = retErr.Error()
+			}
+			_ = v.attestationLog.Record(store.AttestationRecord{
+				Timestamp:  time.Now(),
+				ClientID:   clientID,
+				HardwareID: hwID,
+				Result:     resultStr,
+				DurationMs: float64(duration.Milliseconds()),
+				PCR14:      pcr14Hex,
+			})
 		}
 	}()
 
@@ -133,10 +187,11 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 
 	report, err := types.ParseReport(reportData)
 	if err != nil {
-		log.Printf("[%s] Report parse failed: %v", clientID, err)
+		clog.Error("report parse failed", "error", err)
 		result.Result = types.VerifyOldVersion
 		return result, err
 	}
+	hwID = fmt.Sprintf("%x", report.TPM.HardwareID[:8])
 
 	// check revocation BEFORE consuming nonce
 	// Why? This prevents wasting nonces on known-revoked clients
@@ -144,8 +199,9 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 	if v.revocationStore != nil {
 		if entry, revoked := v.revocationStore.IsRevoked(clientID); revoked {
 			v.revokedAttests.Add(1)
-			log.Printf("[%s] REJECTED: AIK revoked (reason=%s, by=%s, note=%q)",
-				clientID, entry.Reason, entry.RevokedBy, entry.Note)
+			v.metrics.Rejections.Inc("revoked")
+			logging.Security(clog, "attestation rejected: AIK revoked",
+				"reason", entry.Reason, "revoked_by", entry.RevokedBy, "note", entry.Note)
 			result.Result = types.VerifyRevoked
 			return result, fmt.Errorf("client AIK revoked: %s", entry.Reason)
 		}
@@ -155,22 +211,25 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 	if v.banStore != nil {
 		if entry, banned := v.banStore.IsBanned(report.TPM.HardwareID); banned {
 			v.bannedAttests.Add(1)
-			log.Printf("[%s] REJECTED: Hardware banned (hwid=%x, reason=%s, by=%s)",
-				clientID, report.TPM.HardwareID[:8], entry.Reason, entry.BannedBy)
+			v.metrics.Rejections.Inc("banned")
+			logging.Security(clog, "attestation rejected: hardware banned",
+				"hardware_id", hwID, "reason", entry.Reason, "banned_by", entry.BannedBy)
 			result.Result = types.VerifyBanned
 			return result, fmt.Errorf("hardware banned: %s", entry.Reason)
 		}
 	}
 
 	if err := v.nonceStore.VerifyNonce(report, clientID); err != nil {
-		log.Printf("[%s] Nonce verification failed: %v", clientID, err)
+		clog.Error("nonce verification failed", "error", err)
+		v.metrics.Rejections.Inc("nonce_fail")
 		result.Result = types.VerifyNonceFail
 		return result, err
 	}
-	log.Printf("[%s] Nonce verified (challenge-response + TPMS_ATTEST binding)", clientID)
+	clog.Debug("nonce verified", "method", "challenge-response+TPMS_ATTEST")
 
 	if err := VerifyTimestamp(report, v.timestampMaxAge); err != nil {
-		log.Printf("[%s] Timestamp verification failed: %v", clientID, err)
+		clog.Error("timestamp verification failed", "error", err)
+		v.metrics.Rejections.Inc("nonce_fail")
 		result.Result = types.VerifyNonceFail
 		return result, err
 	}
@@ -180,7 +239,8 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		// TOFU mode: first connection from this client
 		// extract AIK from report and register it
 		if report.TPM.AIKPublicSize == 0 {
-			log.Printf("[%s] ERROR: No AIK public key in report", clientID)
+			clog.Error("no AIK public key in report")
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, errors.New("no AIK public key in report")
 		}
@@ -188,14 +248,16 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		aikData := report.TPM.AIKPublic[:report.TPM.AIKPublicSize]
 		aikPubKey, err = ParseRSAPublicKey(aikData)
 		if err != nil {
-			log.Printf("[%s] ERROR: Failed to parse AIK public key: %v", clientID, err)
+			clog.Error("failed to parse AIK public key", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("failed to parse AIK: %w", err)
 		}
 
 		// verify signature before registering
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
-			log.Printf("[%s] Signature verification failed: %v", clientID, err)
+			clog.Error("signature verification failed", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, err
 		}
@@ -204,87 +266,95 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		var aikCert, ekCert []byte
 		if report.TPM.AIKCertSize > 0 {
 			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
-			log.Printf("[%s] AIK certificate provided (%d bytes)", clientID, report.TPM.AIKCertSize)
+			clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
 		}
 		if report.TPM.EKCertSize > 0 {
 			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
-			log.Printf("[%s] EK certificate provided (%d bytes)", clientID, report.TPM.EKCertSize)
+			clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
 		}
 
 		// register AIK with certificate verification (if certs provided)
 		if err := v.aikStore.RegisterAIKWithCert(clientID, aikPubKey, aikCert, ekCert); err != nil {
-			log.Printf("[%s] ERROR: Failed to register AIK: %v", clientID, err)
+			clog.Error("failed to register AIK", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("AIK registration failed: %w", err)
 		}
 
+		fingerprint := AIKFingerprint(aikPubKey)
 		if len(aikCert) > 0 || len(ekCert) > 0 {
-			log.Printf("[%s] AIK registered with certificate verification (fingerprint: %s)",
-				clientID, AIKFingerprint(aikPubKey))
+			clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
 		} else {
-			log.Printf("[%s] TOFU: AIK registered without certificate (fingerprint: %s)",
-				clientID, AIKFingerprint(aikPubKey))
+			clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
 		}
 
 		// register hardware ID (TOFU for new clients)
 		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
 			if errors.Is(err, store.ErrHardwareIDMismatch) {
-				log.Printf("[%s] CRITICAL: Hardware identity mismatch - possible cloning or hardware change", clientID)
+				logging.Security(clog, "hardware identity mismatch",
+					"detail", "possible cloning or hardware change")
+				v.metrics.Rejections.Inc("integrity_mismatch")
 				result.Result = types.VerifySigFail
 				return result, fmt.Errorf("hardware identity verification failed: %w", err)
 			}
-			log.Printf("[%s] ERROR: Failed to register hardware ID: %v", clientID, err)
+			clog.Error("failed to register hardware ID", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("hardware ID registration failed: %w", err)
 		}
-		log.Printf("[%s] Hardware ID registered: %x", clientID, report.TPM.HardwareID[:8])
+		clog.Info("hardware ID registered", "hwid", hwID)
 	} else {
 		// already registered - verify signature
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
-			log.Printf("[%s] Signature verification failed: %v", clientID, err)
+			clog.Error("signature verification failed", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, err
 		}
-		log.Printf("[%s] Signature verified with registered AIK", clientID)
+		clog.Debug("signature verified with registered AIK")
 
 		// verify hardware ID matches registered value
 		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
 			if errors.Is(err, store.ErrHardwareIDMismatch) {
-				log.Printf("[%s] CRITICAL: Hardware identity mismatch - possible cloning or hardware change", clientID)
+				logging.Security(clog, "hardware identity mismatch",
+					"detail", "possible cloning or hardware change")
+				v.metrics.Rejections.Inc("integrity_mismatch")
 				result.Result = types.VerifySigFail
 				return result, fmt.Errorf("hardware identity verification failed: %w", err)
 			}
-			log.Printf("[%s] ERROR: Hardware ID verification failed: %v", clientID, err)
+			clog.Error("hardware ID verification failed", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("hardware ID verification failed: %w", err)
 		}
 	}
 
 	if err := v.pcrVerifier.VerifyReport(report); err != nil {
-		log.Printf("[%s] PCR verification failed: %v", clientID, err)
+		clog.Error("PCR verification failed", "error", err)
+		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
 		return result, err
 	}
 
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
+	pcr14Hex = FormatPCR14(pcr14)
 	tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
 	switch tofuResult {
 	case TOFUFirstUse:
-		log.Printf("[%s] TOFU: First attestation - PCR14 baseline established: %s",
-			clientID, FormatPCR14(pcr14))
+		clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
 	case TOFUMatch:
-		log.Printf("[%s] TOFU: PCR14 matches baseline (attestation #%d)",
-			clientID, baseline.AttestCount)
+		clog.Debug("PCR14 matches baseline", "attest_count", baseline.AttestCount)
 	case TOFUMismatch:
-		log.Printf("[%s] CRITICAL: Potential agent tampering detected! Expected PCR14: %s, Got: %s",
-			clientID, FormatPCR14(baseline.PCR14), FormatPCR14(pcr14))
+		logging.Security(clog, "potential agent tampering detected",
+			"expected_pcr14", FormatPCR14(baseline.PCR14), "actual_pcr14", pcr14Hex)
+		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
 	}
 
 	if report.Header.Flags&types.FlagIOMMUOK == 0 {
-		log.Printf("[%s] IOMMU not verified", clientID)
+		clog.Warn("IOMMU not verified")
 		// IMPORTANT: policy determines if this is required
 	}
 
@@ -299,12 +369,12 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		secFlags = append(secFlags, "SECUREBOOT")
 	}
 	if len(secFlags) > 0 {
-		log.Printf("[%s] Security features: %v", clientID, secFlags)
+		clog.Info("security features detected", "flags", secFlags)
 	} else {
-		log.Printf("[%s] WARNING: No module security features detected", clientID)
+		clog.Warn("no module security features detected")
 	}
 
-	log.Printf("[%s] Verification successful", clientID)
+	clog.Info("verification successful")
 
 	result.Result = types.VerifyOK
 	result.ValidUntil = uint64(time.Now().Add(v.sessionTokenLife).Unix())
