@@ -576,8 +576,7 @@ func TestIntegrationAPI_PrometheusRevocationMetrics(t *testing.T) {
 	body := rec.Body.String()
 
 	expectedMetrics := []string{
-		"lota_attestations_revoked_total",
-		"lota_attestations_banned_total",
+		"lota_rejections_total",
 		"lota_active_revocations",
 		"lota_active_bans",
 	}

@@ -13,31 +13,46 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/logging"
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 // serves the monitoring REST API
 type APIHandler struct {
-	verifier  *verify.Verifier
-	server    *Server
-	auditLog  store.AuditLog
-	startTime time.Time
+	verifier       *verify.Verifier
+	server         *Server
+	auditLog       store.AuditLog
+	attestationLog store.AttestationLog
+	log            *slog.Logger
+	metrics        *metrics.Metrics
+	startTime      time.Time
 }
 
 // creates a new API handler and registers routes on the given mux
-func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog) *APIHandler {
+func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog) *APIHandler {
+	if logger == nil {
+		logger = logging.Nop()
+	}
+	if m == nil {
+		m = metrics.New()
+	}
+
 	h := &APIHandler{
-		verifier:  verifier,
-		server:    srv,
-		auditLog:  auditLog,
-		startTime: time.Now(),
+		verifier:       verifier,
+		server:         srv,
+		auditLog:       auditLog,
+		attestationLog: attestLog,
+		log:            logger.With("component", "api"),
+		metrics:        m,
+		startTime:      time.Now(),
 	}
 
 	mux.HandleFunc("GET /health", h.handleHealth)
@@ -58,6 +73,9 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 
 	// audit log
 	mux.HandleFunc("GET /api/v1/audit", h.handleAuditLog)
+
+	// attestation decision log
+	mux.HandleFunc("GET /api/v1/attestations", h.handleAttestationLog)
 
 	return h
 }
@@ -225,57 +243,17 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 
 // GET /metrics - Prometheus text exposition format
 func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// sync gauges from verifier stats before export
 	stats := h.verifier.Stats()
+	h.metrics.PendingChallenges.Store(int64(stats.PendingChallenges))
+	h.metrics.RegisteredClients.Store(int64(stats.RegisteredClients))
+	h.metrics.ActiveRevocations.Store(int64(stats.ActiveRevocations))
+	h.metrics.ActiveBans.Store(int64(stats.ActiveBans))
+	h.metrics.UsedNonces.Store(int64(stats.UsedNonces))
+	h.metrics.LoadedPolicies.Store(int64(len(stats.LoadedPolicies)))
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-
-	fmt.Fprintf(w, "# HELP lota_pending_challenges Number of outstanding attestation challenges\n")
-	fmt.Fprintf(w, "# TYPE lota_pending_challenges gauge\n")
-	fmt.Fprintf(w, "lota_pending_challenges %d\n\n", stats.PendingChallenges)
-
-	fmt.Fprintf(w, "# HELP lota_used_nonces Number of consumed nonces in replay history\n")
-	fmt.Fprintf(w, "# TYPE lota_used_nonces gauge\n")
-	fmt.Fprintf(w, "lota_used_nonces %d\n\n", stats.UsedNonces)
-
-	fmt.Fprintf(w, "# HELP lota_registered_clients Number of registered attestation clients\n")
-	fmt.Fprintf(w, "# TYPE lota_registered_clients gauge\n")
-	fmt.Fprintf(w, "lota_registered_clients %d\n\n", stats.RegisteredClients)
-
-	fmt.Fprintf(w, "# HELP lota_attestations_total Total number of attestation attempts\n")
-	fmt.Fprintf(w, "# TYPE lota_attestations_total counter\n")
-	fmt.Fprintf(w, "lota_attestations_total %d\n\n", stats.TotalAttestations)
-
-	fmt.Fprintf(w, "# HELP lota_attestations_success_total Total successful attestations\n")
-	fmt.Fprintf(w, "# TYPE lota_attestations_success_total counter\n")
-	fmt.Fprintf(w, "lota_attestations_success_total %d\n\n", stats.SuccessAttests)
-
-	fmt.Fprintf(w, "# HELP lota_attestations_failed_total Total failed attestations\n")
-	fmt.Fprintf(w, "# TYPE lota_attestations_failed_total counter\n")
-	fmt.Fprintf(w, "lota_attestations_failed_total %d\n\n", stats.FailedAttests)
-
-	fmt.Fprintf(w, "# HELP lota_attestations_revoked_total Total attestation attempts rejected due to revocation\n")
-	fmt.Fprintf(w, "# TYPE lota_attestations_revoked_total counter\n")
-	fmt.Fprintf(w, "lota_attestations_revoked_total %d\n\n", stats.RevokedAttests)
-
-	fmt.Fprintf(w, "# HELP lota_attestations_banned_total Total attestation attempts rejected due to hardware ban\n")
-	fmt.Fprintf(w, "# TYPE lota_attestations_banned_total counter\n")
-	fmt.Fprintf(w, "lota_attestations_banned_total %d\n\n", stats.BannedAttests)
-
-	fmt.Fprintf(w, "# HELP lota_active_revocations Number of currently revoked client AIKs\n")
-	fmt.Fprintf(w, "# TYPE lota_active_revocations gauge\n")
-	fmt.Fprintf(w, "lota_active_revocations %d\n\n", stats.ActiveRevocations)
-
-	fmt.Fprintf(w, "# HELP lota_active_bans Number of currently banned hardware IDs\n")
-	fmt.Fprintf(w, "# TYPE lota_active_bans gauge\n")
-	fmt.Fprintf(w, "lota_active_bans %d\n\n", stats.ActiveBans)
-
-	fmt.Fprintf(w, "# HELP lota_uptime_seconds Verifier uptime in seconds\n")
-	fmt.Fprintf(w, "# TYPE lota_uptime_seconds gauge\n")
-	fmt.Fprintf(w, "lota_uptime_seconds %.0f\n\n", stats.Uptime.Seconds())
-
-	fmt.Fprintf(w, "# HELP lota_loaded_policies Number of loaded PCR policies\n")
-	fmt.Fprintf(w, "# TYPE lota_loaded_policies gauge\n")
-	fmt.Fprintf(w, "lota_loaded_policies %d\n", len(stats.LoadedPolicies))
+	fmt.Fprint(w, h.metrics.Export())
 }
 
 // JSON request for revoke/unrevoke actions
@@ -362,13 +340,14 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 			writeJSON(w, errorResponse{Error: "client is already revoked"})
 			return
 		}
-		log.Printf("Revocation failed for %s: %v", clientID, err)
+		h.log.Error("revocation failed", "client_id", clientID, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, errorResponse{Error: "internal error"})
 		return
 	}
 
-	log.Printf("[REVOKE] Client %s revoked by %s (reason=%s, note=%q)", clientID, req.Actor, req.Reason, req.Note)
+	logging.Security(h.log, "client revoked",
+		"client_id", clientID, "actor", req.Actor, "reason", req.Reason, "note", req.Note)
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]string{
@@ -394,13 +373,13 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 			writeJSON(w, errorResponse{Error: "client is not revoked"})
 			return
 		}
-		log.Printf("Unrevoke failed for %s: %v", clientID, err)
+		h.log.Error("unrevoke failed", "client_id", clientID, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, errorResponse{Error: "internal error"})
 		return
 	}
 
-	log.Printf("[UNREVOKE] Client %s unrevoked", clientID)
+	logging.Security(h.log, "client unrevoked", "client_id", clientID)
 
 	writeJSON(w, map[string]string{
 		"status":    "unrevoked",
@@ -494,13 +473,14 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, errorResponse{Error: "hardware ID is already banned"})
 			return
 		}
-		log.Printf("Ban failed for %s: %v", req.HardwareID, err)
+		h.log.Error("ban failed", "hardware_id", req.HardwareID, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, errorResponse{Error: "internal error"})
 		return
 	}
 
-	log.Printf("[BAN] Hardware %s banned by %s (reason=%s)", req.HardwareID[:16]+"...", req.Actor, req.Reason)
+	logging.Security(h.log, "hardware banned",
+		"hardware_id", req.HardwareID, "actor", req.Actor, "reason", req.Reason)
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]string{
@@ -542,13 +522,13 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, errorResponse{Error: "hardware ID is not banned"})
 			return
 		}
-		log.Printf("Unban failed for %s: %v", hwidHex, err)
+		h.log.Error("unban failed", "hardware_id", hwidHex, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, errorResponse{Error: "internal error"})
 		return
 	}
 
-	log.Printf("[UNBAN] Hardware %s unbanned", hwidHex[:16]+"...")
+	logging.Security(h.log, "hardware unbanned", "hardware_id", hwidHex)
 
 	writeJSON(w, map[string]string{
 		"status":      "unbanned",
@@ -629,12 +609,62 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// JSON response for attestation decision entries
+type attestationResponse struct {
+	ID         int64   `json:"id"`
+	Timestamp  string  `json:"timestamp"`
+	ClientID   string  `json:"client_id"`
+	HardwareID string  `json:"hardware_id,omitempty"`
+	Result     string  `json:"result"`
+	DurationMs float64 `json:"duration_ms"`
+	PCR14      string  `json:"pcr14,omitempty"`
+	Details    string  `json:"details,omitempty"`
+	RemoteAddr string  `json:"remote_addr,omitempty"`
+}
+
+// GET /api/v1/attestations?limit=N - query attestation decision log
+func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request) {
+	if h.attestationLog == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, errorResponse{Error: "attestation log not configured"})
+		return
+	}
+
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	entries := h.attestationLog.QueryAttestations(limit)
+	resp := make([]attestationResponse, len(entries))
+	for i, e := range entries {
+		resp[i] = attestationResponse{
+			ID:         e.ID,
+			Timestamp:  e.Timestamp.UTC().Format(time.RFC3339),
+			ClientID:   e.ClientID,
+			HardwareID: e.HardwareID,
+			Result:     e.Result,
+			DurationMs: e.DurationMs,
+			PCR14:      e.PCR14,
+			Details:    e.Details,
+			RemoteAddr: e.RemoteAddr,
+		}
+	}
+
+	writeJSON(w, map[string]any{
+		"attestations": resp,
+		"count":        len(resp),
+	})
+}
+
 // writes JSON response with proper headers
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		log.Printf("JSON encode error: %v", err)
+		slog.Error("JSON encode error", "error", err)
 	}
 }

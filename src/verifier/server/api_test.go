@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 	"github.com/szymonwilczek/lota/verifier/verify"
@@ -44,10 +45,12 @@ func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
+	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikStore)
 	v.AddPolicy(verify.DefaultPolicy())
 
@@ -58,7 +61,7 @@ func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil)
 
 	return mux, v
 }
@@ -68,10 +71,12 @@ func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
+	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikStore)
 	v.AddPolicy(verify.DefaultPolicy())
 
@@ -88,7 +93,7 @@ func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil)
 
 	return mux, v
 }
