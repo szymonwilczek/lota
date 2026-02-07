@@ -984,6 +984,10 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   struct verifier_challenge challenge;
   struct verifier_result result;
   struct lota_attestation_report report;
+  uint8_t *event_log = NULL;
+  size_t event_log_size = 0;
+  uint8_t *wire_buf = NULL;
+  ssize_t wire_size;
   int ret;
 
   if (verbose)
@@ -1026,10 +1030,47 @@ static int attest_once(const char *server, int port, const char *ca_cert,
     goto cleanup;
   }
 
-  if (verbose)
-    printf("Sending report (%u bytes)...\n", report.header.report_size);
+  /* read TPM event log for verifier PCR reconstruction */
+  event_log = malloc(TPM_MAX_EVENT_LOG_SIZE);
+  if (event_log) {
+    ret =
+        tpm_read_event_log(event_log, TPM_MAX_EVENT_LOG_SIZE, &event_log_size);
+    if (ret < 0) {
+      if (verbose)
+        fprintf(stderr, "Warning: Failed to read TPM event log: %s\n",
+                strerror(-ret));
+      event_log_size = 0;
+    } else if (verbose) {
+      printf("TPM event log read (%zu bytes)\n", event_log_size);
+    }
+  }
 
-  ret = net_send_report(&net_ctx, &report, sizeof(report));
+  /* serialize report with variable-length sections */
+  {
+    size_t total = calculate_report_size(0, (uint32_t)event_log_size);
+    wire_buf = malloc(total);
+    if (!wire_buf) {
+      fprintf(stderr, "Failed to allocate serialization buffer\n");
+      ret = -ENOMEM;
+      goto cleanup;
+    }
+
+    report.header.report_size = (uint32_t)total;
+    wire_size = serialize_report(&report, NULL, 0, event_log,
+                                 (uint32_t)event_log_size, wire_buf, total);
+    if (wire_size < 0) {
+      fprintf(stderr, "Failed to serialize report: %s\n",
+              strerror((int)-wire_size));
+      ret = (int)wire_size;
+      goto cleanup;
+    }
+  }
+
+  if (verbose)
+    printf("Sending report (%zd bytes, event_log: %zu)...\n", wire_size,
+           event_log_size);
+
+  ret = net_send_report(&net_ctx, wire_buf, (size_t)wire_size);
   if (ret < 0) {
     if (verbose)
       fprintf(stderr, "Failed to send report: %s\n", strerror(-ret));
@@ -1053,6 +1094,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   ret = (result.result == VERIFY_OK) ? 0 : 1;
 
 cleanup:
+  free(wire_buf);
+  free(event_log);
   net_context_cleanup(&net_ctx);
   return ret;
 }
