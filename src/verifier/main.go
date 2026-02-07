@@ -13,6 +13,8 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
 //   --generate-cert    Generate self-signed certificate for testing
+//   --log-format FMT   Log output format: text or json (default: text)
+//   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
 
 package main
 
@@ -25,13 +27,14 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/logging"
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/server"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
@@ -46,19 +49,33 @@ var (
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
+	logFormat    = flag.String("log-format", "text", "Log output format: text or json")
+	logLevel     = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 )
 
 func main() {
 	flag.Parse()
 
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Println("LOTA Verifier starting...")
+	// initialize structured logger
+	logger := logging.New(logging.Options{
+		Level:  *logLevel,
+		Format: *logFormat,
+		Output: os.Stderr,
+	})
+
+	// shared metrics registry
+	m := metrics.New()
+
+	logger.Info("LOTA Verifier starting",
+		"log_format", *logFormat, "log_level", *logLevel)
 
 	if *generateCert {
 		if err := generateTestCert(); err != nil {
-			log.Fatalf("Failed to generate certificate: %v", err)
+			logger.Error("failed to generate certificate", "error", err)
+			os.Exit(1)
 		}
-		log.Println("Generated test certificates: lota-verifier.crt, lota-verifier.key")
+		logger.Info("generated test certificates",
+			"cert", "lota-verifier.crt", "key", "lota-verifier.key")
 		if *certFile == "" {
 			*certFile = "lota-verifier.crt"
 			*keyFile = "lota-verifier.key"
@@ -67,18 +84,23 @@ func main() {
 
 	// validate tls config
 	if *certFile == "" || *keyFile == "" {
-		log.Fatal("TLS certificate and key required. Use --generate-cert for testing.")
+		logger.Error("TLS certificate and key required (use --generate-cert for testing)")
+		os.Exit(1)
 	}
 
 	// initialize stores
 	var aikStore store.AIKStore
 	var auditLog store.AuditLog
+	var attestLog store.AttestationLog
 	verifierCfg := verify.DefaultConfig()
+	verifierCfg.Logger = logger
+	verifierCfg.Metrics = m
 
 	if *dbPath != "" {
 		db, err := store.OpenDB(*dbPath)
 		if err != nil {
-			log.Fatalf("Failed to open database: %v", err)
+			logger.Error("failed to open database", "path", *dbPath, "error", err)
+			os.Exit(1)
 		}
 		defer db.Close()
 
@@ -91,14 +113,18 @@ func main() {
 		verifierCfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
 		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 
+		// attestation decision log
+		attestLog = store.NewSQLiteAttestationLog(db)
+		verifierCfg.AttestationLog = attestLog
+
 		ver, _ := store.SchemaVersion(db)
-		log.Printf("SQLite store: %s (schema v%d)", *dbPath, ver)
+		logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 	} else {
 		// file-based AIK store + in-memory baseline/nonce stores
-		var err error
 		fileStore, err := store.NewFileStore(*aikStorePath)
 		if err != nil {
-			log.Fatalf("Failed to initialize AIK store: %v", err)
+			logger.Error("failed to initialize AIK store", "path", *aikStorePath, "error", err)
+			os.Exit(1)
 		}
 		aikStore = fileStore
 
@@ -107,50 +133,61 @@ func main() {
 		verifierCfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 		verifierCfg.BanStore = store.NewMemoryBanStore(auditLog)
 
-		log.Printf("AIK store: %s (%d registered clients)", *aikStorePath, len(fileStore.ListClients()))
+		// in-memory attestation decision log
+		attestLog = store.NewMemoryAttestationLog()
+		verifierCfg.AttestationLog = attestLog
+
+		logger.Info("file-based AIK store initialized",
+			"path", *aikStorePath, "registered_clients", len(fileStore.ListClients()))
 	}
 
 	verifier := verify.NewVerifier(verifierCfg, aikStore)
 
 	verifier.AddPolicy(verify.DefaultPolicy())
-	log.Println("Loaded default policy (baseline security requirements)")
+	logger.Info("loaded default PCR policy")
 
 	// custom policy if specified
 	if *policyFile != "" {
 		if err := verifier.LoadPolicy(*policyFile); err != nil {
-			log.Fatalf("Failed to load policy: %v", err)
+			logger.Error("failed to load policy", "path", *policyFile, "error", err)
+			os.Exit(1)
 		}
-		log.Printf("Loaded policy from: %s", *policyFile)
+		logger.Info("loaded custom policy", "path", *policyFile)
 	}
 
 	// initialize tls server
 	serverCfg := server.ServerConfig{
-		Address:      *addr,
-		HTTPAddress:  *httpAddr,
-		CertFile:     *certFile,
-		KeyFile:      *keyFile,
-		AuditLog:     auditLog,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Address:        *addr,
+		HTTPAddress:    *httpAddr,
+		CertFile:       *certFile,
+		KeyFile:        *keyFile,
+		AuditLog:       auditLog,
+		Logger:         logger,
+		Metrics:        m,
+		AttestationLog: attestLog,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   10 * time.Second,
 	}
 
 	srv, err := server.NewServer(serverCfg, verifier)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		logger.Error("failed to create server", "error", err)
+		os.Exit(1)
 	}
 
 	if err := srv.Start(); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		logger.Error("failed to start server", "error", err)
+		os.Exit(1)
 	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigCh
-	log.Printf("Received signal %v, shutting down...", sig)
+	logger.Info("shutting down", "signal", sig.String())
 
 	srv.Stop()
-	log.Println("LOTA Verifier stopped")
+	logger.Info("LOTA Verifier stopped")
 }
 
 // creates a self-signed certificate for testing
