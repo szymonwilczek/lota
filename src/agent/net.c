@@ -174,13 +174,69 @@ int net_connect(struct net_context *ctx) {
   SSL_set_fd(ssl, sock);
   SSL_set_tlsext_host_name(ssl, ctx->server_addr);
 
+  /*
+   * Hostname verification: ensure the certificate CN or SAN matches
+   * the server that is intended to connect to.
+   */
+  if (!ctx->skip_verify) {
+    if (SSL_set1_host(ssl, ctx->server_addr) != 1) {
+      fprintf(stderr, "Failed to set hostname verification for: %s\n",
+              ctx->server_addr);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EINVAL;
+    }
+  }
+
   /* TLS handshake */
   ret = SSL_connect(ssl);
   if (ret != 1) {
+    int ssl_err = SSL_get_error(ssl, ret);
+    unsigned long err_code = ERR_peek_last_error();
+
+    if (ssl_err == SSL_ERROR_SSL) {
+      fprintf(stderr, "TLS handshake failed: %s\n",
+              ERR_reason_error_string(err_code));
+    } else {
+      fprintf(stderr, "TLS handshake failed (SSL_ERROR=%d)\n", ssl_err);
+    }
+
     SSL_free(ssl);
     close(sock);
     ctx->socket_fd = -1;
     return -ECONNABORTED;
+  }
+
+  /*
+   * Post-handshake certificate verification.
+   */
+  if (!ctx->skip_verify) {
+    long verify_result = SSL_get_verify_result(ssl);
+    if (verify_result != X509_V_OK) {
+      fprintf(stderr,
+              "TLS certificate verification failed: %s (code %ld)\n"
+              "Use --ca-cert to specify the verifier's CA certificate,\n"
+              "or --no-verify-tls for testing (INSECURE).\n",
+              X509_verify_cert_error_string(verify_result), verify_result);
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EACCES;
+    }
+
+    /* verify server presented a certificate */
+    X509 *peer_cert = SSL_get1_peer_certificate(ssl);
+    if (!peer_cert) {
+      fprintf(stderr, "Verifier did not present a TLS certificate\n");
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EACCES;
+    }
+    X509_free(peer_cert);
   }
 
   ctx->ssl = ssl;
