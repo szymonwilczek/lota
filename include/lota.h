@@ -62,14 +62,16 @@ typedef __u64 uint64_t;
 
 /* Event types for ring buffer */
 enum lota_event_type {
-  LOTA_EVENT_EXEC = 1,       /* Binary execution */
-  LOTA_EVENT_MODULE_LOAD,    /* Kernel module load */
-  LOTA_EVENT_MODULE_BLOCKED, /* Module load blocked by policy */
-  LOTA_EVENT_MMAP_EXEC,      /* Executable mmap (library load) */
-  LOTA_EVENT_MMAP_BLOCKED,   /* Executable mmap blocked by policy */
-  LOTA_EVENT_PTRACE,         /* ptrace access attempt */
-  LOTA_EVENT_PTRACE_BLOCKED, /* ptrace access blocked by policy */
-  LOTA_EVENT_SETUID,         /* Privilege escalation (setuid) */
+  LOTA_EVENT_EXEC = 1,          /* Binary execution */
+  LOTA_EVENT_MODULE_LOAD,       /* Kernel module load */
+  LOTA_EVENT_MODULE_BLOCKED,    /* Module load blocked by policy */
+  LOTA_EVENT_MMAP_EXEC,         /* Executable mmap (library load) */
+  LOTA_EVENT_MMAP_BLOCKED,      /* Executable mmap blocked by policy */
+  LOTA_EVENT_PTRACE,            /* ptrace access attempt */
+  LOTA_EVENT_PTRACE_BLOCKED,    /* ptrace access blocked by policy */
+  LOTA_EVENT_SETUID,            /* Privilege escalation (setuid) */
+  LOTA_EVENT_ANON_EXEC,         /* Anonymous executable mmap (JIT, shellcode) */
+  LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
 };
 
 /*
@@ -83,9 +85,10 @@ enum lota_mode {
 };
 
 /* Config map keys */
-#define LOTA_CFG_MODE 0         /* enum lota_mode */
-#define LOTA_CFG_STRICT_MMAP 1  /* 1 = block mmap from untrusted paths */
-#define LOTA_CFG_BLOCK_PTRACE 2 /* 1 = block ptrace on protected pids */
+#define LOTA_CFG_MODE 0            /* enum lota_mode */
+#define LOTA_CFG_STRICT_MMAP 1     /* 1 = block mmap from untrusted paths */
+#define LOTA_CFG_BLOCK_PTRACE 2    /* 1 = block ptrace on protected pids */
+#define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
 #define LOTA_CFG_MAX_ENTRIES 8
 
 /*
