@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"fmt"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -183,22 +184,35 @@ func TestRSAPSSVerifier_InvalidSignature(t *testing.T) {
 func TestSelectVerifier(t *testing.T) {
 	t.Log("TEST: Verifier selection by algorithm")
 
-	testCases := []struct {
+	// known algorithms should succeed
+	knownCases := []struct {
 		sigAlg   uint16
 		wantName string
 	}{
 		{0x0014, "RSASSA-PKCS1-v1_5"}, // TPM_ALG_RSASSA
 		{0x0016, "RSASSA-PSS"},        // TPM_ALG_RSAPSS
-		{0x0000, "RSASSA-PKCS1-v1_5"}, // default
-		{0xFFFF, "RSASSA-PKCS1-v1_5"}, // unknown
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range knownCases {
 		t.Run(tc.wantName, func(t *testing.T) {
-			v := SelectVerifier(tc.sigAlg)
+			v, err := SelectVerifier(tc.sigAlg)
+			if err != nil {
+				t.Fatalf("SelectVerifier(0x%04X) unexpected error: %v", tc.sigAlg, err)
+			}
 			if v.Name() != tc.wantName {
 				t.Errorf("For alg 0x%04X: got %s, want %s",
 					tc.sigAlg, v.Name(), tc.wantName)
+			}
+		})
+	}
+
+	// unknown algorithms must be rejected
+	unknownAlgs := []uint16{0x0000, 0xFFFF, 0x0001, 0x0015}
+	for _, alg := range unknownAlgs {
+		t.Run(fmt.Sprintf("reject_0x%04X", alg), func(t *testing.T) {
+			v, err := SelectVerifier(alg)
+			if err == nil {
+				t.Errorf("SelectVerifier(0x%04X) should fail, got verifier %q", alg, v.Name())
 			}
 		})
 	}

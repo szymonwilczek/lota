@@ -93,15 +93,14 @@ func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikP
 }
 
 // returns appropriate verifier based on signature algorithm
-func SelectVerifier(sigAlg uint16) SignatureVerifier {
+func SelectVerifier(sigAlg uint16) (SignatureVerifier, error) {
 	switch sigAlg {
 	case 0x0014: // TPM_ALG_RSASSA
-		return NewRSASSAVerifier()
+		return NewRSASSAVerifier(), nil
 	case 0x0016: // TPM_ALG_RSAPSS
-		return NewRSAPSSVerifier()
+		return NewRSAPSSVerifier(), nil
 	default:
-		// default to RSASSA for unknown
-		return NewRSASSAVerifier()
+		return nil, fmt.Errorf("unsupported signature algorithm: 0x%04X", sigAlg)
 	}
 }
 
