@@ -427,6 +427,21 @@ static __always_inline int is_standard_module_location(struct dentry *dentry) {
  *
  * For now, it's: simple rolling hash of first 4KB + metadata
  */
+
+/*
+ * 64-bit mixing step: XOR value into accumulator, multiply by a large
+ * odd constant, then shift-mix to propagate bit changes.
+ * Constants chosen from splitmix64 / murmurhash3 finalizer research.
+ */
+static __always_inline u64 fprint_mix(u64 h, u64 val) {
+  h ^= val;
+  h *= 0xbf58476d1ce4e5b9ULL;
+  h ^= h >> 31;
+  h *= 0x94d049bb133111ebULL;
+  h ^= h >> 31;
+  return h;
+}
+
 static __always_inline void compute_partial_hash(struct file *file,
                                                  u8 hash[LOTA_HASH_SIZE]) {
   struct inode *inode;
