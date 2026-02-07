@@ -157,6 +157,10 @@ static int ipc_result_to_error(uint32_t result) {
   case LOTA_IPC_ERR_UNKNOWN_CMD:
   case LOTA_IPC_ERR_BAD_REQUEST:
     return LOTA_ERR_PROTOCOL;
+  case LOTA_IPC_ERR_RATE_LIMITED:
+    return LOTA_ERR_RATE_LIMITED;
+  case LOTA_IPC_ERR_ACCESS_DENIED:
+    return LOTA_ERR_ACCESS_DENIED;
   case LOTA_IPC_ERR_TPM_FAILURE:
   case LOTA_IPC_ERR_INTERNAL:
   default:
@@ -561,6 +565,10 @@ const char *lota_strerror(int error) {
     return "Agent returned error";
   case LOTA_ERR_NO_MEMORY:
     return "Out of memory";
+  case LOTA_ERR_RATE_LIMITED:
+    return "Request rate limited";
+  case LOTA_ERR_ACCESS_DENIED:
+    return "Access denied";
   default:
     return "Unknown error";
   }
