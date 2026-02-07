@@ -415,17 +415,31 @@ static __always_inline int is_standard_module_location(struct dentry *dentry) {
 }
 
 /*
- * Calculate a simple hash of the first N bytes of a file.
+ * Calculate a metadata fingerprint of a file.
  *
- * Due to BPF limitations:
- * - cant read the entire file
- * - cant use crypto APIs
- * - limited loop iterations
+ * This is NOT a cryptographic hash. It is a metadata fingerprint that
+ * captures all available inode attributes that change when a file is
+ * modified. The full SHA-256 content hash is computed in user-space
+ * (by the agent via tpm_hash_file) for critical verification.
  *
- * This is a "fingerprint" for quick comparison, not a secure hash.
- * TODO: The full SHA-256 will be computed in user-space for critical files.
+ * Metadata included in fingerprint:
+ *   - i_ino:        inode number (unique per filesystem)
+ *   - i_size:       file size in bytes
+ *   - i_blocks:     512-byte blocks allocated on disk
+ *   - i_mtime_sec:  content modification time (seconds)
+ *   - i_mtime_nsec: content modification time (nanoseconds)
+ *   - i_ctime_sec:  inode status change time (seconds)
+ *   - i_ctime_nsec: inode status change time (nanoseconds)
+ *   - i_mode:       file type and permissions
+ *   - i_uid/i_gid:  file ownership
+ *   - i_nlink:      hard link count
+ *   - i_generation: filesystem generation counter
+ *   - i_version:    inode version (incremented on any change)
  *
- * For now, it's: simple rolling hash of first 4KB + metadata
+ * Important security note: this fingerprint detects accidental and naive
+ * modifications but is NOT tamper-proof against a privileged attacker who can
+ * control timestamps and metadata. The TPM-backed attestation (PCR values +
+ * signed quote) is the actual trust anchor.
  */
 
 /*
