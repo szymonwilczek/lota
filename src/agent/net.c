@@ -20,7 +20,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-#include "../../include/uapi/lota_report.h"
+#include "../../include/attestation.h"
 
 static int ssl_initialized = 0;
 
