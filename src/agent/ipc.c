@@ -508,11 +508,24 @@ int ipc_init(struct ipc_context *ctx) {
   }
 
   /*
-   * Allow any process to connect.
-   * TODO: systemd socket activation or a dedicated "lota"
-   * group should be used to restrict access to gaming applications.
+   * Restrict socket access to owner (root) and 'lota' group.
+   * Game processes must be members of the 'lota' group to connect.
+   * Falls back to current group if 'lota' group does not exist.
    */
-  chmod(LOTA_IPC_SOCKET_PATH, 0666);
+  chmod(LOTA_IPC_SOCKET_PATH, 0660);
+  {
+    struct group *grp = getgrnam(LOTA_GROUP_NAME);
+    if (grp) {
+      if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
+        fprintf(stderr, "IPC: chown(%s, 0, %d) failed: %s\n",
+                LOTA_IPC_SOCKET_PATH, grp->gr_gid, strerror(errno));
+    } else {
+      fprintf(stderr,
+              "IPC: group '%s' not found, socket accessible to current "
+              "group only\n",
+              LOTA_GROUP_NAME);
+    }
+  }
 
   if (listen(ctx->listen_fd, 16) < 0) {
     ret = -errno;
