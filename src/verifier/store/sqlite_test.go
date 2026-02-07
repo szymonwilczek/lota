@@ -10,6 +10,7 @@ package store
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // helper to create an in-memory SQLite AIK store for testing
@@ -325,4 +326,139 @@ func TestSQLiteAIK_MultipleClients(t *testing.T) {
 	}
 
 	t.Logf("✓ %d independent clients registered and listed", numClients)
+}
+
+func TestSQLiteAIK_GetRegisteredAt(t *testing.T) {
+	t.Log("TEST: SQLite AIK registration timestamp")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key := generateTestKey(t)
+
+	// should fail for unknown client
+	_, err := store.GetRegisteredAt("unknown")
+	if err == nil {
+		t.Error("Expected error for non-existent client")
+	}
+
+	store.RegisterAIK("ts-client", &key.PublicKey)
+
+	regTime, err := store.GetRegisteredAt("ts-client")
+	if err != nil {
+		t.Fatalf("GetRegisteredAt failed: %v", err)
+	}
+
+	if regTime.IsZero() {
+		t.Error("Registration time should not be zero")
+	}
+
+	// should be recent (within last 10 seconds)
+	if time.Since(regTime) > 10*time.Second {
+		t.Errorf("Registration time too old: %v", regTime)
+	}
+
+	t.Log("✓ SQLite created_at timestamp is populated and readable")
+}
+
+func TestSQLiteAIK_RotateAIK(t *testing.T) {
+	t.Log("SECURITY TEST: SQLite AIK key rotation")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+
+	store.RegisterAIK("rotate-client", &key1.PublicKey)
+
+	// different key via RegisterAIK should fail
+	if err := store.RegisterAIK("rotate-client", &key2.PublicKey); err == nil {
+		t.Error("SECURITY: RegisterAIK accepted different key")
+	}
+
+	// RotateAIK should succeed
+	if err := store.RotateAIK("rotate-client", &key2.PublicKey); err != nil {
+		t.Fatalf("RotateAIK failed: %v", err)
+	}
+
+	// should now return new key
+	gotKey, err := store.GetAIK("rotate-client")
+	if err != nil {
+		t.Fatalf("GetAIK after rotation failed: %v", err)
+	}
+	if !publicKeysEqual(gotKey, &key2.PublicKey) {
+		t.Error("Rotated key does not match expected key")
+	}
+
+	t.Log("✓ RotateAIK replaces key while RegisterAIK enforces TOFU")
+}
+
+func TestSQLiteAIK_RotatePreservesHardwareID(t *testing.T) {
+	t.Log("CRITICAL TEST: SQLite AIK rotation preserves hardware ID binding")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+	hwid := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
+
+	store.RegisterAIK("hw-rotate", &key1.PublicKey)
+	store.RegisterHardwareID("hw-rotate", hwid)
+
+	// rotate key
+	store.RotateAIK("hw-rotate", &key2.PublicKey)
+
+	// hardware ID must still be intact
+	gotHWID, err := store.GetHardwareID("hw-rotate")
+	if err != nil {
+		t.Fatalf("GetHardwareID after rotation failed: %v", err)
+	}
+	if gotHWID != hwid {
+		t.Error("Hardware ID lost after AIK rotation - security binding broken!")
+	}
+
+	t.Log("✓ Hardware ID preserved across AIK rotation")
+}
+
+func TestSQLiteAIK_RotateUpdatesTimestamp(t *testing.T) {
+	t.Log("TEST: SQLite AIK rotation updates created_at timestamp")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+
+	store.RegisterAIK("ts-rotate", &key1.PublicKey)
+	regTime1, _ := store.GetRegisteredAt("ts-rotate")
+
+	// SQLite CURRENT_TIMESTAMP has second-level precision
+	// previosuly, i have tried to test for 50ms and this failed
+	time.Sleep(1100 * time.Millisecond)
+
+	store.RotateAIK("ts-rotate", &key2.PublicKey)
+	regTime2, _ := store.GetRegisteredAt("ts-rotate")
+
+	if !regTime2.After(regTime1) {
+		t.Errorf("Rotation should update timestamp: before=%v, after=%v", regTime1, regTime2)
+	}
+
+	t.Log("✓ Rotation resets registration timestamp")
+}
+
+func TestSQLiteAIK_RotateNonexistent(t *testing.T) {
+	t.Log("TEST: SQLite AIK rotation of non-existent client fails")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key := generateTestKey(t)
+
+	if err := store.RotateAIK("nonexistent", &key.PublicKey); err == nil {
+		t.Error("RotateAIK should fail for non-existent client")
+	}
+
+	t.Log("✓ RotateAIK correctly rejects non-existent client")
 }
