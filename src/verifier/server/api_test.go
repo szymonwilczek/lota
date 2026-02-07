@@ -41,7 +41,14 @@ func init() {
 }
 
 // creates a test verifier and HTTP mux for API testing
+// uses a test admin API key so that mutating endpoints are accessible
 func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
+	t.Helper()
+	return setupTestAPIWithKey(t, "test-admin-key")
+}
+
+// creates a test setup with a specific admin API key
+func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
@@ -61,13 +68,19 @@ func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey)
 
 	return mux, v
 }
 
 // creates a test setup where the TLS listener appears active
 func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
+	t.Helper()
+	return setupTestAPIListeningWithKey(t, "test-admin-key")
+}
+
+// creates a test setup with listener and specific admin API key
+func setupTestAPIListeningWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
@@ -93,7 +106,7 @@ func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey)
 
 	return mux, v
 }

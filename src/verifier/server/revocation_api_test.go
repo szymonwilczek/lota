@@ -17,14 +17,27 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
+const testAdminKey = "test-admin-key"
+
+// creates a POST/DELETE request with admin auth header
+func adminRequest(method, path string, body string) *http.Request {
+	var req *http.Request
+	if body != "" {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	req.Header.Set("Authorization", "Bearer "+testAdminKey)
+	return req
+}
+
 func TestAPI_RevokeClient(t *testing.T) {
 	t.Log("TEST: POST /api/v1/clients/{id}/revoke")
 
 	mux, _ := setupTestAPIListening(t)
 
 	body := `{"reason":"cheating","actor":"admin@test","note":"caught using aimbot"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/test-client/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/test-client/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -50,8 +63,7 @@ func TestAPI_RevokeAlreadyRevoked(t *testing.T) {
 	body := `{"reason":"cheating","actor":"admin"}`
 
 	// first revocation
-	req := httptest.NewRequest("POST", "/api/v1/clients/dup-client/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/dup-client/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -59,8 +71,7 @@ func TestAPI_RevokeAlreadyRevoked(t *testing.T) {
 	}
 
 	// second revocation - should conflict
-	req = httptest.NewRequest("POST", "/api/v1/clients/dup-client/revoke",
-		strings.NewReader(body))
+	req = adminRequest("POST", "/api/v1/clients/dup-client/revoke", body)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -74,8 +85,7 @@ func TestAPI_RevokeInvalidReason(t *testing.T) {
 	mux, _ := setupTestAPIListening(t)
 
 	body := `{"reason":"hacking","actor":"admin"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/bad-reason/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/bad-reason/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -90,8 +100,7 @@ func TestAPI_RevokeMissingActor(t *testing.T) {
 	mux, _ := setupTestAPIListening(t)
 
 	body := `{"reason":"cheating"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/no-actor/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/no-actor/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -107,8 +116,7 @@ func TestAPI_UnrevokeClient(t *testing.T) {
 
 	// first revoke
 	body := `{"reason":"admin","actor":"admin"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/unrevoke-target/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/unrevoke-target/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -116,7 +124,7 @@ func TestAPI_UnrevokeClient(t *testing.T) {
 	}
 
 	// then unrevoke
-	req = httptest.NewRequest("DELETE", "/api/v1/clients/unrevoke-target/revoke", nil)
+	req = adminRequest("DELETE", "/api/v1/clients/unrevoke-target/revoke", "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -136,7 +144,7 @@ func TestAPI_UnrevokeNotRevoked(t *testing.T) {
 
 	mux, _ := setupTestAPIListening(t)
 
-	req := httptest.NewRequest("DELETE", "/api/v1/clients/never-revoked/revoke", nil)
+	req := adminRequest("DELETE", "/api/v1/clients/never-revoked/revoke", "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -153,8 +161,7 @@ func TestAPI_ListRevocations(t *testing.T) {
 	// revoke two clients
 	for _, id := range []string{"rev-1", "rev-2"} {
 		body := fmt.Sprintf(`{"reason":"cheating","actor":"admin","note":"test %s"}`, id)
-		req := httptest.NewRequest("POST", "/api/v1/clients/"+id+"/revoke",
-			strings.NewReader(body))
+		req := adminRequest("POST", "/api/v1/clients/"+id+"/revoke", body)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -189,7 +196,7 @@ func TestAPI_BanHardware(t *testing.T) {
 
 	hwidHex := "deadbeef0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c"
 	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin","note":"banned hardware"}`, hwidHex)
-	req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/bans", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -213,7 +220,7 @@ func TestAPI_BanAlreadyBanned(t *testing.T) {
 	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin"}`, hwidHex)
 
 	// first ban
-	req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/bans", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -221,7 +228,7 @@ func TestAPI_BanAlreadyBanned(t *testing.T) {
 	}
 
 	// duplicate ban
-	req = httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+	req = adminRequest("POST", "/api/v1/bans", body)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -245,7 +252,7 @@ func TestAPI_BanInvalidHardwareID(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin"}`, tc.hwid)
-			req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+			req := adminRequest("POST", "/api/v1/bans", body)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
@@ -265,7 +272,7 @@ func TestAPI_UnbanHardware(t *testing.T) {
 	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"admin","actor":"admin"}`, hwidHex)
 
 	// ban first
-	req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/bans", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -273,7 +280,7 @@ func TestAPI_UnbanHardware(t *testing.T) {
 	}
 
 	// unban
-	req = httptest.NewRequest("DELETE", "/api/v1/bans/"+hwidHex, nil)
+	req = adminRequest("DELETE", "/api/v1/bans/"+hwidHex, "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -288,7 +295,7 @@ func TestAPI_UnbanNotBanned(t *testing.T) {
 	mux, _ := setupTestAPIListening(t)
 
 	hwidHex := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	req := httptest.NewRequest("DELETE", "/api/v1/bans/"+hwidHex, nil)
+	req := adminRequest("DELETE", "/api/v1/bans/"+hwidHex, "")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -309,7 +316,7 @@ func TestAPI_ListBans(t *testing.T) {
 
 	for _, hwid := range hwids {
 		body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin"}`, hwid)
-		req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+		req := adminRequest("POST", "/api/v1/bans", body)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -343,8 +350,7 @@ func TestAPI_AuditLog(t *testing.T) {
 
 	// generate some audit entries via revoke/ban actions
 	body := `{"reason":"cheating","actor":"audit-test-admin","note":"audit test"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/audit-client/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/audit-client/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -392,8 +398,7 @@ func TestAPI_StatsIncludeRevocationCounters(t *testing.T) {
 
 	// revoke a client
 	body := `{"reason":"cheating","actor":"admin"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/stats-revoked/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/stats-revoked/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -426,8 +431,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 
 	// revoke via API
 	body := `{"reason":"cheating","actor":"game-server"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/"+clientID+"/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/"+clientID+"/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -481,8 +485,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 
 	// revoke
 	body := `{"reason":"admin","actor":"admin"}`
-	req := httptest.NewRequest("POST", "/api/v1/clients/"+clientID+"/revoke",
-		strings.NewReader(body))
+	req := adminRequest("POST", "/api/v1/clients/"+clientID+"/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -493,7 +496,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 	}
 
 	// unrevoke
-	req = httptest.NewRequest("DELETE", "/api/v1/clients/"+clientID+"/revoke", nil)
+	req = adminRequest("DELETE", "/api/v1/clients/"+clientID+"/revoke", "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -537,7 +540,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 
 	// ban that hardware ID
 	body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"game-server"}`, info.HardwareID)
-	req = httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
+	req = adminRequest("POST", "/api/v1/bans", body)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -588,4 +591,175 @@ func TestIntegrationAPI_PrometheusRevocationMetrics(t *testing.T) {
 	}
 
 	t.Log("✓ All revocation/ban Prometheus metrics present")
+}
+
+func TestAuth_MissingTokenReturns401(t *testing.T) {
+	t.Log("SECURITY TEST: Mutating endpoint without Authorization header returns 401")
+
+	mux, _ := setupTestAPIListening(t)
+
+	endpoints := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{"POST", "/api/v1/clients/victim/revoke", `{"reason":"cheating","actor":"attacker"}`},
+		{"DELETE", "/api/v1/clients/victim/revoke", ""},
+		{"POST", "/api/v1/bans", `{"hardware_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"cheating","actor":"attacker"}`},
+		{"DELETE", "/api/v1/bans/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			var req *http.Request
+			if ep.body != "" {
+				req = httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+			} else {
+				req = httptest.NewRequest(ep.method, ep.path, nil)
+			}
+			// NO Authorization header
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("Expected 401 Unauthorized, got %d", rec.Code)
+			}
+
+			// must include WWW-Authenticate header per RFC 7235
+			wwwAuth := rec.Header().Get("WWW-Authenticate")
+			if wwwAuth == "" {
+				t.Error("Missing WWW-Authenticate header in 401 response")
+			}
+
+			var resp errorResponse
+			json.NewDecoder(rec.Body).Decode(&resp)
+			if resp.Error != "missing Authorization header" {
+				t.Errorf("Unexpected error message: %q", resp.Error)
+			}
+		})
+	}
+
+	t.Log("✓ All mutating endpoints reject requests without token")
+}
+
+func TestAuth_WrongTokenReturns403(t *testing.T) {
+	t.Log("SECURITY TEST: Wrong API key returns 403 Forbidden")
+
+	mux, _ := setupTestAPIListening(t)
+
+	body := `{"reason":"cheating","actor":"attacker"}`
+	req := httptest.NewRequest("POST", "/api/v1/clients/victim/revoke",
+		strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer wrong-key-attempt")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403, got %d", rec.Code)
+	}
+
+	var resp errorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "invalid API key" {
+		t.Errorf("Unexpected error message: %q", resp.Error)
+	}
+
+	t.Log("✓ Wrong API key correctly rejected")
+}
+
+func TestAuth_NoKeyConfiguredReturns403(t *testing.T) {
+	t.Log("SECURITY TEST: Admin endpoints disabled when no key is configured")
+
+	mux, _ := setupTestAPIListeningWithKey(t, "") // no key configured
+
+	body := `{"reason":"cheating","actor":"admin"}`
+	req := httptest.NewRequest("POST", "/api/v1/clients/victim/revoke",
+		strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer anything")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403, got %d", rec.Code)
+	}
+
+	var resp errorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "admin API key not configured" {
+		t.Errorf("Unexpected error message: %q", resp.Error)
+	}
+
+	t.Log("✓ Admin endpoints correctly disabled without key")
+}
+
+func TestAuth_ReadOnlyEndpointsNoAuthRequired(t *testing.T) {
+	t.Log("TEST: Read-only endpoints work without any authentication")
+
+	mux, _ := setupTestAPIListeningWithKey(t, "secret-key")
+
+	readOnlyEndpoints := []string{
+		"/health",
+		"/api/v1/stats",
+		"/api/v1/clients",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/metrics",
+	}
+
+	for _, ep := range readOnlyEndpoints {
+		t.Run("GET "+ep, func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			// NO Authorization header
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Read-only endpoint %s should not require auth, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ All read-only endpoints accessible without auth")
+}
+
+func TestAuth_ValidTokenAllowsMutation(t *testing.T) {
+	t.Log("TEST: Valid Bearer token allows mutating operations")
+
+	mux, _ := setupTestAPIListeningWithKey(t, "my-secret-admin-key")
+
+	body := `{"reason":"admin","actor":"admin"}`
+	req := httptest.NewRequest("POST", "/api/v1/clients/test-client/revoke",
+		strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer my-secret-admin-key")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	t.Log("✓ Valid token grants access to admin endpoints")
+}
+
+func TestAuth_BearerPrefixCaseInsensitive(t *testing.T) {
+	t.Log("TEST: Bearer prefix is case-insensitive per RFC 7235")
+
+	mux, _ := setupTestAPIListeningWithKey(t, "case-test-key")
+
+	prefixes := []string{"Bearer ", "bearer ", "BEARER "}
+	for _, prefix := range prefixes {
+		t.Run(prefix, func(t *testing.T) {
+			body := `{"reason":"admin","actor":"admin"}`
+			req := httptest.NewRequest("POST", "/api/v1/clients/test-client/revoke",
+				strings.NewReader(body))
+			req.Header.Set("Authorization", prefix+"case-test-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Bearer prefix %q should be accepted, got %d", prefix, rec.Code)
+			}
+		})
+	}
 }
