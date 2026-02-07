@@ -162,11 +162,14 @@ struct lota_challenge {
  * Verifier response
  */
 #define LOTA_VERIFY_OK 0
-#define LOTA_VERIFY_NONCE_FAIL 1  /* Nonce mismatch (replay?) */
-#define LOTA_VERIFY_SIG_FAIL 2    /* Quote signature invalid */
-#define LOTA_VERIFY_PCR_FAIL 3    /* PCR values dont match baseline */
-#define LOTA_VERIFY_IOMMU_FAIL 4  /* IOMMU not properly enabled */
-#define LOTA_VERIFY_OLD_VERSION 5 /* Agent version too old */
+#define LOTA_VERIFY_NONCE_FAIL 1         /* Nonce mismatch (replay?) */
+#define LOTA_VERIFY_SIG_FAIL 2           /* Quote signature invalid */
+#define LOTA_VERIFY_PCR_FAIL 3           /* PCR values dont match baseline */
+#define LOTA_VERIFY_IOMMU_FAIL 4         /* IOMMU not properly enabled */
+#define LOTA_VERIFY_OLD_VERSION 5        /* Agent version too old */
+#define LOTA_VERIFY_INTEGRITY_MISMATCH 6 /* PCR14 changed from baseline */
+#define LOTA_VERIFY_REVOKED 7            /* AIK revoked by administrator */
+#define LOTA_VERIFY_BANNED 8             /* Hardware ID banned */
 
 struct lota_verify_result {
   uint32_t magic;            /* LOTA_REPORT_MAGIC */
