@@ -260,6 +260,81 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	}
 }
 
+func TestVerifyToken_StaleToken(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0xAA}
+	// issued 1 hour ago, still valid (valid_until in future)
+	issuedAt := uint64(time.Now().Add(-1 * time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(1 * time.Hour).Unix())
+
+	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0, nil)
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if !claims.TooOld {
+		t.Errorf("expected TooOld=true (age=%d)", claims.AgeSeconds)
+	}
+	if claims.Expired {
+		t.Error("should not be expired (valid_until is future)")
+	}
+	if claims.AgeSeconds < 3500 {
+		t.Errorf("AgeSeconds=%d, expected ~3600", claims.AgeSeconds)
+	}
+}
+
+func TestVerifyToken_FutureToken(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0xBB}
+	// issued 10 minutes in the future
+	issuedAt := uint64(time.Now().Add(10 * time.Minute).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Hour).Unix())
+
+	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if !claims.IssuedInFuture {
+		t.Errorf("expected IssuedInFuture=true (age=%d)", claims.AgeSeconds)
+	}
+	if claims.AgeSeconds >= 0 {
+		t.Errorf("AgeSeconds=%d, expected negative", claims.AgeSeconds)
+	}
+}
+
+func TestVerifyToken_FreshToken(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0xCC}
+	// issued just now
+	issuedAt := uint64(time.Now().Unix())
+	validUntil := uint64(time.Now().Add(1 * time.Hour).Unix())
+
+	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0x4001, nil)
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	if err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if claims.TooOld {
+		t.Errorf("fresh token should not be TooOld (age=%d)", claims.AgeSeconds)
+	}
+	if claims.IssuedInFuture {
+		t.Errorf("fresh token should not be IssuedInFuture (age=%d)", claims.AgeSeconds)
+	}
+	if claims.Expired {
+		t.Error("fresh token should not be Expired")
+	}
+	if claims.AgeSeconds < 0 || claims.AgeSeconds > 5 {
+		t.Errorf("AgeSeconds=%d, expected ~0", claims.AgeSeconds)
+	}
+}
+
 func TestVerifyToken_NilAIK(t *testing.T) {
 	_, err := VerifyToken([]byte("whatever"), nil, nil)
 	if err != ErrInvalidArg {
