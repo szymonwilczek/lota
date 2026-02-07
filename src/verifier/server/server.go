@@ -15,12 +15,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/szymonwilczek/lota/verifier/logging"
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 	"github.com/szymonwilczek/lota/verifier/verify"
@@ -38,6 +40,13 @@ type Server struct {
 	// http monitoring api
 	httpServer *http.Server
 	httpAddr   string
+
+	// structured logging and telemetry
+	log     *slog.Logger
+	metrics *metrics.Metrics
+
+	// optional: attestation decision log
+	attestationLog store.AttestationLog
 
 	// timeouts
 	readTimeout  time.Duration
@@ -57,6 +66,15 @@ type ServerConfig struct {
 
 	// optional: audit log for revocation/ban API
 	AuditLog store.AuditLog
+
+	// optional: structured logger (nil = nop)
+	Logger *slog.Logger
+
+	// optional: shared metrics registry (nil = fresh)
+	Metrics *metrics.Metrics
+
+	// optional: attestation decision log for HTTP API
+	AttestationLog store.AttestationLog
 
 	// timeouts
 	ReadTimeout  time.Duration
@@ -84,15 +102,28 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		MinVersion:   tls.VersionTLS13,
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = logging.Nop()
+	}
+
+	m := cfg.Metrics
+	if m == nil {
+		m = metrics.New()
+	}
+
 	return &Server{
-		verifier:     verifier,
-		auditLog:     cfg.AuditLog,
-		tlsConfig:    tlsConfig,
-		addr:         cfg.Address,
-		httpAddr:     cfg.HTTPAddress,
-		shutdownCh:   make(chan struct{}),
-		readTimeout:  cfg.ReadTimeout,
-		writeTimeout: cfg.WriteTimeout,
+		verifier:       verifier,
+		auditLog:       cfg.AuditLog,
+		tlsConfig:      tlsConfig,
+		addr:           cfg.Address,
+		httpAddr:       cfg.HTTPAddress,
+		log:            logger,
+		metrics:        m,
+		attestationLog: cfg.AttestationLog,
+		shutdownCh:     make(chan struct{}),
+		readTimeout:    cfg.ReadTimeout,
+		writeTimeout:   cfg.WriteTimeout,
 	}, nil
 }
 
@@ -103,7 +134,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = listener
-	log.Printf("LOTA Verifier listening on %s", s.addr)
+	s.log.Info("LOTA Verifier listening", "addr", s.addr)
 
 	go s.acceptLoop()
 
@@ -119,7 +150,7 @@ func (s *Server) Start() error {
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, s.verifier, s, s.auditLog)
+	NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog)
 
 	s.httpServer = &http.Server{
 		Addr:         s.httpAddr,
@@ -134,23 +165,27 @@ func (s *Server) startHTTP() error {
 		return fmt.Errorf("failed to listen on %s: %w", s.httpAddr, err)
 	}
 
-	log.Printf("LOTA Monitoring API listening on http://%s", s.httpAddr)
-	log.Printf("  GET /health              - Health check")
-	log.Printf("  GET /api/v1/stats        - Verification statistics")
-	log.Printf("  GET /api/v1/clients      - List clients")
-	log.Printf("  GET /api/v1/clients/{id} - Client details")
-	log.Printf("  POST   /api/v1/clients/{id}/revoke - Revoke client AIK")
-	log.Printf("  DELETE /api/v1/clients/{id}/revoke - Unrevoke client")
-	log.Printf("  GET /api/v1/revocations  - List revocations")
-	log.Printf("  POST   /api/v1/bans      - Ban hardware ID")
-	log.Printf("  DELETE /api/v1/bans/{id} - Unban hardware ID")
-	log.Printf("  GET /api/v1/bans         - List hardware bans")
-	log.Printf("  GET /api/v1/audit        - Audit log")
-	log.Printf("  GET /metrics             - Prometheus metrics")
+	s.log.Info("LOTA Monitoring API listening",
+		"addr", s.httpAddr,
+		"endpoints", []string{
+			"GET /health",
+			"GET /api/v1/stats",
+			"GET /api/v1/clients",
+			"GET /api/v1/clients/{id}",
+			"POST /api/v1/clients/{id}/revoke",
+			"DELETE /api/v1/clients/{id}/revoke",
+			"GET /api/v1/revocations",
+			"POST /api/v1/bans",
+			"DELETE /api/v1/bans/{id}",
+			"GET /api/v1/bans",
+			"GET /api/v1/audit",
+			"GET /api/v1/attestations",
+			"GET /metrics",
+		})
 
 	go func() {
 		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
+			s.log.Error("HTTP server error", "error", err)
 		}
 	}()
 
@@ -179,7 +214,8 @@ func (s *Server) acceptLoop() {
 			case <-s.shutdownCh:
 				return
 			default:
-				log.Printf("Accept error: %v", err)
+				s.log.Error("accept error", "error", err)
+				s.metrics.ConnectionErrors.Inc()
 				continue
 			}
 		}
@@ -194,7 +230,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	clientAddr := conn.RemoteAddr().String()
-	log.Printf("[%s] New connection", clientAddr)
+	clog := s.log.With("remote_addr", clientAddr)
 
 	// IP without port ensures same client gets same baseline across connections
 	clientIP, _, err := net.SplitHostPort(clientAddr)
@@ -205,18 +241,20 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	challenge, err := s.verifier.GenerateChallenge(clientID)
 	if err != nil {
-		log.Printf("[%s] Failed to generate challenge: %v", clientAddr, err)
+		clog.Error("failed to generate challenge", "error", err)
+		s.metrics.ConnectionErrors.Inc()
 		return
 	}
 
 	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 	challengeData := challenge.Serialize()
 	if _, err := conn.Write(challengeData); err != nil {
-		log.Printf("[%s] Failed to send challenge: %v", clientAddr, err)
+		clog.Error("failed to send challenge", "error", err)
+		s.metrics.ConnectionErrors.Inc()
 		return
 	}
 
-	log.Printf("[%s] Challenge sent", clientAddr)
+	clog.Debug("challenge sent")
 
 	// read attestation report
 	conn.SetReadDeadline(time.Now().Add(s.readTimeout))
@@ -224,14 +262,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// read header to get total size
 	headerBuf := make([]byte, 32)
 	if _, err := io.ReadFull(conn, headerBuf); err != nil {
-		log.Printf("[%s] Failed to read report header: %v", clientAddr, err)
+		clog.Error("failed to read report header", "error", err)
+		s.metrics.ConnectionErrors.Inc()
 		return
 	}
 
 	// validate magic
 	magic := binary.LittleEndian.Uint32(headerBuf[0:4])
 	if magic != types.ReportMagic {
-		log.Printf("[%s] Invalid report magic: 0x%08X", clientAddr, magic)
+		clog.Warn("invalid report magic", "magic", fmt.Sprintf("0x%08X", magic))
+		s.metrics.ConnectionErrors.Inc()
 		s.sendResult(conn, types.VerifyOldVersion)
 		return
 	}
@@ -239,7 +279,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// get total size
 	totalSize := binary.LittleEndian.Uint32(headerBuf[24:28])
 	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
-		log.Printf("[%s] Invalid report size: %d", clientAddr, totalSize)
+		clog.Warn("invalid report size", "size", totalSize)
+		s.metrics.ConnectionErrors.Inc()
 		s.sendResult(conn, types.VerifyOldVersion)
 		return
 	}
@@ -250,23 +291,24 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	if totalSize > 32 {
 		if _, err := io.ReadFull(conn, reportData[32:]); err != nil {
-			log.Printf("[%s] Failed to read report body: %v", clientAddr, err)
+			clog.Error("failed to read report body", "error", err)
+			s.metrics.ConnectionErrors.Inc()
 			return
 		}
 	}
 
-	log.Printf("[%s] Report received (%d bytes)", clientAddr, totalSize)
+	clog.Debug("report received", "size", totalSize)
 
 	result, err := s.verifier.VerifyReport(clientID, reportData)
 	if err != nil {
-		log.Printf("[%s] Verification failed: %v", clientAddr, err)
+		clog.Warn("verification failed", "error", err)
 	}
 
 	s.sendResult(conn, result.Result)
 
 	if result.Result == types.VerifyOK {
-		log.Printf("[%s] Attestation successful, token valid until %s",
-			clientAddr, time.Unix(int64(result.ValidUntil), 0))
+		clog.Info("attestation successful",
+			"valid_until", time.Unix(int64(result.ValidUntil), 0).UTC())
 	}
 }
 
