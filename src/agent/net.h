@@ -23,6 +23,7 @@ struct net_context {
   int connected;
   char server_addr[256];
   int server_port;
+  int skip_verify;
 };
 
 /*
@@ -76,12 +77,19 @@ void net_cleanup(void);
  * @ctx: Context to initialize
  * @server: Server hostname or IP
  * @port: Server port
- * @ca_cert_path: Path to CA certificate for verification (NULL to skip)
+ * @ca_cert_path: Path to CA certificate for verification (NULL for system CAs)
+ * @skip_verify: If nonzero, disable TLS certificate verification (INSECURE)
+ *
+ * By default (ca_cert_path=NULL, skip_verify=0), the system CA certificate
+ * store is used to verify the verifier's certificate. Provide ca_cert_path
+ * to use a custom CA (for example: self-signed verifier cert).
+ * Set skip_verify=1 only for development/testing - this disables all TLS
+ * security.
  *
  * Returns: 0 on success, negative errno on failure
  */
 int net_context_init(struct net_context *ctx, const char *server, int port,
-                     const char *ca_cert_path);
+                     const char *ca_cert_path, int skip_verify);
 
 /*
  * Cleanup network context.
