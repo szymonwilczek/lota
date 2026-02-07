@@ -287,7 +287,7 @@ int net_recv_challenge(struct net_context *ctx,
   memcpy(&challenge->pcr_mask, buf + 40, 4);
   memcpy(&challenge->flags, buf + 44, 4);
 
-  if (challenge->magic != LOTA_REPORT_MAGIC) {
+  if (challenge->magic != LOTA_MAGIC) {
     return -EPROTO;
   }
 
@@ -338,7 +338,7 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
   memcpy(&result->valid_until, buf + 16, 8);
   memcpy(result->session_token, buf + 24, 32);
 
-  if (result->magic != LOTA_REPORT_MAGIC) {
+  if (result->magic != LOTA_MAGIC) {
     return -EPROTO;
   }
 
