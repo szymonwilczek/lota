@@ -1,0 +1,454 @@
+// SPDX-License-Identifier: MIT
+//
+// LOTA Server-Side Token Verification SDK (Go)
+//
+// Provides game servers with the ability to verify attestation tokens
+// received from game clients running the LOTA Gaming SDK.
+//
+// Usage:
+//
+//	claims, err := server.VerifyToken(tokenBytes, aikPub, nil)
+//	if err != nil {
+//	    log.Printf("attestation failed: %v", err)
+//	    rejectClient()
+//	    return
+//	}
+//	if claims.Expired {
+//	    log.Printf("token expired, requesting re-attestation")
+//	    requestNewToken()
+//	    return
+//	}
+//	allowClient()
+
+package server
+
+import (
+	"bytes"
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// Token wire format constants
+const (
+	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
+	TokenVersion    uint16 = 0x0001
+	TokenHeaderSize        = 72
+	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1608 bytes
+
+	MaxAttestSize = 1024
+	MaxSigSize    = 512
+)
+
+// TPM algorithm identifiers
+const (
+	TPMAlgRSASSA uint16 = 0x0014
+	TPMAlgRSAPSS uint16 = 0x0016
+)
+
+// TPM constants for TPMS_ATTEST parsing
+const (
+	tpmGeneratedValue uint32 = 0xff544347
+	tpmSTAttestQuote  uint16 = 0x8018
+)
+
+// Errors returned by verification functions
+var (
+	ErrInvalidArg   = errors.New("lota: invalid argument")
+	ErrBadToken     = errors.New("lota: malformed token")
+	ErrBadVersion   = errors.New("lota: unsupported token version")
+	ErrSigFail      = errors.New("lota: signature verification failed")
+	ErrNonceFail    = errors.New("lota: nonce mismatch")
+	ErrExpired      = errors.New("lota: token expired")
+	ErrAttestParse  = errors.New("lota: failed to parse TPMS_ATTEST")
+	ErrNotQuote     = errors.New("lota: TPMS_ATTEST is not a quote")
+	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
+	ErrNoSignature  = errors.New("lota: token contains no signature")
+	ErrNoAttestData = errors.New("lota: token contains no attestation data")
+)
+
+// represents the verified claims extracted from a LOTA attestation token
+// after successful VerifyToken(), all fields are cryptographically validated
+type Claims struct {
+	// when the token was issued by the LOTA agent
+	IssuedAt time.Time
+
+	// when the token expires
+	ExpiresAt time.Time
+
+	// contains the LOTA_FLAG_* bitmask at issue time
+	Flags uint32
+
+	// 32-byte client nonce included in the token
+	Nonce [32]byte
+
+	// indicates which TPM PCRs were included in the quote
+	PCRMask uint32
+
+	// composite hash of the selected PCR values
+	// from the TPMS_ATTEST QuoteInfo (empty if not a Quote)
+	PCRDigest []byte
+
+	// TPM signature algorithm used (0x0014=RSASSA, 0x0016=PSS)
+	SigAlg uint16
+
+	// TPM hash algorithm used (0x000B=SHA-256)
+	HashAlg uint16
+
+	// true if the token has passed its ExpiresAt time
+	Expired bool
+}
+
+// represents the parsed wire-format header
+type tokenWire struct {
+	magic      uint32
+	version    uint16
+	totalSize  uint16
+	issuedAt   uint64
+	validUntil uint64
+	flags      uint32
+	nonce      [32]byte
+	sigAlg     uint16
+	hashAlg    uint16
+	pcrMask    uint32
+	attestSize uint16
+	sigSize    uint16
+}
+
+// Verifies a serialized LOTA token against an AIK public key
+//
+// Parameters:
+//   - tokenData: serialized token bytes (from lota_token_serialize on client)
+//   - aikPub: AIK RSA public key (from trusted source, NOT from client)
+//   - expectedNonce: optional 32-byte nonce to verify (nil = skip nonce check)
+//
+// Returns verified Claims on success. Returns error if cryptographic
+// verification fails.
+// Note: expired tokens return Claims with Expired=true (not an error) - the caller decides the policy.
+func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) (*Claims, error) {
+	if aikPub == nil {
+		return nil, ErrInvalidArg
+	}
+
+	// parse wire format
+	hdr, err := parseWireHeader(tokenData)
+	if err != nil {
+		return nil, err
+	}
+
+	if hdr.attestSize == 0 {
+		return nil, ErrNoAttestData
+	}
+	if hdr.sigSize == 0 {
+		return nil, ErrNoSignature
+	}
+
+	attestData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.attestSize)]
+	signature := tokenData[TokenHeaderSize+int(hdr.attestSize) : TokenHeaderSize+int(hdr.attestSize)+int(hdr.sigSize)]
+
+	// verify RSA signature over attest_data
+	if err := verifyRSASignature(attestData, signature, hdr.sigAlg, aikPub); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSigFail, err)
+	}
+
+	// parse TPMS_ATTEST - extract extraData and PCR digest
+	extraData, pcrDigest, err := parseTPMSAttest(attestData)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
+	}
+
+	// verify nonce binding: extraData == SHA256(issued_at||valid_until||flags||nonce)
+	computedNonce := computeExpectedNonce(hdr.issuedAt, hdr.validUntil, hdr.flags, hdr.nonce)
+	if !bytes.Equal(extraData, computedNonce[:]) {
+		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
+	}
+
+	// verify client nonce if expected
+	if expectedNonce != nil {
+		if len(expectedNonce) != 32 || !bytes.Equal(hdr.nonce[:], expectedNonce) {
+			return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
+		}
+	}
+
+	claims := &Claims{
+		IssuedAt:  time.Unix(int64(hdr.issuedAt), 0),
+		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
+		Flags:     hdr.flags,
+		Nonce:     hdr.nonce,
+		PCRMask:   hdr.pcrMask,
+		PCRDigest: pcrDigest,
+		SigAlg:    hdr.sigAlg,
+		HashAlg:   hdr.hashAlg,
+	}
+
+	// check expiry
+	if hdr.validUntil > 0 && time.Now().Unix() > int64(hdr.validUntil) {
+		claims.Expired = true
+	}
+
+	return claims, nil
+}
+
+// parses a serialized LOTA token WITHOUT cryptographic verification
+// Claims are UNTRUSTED.
+func ParseToken(tokenData []byte) (*Claims, error) {
+	hdr, err := parseWireHeader(tokenData)
+	if err != nil {
+		return nil, err
+	}
+
+	claims := &Claims{
+		IssuedAt:  time.Unix(int64(hdr.issuedAt), 0),
+		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
+		Flags:     hdr.flags,
+		Nonce:     hdr.nonce,
+		PCRMask:   hdr.pcrMask,
+		SigAlg:    hdr.sigAlg,
+		HashAlg:   hdr.hashAlg,
+	}
+
+	// try to extract PCR digest from TPMS_ATTEST (best-effort)
+	if hdr.attestSize > 0 {
+		attestData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.attestSize)]
+		_, pcrDigest, err := parseTPMSAttest(attestData)
+		if err == nil {
+			claims.PCRDigest = pcrDigest
+		}
+	}
+
+	if hdr.validUntil > 0 && time.Now().Unix() > int64(hdr.validUntil) {
+		claims.Expired = true
+	}
+
+	return claims, nil
+}
+
+// creates the wire-format representation of a token
+// This is the Go equivalent of lota_token_serialize() from the C gaming SDK.
+// For more information see: include/lota_gaming.h
+func SerializeToken(issuedAt, validUntil uint64, flags uint32, nonce [32]byte,
+	sigAlg, hashAlg uint16, pcrMask uint32,
+	attestData, signature []byte,
+) ([]byte, error) {
+	if len(attestData) > MaxAttestSize {
+		return nil, fmt.Errorf("attest_data too large: %d > %d", len(attestData), MaxAttestSize)
+	}
+	if len(signature) > MaxSigSize {
+		return nil, fmt.Errorf("signature too large: %d > %d", len(signature), MaxSigSize)
+	}
+
+	totalSize := TokenHeaderSize + len(attestData) + len(signature)
+	buf := make([]byte, totalSize)
+
+	// header
+	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
+	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize))
+	binary.LittleEndian.PutUint64(buf[8:16], issuedAt)
+	binary.LittleEndian.PutUint64(buf[16:24], validUntil)
+	binary.LittleEndian.PutUint32(buf[24:28], flags)
+	copy(buf[28:60], nonce[:])
+	binary.LittleEndian.PutUint16(buf[60:62], sigAlg)
+	binary.LittleEndian.PutUint16(buf[62:64], hashAlg)
+	binary.LittleEndian.PutUint32(buf[64:68], pcrMask)
+	binary.LittleEndian.PutUint16(buf[68:70], uint16(len(attestData)))
+	binary.LittleEndian.PutUint16(buf[70:72], uint16(len(signature)))
+
+	// variable data
+	copy(buf[TokenHeaderSize:], attestData)
+	copy(buf[TokenHeaderSize+len(attestData):], signature)
+
+	return buf, nil
+}
+
+// parses the 72-byte token header
+func parseWireHeader(data []byte) (*tokenWire, error) {
+	if len(data) < TokenHeaderSize {
+		return nil, fmt.Errorf("%w: too short (%d bytes, need %d)", ErrBadToken, len(data), TokenHeaderSize)
+	}
+
+	hdr := &tokenWire{}
+	hdr.magic = binary.LittleEndian.Uint32(data[0:4])
+	if hdr.magic != TokenMagic {
+		return nil, fmt.Errorf("%w: bad magic 0x%08X (expected 0x%08X)", ErrBadToken, hdr.magic, TokenMagic)
+	}
+
+	hdr.version = binary.LittleEndian.Uint16(data[4:6])
+	if hdr.version != TokenVersion {
+		return nil, fmt.Errorf("%w: version %d (expected %d)", ErrBadVersion, hdr.version, TokenVersion)
+	}
+
+	hdr.totalSize = binary.LittleEndian.Uint16(data[6:8])
+	if int(hdr.totalSize) > len(data) || hdr.totalSize < TokenHeaderSize {
+		return nil, fmt.Errorf("%w: total_size %d invalid (have %d bytes)", ErrBadToken, hdr.totalSize, len(data))
+	}
+
+	hdr.issuedAt = binary.LittleEndian.Uint64(data[8:16])
+	hdr.validUntil = binary.LittleEndian.Uint64(data[16:24])
+	hdr.flags = binary.LittleEndian.Uint32(data[24:28])
+	copy(hdr.nonce[:], data[28:60])
+	hdr.sigAlg = binary.LittleEndian.Uint16(data[60:62])
+	hdr.hashAlg = binary.LittleEndian.Uint16(data[62:64])
+	hdr.pcrMask = binary.LittleEndian.Uint32(data[64:68])
+	hdr.attestSize = binary.LittleEndian.Uint16(data[68:70])
+	hdr.sigSize = binary.LittleEndian.Uint16(data[70:72])
+
+	// validate sizes
+	expected := int(TokenHeaderSize) + int(hdr.attestSize) + int(hdr.sigSize)
+	if expected > int(hdr.totalSize) {
+		return nil, fmt.Errorf("%w: data sizes exceed total_size", ErrBadToken)
+	}
+	if hdr.attestSize > MaxAttestSize || hdr.sigSize > MaxSigSize {
+		return nil, fmt.Errorf("%w: attest_size=%d sig_size=%d exceed limits", ErrBadToken, hdr.attestSize, hdr.sigSize)
+	}
+
+	return hdr, nil
+}
+
+// verifies the TPM RSA signature over attest_data
+func verifyRSASignature(attestData, signature []byte, sigAlg uint16, aikPub *rsa.PublicKey) error {
+	hash := sha256.Sum256(attestData)
+
+	switch sigAlg {
+	case TPMAlgRSAPSS:
+		opts := &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
+			Hash:       crypto.SHA256,
+		}
+		return rsa.VerifyPSS(aikPub, crypto.SHA256, hash[:], signature, opts)
+
+	default: // TPMAlgRSASSA and unknown -> PKCS1v15
+		return rsa.VerifyPKCS1v15(aikPub, crypto.SHA256, hash[:], signature)
+	}
+}
+
+// computes SHA256(issued_at || valid_until || flags || nonce)
+// all integers in little-endian byte order
+func computeExpectedNonce(issuedAt, validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
+	var buf [52]byte // 8 + 8 + 4 + 32
+	binary.LittleEndian.PutUint64(buf[0:8], issuedAt)
+	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
+	binary.LittleEndian.PutUint32(buf[16:20], flags)
+	copy(buf[20:52], nonce[:])
+	return sha256.Sum256(buf[:])
+}
+
+// parses a raw TPMS_ATTEST blob and extracts:
+//   - extraData (the nonce embedded by the TPM)
+//   - pcrDigest (the PCR composite hash, only for Quote type)
+func parseTPMSAttest(data []byte) (extraData []byte, pcrDigest []byte, err error) {
+	if len(data) < 10 {
+		return nil, nil, fmt.Errorf("attest data too short: %d bytes", len(data))
+	}
+
+	r := bytes.NewReader(data)
+
+	// magic (4 bytes, big-endian)
+	var magic uint32
+	if err := binary.Read(r, binary.BigEndian, &magic); err != nil {
+		return nil, nil, fmt.Errorf("read magic: %w", err)
+	}
+	if magic != tpmGeneratedValue {
+		return nil, nil, fmt.Errorf("%w: got 0x%08X", ErrBadMagic, magic)
+	}
+
+	// type (2 bytes, big-endian)
+	var attestType uint16
+	if err := binary.Read(r, binary.BigEndian, &attestType); err != nil {
+		return nil, nil, fmt.Errorf("read type: %w", err)
+	}
+
+	// qualifiedSigner (TPM2B_NAME: 2-byte size + data)
+	var signerSize uint16
+	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
+		return nil, nil, fmt.Errorf("read signer size: %w", err)
+	}
+	signerBuf := make([]byte, signerSize)
+	if _, err := r.Read(signerBuf); err != nil {
+		return nil, nil, fmt.Errorf("read signer: %w", err)
+	}
+
+	// extraData (TPM2B_DATA: 2-byte size + data)
+	var extraSize uint16
+	if err := binary.Read(r, binary.BigEndian, &extraSize); err != nil {
+		return nil, nil, fmt.Errorf("read extraData size: %w", err)
+	}
+	extraData = make([]byte, extraSize)
+	if _, err := r.Read(extraData); err != nil {
+		return nil, nil, fmt.Errorf("read extraData: %w", err)
+	}
+
+	// clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 bytes
+	clockBuf := make([]byte, 17)
+	if _, err := r.Read(clockBuf); err != nil {
+		return nil, nil, fmt.Errorf("read clockInfo: %w", err)
+	}
+
+	// firmwareVersion (8 bytes)
+	fwBuf := make([]byte, 8)
+	if _, err := r.Read(fwBuf); err != nil {
+		return nil, nil, fmt.Errorf("read firmwareVersion: %w", err)
+	}
+
+	if attestType == tpmSTAttestQuote {
+		// TPML_PCR_SELECTION: count(4) + array
+		var pcrSelCount uint32
+		if err := binary.Read(r, binary.BigEndian, &pcrSelCount); err != nil {
+			return extraData, nil, nil // partial success - have extraData
+		}
+
+		for i := uint32(0); i < pcrSelCount; i++ {
+			var hashAlg uint16
+			var selectSize uint8
+			if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
+				return extraData, nil, nil
+			}
+			if err := binary.Read(r, binary.BigEndian, &selectSize); err != nil {
+				return extraData, nil, nil
+			}
+			selectBuf := make([]byte, selectSize)
+			if _, err := r.Read(selectBuf); err != nil {
+				return extraData, nil, nil
+			}
+		}
+
+		// pcrDigest (TPM2B_DIGEST: 2-byte size + data)
+		var digestSize uint16
+		if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
+			return extraData, nil, nil
+		}
+		pcrDigest = make([]byte, digestSize)
+		if _, err := r.Read(pcrDigest); err != nil {
+			return extraData, nil, nil
+		}
+	}
+
+	return extraData, pcrDigest, nil
+}
+
+// parses a DER-encoded RSA public key
+// accepts both PKIX/SPKI format (SubjectPublicKeyInfo) and PKCS#1 format
+func ParseRSAPublicKey(der []byte) (*rsa.PublicKey, error) {
+	// PKIX first
+	pub, err := x509.ParsePKIXPublicKey(der)
+	if err == nil {
+		rsaPub, ok := pub.(*rsa.PublicKey)
+		if !ok {
+			return nil, errors.New("not an RSA public key")
+		}
+		return rsaPub, nil
+	}
+
+	// PKCS#1
+	rsaPub, err := x509.ParsePKCS1PublicKey(der)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
+	}
+
+	return rsaPub, nil
+}
