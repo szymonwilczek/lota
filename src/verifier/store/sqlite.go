@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // implements AIKStore using a SQLite database
@@ -191,6 +192,51 @@ func (s *SQLiteAIKStore) ListClients() []string {
 	}
 
 	return clients
+}
+
+func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var t time.Time
+	err := s.db.QueryRow(
+		"SELECT created_at FROM clients WHERE id = ?", clientID,
+	).Scan(&t)
+
+	if err == sql.ErrNoRows {
+		return time.Time{}, errors.New("client not found")
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to query registration time: %w", err)
+	}
+
+	return t, nil
+}
+
+// replaces expired AIK with a new key, preserving hardware ID binding
+func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pemText, err := encodePEMPublicKey(newKey)
+	if err != nil {
+		return fmt.Errorf("failed to encode new key: %w", err)
+	}
+
+	result, err := s.db.Exec(
+		"UPDATE clients SET aik_pem = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?",
+		pemText, clientID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to rotate AIK: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return errors.New("client not registered")
+	}
+
+	return nil
 }
 
 // marshals an RSA public key to PEM text
