@@ -275,9 +275,12 @@ func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	return a.E == b.E
 }
 
-// returns SHA-256 fingerprint of public key
+// returns SHA-256 fingerprint of public key (PKIX/SPKI encoding)
 func Fingerprint(pubKey *rsa.PublicKey) string {
-	keyBytes := x509.MarshalPKCS1PublicKey(pubKey)
+	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return ""
+	}
 	hash := sha256.Sum256(keyBytes)
 	return hex.EncodeToString(hash[:])
 }

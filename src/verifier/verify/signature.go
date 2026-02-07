@@ -135,29 +135,27 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	return nil
 }
 
-// parses RSA public key from DER or PEM format
+// parses RSA public key from DER-encoded PKIX/SPKI format
 func ParseRSAPublicKey(keyData []byte) (*rsa.PublicKey, error) {
 	pub, err := x509.ParsePKIXPublicKey(keyData)
-	if err == nil {
-		rsaPub, ok := pub.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.New("not an RSA public key")
-		}
-		return rsaPub, nil
-	}
-
-	rsaPub, err := x509.ParsePKCS1PublicKey(keyData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
+		return nil, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
 
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
 	return rsaPub, nil
 }
 
-// returns SHA-256 fingerprint of AIK public key
+// returns SHA-256 fingerprint of AIK public key (PKIX/SPKI encoding)
 // used for tofu identification
 func AIKFingerprint(aikPubKey *rsa.PublicKey) string {
-	keyBytes := x509.MarshalPKCS1PublicKey(aikPubKey)
+	keyBytes, err := x509.MarshalPKIXPublicKey(aikPubKey)
+	if err != nil {
+		return ""
+	}
 	hash := sha256.Sum256(keyBytes)
 	return hex.EncodeToString(hash[:])
 }
