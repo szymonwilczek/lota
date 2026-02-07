@@ -45,6 +45,7 @@ type Verifier struct {
 	nonceLifetime    time.Duration
 	timestampMaxAge  time.Duration
 	sessionTokenLife time.Duration
+	aikMaxAge        time.Duration
 
 	// monitoring
 	startTime      time.Time
@@ -65,6 +66,10 @@ type VerifierConfig struct {
 
 	// how long issued tokens are valid
 	SessionTokenLife time.Duration
+
+	// maximum age of a registered AIK before key rotation is required
+	// zero disables AIK expiry (not recommended)
+	AIKMaxAge time.Duration
 
 	// optional: persistent baseline store (nil = in-memory)
 	BaselineStore BaselineStorer
@@ -94,6 +99,7 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:    5 * time.Minute,
 		TimestampMaxAge:  2 * time.Minute,
 		SessionTokenLife: 1 * time.Hour,
+		AIKMaxAge:        30 * 24 * time.Hour, // 30 days
 	}
 }
 
@@ -131,6 +137,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:    cfg.NonceLifetime,
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
+		aikMaxAge:        cfg.AIKMaxAge,
 		startTime:        time.Now(),
 	}
 }
@@ -234,10 +241,26 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		return result, err
 	}
 
+	// check if registered AIK has exceeded its maximum age.
+	// expired AIKs are rotated via re-TOFU on the next attestation.
+	aikExpired := false
+	if v.aikMaxAge > 0 {
+		if regTime, err := v.aikStore.GetRegisteredAt(clientID); err == nil && !regTime.IsZero() {
+			if time.Since(regTime) > v.aikMaxAge {
+				aikExpired = true
+				clog.Warn("AIK registration expired, key rotation required",
+					"registered_at", regTime.UTC().Format(time.RFC3339),
+					"max_age", v.aikMaxAge,
+					"age", time.Since(regTime).Truncate(time.Second))
+			}
+		}
+	}
+
 	aikPubKey, err := v.aikStore.GetAIK(clientID)
-	if err != nil {
-		// TOFU mode: first connection from this client
-		// extract AIK from report and register it
+	newClient := err != nil
+
+	if newClient || aikExpired {
+		// extract the AIK from the report and verify the signature before trusting the key
 		if report.TPM.AIKPublicSize == 0 {
 			clog.Error("no AIK public key in report")
 			v.metrics.Rejections.Inc("sig_fail")
@@ -254,7 +277,7 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 			return result, fmt.Errorf("failed to parse AIK: %w", err)
 		}
 
-		// verify signature before registering
+		// verify signature before registering or rotating
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
 			clog.Error("signature verification failed", "error", err)
 			v.metrics.Rejections.Inc("sig_fail")
@@ -262,33 +285,46 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 			return result, err
 		}
 
-		// extract AIK and EK certificates if provided
-		var aikCert, ekCert []byte
-		if report.TPM.AIKCertSize > 0 {
-			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
-			clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
-		}
-		if report.TPM.EKCertSize > 0 {
-			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
-			clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
-		}
-
-		// register AIK with certificate verification (if certs provided)
-		if err := v.aikStore.RegisterAIKWithCert(clientID, aikPubKey, aikCert, ekCert); err != nil {
-			clog.Error("failed to register AIK", "error", err)
-			v.metrics.Rejections.Inc("sig_fail")
-			result.Result = types.VerifySigFail
-			return result, fmt.Errorf("AIK registration failed: %w", err)
-		}
-
-		fingerprint := AIKFingerprint(aikPubKey)
-		if len(aikCert) > 0 || len(ekCert) > 0 {
-			clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+		if aikExpired {
+			// key rotation: replace expired AIK, preserve hardware binding
+			if err := v.aikStore.RotateAIK(clientID, aikPubKey); err != nil {
+				clog.Error("failed to rotate AIK", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, fmt.Errorf("AIK rotation failed: %w", err)
+			}
+			fingerprint := AIKFingerprint(aikPubKey)
+			logging.Security(clog, "AIK rotated after expiry",
+				"fingerprint", fingerprint, "max_age", v.aikMaxAge)
 		} else {
-			clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
+			// first connection: extract certificates and register via TOFU
+			var aikCert, ekCert []byte
+			if report.TPM.AIKCertSize > 0 {
+				aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
+				clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
+			}
+			if report.TPM.EKCertSize > 0 {
+				ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
+				clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
+			}
+
+			// register AIK with certificate verification (if certs provided)
+			if err := v.aikStore.RegisterAIKWithCert(clientID, aikPubKey, aikCert, ekCert); err != nil {
+				clog.Error("failed to register AIK", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, fmt.Errorf("AIK registration failed: %w", err)
+			}
+
+			fingerprint := AIKFingerprint(aikPubKey)
+			if len(aikCert) > 0 || len(ekCert) > 0 {
+				clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+			} else {
+				clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
+			}
 		}
 
-		// register hardware ID (TOFU for new clients)
+		// register or validate hardware ID
 		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
 			if errors.Is(err, store.ErrHardwareIDMismatch) {
 				logging.Security(clog, "hardware identity mismatch",
@@ -302,9 +338,11 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("hardware ID registration failed: %w", err)
 		}
-		clog.Info("hardware ID registered", "hwid", hwID)
+		if newClient {
+			clog.Info("hardware ID registered", "hwid", hwID)
+		}
 	} else {
-		// already registered - verify signature
+		// already registered and not expired - verify signature
 		if err := VerifyReportSignature(report, aikPubKey); err != nil {
 			clog.Error("signature verification failed", "error", err)
 			v.metrics.Rejections.Inc("sig_fail")
