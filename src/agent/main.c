@@ -595,6 +595,11 @@ static void print_usage(const char *prog) {
   printf("  --server HOST     Verifier server address (default: localhost)\n");
   printf("  --port PORT       Verifier server port (default: %d)\n",
          DEFAULT_VERIFIER_PORT);
+  printf("  --ca-cert PATH    CA certificate for verifier TLS verification\n");
+  printf("                    (default: use system CA store)\n");
+  printf(
+      "  --no-verify-tls   Disable TLS certificate verification (INSECURE)\n");
+  printf("                    Only for development/testing!\n");
   printf("  --bpf PATH        Path to BPF object file\n");
   printf("                    (default: %s)\n", DEFAULT_BPF_PATH);
   printf("  --mode MODE       Set enforcement mode:\n");
@@ -1220,6 +1225,8 @@ int main(int argc, char *argv[]) {
   const char *bpf_path = DEFAULT_BPF_PATH;
   const char *server_addr = "localhost";
   int server_port = DEFAULT_VERIFIER_PORT;
+  const char *ca_cert_path = NULL;
+  int no_verify_tls = 0;
 
   static struct option long_options[] = {
       {"test-tpm", no_argument, 0, 't'},
@@ -1231,6 +1238,8 @@ int main(int argc, char *argv[]) {
       {"attest-interval", required_argument, 0, 'I'},
       {"server", required_argument, 0, 's'},
       {"port", required_argument, 0, 'p'},
+      {"ca-cert", required_argument, 0, 'C'},
+      {"no-verify-tls", no_argument, 0, 'K'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
       {"strict-mmap", no_argument, 0, 'M'},
@@ -1240,8 +1249,8 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:b:m:MPR:L:h", long_options,
-                            NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:Kb:m:MPR:L:h",
+                            long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
@@ -1276,6 +1285,12 @@ int main(int argc, char *argv[]) {
       break;
     case 'p':
       server_port = atoi(optarg);
+      break;
+    case 'C':
+      ca_cert_path = optarg;
+      break;
+    case 'K':
+      no_verify_tls = 1;
       break;
     case 'b':
       bpf_path = optarg;
@@ -1417,10 +1432,15 @@ int main(int argc, char *argv[]) {
   }
 
   if (attest_flag) {
+    if (no_verify_tls && ca_cert_path) {
+      fprintf(stderr,
+              "Warning: --ca-cert ignored when --no-verify-tls is set\n");
+    }
     if (attest_interval > 0)
-      return do_continuous_attest(server_addr, server_port, attest_interval);
+      return do_continuous_attest(server_addr, server_port, ca_cert_path,
+                                  no_verify_tls, attest_interval);
     else
-      return do_attest(server_addr, server_port);
+      return do_attest(server_addr, server_port, ca_cert_path, no_verify_tls);
   }
 
   return run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
