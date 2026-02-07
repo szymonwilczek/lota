@@ -251,7 +251,7 @@ static __always_inline int is_trusted_lib_path(const char *path) {
  *
  * Allowed paths (Im writing this on Fedora):
  *   /usr/lib/modules/   - Standard Fedora/RHEL module location
- *   /lib/modules/       - Legacy/symlink compatibility
+ *   /lib/modules/       - Symlink to /usr/lib/modules on Fedora/RHEL
  */
 static __always_inline int is_allowed_module_path(const char *path) {
   char buf[64];

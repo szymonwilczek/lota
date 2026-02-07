@@ -10,8 +10,8 @@
  * wire format across architectures.
  *
  * Protocol versioning:
- *   - Major version change = breaking protocol change
- *   - Minor version change = backwards-compatible additions
+ *   - Any version change is a breaking protocol change (pre-v1.0)
+ *   - Both major and minor must match exactly
  *
  * All multi-byte integers are little-endian.
  */
