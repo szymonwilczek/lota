@@ -48,6 +48,7 @@ static volatile sig_atomic_t g_running = 1;
 static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
+static int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
 static uint32_t g_protect_pids[64];
@@ -486,6 +487,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   } else {
     printf("Mode: %s\n", mode_to_string(mode));
   }
+  g_mode = mode;
   if (mode == LOTA_MODE_ENFORCE) {
     printf("\n*** WARNING: ENFORCE mode active - module loading BLOCKED ***\n");
   }
@@ -760,7 +762,8 @@ static int export_pcr_baseline(void) {
 
     printf("require_iommu: %s      # DMA protection\n",
            iommu_ok ? "true" : "false");
-    printf("require_enforce: true        # LSM enforce mode (recommended)\n");
+    printf("require_enforce: %s        # LSM enforce mode\n",
+           (g_mode == LOTA_MODE_ENFORCE) ? "true" : "false");
     printf("require_module_sig: %s  # Signed kernel modules\n",
            (flags & LOTA_REPORT_FLAG_MODULE_SIG) ? "true" : "false");
     printf("require_secureboot: %s  # UEFI Secure Boot\n",
@@ -958,6 +961,11 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
 
   report->header.flags |= check_module_security();
+
+  /* report LSM enforcement mode */
+  if (g_mode == LOTA_MODE_ENFORCE) {
+    report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
+  }
 
   return 0;
 }
