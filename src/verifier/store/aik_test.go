@@ -515,3 +515,248 @@ func TestFingerprint(t *testing.T) {
 		t.Error("Different keys should produce different fingerprints")
 	}
 }
+
+func TestMemoryStore_GetRegisteredAt(t *testing.T) {
+	store := NewMemoryStore()
+	key := generateTestKey(t)
+
+	// should fail for unknown client
+	_, err := store.GetRegisteredAt("unknown")
+	if err == nil {
+		t.Error("Expected error for non-existent client")
+	}
+
+	before := time.Now()
+	store.RegisterAIK("client1", &key.PublicKey)
+	after := time.Now()
+
+	regTime, err := store.GetRegisteredAt("client1")
+	if err != nil {
+		t.Fatalf("GetRegisteredAt failed: %v", err)
+	}
+
+	if regTime.Before(before) || regTime.After(after) {
+		t.Errorf("Registration time %v not in expected range [%v, %v]", regTime, before, after)
+	}
+}
+
+func TestMemoryStore_RotateAIK(t *testing.T) {
+	store := NewMemoryStore()
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+
+	store.RegisterAIK("client1", &key1.PublicKey)
+
+	// different key should fail via RegisterAIK (TOFU invariant)
+	if err := store.RegisterAIK("client1", &key2.PublicKey); err == nil {
+		t.Error("RegisterAIK should reject different key")
+	}
+
+	// rotation should succeed
+	if err := store.RotateAIK("client1", &key2.PublicKey); err != nil {
+		t.Fatalf("RotateAIK failed: %v", err)
+	}
+
+	// should now return new key
+	gotKey, err := store.GetAIK("client1")
+	if err != nil {
+		t.Fatalf("GetAIK failed: %v", err)
+	}
+	if !publicKeysEqual(gotKey, &key2.PublicKey) {
+		t.Error("Rotated key does not match expected key")
+	}
+}
+
+func TestMemoryStore_RotatePreservesHardwareID(t *testing.T) {
+	store := NewMemoryStore()
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+	hwid := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
+
+	store.RegisterAIK("client1", &key1.PublicKey)
+	store.RegisterHardwareID("client1", hwid)
+
+	// rotate key
+	store.RotateAIK("client1", &key2.PublicKey)
+
+	// hardware ID should still be there
+	gotHWID, err := store.GetHardwareID("client1")
+	if err != nil {
+		t.Fatalf("GetHardwareID after rotation failed: %v", err)
+	}
+	if gotHWID != hwid {
+		t.Error("Hardware ID lost after AIK rotation")
+	}
+}
+
+func TestMemoryStore_RotateUpdatesTimestamp(t *testing.T) {
+	store := NewMemoryStore()
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+
+	store.RegisterAIK("client1", &key1.PublicKey)
+	regTime1, _ := store.GetRegisteredAt("client1")
+
+	// small sleep to ensure different timestamp
+	time.Sleep(10 * time.Millisecond)
+
+	store.RotateAIK("client1", &key2.PublicKey)
+	regTime2, _ := store.GetRegisteredAt("client1")
+
+	if !regTime2.After(regTime1) {
+		t.Errorf("Rotation should update timestamp: before=%v, after=%v", regTime1, regTime2)
+	}
+}
+
+func TestMemoryStore_RotateNonexistent(t *testing.T) {
+	store := NewMemoryStore()
+	key := generateTestKey(t)
+
+	if err := store.RotateAIK("nonexistent", &key.PublicKey); err == nil {
+		t.Error("RotateAIK should fail for non-existent client")
+	}
+}
+
+func TestFileStore_GetRegisteredAt(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+
+	before := time.Now()
+	store.RegisterAIK("client1", &key.PublicKey)
+	after := time.Now()
+
+	regTime, err := store.GetRegisteredAt("client1")
+	if err != nil {
+		t.Fatalf("GetRegisteredAt failed: %v", err)
+	}
+
+	if regTime.Before(before) || regTime.After(after) {
+		t.Errorf("Registration time %v not in expected range [%v, %v]", regTime, before, after)
+	}
+
+	// verify .meta file was created
+	metaPath := filepath.Join(tempDir, "client1.meta")
+	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
+		t.Error("Metadata file was not created")
+	}
+}
+
+func TestFileStore_RotateAIK(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+
+	store.RegisterAIK("client1", &key1.PublicKey)
+
+	// rotate
+	if err := store.RotateAIK("client1", &key2.PublicKey); err != nil {
+		t.Fatalf("RotateAIK failed: %v", err)
+	}
+
+	// verify new key is returned
+	gotKey, err := store.GetAIK("client1")
+	if err != nil {
+		t.Fatalf("GetAIK failed: %v", err)
+	}
+	if !publicKeysEqual(gotKey, &key2.PublicKey) {
+		t.Error("Rotated key does not match")
+	}
+
+	// verify persistence: reload store
+	store2, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore (reload) failed: %v", err)
+	}
+
+	gotKey2, err := store2.GetAIK("client1")
+	if err != nil {
+		t.Fatalf("GetAIK after reload failed: %v", err)
+	}
+	if !publicKeysEqual(gotKey2, &key2.PublicKey) {
+		t.Error("Rotated key not persisted correctly")
+	}
+}
+
+func TestFileStore_RotatePreservesHardwareID(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key1 := generateTestKey(t)
+	key2 := generateTestKey(t)
+	hwid := [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
+
+	store.RegisterAIK("client1", &key1.PublicKey)
+	store.RegisterHardwareID("client1", hwid)
+
+	store.RotateAIK("client1", &key2.PublicKey)
+
+	gotHWID, err := store.GetHardwareID("client1")
+	if err != nil {
+		t.Fatalf("GetHardwareID after rotation failed: %v", err)
+	}
+	if gotHWID != hwid {
+		t.Error("Hardware ID lost after AIK rotation")
+	}
+}
+
+func TestFileStore_LegacyMtimeFallback(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+	store.RegisterAIK("legacy", &key.PublicKey)
+
+	// delete .meta file to simulate legacy entry
+	metaPath := filepath.Join(tempDir, "legacy.meta")
+	os.Remove(metaPath)
+
+	// reload store - should fall back to PEM file mtime
+	store2, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore (reload) failed: %v", err)
+	}
+
+	regTime, err := store2.GetRegisteredAt("legacy")
+	if err != nil {
+		t.Fatalf("GetRegisteredAt should fallback to mtime: %v", err)
+	}
+	if regTime.IsZero() {
+		t.Error("Registration time should not be zero for legacy entry")
+	}
+}
