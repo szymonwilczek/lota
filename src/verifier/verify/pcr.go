@@ -203,6 +203,13 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
+	// check LSM enforce mode
+	if policy.RequireEnforce {
+		if report.Header.Flags&types.FlagEnforce == 0 {
+			return errors.New("LSM enforce mode not active")
+		}
+	}
+
 	// check module signing enforcement
 	if policy.RequireModuleSig {
 		if report.Header.Flags&types.FlagModuleSig == 0 {
