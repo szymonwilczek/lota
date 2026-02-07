@@ -322,8 +322,11 @@ func verifyRSASignature(attestData, signature []byte, sigAlg uint16, aikPub *rsa
 		}
 		return rsa.VerifyPSS(aikPub, crypto.SHA256, hash[:], signature, opts)
 
-	default: // TPMAlgRSASSA and unknown -> PKCS1v15
+	case TPMAlgRSASSA:
 		return rsa.VerifyPKCS1v15(aikPub, crypto.SHA256, hash[:], signature)
+
+	default:
+		return fmt.Errorf("unsupported signature algorithm: 0x%04X", sigAlg)
 	}
 }
 
@@ -431,24 +434,16 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrDigest []byte, err error
 	return extraData, pcrDigest, nil
 }
 
-// parses a DER-encoded RSA public key
-// accepts both PKIX/SPKI format (SubjectPublicKeyInfo) and PKCS#1 format
+// parses a DER-encoded RSA public key in PKIX/SPKI format (SubjectPublicKeyInfo)
 func ParseRSAPublicKey(der []byte) (*rsa.PublicKey, error) {
-	// PKIX first
 	pub, err := x509.ParsePKIXPublicKey(der)
-	if err == nil {
-		rsaPub, ok := pub.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.New("not an RSA public key")
-		}
-		return rsaPub, nil
-	}
-
-	// PKCS#1
-	rsaPub, err := x509.ParsePKCS1PublicKey(der)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
+		return nil, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
 
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
 	return rsaPub, nil
 }

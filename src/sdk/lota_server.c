@@ -238,10 +238,14 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 
     if (EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
       goto out;
-  } else {
-    /* RSASSA-PKCS1-v1_5 (default, including TPM_ALG_RSASSA) */
+  } else if (sig_alg == TPM_ALG_RSASSA) {
+    /* RSASSA-PKCS1-v1_5 */
     if (EVP_DigestVerifyInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) != 1)
       goto out;
+  } else {
+    /* reject unknown signature algorithms */
+    ret = LOTA_SERVER_ERR_SIG_FAIL;
+    goto out;
   }
 
   if (EVP_DigestVerifyUpdate(md_ctx, attest_data, attest_len) != 1)

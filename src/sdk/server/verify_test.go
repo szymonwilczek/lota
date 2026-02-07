@@ -405,7 +405,7 @@ func TestParseTPMSAttest_TooShort(t *testing.T) {
 func TestParseRSAPublicKey(t *testing.T) {
 	key := generateTestKey(t)
 
-	// PKIX format
+	// PKIX format must be accepted
 	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
 		t.Fatalf("MarshalPKIXPublicKey: %v", err)
@@ -419,13 +419,10 @@ func TestParseRSAPublicKey(t *testing.T) {
 		t.Error("parsed key N doesn't match")
 	}
 
-	// PKCS#1 format
+	// PKCS#1 format must be rejected
 	derPKCS1 := x509.MarshalPKCS1PublicKey(&key.PublicKey)
-	parsed2, err := ParseRSAPublicKey(derPKCS1)
-	if err != nil {
-		t.Fatalf("ParseRSAPublicKey (PKCS1): %v", err)
-	}
-	if parsed2.N.Cmp(key.PublicKey.N) != 0 {
-		t.Error("parsed PKCS1 key N doesn't match")
+	_, err = ParseRSAPublicKey(derPKCS1)
+	if err == nil {
+		t.Fatal("ParseRSAPublicKey should reject PKCS#1 format")
 	}
 }
