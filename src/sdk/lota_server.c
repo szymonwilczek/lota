@@ -376,6 +376,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
+  /* check freshness: is issued_at close to now? */
+  claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
+  claims->too_old = (claims->age_seconds > LOTA_TOKEN_DEFAULT_MAX_AGE) ? 1 : 0;
+  claims->issued_in_future =
+      (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
+
   return LOTA_SERVER_OK;
 }
 
@@ -416,6 +422,12 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
+
+  /* check freshness */
+  claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
+  claims->too_old = (claims->age_seconds > LOTA_TOKEN_DEFAULT_MAX_AGE) ? 1 : 0;
+  claims->issued_in_future =
+      (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
 
   return LOTA_SERVER_OK;
 }
