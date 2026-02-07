@@ -105,7 +105,7 @@ func TestMigrations_TablesExist(t *testing.T) {
 	}
 	defer db.Close()
 
-	expectedTables := []string{"schema_version", "clients", "baselines", "used_nonces", "revocations", "hardware_bans", "audit_log"}
+	expectedTables := []string{"schema_version", "clients", "baselines", "used_nonces", "revocations", "hardware_bans", "audit_log", "attestation_log"}
 
 	for _, table := range expectedTables {
 		t.Run(table, func(t *testing.T) {

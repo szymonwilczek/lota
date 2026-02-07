@@ -7,7 +7,8 @@
 // Schema versioning ensures safe upgrades between verifier releases.
 // Each migration runs in a transaction with automatic rollback on failure.
 //
-// IMPORTANT: Never modify existing migrations. Only append new ones.
+// Pre-v1.0: Schema is consolidated into a single migration.
+// Post-v1.0: Append new migrations only. Never modify existing ones.
 
 package store
 
@@ -28,11 +29,11 @@ type migration struct {
 }
 
 // schema migration history
-// IMPORTANT: Append-only! Never modify existing migrations!
+// Pre-v1.0: single consolidated schema, no incremental migrations needed.
 var migrations = []migration{
 	{
 		version:     1,
-		description: "initial schema: clients, baselines, used_nonces",
+		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log",
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
@@ -55,12 +56,7 @@ var migrations = []migration{
 			);
 
 			CREATE INDEX idx_used_nonces_used_at ON used_nonces(used_at);
-		`,
-	},
-	{
-		version:     2,
-		description: "revocation and hardware ban tables with audit log",
-		sql: `
+
 			CREATE TABLE revocations (
 				client_id  TEXT PRIMARY KEY,
 				reason     TEXT NOT NULL,
@@ -89,12 +85,7 @@ var migrations = []migration{
 
 			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
 			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
-		`,
-	},
-	{
-		version:     3,
-		description: "attestation decision log for structured audit trail",
-		sql: `
+
 			CREATE TABLE attestation_log (
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
 				timestamp   TIMESTAMP NOT NULL,
