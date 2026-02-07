@@ -121,6 +121,23 @@ func (fs *FileStore) loadAll() error {
 				continue
 			}
 			fs.hardwareIDs[clientID] = hwid
+
+		case ".meta":
+			meta, err := fs.loadMeta(clientID)
+			if err != nil {
+				fmt.Printf("Warning: failed to load metadata for %s: %v\n", clientID, err)
+				continue
+			}
+			fs.registeredAt[clientID] = meta.RegisteredAt
+		}
+	}
+
+	// backfill registration time from PEM file mtime for legacy entries
+	for clientID := range fs.cache {
+		if _, hasMeta := fs.registeredAt[clientID]; !hasMeta {
+			if info, err := os.Stat(filepath.Join(fs.storePath, clientID+".pem")); err == nil {
+				fs.registeredAt[clientID] = info.ModTime()
+			}
 		}
 	}
 
@@ -167,6 +184,32 @@ func (fs *FileStore) loadHardwareID(clientID string) ([32]byte, error) {
 
 	copy(hwid[:], data)
 	return hwid, nil
+}
+
+func (fs *FileStore) loadMeta(clientID string) (*aikMeta, error) {
+	path := filepath.Join(fs.storePath, clientID+".meta")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var meta aikMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to parse metadata: %w", err)
+	}
+
+	return &meta, nil
+}
+
+func (fs *FileStore) saveMeta(clientID string, regTime time.Time) error {
+	meta := aikMeta{RegisteredAt: regTime}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	path := filepath.Join(fs.storePath, clientID+".meta")
+	return os.WriteFile(path, data, 0600)
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
@@ -217,6 +260,13 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	// add to cache
 	fs.cache[clientID] = pubKey
 
+	// persist registration timestamp
+	now := time.Now()
+	if err := fs.saveMeta(clientID, now); err != nil {
+		fmt.Printf("Warning: failed to save metadata for %s: %v\n", clientID, err)
+	}
+	fs.registeredAt[clientID] = now
+
 	return nil
 }
 
@@ -229,7 +279,11 @@ func (fs *FileStore) RevokeAIK(clientID string) error {
 		return fmt.Errorf("failed to remove key file: %w", err)
 	}
 
+	metaPath := filepath.Join(fs.storePath, clientID+".meta")
+	os.Remove(metaPath)
+
 	delete(fs.cache, clientID)
+	delete(fs.registeredAt, clientID)
 	return nil
 }
 
@@ -395,6 +449,7 @@ func (ms *MemoryStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 	}
 
 	ms.keys[clientID] = pubKey
+	ms.registeredAt[clientID] = time.Now()
 	return nil
 }
 
@@ -403,6 +458,7 @@ func (ms *MemoryStore) RevokeAIK(clientID string) error {
 	defer ms.mu.Unlock()
 
 	delete(ms.keys, clientID)
+	delete(ms.registeredAt, clientID)
 	return nil
 }
 
