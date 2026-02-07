@@ -964,7 +964,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
  * TPM and network must be initialized before calling.
  * Returns: 0 on success, negative errno on failure
  */
-static int attest_once(const char *server, int port, int verbose) {
+static int attest_once(const char *server, int port, const char *ca_cert,
+                       int skip_verify, int verbose) {
   struct net_context net_ctx;
   struct verifier_challenge challenge;
   struct verifier_result result;
@@ -974,7 +975,7 @@ static int attest_once(const char *server, int port, int verbose) {
   if (verbose)
     printf("Connecting to verifier at %s:%d...\n", server, port);
 
-  ret = net_context_init(&net_ctx, server, port, NULL);
+  ret = net_context_init(&net_ctx, server, port, ca_cert, skip_verify);
   if (ret < 0) {
     if (verbose)
       fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
@@ -1045,7 +1046,8 @@ cleanup:
 /*
  * One-shot remote attestation
  */
-static int do_attest(const char *server, int port) {
+static int do_attest(const char *server, int port, const char *ca_cert,
+                     int skip_verify) {
   int ret;
 
   printf("=== Remote Attestation ===\n\n");
@@ -1079,7 +1081,7 @@ static int do_attest(const char *server, int port) {
     return ret;
   }
 
-  ret = attest_once(server, port, 1);
+  ret = attest_once(server, port, ca_cert, skip_verify, 1);
 
   printf("\n=== Attestation %s ===\n", ret == 0 ? "Successful" : "Failed");
 
@@ -1093,6 +1095,7 @@ static int do_attest(const char *server, int port) {
  * Re-attests every interval_sec seconds with exponential backoff on failure.
  */
 static int do_continuous_attest(const char *server, int port,
+                                const char *ca_cert, int skip_verify,
                                 int interval_sec) {
   int ret;
   int consecutive_failures = 0;
@@ -1158,7 +1161,7 @@ static int do_continuous_attest(const char *server, int port,
     now = time(NULL);
 
     printf("[%ld] Attestation round starting...\n", (long)now);
-    ret = attest_once(server, port, 0);
+    ret = attest_once(server, port, ca_cert, skip_verify, 0);
 
     if (ret == 0) {
       printf("[%ld] Attestation successful\n", (long)now);
