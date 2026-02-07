@@ -26,6 +26,7 @@ const (
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
+	ExecEventSize   = 336 // sizeof(lota_exec_event)
 )
 
 // report flags (see: include/attestation.h)
@@ -129,6 +130,9 @@ type AttestationReport struct {
 	TPM    TPMEvidence       // 2860 bytes
 	System SystemMeasurement // 396 bytes (364 + 32 for agent_hash)
 	BPF    BPFSummary        // 24 bytes
+
+	// variable-length sections (not part of fixed wire format)
+	EventLog []byte // raw TCG binary event log from agent
 }
 
 // Challenge for attestation protocol (48 bytes)
@@ -157,9 +161,12 @@ var (
 	ErrInvalidSize    = errors.New("invalid report size")
 )
 
-// expected binary size of AttestationReport
-// Header(32) + TPM(6992) + System(396) + BPF(24) = 7444
-const ExpectedReportSize = 7444
+// minimum binary size of serialized report on wire
+// Header(32) + TPM(6992) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7452
+const MinReportSize = 7452
+
+// fixed struct portion (without variable-length sections)
+const FixedReportSize = 7444
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
