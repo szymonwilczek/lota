@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 
@@ -66,6 +67,34 @@ func NewPCRVerifier() *PCRVerifier {
 	}
 }
 
+// checks policy for common misconfigurations and logs warnings
+// returns list of warnings found (empty if policy is well-configured)
+func ValidatePolicy(policy *PCRPolicy) []string {
+	var warnings []string
+
+	if len(policy.PCRs) == 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"policy '%s': no PCR values defined -> any PCR set will pass",
+			policy.Name))
+	}
+
+	if len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"policy '%s': no kernel/agent hash allowlists -> any binary accepted",
+			policy.Name))
+	}
+
+	hasAnyRequirement := policy.RequireIOMMU || policy.RequireEnforce ||
+		policy.RequireModuleSig || policy.RequireSecureBoot || policy.RequireLockdown
+	if !hasAnyRequirement && len(policy.PCRs) == 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"policy '%s': no security requirements enabled -> effectively permissive",
+			policy.Name))
+	}
+
+	return warnings
+}
+
 // loads a policy from YAML file
 func (v *PCRVerifier) LoadPolicy(path string) error {
 	data, err := os.ReadFile(path)
@@ -76,6 +105,10 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	var policy PCRPolicy
 	if err := yaml.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse policy: %w", err)
+	}
+
+	for _, w := range ValidatePolicy(&policy) {
+		log.Printf("WARNING: %s", w)
 	}
 
 	v.mu.Lock()
@@ -93,6 +126,10 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 
 // adds a policy programmatically
 func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) {
+	for _, w := range ValidatePolicy(policy) {
+		log.Printf("WARNING: %s", w)
+	}
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
