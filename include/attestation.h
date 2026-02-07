@@ -12,6 +12,7 @@
 #include "iommu_types.h"
 #include "lota.h"
 #include <stdint.h>
+#include <sys/types.h>
 
 /*
  * Attestation report header
