@@ -231,3 +231,72 @@ func (l *MemoryAuditLog) Query(limit int) []AuditEntry {
 	}
 	return result
 }
+
+// records every attestation decision for forensic review
+// one entry per attestation attempt
+// Log is append-only
+type AttestationLog interface {
+	// records a single attestation attempt with its outcome
+	Record(entry AttestationRecord) error
+
+	// returns the most recent attestation records (newest first)
+	QueryAttestations(limit int) []AttestationRecord
+}
+
+// single attestation attempt outcome
+type AttestationRecord struct {
+	ID         int64
+	Timestamp  time.Time
+	ClientID   string
+	HardwareID string  // hex-encoded, empty if unknown
+	Result     string  // ok, nonce_fail, sig_fail, pcr_fail, integrity_mismatch, revoked, banned, parse_error
+	DurationMs float64 // verification wall-clock time in milliseconds
+	PCR14      string  // hex-encoded PCR14 value, empty if not available
+	Details    string  // human-readable detail or error message
+	RemoteAddr string  // client IP address
+}
+
+// implements AttestationLog using an in-memory slice
+type MemoryAttestationLog struct {
+	mu      sync.RWMutex
+	entries []AttestationRecord
+	nextID  int64
+}
+
+// creates an empty in-memory attestation log
+func NewMemoryAttestationLog() *MemoryAttestationLog {
+	return &MemoryAttestationLog{
+		entries: make([]AttestationRecord, 0),
+		nextID:  1,
+	}
+}
+
+func (l *MemoryAttestationLog) Record(entry AttestationRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry.ID = l.nextID
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+	l.entries = append(l.entries, entry)
+	l.nextID++
+	return nil
+}
+
+func (l *MemoryAttestationLog) QueryAttestations(limit int) []AttestationRecord {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	n := len(l.entries)
+	if limit > 0 && limit < n {
+		n = limit
+	}
+
+	// newest first
+	result := make([]AttestationRecord, n)
+	for i := 0; i < n; i++ {
+		result[i] = l.entries[len(l.entries)-1-i]
+	}
+	return result
+}

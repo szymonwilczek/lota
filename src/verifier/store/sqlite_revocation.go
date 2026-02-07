@@ -288,3 +288,66 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 	}
 	return entries
 }
+
+// implements AttestationLog using the attestation_log table (migration v3)
+type SQLiteAttestationLog struct {
+	mu sync.Mutex
+	db *sql.DB
+}
+
+// creates an attestation log backed by the given database
+func NewSQLiteAttestationLog(db *sql.DB) *SQLiteAttestationLog {
+	return &SQLiteAttestationLog{db: db}
+}
+
+func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ts := entry.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+
+	_, err := l.db.Exec(
+		`INSERT INTO attestation_log
+		 (timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ts, entry.ClientID, entry.HardwareID, entry.Result,
+		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
+	)
+	return err
+}
+
+func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	query := `SELECT id, timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	          FROM attestation_log ORDER BY id DESC`
+	if limit > 0 {
+		query += " LIMIT ?"
+	}
+
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		rows, err = l.db.Query(query, limit)
+	} else {
+		rows, err = l.db.Query(query)
+	}
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var entries []AttestationRecord
+	for rows.Next() {
+		var e AttestationRecord
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.ClientID, &e.HardwareID,
+			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
+			entries = append(entries, e)
+		}
+	}
+	return entries
+}

@@ -91,6 +91,27 @@ var migrations = []migration{
 			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
 		`,
 	},
+	{
+		version:     3,
+		description: "attestation decision log for structured audit trail",
+		sql: `
+			CREATE TABLE attestation_log (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				timestamp   TIMESTAMP NOT NULL,
+				client_id   TEXT NOT NULL,
+				hardware_id TEXT NOT NULL DEFAULT '',
+				result      TEXT NOT NULL,
+				duration_ms REAL NOT NULL DEFAULT 0,
+				pcr14       TEXT NOT NULL DEFAULT '',
+				details     TEXT NOT NULL DEFAULT '',
+				remote_addr TEXT NOT NULL DEFAULT ''
+			);
+
+			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);
+			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
+			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path
