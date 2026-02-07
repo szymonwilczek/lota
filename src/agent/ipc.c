@@ -422,13 +422,15 @@ static int handle_client_write(struct ipc_client *client) {
 }
 
 /*
- * Accept new client
+ * Accept new client with peer credential authentication
  */
 static int accept_client(struct ipc_context *ctx) {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
   struct ipc_client *client;
   struct epoll_event ev;
+  struct ucred cred;
+  socklen_t cred_len = sizeof(cred);
   int fd;
   int ret;
 
@@ -439,13 +441,23 @@ static int accept_client(struct ipc_context *ctx) {
     return -errno;
   }
 
+  /* retrieve peer credentials */
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
+    fprintf(stderr, "IPC: SO_PEERCRED failed: %s\n", strerror(errno));
+    close(fd);
+    return -errno;
+  }
+
+  printf("IPC: client connected pid=%d uid=%d gid=%d\n", cred.pid, cred.uid,
+         cred.gid);
+
   ret = set_nonblocking(fd);
   if (ret < 0) {
     close(fd);
     return ret;
   }
 
-  client = client_create(fd);
+  client = client_create(fd, cred.uid, cred.gid, cred.pid);
   if (!client) {
     close(fd);
     return -ENOMEM;
