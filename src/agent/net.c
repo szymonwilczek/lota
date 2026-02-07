@@ -18,6 +18,7 @@
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 
 #include "../../include/uapi/lota_report.h"
 
@@ -45,7 +46,7 @@ void net_cleanup(void) {
 }
 
 int net_context_init(struct net_context *ctx, const char *server, int port,
-                     const char *ca_cert_path) {
+                     const char *ca_cert_path, int skip_verify) {
   SSL_CTX *ssl_ctx;
   const SSL_METHOD *method;
 
@@ -54,6 +55,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 
   memset(ctx, 0, sizeof(*ctx));
   ctx->socket_fd = -1;
+  ctx->skip_verify = skip_verify;
 
   strncpy(ctx->server_addr, server, sizeof(ctx->server_addr) - 1);
   ctx->server_port = port;
@@ -66,16 +68,39 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 
   SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
 
-  /* CA certificate if provided */
-  if (ca_cert_path) {
+  if (skip_verify) {
+    /*
+     * INSECURE!!!: Skip all certificate verification.
+     * This makes the connection vulnerable to MITM attacks.
+     * I only use this for development/testing with self-signed certs
+     * when the CA certificate is not available.
+     */
+    fprintf(stderr,
+            "WARNING: TLS certificate verification DISABLED (--no-verify-tls)\n"
+            "WARNING: Connection is vulnerable to MITM attacks!\n"
+            "WARNING: Do NOT use in production.\n");
+    SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
+  } else if (ca_cert_path) {
+    /* custom CA certificate provided */
     if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path, NULL) != 1) {
+      fprintf(stderr, "Failed to load CA certificate: %s\n", ca_cert_path);
       SSL_CTX_free(ssl_ctx);
       return -EINVAL;
     }
     SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
   } else {
-    /* For testing (will be changed): skip certificate verification */
-    SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
+    /*
+     * No custom CA - use system default certificate store.
+     * This verifies the verifier's certificate against trusted system CAs.
+     */
+    if (SSL_CTX_set_default_verify_paths(ssl_ctx) != 1) {
+      fprintf(stderr, "Failed to load system CA certificates.\n"
+                      "Use --ca-cert to specify verifier's CA certificate,\n"
+                      "or --no-verify-tls for testing (INSECURE).\n");
+      SSL_CTX_free(ssl_ctx);
+      return -ENOENT;
+    }
+    SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
   }
 
   ctx->ssl_ctx = ssl_ctx;
