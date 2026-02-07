@@ -830,3 +830,34 @@ cleanup:
 
   return ret;
 }
+
+int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size) {
+  int fd;
+  ssize_t n;
+  size_t total = 0;
+
+  if (!buf || !out_size || buf_size == 0)
+    return -EINVAL;
+
+  *out_size = 0;
+
+  fd = open(TPM_EVENTLOG_PATH_BIOS, O_RDONLY);
+  if (fd < 0)
+    return -errno;
+
+  while (total < buf_size) {
+    n = read(fd, buf + total, buf_size - total);
+    if (n < 0) {
+      int err = errno;
+      close(fd);
+      return -err;
+    }
+    if (n == 0)
+      break;
+    total += (size_t)n;
+  }
+
+  close(fd);
+  *out_size = total;
+  return 0;
+}

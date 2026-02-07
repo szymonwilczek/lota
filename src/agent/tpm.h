@@ -197,4 +197,30 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
  */
 int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
 
+/*
+ * TPM Event Log paths (tried in order)
+ */
+#define TPM_EVENTLOG_PATH_BIOS                                                 \
+  "/sys/kernel/security/tpm0/binary_bios_measurements"
+#define TPM_EVENTLOG_PATH_IMA                                                  \
+  "/sys/kernel/security/ima/binary_runtime_measurements"
+
+/* Maximum event log size (512 KB) */
+#define TPM_MAX_EVENT_LOG_SIZE (512 * 1024)
+
+/*
+ * tpm_read_event_log - Read TPM event log from securityfs
+ * @buf: Output buffer (caller allocates, recommend TPM_MAX_EVENT_LOG_SIZE)
+ * @buf_size: Size of output buffer
+ * @out_size: Actual bytes read
+ *
+ * Reads the TCG binary event log from
+ * /sys/kernel/security/tpm0/binary_bios_measurements.
+ * This log records all firmware/bootloader PCR extend operations.
+ * The verifier uses it to independently replay and verify PCR values.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
+
 #endif /* LOTA_TPM_H */
