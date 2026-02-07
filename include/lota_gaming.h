@@ -194,6 +194,32 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 void lota_token_free(struct lota_token *token);
 
 /*
+ * lota_token_serialized_size - Calculate serialized token size
+ * @token: Token to measure
+ *
+ * Returns the number of bytes needed to serialize @token,
+ * or 0 if the token is invalid.
+ */
+size_t lota_token_serialized_size(const struct lota_token *token);
+
+/*
+ * lota_token_serialize - Serialize token to wire format
+ * @token: Token to serialize (from lota_get_token)
+ * @buf: Output buffer
+ * @buflen: Size of output buffer
+ * @written: Output: number of bytes written (may be NULL)
+ *
+ * Writes a portable binary representation suitable for sending
+ * to a game server. The server deserializes and verifies with
+ * lota_server_verify_token() from lota_server.h.
+ *
+ * Returns LOTA_OK on success, LOTA_ERR_BUFFER_TOO_SMALL if buf
+ * is too small (use lota_token_serialized_size to check first).
+ */
+int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
+                         size_t buflen, size_t *written);
+
+/*
  * lota_strerror - Get error message for error code
  */
 const char *lota_strerror(int error);
