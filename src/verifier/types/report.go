@@ -178,10 +178,9 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 
 	report.Header.Version = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
-	majorVersion := report.Header.Version >> 16
-	if majorVersion != (ReportVersion >> 16) {
-		return nil, fmt.Errorf("%w: got %d.x, expected %d.x",
-			ErrInvalidVersion, majorVersion, ReportVersion>>16)
+	if report.Header.Version != ReportVersion {
+		return nil, fmt.Errorf("%w: got 0x%08X, expected 0x%08X",
+			ErrInvalidVersion, report.Header.Version, ReportVersion)
 	}
 
 	report.Header.Timestamp = binary.LittleEndian.Uint64(data[offset:])
