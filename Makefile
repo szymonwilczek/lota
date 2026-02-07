@@ -37,6 +37,8 @@ VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
+SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
+SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 
 # Compiler flags
 CFLAGS := -Wall -Wextra -Werror -O2 -g
@@ -73,9 +75,13 @@ SDK_DIR := $(SRC_DIR)/sdk
 SDK_SRCS := $(SDK_DIR)/lota_gaming.c
 SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
+# Server SDK source files
+SERVER_SDK_SRCS := $(SDK_DIR)/lota_server.c
+SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB)
+all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -106,6 +112,16 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(AR) rcs $@ $^
 	@echo "Built: $@"
 
+# build server SDK shared library
+$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+	$(CC) -shared -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+# build server SDK static library
+$(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+	$(AR) rcs $@ $^
+	@echo "Built: $@"
+
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
@@ -118,7 +134,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent verifier sdk clean install test
+.PHONY: bpf agent verifier sdk server-sdk clean install test
 
 bpf: $(BPF_OBJ)
 
@@ -127,6 +143,8 @@ agent: $(AGENT_BIN)
 verifier: $(VERIFIER_BIN)
 
 sdk: $(SDK_LIB) $(SDK_STATIC)
+
+server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -148,7 +166,9 @@ install: all
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
+	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
@@ -178,14 +198,15 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 .PHONY: help
 help:
 	@echo "LOTA Makefile targets:"
-	@echo "  all      - Build agent, verifier, SDK and BPF program (default)"
-	@echo "  bpf      - Build only BPF program"
-	@echo "  agent    - Build only user-space agent"
-	@echo "  verifier - Build only Go verifier"
-	@echo "  sdk      - Build only gaming SDK library"
-	@echo "  clean    - Remove build artifacts"
-	@echo "  install  - Install to /usr (requires sudo)"
-	@echo "  test     - Run basic tests (requires sudo)"
+	@echo "  all        - Build agent, verifier, SDKs and BPF program (default)"
+	@echo "  bpf        - Build only BPF program"
+	@echo "  agent      - Build only user-space agent"
+	@echo "  verifier   - Build only Go verifier"
+	@echo "  sdk        - Build only gaming SDK library"
+	@echo "  server-sdk - Build only server-side verification SDK"
+	@echo "  clean      - Remove build artifacts"
+	@echo "  install    - Install to /usr (requires sudo)"
+	@echo "  test       - Run basic tests (requires sudo)"
 	@echo ""
 	@echo "Prerequisites (Fedora):"
 	@echo "  sudo dnf install clang llvm libbpf-devel tpm2-tss-devel openssl-devel bpftool golang"
