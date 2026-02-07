@@ -323,11 +323,11 @@ func TestPCRVerifier_VerifyReport_PassingPolicy(t *testing.T) {
 
 	verifier := NewPCRVerifier()
 
-	// permissive policy
+	// permissive policy (default requires enforce mode)
 	verifier.AddPolicy(DefaultPolicy())
 
 	report := &types.AttestationReport{}
-	report.Header.Flags = types.FlagModuleSig // will not be checked since RequireModuleSig=false
+	report.Header.Flags = types.FlagEnforce // required by default policy
 
 	err := verifier.VerifyReport(report)
 	if err != nil {
@@ -398,4 +398,169 @@ func TestExamplePolicy(t *testing.T) {
 	}
 
 	t.Log("ExamplePolicy provides valid template structure")
+}
+
+func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
+	t.Log("SECURITY TEST: LSM enforce mode requirement")
+
+	verifier := NewPCRVerifier()
+
+	policy := &PCRPolicy{
+		Name:           "require-enforce",
+		RequireEnforce: true,
+	}
+	verifier.AddPolicy(policy)
+
+	// report without enforce flag
+	report := &types.AttestationReport{}
+	report.Header.Flags = 0
+
+	err := verifier.VerifyReport(report)
+	if err == nil {
+		t.Error("Expected error when LSM enforce mode not active")
+	}
+
+	t.Logf("Missing enforce mode correctly detected: %v", err)
+}
+
+func TestPCRVerifier_VerifyReport_RequireEnforce_Pass(t *testing.T) {
+	t.Log("TEST: Enforce requirement passes when flag set")
+
+	verifier := NewPCRVerifier()
+
+	policy := &PCRPolicy{
+		Name:           "require-enforce",
+		RequireEnforce: true,
+	}
+	verifier.AddPolicy(policy)
+
+	report := &types.AttestationReport{}
+	report.Header.Flags = types.FlagEnforce
+
+	err := verifier.VerifyReport(report)
+	if err != nil {
+		t.Errorf("Report with enforce flag should pass: %v", err)
+	}
+
+	t.Log("Enforce requirement correctly passes with flag set")
+}
+
+func TestPCRVerifier_VerifyReport_DefaultPolicy_RejectsMonitor(t *testing.T) {
+	t.Log("SECURITY TEST: DefaultPolicy rejects agents not in enforce mode")
+
+	verifier := NewPCRVerifier()
+	verifier.AddPolicy(DefaultPolicy())
+
+	// agent in monitor mode -> no FlagEnforce
+	report := &types.AttestationReport{}
+	report.Header.Flags = types.FlagBPFActive // BPF loaded but not enforcing
+
+	err := verifier.VerifyReport(report)
+	if err == nil {
+		t.Error("DefaultPolicy should reject agents not in enforce mode")
+	}
+
+	t.Logf("Monitor mode agent correctly rejected: %v", err)
+}
+
+func TestValidatePolicy_EmptyPolicy(t *testing.T) {
+	t.Log("TEST: ValidatePolicy detects empty permissive policy")
+
+	policy := &PCRPolicy{
+		Name: "empty",
+	}
+
+	warnings := ValidatePolicy(policy)
+	if len(warnings) == 0 {
+		t.Error("Empty policy should produce warnings")
+	}
+
+	// should warn about no PCRs
+	foundPCRWarning := false
+	foundPermissiveWarning := false
+	for _, w := range warnings {
+		t.Logf("  Warning: %s", w)
+		if len(w) > 0 {
+			if containsStr(w, "no PCR") {
+				foundPCRWarning = true
+			}
+			if containsStr(w, "permissive") {
+				foundPermissiveWarning = true
+			}
+		}
+	}
+
+	if !foundPCRWarning {
+		t.Error("Should warn about missing PCR values")
+	}
+	if !foundPermissiveWarning {
+		t.Error("Should warn about permissive policy")
+	}
+
+	t.Log("Empty policy correctly diagnosed")
+}
+
+func TestValidatePolicy_StrictPolicy(t *testing.T) {
+	t.Log("TEST: ValidatePolicy on strict policy")
+
+	policy := StrictPolicy()
+	warnings := ValidatePolicy(policy)
+
+	// strict has requirements enabled but no PCRs -> should warn about PCRs only
+	foundPCRWarning := false
+	foundPermissiveWarning := false
+	for _, w := range warnings {
+		t.Logf("  Warning: %s", w)
+		if containsStr(w, "no PCR") {
+			foundPCRWarning = true
+		}
+		if containsStr(w, "permissive") {
+			foundPermissiveWarning = true
+		}
+	}
+
+	if !foundPCRWarning {
+		t.Error("Should warn about missing PCR values even in strict policy")
+	}
+	if foundPermissiveWarning {
+		t.Error("Strict policy with all requirements should not be called permissive")
+	}
+
+	t.Log("Strict policy validation correct")
+}
+
+func TestValidatePolicy_WellConfigured(t *testing.T) {
+	t.Log("TEST: ValidatePolicy on well-configured policy")
+
+	policy := &PCRPolicy{
+		Name: "good",
+		PCRs: map[int]string{
+			0: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61",
+		},
+		KernelHashes:   []string{"6da97dc5886e0da1d3ce0ac1a01c82c642564460d907cfc10db9af1ca8ad97d9"},
+		RequireEnforce: true,
+	}
+
+	warnings := ValidatePolicy(policy)
+	if len(warnings) != 0 {
+		for _, w := range warnings {
+			t.Errorf("Unexpected warning: %s", w)
+		}
+	}
+
+	t.Log("Well-configured policy produces no warnings")
+}
+
+// helper for substring matching in tests
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 && stringContains(s, substr))
+}
+
+func stringContains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
