@@ -81,6 +81,8 @@ struct {
 #define STAT_PTRACE_ATTEMPTS 7
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
+#define STAT_ANON_EXEC 10
+#define STAT_ANON_EXEC_BLOCKED 11
 
 /*
  * Configuration map for runtime policy control.
@@ -873,9 +875,57 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   if (!(prot & 0x4))
     return 0;
 
-  /* anonymous executable mappings (JIT, etc) - log but dont block */
-  if (!file)
+  /*
+   * Anonymous executable mappings (file == NULL).
+   *
+   * In ENFORCE mode with LOTA_CFG_BLOCK_ANON_EXEC enabled, these are
+   * blocked and logged. Otherwise, they are logged only.
+   */
+  if (!file) {
+    int anon_blocked = 0;
+
+    inc_stat(STAT_ANON_EXEC);
+
+    mode = get_mode();
+
+    if (mode == LOTA_MODE_MAINTENANCE)
+      return 0;
+
+    if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC)) {
+      anon_blocked = 1;
+    }
+
+    event = bpf_map_lookup_elem(&event_scratch, &key);
+    if (event) {
+      __builtin_memset(event, 0, sizeof(*event));
+      event->timestamp_ns = bpf_ktime_get_ns();
+      event->event_type =
+          anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED : LOTA_EVENT_ANON_EXEC;
+      event->pid = bpf_get_current_pid_tgid() >> 32;
+      event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+      event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+
+      bpf_get_current_comm(event->comm, sizeof(event->comm));
+      __builtin_memcpy(event->filename, "(anon-exec)", 12);
+
+      struct lota_exec_event *rb_event;
+      rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+      if (rb_event) {
+        __builtin_memcpy(rb_event, event, sizeof(*event));
+        bpf_ringbuf_submit(rb_event, 0);
+        inc_stat(STAT_EVENTS_SENT);
+      } else {
+        inc_stat(STAT_RINGBUF_DROPS);
+      }
+    }
+
+    if (anon_blocked) {
+      inc_stat(STAT_ANON_EXEC_BLOCKED);
+      return -1; /* -EPERM */
+    }
+
     return 0;
+  }
 
   inc_stat(STAT_MMAP_EXECS);
 
