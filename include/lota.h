@@ -115,14 +115,6 @@ struct lota_exec_event {
 } __attribute__((packed));
 
 /*
- * Partial hash calculation:
- * Due to eBPF instruction limits, entire files cannot be cached.
- * What is hashed: first 4KB + file size + inode number.
- * This provides a "fingerprint" that changes if binary is modified.
- */
-#define LOTA_HASH_SAMPLE_SIZE 4096
-
-/*
  * Trusted library path prefixes.
  * Libraries loaded via mmap(PROT_EXEC) from these paths are allowed
  * in ENFORCE mode. All other executable mmaps are blocked.
