@@ -78,6 +78,24 @@ extern "C" {
 #define LOTA_TOKEN_MAX_SIZE (LOTA_TOKEN_HEADER_SIZE + 1024 + 512)
 
 /*
+ * Token freshness policy defaults.
+ *
+ * LOTA_TOKEN_DEFAULT_MAX_AGE:
+ *   Maximum acceptable age (in seconds) for a token. If the token's
+ *   issued_at timestamp is older than (now - max_age), the token is
+ *   considered stale. Default is 300 seconds (5 minutes).
+ *   Game servers can override by checking claims.age_seconds directly.
+ *
+ * LOTA_TOKEN_MAX_CLOCK_SKEW:
+ *   Maximum allowed clock difference (in seconds) between the token
+ *   issuer and the verifier. Tokens with issued_at in the future
+ *   (beyond this tolerance) are flagged as issued_in_future.
+ *   Default is 60 seconds.
+ */
+#define LOTA_TOKEN_DEFAULT_MAX_AGE 300
+#define LOTA_TOKEN_MAX_CLOCK_SKEW 60
+
+/*
  * Token wire format header (packed, little-endian)
  */
 struct lota_token_wire {
@@ -127,6 +145,9 @@ struct lota_server_claims {
   uint8_t pcr_digest[32]; /* PCR composite hash from TPMS_ATTEST */
   size_t pcr_digest_len;  /* Actual length of pcr_digest (0 if absent) */
   int expired;            /* 1 if token has expired, 0 otherwise */
+  int too_old;            /* 1 if age > LOTA_TOKEN_DEFAULT_MAX_AGE */
+  int issued_in_future;   /* 1 if issued_at > now + LOTA_TOKEN_MAX_CLOCK_SKEW */
+  int64_t age_seconds;    /* Token age: now - issued_at (negative if future) */
 };
 
 /*
@@ -146,10 +167,17 @@ struct lota_server_claims {
  *  4. extraData == SHA256(issued_at || valid_until || flags || nonce)
  *  5. Optionally verify client nonce matches expected_nonce
  *  6. Check token expiry against current time
- *  7. Extract PCR digest from TPMS_ATTEST QuoteInfo
+ *  7. Check token freshness (issued_at close to now)
+ *  8. Extract PCR digest from TPMS_ATTEST QuoteInfo
  *
- * Returns LOTA_SERVER_OK on success (even if token is expired - check
- * claims->expired). Returns negative error code on verification failure.
+ * Freshness checks (soft - reported in claims, not hard errors):
+ *  - claims->too_old: token age exceeds LOTA_TOKEN_DEFAULT_MAX_AGE
+ *  - claims->issued_in_future: issued_at ahead of now by > MAX_CLOCK_SKEW
+ *  - claims->age_seconds: signed age for custom policy decisions
+ *
+ * Returns LOTA_SERVER_OK on success (even if token is expired/stale -
+ * check claims->expired and claims->too_old). Returns negative error
+ * code on verification failure.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
