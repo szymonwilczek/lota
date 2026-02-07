@@ -445,27 +445,76 @@ static __always_inline u64 fprint_mix(u64 h, u64 val) {
 static __always_inline void compute_partial_hash(struct file *file,
                                                  u8 hash[LOTA_HASH_SIZE]) {
   struct inode *inode;
-  u64 ino, size;
+  u64 h0, h1, h2, h3;
+  u64 ino, size, blocks;
+  u64 mtime_sec, ctime_sec;
+  u32 mtime_nsec, ctime_nsec;
+  u32 mode, nlink, generation;
+  u32 uid_val, gid_val;
+  u64 i_version;
 
-  /* For file metadata */
   inode = BPF_CORE_READ(file, f_inode);
   if (!inode) {
     __builtin_memset(hash, 0, LOTA_HASH_SIZE);
     return;
   }
 
+  /* gather all available inode metadata */
   ino = BPF_CORE_READ(inode, i_ino);
   size = BPF_CORE_READ(inode, i_size);
+  blocks = BPF_CORE_READ(inode, i_blocks);
+  mode = BPF_CORE_READ(inode, i_mode);
+  uid_val = BPF_CORE_READ(inode, i_uid.val);
+  gid_val = BPF_CORE_READ(inode, i_gid.val);
+  nlink = BPF_CORE_READ(inode, i_nlink);
+  generation = BPF_CORE_READ(inode, i_generation);
 
   /*
-   * For now (will be changed), encode inode and size into hash.
-   * Real implementation would read file content.
-   *
-   * Format: [8 bytes ino][8 bytes size][16 bytes zero]
+   * Timestamps: mtime changes on content write, ctime changes on
+   * any metadata change.
    */
-  __builtin_memset(hash, 0, LOTA_HASH_SIZE);
-  __builtin_memcpy(hash, &ino, sizeof(ino));
-  __builtin_memcpy(hash + 8, &size, sizeof(size));
+  mtime_sec = BPF_CORE_READ(inode, i_mtime_sec);
+  mtime_nsec = BPF_CORE_READ(inode, i_mtime_nsec);
+  ctime_sec = BPF_CORE_READ(inode, i_ctime_sec);
+  ctime_nsec = BPF_CORE_READ(inode, i_ctime_nsec);
+
+  /*
+   * i_version: kernel-maintained counter incremented on every inode
+   * modification. Strongest anti-tamper signal available from BPF.
+   * Stored as atomic64_t, read the counter value directly.
+   */
+  i_version = BPF_CORE_READ(inode, i_version.counter);
+
+  /*
+   * Mix metadata into 4 independent 64-bit hash lanes.
+   * Initial values are arbitrary non-zero constants to avoid
+   * zero-state degeneracy.
+   */
+  h0 = fprint_mix(0x243f6a8885a308d3ULL, ino);       /* pi fractional */
+  h1 = fprint_mix(0x13198a2e03707344ULL, size);      /* pi fractional */
+  h2 = fprint_mix(0xa4093822299f31d0ULL, blocks);    /* e fractional  */
+  h3 = fprint_mix(0x082efa98ec4e6c89ULL, i_version); /* e fractional  */
+
+  h0 = fprint_mix(h0, mtime_sec);
+  h1 = fprint_mix(h1, (u64)mtime_nsec);
+  h2 = fprint_mix(h2, ctime_sec);
+  h3 = fprint_mix(h3, (u64)ctime_nsec);
+
+  h0 = fprint_mix(h0, (u64)mode | ((u64)nlink << 16) | ((u64)generation << 32));
+  h1 = fprint_mix(h1, (u64)uid_val | ((u64)gid_val << 32));
+
+  h0 ^= h2;
+  h1 ^= h3;
+  h2 = fprint_mix(h2, h0);
+  h3 = fprint_mix(h3, h1);
+  h0 = fprint_mix(h0, h3);
+  h1 = fprint_mix(h1, h2);
+
+  /* 32-byte fingerprint (4 x 8 bytes) */
+  __builtin_memcpy(hash, &h0, 8);
+  __builtin_memcpy(hash + 8, &h1, 8);
+  __builtin_memcpy(hash + 16, &h2, 8);
+  __builtin_memcpy(hash + 24, &h3, 8);
 }
 
 /*
