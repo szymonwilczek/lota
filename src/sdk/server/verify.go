@@ -45,6 +45,17 @@ const (
 	MaxSigSize    = 512
 )
 
+// Token freshness policy defaults (see: include/lota_server.h)
+const (
+	// Maximum acceptable age (in seconds) for a token.
+	// Tokens older than this are flagged as TooOld.
+	DefaultMaxTokenAge = 300 // 5 minutes
+
+	// Maximum allowed clock skew (in seconds) between issuer and verifier.
+	// Tokens issued further in the future are flagged as IssuedInFuture.
+	MaxClockSkew = 60 // 1 minute
+)
+
 // TPM algorithm identifiers
 const (
 	TPMAlgRSASSA uint16 = 0x0014
@@ -102,6 +113,15 @@ type Claims struct {
 
 	// true if the token has passed its ExpiresAt time
 	Expired bool
+
+	// true if the token age exceeds DefaultMaxTokenAge
+	TooOld bool
+
+	// true if IssuedAt is ahead of now by more than MaxClockSkew
+	IssuedInFuture bool
+
+	// signed token age: now - IssuedAt (negative if issued in the future)
+	AgeSeconds int64
 }
 
 // represents the parsed wire-format header
@@ -187,9 +207,15 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	// check expiry
-	if hdr.validUntil > 0 && time.Now().Unix() > int64(hdr.validUntil) {
+	now := time.Now()
+	if hdr.validUntil > 0 && now.Unix() > int64(hdr.validUntil) {
 		claims.Expired = true
 	}
+
+	// check freshness
+	claims.AgeSeconds = now.Unix() - int64(hdr.issuedAt)
+	claims.TooOld = claims.AgeSeconds > DefaultMaxTokenAge
+	claims.IssuedInFuture = claims.AgeSeconds < -int64(MaxClockSkew)
 
 	return claims, nil
 }
@@ -224,6 +250,12 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 	if hdr.validUntil > 0 && time.Now().Unix() > int64(hdr.validUntil) {
 		claims.Expired = true
 	}
+
+	// check freshness
+	now := time.Now()
+	claims.AgeSeconds = now.Unix() - int64(hdr.issuedAt)
+	claims.TooOld = claims.AgeSeconds > DefaultMaxTokenAge
+	claims.IssuedInFuture = claims.AgeSeconds < -int64(MaxClockSkew)
 
 	return claims, nil
 }
