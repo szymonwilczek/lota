@@ -372,6 +372,12 @@ static int handle_exec_event(void *ctx, void *data, size_t len) {
            (unsigned long long)event->timestamp_ns, event->comm, event->uid,
            event->target_pid, event->pid);
     return 0;
+  case LOTA_EVENT_ANON_EXEC:
+    event_type_str = "ANON_EXEC";
+    break;
+  case LOTA_EVENT_ANON_EXEC_BLOCKED:
+    event_type_str = "ANON_EXEC_BLOCKED";
+    break;
   default:
     event_type_str = "UNKNOWN";
     break;
