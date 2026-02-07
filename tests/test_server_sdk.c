@@ -387,6 +387,14 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
     FAIL("should not be expired");
     return;
   }
+  if (claims.too_old) {
+    FAIL("fresh token should not be too_old");
+    return;
+  }
+  if (claims.issued_in_future) {
+    FAIL("should not be issued_in_future");
+    return;
+  }
   if (claims.flags != 0x07) {
     FAIL("flags mismatch");
     return;
@@ -538,6 +546,129 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
   }
 }
 
+static void test_verify_stale_token(EVP_PKEY *key, const uint8_t *aik_der,
+                                    size_t aik_len) {
+  TEST("lota_server_verify_token - stale token → claims.too_old=1");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0xAA};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  /* issued 1 hour ago, valid_until still in the future */
+  build_full_token(key, now - 3600, now + 3600, 0x07, nonce, tokbuf,
+                   sizeof(tokbuf), &tok_written);
+
+  struct lota_server_claims claims;
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret != LOTA_SERVER_OK) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "verify returned %d (expected OK)", ret);
+    FAIL(msg);
+    return;
+  }
+  if (!claims.too_old) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "too_old should be 1 (age=%ld)",
+             (long)claims.age_seconds);
+    FAIL(msg);
+    return;
+  }
+  if (claims.expired) {
+    FAIL("should not be expired (valid_until is future)");
+    return;
+  }
+  if (claims.age_seconds < 3500) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "age_seconds=%ld, expected ~3600",
+             (long)claims.age_seconds);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
+static void test_verify_future_token(EVP_PKEY *key, const uint8_t *aik_der,
+                                     size_t aik_len) {
+  TEST("lota_server_verify_token - future token → issued_in_future=1");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0xBB};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  /* issued 10 minutes in the future (far beyond clock skew tolerance) */
+  build_full_token(key, now + 600, now + 7200, 0, nonce, tokbuf, sizeof(tokbuf),
+                   &tok_written);
+
+  struct lota_server_claims claims;
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret != LOTA_SERVER_OK) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "verify returned %d (expected OK)", ret);
+    FAIL(msg);
+    return;
+  }
+  if (!claims.issued_in_future) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "issued_in_future should be 1 (age=%ld)",
+             (long)claims.age_seconds);
+    FAIL(msg);
+    return;
+  }
+  if (claims.age_seconds >= 0) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "age should be negative, got %ld",
+             (long)claims.age_seconds);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
+static void test_verify_fresh_token_not_stale(EVP_PKEY *key,
+                                              const uint8_t *aik_der,
+                                              size_t aik_len) {
+  TEST("lota_server_verify_token - fresh token → too_old=0");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0xCC};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  /* issued 10 seconds ago - well within max age */
+  build_full_token(key, now - 10, now + 3600, 0x07, nonce, tokbuf,
+                   sizeof(tokbuf), &tok_written);
+
+  struct lota_server_claims claims;
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret != LOTA_SERVER_OK) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "verify returned %d (expected OK)", ret);
+    FAIL(msg);
+    return;
+  }
+  if (claims.too_old || claims.issued_in_future || claims.expired) {
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+             "too_old=%d issued_in_future=%d expired=%d (all should be 0)",
+             claims.too_old, claims.issued_in_future, claims.expired);
+    FAIL(msg);
+    return;
+  }
+  if (claims.age_seconds < 0 || claims.age_seconds > 60) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "age_seconds=%ld, expected ~10",
+             (long)claims.age_seconds);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
 static void test_malformed_inputs(void) {
   TEST("lota_server_verify_token - NULL inputs");
   struct lota_server_claims claims;
@@ -655,6 +786,11 @@ int main(void) {
   test_verify_bad_signature(key, aik_der, aik_len);
   test_verify_tampered_flags(key, aik_der, aik_len);
   test_verify_expired(key, aik_der, aik_len);
+
+  printf(BOLD "\nFreshness Checks:\n" RESET);
+  test_verify_stale_token(key, aik_der, aik_len);
+  test_verify_future_token(key, aik_der, aik_len);
+  test_verify_fresh_token_not_stale(key, aik_der, aik_len);
 
   printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
   test_malformed_inputs();
