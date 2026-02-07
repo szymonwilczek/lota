@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,17 +21,86 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAX_EVENTS 16
 #define MAX_CLIENTS 64
 #define SOCKET_DIR "/run/lota"
+#define LOTA_GROUP_NAME "lota"
+
+/* Rate limiting: max GET_TOKEN requests per UID per window */
+#define TOKEN_RATE_LIMIT 10      /* requests */
+#define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
+
+/*
+ * Per-UID rate limiter
+ */
+struct uid_rate {
+  uid_t uid;
+  int count;
+  time_t window_start;
+};
+
+#define MAX_RATE_ENTRIES 256
+static struct uid_rate rate_table[MAX_RATE_ENTRIES];
+static int rate_count = 0;
+
+/*
+ * Check and update rate limit for a UID.
+ * Returns 0 if allowed, -1 if rate limited.
+ */
+static int check_rate_limit(uid_t uid) {
+  time_t now = time(NULL);
+
+  /* existing entry */
+  for (int i = 0; i < rate_count; i++) {
+    if (rate_table[i].uid == uid) {
+      /* reset window if expired */
+      if (now - rate_table[i].window_start >= TOKEN_RATE_WINDOW_SEC) {
+        rate_table[i].count = 1;
+        rate_table[i].window_start = now;
+        return 0;
+      }
+      /* within window: check limit */
+      if (rate_table[i].count >= TOKEN_RATE_LIMIT)
+        return -1;
+      rate_table[i].count++;
+      return 0;
+    }
+  }
+
+  /* new entry */
+  if (rate_count < MAX_RATE_ENTRIES) {
+    rate_table[rate_count].uid = uid;
+    rate_table[rate_count].count = 1;
+    rate_table[rate_count].window_start = now;
+    rate_count++;
+    return 0;
+  }
+
+  /* table full - evict oldest expired entry, or reject */
+  for (int i = 0; i < rate_count; i++) {
+    if (now - rate_table[i].window_start >= TOKEN_RATE_WINDOW_SEC) {
+      rate_table[i].uid = uid;
+      rate_table[i].count = 1;
+      rate_table[i].window_start = now;
+      return 0;
+    }
+  }
+
+  /* all slots active and not expired - fail open to avoid DoS on self */
+  return 0;
+}
 
 /*
  * Client connection state
  */
 struct ipc_client {
   int fd;
+  uid_t peer_uid; /* authenticated peer UID via SO_PEERCRED */
+  gid_t peer_gid; /* authenticated peer GID */
+  pid_t peer_pid; /* authenticated peer PID */
   uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
   size_t recv_len;
   uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
@@ -65,8 +135,13 @@ static int ensure_socket_dir(void) {
     return 0;
   }
 
-  if (mkdir(SOCKET_DIR, 0755) < 0)
+  if (mkdir(SOCKET_DIR, 0750) < 0)
     return -errno;
+
+  /* set socket directory group to 'lota' if the group exists */
+  struct group *grp = getgrnam(LOTA_GROUP_NAME);
+  if (grp)
+    chown(SOCKET_DIR, 0, grp->gr_gid);
 
   return 0;
 }
@@ -74,7 +149,8 @@ static int ensure_socket_dir(void) {
 /*
  * Find or create client slot
  */
-static struct ipc_client *client_create(int fd) {
+static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
+                                        pid_t pid) {
   struct ipc_client *client;
 
   if (client_count >= MAX_CLIENTS)
@@ -85,6 +161,9 @@ static struct ipc_client *client_create(int fd) {
     return NULL;
 
   client->fd = fd;
+  client->peer_uid = uid;
+  client->peer_gid = gid;
+  client->peer_pid = pid;
 
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (!clients[i]) {
@@ -233,6 +312,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
     build_error_response(client, LOTA_IPC_ERR_NOT_ATTESTED);
+    return;
+  }
+
+  /* rate limit GET_TOKEN per peer UID */
+  if (check_rate_limit(client->peer_uid) < 0) {
+    fprintf(stderr, "IPC: rate limited GET_TOKEN for uid=%d pid=%d\n",
+            client->peer_uid, client->peer_pid);
+    build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
     return;
   }
 
