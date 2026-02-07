@@ -12,6 +12,7 @@
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
+//   --admin-api-key KEY Admin API key for mutating HTTP endpoints (required for revoke/ban)
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -48,6 +49,7 @@ var (
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
+	adminAPIKey  = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
 	logFormat    = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel     = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
@@ -165,8 +167,13 @@ func main() {
 		Logger:         logger,
 		Metrics:        m,
 		AttestationLog: attestLog,
+		AdminAPIKey:    *adminAPIKey,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
+	}
+
+	if *httpAddr != "" && *adminAPIKey == "" {
+		logger.Warn("HTTP API enabled without --admin-api-key: admin endpoints (revoke, ban) will be disabled")
 	}
 
 	srv, err := server.NewServer(serverCfg, verifier)
