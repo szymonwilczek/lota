@@ -142,7 +142,7 @@ func (d *dummyListener) Addr() net.Addr {
 func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	t.Helper()
 
-	buf := make([]byte, types.ExpectedReportSize)
+	buf := make([]byte, types.MinReportSize)
 	offset := 0
 
 	// Header (32 bytes)
@@ -154,7 +154,7 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], 0) // timestamp_ns
 	offset += 8
-	binary.LittleEndian.PutUint32(buf[offset:], types.ExpectedReportSize)
+	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
 	offset += 4

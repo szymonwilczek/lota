@@ -689,7 +689,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 		t.Helper()
 	}
 
-	buf := make([]byte, types.ExpectedReportSize)
+	buf := make([]byte, types.MinReportSize)
 	offset := 0
 
 	// Header
@@ -700,7 +700,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
 	offset += 8
 	offset += 8 // timestamp_ns
-	binary.LittleEndian.PutUint32(buf[offset:], types.ExpectedReportSize)
+	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
 	offset += 4

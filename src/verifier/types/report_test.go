@@ -16,7 +16,7 @@ import (
 // Test report matching C struct layout
 // IMPORTANT: Any misalignment causes verification failures
 func createTestReportBytes() []byte {
-	buf := make([]byte, ExpectedReportSize)
+	buf := make([]byte, MinReportSize)
 	offset := 0
 
 	// Header (32 bytes)
@@ -28,7 +28,7 @@ func createTestReportBytes() []byte {
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], 123456789) // timestamp_ns
 	offset += 8
-	binary.LittleEndian.PutUint32(buf[offset:], ExpectedReportSize) // report_size
+	binary.LittleEndian.PutUint32(buf[offset:], MinReportSize) // report_size
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], FlagTPMQuoteOK|FlagModuleSig) // flags
 	offset += 4
@@ -146,8 +146,8 @@ func TestParseReport_ValidReport(t *testing.T) {
 		if report.Header.TimestampNs != 123456789 {
 			t.Errorf("TimestampNs: got %d, want 123456789", report.Header.TimestampNs)
 		}
-		if report.Header.ReportSize != ExpectedReportSize {
-			t.Errorf("ReportSize: got %d, want %d", report.Header.ReportSize, ExpectedReportSize)
+		if report.Header.ReportSize != MinReportSize {
+			t.Errorf("ReportSize: got %d, want %d", report.Header.ReportSize, MinReportSize)
 		}
 		if report.Header.Flags != (FlagTPMQuoteOK | FlagModuleSig) {
 			t.Errorf("Flags: got 0x%08X, want 0x%08X",
@@ -262,7 +262,7 @@ func TestParseReport_TruncatedData(t *testing.T) {
 		{"OnlyMagic", 4},
 		{"OnlyHeader", 32},
 		{"HalfTPM", 32 + 1000},
-		{"AlmostComplete", ExpectedReportSize - 1},
+		{"AlmostComplete", MinReportSize - 1},
 	}
 
 	for _, tc := range testCases {
@@ -326,11 +326,14 @@ func TestParseReport_Alignment(t *testing.T) {
 		})
 	}
 
-	// final check: total size (with certificates and hardware_id)
-	if ExpectedReportSize != 7444 {
-		t.Errorf("ExpectedReportSize: got %d, want 7444", ExpectedReportSize)
+	// final check: fixed size matches C struct, min size includes variable sections header
+	if FixedReportSize != 7444 {
+		t.Errorf("FixedReportSize: got %d, want 7444", FixedReportSize)
 	}
-	t.Logf("✓ Total report size: %d bytes", ExpectedReportSize)
+	if MinReportSize != 7452 {
+		t.Errorf("MinReportSize: got %d, want 7452", MinReportSize)
+	}
+	t.Logf("✓ Fixed report size: %d bytes, minimum wire size: %d bytes", FixedReportSize, MinReportSize)
 }
 
 func TestChallenge_Serialize(t *testing.T) {

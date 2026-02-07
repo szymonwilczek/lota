@@ -170,8 +170,8 @@ const FixedReportSize = 7444
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
-	if len(data) < ExpectedReportSize {
-		return nil, fmt.Errorf("%w: got %d, expected %d", ErrInvalidSize, len(data), ExpectedReportSize)
+	if len(data) < MinReportSize {
+		return nil, fmt.Errorf("%w: got %d, minimum %d", ErrInvalidSize, len(data), MinReportSize)
 	}
 
 	report := &AttestationReport{}
@@ -260,6 +260,34 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	report.BPF.FirstEventTS = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	report.BPF.LastEventTS = binary.LittleEndian.Uint64(data[offset:])
+	offset += 8
+
+	// BPF events section: event_count + events
+	if len(data) < offset+4 {
+		return nil, fmt.Errorf("%w: truncated at event_count", ErrInvalidSize)
+	}
+	eventCount := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	eventBytes := int(eventCount) * ExecEventSize
+	if len(data) < offset+eventBytes {
+		return nil, fmt.Errorf("%w: truncated at BPF events (need %d bytes)", ErrInvalidSize, eventBytes)
+	}
+	offset += eventBytes // skip BPF events (not parsed yet)
+
+	// TPM event log section
+	if len(data) < offset+4 {
+		return nil, fmt.Errorf("%w: truncated at event_log_size", ErrInvalidSize)
+	}
+	eventLogSize := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	if len(data) < offset+int(eventLogSize) {
+		return nil, fmt.Errorf("%w: truncated at event_log (need %d, have %d)",
+			ErrInvalidSize, eventLogSize, len(data)-offset)
+	}
+	if eventLogSize > 0 {
+		report.EventLog = make([]byte, eventLogSize)
+		copy(report.EventLog, data[offset:offset+int(eventLogSize)])
+	}
 
 	return report, nil
 }
