@@ -13,6 +13,7 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
 //   --admin-api-key KEY Admin API key for mutating HTTP endpoints (required for revoke/ban)
+//   --aik-max-age DUR  Maximum AIK registration age before forced rotation (default: 720h)
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -51,6 +52,7 @@ var (
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
 	adminAPIKey  = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
+	aikMaxAge    = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
 	logFormat    = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel     = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 )
@@ -97,6 +99,13 @@ func main() {
 	verifierCfg := verify.DefaultConfig()
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
+	verifierCfg.AIKMaxAge = *aikMaxAge
+
+	if *aikMaxAge == 0 {
+		logger.Warn("AIK expiry disabled (--aik-max-age=0): registered keys will never expire")
+	} else {
+		logger.Info("AIK key rotation enabled", "max_age", *aikMaxAge)
+	}
 
 	if *dbPath != "" {
 		db, err := store.OpenDB(*dbPath)
