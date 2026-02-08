@@ -63,6 +63,14 @@ var (
 	logLevel     = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 )
 
+// resolveAPIKey returns the flag value if set, otherwise falls back to the environment variable
+func resolveAPIKey(flagVal *string, envVar string) string {
+	if *flagVal != "" {
+		return *flagVal
+	}
+	return os.Getenv(envVar)
+}
+
 func main() {
 	flag.Parse()
 
@@ -172,6 +180,17 @@ func main() {
 		logger.Info("loaded custom policy", "path", *policyFile)
 	}
 
+	// resolve API keys (flag -> env var fallback)
+	adminKey := resolveAPIKey(adminAPIKey, "LOTA_ADMIN_API_KEY")
+	readerKey := resolveAPIKey(readerAPIKey, "LOTA_READER_API_KEY")
+
+	if adminKey != *adminAPIKey && adminKey != "" {
+		logger.Info("admin API key loaded from LOTA_ADMIN_API_KEY environment variable")
+	}
+	if readerKey != *readerAPIKey && readerKey != "" {
+		logger.Info("reader API key loaded from LOTA_READER_API_KEY environment variable")
+	}
+
 	// initialize tls server
 	serverCfg := server.ServerConfig{
 		Address:        *addr,
@@ -182,13 +201,17 @@ func main() {
 		Logger:         logger,
 		Metrics:        m,
 		AttestationLog: attestLog,
-		AdminAPIKey:    *adminAPIKey,
+		AdminAPIKey:    adminKey,
+		ReaderAPIKey:   readerKey,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 	}
 
-	if *httpAddr != "" && *adminAPIKey == "" {
-		logger.Warn("HTTP API enabled without --admin-api-key: admin endpoints (revoke, ban) will be disabled")
+	if *httpAddr != "" && adminKey == "" {
+		logger.Warn("HTTP API enabled without admin API key: admin endpoints (revoke, ban) will be disabled")
+	}
+	if *httpAddr != "" && readerKey == "" {
+		logger.Warn("HTTP API enabled without reader API key: sensitive read-only endpoints will be public")
 	}
 
 	srv, err := server.NewServer(serverCfg, verifier)
