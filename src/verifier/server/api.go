@@ -128,6 +128,43 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// wraps a handler with reader-level authentication
+// accepts either the reader API key or the admin API key
+// if no reader key is configured, the endpoint is public
+func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.readerAPIKey == "" {
+			// endpoint is public
+			next(w, r)
+			return
+		}
+
+		token := extractBearerToken(r)
+		if token == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="lota"'`)
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, errorResponse{Error: "missing Authorization header"})
+			return
+		}
+
+		readerOK := h.readerAPIKey != "" &&
+			subtle.ConstantTimeCompare([]byte(token), []byte(h.readerAPIKey)) == 1
+		adminOK := h.adminAPIKey != "" &&
+			subtle.ConstantTimeCompare([]byte(token), []byte(h.adminAPIKey)) == 1
+
+		if !readerOK && !adminOK {
+			logging.Security(h.log, "reader auth failed",
+				"method", r.Method, "path", r.URL.Path,
+				"remote_addr", r.RemoteAddr)
+			w.WriteHeader(http.StatusForbidden)
+			writeJSON(w, errorResponse{Error: "invalid API key"})
+			return
+		}
+
+		next(w, r)
+	}
+}
+
 // extracts the Bearer token from the Authorization header
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
