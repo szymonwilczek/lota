@@ -15,19 +15,23 @@ for the LOTA verifier.
 
 ### 1. Export Baseline from Target System
 
-Run the LOTA agent on the target system to collect PCR values:
+Run the LOTA agent on the target system to generate a complete policy:
 
 ```bash
-# Export PCR baseline to stdout
-sudo lota-agent --export-baseline > my-baseline.yaml
+# Export full policy YAML to file
+sudo lota-agent --export-policy > my-policy.yaml
 
 # Or redirect diagnostic output
-sudo lota-agent --export-baseline 2>/dev/null > my-baseline.yaml
+sudo lota-agent --export-policy 2>/dev/null > my-policy.yaml
 ```
 
 ### 2. Customize Policy
 
-Copy the relevant values into a new policy file:
+The exported policy is ready to use as-is. Optionally edit to:
+
+- Remove PCR values you don't want to enforce
+- Adjust security requirements
+- Change the policy name
 
 ```yaml
 name: my-production
@@ -104,6 +108,6 @@ When software is updated:
 4. Clear TOFU baseline if agent binary changes legitimately
 
 ```bash
-# Re-export baseline after updates
-sudo lota-agent --export-baseline > updated-baseline.yaml
+# Re-export policy after updates
+sudo lota-agent --export-policy > updated-policy.yaml
 ```

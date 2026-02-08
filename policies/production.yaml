@@ -5,7 +5,7 @@
 # and hash lists for your specific environment before use.
 #
 # How to collect values:
-#   PCR values:    lota-agent --export-pcr-baseline > my-baseline.txt
+#   Full policy:   sudo lota-agent --export-policy > my-policy.yaml
 #   Kernel hash:   sha256sum /boot/vmlinuz-$(uname -r) | cut -d' ' -f1
 #   Agent hash:    sha256sum /usr/sbin/lota-agent | cut -d' ' -f1
 #
