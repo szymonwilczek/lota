@@ -608,6 +608,9 @@ static void print_usage(const char *prog) {
   printf(
       "  --no-verify-tls   Disable TLS certificate verification (INSECURE)\n");
   printf("                    Only for development/testing!\n");
+  printf("  --pin-sha256 HEX  Pin verifier certificate by SHA-256 "
+         "fingerprint\n");
+  printf("                    (64 hex chars, colons/spaces allowed)\n");
   printf("  --bpf PATH        Path to BPF object file\n");
   printf("                    (default: %s)\n", DEFAULT_BPF_PATH);
   printf("  --mode MODE       Set enforcement mode:\n");
@@ -979,7 +982,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
  * Returns: 0 on success, negative errno on failure
  */
 static int attest_once(const char *server, int port, const char *ca_cert,
-                       int skip_verify, int verbose) {
+                       int skip_verify, const uint8_t *pin_sha256,
+                       int verbose) {
   struct net_context net_ctx;
   struct verifier_challenge challenge;
   struct verifier_result result;
@@ -993,7 +997,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   if (verbose)
     printf("Connecting to verifier at %s:%d...\n", server, port);
 
-  ret = net_context_init(&net_ctx, server, port, ca_cert, skip_verify);
+  ret = net_context_init(&net_ctx, server, port, ca_cert, skip_verify,
+                         pin_sha256);
   if (ret < 0) {
     if (verbose)
       fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
@@ -1104,7 +1109,7 @@ cleanup:
  * One-shot remote attestation
  */
 static int do_attest(const char *server, int port, const char *ca_cert,
-                     int skip_verify) {
+                     int skip_verify, const uint8_t *pin_sha256) {
   int ret;
 
   printf("=== Remote Attestation ===\n\n");
@@ -1138,7 +1143,7 @@ static int do_attest(const char *server, int port, const char *ca_cert,
     return ret;
   }
 
-  ret = attest_once(server, port, ca_cert, skip_verify, 1);
+  ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 1);
 
   printf("\n=== Attestation %s ===\n", ret == 0 ? "Successful" : "Failed");
 
@@ -1153,7 +1158,7 @@ static int do_attest(const char *server, int port, const char *ca_cert,
  */
 static int do_continuous_attest(const char *server, int port,
                                 const char *ca_cert, int skip_verify,
-                                int interval_sec) {
+                                const uint8_t *pin_sha256, int interval_sec) {
   int ret;
   int consecutive_failures = 0;
   int backoff_sec = 0;
@@ -1218,7 +1223,7 @@ static int do_continuous_attest(const char *server, int port,
     now = time(NULL);
 
     printf("[%ld] Attestation round starting...\n", (long)now);
-    ret = attest_once(server, port, ca_cert, skip_verify, 0);
+    ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 0);
 
     if (ret == 0) {
       printf("[%ld] Attestation successful\n", (long)now);
@@ -1287,6 +1292,9 @@ int main(int argc, char *argv[]) {
   int server_port = DEFAULT_VERIFIER_PORT;
   const char *ca_cert_path = NULL;
   int no_verify_tls = 0;
+  const char *pin_sha256_hex = NULL;
+  uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
+  int has_pin = 0;
 
   static struct option long_options[] = {
       {"test-tpm", no_argument, 0, 't'},
@@ -1300,6 +1308,7 @@ int main(int argc, char *argv[]) {
       {"port", required_argument, 0, 'p'},
       {"ca-cert", required_argument, 0, 'C'},
       {"no-verify-tls", no_argument, 0, 'K'},
+      {"pin-sha256", required_argument, 0, 'F'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
       {"strict-mmap", no_argument, 0, 'M'},
@@ -1309,7 +1318,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:Kb:m:MPR:L:h",
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:h",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1352,6 +1361,9 @@ int main(int argc, char *argv[]) {
     case 'K':
       no_verify_tls = 1;
       break;
+    case 'F':
+      pin_sha256_hex = optarg;
+      break;
     case 'b':
       bpf_path = optarg;
       break;
@@ -1387,6 +1399,25 @@ int main(int argc, char *argv[]) {
     default:
       print_usage(argv[0]);
       return (opt == 'h') ? 0 : 1;
+    }
+  }
+
+  /* parse certificate pin if provided */
+  if (pin_sha256_hex) {
+    if (net_parse_pin_sha256(pin_sha256_hex, pin_sha256_bin) < 0) {
+      fprintf(stderr,
+              "Invalid --pin-sha256 value: '%s'\n"
+              "Expected 64 hex characters (colons/spaces allowed).\n"
+              "Example: openssl x509 -in cert.pem "
+              "-fingerprint -sha256 -noout\n",
+              pin_sha256_hex);
+      return 1;
+    }
+    has_pin = 1;
+    if (no_verify_tls) {
+      fprintf(stderr,
+              "Warning: --pin-sha256 with --no-verify-tls: PKI validation\n"
+              "is disabled but certificate pinning remains active.\n");
     }
   }
 
@@ -1497,10 +1528,12 @@ int main(int argc, char *argv[]) {
               "Warning: --ca-cert ignored when --no-verify-tls is set\n");
     }
     if (attest_interval > 0)
-      return do_continuous_attest(server_addr, server_port, ca_cert_path,
-                                  no_verify_tls, attest_interval);
+      return do_continuous_attest(
+          server_addr, server_port, ca_cert_path, no_verify_tls,
+          has_pin ? pin_sha256_bin : NULL, attest_interval);
     else
-      return do_attest(server_addr, server_port, ca_cert_path, no_verify_tls);
+      return do_attest(server_addr, server_port, ca_cert_path, no_verify_tls,
+                       has_pin ? pin_sha256_bin : NULL);
   }
 
   return run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
