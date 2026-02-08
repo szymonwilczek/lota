@@ -38,9 +38,10 @@ type Server struct {
 	wg         sync.WaitGroup
 
 	// http monitoring api
-	httpServer  *http.Server
-	httpAddr    string
-	adminAPIKey string
+	httpServer   *http.Server
+	httpAddr     string
+	adminAPIKey  string
+	readerAPIKey string
 
 	// structured logging and telemetry
 	log     *slog.Logger
@@ -79,6 +80,9 @@ type ServerConfig struct {
 
 	// admin API key for mutating endpoints (empty = admin endpoints disabled)
 	AdminAPIKey string
+
+	// reader API key for sensitive read-only endpoints (empty = public)
+	ReaderAPIKey string
 
 	// timeouts
 	ReadTimeout  time.Duration
@@ -123,6 +127,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		addr:           cfg.Address,
 		httpAddr:       cfg.HTTPAddress,
 		adminAPIKey:    cfg.AdminAPIKey,
+		readerAPIKey:   cfg.ReaderAPIKey,
 		log:            logger,
 		metrics:        m,
 		attestationLog: cfg.AttestationLog,
@@ -155,7 +160,7 @@ func (s *Server) Start() error {
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey)
+	NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey, s.readerAPIKey)
 
 	s.httpServer = &http.Server{
 		Addr:         s.httpAddr,
@@ -173,6 +178,7 @@ func (s *Server) startHTTP() error {
 	s.log.Info("LOTA Monitoring API listening",
 		"addr", s.httpAddr,
 		"admin_auth", s.adminAPIKey != "",
+		"reader_auth", s.readerAPIKey != "",
 		"endpoints", []string{
 			"GET /health",
 			"GET /api/v1/stats",
