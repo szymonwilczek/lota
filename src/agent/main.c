@@ -42,6 +42,9 @@
 #define MIN_ATTEST_INTERVAL 10      /* 10 seconds */
 #define MAX_BACKOFF_SECONDS 300     /* Max retry delay */
 
+/* Default AIK TTL */
+#define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
+
 /* PCR index for LOTA agent self-measurement */
 #define LOTA_PCR_SELF 14
 
@@ -494,6 +497,16 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
       ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
                   (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
       printf("AIK ready, signed tokens enabled\n");
+
+      ret = tpm_aik_load_metadata(&g_tpm_ctx);
+      if (ret < 0) {
+        fprintf(stderr, "Warning: Failed to load AIK metadata: %s\n",
+                strerror(-ret));
+      } else {
+        int64_t age = tpm_aik_age(&g_tpm_ctx);
+        printf("AIK generation: %lu, age: %ld seconds\n",
+               (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+      }
     }
 
     printf("Performing self-measurement...\n");
@@ -687,6 +700,8 @@ static void print_usage(const char *prog) {
   printf("  --daemon          Fork to background (not needed under systemd)\n");
   printf("  --pid-file PATH   PID file location\n");
   printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
+  printf("  --aik-ttl SECS    AIK key lifetime in seconds before rotation\n");
+  printf("                    (default: 30 days, min: 3600)\n");
   printf("  --help            Show this help\n");
 }
 
@@ -984,6 +999,21 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     }
   }
 
+  /* AIK rotation metadata */
+  if (g_tpm_ctx.aik_meta_loaded) {
+    report->tpm.aik_generation = g_tpm_ctx.aik_meta.generation;
+
+    if (tpm_aik_in_grace_period(&g_tpm_ctx)) {
+      size_t prev_size = 0;
+      ret = tpm_aik_get_prev_public(&g_tpm_ctx, report->tpm.prev_aik_public,
+                                    LOTA_MAX_AIK_PUB_SIZE, &prev_size);
+      if (ret == 0) {
+        report->tpm.prev_aik_public_size = (uint16_t)prev_size;
+        printf("Previous AIK included (grace period, %zu bytes)\n", prev_size);
+      }
+    }
+  }
+
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
 
   /* system info: kernel hash */
@@ -1222,7 +1252,8 @@ static int do_attest(const char *server, int port, const char *ca_cert,
  */
 static int do_continuous_attest(const char *server, int port,
                                 const char *ca_cert, int skip_verify,
-                                const uint8_t *pin_sha256, int interval_sec) {
+                                const uint8_t *pin_sha256, int interval_sec,
+                                uint32_t aik_ttl) {
   int ret;
   int consecutive_failures = 0;
   int backoff_sec = 0;
@@ -1279,12 +1310,40 @@ static int do_continuous_attest(const char *server, int port,
   ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
               (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
 
+  ret = tpm_aik_load_metadata(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Failed to load AIK metadata: %s\n",
+            strerror(-ret));
+  } else {
+    int64_t age = tpm_aik_age(&g_tpm_ctx);
+    printf("AIK generation: %lu, age: %ld seconds\n",
+           (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+  }
+
   ipc_update_status(&g_ipc_ctx, status_flags, 0);
 
   printf("Starting attestation loop (Ctrl+C to stop)...\n\n");
 
   while (g_running) {
     now = time(NULL);
+
+    /* check if AIK rotation is due */
+    if (g_tpm_ctx.aik_meta_loaded) {
+      int needs = tpm_aik_needs_rotation(&g_tpm_ctx, aik_ttl);
+      if (needs == 1) {
+        printf("[%ld] AIK rotation due (gen %lu, age %ld s)\n", (long)now,
+               (unsigned long)g_tpm_ctx.aik_meta.generation,
+               (long)tpm_aik_age(&g_tpm_ctx));
+        ret = tpm_rotate_aik(&g_tpm_ctx);
+        if (ret < 0) {
+          fprintf(stderr, "[%ld] AIK rotation failed: %s\n", (long)now,
+                  strerror(-ret));
+        } else {
+          printf("[%ld] AIK rotated -> generation %lu\n", (long)now,
+                 (unsigned long)g_tpm_ctx.aik_meta.generation);
+        }
+      }
+    }
 
     printf("[%ld] Attestation round starting...\n", (long)now);
     ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 0);
@@ -1348,6 +1407,7 @@ int main(int argc, char *argv[]) {
   int export_baseline_flag = 0;
   int attest_flag = 0;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
+  uint32_t aik_ttl = DEFAULT_AIK_TTL;
   int mode = LOTA_MODE_MONITOR;
   bool strict_mmap = false;
   bool block_ptrace = false;
@@ -1384,10 +1444,11 @@ int main(int argc, char *argv[]) {
       {"trust-lib", required_argument, 0, 'L'},
       {"daemon", no_argument, 0, 'd'},
       {"pid-file", required_argument, 0, 'D'},
+      {"aik-ttl", required_argument, 0, 'T'},
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:h",
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:h",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1469,6 +1530,14 @@ int main(int argc, char *argv[]) {
       break;
     case 'D':
       pid_file_path = optarg;
+      break;
+    case 'T':
+      aik_ttl = (uint32_t)atoi(optarg);
+      if (aik_ttl > 0 && aik_ttl < 3600) {
+        fprintf(stderr, "Warning: AIK TTL %u too low, using 3600s (1 hour)\n",
+                aik_ttl);
+        aik_ttl = 3600;
+      }
       break;
     case 'h':
     default:
@@ -1611,7 +1680,7 @@ int main(int argc, char *argv[]) {
     if (attest_interval > 0)
       return do_continuous_attest(
           server_addr, server_port, ca_cert_path, no_verify_tls,
-          has_pin ? pin_sha256_bin : NULL, attest_interval);
+          has_pin ? pin_sha256_bin : NULL, attest_interval, aik_ttl);
     else
       return do_attest(server_addr, server_port, ca_cert_path, no_verify_tls,
                        has_pin ? pin_sha256_bin : NULL);
