@@ -304,14 +304,19 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
                              const uint8_t *expected_nonce,
+                             uint32_t max_age_sec,
                              struct lota_server_claims *claims) {
   struct lota_token_wire hdr;
   int ret;
+  uint32_t effective_max_age;
 
   if (!token_data || !aik_pub_der || !claims)
     return LOTA_SERVER_ERR_INVALID_ARG;
   if (token_len == 0 || aik_pub_len == 0)
     return LOTA_SERVER_ERR_INVALID_ARG;
+
+  effective_max_age =
+      (max_age_sec > 0) ? max_age_sec : LOTA_TOKEN_DEFAULT_MAX_AGE;
 
   memset(claims, 0, sizeof(*claims));
 
@@ -376,22 +381,35 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
-  /* check freshness: is issued_at close to now? */
+  /* check freshness against caller-specified max age */
   claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
-  claims->too_old = (claims->age_seconds > LOTA_TOKEN_DEFAULT_MAX_AGE) ? 1 : 0;
+  claims->too_old = (claims->age_seconds > (int64_t)effective_max_age) ? 1 : 0;
   claims->issued_in_future =
       (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
+
+  /* hard rejection: expired, too old, or future */
+  if (claims->expired)
+    return LOTA_SERVER_ERR_EXPIRED;
+  if (claims->too_old)
+    return LOTA_SERVER_ERR_TOO_OLD;
+  if (claims->issued_in_future)
+    return LOTA_SERVER_ERR_FUTURE;
 
   return LOTA_SERVER_OK;
 }
 
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
+                            uint32_t max_age_sec,
                             struct lota_server_claims *claims) {
   struct lota_token_wire hdr;
   int ret;
+  uint32_t effective_max_age;
 
   if (!token_data || !claims)
     return LOTA_SERVER_ERR_INVALID_ARG;
+
+  effective_max_age =
+      (max_age_sec > 0) ? max_age_sec : LOTA_TOKEN_DEFAULT_MAX_AGE;
 
   memset(claims, 0, sizeof(*claims));
 
@@ -423,9 +441,9 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
-  /* check freshness */
+  /* check freshness against caller-specified max age */
   claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
-  claims->too_old = (claims->age_seconds > LOTA_TOKEN_DEFAULT_MAX_AGE) ? 1 : 0;
+  claims->too_old = (claims->age_seconds > (int64_t)effective_max_age) ? 1 : 0;
   claims->issued_in_future =
       (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
 
@@ -454,6 +472,10 @@ const char *lota_server_strerror(int error) {
     return "Cryptographic error";
   case LOTA_SERVER_ERR_BUFFER:
     return "Buffer too small";
+  case LOTA_SERVER_ERR_TOO_OLD:
+    return "Token too old (exceeds max_age_sec)";
+  case LOTA_SERVER_ERR_FUTURE:
+    return "Token issued in the future";
   default:
     return "Unknown error";
   }
