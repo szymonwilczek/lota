@@ -374,6 +374,13 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		return result, err
 	}
 
+	// verify event log -> independent PCR reconstruction
+	if err := VerifyEventLog(report); err != nil {
+		clog.Warn("event log verification issue", "error", err)
+	} else {
+		clog.Debug("event log verified", "size", len(report.EventLog))
+	}
+
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
