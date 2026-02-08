@@ -17,6 +17,7 @@
  */
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +35,13 @@
 #include "ipc.h"
 #include "net.h"
 #include "policy.h"
+#include "policy_sign.h"
 #include "quote.h"
 #include "tpm.h"
+
+#ifndef EAUTH
+#define EAUTH 80
+#endif
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define DEFAULT_VERIFIER_PORT 8443
@@ -703,6 +709,17 @@ static void print_usage(const char *prog) {
   printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
   printf("  --aik-ttl SECS    AIK key lifetime in seconds before rotation\n");
   printf("                    (default: 30 days, min: 3600)\n");
+  printf("\nPolicy signing:\n");
+  printf("  --gen-signing-key PREFIX\n");
+  printf("                    Generate Ed25519 keypair: PREFIX.key + "
+         "PREFIX.pub\n");
+  printf("  --sign-policy FILE --signing-key KEY\n");
+  printf("                    Sign policy YAML, write detached FILE.sig\n");
+  printf("  --verify-policy FILE --policy-pubkey PUB\n");
+  printf("                    Verify detached Ed25519 signature on FILE\n");
+  printf("  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
+  printf("  --policy-pubkey PATH Ed25519 public key (PEM) for verification\n");
+  printf("\n");
   printf("  --help            Show this help\n");
 }
 
@@ -752,7 +769,13 @@ static int export_policy(void) {
     strftime(snap.timestamp, sizeof(snap.timestamp), "%Y-%m-%dT%H:%M:%SZ",
              &tm_buf);
 
-  snprintf(snap.name, sizeof(snap.name), "%s-baseline", snap.hostname);
+  {
+    size_t hlen = strlen(snap.hostname);
+    if (hlen + sizeof("-baseline") <= sizeof(snap.name))
+      snprintf(snap.name, sizeof(snap.name), "%s-baseline", snap.hostname);
+    else
+      snprintf(snap.name, sizeof(snap.name), "%.54s-baseline", snap.hostname);
+  }
   snprintf(snap.description, sizeof(snap.description),
            "Auto-generated policy from %s", snap.hostname);
 
@@ -1383,6 +1406,11 @@ int main(int argc, char *argv[]) {
   int test_signed_flag = 0;
   int export_policy_flag = 0;
   int attest_flag = 0;
+  const char *gen_signing_key_prefix = NULL;
+  const char *sign_policy_file = NULL;
+  const char *verify_policy_file = NULL;
+  const char *signing_key_path = NULL;
+  const char *policy_pubkey_path = NULL;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   uint32_t aik_ttl = DEFAULT_AIK_TTL;
   int mode = LOTA_MODE_MONITOR;
@@ -1422,10 +1450,16 @@ int main(int argc, char *argv[]) {
       {"daemon", no_argument, 0, 'd'},
       {"pid-file", required_argument, 0, 'D'},
       {"aik-ttl", required_argument, 0, 'T'},
+      {"gen-signing-key", required_argument, 0, 'G'},
+      {"sign-policy", required_argument, 0, 'g'},
+      {"verify-policy", required_argument, 0, 'V'},
+      {"signing-key", required_argument, 0, 'k'},
+      {"policy-pubkey", required_argument, 0, 'Q'},
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:h",
+  while ((opt = getopt_long(argc, argv,
+                            "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:h",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1516,6 +1550,21 @@ int main(int argc, char *argv[]) {
         aik_ttl = 3600;
       }
       break;
+    case 'G':
+      gen_signing_key_prefix = optarg;
+      break;
+    case 'g':
+      sign_policy_file = optarg;
+      break;
+    case 'V':
+      verify_policy_file = optarg;
+      break;
+    case 'k':
+      signing_key_path = optarg;
+      break;
+    case 'Q':
+      policy_pubkey_path = optarg;
+      break;
     case 'h':
     default:
       print_usage(argv[0]);
@@ -1548,6 +1597,71 @@ int main(int argc, char *argv[]) {
     if (sig_ret < 0) {
       fprintf(stderr, "Failed to install signal handlers: %s\n",
               strerror(-sig_ret));
+      return 1;
+    }
+  }
+
+  /* policy signing operations */
+  if (gen_signing_key_prefix) {
+    char priv_path[PATH_MAX];
+    char pub_path[PATH_MAX];
+    int ret;
+
+    snprintf(priv_path, sizeof(priv_path), "%s.key", gen_signing_key_prefix);
+    snprintf(pub_path, sizeof(pub_path), "%s.pub", gen_signing_key_prefix);
+
+    ret = policy_sign_generate_keypair(priv_path, pub_path);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to generate keypair: %s\n", strerror(-ret));
+      return 1;
+    }
+    printf("Generated Ed25519 keypair:\n");
+    printf("  Private key: %s\n", priv_path);
+    printf("  Public key:  %s\n", pub_path);
+    return 0;
+  }
+
+  if (sign_policy_file) {
+    char sig_path[PATH_MAX];
+    int ret;
+
+    if (!signing_key_path) {
+      fprintf(stderr, "--sign-policy requires --signing-key\n");
+      return 1;
+    }
+
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", sign_policy_file);
+
+    ret = policy_sign_file(sign_policy_file, signing_key_path, sig_path);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to sign policy: %s\n", strerror(-ret));
+      return 1;
+    }
+    printf("Signed: %s\n", sign_policy_file);
+    printf("Signature: %s\n", sig_path);
+    return 0;
+  }
+
+  if (verify_policy_file) {
+    char sig_path[PATH_MAX];
+    int ret;
+
+    if (!policy_pubkey_path) {
+      fprintf(stderr, "--verify-policy requires --policy-pubkey\n");
+      return 1;
+    }
+
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", verify_policy_file);
+
+    ret = policy_verify_file(verify_policy_file, policy_pubkey_path, sig_path);
+    if (ret == 0) {
+      printf("Signature valid: %s\n", verify_policy_file);
+      return 0;
+    } else if (ret == -EAUTH) {
+      fprintf(stderr, "Signature INVALID: %s\n", verify_policy_file);
+      return 1;
+    } else {
+      fprintf(stderr, "Verification failed: %s\n", strerror(-ret));
       return 1;
     }
   }
