@@ -36,13 +36,18 @@ type APIHandler struct {
 	metrics        *metrics.Metrics
 	startTime      time.Time
 	adminAPIKey    string // if non-empty, required for mutating endpoints
+	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 }
 
 // creates a new API handler and registers routes on the given mux
 // adminAPIKey controls access to mutating endpoints (revoke, ban):
 //   - non-empty: requires Authorization: Bearer <key> header
 //   - empty: all mutating endpoints return 403
-func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey string) *APIHandler {
+//
+// readerAPIKey controls access to sensitive read-only endpoints:
+//   - non-empty: requires Authorization: Bearer <reader-key|admin-key>
+//   - empty: sensitive read-only endpoints are public (not recommended)
+func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey string, readerAPIKey string) *APIHandler {
 	if logger == nil {
 		logger = logging.Nop()
 	}
@@ -59,6 +64,7 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 		metrics:        m,
 		startTime:      time.Now(),
 		adminAPIKey:    adminAPIKey,
+		readerAPIKey:   readerAPIKey,
 	}
 
 	// read-only monitoring endpoints (no auth required)
