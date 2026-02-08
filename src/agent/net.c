@@ -246,6 +246,63 @@ int net_connect(struct net_context *ctx) {
     X509_free(peer_cert);
   }
 
+  /*
+   * Certificate pinning: compute SHA-256 fingerprint of the server's
+   * DER-encoded certificate and compare against the expected pin.
+   */
+  if (ctx->has_pin) {
+    X509 *peer_cert = SSL_get1_peer_certificate(ssl);
+    if (!peer_cert) {
+      fprintf(stderr,
+              "Certificate pinning failed: server presented no certificate\n");
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EACCES;
+    }
+
+    unsigned char digest[NET_PIN_SHA256_LEN];
+    unsigned int digest_len = 0;
+
+    if (X509_digest(peer_cert, EVP_sha256(), digest, &digest_len) != 1 ||
+        digest_len != NET_PIN_SHA256_LEN) {
+      fprintf(stderr, "Certificate pinning failed: unable to compute "
+                      "SHA-256 fingerprint\n");
+      X509_free(peer_cert);
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EACCES;
+    }
+    X509_free(peer_cert);
+
+    /*
+     * Constant-time comparison to prevent timing side-channels.
+     * CRYPTO_memcmp returns 0 on match.
+     */
+    if (CRYPTO_memcmp(digest, ctx->pin_sha256, NET_PIN_SHA256_LEN) != 0) {
+      fprintf(stderr, "SECURITY: Certificate pinning FAILED!\n"
+                      "  Expected: ");
+      for (int i = 0; i < NET_PIN_SHA256_LEN; i++)
+        fprintf(stderr, "%02x", ctx->pin_sha256[i]);
+      fprintf(stderr, "\n  Got:      ");
+      for (int i = 0; i < NET_PIN_SHA256_LEN; i++)
+        fprintf(stderr, "%02x", digest[i]);
+      fprintf(stderr, "\n"
+                      "  The verifier's certificate does not match the "
+                      "pinned fingerprint.\n"
+                      "  This may indicate a MITM attack or certificate "
+                      "rotation.\n");
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
+      close(sock);
+      ctx->socket_fd = -1;
+      return -EACCES;
+    }
+  }
+
   ctx->ssl = ssl;
   ctx->connected = 1;
 
