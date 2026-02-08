@@ -67,28 +67,26 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 		readerAPIKey:   readerAPIKey,
 	}
 
-	// read-only monitoring endpoints (no auth required)
+	// public monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /health", h.handleHealth)
 	mux.HandleFunc("GET /api/v1/stats", h.handleStats)
-	mux.HandleFunc("GET /api/v1/clients", h.handleListClients)
-	mux.HandleFunc("GET /api/v1/clients/", h.handleClientInfo)
 	mux.HandleFunc("GET /metrics", h.handleMetrics)
+
+	// sensitive read-only endpoints (reader or admin auth required)
+	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
+	mux.HandleFunc("GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
+	mux.HandleFunc("GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
+	mux.HandleFunc("GET /api/v1/bans", h.requireReader(h.handleListBans))
+	mux.HandleFunc("GET /api/v1/audit", h.requireReader(h.handleAuditLog))
+	mux.HandleFunc("GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
 	// revocation management (admin auth required)
 	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
-	mux.HandleFunc("GET /api/v1/revocations", h.handleListRevocations)
 
 	// hardware ban management (admin auth required)
 	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
 	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
-	mux.HandleFunc("GET /api/v1/bans", h.handleListBans)
-
-	// audit log (read-only)
-	mux.HandleFunc("GET /api/v1/audit", h.handleAuditLog)
-
-	// attestation decision log (read-only)
-	mux.HandleFunc("GET /api/v1/attestations", h.handleAttestationLog)
 
 	return h
 }
