@@ -47,6 +47,7 @@
 
 /* Global state */
 static volatile sig_atomic_t g_running = 1;
+static volatile sig_atomic_t g_reload = 0;
 static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
@@ -61,14 +62,6 @@ static int g_trust_lib_count;
 
 static uint32_t check_module_security(void);
 static int self_measure(struct tpm_context *ctx);
-
-/*
- * Signal handler for graceful shutdown
- */
-static void signal_handler(int sig) {
-  (void)sig;
-  g_running = 0;
-}
 
 /*
  * Print hex dump of buffer
@@ -594,6 +587,17 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
   /* main loop */
   while (g_running) {
+    if (g_reload) {
+      g_reload = 0;
+      printf("SIGHUP received, reloading configuration\n");
+      /*
+       * TODO: re-read configuration, refresh BPF maps,
+       * rotate hash cache, etc.
+       * For now, I'm just logging the event so systemctl reload lota-agent no
+       * longer kills the process.
+       */
+    }
+
     /* non-blocking */
     ipc_process(&g_ipc_ctx, 0);
 
@@ -1383,7 +1387,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
-  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:h",
+  while ((opt = getopt_long(argc, argv, "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:h",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1492,9 +1496,15 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* signal handlers */
-  signal(SIGINT, signal_handler);
-  signal(SIGTERM, signal_handler);
+  /* signal handlers: SIGTERM/SIGINT -> shutdown, SIGHUP -> reload */
+  {
+    int sig_ret = daemon_install_signals(&g_running, &g_reload);
+    if (sig_ret < 0) {
+      fprintf(stderr, "Failed to install signal handlers: %s\n",
+              strerror(-sig_ret));
+      return 1;
+    }
+  }
 
   if (test_tpm_flag)
     return test_tpm();
