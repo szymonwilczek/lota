@@ -789,6 +789,102 @@ func TestAuth_ReaderKeyRequiredForSensitiveEndpoints(t *testing.T) {
 
 	t.Log("✓ All sensitive read-only endpoints reject unauthenticated requests")
 }
+func TestAuth_ReaderKeyGrantsReadAccess(t *testing.T) {
+	t.Log("TEST: Reader API key grants access to sensitive read-only endpoints")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	sensitiveEndpoints := []string{
+		"/api/v1/clients",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/api/v1/attestations",
+	}
+
+	for _, ep := range sensitiveEndpoints {
+		t.Run("GET "+ep+" reader key", func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			req.Header.Set("Authorization", "Bearer reader-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Reader key should grant access to %s, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Reader key grants access to all sensitive read-only endpoints")
+}
+
+func TestAuth_AdminKeyGrantsReadAccess(t *testing.T) {
+	t.Log("TEST: Admin API key also grants access to sensitive read-only endpoints")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	sensitiveEndpoints := []string{
+		"/api/v1/clients",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/api/v1/attestations",
+	}
+
+	for _, ep := range sensitiveEndpoints {
+		t.Run("GET "+ep+" admin key", func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			req.Header.Set("Authorization", "Bearer admin-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Admin key should grant access to %s, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Admin key grants access to all sensitive read-only endpoints")
+}
+
+func TestAuth_ReaderKeyCannotMutate(t *testing.T) {
+	t.Log("SECURITY TEST: Reader API key must not allow mutating operations")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	endpoints := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{"POST", "/api/v1/clients/victim/revoke", `{"reason":"cheating","actor":"attacker"}`},
+		{"DELETE", "/api/v1/clients/victim/revoke", ""},
+		{"POST", "/api/v1/bans", `{"hardware_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"cheating","actor":"attacker"}`},
+		{"DELETE", "/api/v1/bans/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			var req *http.Request
+			if ep.body != "" {
+				req = httptest.NewRequest(ep.method, ep.path, strings.NewReader(ep.body))
+			} else {
+				req = httptest.NewRequest(ep.method, ep.path, nil)
+			}
+			req.Header.Set("Authorization", "Bearer reader-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("Reader key should not allow %s %s, got %d (want 403)",
+					ep.method, ep.path, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Reader key correctly denied on all mutating endpoints")
+}
+
 func TestAuth_WrongReaderKeyReturns403(t *testing.T) {
 	t.Log("SECURITY TEST: Wrong reader key returns 403 on sensitive read-only endpoints")
 
