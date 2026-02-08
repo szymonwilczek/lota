@@ -27,6 +27,8 @@
 struct lota_client {
   int fd;
   int timeout_ms;
+  lota_status_callback_fn callback;
+  void *user_data;
 };
 
 /*
@@ -89,6 +91,11 @@ static int send_request(struct lota_client *client,
   return 0;
 }
 
+/* for helpers used by recv_response */
+static int dispatch_notification(struct lota_client *client,
+                                 const void *payload, size_t payload_len);
+static void drain_payload(int fd, size_t remaining);
+
 /*
  * Receive response with timeout
  */
@@ -98,32 +105,50 @@ static int recv_response(struct lota_client *client,
   ssize_t n;
   int ret;
 
-  ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
-  if (ret < 0)
-    return ret;
+  /*
+   * Loop until LOTA receive a command response (not a notification!).
+   * Server-push notifications that arrive while waiting for a
+   * response are dispatched via the callback and skipped.
+   */
+  for (;;) {
+    ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
+    if (ret < 0)
+      return ret;
 
-  /* receive header */
-  n = recv(client->fd, resp, sizeof(*resp), MSG_WAITALL);
-  if (n != sizeof(*resp))
-    return (n < 0) ? -errno : -EIO;
+    n = recv(client->fd, resp, sizeof(*resp), MSG_WAITALL);
+    if (n != sizeof(*resp))
+      return (n < 0) ? -errno : -EIO;
 
-  if (resp->magic != LOTA_IPC_MAGIC)
-    return LOTA_ERR_PROTOCOL;
+    if (resp->magic != LOTA_IPC_MAGIC)
+      return LOTA_ERR_PROTOCOL;
+
+    if (resp->result == LOTA_IPC_NOTIFY && resp->payload_len > 0) {
+      uint8_t nbuf[sizeof(struct lota_ipc_notify)];
+      size_t nlen =
+          resp->payload_len < sizeof(nbuf) ? resp->payload_len : sizeof(nbuf);
+
+      ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
+      if (ret < 0)
+        return ret;
+
+      n = recv(client->fd, nbuf, nlen, MSG_WAITALL);
+      if (n != (ssize_t)nlen)
+        return (n < 0) ? -errno : -EIO;
+
+      if (resp->payload_len > sizeof(nbuf))
+        drain_payload(client->fd, resp->payload_len - sizeof(nbuf));
+
+      dispatch_notification(client, nbuf, nlen);
+      continue;
+    }
+
+    break; /* got a real response */
+  }
 
   /* receive payload if present */
   if (resp->payload_len > 0) {
     if (resp->payload_len > payload_size) {
-      char discard[256];
-      size_t remaining = resp->payload_len;
-
-      while (remaining > 0) {
-        size_t chunk =
-            remaining < sizeof(discard) ? remaining : sizeof(discard);
-        n = recv(client->fd, discard, chunk, 0);
-        if (n <= 0)
-          break;
-        remaining -= (size_t)n;
-      }
+      drain_payload(client->fd, resp->payload_len);
       return LOTA_ERR_BUFFER_TOO_SMALL;
     }
 
@@ -165,6 +190,48 @@ static int ipc_result_to_error(uint32_t result) {
   case LOTA_IPC_ERR_INTERNAL:
   default:
     return LOTA_ERR_AGENT_ERROR;
+  }
+}
+
+/*
+ * Dispatch a server-push notification via the client's callback.
+ * Returns 1 if dispatched, 0 if no callback registered.
+ */
+static int dispatch_notification(struct lota_client *client,
+                                 const void *payload, size_t payload_len) {
+  const struct lota_ipc_notify *notify;
+  struct lota_status status;
+
+  if (!client->callback)
+    return 0;
+
+  if (payload_len < sizeof(*notify))
+    return 0;
+
+  notify = payload;
+  status.flags = notify->flags;
+  status.last_attest_time = notify->last_attest_time;
+  status.valid_until = notify->valid_until;
+  status.attest_count = notify->attest_count;
+  status.fail_count = notify->fail_count;
+
+  client->callback(&status, notify->events, client->user_data);
+  return 1;
+}
+
+/*
+ * Drain and discard a response payload from the socket.
+ */
+static void drain_payload(int fd, size_t remaining) {
+  char discard[256];
+
+  while (remaining > 0) {
+    size_t chunk = remaining < sizeof(discard) ? remaining : sizeof(discard);
+    ssize_t n = recv(fd, discard, chunk, 0);
+
+    if (n <= 0)
+      break;
+    remaining -= (size_t)n;
   }
 }
 
@@ -541,6 +608,114 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
     *written = off;
 
   return LOTA_OK;
+}
+
+int lota_subscribe(struct lota_client *client, uint32_t event_mask,
+                   lota_status_callback_fn callback, void *user_data) {
+  struct lota_ipc_request req;
+  struct lota_ipc_response resp;
+  struct lota_ipc_subscribe_request sub;
+  size_t payload_len;
+  int ret;
+
+  if (!client)
+    return LOTA_ERR_NOT_CONNECTED;
+  if (event_mask != 0 && !callback)
+    return LOTA_ERR_INVALID_ARG;
+
+  memset(&req, 0, sizeof(req));
+  req.magic = LOTA_IPC_MAGIC;
+  req.version = LOTA_IPC_VERSION;
+  req.cmd = LOTA_IPC_CMD_SUBSCRIBE;
+  req.payload_len = sizeof(sub);
+
+  sub.event_mask = event_mask;
+
+  ret = send_request(client, &req, &sub, sizeof(sub));
+  if (ret < 0)
+    return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT : LOTA_ERR_PROTOCOL;
+
+  ret = recv_response(client, &resp, NULL, 0, &payload_len);
+  if (ret < 0)
+    return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT : LOTA_ERR_PROTOCOL;
+
+  if (resp.result != LOTA_IPC_OK)
+    return ipc_result_to_error(resp.result);
+
+  client->callback = callback;
+  client->user_data = user_data;
+
+  return LOTA_OK;
+}
+
+int lota_unsubscribe(struct lota_client *client) {
+  int ret;
+
+  ret = lota_subscribe(client, 0, NULL, NULL);
+  if (ret == LOTA_OK) {
+    client->callback = NULL;
+    client->user_data = NULL;
+  }
+  return ret;
+}
+
+int lota_poll_events(struct lota_client *client, int timeout_ms) {
+  struct lota_ipc_response resp;
+  uint8_t buf[sizeof(struct lota_ipc_notify)];
+  ssize_t n;
+  int ret;
+  int dispatched = 0;
+
+  if (!client)
+    return LOTA_ERR_NOT_CONNECTED;
+
+  for (;;) {
+    ret = wait_for_socket(client->fd, POLLIN, timeout_ms);
+    if (ret == -ETIMEDOUT)
+      break;
+    if (ret < 0)
+      return LOTA_ERR_PROTOCOL;
+
+    n = recv(client->fd, &resp, sizeof(resp), MSG_WAITALL);
+    if (n == 0)
+      return LOTA_ERR_NOT_CONNECTED;
+    if (n != sizeof(resp))
+      return LOTA_ERR_PROTOCOL;
+
+    if (resp.magic != LOTA_IPC_MAGIC)
+      return LOTA_ERR_PROTOCOL;
+
+    if (resp.result != LOTA_IPC_NOTIFY) {
+      /* unexpected non-notification -> drain and skip */
+      if (resp.payload_len > 0)
+        drain_payload(client->fd, resp.payload_len);
+      continue;
+    }
+
+    if (resp.payload_len > 0) {
+      size_t nlen =
+          resp.payload_len < sizeof(buf) ? resp.payload_len : sizeof(buf);
+
+      ret = wait_for_socket(client->fd, POLLIN,
+                            timeout_ms > 0 ? timeout_ms : 1000);
+      if (ret < 0)
+        break;
+
+      n = recv(client->fd, buf, nlen, MSG_WAITALL);
+      if (n != (ssize_t)nlen)
+        return LOTA_ERR_PROTOCOL;
+
+      if (resp.payload_len > sizeof(buf))
+        drain_payload(client->fd, resp.payload_len - sizeof(buf));
+
+      dispatched += dispatch_notification(client, buf, nlen);
+    }
+
+    /* switch to non-blocking to drain queue */
+    timeout_ms = 0;
+  }
+
+  return dispatched;
 }
 
 const char *lota_strerror(int error) {

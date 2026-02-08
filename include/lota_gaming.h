@@ -233,6 +233,56 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
                          size_t buflen, size_t *written);
 
 /*
+ * Status change callback type
+ *
+ * @status:    Current attestation status snapshot
+ * @events:    LOTA_EVENT_* bitmask describing what changed
+ * @user_data: Opaque pointer from lota_subscribe()
+ */
+typedef void (*lota_status_callback_fn)(const struct lota_status *status,
+                                        uint32_t events, void *user_data);
+
+/*
+ * lota_subscribe - Subscribe to status change notifications
+ * @client:     Client handle
+ * @event_mask: LOTA_EVENT_* bitmask (LOTA_EVENT_ALL for everything)
+ * @callback:   Function called when a subscribed event occurs
+ * @user_data:  Opaque pointer forwarded to callback
+ *
+ * After subscribing, the agent pushes notifications whenever
+ * a subscribed event occurs.  Call lota_poll_events() to receive
+ * them, or they are dispatched transparently during other SDK calls.
+ *
+ * Returns LOTA_OK on success.
+ */
+int lota_subscribe(struct lota_client *client, uint32_t event_mask,
+                   lota_status_callback_fn callback, void *user_data);
+
+/*
+ * lota_unsubscribe - Cancel status change subscription
+ * @client: Client handle
+ *
+ * Tells the agent to stop sending notifications on this connection.
+ *
+ * Returns LOTA_OK on success.
+ */
+int lota_unsubscribe(struct lota_client *client);
+
+/*
+ * lota_poll_events - Poll for pending notifications
+ * @client:     Client handle (must be subscribed)
+ * @timeout_ms: Maximum wait time in milliseconds
+ *              (0 = non-blocking, -1 = block indefinitely)
+ *
+ * Reads from the connection and dispatches pending notifications
+ * via the callback registered with lota_subscribe().
+ *
+ * Returns: number of notifications dispatched (>= 0),
+ *          or negative LOTA_ERR_* on error.
+ */
+int lota_poll_events(struct lota_client *client, int timeout_ms);
+
+/*
  * lota_strerror - Get error message for error code
  */
 const char *lota_strerror(int error);
