@@ -693,21 +693,18 @@ func TestAuth_NoKeyConfiguredReturns403(t *testing.T) {
 }
 
 func TestAuth_ReadOnlyEndpointsNoAuthRequired(t *testing.T) {
-	t.Log("TEST: Read-only endpoints work without any authentication")
+	t.Log("TEST: Public endpoints work without any authentication")
+	t.Log("Public endpoints: health, stats, metrics (no secrets exposed)")
 
 	mux, _ := setupTestAPIListeningWithKey(t, "secret-key")
 
-	readOnlyEndpoints := []string{
+	publicEndpoints := []string{
 		"/health",
 		"/api/v1/stats",
-		"/api/v1/clients",
-		"/api/v1/revocations",
-		"/api/v1/bans",
-		"/api/v1/audit",
 		"/metrics",
 	}
 
-	for _, ep := range readOnlyEndpoints {
+	for _, ep := range publicEndpoints {
 		t.Run("GET "+ep, func(t *testing.T) {
 			req := httptest.NewRequest("GET", ep, nil)
 			// NO Authorization header
@@ -715,12 +712,12 @@ func TestAuth_ReadOnlyEndpointsNoAuthRequired(t *testing.T) {
 			mux.ServeHTTP(rec, req)
 
 			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-				t.Errorf("Read-only endpoint %s should not require auth, got %d", ep, rec.Code)
+				t.Errorf("Public endpoint %s should not require auth, got %d", ep, rec.Code)
 			}
 		})
 	}
 
-	t.Log("✓ All read-only endpoints accessible without auth")
+	t.Log("✓ All public endpoints accessible without auth")
 }
 
 func TestAuth_ValidTokenAllowsMutation(t *testing.T) {
