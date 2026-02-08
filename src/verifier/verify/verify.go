@@ -11,6 +11,7 @@
 package verify
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -440,6 +441,12 @@ func (v *Verifier) LoadPolicy(path string) error {
 // adds a policy programmatically
 func (v *Verifier) AddPolicy(policy *PCRPolicy) {
 	v.pcrVerifier.AddPolicy(policy)
+}
+
+// sets the Ed25519 public key used to verify policy file signatures
+// when set, LoadPolicy rejects any policy without a valid detached .sig file!
+func (v *Verifier) SetPolicyPublicKey(pubKey ed25519.PublicKey) {
+	v.pcrVerifier.SetPolicyPublicKey(pubKey)
 }
 
 // sets which policy to use

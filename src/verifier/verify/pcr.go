@@ -8,6 +8,7 @@ package verify
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -55,9 +56,10 @@ type PCRPolicy struct {
 
 // manages PCR policies and verification
 type PCRVerifier struct {
-	mu       sync.RWMutex
-	policies map[string]*PCRPolicy
-	active   string // name of active policy
+	mu           sync.RWMutex
+	policies     map[string]*PCRPolicy
+	active       string            // name of active policy
+	policyPubKey ed25519.PublicKey // if set, policy files require valid Ed25519 signature
 }
 
 // creates a new PCR verifier
@@ -65,6 +67,15 @@ func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
 		policies: make(map[string]*PCRPolicy),
 	}
+}
+
+// sets the Ed25519 public key used to verify policy file signatures
+// when set, LoadPolicy rejects any policy without a valid detached .sig file
+// pass nil to disable signature verification
+func (v *PCRVerifier) SetPolicyPublicKey(pubKey ed25519.PublicKey) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.policyPubKey = pubKey
 }
 
 // checks policy for common misconfigurations and logs warnings
@@ -96,10 +107,22 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 }
 
 // loads a policy from YAML file
+// if a policy public key has been set via SetPolicyPublicKey,
+// the file must have a valid detached Ed25519 signature at path+".sig"!
 func (v *PCRVerifier) LoadPolicy(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("failed to read policy file: %w", err)
+	}
+
+	v.mu.RLock()
+	pubKey := v.policyPubKey
+	v.mu.RUnlock()
+
+	if pubKey != nil {
+		if err := VerifyPolicyFile(path, pubKey); err != nil {
+			return fmt.Errorf("policy signature verification failed: %w", err)
+		}
 	}
 
 	var policy PCRPolicy

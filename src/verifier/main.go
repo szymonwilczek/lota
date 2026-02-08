@@ -12,6 +12,7 @@
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
+//   --policy-pubkey FILE Ed25519 public key for policy signature verification
 //   --admin-api-key KEY Admin API key for mutating HTTP endpoints (required for revoke/ban)
 //   --reader-api-key KEY Reader API key for sensitive read-only endpoints (optional)
 //
@@ -55,6 +56,7 @@ var (
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
+	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 	adminAPIKey  = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
 	readerAPIKey = flag.String("reader-api-key", "", "API key for sensitive read-only endpoints (clients, audit, attestations); if empty, those endpoints are public")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
@@ -170,6 +172,17 @@ func main() {
 
 	verifier.AddPolicy(verify.DefaultPolicy())
 	logger.Info("loaded default PCR policy")
+
+	// policy signature verification key
+	if *policyPubKey != "" {
+		pubKey, err := verify.LoadPolicyPublicKey(*policyPubKey)
+		if err != nil {
+			logger.Error("failed to load policy public key", "path", *policyPubKey, "error", err)
+			os.Exit(1)
+		}
+		verifier.SetPolicyPublicKey(pubKey)
+		logger.Info("policy signature verification enabled", "pubkey", *policyPubKey)
+	}
 
 	// custom policy if specified
 	if *policyFile != "" {
