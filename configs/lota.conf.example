@@ -1,0 +1,80 @@
+# /etc/lota/lota.conf -- LOTA Agent configuration
+#
+# Line-oriented key = value format.
+# Lines starting with '#' are comments. Empty lines are ignored.
+# Keys accept both underscore and hyphen forms (e.g: ca_cert, ca-cert).
+# CLI flags override any value set here.
+#
+# To dump the effective configuration after loading this file:
+#   lota-agent --dump-config
+#   lota-agent --config /path/to/file --dump-config
+
+# ---- Verifier connection ------------------------------------------------
+
+# Verifier server address
+server = localhost
+
+# Verifier server port
+port = 8443
+
+# CA certificate for TLS verification (default: system CA store)
+# ca_cert = /etc/lota/ca.pem
+
+# Disable TLS certificate verification (INSECURE, for testing only)
+no_verify_tls = false
+
+# Pin verifier certificate by SHA-256 fingerprint (64 hex chars)
+# pin_sha256 = aabbccdd...
+
+# ---- BPF / enforcement --------------------------------------------------
+
+# Path to compiled BPF object file
+bpf_path = /usr/lib/lota/lota_lsm.bpf.o
+
+# Enforcement mode: monitor, enforce, maintenance
+mode = monitor
+
+# Block mmap(PROT_EXEC) of untrusted libraries (requires enforce mode)
+strict_mmap = false
+
+# Block all ptrace attach attempts (requires enforce mode)
+block_ptrace = false
+
+# ---- Attestation ---------------------------------------------------------
+
+# Continuous attestation interval in seconds (0 = one-shot when --attest)
+attest_interval = 0
+
+# AIK key lifetime in seconds before rotation (0 = default 30 days)
+aik_ttl = 0
+
+# ---- Daemon --------------------------------------------------------------
+
+# Fork to background (not needed under systemd)
+daemon = false
+
+# PID file location
+pid_file = /run/lota/lota-agent.pid
+
+# ---- Policy signing ------------------------------------------------------
+
+# Ed25519 private key for signing policies
+# signing_key = /etc/lota/policy.key
+
+# Ed25519 public key for verifying policy signatures
+# policy_pubkey = /etc/lota/policy.pub
+
+# ---- Logging -------------------------------------------------------------
+
+# Log level: debug, info, warn, error
+log_level = info
+
+# ---- Trusted libraries ---------------------------------------------------
+# Multiple trust_lib entries are allowed (one per line).
+# trust_lib = /usr/lib64/libc.so.6
+# trust_lib = /usr/lib64/libssl.so.3
+
+# ---- Protected PIDs ------------------------------------------------------
+# Multiple protect_pid entries are allowed (one per line).
+# protect_pid = 1234
+# protect_pid = 5678
