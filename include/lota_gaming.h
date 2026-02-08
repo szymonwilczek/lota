@@ -68,6 +68,17 @@ enum lota_error {
 #define LOTA_FLAG_SECURE_BOOT (1 << 4)
 
 /*
+ * Subscription event types
+ *
+ * Bitmask selecting which status changes trigger push notifications.
+ * Pass to lota_subscribe() to control notification granularity.
+ */
+#define LOTA_EVENT_STATUS (1U << 0) /* Status flags changed */
+#define LOTA_EVENT_ATTEST (1U << 1) /* Attestation completed (pass/fail) */
+#define LOTA_EVENT_MODE (1U << 2)   /* Enforcement mode changed */
+#define LOTA_EVENT_ALL 0xFFFFFFFFU
+
+/*
  * Opaque client handle
  */
 struct lota_client;
