@@ -84,6 +84,8 @@ void net_cleanup(void);
  * @port: Server port
  * @ca_cert_path: Path to CA certificate for verification (NULL for system CAs)
  * @skip_verify: If nonzero, disable TLS certificate verification (INSECURE)
+ * @pin_sha256: SHA-256 fingerprint of expected server certificate (NULL to
+ * skip)
  *
  * By default (ca_cert_path=NULL, skip_verify=0), the system CA certificate
  * store is used to verify the verifier's certificate. Provide ca_cert_path
@@ -91,10 +93,26 @@ void net_cleanup(void);
  * Set skip_verify=1 only for development/testing - this disables all TLS
  * security.
  *
+ * If pin_sha256 is non-NULL, the 32-byte SHA-256 fingerprint of the server's
+ * DER-encoded certificate is compared after the TLS handshake. The connection
+ * is aborted on mismatch. Pinning is enforced regardless of skip_verify to
+ * catch MITM even in insecure test setups.
+ *
  * Returns: 0 on success, negative errno on failure
  */
 int net_context_init(struct net_context *ctx, const char *server, int port,
-                     const char *ca_cert_path, int skip_verify);
+                     const char *ca_cert_path, int skip_verify,
+                     const uint8_t *pin_sha256);
+
+/*
+ * Parse hex-encoded SHA-256 fingerprint into binary.
+ *
+ * @hex: 64-character hex string. colons (':') and spaces are silently skipped.
+ * @out: Output buffer, must be at least NET_PIN_SHA256_LEN bytes
+ *
+ * Returns: 0 on success, -EINVAL on bad input
+ */
+int net_parse_pin_sha256(const char *hex, uint8_t *out);
 
 /*
  * Cleanup network context.
