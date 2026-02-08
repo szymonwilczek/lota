@@ -34,6 +34,40 @@ struct tpm_quote_response;
 #define TPM_HASH_ALG TPM2_ALG_SHA256
 
 /*
+ * AIK rotation defaults.
+ * Grace period allows the verifier to observe the previous key
+ * alongside the new one for continuity verification.
+ */
+#define TPM_AIK_DEFAULT_TTL_SEC (30 * 24 * 3600) /* 30 days */
+#define TPM_AIK_GRACE_PERIOD_SEC 3600            /* 1 hour */
+
+/* AIK metadata file magic and version */
+#define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
+#define TPM_AIK_META_VERSION 1
+
+/* Default metadata path (install target creates /var/lib/lota/aiks/) */
+#define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
+
+/*
+ * AIK metadata - persisted to disk for tracking rotation state.
+ *
+ * Stored at TPM_AIK_META_PATH. The generation counter is monotonic
+ * and never resets, allowing the verifier to detect rollback attacks.
+ *
+ * provisioned_at tracks the creation time of the current AIK so the
+ * agent can determine when rotation is due without relying on the TPM
+ * clock (which may drift or be unavailable).
+ */
+struct aik_metadata {
+  uint32_t magic;
+  uint32_t version;
+  uint64_t generation;     /* monotonic rotation counter */
+  int64_t provisioned_at;  /* time_t: current AIK creation */
+  int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
+  uint8_t _reserved[64];
+} __attribute__((packed));
+
+/*
  * TPM context - holds ESYS context and session state.
  * Opaque to callers, accessed via tpm_* functions.
  */
@@ -41,6 +75,16 @@ struct tpm_context {
   ESYS_CONTEXT *esys_ctx;
   TSS2_TCTI_CONTEXT *tcti_ctx;
   bool initialized;
+
+  /* AIK rotation state */
+  struct aik_metadata aik_meta;
+  bool aik_meta_loaded;
+  char aik_meta_path[256];
+
+  /* Grace period: previous AIK public key kept after rotation */
+  uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
+  size_t prev_aik_public_size;
+  time_t grace_deadline; /* 0 if no grace period active */
 };
 
 /*
@@ -196,6 +240,85 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
  * Returns: 0 on success, negative errno on failure
  */
 int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
+
+/*
+ * tpm_aik_load_metadata - Load AIK rotation metadata from disk
+ * @ctx: Initialized TPM context
+ *
+ * Reads metadata from ctx->aik_meta_path (or TPM_AIK_META_PATH by
+ * default). If the file does not exist, initializes default metadata
+ * with provisioned_at = now and writes it.
+ *
+ * Must be called after tpm_provision_aik() so the AIK exists.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_aik_load_metadata(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_save_metadata - Persist AIK metadata to disk
+ * @ctx: TPM context with metadata to save
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_aik_save_metadata(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_age - Get current AIK age in seconds
+ * @ctx: TPM context with loaded metadata
+ *
+ * Returns: age in seconds, or negative errno on error
+ */
+int64_t tpm_aik_age(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_needs_rotation - Check if AIK rotation is due
+ * @ctx: TPM context with loaded metadata
+ * @max_age_sec: Maximum AIK age in seconds (0 = use default 30d)
+ *
+ * Returns: 1 if rotation needed, 0 if not, negative errno on error
+ */
+int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec);
+
+/*
+ * tpm_rotate_aik - Rotate the Attestation Identity Key
+ * @ctx: Initialized TPM context with loaded metadata
+ *
+ * Full rotation sequence:
+ *   - Exports current AIK public key (preserved for grace period)
+ *   - Evicts old persistent handle via Esys_EvictControl
+ *   - Creates new AIK via Esys_CreatePrimary + Esys_EvictControl
+ *   - Increments generation counter and updates provisioned_at
+ *   - Persists metadata and starts grace period timer
+ *
+ * After rotation, tpm_aik_get_prev_public() returns the old public
+ * key for the duration of the grace period.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_rotate_aik(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_in_grace_period - Check if migration grace period is active
+ * @ctx: TPM context
+ *
+ * Returns: 1 if grace period is active, 0 otherwise
+ */
+int tpm_aik_in_grace_period(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_get_prev_public - Get previous AIK public key
+ * @ctx: TPM context
+ * @buf: Output buffer for DER-encoded public key
+ * @buf_size: Size of output buffer
+ * @out_size: Actual size of exported key
+ *
+ * Only available during the grace period after rotation.
+ *
+ * Returns: 0 on success, -ENOENT if no previous key, negative errno
+ */
+int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
+                            size_t buf_size, size_t *out_size);
 
 /*
  * TPM Event Log paths (tried in order)
