@@ -29,6 +29,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "bpf_loader.h"
+#include "config.h"
 #include "daemon.h"
 #include "hash_verify.h"
 #include "iommu.h"
@@ -667,6 +668,9 @@ static void print_usage(const char *prog) {
   printf("Usage: %s [options]\n", prog);
   printf("\n");
   printf("Options:\n");
+  printf("  --config PATH     Configuration file path\n");
+  printf("                    (default: %s)\n", LOTA_CONFIG_DEFAULT_PATH);
+  printf("  --dump-config     Print loaded configuration and exit\n");
   printf("  --test-tpm        Test TPM operations and exit\n");
   printf("  --test-iommu      Test IOMMU verification and exit\n");
   printf("  --test-ipc        Run IPC server with simulated attested state\n");
@@ -1427,8 +1431,13 @@ int main(int argc, char *argv[]) {
   const char *pin_sha256_hex = NULL;
   uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
   int has_pin = 0;
+  struct lota_config cfg;
+  const char *config_path = NULL;
+  int dump_config_flag = 0;
 
   static struct option long_options[] = {
+      {"config", required_argument, 0, 'f'},
+      {"dump-config", no_argument, 0, 'Z'},
       {"test-tpm", no_argument, 0, 't'},
       {"test-iommu", no_argument, 0, 'i'},
       {"test-ipc", no_argument, 0, 'c'},
@@ -1458,8 +1467,58 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
+  config_init(&cfg);
+
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+      config_path = argv[++i];
+    }
+  }
+
+  {
+    int cfg_ret = config_load(&cfg, config_path);
+    if (cfg_ret == -ENOENT && !config_path) {
+      /* default config file does not exist -> not an error */
+    } else if (cfg_ret == -ENOENT) {
+      fprintf(stderr, "Config file not found: %s\n", config_path);
+      return 1;
+    } else if (cfg_ret < 0) {
+      fprintf(stderr, "Failed to load config %s: %s\n",
+              config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
+              strerror(-cfg_ret));
+      return 1;
+    }
+  }
+
+  server_addr = cfg.server;
+  server_port = cfg.port;
+  ca_cert_path = cfg.ca_cert[0] ? cfg.ca_cert : NULL;
+  no_verify_tls = cfg.no_verify_tls ? 1 : 0;
+  pin_sha256_hex = cfg.pin_sha256[0] ? cfg.pin_sha256 : NULL;
+  bpf_path = cfg.bpf_path;
+  {
+    int cfg_mode = parse_mode(cfg.mode);
+    if (cfg_mode >= 0)
+      mode = cfg_mode;
+  }
+  strict_mmap = cfg.strict_mmap;
+  block_ptrace = cfg.block_ptrace;
+  attest_interval = cfg.attest_interval;
+  aik_ttl = cfg.aik_ttl;
+  daemon_flag = cfg.daemon ? 1 : 0;
+  pid_file_path = cfg.pid_file;
+  signing_key_path = cfg.signing_key[0] ? cfg.signing_key : NULL;
+  policy_pubkey_path = cfg.policy_pubkey[0] ? cfg.policy_pubkey : NULL;
+
+  g_protect_pid_count = cfg.protect_pid_count;
+  for (int i = 0; i < cfg.protect_pid_count; i++)
+    g_protect_pids[i] = cfg.protect_pids[i];
+  g_trust_lib_count = cfg.trust_lib_count;
+  for (int i = 0; i < cfg.trust_lib_count; i++)
+    g_trust_libs[i] = cfg.trust_libs[i];
+
   while ((opt = getopt_long(argc, argv,
-                            "ticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:h",
+                            "f:ZticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:h",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1565,11 +1624,22 @@ int main(int argc, char *argv[]) {
     case 'Q':
       policy_pubkey_path = optarg;
       break;
+    case 'f':
+      /* --config: handled in pre-scan above */
+      break;
+    case 'Z':
+      dump_config_flag = 1;
+      break;
     case 'h':
     default:
       print_usage(argv[0]);
       return (opt == 'h') ? 0 : 1;
     }
+  }
+
+  if (dump_config_flag) {
+    config_dump(&cfg, stdout);
+    return 0;
   }
 
   /* parse certificate pin if provided */
