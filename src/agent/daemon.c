@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,35 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+/*
+ * Pointers to the caller's flags, set by daemon_install_signals().
+ * These are module-level so that the async-signal-safe handlers
+ * (which cannot take arguments) can reach them.
+ */
+static volatile sig_atomic_t *g_daemon_running;
+static volatile sig_atomic_t *g_daemon_reload;
+
+/*
+ * Signal handler: graceful shutdown (SIGTERM, SIGINT).
+ * Async-signal-safe: only writes to a volatile sig_atomic_t.
+ */
+static void sigterm_handler(int sig) {
+  (void)sig;
+  if (g_daemon_running)
+    *g_daemon_running = 0;
+}
+
+/*
+ * Signal handler: configuration reload (SIGHUP).
+ * Async-signal-safe: only writes to a volatile sig_atomic_t.
+ */
+static void sighup_handler(int sig) {
+  (void)sig;
+  if (g_daemon_reload)
+    *g_daemon_reload = 1;
+}
+
 int daemonize(void) {
   pid_t pid;
   int fd;
@@ -165,3 +195,73 @@ void pidfile_remove(const char *path, int fd) {
     close(fd);
 }
 
+int daemon_install_signals(volatile sig_atomic_t *running,
+                           volatile sig_atomic_t *reload) {
+  struct sigaction sa;
+
+  if (!running || !reload)
+    return -EINVAL;
+
+  g_daemon_running = running;
+  g_daemon_reload = reload;
+
+  /*
+   * SIGTERM / SIGINT -> graceful shutdown.
+   * SA_RESTART: restart interrupted syscalls
+   */
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sigterm_handler;
+  sa.sa_flags = SA_RESTART;
+  sigemptyset(&sa.sa_mask);
+
+  if (sigaction(SIGTERM, &sa, NULL) < 0)
+    return -errno;
+  if (sigaction(SIGINT, &sa, NULL) < 0)
+    return -errno;
+
+  /*
+   * SIGHUP -> reload configuration
+   */
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sighup_handler;
+  sa.sa_flags = SA_RESTART;
+  sigemptyset(&sa.sa_mask);
+
+  if (sigaction(SIGHUP, &sa, NULL) < 0)
+    return -errno;
+
+  /*
+   * SIGPIPE -> ignore
+   */
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_IGN;
+  sa.sa_flags = 0;
+  sigemptyset(&sa.sa_mask);
+
+  if (sigaction(SIGPIPE, &sa, NULL) < 0)
+    return -errno;
+
+  return 0;
+}
+
+int daemon_redirect_output(const char *log_path) {
+  int fd;
+
+  if (!log_path)
+    log_path = "/dev/null";
+
+  fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+  if (fd < 0)
+    return -errno;
+
+  if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+    int err = errno;
+    close(fd);
+    return -err;
+  }
+
+  if (fd > STDERR_FILENO)
+    close(fd);
+
+  return 0;
+}
