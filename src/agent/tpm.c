@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <openssl/bn.h>
@@ -829,6 +831,243 @@ cleanup:
     Esys_Free(ek_qualified_name);
 
   return ret;
+}
+
+/*
+ * Create directory path recursively.
+ */
+static int mkdirs(const char *path, mode_t mode) {
+  char tmp[256];
+  char *p;
+  size_t len;
+
+  len = strlen(path);
+  if (len == 0 || len >= sizeof(tmp))
+    return -EINVAL;
+
+  memcpy(tmp, path, len + 1);
+
+  for (p = tmp + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, mode) < 0 && errno != EEXIST)
+        return -errno;
+      *p = '/';
+    }
+  }
+  return 0;
+}
+
+int tpm_aik_load_metadata(struct tpm_context *ctx) {
+  const char *path;
+  int fd;
+  ssize_t n;
+  struct aik_metadata meta;
+
+  if (!ctx || !ctx->initialized)
+    return -EINVAL;
+
+  path = ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+
+  fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    if (errno != ENOENT)
+      return -errno;
+
+    /*
+     * file does not exist -> first run after install
+     * initialize default metadata with current time
+     */
+    memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+    ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
+    ctx->aik_meta.version = TPM_AIK_META_VERSION;
+    ctx->aik_meta.generation = 1;
+    ctx->aik_meta.provisioned_at = (int64_t)time(NULL);
+    ctx->aik_meta.last_rotated_at = 0;
+    ctx->aik_meta_loaded = true;
+
+    return tpm_aik_save_metadata(ctx);
+  }
+
+  n = read(fd, &meta, sizeof(meta));
+  close(fd);
+
+  if (n != (ssize_t)sizeof(meta))
+    return -EIO;
+
+  if (meta.magic != TPM_AIK_META_MAGIC)
+    return -EINVAL;
+
+  if (meta.version != TPM_AIK_META_VERSION)
+    return -ENOTSUP;
+
+  ctx->aik_meta = meta;
+  ctx->aik_meta_loaded = true;
+  return 0;
+}
+
+int tpm_aik_save_metadata(struct tpm_context *ctx) {
+  const char *path;
+  int fd;
+  ssize_t n;
+  int ret;
+
+  if (!ctx)
+    return -EINVAL;
+
+  path = ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+
+  /* ensure parent directory exists */
+  ret = mkdirs(path, 0755);
+  if (ret < 0)
+    return ret;
+
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0)
+    return -errno;
+
+  n = write(fd, &ctx->aik_meta, sizeof(ctx->aik_meta));
+  if (n != (ssize_t)sizeof(ctx->aik_meta)) {
+    close(fd);
+    return -EIO;
+  }
+
+  fsync(fd);
+  close(fd);
+  return 0;
+}
+
+int64_t tpm_aik_age(struct tpm_context *ctx) {
+  time_t now;
+
+  if (!ctx || !ctx->aik_meta_loaded)
+    return -EINVAL;
+
+  now = time(NULL);
+  return (int64_t)(now - (time_t)ctx->aik_meta.provisioned_at);
+}
+
+int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec) {
+  int64_t age;
+
+  if (!ctx || !ctx->aik_meta_loaded)
+    return -EINVAL;
+
+  if (max_age_sec == 0)
+    max_age_sec = TPM_AIK_DEFAULT_TTL_SEC;
+
+  age = tpm_aik_age(ctx);
+  if (age < 0)
+    return (int)age;
+
+  return (age >= (int64_t)max_age_sec) ? 1 : 0;
+}
+
+int tpm_rotate_aik(struct tpm_context *ctx) {
+  int ret;
+  ESYS_TR old_handle = ESYS_TR_NONE;
+  size_t prev_size = 0;
+
+  if (!ctx || !ctx->initialized || !ctx->aik_meta_loaded)
+    return -EINVAL;
+
+  /* export current AIK public key for grace period */
+  ret = aik_exists(ctx, &old_handle);
+  if (ret < 0)
+    return ret;
+
+  if (ret == 1) {
+    ret = tpm_get_aik_public(ctx, ctx->prev_aik_public,
+                             sizeof(ctx->prev_aik_public), &prev_size);
+    if (ret < 0) {
+      /*
+       * cannot export old key -> grace period will be empty
+       * continue with rotation anyway
+       */
+      prev_size = 0;
+    }
+    ctx->prev_aik_public_size = prev_size;
+
+    /* evict old persistent handle */
+    {
+      TSS2_RC rc;
+      ESYS_TR out_handle;
+      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
+                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                             TPM_AIK_HANDLE, &out_handle);
+      if (rc != TSS2_RC_SUCCESS)
+        return tss2_rc_to_errno(rc);
+    }
+  } else {
+    ctx->prev_aik_public_size = 0;
+  }
+
+  /* create new AIK */
+  ret = tpm_provision_aik(ctx);
+  if (ret < 0) {
+    /*
+     * old key evicted but new key creation failed
+     * persistent handle is empty
+     * log and propagate error!
+     */
+    return ret;
+  }
+
+  /* update metadata */
+  ctx->aik_meta.generation++;
+  ctx->aik_meta.last_rotated_at = (int64_t)time(NULL);
+  ctx->aik_meta.provisioned_at = ctx->aik_meta.last_rotated_at;
+
+  ret = tpm_aik_save_metadata(ctx);
+  if (ret < 0)
+    return ret;
+
+  /* start grace period */
+  if (ctx->prev_aik_public_size > 0) {
+    ctx->grace_deadline = time(NULL) + TPM_AIK_GRACE_PERIOD_SEC;
+  } else {
+    ctx->grace_deadline = 0;
+  }
+
+  return 0;
+}
+
+int tpm_aik_in_grace_period(struct tpm_context *ctx) {
+  if (!ctx)
+    return 0;
+
+  if (ctx->grace_deadline == 0)
+    return 0;
+
+  if (time(NULL) >= ctx->grace_deadline) {
+    /* grace period expired -> clear state */
+    ctx->grace_deadline = 0;
+    ctx->prev_aik_public_size = 0;
+    return 0;
+  }
+
+  return 1;
+}
+
+int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
+                            size_t buf_size, size_t *out_size) {
+  if (!ctx || !buf || !out_size)
+    return -EINVAL;
+
+  *out_size = 0;
+
+  if (!tpm_aik_in_grace_period(ctx))
+    return -ENOENT;
+
+  if (ctx->prev_aik_public_size == 0)
+    return -ENOENT;
+
+  if (buf_size < ctx->prev_aik_public_size)
+    return -ENOSPC;
+
+  memcpy(buf, ctx->prev_aik_public, ctx->prev_aik_public_size);
+  *out_size = ctx->prev_aik_public_size;
+  return 0;
 }
 
 int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size) {
