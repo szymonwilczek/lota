@@ -246,3 +246,33 @@ func algDigestSize(algID uint16) int {
 	}
 }
 
+// replays the event log to reconstruct PCR values
+// starts from all-zero PCRs and applies each extend operation
+func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
+	if parsed == nil {
+		return nil, errors.New("nil event log")
+	}
+
+	result := &ReplayResult{}
+	for _, entry := range parsed.Entries {
+		if entry.PCRIndex >= types.PCRCount {
+			continue
+		}
+
+		sha256Digest, ok := entry.Digests[AlgSHA256]
+		if !ok {
+			continue // skip entries without SHA-256 digest
+		}
+
+		// PCR extend: new_value = SHA256(old_value || digest)
+		h := sha256.New()
+		h.Write(result.PCRValues[entry.PCRIndex][:])
+		h.Write(sha256Digest)
+		copy(result.PCRValues[entry.PCRIndex][:], h.Sum(nil))
+
+		result.ExtendCounts[entry.PCRIndex]++
+	}
+
+	result.TotalEntries = len(parsed.Entries)
+	return result, nil
+}
