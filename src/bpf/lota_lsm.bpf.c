@@ -178,6 +178,55 @@ static __always_inline int is_protected_pid(u32 pid) {
 }
 
 /*
+ * Resolve full file path using bpf_d_path.
+ *
+ * bpf_d_path() walks the dentry/mount tree in kernel and produces the
+ * absolute path string.  It is only available from sleepable BPF
+ * programs attached to functions on the d_path allowlist.
+ *
+ * @file: kernel struct file pointer (must be a trusted/BTF pointer)
+ * @buf:  destination buffer
+ * @sz:   buffer size
+ *
+ * Returns: >= 0 on success (bytes written), negative on error
+ */
+static __always_inline long resolve_file_path(struct file *file, char *buf,
+                                              u32 sz) {
+  struct path *fpath;
+  long ret;
+
+  if (!file || sz == 0)
+    return -1;
+
+  fpath = (struct path *)__builtin_preserve_access_index(&file->f_path);
+  ret = bpf_d_path(fpath, buf, sz);
+  if (ret >= 0)
+    return ret;
+
+  /*
+   * fallback: read basename from dentry.
+   */
+  {
+    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
+    const unsigned char *name;
+
+    if (!dentry)
+      goto zero;
+
+    name = BPF_CORE_READ(dentry, d_name.name);
+    if (!name)
+      goto zero;
+
+    ret = bpf_probe_read_kernel_str(buf, sz, name);
+    return ret;
+  }
+
+zero:
+  buf[0] = '\0';
+  return 0;
+}
+
+/*
  * Check if a library path is in the trusted whitelist.
  */
 static __always_inline int is_trusted_lib(const char *path) {
