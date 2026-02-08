@@ -28,6 +28,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "bpf_loader.h"
+#include "hash_verify.h"
 #include "iommu.h"
 #include "ipc.h"
 #include "net.h"
@@ -48,6 +49,7 @@ static volatile sig_atomic_t g_running = 1;
 static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
+static struct hash_verify_ctx g_hash_ctx;
 static int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
@@ -330,11 +332,28 @@ static int test_iommu(void) {
 }
 
 /*
- * Ring buffer event handler
+ * Format SHA-256 hex string into buffer.
+ * buf must be at least 65 bytes (64 hex + NUL).
+ */
+static void format_sha256(const uint8_t hash[LOTA_HASH_SIZE], char *buf) {
+  for (int i = 0; i < LOTA_HASH_SIZE; i++)
+    snprintf(buf + i * 2, 3, "%02x", hash[i]);
+}
+
+/*
+ * Ring buffer event handler.
+ *
+ * For file-bearing events (EXEC, MODULE, MMAP), computes the SHA-256
+ * content hash via the hash verification cache and logs it alongside
+ * the event metadata.
  */
 static int handle_exec_event(void *ctx, void *data, size_t len) {
   struct lota_exec_event *event = data;
   const char *event_type_str;
+  uint8_t content_hash[LOTA_HASH_SIZE];
+  char hash_hex[LOTA_HASH_SIZE * 2 + 1];
+  int has_file = 0;
+  int hash_ret;
   (void)ctx;
 
   if (len < sizeof(*event))
@@ -343,18 +362,23 @@ static int handle_exec_event(void *ctx, void *data, size_t len) {
   switch (event->event_type) {
   case LOTA_EVENT_EXEC:
     event_type_str = "EXEC";
+    has_file = 1;
     break;
   case LOTA_EVENT_MODULE_LOAD:
     event_type_str = "MODULE";
+    has_file = 1;
     break;
   case LOTA_EVENT_MODULE_BLOCKED:
     event_type_str = "BLOCKED";
+    has_file = 1;
     break;
   case LOTA_EVENT_MMAP_EXEC:
     event_type_str = "MMAP_EXEC";
+    has_file = 1;
     break;
   case LOTA_EVENT_MMAP_BLOCKED:
     event_type_str = "MMAP_BLOCKED";
+    has_file = 1;
     break;
   case LOTA_EVENT_PTRACE:
     event_type_str = "PTRACE";
@@ -382,6 +406,23 @@ static int handle_exec_event(void *ctx, void *data, size_t len) {
   default:
     event_type_str = "UNKNOWN";
     break;
+  }
+
+  /*
+   * For events with a file path, attempt to resolve the content
+   * SHA-256 hash. This uses the LRU cache so unchanged files
+   * are not re-hashed on every event.
+   */
+  if (has_file && event->filename[0] == '/') {
+    hash_ret = hash_verify_event(&g_hash_ctx, event, content_hash);
+    if (hash_ret == 0) {
+      format_sha256(content_hash, hash_hex);
+      printf("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)\n",
+             (unsigned long long)event->timestamp_ns, event_type_str,
+             event->comm, event->filename, hash_hex, event->pid, event->uid);
+      return 0;
+    }
+    /* hash failed -> fall through to log without hash */
   }
 
   printf("[%llu] %s %s: %s (pid=%u, uid=%u)\n",
@@ -414,7 +455,13 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
   printf("=== LOTA Agent ===\n\n");
 
-  /* IPC server first */
+  ret = hash_verify_init(&g_hash_ctx, 0);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize hash cache: %s\n", strerror(-ret));
+    return ret;
+  }
+  printf("Hash verification cache ready\n");
+
   printf("Starting IPC server...\n");
   ret = ipc_init(&g_ipc_ctx);
   if (ret < 0) {
@@ -574,11 +621,20 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     printf("Setuid transitions: %lu\n", setuid_ev);
   }
 
+  {
+    uint64_t h_hits, h_misses, h_errors;
+    hash_verify_stats(&g_hash_ctx, &h_hits, &h_misses, &h_errors);
+    printf("Hash cache hits: %lu\n", h_hits);
+    printf("Hash cache misses: %lu\n", h_misses);
+    printf("Hash errors: %lu\n", h_errors);
+  }
+
 cleanup_bpf:
   bpf_loader_cleanup(&g_bpf_ctx);
 cleanup_tpm:
   tpm_cleanup(&g_tpm_ctx);
   ipc_cleanup(&g_ipc_ctx);
+  hash_verify_cleanup(&g_hash_ctx);
   return ret;
 }
 
