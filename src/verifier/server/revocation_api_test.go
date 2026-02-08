@@ -760,3 +760,54 @@ func TestAuth_BearerPrefixCaseInsensitive(t *testing.T) {
 		})
 	}
 }
+
+func TestAuth_ReaderKeyRequiredForSensitiveEndpoints(t *testing.T) {
+	t.Log("SECURITY TEST: Sensitive read-only endpoints require reader or admin key")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	sensitiveEndpoints := []string{
+		"/api/v1/clients",
+		"/api/v1/clients/some-id",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/api/v1/attestations",
+	}
+
+	for _, ep := range sensitiveEndpoints {
+		t.Run("GET "+ep+" no auth", func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("Sensitive endpoint %s should return 401 without auth, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ All sensitive read-only endpoints reject unauthenticated requests")
+}
+func TestAuth_WrongReaderKeyReturns403(t *testing.T) {
+	t.Log("SECURITY TEST: Wrong reader key returns 403 on sensitive read-only endpoints")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	req := httptest.NewRequest("GET", "/api/v1/audit", nil)
+	req.Header.Set("Authorization", "Bearer wrong-reader-key")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403, got %d", rec.Code)
+	}
+
+	var resp errorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "invalid API key" {
+		t.Errorf("Unexpected error message: %q", resp.Error)
+	}
+
+	t.Log("✓ Wrong reader key correctly rejected")
+}
