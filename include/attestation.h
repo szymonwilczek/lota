@@ -105,6 +105,21 @@ struct lota_tpm_evidence {
    */
   uint8_t hardware_id[LOTA_HARDWARE_ID_SIZE];
 
+  /*
+   * AIK rotation metadata.
+   * Generation is a monotonic counter incremented on every rotation.
+   */
+  uint64_t aik_generation;
+
+  /*
+   * Previous AIK public key (DER SPKI), populated during rotation
+   * grace period. When prev_aik_public_size > 0 the agent just
+   * rotated its AIK and includes the old key so the verifier can
+   * verify continuity (same TPM, legitimate rotation).
+   */
+  uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
+  uint16_t prev_aik_public_size;
+
   /* Reserved for alignment */
   uint8_t _reserved[2];
 } __attribute__((packed));
