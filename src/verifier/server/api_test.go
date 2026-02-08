@@ -42,13 +42,20 @@ func init() {
 
 // creates a test verifier and HTTP mux for API testing
 // uses a test admin API key so that mutating endpoints are accessible
+// reader key is empty so sensitive read endpoints are public
 func setupTestAPI(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
-	return setupTestAPIWithKey(t, "test-admin-key")
+	return setupTestAPIWithKeys(t, "test-admin-key", "")
 }
 
-// creates a test setup with a specific admin API key
+// creates a test setup with a specific admin API key (no reader key)
 func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify.Verifier) {
+	t.Helper()
+	return setupTestAPIWithKeys(t, adminKey, "")
+}
+
+// creates a test setup with specific admin and reader API keys
+func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
@@ -68,7 +75,7 @@ func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey, readerKey)
 
 	return mux, v
 }
@@ -76,11 +83,17 @@ func setupTestAPIWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify
 // creates a test setup where the TLS listener appears active
 func setupTestAPIListening(t *testing.T) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
-	return setupTestAPIListeningWithKey(t, "test-admin-key")
+	return setupTestAPIListeningWithKeys(t, "test-admin-key", "")
 }
 
-// creates a test setup with listener and specific admin API key
+// creates a test setup with listener and specific admin API key (no reader key)
 func setupTestAPIListeningWithKey(t *testing.T, adminKey string) (*http.ServeMux, *verify.Verifier) {
+	t.Helper()
+	return setupTestAPIListeningWithKeys(t, adminKey, "")
+}
+
+// creates a test setup with listener and specific admin + reader API keys
+func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*http.ServeMux, *verify.Verifier) {
 	t.Helper()
 
 	aikStore := store.NewMemoryStore()
@@ -106,7 +119,7 @@ func setupTestAPIListeningWithKey(t *testing.T, adminKey string) (*http.ServeMux
 	}
 
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey)
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, nil, adminKey, readerKey)
 
 	return mux, v
 }
