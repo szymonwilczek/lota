@@ -106,6 +106,10 @@ struct ipc_client {
   uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
   size_t send_len;
   size_t send_offset;
+  bool subscribed;         /* client subscribed to notifications */
+  uint32_t event_mask;     /* LOTA_IPC_EVENT_* subscription mask */
+  bool notify_pending;     /* notification queued behind current send */
+  uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
 };
 
 static struct ipc_client *clients[MAX_CLIENTS];
@@ -216,6 +220,63 @@ static void build_error_response(struct ipc_client *client, uint32_t result) {
 
   client->send_len = LOTA_IPC_RESPONSE_SIZE;
   client->send_offset = 0;
+}
+
+/*
+ * Build a notification frame in the client's send buffer.
+ */
+static void build_notification(struct ipc_context *ctx,
+                               struct ipc_client *client, uint32_t events) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  struct lota_ipc_notify *notify;
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_NOTIFY;
+  resp->payload_len = sizeof(*notify);
+
+  notify = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+  notify->events = events;
+  notify->flags = ctx->status_flags;
+  notify->last_attest_time = ctx->last_attest_time;
+  notify->valid_until = ctx->valid_until;
+  notify->attest_count = ctx->attest_count;
+  notify->fail_count = ctx->fail_count;
+  notify->mode = ctx->mode;
+  memset(notify->reserved, 0, sizeof(notify->reserved));
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*notify);
+  client->send_offset = 0;
+}
+
+/*
+ * Push notification to a single subscriber.
+ */
+static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
+                        uint32_t events) {
+  uint32_t relevant = events & client->event_mask;
+
+  if (!relevant)
+    return;
+
+  if (client->send_len > client->send_offset) {
+    /* send in progress -> accumulate */
+    client->notify_pending = true;
+    client->pending_events |= relevant;
+    return;
+  }
+
+  build_notification(ctx, client, relevant);
+}
+
+/*
+ * Notify all subscribers about an event.
+ */
+static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i] && clients[i]->subscribed)
+      push_notify(ctx, clients[i], events);
+  }
 }
 
 /*
@@ -398,6 +459,44 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 }
 
 /*
+ * Handle SUBSCRIBE command
+ *
+ * Registers or cancels per-connection push notifications.
+ * event_mask = 0 cancels any existing subscription.
+ */
+static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
+                             const uint8_t *payload, uint32_t payload_len) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  const struct lota_ipc_subscribe_request *sub;
+  (void)ctx;
+
+  if (payload_len < sizeof(*sub)) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+
+  sub = (const void *)payload;
+
+  if (sub->event_mask == 0) {
+    client->subscribed = false;
+    client->event_mask = 0;
+    client->notify_pending = false;
+    client->pending_events = 0;
+  } else {
+    client->subscribed = true;
+    client->event_mask = sub->event_mask;
+  }
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = 0;
+
+  client->send_len = LOTA_IPC_RESPONSE_SIZE;
+  client->send_offset = 0;
+}
+
+/*
  * Process complete request
  */
 static void process_request(struct ipc_context *ctx,
@@ -423,6 +522,10 @@ static void process_request(struct ipc_context *ctx,
 
   case LOTA_IPC_CMD_GET_TOKEN:
     handle_get_token(ctx, client, payload, payload_len);
+    break;
+
+  case LOTA_IPC_CMD_SUBSCRIBE:
+    handle_subscribe(ctx, client, payload, payload_len);
     break;
 
   default:
@@ -480,7 +583,8 @@ static int handle_client_read(struct ipc_context *ctx,
 /*
  * Handle client write event
  */
-static int handle_client_write(struct ipc_client *client) {
+static int handle_client_write(struct ipc_context *ctx,
+                               struct ipc_client *client) {
   ssize_t n;
   size_t remaining;
 
@@ -503,6 +607,17 @@ static int handle_client_write(struct ipc_client *client) {
     /* response complete, reset */
     client->send_len = 0;
     client->send_offset = 0;
+
+    /*
+     * deliver pending notification that accumulated
+     * while the previous send was in progress
+     */
+    if (client->subscribed && client->notify_pending) {
+      uint32_t pending = client->pending_events;
+      client->notify_pending = false;
+      client->pending_events = 0;
+      build_notification(ctx, client, pending);
+    }
   }
 
   return 0;
@@ -731,7 +846,7 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
       }
 
       if (events[i].events & EPOLLOUT) {
-        if (handle_client_write(client) < 0)
+        if (handle_client_write(ctx, client) < 0)
           ret = -1;
       }
 
@@ -757,9 +872,14 @@ int ipc_get_fd(struct ipc_context *ctx) { return ctx->epoll_fd; }
  */
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
                        uint64_t valid_until) {
+  uint32_t old_flags = ctx->status_flags;
+
   ctx->status_flags = flags;
   ctx->valid_until = valid_until;
   ctx->last_attest_time = (uint64_t)time(NULL);
+
+  if (old_flags != flags)
+    notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
 }
 
 /*
@@ -770,12 +890,21 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success) {
     ctx->attest_count++;
   else
     ctx->fail_count++;
+
+  notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
 }
 
 /*
  * Set mode
  */
-void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) { ctx->mode = mode; }
+void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) {
+  uint8_t old_mode = ctx->mode;
+
+  ctx->mode = mode;
+
+  if (old_mode != mode)
+    notify_subscribers(ctx, LOTA_IPC_EVENT_MODE);
+}
 
 /*
  * Set TPM context for token signing
