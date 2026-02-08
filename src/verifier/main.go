@@ -13,6 +13,11 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
 //   --admin-api-key KEY Admin API key for mutating HTTP endpoints (required for revoke/ban)
+//   --reader-api-key KEY Reader API key for sensitive read-only endpoints (optional)
+//
+// Environment variables (fallback when flag is empty):
+//   LOTA_ADMIN_API_KEY  Equivalent to --admin-api-key
+//   LOTA_READER_API_KEY Equivalent to --reader-api-key
 //   --aik-max-age DUR  Maximum AIK registration age before forced rotation (default: 720h)
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
@@ -51,6 +56,7 @@ var (
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
 	adminAPIKey  = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
+	readerAPIKey = flag.String("reader-api-key", "", "API key for sensitive read-only endpoints (clients, audit, attestations); if empty, those endpoints are public")
 	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
 	aikMaxAge    = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
 	logFormat    = flag.String("log-format", "text", "Log output format: text or json")
