@@ -39,6 +39,7 @@ enum lota_ipc_result {
   LOTA_IPC_ERR_INTERNAL = 0x05,
   LOTA_IPC_ERR_RATE_LIMITED = 0x06,
   LOTA_IPC_ERR_ACCESS_DENIED = 0x07,
+  LOTA_IPC_NOTIFY = 0x80,
 };
 
 /*
@@ -145,5 +146,44 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_MAX_SIZE                                                \
   (LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST +                    \
    LOTA_IPC_TOKEN_MAX_SIG)
+
+/*
+ * Subscription event types (bitmask for SUBSCRIBE request)
+ *
+ * Controls which state changes trigger push notifications.
+ */
+#define LOTA_IPC_EVENT_STATUS (1U << 0) /* Status flags changed */
+#define LOTA_IPC_EVENT_ATTEST                                                  \
+  (1U << 1)                           /* Attestation completed (pass/fail)     \
+                                       */
+#define LOTA_IPC_EVENT_MODE (1U << 2) /* Enforcement mode changed */
+#define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
+
+/*
+ * SUBSCRIBE request payload
+ *
+ * Registers or cancels per-connection push notifications.
+ * event_mask selects which events trigger notifications.
+ * Sending event_mask = 0 cancels the subscription.
+ *
+ * Server responds with LOTA_IPC_OK on success.
+ */
+struct lota_ipc_subscribe_request {
+  uint32_t event_mask; /* LOTA_IPC_EVENT_* bitmask (0 = unsubscribe) */
+} __attribute__((packed));
+
+/*
+ * Push notification payload
+ */
+struct lota_ipc_notify {
+  uint32_t events;           /* LOTA_IPC_EVENT_* that triggered this */
+  uint32_t flags;            /* Current LOTA_STATUS_* bitmask */
+  uint64_t last_attest_time; /* Unix timestamp of last attestation */
+  uint64_t valid_until;      /* Token valid until (Unix timestamp) */
+  uint32_t attest_count;     /* Total successful attestations */
+  uint32_t fail_count;       /* Total failed attestations */
+  uint8_t mode;              /* Current mode (enum lota_mode) */
+  uint8_t reserved[3];
+} __attribute__((packed));
 
 #endif /* LOTA_IPC_H */
