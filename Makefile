@@ -69,7 +69,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/hash_verify.c \
-              $(AGENT_DIR)/daemon.c
+              $(AGENT_DIR)/daemon.c \
+              $(AGENT_DIR)/policy.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
