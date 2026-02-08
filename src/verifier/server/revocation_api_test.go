@@ -907,3 +907,99 @@ func TestAuth_WrongReaderKeyReturns403(t *testing.T) {
 
 	t.Log("✓ Wrong reader key correctly rejected")
 }
+
+func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
+	t.Log("TEST: When no reader key is configured, sensitive read endpoints are public")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
+
+	sensitiveEndpoints := []string{
+		"/api/v1/clients",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/api/v1/attestations",
+	}
+
+	for _, ep := range sensitiveEndpoints {
+		t.Run("GET "+ep, func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Endpoint %s should be public when no keys configured, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Sensitive endpoints are public when no reader key configured")
+}
+
+func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
+	t.Log("TEST: Admin key alone does not protect sensitive read-only endpoints")
+	t.Log("Reader protection is opt-in via --reader-api-key flag")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "")
+
+	sensitiveEndpoints := []string{
+		"/api/v1/clients",
+		"/api/v1/revocations",
+		"/api/v1/bans",
+		"/api/v1/audit",
+		"/api/v1/attestations",
+	}
+
+	for _, ep := range sensitiveEndpoints {
+		t.Run("GET "+ep+" no auth", func(t *testing.T) {
+			req := httptest.NewRequest("GET", ep, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Endpoint %s should be public when only admin key is set, got %d", ep, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Sensitive read-only endpoints are public without --reader-api-key")
+}
+
+func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
+	t.Log("TEST: Health, stats, and metrics are always public regardless of key config")
+
+	configs := []struct {
+		name      string
+		adminKey  string
+		readerKey string
+	}{
+		{"no keys", "", ""},
+		{"admin only", "admin-key", ""},
+		{"reader only", "", "reader-key"},
+		{"both keys", "admin-key", "reader-key"},
+	}
+
+	publicEndpoints := []string{
+		"/health",
+		"/api/v1/stats",
+		"/metrics",
+	}
+
+	for _, cfg := range configs {
+		t.Run(cfg.name, func(t *testing.T) {
+			mux, _ := setupTestAPIListeningWithKeys(t, cfg.adminKey, cfg.readerKey)
+
+			for _, ep := range publicEndpoints {
+				req := httptest.NewRequest("GET", ep, nil)
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+					t.Errorf("[%s] Public endpoint %s returned %d", cfg.name, ep, rec.Code)
+				}
+			}
+		})
+	}
+
+	t.Log("✓ Public endpoints accessible in all key configurations")
+}
