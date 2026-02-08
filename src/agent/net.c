@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -46,7 +47,8 @@ void net_cleanup(void) {
 }
 
 int net_context_init(struct net_context *ctx, const char *server, int port,
-                     const char *ca_cert_path, int skip_verify) {
+                     const char *ca_cert_path, int skip_verify,
+                     const uint8_t *pin_sha256) {
   SSL_CTX *ssl_ctx;
   const SSL_METHOD *method;
 
@@ -56,6 +58,11 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
   memset(ctx, 0, sizeof(*ctx));
   ctx->socket_fd = -1;
   ctx->skip_verify = skip_verify;
+
+  if (pin_sha256) {
+    memcpy(ctx->pin_sha256, pin_sha256, NET_PIN_SHA256_LEN);
+    ctx->has_pin = 1;
+  }
 
   strncpy(ctx->server_addr, server, sizeof(ctx->server_addr) - 1);
   ctx->server_port = port;
