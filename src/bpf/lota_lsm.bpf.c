@@ -1018,9 +1018,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    if (name) {
-      bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
-    }
+    resolve_file_path(file, event->filename, sizeof(event->filename));
 
     /* compute fingerprint of mapped file */
     compute_partial_hash(file, event->hash);
