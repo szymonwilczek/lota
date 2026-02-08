@@ -276,3 +276,89 @@ func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 	result.TotalEntries = len(parsed.Entries)
 	return result, nil
 }
+
+// verifies that reported PCR values match the event log replay
+// only checks PCRs that have entries in the event log (extend count > 0)
+// PCRs with OS-level extensions (PCR 14 from LOTA self-measurement)
+// are expected to differ since those extensions happen after boot
+//
+// skipPCRs allows excluding specific PCR indices from the check
+func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayResult, skipPCRs map[int]bool) []string {
+	var mismatches []string
+
+	for i := 0; i < types.PCRCount; i++ {
+		if replay.ExtendCounts[i] == 0 {
+			continue // no events for this PCR
+		}
+		if skipPCRs != nil && skipPCRs[i] {
+			continue
+		}
+
+		reported := report.TPM.PCRValues[i]
+		replayed := replay.PCRValues[i]
+
+		if reported != replayed {
+			mismatches = append(mismatches, fmt.Sprintf(
+				"PCR %d: reported=%s replayed=%s (extends=%d)",
+				i,
+				hex.EncodeToString(reported[:]),
+				hex.EncodeToString(replayed[:]),
+				replay.ExtendCounts[i]))
+		}
+	}
+
+	return mismatches
+}
+
+// performs full event log verification:
+// - parse the binary event log
+// - replay PCR extend operations
+// - compare replayed PCRs against reported values
+// - log warnings for mismatches (firmware PCRs 0-7 should match)
+//
+// Returns nil if event log is empty/absent (optional feature).
+// Returns error only for parsing failures, not PCR mismatches
+func VerifyEventLog(report *types.AttestationReport) error {
+	if len(report.EventLog) == 0 {
+		return errors.New("TPM event log missing from report")
+	}
+
+	parsed, err := ParseEventLog(report.EventLog)
+	if err != nil {
+		return fmt.Errorf("event log parse failed: %w", err)
+	}
+
+	replay, err := ReplayEventLog(parsed)
+	if err != nil {
+		return fmt.Errorf("event log replay failed: %w", err)
+	}
+
+	// skip PCR 14 (LOTA self-measurement, extended at runtime)
+	// skip PCR 8-9 (may have OS-level IMA extensions)
+	skipPCRs := map[int]bool{
+		8: true, 9: true, 14: true,
+	}
+
+	mismatches := VerifyEventLogConsistency(report, replay, skipPCRs)
+	if len(mismatches) > 0 {
+		for _, m := range mismatches {
+			log.Printf("WARNING: event log PCR mismatch: %s", m)
+		}
+		return fmt.Errorf("event log verification: %d PCR mismatches detected", len(mismatches))
+	}
+
+	log.Printf("event log verified: %d entries, %d PCRs replayed",
+		replay.TotalEntries, countNonZero(replay.ExtendCounts[:]))
+
+	return nil
+}
+
+func countNonZero(counts []int) int {
+	n := 0
+	for _, c := range counts {
+		if c > 0 {
+			n++
+		}
+	}
+	return n
+}
