@@ -789,6 +789,7 @@ func TestAuth_ReaderKeyRequiredForSensitiveEndpoints(t *testing.T) {
 
 	t.Log("✓ All sensitive read-only endpoints reject unauthenticated requests")
 }
+
 func TestAuth_ReaderKeyGrantsReadAccess(t *testing.T) {
 	t.Log("TEST: Reader API key grants access to sensitive read-only endpoints")
 
@@ -1002,4 +1003,26 @@ func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
 	}
 
 	t.Log("✓ Public endpoints accessible in all key configurations")
+}
+
+func TestAuth_ReaderBearerCaseInsensitive(t *testing.T) {
+	t.Log("TEST: Reader auth accepts case-insensitive Bearer prefix per RFC 7235")
+
+	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
+
+	prefixes := []string{"Bearer ", "bearer ", "BEARER "}
+	for _, prefix := range prefixes {
+		t.Run(prefix, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/v1/audit", nil)
+			req.Header.Set("Authorization", prefix+"reader-key")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+				t.Errorf("Bearer prefix %q should be accepted for reader, got %d", prefix, rec.Code)
+			}
+		})
+	}
+
+	t.Log("✓ Reader auth accepts case-insensitive Bearer prefix")
 }
