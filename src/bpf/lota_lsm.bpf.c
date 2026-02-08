@@ -721,13 +721,12 @@ int BPF_PROG(lota_module_request, char *kmod_name, int ret) {
  *
  * Return: 0 to allow, -EPERM to deny
  */
-SEC("lsm/kernel_read_file")
+SEC("lsm.s/kernel_read_file")
 int BPF_PROG(lota_kernel_read_file, struct file *file,
              enum kernel_read_file_id id, bool contents, int ret) {
   struct lota_exec_event *event;
   struct dentry *dentry;
   const unsigned char *name;
-  char path_buf[64];
   u32 mode;
   u32 key = 0;
   int blocked = 0;
@@ -750,16 +749,8 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   /* for path validation */
   dentry = BPF_CORE_READ(file, f_path.dentry);
 
-  /*
-   * Read the path from file structure.
-   * TODO: resolve the full path in BPF!!!!
-   */
+  /* also get dentry name for whitelist lookup */
   name = BPF_CORE_READ(dentry, d_name.name);
-
-  __builtin_memset(path_buf, 0, sizeof(path_buf));
-  if (name) {
-    bpf_probe_read_kernel_str(path_buf, sizeof(path_buf), name);
-  }
 
   /*
    * In ENFORCE mode, LOTA block modules not from standard paths.
@@ -791,7 +782,10 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    __builtin_memcpy(event->filename, path_buf, sizeof(path_buf));
+    resolve_file_path(file, event->filename, sizeof(event->filename));
+
+    /* compute fingerprint of module file */
+    compute_partial_hash(file, event->hash);
 
     struct lota_exec_event *rb_event;
     rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
