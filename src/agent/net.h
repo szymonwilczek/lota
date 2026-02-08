@@ -13,6 +13,9 @@
 
 struct tpm_quote_response;
 
+/* SHA-256 digest size for certificate fingerprint pinning */
+#define NET_PIN_SHA256_LEN 32
+
 /*
  * Network context - holds TLS connection state
  */
@@ -24,6 +27,8 @@ struct net_context {
   char server_addr[256];
   int server_port;
   int skip_verify;
+  uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+  int has_pin; /* nonzero if pin_sha256 is set */
 };
 
 /*
