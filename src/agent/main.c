@@ -28,6 +28,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "bpf_loader.h"
+#include "daemon.h"
 #include "hash_verify.h"
 #include "iommu.h"
 #include "ipc.h"
@@ -679,6 +680,9 @@ static void print_usage(const char *prog) {
   printf("                    (requires --mode enforce)\n");
   printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
   printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
+  printf("  --daemon          Fork to background (not needed under systemd)\n");
+  printf("  --pid-file PATH   PID file location\n");
+  printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
   printf("  --help            Show this help\n");
 }
 
@@ -1343,6 +1347,9 @@ int main(int argc, char *argv[]) {
   int mode = LOTA_MODE_MONITOR;
   bool strict_mmap = false;
   bool block_ptrace = false;
+  int daemon_flag = 0;
+  const char *pid_file_path = NULL;
+  int pid_fd = -1;
   const char *bpf_path = DEFAULT_BPF_PATH;
   const char *server_addr = "localhost";
   int server_port = DEFAULT_VERIFIER_PORT;
@@ -1371,6 +1378,8 @@ int main(int argc, char *argv[]) {
       {"block-ptrace", no_argument, 0, 'P'},
       {"protect-pid", required_argument, 0, 'R'},
       {"trust-lib", required_argument, 0, 'L'},
+      {"daemon", no_argument, 0, 'd'},
+      {"pid-file", required_argument, 0, 'D'},
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
@@ -1450,6 +1459,12 @@ int main(int argc, char *argv[]) {
       } else {
         fprintf(stderr, "Too many --trust-lib entries (max 64)\n");
       }
+      break;
+    case 'd':
+      daemon_flag = 1;
+      break;
+    case 'D':
+      pid_file_path = optarg;
       break;
     case 'h':
     default:
@@ -1592,5 +1607,29 @@ int main(int argc, char *argv[]) {
                        has_pin ? pin_sha256_bin : NULL);
   }
 
-  return run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
+  if (daemon_flag) {
+    int dret = daemonize();
+    if (dret < 0) {
+      fprintf(stderr, "Failed to daemonize: %s\n", strerror(-dret));
+      return 1;
+    }
+  }
+
+  pid_fd = pidfile_create(pid_file_path);
+  if (pid_fd == -EEXIST) {
+    fprintf(stderr, "Another instance is already running (PID file locked)\n");
+    return 1;
+  }
+  if (pid_fd < 0) {
+    fprintf(stderr, "Warning: Failed to create PID file: %s\n",
+            strerror(-pid_fd));
+    /* non-fatal: continue without PID file */
+    pid_fd = -1;
+  }
+
+  {
+    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
+    pidfile_remove(pid_file_path, pid_fd);
+    return ret;
+  }
 }
