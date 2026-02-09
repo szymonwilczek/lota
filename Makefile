@@ -72,7 +72,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/daemon.c \
               $(AGENT_DIR)/policy.c \
               $(AGENT_DIR)/policy_sign.c \
-              $(AGENT_DIR)/config.c
+              $(AGENT_DIR)/config.c \
+              $(AGENT_DIR)/steam_runtime.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 

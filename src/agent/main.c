@@ -38,6 +38,7 @@
 #include "policy.h"
 #include "policy_sign.h"
 #include "quote.h"
+#include "steam_runtime.h"
 #include "tpm.h"
 
 #ifndef EAUTH
@@ -73,6 +74,49 @@ static int g_trust_lib_count;
 
 static uint32_t check_module_security(void);
 static int self_measure(struct tpm_context *ctx);
+
+/*
+ * Set up a container-accessible extra listener socket.
+ *
+ * Failures are non-fatal: the primary socket still works for
+ * host-side clients.
+ */
+static void setup_container_listener(struct ipc_context *ctx) {
+  char dir[PATH_MAX];
+  char path[PATH_MAX];
+  struct steam_runtime_info rt_info;
+  int ret;
+
+  ret = steam_runtime_container_socket_dir(dir, sizeof(dir));
+  if (ret < 0)
+    return; /* XDG_RUNTIME_DIR not set, nothing to do */
+
+  ret = steam_runtime_container_socket_path(path, sizeof(path));
+  if (ret < 0)
+    return;
+
+  if (strcmp(path, LOTA_IPC_SOCKET_PATH) == 0)
+    return;
+
+  ret = steam_runtime_ensure_socket_dir(dir);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: cannot create container socket dir %s: %s\n", dir,
+            strerror(-ret));
+    return;
+  }
+
+  ret = ipc_add_listener(ctx, path);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: container listener %s: %s\n", path,
+            strerror(-ret));
+    return;
+  }
+
+  /* log detected Steam Runtime environment */
+  ret = steam_runtime_detect(&rt_info);
+  if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
+    steam_runtime_log_info(&rt_info);
+}
 
 /*
  * Print hex dump of buffer
@@ -474,6 +518,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     fprintf(stderr, "Continuing without IPC support\n");
   } else {
     ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
+    setup_container_listener(&g_ipc_ctx);
   }
   printf("\n");
 
@@ -1275,6 +1320,8 @@ static int do_continuous_attest(const char *server, int port,
   if (ret < 0) {
     fprintf(stderr, "Warning: IPC init failed: %s\n", strerror(-ret));
     fprintf(stderr, "Gaming clients will not be able to query status\n");
+  } else {
+    setup_container_listener(&g_ipc_ctx);
   }
   printf("\n");
 
@@ -1755,6 +1802,7 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
       return 1;
     }
+    setup_container_listener(&g_ipc_ctx);
 
     valid_until = (uint64_t)(time(NULL) + 3600);
     ipc_update_status(&g_ipc_ctx,
@@ -1806,6 +1854,7 @@ int main(int argc, char *argv[]) {
       tpm_cleanup(&g_tpm_ctx);
       return 1;
     }
+    setup_container_listener(&g_ipc_ctx);
 
     /* enable signed tokens with PCRs 0, 1, 14 */
     ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
