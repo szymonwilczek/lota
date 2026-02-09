@@ -1,0 +1,223 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# lota-steam-setup -- Configure Steam for LOTA integration
+#
+# Sets up the LOTA agent socket to be accessible from inside
+# Steam Runtime pressure-vessel containers (soldier, sniper, etc.)
+# and configures the LD_PRELOAD hook for automatic loading.
+#
+# What this script does:
+#   1. Creates $XDG_RUNTIME_DIR/lota/ with correct permissions
+#   2. Verifies the LOTA agent is reachable from the container path
+#   3. Prints Steam launch option instructions
+#
+# Usage:
+#   lota-steam-setup             Run setup checks
+#   lota-steam-setup --verify    Verify existing setup only
+#   lota-steam-setup --help      Show help
+#
+# Copyright (C) 2026 Szymon Wilczek
+
+set -euo pipefail
+
+LOTA_GROUP="lota"
+SOCKET_NAME="lota.sock"
+PRIMARY_SOCKET="/run/lota/${SOCKET_NAME}"
+HOOK_LIB="liblota_wine_hook.so"
+
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE='' NC=''
+fi
+
+info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()    { echo -e "${GREEN}[OK]${NC}   $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+fail()  { echo -e "${RED}[FAIL]${NC} $*"; }
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Configure Steam Runtime integration for LOTA.
+
+Options:
+  --verify    Only check existing setup, do not modify anything
+  --help      Show this help message
+
+Environment:
+  XDG_RUNTIME_DIR   Base directory for user runtime files (required)
+EOF
+}
+
+check_xdg_runtime_dir() {
+    if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+        fail "XDG_RUNTIME_DIR is not set"
+        echo "  This variable is required for container-aware IPC."
+        echo "  It is normally set by systemd-logind or elogind."
+        return 1
+    fi
+
+    if [[ ! -d "$XDG_RUNTIME_DIR" ]]; then
+        fail "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR does not exist"
+        return 1
+    fi
+
+    ok "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+    return 0
+}
+
+check_agent_running() {
+    if [[ -S "$PRIMARY_SOCKET" ]]; then
+        ok "LOTA agent socket: $PRIMARY_SOCKET"
+        return 0
+    fi
+
+    warn "LOTA agent socket not found at $PRIMARY_SOCKET"
+    echo "  The agent may not be running.  Start it with:"
+    echo "    sudo lota-agent --daemon"
+    return 1
+}
+
+check_lota_group() {
+    if getent group "$LOTA_GROUP" >/dev/null 2>&1; then
+        ok "Group '$LOTA_GROUP' exists"
+    else
+        warn "Group '$LOTA_GROUP' does not exist"
+        echo "  Create it with: sudo groupadd $LOTA_GROUP"
+        echo "  Add your user:  sudo usermod -aG $LOTA_GROUP \$USER"
+        return 1
+    fi
+
+    if id -nG | grep -qw "$LOTA_GROUP"; then
+        ok "Current user is a member of group '$LOTA_GROUP'"
+    else
+        warn "Current user is not a member of '$LOTA_GROUP'"
+        echo "  Add with: sudo usermod -aG $LOTA_GROUP $(whoami)"
+        echo "  Then log out and back in."
+        return 1
+    fi
+
+    return 0
+}
+
+check_hook_library() {
+    local found=""
+
+    for candidate in \
+        /usr/lib64/${HOOK_LIB} \
+        /usr/lib/${HOOK_LIB} \
+        /usr/local/lib64/${HOOK_LIB} \
+        /usr/local/lib/${HOOK_LIB}; do
+        if [[ -f "$candidate" ]]; then
+            found="$candidate"
+            break
+        fi
+    done
+
+    if [[ -n "$found" ]]; then
+        ok "Hook library found: $found"
+    else
+        warn "Hook library ($HOOK_LIB) not found in standard paths"
+        echo "  Install with: sudo make install"
+    fi
+}
+
+setup_container_socket_dir() {
+    local dir="${XDG_RUNTIME_DIR}/lota"
+
+    if [[ -d "$dir" ]]; then
+        ok "Container socket directory exists: $dir"
+        return 0
+    fi
+
+    info "Creating container socket directory: $dir"
+    mkdir -p "$dir"
+    chmod 0750 "$dir"
+
+    # set group if possible
+    if getent group "$LOTA_GROUP" >/dev/null 2>&1; then
+        chgrp "$LOTA_GROUP" "$dir" 2>/dev/null || true
+    fi
+
+    ok "Created: $dir"
+}
+
+check_container_socket() {
+    local container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
+
+    if [[ -S "$container_socket" ]]; then
+        ok "Container socket: $container_socket"
+        return 0
+    fi
+
+    warn "Container socket not found: $container_socket"
+    echo "  The LOTA agent needs to be (re)started to create this socket."
+    echo "  It will automatically create an extra listener at this path."
+    return 1
+}
+
+verify_only=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --verify)
+            verify_only=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+echo "=== LOTA Steam Runtime Integration Setup ==="
+echo ""
+
+errors=0
+
+check_xdg_runtime_dir || ((errors++))
+check_agent_running   || ((errors++))
+check_lota_group      || ((errors++))
+check_hook_library
+
+echo ""
+
+if ! $verify_only; then
+    info "Setting up container-accessible socket directory..."
+    setup_container_socket_dir || ((errors++))
+fi
+
+check_container_socket || ((errors++))
+
+echo ""
+echo "=== Steam Launch Options ==="
+echo ""
+echo "  For games using the LOTA hook, set Steam launch options to:"
+echo ""
+echo "    lota-proton-hook %command%"
+echo ""
+echo "  Or for manual LD_PRELOAD:"
+echo ""
+echo "    LOTA_HOOK_LOG_LEVEL=info LD_PRELOAD=${HOOK_LIB} %command%"
+echo ""
+
+if [[ $errors -gt 0 ]]; then
+    echo ""
+    warn "$errors issue(s) detected.  See warnings above."
+    exit 1
+fi
+
+ok "All checks passed.  LOTA Steam integration is ready."

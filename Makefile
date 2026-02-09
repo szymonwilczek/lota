@@ -188,6 +188,7 @@ install: all
 	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
+	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
