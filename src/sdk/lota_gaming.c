@@ -7,11 +7,13 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -19,6 +21,11 @@
 #include "../../include/lota_ipc.h"
 
 #define DEFAULT_TIMEOUT_MS 5000
+
+/*
+ * Maximum number of candidate socket paths to try during autodiscovery.
+ */
+#define MAX_DISCOVERY_PATHS 4
 #define VERSION_STRING "1.0.0"
 
 /*
@@ -237,28 +244,24 @@ static void drain_payload(int fd, size_t remaining) {
 
 struct lota_client *lota_connect(void) { return lota_connect_opts(NULL); }
 
-struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts) {
-  struct lota_client *client;
+/*
+ * Try to connect to a specific socket path.
+ *
+ * Returns a connected fd on success, -1 on failure.
+ */
+static int try_connect_path(const char *path, int timeout_ms) {
   struct sockaddr_un addr;
-  const char *path;
-  int timeout_ms;
-  int fd;
-  int ret;
-
-  path = (opts && opts->socket_path) ? opts->socket_path : LOTA_IPC_SOCKET_PATH;
-  timeout_ms =
-      (opts && opts->timeout_ms > 0) ? opts->timeout_ms : DEFAULT_TIMEOUT_MS;
+  int fd, ret;
 
   fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0)
-    return NULL;
+    return -1;
 
   if (set_nonblock(fd) < 0) {
     close(fd);
-    return NULL;
+    return -1;
   }
 
-  /* connect */
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
@@ -266,26 +269,95 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts) {
   ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
   if (ret < 0 && errno != EINPROGRESS) {
     close(fd);
-    return NULL;
+    return -1;
   }
 
   if (ret < 0) {
-    /* wait for connection to complete */
     ret = wait_for_socket(fd, POLLOUT, timeout_ms);
     if (ret < 0) {
       close(fd);
-      return NULL;
+      return -1;
     }
 
-    /* check for connection error */
     int err = 0;
     socklen_t len = sizeof(err);
     getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
     if (err != 0) {
       close(fd);
-      return NULL;
+      return -1;
     }
   }
+
+  return fd;
+}
+
+/*
+ * Build the list of candidate socket paths for autodiscovery.
+ *
+ * Discovery order:
+ *   1. LOTA_IPC_SOCKET env var (explicit override)
+ *   2. /run/lota/lota.sock (primary agent socket)
+ *   3. $XDG_RUNTIME_DIR/lota/lota.sock (container-accessible)
+ */
+static int build_discovery_paths(char paths[][PATH_MAX], int max) {
+  const char *env;
+  int n = 0;
+
+  /* explicit override via environment */
+  env = getenv("LOTA_IPC_SOCKET");
+  if (env && env[0] && n < max) {
+    snprintf(paths[n], PATH_MAX, "%s", env);
+    n++;
+  }
+
+  /* primary path */
+  if (n < max) {
+    snprintf(paths[n], PATH_MAX, "%s", LOTA_IPC_SOCKET_PATH);
+    n++;
+  }
+
+  /* container-accessible path via XDG_RUNTIME_DIR */
+  env = getenv("XDG_RUNTIME_DIR");
+  if (env && env[0] && n < max) {
+    snprintf(paths[n], PATH_MAX, "%s/lota/lota.sock", env);
+    n++;
+  }
+
+  return n;
+}
+
+struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts) {
+  struct lota_client *client;
+  char discovery[MAX_DISCOVERY_PATHS][PATH_MAX];
+  int timeout_ms;
+  int fd = -1;
+
+  timeout_ms =
+      (opts && opts->timeout_ms > 0) ? opts->timeout_ms : DEFAULT_TIMEOUT_MS;
+
+  /*
+   * if the caller provided an explicit socket path, use only that
+   * otherwise, try autodiscovery across known paths
+   */
+  if (opts && opts->socket_path) {
+    fd = try_connect_path(opts->socket_path, timeout_ms);
+  } else {
+    int count = build_discovery_paths(discovery, MAX_DISCOVERY_PATHS);
+
+    for (int i = 0; i < count; i++) {
+      /* quick existence check to avoid blocking connect on missing sockets */
+      struct stat st;
+      if (stat(discovery[i], &st) != 0)
+        continue;
+
+      fd = try_connect_path(discovery[i], timeout_ms);
+      if (fd >= 0)
+        break;
+    }
+  }
+
+  if (fd < 0)
+    return NULL;
 
   client = malloc(sizeof(*client));
   if (!client) {
