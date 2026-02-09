@@ -6,6 +6,7 @@
 #ifndef LOTA_AGENT_IPC_H
 #define LOTA_AGENT_IPC_H
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
@@ -13,13 +14,30 @@
 struct tpm_context;
 
 /*
+ * Maximum number of extra listener sockets.
+ */
+#define IPC_MAX_EXTRA_LISTENERS 4
+
+/*
+ * Extra listener socket.
+ */
+struct ipc_listener {
+  int fd;              /* Listening fd (-1 if unused) */
+  char path[PATH_MAX]; /* Socket path for cleanup */
+};
+
+/*
  * IPC server context
  */
 struct ipc_context {
-  int listen_fd; /* Listening socket */
+  int listen_fd; /* Primary listening socket */
   int epoll_fd;  /* epoll instance */
   bool running;
   time_t start_time; /* For uptime calculation */
+
+  /* Extra listener sockets */
+  struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
+  int extra_count;
 
   /* TPM context for token signing */
   struct tpm_context *tpm;
@@ -107,5 +125,28 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
                  uint32_t pcr_mask);
+
+/*
+ * ipc_add_listener - Add an extra listener socket.
+ * @ctx: Initialized IPC context.
+ * @socket_path: Absolute path for the new Unix socket.
+ *
+ * Creates an additional listening socket and registers it with
+ * the epoll set. The socket directory must already exist.
+ * Connections accepted on extra listeners are handled identically
+ * to the primary socket.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
+
+/*
+ * ipc_is_listener - Check if an fd is any listener socket.
+ * @ctx: Server context.
+ * @fd:  File descriptor to check.
+ *
+ * Returns: 1 if fd is the primary or any extra listener, 0 otherwise.
+ */
+int ipc_is_listener(struct ipc_context *ctx, int fd);
 
 #endif /* LOTA_AGENT_IPC_H */

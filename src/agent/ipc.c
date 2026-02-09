@@ -626,7 +626,7 @@ static int handle_client_write(struct ipc_context *ctx,
 /*
  * Accept new client with peer credential authentication
  */
-static int accept_client(struct ipc_context *ctx) {
+static int accept_client(struct ipc_context *ctx, int listen_fd) {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
   struct ipc_client *client;
@@ -636,7 +636,7 @@ static int accept_client(struct ipc_context *ctx) {
   int fd;
   int ret;
 
-  fd = accept(ctx->listen_fd, (struct sockaddr *)&addr, &len);
+  fd = accept(listen_fd, (struct sockaddr *)&addr, &len);
   if (fd < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK)
       return 0;
@@ -687,6 +687,10 @@ int ipc_init(struct ipc_context *ctx) {
   ctx->listen_fd = -1;
   ctx->epoll_fd = -1;
   ctx->start_time = time(NULL);
+
+  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
+    ctx->extra[i].fd = -1;
+  ctx->extra_count = 0;
 
   ret = ensure_socket_dir();
   if (ret < 0) {
@@ -805,6 +809,20 @@ void ipc_cleanup(struct ipc_context *ctx) {
   }
 
   unlink(LOTA_IPC_SOCKET_PATH);
+
+  /* close extra listener sockets */
+  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+    if (ctx->extra[i].fd >= 0) {
+      close(ctx->extra[i].fd);
+      ctx->extra[i].fd = -1;
+      if (ctx->extra[i].path[0]) {
+        unlink(ctx->extra[i].path);
+        ctx->extra[i].path[0] = '\0';
+      }
+    }
+  }
+  ctx->extra_count = 0;
+
   printf("IPC: Cleaned up\n");
 }
 
@@ -829,9 +847,9 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
   for (int i = 0; i < nfds; i++) {
     int fd = events[i].data.fd;
 
-    if (fd == ctx->listen_fd) {
-      /* new connection */
-      accept_client(ctx);
+    if (fd == ctx->listen_fd || ipc_is_listener(ctx, fd)) {
+      /* new connection on primary or extra listener */
+      accept_client(ctx, fd);
       processed++;
     } else {
       /* client event */
@@ -913,4 +931,110 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
                  uint32_t pcr_mask) {
   ctx->tpm = tpm;
   ctx->quote_pcr_mask = pcr_mask;
+}
+
+/*
+ * Add extra listener socket.
+ *
+ * Creates a new Unix stream socket at the given path, registers it
+ * with epoll, and stores it in the extra[] array for cleanup on
+ * shutdown. Connections accepted on this socket are handled
+ * identically to the primary listener.
+ */
+int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
+  struct sockaddr_un addr;
+  struct epoll_event ev;
+  int fd, ret, slot;
+
+  if (!ctx || !socket_path || !socket_path[0])
+    return -EINVAL;
+
+  if (ctx->epoll_fd < 0)
+    return -EINVAL;
+
+  if (ctx->extra_count >= IPC_MAX_EXTRA_LISTENERS)
+    return -ENOSPC;
+
+  /* find free slot */
+  slot = -1;
+  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+    if (ctx->extra[i].fd < 0) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0)
+    return -ENOSPC;
+
+  /* remove stale socket file */
+  unlink(socket_path);
+
+  fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: extra socket() failed: %s\n", strerror(-ret));
+    return ret;
+  }
+
+  ret = set_nonblocking(fd);
+  if (ret < 0) {
+    close(fd);
+    return ret;
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: bind(%s) failed: %s\n", socket_path, strerror(-ret));
+    close(fd);
+    return ret;
+  }
+
+  /* match primary socket permissions */
+  chmod(socket_path, 0660);
+  {
+    struct group *grp = getgrnam(LOTA_GROUP_NAME);
+    if (grp)
+      chown(socket_path, 0, grp->gr_gid);
+  }
+
+  if (listen(fd, 16) < 0) {
+    ret = -errno;
+    close(fd);
+    unlink(socket_path);
+    return ret;
+  }
+
+  ev.events = EPOLLIN;
+  ev.data.fd = fd;
+  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+    ret = -errno;
+    close(fd);
+    unlink(socket_path);
+    return ret;
+  }
+
+  ctx->extra[slot].fd = fd;
+  snprintf(ctx->extra[slot].path, sizeof(ctx->extra[slot].path), "%s",
+           socket_path);
+  ctx->extra_count++;
+
+  printf("IPC: Extra listener on %s\n", socket_path);
+  return 0;
+}
+
+/*
+ * Check if fd is any listener socket (primary or extra).
+ */
+int ipc_is_listener(struct ipc_context *ctx, int fd) {
+  if (fd == ctx->listen_fd)
+    return 1;
+  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+    if (ctx->extra[i].fd >= 0 && ctx->extra[i].fd == fd)
+      return 1;
+  }
+  return 0;
 }
