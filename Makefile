@@ -85,9 +85,14 @@ SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 SERVER_SDK_SRCS := $(SDK_DIR)/lota_server.c
 SERVER_SDK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SERVER_SDK_SRCS))
 
+# Wine/Proton hook
+WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
+WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
+WINE_HOOK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(WINE_HOOK_SRCS))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB)
+all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -128,6 +133,11 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(AR) rcs $@ $^
 	@echo "Built: $@"
 
+# build Wine/Proton hook (self-contained: includes gaming SDK)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
+	$(CC) -shared -o $@ $^ -lpthread
+	@echo "Built: $@"
+
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
@@ -140,7 +150,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent verifier sdk server-sdk clean install test
+.PHONY: bpf agent verifier sdk server-sdk wine-hook clean install test
 
 bpf: $(BPF_OBJ)
 
@@ -151,6 +161,8 @@ verifier: $(VERIFIER_BIN)
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
 server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
+
+wine-hook: $(WINE_HOOK_LIB)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -173,7 +185,10 @@ install: all
 	install -m 644 $(BPF_OBJ) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
+	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
+	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
@@ -210,6 +225,7 @@ help:
 	@echo "  verifier   - Build only Go verifier"
 	@echo "  sdk        - Build only gaming SDK library"
 	@echo "  server-sdk - Build only server-side verification SDK"
+	@echo "  wine-hook  - Build only Wine/Proton LD_PRELOAD hook"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  install    - Install to /usr (requires sudo)"
 	@echo "  test       - Run basic tests (requires sudo)"

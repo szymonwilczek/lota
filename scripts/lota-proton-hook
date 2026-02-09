@@ -1,0 +1,56 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# lota-proton-hook -- Launch wrapper for Steam/Proton with LOTA integration
+#
+# Sets LD_PRELOAD so that the LOTA Wine hook library is loaded into
+# the Wine/Proton process, transparently bridging attestation into
+# the Windows game.
+#
+# Usage:
+#   As Steam launch option:
+#     lota-proton-hook %command%
+#
+#   Direct:
+#     lota-proton-hook wine game.exe
+#     lota-proton-hook proton run game.exe
+#
+# Environment:
+#   LOTA_HOOK_LIB_PATH   Override path to liblota_wine_hook.so
+#   LOTA_HOOK_DISABLE    Set to 1 to disable (pass-through)
+#   LOTA_HOOK_LOG_LEVEL  debug | info | warn | error | silent
+#   LOTA_HOOK_TOKEN_DIR  Custom output directory for status files
+#   LOTA_HOOK_REFRESH_SEC  Token refresh interval (default: 60)
+#
+# Copyright (C) 2026 Szymon Wilczek
+
+set -euo pipefail
+
+LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
+
+if [[ -z "$LOTA_HOOK_LIB" ]]; then
+    for candidate in \
+        /usr/lib64/liblota_wine_hook.so \
+        /usr/lib/liblota_wine_hook.so \
+        /usr/local/lib64/liblota_wine_hook.so \
+        /usr/local/lib/liblota_wine_hook.so; do
+        if [[ -f "$candidate" ]]; then
+            LOTA_HOOK_LIB="$candidate"
+            break
+        fi
+    done
+fi
+
+if [[ -z "$LOTA_HOOK_LIB" || ! -f "$LOTA_HOOK_LIB" ]]; then
+    echo "lota-proton-hook: hook library not found" >&2
+    echo "lota-proton-hook: continuing without LOTA integration" >&2
+    exec "$@"
+fi
+
+if [[ -n "${LD_PRELOAD:-}" ]]; then
+    export LD_PRELOAD="${LOTA_HOOK_LIB}:${LD_PRELOAD}"
+else
+    export LD_PRELOAD="${LOTA_HOOK_LIB}"
+fi
+
+exec "$@"
