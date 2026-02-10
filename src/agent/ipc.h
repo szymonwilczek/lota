@@ -12,6 +12,7 @@
 #include <time.h>
 
 struct tpm_context;
+struct dbus_context;
 
 /*
  * Maximum number of extra listener sockets.
@@ -42,6 +43,9 @@ struct ipc_context {
   /* TPM context for token signing */
   struct tpm_context *tpm;
   uint32_t quote_pcr_mask;
+
+  /* D-Bus context (optional, NULL if D-Bus unavailable) */
+  struct dbus_context *dbus;
 
   /* Attestation state */
   uint32_t status_flags;
@@ -148,5 +152,15 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
  * Returns: 1 if fd is the primary or any extra listener, 0 otherwise.
  */
 int ipc_is_listener(struct ipc_context *ctx, int fd);
+
+/*
+ * ipc_set_dbus - Attach D-Bus context for signal emission.
+ * @ctx: Server context.
+ * @dbus: D-Bus context (or NULL to detach).
+ *
+ * When set, ipc_update_status/ipc_record_attestation/ipc_set_mode
+ * will automatically emit corresponding D-Bus signals.
+ */
+void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus);
 
 #endif /* LOTA_AGENT_IPC_H */

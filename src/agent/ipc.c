@@ -7,6 +7,7 @@
 #include "ipc.h"
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+#include "dbus.h"
 #include "quote.h"
 #include "tpm.h"
 
@@ -896,8 +897,10 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
   ctx->valid_until = valid_until;
   ctx->last_attest_time = (uint64_t)time(NULL);
 
-  if (old_flags != flags)
+  if (old_flags != flags) {
     notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+    dbus_emit_status_changed(ctx->dbus, flags);
+  }
 }
 
 /*
@@ -910,6 +913,7 @@ void ipc_record_attestation(struct ipc_context *ctx, bool success) {
     ctx->fail_count++;
 
   notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
+  dbus_emit_attestation_result(ctx->dbus, success);
 }
 
 /*
@@ -920,8 +924,10 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode) {
 
   ctx->mode = mode;
 
-  if (old_mode != mode)
+  if (old_mode != mode) {
     notify_subscribers(ctx, LOTA_IPC_EVENT_MODE);
+    dbus_emit_mode_changed(ctx->dbus, mode);
+  }
 }
 
 /*
@@ -1037,4 +1043,9 @@ int ipc_is_listener(struct ipc_context *ctx, int fd) {
       return 1;
   }
   return 0;
+}
+
+void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus) {
+  if (ctx)
+    ctx->dbus = dbus;
 }
