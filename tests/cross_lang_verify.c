@@ -67,7 +67,7 @@ int main(void) {
 
   /* untrusted first */
   struct lota_server_claims parse_claims;
-  int ret = lota_server_parse_token(tok, tok_len, &parse_claims);
+  int ret = lota_server_parse_token(tok, tok_len, 300, &parse_claims);
   if (ret != LOTA_SERVER_OK) {
     printf(RED "[C] Parse failed: %s\n" RESET, lota_server_strerror(ret));
     return 1;
@@ -80,7 +80,8 @@ int main(void) {
 
   /* full verify with nonce */
   struct lota_server_claims claims;
-  ret = lota_server_verify_token(tok, tok_len, aik, aik_len, nonce, &claims);
+  ret =
+      lota_server_verify_token(tok, tok_len, aik, aik_len, nonce, 300, &claims);
   if (ret != LOTA_SERVER_OK) {
     printf(RED "[C] VERIFY FAILED: %s (code %d)\n" RESET,
            lota_server_strerror(ret), ret);
