@@ -686,8 +686,8 @@ int BPF_PROG(lota_module_request, char *kmod_name, int ret) {
   __builtin_memset(event, 0, sizeof(*event));
   event->timestamp_ns = bpf_ktime_get_ns();
   event->event_type = LOTA_EVENT_MODULE_LOAD;
-  event->pid = bpf_get_current_pid_tgid() >> 32;
-  event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+  event->tgid = bpf_get_current_pid_tgid() >> 32;
+  event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 
   bpf_get_current_comm(event->comm, sizeof(event->comm));
 
@@ -776,8 +776,8 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     event->timestamp_ns = bpf_ktime_get_ns();
     event->event_type =
         blocked ? LOTA_EVENT_MODULE_BLOCKED : LOTA_EVENT_MODULE_LOAD;
-    event->pid = bpf_get_current_pid_tgid() >> 32;
-    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = 0; /* will be root for module loads */
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
@@ -854,8 +854,8 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     event->timestamp_ns = bpf_ktime_get_ns();
     event->event_type =
         blocked ? LOTA_EVENT_MODULE_BLOCKED : LOTA_EVENT_MODULE_LOAD;
-    event->pid = bpf_get_current_pid_tgid() >> 32;
-    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
@@ -944,8 +944,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
       event->timestamp_ns = bpf_ktime_get_ns();
       event->event_type =
           anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED : LOTA_EVENT_ANON_EXEC;
-      event->pid = bpf_get_current_pid_tgid() >> 32;
-      event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+      event->tgid = bpf_get_current_pid_tgid() >> 32;
+      event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
       event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 
       bpf_get_current_comm(event->comm, sizeof(event->comm));
@@ -1012,8 +1012,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
     event->timestamp_ns = bpf_ktime_get_ns();
     event->event_type =
         blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
-    event->pid = bpf_get_current_pid_tgid() >> 32;
-    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
@@ -1097,8 +1097,8 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
     event->event_type = blocked ? LOTA_EVENT_PTRACE_BLOCKED : LOTA_EVENT_PTRACE;
-    event->pid = bpf_get_current_pid_tgid() >> 32;
-    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
     event->target_pid = child_pid;
 
@@ -1172,8 +1172,8 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
     event->event_type = LOTA_EVENT_SETUID;
-    event->pid = bpf_get_current_pid_tgid() >> 32;
-    event->tgid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = old_uid;
     event->target_pid = new_uid; /* reuse target_pid for new UID */
 
