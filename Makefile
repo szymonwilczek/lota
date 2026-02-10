@@ -203,19 +203,144 @@ install: all
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
-# Build test binary
+# Build test binaries
 TEST_SDK_BIN := $(BUILD_DIR)/test_sdk_ipc
+TEST_BIN_DIR := $(BUILD_DIR)
+
+TEST_BINS := \
+	$(TEST_BIN_DIR)/test_hash_verify \
+	$(TEST_BIN_DIR)/test_dbus \
+	$(TEST_BIN_DIR)/test_systemd \
+	$(TEST_BIN_DIR)/test_steam_runtime \
+	$(TEST_BIN_DIR)/test_wine_hook \
+	$(TEST_BIN_DIR)/test_daemon \
+	$(TEST_BIN_DIR)/test_tls_verify \
+	$(TEST_BIN_DIR)/test_config \
+	$(TEST_BIN_DIR)/test_subscribe \
+	$(TEST_BIN_DIR)/test_policy_sign \
+	$(TEST_BIN_DIR)/test_policy_export \
+	$(TEST_BIN_DIR)/test_aik_rotation \
+	$(TEST_BIN_DIR)/test_server_sdk \
+	$(TEST_BIN_DIR)/sdk_demo \
+	$(TEST_BIN_DIR)/lota_ipc_test \
+	$(TEST_BIN_DIR)/cross_lang_verify \
+	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
 	@echo "Built: $@"
 
-# Basic tests (requires root for TPM/BPF)
-test: all $(TEST_SDK_BIN)
-	@echo "=== Testing IOMMU verification ==="
+$(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_HOOK_TESTING -o $@ $^ -lpthread
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/policy.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/cross_lang_verify: tests/cross_lang_verify.c $(SDK_DIR)/lota_server.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+# Full test suite (includes /tests plus agent hardware tests)
+test: all $(TEST_BINS)
+	@echo "=== Running unit tests ==="
+	@./build/test_hash_verify
+	@./build/test_dbus
+	@./build/test_systemd
+	@./build/test_steam_runtime
+	@./build/test_wine_hook
+	@./build/test_daemon
+	@./build/test_config
+	@./build/test_subscribe
+	@./build/test_policy_sign
+	@./build/test_policy_export
+	@./build/test_aik_rotation
+	@./build/test_server_sdk
+	@echo ""
+	@echo "=== Running integration tests (best effort) ==="
+	@if [ -S /run/lota/lota.sock ]; then \
+		./build/test_sdk_ipc; \
+		./build/lota_ipc_test status; \
+		./build/sdk_demo; \
+	else \
+		echo "SKIP: SDK/IPC tests (agent socket not found)"; \
+	fi
+	@if [ -n "$$LOTA_RUN_TLS_TESTS" ]; then \
+		./build/test_tls_verify; \
+	elif [ -f /tmp/lota-tls-test/ca.pem ]; then \
+		if command -v ss >/dev/null 2>&1; then \
+			if ss -lnt | grep -q ":9443 "; then ./build/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
+		elif command -v nc >/dev/null 2>&1; then \
+			if nc -z 127.0.0.1 9443; then ./build/test_tls_verify /tmp/lota-tls-test/ca.pem; else echo "SKIP: test_tls_verify (no server on 9443)"; fi; \
+		else \
+			echo "SKIP: test_tls_verify (no ss/nc to check server)"; \
+		fi; \
+	else \
+		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
+	fi
+	@if command -v go >/dev/null 2>&1; then \
+		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang_gen.go && \
+		cd $(CURDIR) && ./build/cross_lang_verify; \
+	else \
+		echo "SKIP: cross_lang_gen (go not installed)"; \
+	fi
+	@echo ""
+	@echo "=== Agent hardware tests (require root) ==="
 	sudo $(AGENT_BIN) --test-iommu
 	@echo ""
-	@echo "=== Testing TPM operations ==="
 	sudo $(AGENT_BIN) --test-tpm
 	@echo ""
 	@echo "Tests complete"
