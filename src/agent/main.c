@@ -79,6 +79,8 @@ static int g_trust_lib_count;
 
 static uint32_t check_module_security(void);
 static int self_measure(struct tpm_context *ctx);
+static const char *mode_to_string(int mode);
+static int parse_mode(const char *mode_str);
 
 /*
  * Set up a container-accessible extra listener socket.
@@ -544,7 +546,8 @@ static const char *mode_to_string(int mode) {
 }
 
 static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
-                      bool block_ptrace) {
+                      bool block_ptrace, const char *config_path,
+                      struct lota_config *cfg) {
   int ret;
   uint32_t status_flags = 0;
   uint64_t wd_usec = 0;
@@ -705,11 +708,58 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
       g_reload = 0;
       sdnotify_reloading();
       lota_info("SIGHUP received, reloading configuration");
-      /*
-       * TODO: re-read configuration, refresh BPF maps,
-       * rotate hash cache, etc.
-       */
-      sdnotify_ready();
+
+      struct lota_config new_cfg;
+      config_init(&new_cfg);
+      int reload_ret = config_load(&new_cfg, config_path);
+      if (reload_ret < 0 && reload_ret != -ENOENT) {
+        lota_err("Failed to reload config: %s", strerror(-reload_ret));
+        sdnotify_ready();
+      } else {
+        int new_mode = parse_mode(new_cfg.mode);
+        if (new_mode >= 0 && new_mode != mode) {
+          if (bpf_loader_set_mode(&g_bpf_ctx, new_mode) == 0) {
+            lota_info("Mode changed: %s -> %s", mode_to_string(mode),
+                      mode_to_string(new_mode));
+            mode = new_mode;
+            g_mode = new_mode;
+          } else {
+            lota_warn("Failed to apply new mode");
+          }
+        }
+
+        if (new_cfg.strict_mmap != strict_mmap) {
+          bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+                                new_cfg.strict_mmap ? 1 : 0);
+          strict_mmap = new_cfg.strict_mmap;
+          lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
+        }
+
+        if (new_cfg.block_ptrace != block_ptrace) {
+          bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+                                new_cfg.block_ptrace ? 1 : 0);
+          block_ptrace = new_cfg.block_ptrace;
+          lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+        }
+
+        if (new_cfg.log_level[0] &&
+            strcmp(new_cfg.log_level, cfg->log_level) != 0) {
+          int lvl = LOG_DEBUG;
+          if (strcmp(new_cfg.log_level, "error") == 0)
+            lvl = LOG_ERR;
+          else if (strcmp(new_cfg.log_level, "warn") == 0)
+            lvl = LOG_WARNING;
+          else if (strcmp(new_cfg.log_level, "info") == 0)
+            lvl = LOG_INFO;
+          journal_set_level(lvl);
+          lota_info("Log level changed to %s", new_cfg.log_level);
+        }
+
+        *cfg = new_cfg;
+        sdnotify_ready();
+        sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
+        lota_info("Configuration reloaded");
+      }
     }
 
     /* non-blocking */
@@ -1996,7 +2046,8 @@ int main(int argc, char *argv[]) {
   }
 
   {
-    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace);
+    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace, config_path,
+                         &cfg);
     pidfile_remove(pid_file_path, pid_fd);
     return ret;
   }
