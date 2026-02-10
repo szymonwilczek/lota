@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -357,8 +358,10 @@ static int test_tpm(void) {
 
     /* Generate random nonce (TODO: from server) */
     printf("Generating test nonce...\n");
-    for (size_t j = 0; j < LOTA_NONCE_SIZE; j++) {
-      test_nonce[j] = (uint8_t)(rand() & 0xFF);
+    if (getrandom(test_nonce, LOTA_NONCE_SIZE, 0) != LOTA_NONCE_SIZE) {
+      fprintf(stderr, "getrandom failed: %s\n", strerror(errno));
+      tpm_cleanup(&g_tpm_ctx);
+      return -1;
     }
     print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
 
