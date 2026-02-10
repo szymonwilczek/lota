@@ -35,10 +35,12 @@
 #include "hash_verify.h"
 #include "iommu.h"
 #include "ipc.h"
+#include "journal.h"
 #include "net.h"
 #include "policy.h"
 #include "policy_sign.h"
 #include "quote.h"
+#include "sdnotify.h"
 #include "steam_runtime.h"
 #include "tpm.h"
 
@@ -131,7 +133,32 @@ static void setup_dbus(struct ipc_context *ctx) {
   if (g_dbus_ctx)
     ipc_set_dbus(ctx, g_dbus_ctx);
   else
-    fprintf(stderr, "Warning: D-Bus unavailable, using socket IPC only\n");
+    lota_warn("D-Bus unavailable, using socket IPC only");
+}
+
+/*
+ * Initialize IPC, preferring a systemd socket-activated fd.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+static int ipc_init_or_activate(struct ipc_context *ctx) {
+  int n, fd, ret;
+
+  n = sdnotify_listen_fds();
+  if (n > 0) {
+    for (fd = SD_LISTEN_FDS_START; fd < SD_LISTEN_FDS_START + n; fd++) {
+      if (sdnotify_is_unix_socket(fd)) {
+        lota_info("Using socket-activated fd %d", fd);
+        ret = ipc_init_activated(ctx, fd);
+        if (ret == 0)
+          return 0;
+        lota_warn("Failed to use activated fd %d: %s", fd, strerror(-ret));
+      }
+    }
+    lota_warn("No suitable activated socket, creating own");
+  }
+
+  return ipc_init(ctx);
 }
 
 /*
@@ -517,132 +544,132 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                       bool block_ptrace) {
   int ret;
   uint32_t status_flags = 0;
+  uint64_t wd_usec = 0;
+  bool wd_enabled;
 
-  printf("=== LOTA Agent ===\n\n");
+  lota_info("LOTA agent starting");
+
+  /* detect watchdog interval */
+  wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
+  if (wd_enabled)
+    lota_info("Watchdog enabled, interval %lu us", (unsigned long)wd_usec);
 
   ret = hash_verify_init(&g_hash_ctx, 0);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize hash cache: %s\n", strerror(-ret));
+    lota_err("Failed to initialize hash cache: %s", strerror(-ret));
     return ret;
   }
-  printf("Hash verification cache ready\n");
+  lota_info("Hash verification cache ready");
 
-  printf("Starting IPC server...\n");
-  ret = ipc_init(&g_ipc_ctx);
+  lota_info("Starting IPC server");
+  ret = ipc_init_or_activate(&g_ipc_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
-    fprintf(stderr, "Continuing without IPC support\n");
+    lota_err("Failed to initialize IPC: %s", strerror(-ret));
+    lota_warn("Continuing without IPC support");
   } else {
     ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
     setup_container_listener(&g_ipc_ctx);
     setup_dbus(&g_ipc_ctx);
   }
-  printf("\n");
 
-  printf("Verifying IOMMU...\n");
+  lota_info("Verifying IOMMU");
   ret = test_iommu();
   if (ret != 0) {
-    fprintf(stderr, "Warning: IOMMU verification failed\n");
-    /* continue anyway for testing - ill handle it later */
+    lota_warn("IOMMU verification failed");
   } else {
     status_flags |= LOTA_STATUS_IOMMU_OK;
   }
-  printf("\n");
 
-  printf("Initializing TPM...\n");
+  lota_info("Initializing TPM");
   ret = tpm_init(&g_tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
-    fprintf(stderr, "Continuing without TPM support\n");
+    lota_err("Failed to initialize TPM: %s", strerror(-ret));
+    lota_warn("Continuing without TPM support");
   } else {
-    printf("TPM initialized\n");
+    lota_info("TPM initialized");
     status_flags |= LOTA_STATUS_TPM_OK;
 
-    printf("Provisioning AIK...\n");
+    lota_info("Provisioning AIK");
     ret = tpm_provision_aik(&g_tpm_ctx);
     if (ret < 0) {
-      fprintf(stderr, "Warning: AIK provisioning failed: %s\n", strerror(-ret));
-      fprintf(stderr, "Signed tokens will not be available\n");
+      lota_warn("AIK provisioning failed: %s", strerror(-ret));
+      lota_warn("Signed tokens will not be available");
     } else {
       ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
                   (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
-      printf("AIK ready, signed tokens enabled\n");
+      lota_info("AIK ready, signed tokens enabled");
 
       ret = tpm_aik_load_metadata(&g_tpm_ctx);
       if (ret < 0) {
-        fprintf(stderr, "Warning: Failed to load AIK metadata: %s\n",
-                strerror(-ret));
+        lota_warn("Failed to load AIK metadata: %s", strerror(-ret));
       } else {
         int64_t age = tpm_aik_age(&g_tpm_ctx);
-        printf("AIK generation: %lu, age: %ld seconds\n",
-               (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+        lota_info("AIK generation: %lu, age: %ld seconds",
+                  (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
       }
     }
 
-    printf("Performing self-measurement...\n");
+    lota_info("Performing self-measurement");
     ret = self_measure(&g_tpm_ctx);
     if (ret < 0) {
-      fprintf(stderr, "Self-measurement failed: %s\n", strerror(-ret));
-      fprintf(stderr, "Warning: Continuing without self-measurement\n");
+      lota_err("Self-measurement failed: %s", strerror(-ret));
+      lota_warn("Continuing without self-measurement");
     } else {
-      printf("Self-measurement complete (PCR %d extended)\n", LOTA_PCR_SELF);
+      lota_info("Self-measurement complete (PCR %d extended)", LOTA_PCR_SELF);
     }
   }
-  printf("\n");
 
-  printf("Loading BPF program from: %s\n", bpf_path);
+  lota_info("Loading BPF program from: %s", bpf_path);
   ret = bpf_loader_init(&g_bpf_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize BPF loader: %s\n", strerror(-ret));
+    lota_err("Failed to initialize BPF loader: %s", strerror(-ret));
     goto cleanup_tpm;
   }
 
   ret = bpf_loader_load(&g_bpf_ctx, bpf_path);
   if (ret < 0) {
-    fprintf(stderr, "Failed to load BPF program: %s\n", strerror(-ret));
+    lota_err("Failed to load BPF program: %s", strerror(-ret));
     goto cleanup_bpf;
   }
-  printf("BPF program loaded\n");
+  lota_info("BPF program loaded");
   status_flags |= LOTA_STATUS_BPF_LOADED;
 
   ret = bpf_loader_set_mode(&g_bpf_ctx, mode);
   if (ret < 0) {
-    fprintf(stderr, "Warning: Failed to set mode: %s\n", strerror(-ret));
+    lota_warn("Failed to set mode: %s", strerror(-ret));
   } else {
-    printf("Mode: %s\n", mode_to_string(mode));
+    lota_info("Mode: %s", mode_to_string(mode));
   }
   g_mode = mode;
   if (mode == LOTA_MODE_ENFORCE) {
-    printf("\n*** WARNING: ENFORCE mode active - module loading BLOCKED ***\n");
+    lota_notice("ENFORCE mode active - module loading BLOCKED");
   }
 
   /* apply runtime config flags */
   if (strict_mmap) {
     ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP, 1);
     if (ret < 0)
-      fprintf(stderr, "Warning: Failed to enable strict mmap: %s\n",
-              strerror(-ret));
+      lota_warn("Failed to enable strict mmap: %s", strerror(-ret));
     else
-      printf("Strict mmap enforcement: ON\n");
+      lota_info("Strict mmap enforcement: ON");
   }
 
   if (block_ptrace) {
     ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE, 1);
     if (ret < 0)
-      fprintf(stderr, "Warning: Failed to enable ptrace blocking: %s\n",
-              strerror(-ret));
+      lota_warn("Failed to enable ptrace blocking: %s", strerror(-ret));
     else
-      printf("Global ptrace blocking: ON\n");
+      lota_info("Global ptrace blocking: ON");
   }
 
   /* apply protected PIDs from CLI */
   for (int i = 0; i < g_protect_pid_count; i++) {
     ret = bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]);
     if (ret < 0) {
-      fprintf(stderr, "Warning: Failed to protect PID %u: %s\n",
-              g_protect_pids[i], strerror(-ret));
+      lota_warn("Failed to protect PID %u: %s", g_protect_pids[i],
+                strerror(-ret));
     } else {
-      printf("Protected PID: %u\n", g_protect_pids[i]);
+      lota_dbg("Protected PID: %u", g_protect_pids[i]);
     }
   }
 
@@ -650,47 +677,53 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   for (int i = 0; i < g_trust_lib_count; i++) {
     ret = bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]);
     if (ret < 0) {
-      fprintf(stderr, "Warning: Failed to trust lib %s: %s\n", g_trust_libs[i],
-              strerror(-ret));
+      lota_warn("Failed to trust lib %s: %s", g_trust_libs[i], strerror(-ret));
     } else {
-      printf("Trusted lib: %s\n", g_trust_libs[i]);
+      lota_dbg("Trusted lib: %s", g_trust_libs[i]);
     }
   }
 
   ret = bpf_loader_setup_ringbuf(&g_bpf_ctx, handle_exec_event, NULL);
   if (ret < 0) {
-    fprintf(stderr, "Failed to setup ring buffer: %s\n", strerror(-ret));
+    lota_err("Failed to setup ring buffer: %s", strerror(-ret));
     goto cleanup_bpf;
   }
-  printf("Ring buffer ready\n\n");
+  lota_info("Ring buffer ready");
 
   ipc_update_status(&g_ipc_ctx, status_flags, 0);
 
-  printf("Monitoring binary executions (Ctrl+C to stop)...\n\n");
+  sdnotify_ready();
+  sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
+  lota_info("Monitoring binary executions");
 
   /* main loop */
   while (g_running) {
     if (g_reload) {
       g_reload = 0;
-      printf("SIGHUP received, reloading configuration\n");
+      sdnotify_reloading();
+      lota_info("SIGHUP received, reloading configuration");
       /*
        * TODO: re-read configuration, refresh BPF maps,
        * rotate hash cache, etc.
-       * For now, I'm just logging the event so systemctl reload lota-agent no
-       * longer kills the process.
        */
+      sdnotify_ready();
     }
 
     /* non-blocking */
     ipc_process(&g_ipc_ctx, 0);
     dbus_process(g_dbus_ctx, 0);
 
+    if (wd_enabled)
+      sdnotify_watchdog_ping();
+
     ret = bpf_loader_poll(&g_bpf_ctx, 100); /* 100ms timeout */
     if (ret < 0 && ret != -EINTR) {
-      fprintf(stderr, "Poll error: %s\n", strerror(-ret));
+      lota_err("Poll error: %s", strerror(-ret));
       break;
     }
   }
+
+  sdnotify_stopping();
 
   uint64_t total, sent, errs, drops;
   uint64_t mblocked, mmexec, mmblock, ptratt, ptrblk, setuid_ev;
@@ -1329,49 +1362,51 @@ static int do_continuous_attest(const char *server, int port,
   time_t now;
   uint32_t status_flags = 0;
   uint64_t valid_until = 0;
+  uint64_t wd_usec = 0;
+  bool wd_enabled;
 
-  printf("=== Continuous Attestation ===\n");
-  printf("Server: %s:%d\n", server, port);
-  printf("Interval: %d seconds\n\n", interval_sec);
+  lota_info("Continuous attestation starting");
+  lota_info("Server: %s:%d, interval: %d seconds", server, port, interval_sec);
 
-  printf("Starting IPC server...\n");
-  ret = ipc_init(&g_ipc_ctx);
+  wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
+
+  lota_info("Starting IPC server");
+  ret = ipc_init_or_activate(&g_ipc_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Warning: IPC init failed: %s\n", strerror(-ret));
-    fprintf(stderr, "Gaming clients will not be able to query status\n");
+    lota_warn("IPC init failed: %s", strerror(-ret));
+    lota_warn("Gaming clients will not be able to query status");
   } else {
     setup_container_listener(&g_ipc_ctx);
     setup_dbus(&g_ipc_ctx);
   }
-  printf("\n");
 
   ret = net_init();
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize network: %s\n", strerror(-ret));
+    lota_err("Failed to initialize network: %s", strerror(-ret));
     ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
 
-  printf("Initializing TPM...\n");
+  lota_info("Initializing TPM");
   ret = tpm_init(&g_tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    lota_err("Failed to initialize TPM: %s", strerror(-ret));
     net_cleanup();
     ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
   status_flags |= LOTA_STATUS_TPM_OK;
 
-  printf("Performing self-measurement...\n");
+  lota_info("Performing self-measurement");
   ret = self_measure(&g_tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
+    lota_warn("Self-measurement failed: %s", strerror(-ret));
   }
 
-  printf("Checking AIK...\n");
+  lota_info("Checking AIK");
   ret = tpm_provision_aik(&g_tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
+    lota_err("Failed to provision AIK: %s", strerror(-ret));
     tpm_cleanup(&g_tpm_ctx);
     net_cleanup();
     ipc_cleanup(&g_ipc_ctx);
@@ -1383,17 +1418,18 @@ static int do_continuous_attest(const char *server, int port,
 
   ret = tpm_aik_load_metadata(&g_tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Warning: Failed to load AIK metadata: %s\n",
-            strerror(-ret));
+    lota_warn("Failed to load AIK metadata: %s", strerror(-ret));
   } else {
     int64_t age = tpm_aik_age(&g_tpm_ctx);
-    printf("AIK generation: %lu, age: %ld seconds\n",
-           (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+    lota_info("AIK generation: %lu, age: %ld seconds",
+              (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
   }
 
   ipc_update_status(&g_ipc_ctx, status_flags, 0);
 
-  printf("Starting attestation loop (Ctrl+C to stop)...\n\n");
+  sdnotify_ready();
+  sdnotify_status("Attesting to %s:%d", server, port);
+  lota_info("Starting attestation loop");
 
   while (g_running) {
     now = time(NULL);
@@ -1402,25 +1438,24 @@ static int do_continuous_attest(const char *server, int port,
     if (g_tpm_ctx.aik_meta_loaded) {
       int needs = tpm_aik_needs_rotation(&g_tpm_ctx, aik_ttl);
       if (needs == 1) {
-        printf("[%ld] AIK rotation due (gen %lu, age %ld s)\n", (long)now,
-               (unsigned long)g_tpm_ctx.aik_meta.generation,
-               (long)tpm_aik_age(&g_tpm_ctx));
+        lota_info("AIK rotation due (gen %lu, age %ld s)",
+                  (unsigned long)g_tpm_ctx.aik_meta.generation,
+                  (long)tpm_aik_age(&g_tpm_ctx));
         ret = tpm_rotate_aik(&g_tpm_ctx);
         if (ret < 0) {
-          fprintf(stderr, "[%ld] AIK rotation failed: %s\n", (long)now,
-                  strerror(-ret));
+          lota_err("AIK rotation failed: %s", strerror(-ret));
         } else {
-          printf("[%ld] AIK rotated -> generation %lu\n", (long)now,
-                 (unsigned long)g_tpm_ctx.aik_meta.generation);
+          lota_info("AIK rotated -> generation %lu",
+                    (unsigned long)g_tpm_ctx.aik_meta.generation);
         }
       }
     }
 
-    printf("[%ld] Attestation round starting...\n", (long)now);
+    lota_dbg("Attestation round starting");
     ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 0);
 
     if (ret == 0) {
-      printf("[%ld] Attestation successful\n", (long)now);
+      lota_info("Attestation successful");
       consecutive_failures = 0;
       backoff_sec = 0;
       last_success = now;
@@ -1430,6 +1465,7 @@ static int do_continuous_attest(const char *server, int port,
       valid_until = (uint64_t)(now + interval_sec + 60); /* buffer */
       ipc_update_status(&g_ipc_ctx, status_flags, valid_until);
       ipc_record_attestation(&g_ipc_ctx, true);
+      sdnotify_status("Attested, valid until %lu", (unsigned long)valid_until);
     } else {
       consecutive_failures++;
       /* exponential backoff: 10, 20, 40, 80, ... up to max */
@@ -1437,12 +1473,11 @@ static int do_continuous_attest(const char *server, int port,
       if (backoff_sec > MAX_BACKOFF_SECONDS)
         backoff_sec = MAX_BACKOFF_SECONDS;
 
-      fprintf(stderr, "[%ld] Attestation FAILED (attempt %d, backoff %ds)\n",
-              (long)now, consecutive_failures, backoff_sec);
+      lota_err("Attestation FAILED (attempt %d, backoff %ds)",
+               consecutive_failures, backoff_sec);
 
       if (last_success > 0) {
-        fprintf(stderr, "[%ld] Last success: %ld seconds ago\n", (long)now,
-                (long)(now - last_success));
+        lota_warn("Last success: %ld seconds ago", (long)(now - last_success));
       }
 
       /* update ipc: clear attested flag after multiple failures */
@@ -1451,19 +1486,24 @@ static int do_continuous_attest(const char *server, int port,
         ipc_update_status(&g_ipc_ctx, status_flags, 0);
       }
       ipc_record_attestation(&g_ipc_ctx, false);
+      sdnotify_status("Attestation failed (%d consecutive)",
+                      consecutive_failures);
     }
 
     int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
-    printf("[%ld] Next attestation in %d seconds\n\n", (long)now, sleep_time);
+    lota_dbg("Next attestation in %d seconds", sleep_time);
 
     for (int i = 0; i < sleep_time && g_running; i++) {
       ipc_process(&g_ipc_ctx, 100); /* 100ms timeout */
       dbus_process(g_dbus_ctx, 0);
+      if (wd_enabled)
+        sdnotify_watchdog_ping();
       usleep(900000);
     }
   }
 
-  printf("\nShutting down continuous attestation...\n");
+  lota_info("Shutting down continuous attestation");
+  sdnotify_stopping();
   tpm_cleanup(&g_tpm_ctx);
   net_cleanup();
   dbus_cleanup(g_dbus_ctx);
@@ -1537,6 +1577,8 @@ int main(int argc, char *argv[]) {
       {0, 0, 0, 0}};
 
   config_init(&cfg);
+
+  journal_init("lota-agent");
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
@@ -1819,7 +1861,7 @@ int main(int argc, char *argv[]) {
     uint64_t valid_until;
     printf("=== IPC Test Server (Unsigned) ===\n\n");
     printf("Starting IPC server for testing...\n");
-    ret = ipc_init(&g_ipc_ctx);
+    ret = ipc_init_or_activate(&g_ipc_ctx);
     if (ret < 0) {
       fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
       return 1;
@@ -1839,11 +1881,14 @@ int main(int argc, char *argv[]) {
     printf("Tokens will be UNSIGNED.\n");
     printf("Press Ctrl+C to stop.\n\n");
 
+    sdnotify_ready();
+
     while (g_running) {
       ipc_process(&g_ipc_ctx, 1000);
       dbus_process(g_dbus_ctx, 0);
     }
 
+    sdnotify_stopping();
     printf("\nShutting down IPC test server...\n");
     dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
@@ -1873,7 +1918,7 @@ int main(int argc, char *argv[]) {
     printf("AIK ready\n\n");
 
     printf("Starting IPC server...\n");
-    ret = ipc_init(&g_ipc_ctx);
+    ret = ipc_init_or_activate(&g_ipc_ctx);
     if (ret < 0) {
       fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
       tpm_cleanup(&g_tpm_ctx);
@@ -1898,11 +1943,14 @@ int main(int argc, char *argv[]) {
     printf("Tokens will be SIGNED by TPM AIK!\n");
     printf("Press Ctrl+C to stop.\n\n");
 
+    sdnotify_ready();
+
     while (g_running) {
       ipc_process(&g_ipc_ctx, 1000);
       dbus_process(g_dbus_ctx, 0);
     }
 
+    sdnotify_stopping();
     printf("\nShutting down...\n");
     dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
