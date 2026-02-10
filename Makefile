@@ -94,9 +94,14 @@ WINE_HOOK_LIB := $(BUILD_DIR)/liblota_wine_hook.so
 WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
 WINE_HOOK_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(WINE_HOOK_SRCS))
 
+# Anti-cheat compatibility layer
+ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
+ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
+ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB)
+all: $(AGENT_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -142,6 +147,11 @@ $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
 	$(CC) -shared -o $@ $^ -lpthread
 	@echo "Built: $@"
 
+# build anti-cheat compatibility layer (includes gaming + server SDK)
+$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+	$(CC) -shared -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
@@ -154,7 +164,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent verifier sdk server-sdk wine-hook clean install test
+.PHONY: bpf agent verifier sdk server-sdk wine-hook anticheat clean install test
 
 bpf: $(BPF_OBJ)
 
@@ -167,6 +177,8 @@ sdk: $(SDK_LIB) $(SDK_STATIC)
 server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
 
 wine-hook: $(WINE_HOOK_LIB)
+
+anticheat: $(ANTICHEAT_LIB)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -190,6 +202,7 @@ install: all
 	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
+	install -m 755 $(ANTICHEAT_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/etc/dbus-1/system.d
@@ -201,6 +214,7 @@ install: all
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_anticheat.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries
@@ -224,6 +238,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/sdk_demo \
 	$(TEST_BIN_DIR)/lota_ipc_test \
 	$(TEST_BIN_DIR)/cross_lang_verify \
+	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
@@ -286,6 +301,10 @@ $(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DI
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
@@ -309,6 +328,7 @@ test: all $(TEST_BINS)
 	@./build/test_policy_export
 	@./build/test_aik_rotation
 	@./build/test_server_sdk
+	@./build/test_anticheat
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -S /run/lota/lota.sock ]; then \
@@ -361,6 +381,7 @@ help:
 	@echo "  sdk        - Build only gaming SDK library"
 	@echo "  server-sdk - Build only server-side verification SDK"
 	@echo "  wine-hook  - Build only Wine/Proton LD_PRELOAD hook"
+	@echo "  anticheat  - Build only anti-cheat compatibility layer"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  install    - Install to /usr (requires sudo)"
 	@echo "  test       - Run basic tests (requires sudo)"
