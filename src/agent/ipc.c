@@ -8,6 +8,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "dbus.h"
+#include "journal.h"
 #include "quote.h"
 #include "tpm.h"
 
@@ -379,8 +380,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   /* rate limit GET_TOKEN per peer UID */
   if (check_rate_limit(client->peer_uid) < 0) {
-    fprintf(stderr, "IPC: rate limited GET_TOKEN for uid=%d pid=%d\n",
-            client->peer_uid, client->peer_pid);
+    lota_warn("rate limited GET_TOKEN for uid=%d pid=%d",
+             client->peer_uid, client->peer_pid);
     build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
     return;
   }
