@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"time"
 
 	server "github.com/szymonwilczek/lota/sdk/server"
 )
@@ -33,8 +34,9 @@ func main() {
 
 	// build token
 	nonce := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
-	issuedAt := uint64(1700000000)
-	validUntil := uint64(1700003600)
+	now := uint64(time.Now().Unix())
+	issuedAt := now
+	validUntil := now + 3600
 	flags := uint32(0x07)
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
