@@ -380,8 +380,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   /* rate limit GET_TOKEN per peer UID */
   if (check_rate_limit(client->peer_uid) < 0) {
-    lota_warn("rate limited GET_TOKEN for uid=%d pid=%d",
-             client->peer_uid, client->peer_pid);
+    lota_warn("rate limited GET_TOKEN for uid=%d pid=%d", client->peer_uid,
+              client->peer_pid);
     build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
     return;
   }
@@ -411,7 +411,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
   if (ret < 0) {
-    fprintf(stderr, "IPC: tpm_quote failed: %s\n", strerror(-ret));
+    lota_err("tpm_quote failed: %s", strerror(-ret));
     build_error_response(client, LOTA_IPC_ERR_TPM_FAILURE);
     return;
   }
@@ -420,7 +420,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   total_size =
       LOTA_IPC_TOKEN_HEADER_SIZE + quote.attest_size + quote.signature_size;
   if (total_size > LOTA_IPC_MAX_PAYLOAD) {
-    fprintf(stderr, "IPC: token too large (%zu bytes)\n", total_size);
+    lota_err("token too large (%zu bytes)", total_size);
     build_error_response(client, LOTA_IPC_ERR_INTERNAL);
     return;
   }
@@ -635,13 +635,13 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
 
   /* retrieve peer credentials */
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) < 0) {
-    fprintf(stderr, "IPC: SO_PEERCRED failed: %s\n", strerror(errno));
+    lota_err("SO_PEERCRED failed: %s", strerror(errno));
     close(fd);
     return -errno;
   }
 
-  printf("IPC: client connected pid=%d uid=%d gid=%d\n", cred.pid, cred.uid,
-         cred.gid);
+  lota_dbg("client connected pid=%d uid=%d gid=%d", cred.pid, cred.uid,
+           cred.gid);
 
   ret = set_nonblocking(fd);
   if (ret < 0) {
@@ -684,8 +684,7 @@ int ipc_init(struct ipc_context *ctx) {
 
   ret = ensure_socket_dir();
   if (ret < 0) {
-    fprintf(stderr, "IPC: Failed to create %s: %s\n", SOCKET_DIR,
-            strerror(-ret));
+    lota_err("failed to create %s: %s", SOCKET_DIR, strerror(-ret));
     return ret;
   }
 
@@ -694,13 +693,13 @@ int ipc_init(struct ipc_context *ctx) {
   ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (ctx->listen_fd < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: socket() failed: %s\n", strerror(-ret));
+    lota_err("socket() failed: %s", strerror(-ret));
     return ret;
   }
 
   ret = set_nonblocking(ctx->listen_fd);
   if (ret < 0) {
-    fprintf(stderr, "IPC: set_nonblocking() failed: %s\n", strerror(-ret));
+    lota_err("set_nonblocking() failed: %s", strerror(-ret));
     goto err_close;
   }
 
@@ -710,8 +709,7 @@ int ipc_init(struct ipc_context *ctx) {
 
   if (bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: bind(%s) failed: %s\n", LOTA_IPC_SOCKET_PATH,
-            strerror(-ret));
+    lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH, strerror(-ret));
     goto err_close;
   }
 
@@ -725,26 +723,24 @@ int ipc_init(struct ipc_context *ctx) {
     struct group *grp = getgrnam(LOTA_GROUP_NAME);
     if (grp) {
       if (chown(LOTA_IPC_SOCKET_PATH, 0, grp->gr_gid) < 0)
-        fprintf(stderr, "IPC: chown(%s, 0, %d) failed: %s\n",
-                LOTA_IPC_SOCKET_PATH, grp->gr_gid, strerror(errno));
+        lota_warn("chown(%s, 0, %d) failed: %s", LOTA_IPC_SOCKET_PATH,
+                  grp->gr_gid, strerror(errno));
     } else {
-      fprintf(stderr,
-              "IPC: group '%s' not found, socket accessible to current "
-              "group only\n",
-              LOTA_GROUP_NAME);
+      lota_warn("group '%s' not found, socket accessible to current group only",
+                LOTA_GROUP_NAME);
     }
   }
 
   if (listen(ctx->listen_fd, 16) < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: listen() failed: %s\n", strerror(-ret));
+    lota_err("listen() failed: %s", strerror(-ret));
     goto err_unlink;
   }
 
   ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
   if (ctx->epoll_fd < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: epoll_create1() failed: %s\n", strerror(-ret));
+    lota_err("epoll_create1() failed: %s", strerror(-ret));
     goto err_unlink;
   }
 
@@ -752,14 +748,14 @@ int ipc_init(struct ipc_context *ctx) {
   ev.data.fd = ctx->listen_fd;
   if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: epoll_ctl() failed: %s\n", strerror(-ret));
+    lota_err("epoll_ctl() failed: %s", strerror(-ret));
     goto err_epoll;
   }
 
   ctx->running = true;
   ctx->status_flags = LOTA_STATUS_TPM_OK; /* will be updated */
 
-  printf("IPC: Listening on %s\n", LOTA_IPC_SOCKET_PATH);
+  lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
   return 0;
 
 err_epoll:
@@ -795,8 +791,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
 
   ret = set_nonblocking(fd);
   if (ret < 0) {
-    fprintf(stderr, "IPC: set_nonblocking(activated fd) failed: %s\n",
-            strerror(-ret));
+    lota_err("set_nonblocking(activated fd) failed: %s", strerror(-ret));
     return ret;
   }
 
@@ -805,7 +800,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
   if (ctx->epoll_fd < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: epoll_create1() failed: %s\n", strerror(-ret));
+    lota_err("epoll_create1() failed: %s", strerror(-ret));
     ctx->listen_fd = -1;
     return ret;
   }
@@ -814,7 +809,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   ev.data.fd = ctx->listen_fd;
   if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: epoll_ctl() failed: %s\n", strerror(-ret));
+    lota_err("epoll_ctl() failed: %s", strerror(-ret));
     close(ctx->epoll_fd);
     ctx->epoll_fd = -1;
     ctx->listen_fd = -1;
@@ -824,7 +819,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   ctx->running = true;
   ctx->status_flags = LOTA_STATUS_TPM_OK;
 
-  printf("IPC: Using socket-activated fd %d\n", fd);
+  lota_info("IPC using socket-activated fd %d", fd);
   return 0;
 }
 
@@ -868,7 +863,7 @@ void ipc_cleanup(struct ipc_context *ctx) {
   }
   ctx->extra_count = 0;
 
-  printf("IPC: Cleaned up\n");
+  lota_dbg("IPC cleaned up");
 }
 
 /*
@@ -1022,7 +1017,7 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
   fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: extra socket() failed: %s\n", strerror(-ret));
+    lota_err("extra socket() failed: %s", strerror(-ret));
     return ret;
   }
 
@@ -1038,7 +1033,7 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
 
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     ret = -errno;
-    fprintf(stderr, "IPC: bind(%s) failed: %s\n", socket_path, strerror(-ret));
+    lota_err("bind(%s) failed: %s", socket_path, strerror(-ret));
     close(fd);
     return ret;
   }
@@ -1072,7 +1067,7 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
            socket_path);
   ctx->extra_count++;
 
-  printf("IPC: Extra listener on %s\n", socket_path);
+  lota_info("IPC extra listener on %s", socket_path);
   return 0;
 }
 
