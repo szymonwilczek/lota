@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -538,6 +539,9 @@ type CertificateStore struct {
 	requireCerts bool
 }
 
+// TCG EK Credential Profile OID for TPM 2.0
+var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
+
 // certificate verification errors
 var (
 	ErrNoCertificate       = errors.New("certificate required but not provided")
@@ -547,6 +551,7 @@ var (
 	ErrCertificateExpired  = errors.New("certificate has expired")
 	ErrCertificateNotYet   = errors.New("certificate not yet valid")
 	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
+	ErrCertificateEKOID    = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
 )
 
 // hardware identity errors
@@ -707,10 +712,18 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 		}
 	}
 
-	// EK certificate should contain specific OIDs for TPM 2.0
-	// TCG EK Credential Profile defines OID 2.23.133.8.1 for TPM 2.0 EK
-	// For now, I just validate the chain - OID checking can (will) be added later
-	// marked as TODO
+	// EK certificate must contain the TCG EK Credential Profile OID
+	// (2.23.133.8.1) in Extended Key Usage to prove TPM 2.0 origin!!
+	found := false
+	for _, oid := range cert.UnknownExtKeyUsage {
+		if oid.Equal(oidTCGEKCertificate) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrCertificateEKOID
+	}
 
 	return nil
 }

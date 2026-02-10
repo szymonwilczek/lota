@@ -8,6 +8,8 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -758,5 +760,133 @@ func TestFileStore_LegacyMtimeFallback(t *testing.T) {
 	}
 	if regTime.IsZero() {
 		t.Error("Registration time should not be zero for legacy entry")
+	}
+}
+
+// generates an EK certificate signed by a CA with the TCG EK OID in EKU
+func generateEKCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
+	t.Helper()
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(10),
+		Subject: pkix.Name{
+			Organization: []string{"LOTA Test TPM Manufacturer"},
+			CommonName:   "EK Certificate",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment,
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{{2, 23, 133, 8, 1}},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Failed to create EK certificate: %v", err)
+	}
+
+	return certDER
+}
+
+// generates an EK certificate WITHOUT the TCG OID (should be rejected)
+func generateEKCertificateNoOID(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
+	t.Helper()
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(11),
+		Subject: pkix.Name{
+			Organization: []string{"LOTA Test"},
+			CommonName:   "Fake EK Certificate",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Failed to create EK certificate without OID: %v", err)
+	}
+
+	return certDER
+}
+
+func TestCertificateStore_ValidEKCertificate(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	storePath := filepath.Join(tempDir, "store")
+	if err := os.Mkdir(storePath, 0700); err != nil {
+		t.Fatalf("Failed to create store dir: %v", err)
+	}
+
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+
+	caCertPath := filepath.Join(tempDir, "ca.pem")
+	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	store, err := NewCertificateStore(storePath, []string{caCertPath}, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStore failed: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
+
+	ekKey := generateTestKey(t)
+	ekCertDER := generateEKCertificate(t, ekKey, caCert, caKey)
+
+	// should succeed: valid AIK cert + EK cert with TCG OID
+	if err := store.RegisterAIKWithCert("client-ek", &aikKey.PublicKey, aikCertDER, ekCertDER); err != nil {
+		t.Errorf("Registration with valid EK cert should succeed: %v", err)
+	}
+}
+
+func TestCertificateStore_EKCertificateMissingOID(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	storePath := filepath.Join(tempDir, "store")
+	if err := os.Mkdir(storePath, 0700); err != nil {
+		t.Fatalf("Failed to create store dir: %v", err)
+	}
+
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+
+	caCertPath := filepath.Join(tempDir, "ca.pem")
+	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	store, err := NewCertificateStore(storePath, []string{caCertPath}, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStore failed: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	aikCertDER := generateSignedCertificate(t, aikKey, caCert, caKey)
+
+	ekKey := generateTestKey(t)
+	ekCertDER := generateEKCertificateNoOID(t, ekKey, caCert, caKey)
+
+	// should fail: EK cert without TCG OID
+	err = store.RegisterAIKWithCert("client-ek-bad", &aikKey.PublicKey, aikCertDER, ekCertDER)
+	if err == nil {
+		t.Fatal("Registration with EK cert missing TCG OID should fail")
+	}
+	if !errors.Is(err, ErrCertificateEKOID) {
+		t.Errorf("Expected ErrCertificateEKOID, got: %v", err)
 	}
 }
