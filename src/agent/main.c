@@ -358,7 +358,7 @@ static int test_tpm(void) {
     uint8_t test_nonce[LOTA_NONCE_SIZE];
     uint32_t quote_pcr_mask;
 
-    /* Generate random nonce (TODO: from server) */
+    /* Generate random test nonce (production path uses server challenge) */
     printf("Generating test nonce...\n");
     if (getrandom(test_nonce, LOTA_NONCE_SIZE, 0) != LOTA_NONCE_SIZE) {
       fprintf(stderr, "getrandom failed: %s\n", strerror(errno));
