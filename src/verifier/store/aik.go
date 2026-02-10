@@ -531,7 +531,8 @@ func (ms *MemoryStore) GetHardwareID(clientID string) ([32]byte, error) {
 	return hwid, nil
 }
 
-// currently a placeholder
+// wraps FileStore with X.509 certificate verification
+// validates AIK and EK certificate chains against trusted CA roots
 type CertificateStore struct {
 	fileStore    *FileStore
 	trustedCAs   []*x509.Certificate
