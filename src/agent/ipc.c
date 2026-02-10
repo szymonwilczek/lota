@@ -785,6 +785,61 @@ err_close:
 }
 
 /*
+ * just set it non-blocking, create an epoll, and register it
+ * no bind/listen is needed because systemd already did that
+ */
+int ipc_init_activated(struct ipc_context *ctx, int fd) {
+  struct epoll_event ev;
+  int ret;
+
+  if (!ctx || fd < 0)
+    return -EINVAL;
+
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->listen_fd = -1;
+  ctx->epoll_fd = -1;
+  ctx->start_time = time(NULL);
+
+  for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
+    ctx->extra[i].fd = -1;
+  ctx->extra_count = 0;
+
+  ret = set_nonblocking(fd);
+  if (ret < 0) {
+    fprintf(stderr, "IPC: set_nonblocking(activated fd) failed: %s\n",
+            strerror(-ret));
+    return ret;
+  }
+
+  ctx->listen_fd = fd;
+
+  ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+  if (ctx->epoll_fd < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: epoll_create1() failed: %s\n", strerror(-ret));
+    ctx->listen_fd = -1;
+    return ret;
+  }
+
+  ev.events = EPOLLIN;
+  ev.data.fd = ctx->listen_fd;
+  if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->listen_fd, &ev) < 0) {
+    ret = -errno;
+    fprintf(stderr, "IPC: epoll_ctl() failed: %s\n", strerror(-ret));
+    close(ctx->epoll_fd);
+    ctx->epoll_fd = -1;
+    ctx->listen_fd = -1;
+    return ret;
+  }
+
+  ctx->running = true;
+  ctx->status_flags = LOTA_STATUS_TPM_OK;
+
+  printf("IPC: Using socket-activated fd %d\n", fd);
+  return 0;
+}
+
+/*
  * Cleanup IPC server
  */
 void ipc_cleanup(struct ipc_context *ctx) {

@@ -154,6 +154,20 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
 int ipc_is_listener(struct ipc_context *ctx, int fd);
 
 /*
+ * ipc_init_activated - Initialize IPC from a systemd socket-activated fd.
+ * @ctx: Context to initialize.
+ * @fd:  Pre-created listening socket fd (from sd_listen_fds).
+ *
+ * Uses the passed fd as the primary listener instead of creating
+ * a new socket. The fd must be an AF_UNIX SOCK_STREAM socket
+ * already in listening state. Ownership transfers to the IPC
+ * context; the fd will be closed by ipc_cleanup().
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int ipc_init_activated(struct ipc_context *ctx, int fd);
+
+/*
  * ipc_set_dbus - Attach D-Bus context for signal emission.
  * @ctx: Server context.
  * @dbus: D-Bus context (or NULL to detach).
