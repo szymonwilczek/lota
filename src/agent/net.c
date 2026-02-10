@@ -29,10 +29,6 @@ int net_init(void) {
   if (ssl_initialized)
     return 0;
 
-  SSL_library_init();
-  SSL_load_error_strings();
-  OpenSSL_add_all_algorithms();
-
   ssl_initialized = 1;
   return 0;
 }
@@ -41,8 +37,6 @@ void net_cleanup(void) {
   if (!ssl_initialized)
     return;
 
-  EVP_cleanup();
-  ERR_free_strings();
   ssl_initialized = 0;
 }
 
