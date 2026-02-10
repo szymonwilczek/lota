@@ -46,7 +46,7 @@ CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
 
 # Libraries for agent
-LDFLAGS := -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
+LDFLAGS := -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd
 
 # BPF compilation flags
 # -target bpf: Generate BPF bytecode
@@ -73,7 +73,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/policy.c \
               $(AGENT_DIR)/policy_sign.c \
               $(AGENT_DIR)/config.c \
-              $(AGENT_DIR)/steam_runtime.c
+              $(AGENT_DIR)/steam_runtime.c \
+              $(AGENT_DIR)/dbus.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
@@ -189,6 +190,8 @@ install: all
 	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
+	install -d $(DESTDIR)/etc/dbus-1/system.d
+	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/

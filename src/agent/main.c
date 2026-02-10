@@ -31,6 +31,7 @@
 #include "bpf_loader.h"
 #include "config.h"
 #include "daemon.h"
+#include "dbus.h"
 #include "hash_verify.h"
 #include "iommu.h"
 #include "ipc.h"
@@ -64,6 +65,7 @@ static struct tpm_context g_tpm_ctx;
 static struct bpf_loader_ctx g_bpf_ctx;
 static struct ipc_context g_ipc_ctx;
 static struct hash_verify_ctx g_hash_ctx;
+static struct dbus_context *g_dbus_ctx;
 static int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
@@ -116,6 +118,20 @@ static void setup_container_listener(struct ipc_context *ctx) {
   ret = steam_runtime_detect(&rt_info);
   if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
     steam_runtime_log_info(&rt_info);
+}
+
+/*
+ * Set up D-Bus interface on the system bus.
+ *
+ * Non-fatal: if D-Bus is unavailable the agent continues with Unix socket IPC
+ * only.
+ */
+static void setup_dbus(struct ipc_context *ctx) {
+  g_dbus_ctx = dbus_init(ctx);
+  if (g_dbus_ctx)
+    ipc_set_dbus(ctx, g_dbus_ctx);
+  else
+    fprintf(stderr, "Warning: D-Bus unavailable, using socket IPC only\n");
 }
 
 /*
@@ -519,6 +535,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   } else {
     ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
     setup_container_listener(&g_ipc_ctx);
+    setup_dbus(&g_ipc_ctx);
   }
   printf("\n");
 
@@ -666,6 +683,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
     /* non-blocking */
     ipc_process(&g_ipc_ctx, 0);
+    dbus_process(g_dbus_ctx, 0);
 
     ret = bpf_loader_poll(&g_bpf_ctx, 100); /* 100ms timeout */
     if (ret < 0 && ret != -EINTR) {
@@ -704,6 +722,7 @@ cleanup_bpf:
   bpf_loader_cleanup(&g_bpf_ctx);
 cleanup_tpm:
   tpm_cleanup(&g_tpm_ctx);
+  dbus_cleanup(g_dbus_ctx);
   ipc_cleanup(&g_ipc_ctx);
   hash_verify_cleanup(&g_hash_ctx);
   return ret;
@@ -1322,6 +1341,7 @@ static int do_continuous_attest(const char *server, int port,
     fprintf(stderr, "Gaming clients will not be able to query status\n");
   } else {
     setup_container_listener(&g_ipc_ctx);
+    setup_dbus(&g_ipc_ctx);
   }
   printf("\n");
 
@@ -1438,6 +1458,7 @@ static int do_continuous_attest(const char *server, int port,
 
     for (int i = 0; i < sleep_time && g_running; i++) {
       ipc_process(&g_ipc_ctx, 100); /* 100ms timeout */
+      dbus_process(g_dbus_ctx, 0);
       usleep(900000);
     }
   }
@@ -1445,6 +1466,7 @@ static int do_continuous_attest(const char *server, int port,
   printf("\nShutting down continuous attestation...\n");
   tpm_cleanup(&g_tpm_ctx);
   net_cleanup();
+  dbus_cleanup(g_dbus_ctx);
   ipc_cleanup(&g_ipc_ctx);
   return 0;
 }
@@ -1803,6 +1825,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     setup_container_listener(&g_ipc_ctx);
+    setup_dbus(&g_ipc_ctx);
 
     valid_until = (uint64_t)(time(NULL) + 3600);
     ipc_update_status(&g_ipc_ctx,
@@ -1818,9 +1841,11 @@ int main(int argc, char *argv[]) {
 
     while (g_running) {
       ipc_process(&g_ipc_ctx, 1000);
+      dbus_process(g_dbus_ctx, 0);
     }
 
     printf("\nShutting down IPC test server...\n");
+    dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
     return 0;
   }
@@ -1855,6 +1880,7 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     setup_container_listener(&g_ipc_ctx);
+    setup_dbus(&g_ipc_ctx);
 
     /* enable signed tokens with PCRs 0, 1, 14 */
     ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
@@ -1874,9 +1900,11 @@ int main(int argc, char *argv[]) {
 
     while (g_running) {
       ipc_process(&g_ipc_ctx, 1000);
+      dbus_process(g_dbus_ctx, 0);
     }
 
     printf("\nShutting down...\n");
+    dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
     tpm_cleanup(&g_tpm_ctx);
     return 0;
