@@ -74,7 +74,9 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/policy_sign.c \
               $(AGENT_DIR)/config.c \
               $(AGENT_DIR)/steam_runtime.c \
-              $(AGENT_DIR)/dbus.c
+              $(AGENT_DIR)/dbus.c \
+              $(AGENT_DIR)/sdnotify.c \
+              $(AGENT_DIR)/journal.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
@@ -192,6 +194,9 @@ install: all
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
+	install -d $(DESTDIR)/usr/lib/systemd/system
+	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
+	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
