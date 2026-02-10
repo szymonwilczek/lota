@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT
+#
+# LOTA Agent - systemd Service Unit
+#
+# Type=notify: agent calls sd_notify(READY=1) when fully initialized.
+# WatchdogSec: agent sends WATCHDOG=1 periodically; systemd restarts
+#              if the ping is missed.
+#
+# Installation:
+#   install -m 644 lota-agent.service /usr/lib/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now lota-agent
+#
+# Copyright (C) 2026 Szymon Wilczek
+
+[Unit]
+Description=LOTA - Linux Open Trusted Attestation Agent
+Documentation=https://github.com/szymonwilczek/lota
+After=network.target local-fs.target
+After=tpm2-abrmd.service dbus.service
+Wants=tpm2-abrmd.service
+Requires=lota-agent.socket
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/lota-agent --mode monitor
+ExecReload=/bin/kill -HUP $MAINPID
+WatchdogSec=60s
+Restart=on-failure
+RestartSec=5s
+
+# as root (for TPM and BPF)
+User=root
+Group=root
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lota /var/log/lota /run/lota
+ReadOnlyPaths=/etc/lota /usr/lib/lota
+
+# no access to /home, /root
+ProtectHome=yes
+
+# private /tmp and /var/tmp
+PrivateTmp=yes
+
+# only allow specific devices
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=/dev/tpm0 rw
+
+# TPM + BPF + raw I/O
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON
+
+# prevent acquiring new privileges via execve
+NoNewPrivileges=yes
+
+# allow standard service + I/O + networking syscalls
+SystemCallFilter=@system-service @io-event @network-io
+
+# BPF and perf syscalls required for LSM program
+SystemCallFilter=bpf perf_event_open
+
+# block remaining privileged syscalls
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+
+# no user namespace remapping (needs real root for TPM)
+PrivateUsers=no
+
+# protect kernel tunables (sysctl)
+ProtectKernelTunables=yes
+
+# allow module loading check (BPF monitors it)
+ProtectKernelModules=no
+
+# allow reading kernel logs (for event correlation)
+ProtectKernelLogs=no
+
+# protect cgroups hierarchy
+ProtectControlGroups=yes
+
+# hide /proc except own process
+ProtectProc=invisible
+ProcSubset=pid
+
+# protect the system clock
+ProtectClock=yes
+
+# protect hostname
+ProtectHostname=yes
+
+# only Unix sockets (IPC), IPv4/IPv6 (attestation), netlink (BPF)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# disable W^X for most mappings
+# needed for BPF JIT
+MemoryDenyWriteExecute=no
+
+# lock memory (for TPM secrets)
+LockPersonality=yes
+
+# prevent suid/sgid bits on created files
+UMask=0077
+
+# restrict realtime scheduling
+RestrictRealtime=yes
+
+# restrict kernel keyring access
+KeyringMode=private
+
+# remove all supplementary groups
+SupplementaryGroups=
+
+SecureBits=noroot-locked
+
+LimitMEMLOCK=64M
+LimitNOFILE=1024
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lota-agent
+SyslogFacility=auth
+
+[Install]
+WantedBy=multi-user.target
+Alias=lota.service
