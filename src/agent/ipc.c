@@ -399,21 +399,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   else
     memset(token->client_nonce, 0, 32);
 
-  /* if no TPM context, return unsigned token (for testing!!!) */
+  /* TPM context is required - refuse to issue unsigned tokens */
   if (!ctx->tpm) {
-    token->attest_size = 0;
-    token->sig_size = 0;
-    token->sig_alg = 0;
-    token->hash_alg = 0;
-    token->pcr_mask = 0;
-
-    resp->magic = LOTA_IPC_MAGIC;
-    resp->version = LOTA_IPC_VERSION;
-    resp->result = LOTA_IPC_OK;
-    resp->payload_len = LOTA_IPC_TOKEN_HEADER_SIZE;
-
-    client->send_len = LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
-    client->send_offset = 0;
+    build_error_response(client, LOTA_IPC_ERR_TPM_FAILURE);
     return;
   }
 
