@@ -1218,6 +1218,11 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
   }
 
+  /* report BPF LSM status */
+  if (g_bpf_ctx.loaded) {
+    report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
+  }
+
   return 0;
 }
 
