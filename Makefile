@@ -76,7 +76,8 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/steam_runtime.c \
               $(AGENT_DIR)/dbus.c \
               $(AGENT_DIR)/sdnotify.c \
-              $(AGENT_DIR)/journal.c
+              $(AGENT_DIR)/journal.c \
+              $(AGENT_DIR)/selftest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
 
