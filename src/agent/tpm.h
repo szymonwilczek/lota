@@ -22,11 +22,11 @@ struct tpm_quote_response;
 
 /* * TODO: Implement dynamic AIK provisioning.
  * Currently using a hardcoded persistent handle for PoC purposes.
- * In the near future, this will be loaded via Tss2_Sys_Context or
- * retrieved from a trusted Key Broker Service, I'll explore it.
+ * Production deployments should load this via configuration or
+ * retrieve it from a trusted Key Broker Service.
  *
  * Handle 0x81010002 chosen to avoid conflicts with existing keys
- * (Windows Hello, BitLocker, something more; at 0x81010001).
+ * (Windows Hello, BitLocker, etc. at 0x81010001).
  */
 #define TPM_AIK_HANDLE 0x81010002
 
