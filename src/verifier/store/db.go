@@ -15,7 +15,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -192,7 +192,7 @@ func runMigrations(db *sql.DB) error {
 			return fmt.Errorf("failed to commit migration %d: %w", m.version, err)
 		}
 
-		log.Printf("Applied migration %d: %s", m.version, m.description)
+		slog.Info("applied database migration", "version", m.version, "description", m.description)
 	}
 
 	return nil
