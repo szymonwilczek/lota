@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -110,7 +111,7 @@ func (fs *FileStore) loadAll() error {
 		case ".pem":
 			pubKey, err := fs.loadKey(clientID)
 			if err != nil {
-				fmt.Printf("Warning: failed to load key for %s: %v\n", clientID, err)
+				slog.Warn("failed to load key", "client", clientID, "error", err)
 				continue
 			}
 			fs.cache[clientID] = pubKey
@@ -118,7 +119,7 @@ func (fs *FileStore) loadAll() error {
 		case ".hwid":
 			hwid, err := fs.loadHardwareID(clientID)
 			if err != nil {
-				fmt.Printf("Warning: failed to load hardware ID for %s: %v\n", clientID, err)
+				slog.Warn("failed to load hardware ID", "client", clientID, "error", err)
 				continue
 			}
 			fs.hardwareIDs[clientID] = hwid
@@ -126,7 +127,7 @@ func (fs *FileStore) loadAll() error {
 		case ".meta":
 			meta, err := fs.loadMeta(clientID)
 			if err != nil {
-				fmt.Printf("Warning: failed to load metadata for %s: %v\n", clientID, err)
+				slog.Warn("failed to load metadata", "client", clientID, "error", err)
 				continue
 			}
 			fs.registeredAt[clientID] = meta.RegisteredAt
@@ -264,7 +265,7 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	// persist registration timestamp
 	now := time.Now()
 	if err := fs.saveMeta(clientID, now); err != nil {
-		fmt.Printf("Warning: failed to save metadata for %s: %v\n", clientID, err)
+		slog.Warn("failed to save metadata", "client", clientID, "error", err)
 	}
 	fs.registeredAt[clientID] = now
 
@@ -343,7 +344,7 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	// update metadata with new registration time
 	now := time.Now()
 	if err := fs.saveMeta(clientID, now); err != nil {
-		fmt.Printf("Warning: failed to save metadata for %s: %v\n", clientID, err)
+		slog.Warn("failed to save metadata", "client", clientID, "error", err)
 	}
 
 	fs.cache[clientID] = newKey
