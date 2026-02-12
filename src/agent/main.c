@@ -29,6 +29,7 @@
 #include "../../include/attestation.h"
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+#include "agent.h"
 #include "bpf_loader.h"
 #include "config.h"
 #include "daemon.h"
@@ -58,18 +59,15 @@
 /* Default AIK TTL */
 #define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
-/* PCR index for LOTA agent self-measurement */
-#define LOTA_PCR_SELF 14
-
 /* Global state */
-static volatile sig_atomic_t g_running = 1;
+volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_reload = 0;
-static struct tpm_context g_tpm_ctx;
-static struct bpf_loader_ctx g_bpf_ctx;
-static struct ipc_context g_ipc_ctx;
-static struct hash_verify_ctx g_hash_ctx;
-static struct dbus_context *g_dbus_ctx;
-static int g_mode = LOTA_MODE_MONITOR;
+struct tpm_context g_tpm_ctx;
+struct bpf_loader_ctx g_bpf_ctx;
+struct ipc_context g_ipc_ctx;
+struct hash_verify_ctx g_hash_ctx;
+struct dbus_context *g_dbus_ctx;
+int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
 static uint32_t g_protect_pids[64];
@@ -78,7 +76,6 @@ static const char *g_trust_libs[64];
 static int g_trust_lib_count;
 
 static uint32_t check_module_security(void);
-static int self_measure(struct tpm_context *ctx);
 static const char *mode_to_string(int mode);
 static int parse_mode(const char *mode_str);
 
@@ -88,7 +85,7 @@ static int parse_mode(const char *mode_str);
  * Failures are non-fatal: the primary socket still works for
  * host-side clients.
  */
-static void setup_container_listener(struct ipc_context *ctx) {
+void setup_container_listener(struct ipc_context *ctx) {
   char dir[PATH_MAX];
   char path[PATH_MAX];
   struct steam_runtime_info rt_info;
@@ -131,7 +128,7 @@ static void setup_container_listener(struct ipc_context *ctx) {
  * Non-fatal: if D-Bus is unavailable the agent continues with Unix socket IPC
  * only.
  */
-static void setup_dbus(struct ipc_context *ctx) {
+void setup_dbus(struct ipc_context *ctx) {
   g_dbus_ctx = dbus_init(ctx);
   if (g_dbus_ctx)
     ipc_set_dbus(ctx, g_dbus_ctx);
@@ -144,7 +141,7 @@ static void setup_dbus(struct ipc_context *ctx) {
  *
  * Returns: 0 on success, negative errno on failure.
  */
-static int ipc_init_or_activate(struct ipc_context *ctx) {
+int ipc_init_or_activate(struct ipc_context *ctx) {
   int n, fd, ret;
 
   n = sdnotify_listen_fds();
@@ -183,7 +180,7 @@ static void print_hex(const char *label, const uint8_t *data, size_t len) {
  *
  * Returns: 0 on success, negative errno on failure
  */
-static int self_measure(struct tpm_context *ctx) {
+int self_measure(struct tpm_context *ctx) {
   char exe_path[LOTA_MAX_PATH_LEN];
   uint8_t self_hash[LOTA_HASH_SIZE];
   ssize_t len;
