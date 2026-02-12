@@ -46,6 +46,7 @@ struct lota_config {
   /* Attestation */
   int attest_interval; /* 0 = one-shot */
   uint32_t aik_ttl;    /* seconds, 0 = default */
+  uint32_t aik_handle; /* TPM persistent handle, 0 = default */
 
   /* Daemon */
   bool daemon;

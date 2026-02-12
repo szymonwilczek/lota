@@ -341,7 +341,8 @@ static int test_tpm(void) {
   /* AIK provisioning test */
   printf("\n=== AIK Provisioning Test ===\n\n");
 
-  printf("Checking/provisioning AIK at handle 0x%08X...\n", TPM_AIK_HANDLE);
+  printf("Checking/provisioning AIK at handle 0x%08X...\n",
+         g_tpm_ctx.aik_handle);
   ret = tpm_provision_aik(&g_tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "AIK provisioning failed: %s\n", strerror(-ret));
@@ -1674,6 +1675,7 @@ int main(int argc, char *argv[]) {
   block_ptrace = cfg.block_ptrace;
   attest_interval = cfg.attest_interval;
   aik_ttl = cfg.aik_ttl;
+  g_tpm_ctx.aik_handle = cfg.aik_handle;
   daemon_flag = cfg.daemon ? 1 : 0;
   pid_file_path = cfg.pid_file;
   signing_key_path = cfg.signing_key[0] ? cfg.signing_key : NULL;

@@ -55,11 +55,15 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
 int tpm_init(struct tpm_context *ctx) {
   TSS2_RC rc;
   size_t tcti_size;
+  uint32_t saved_handle;
 
   if (!ctx)
     return -EINVAL;
 
+  /* preserve caller-configured handle across memset */
+  saved_handle = ctx->aik_handle;
   memset(ctx, 0, sizeof(*ctx));
+  ctx->aik_handle = saved_handle;
 
   /*
    * Initialize TCTI context for device access.
@@ -93,6 +97,11 @@ int tpm_init(struct tpm_context *ctx) {
   }
 
   ctx->initialized = true;
+
+  /* default AIK handle if not pre-configured */
+  if (!ctx->aik_handle)
+    ctx->aik_handle = TPM_AIK_HANDLE;
+
   return 0;
 }
 
@@ -211,7 +220,7 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
   TSS2_RC rc;
   ESYS_TR key_handle = ESYS_TR_NONE;
 
-  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_AIK_HANDLE, ESYS_TR_NONE,
+  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle, ESYS_TR_NONE,
                              ESYS_TR_NONE, ESYS_TR_NONE, &key_handle);
   if (rc == TSS2_RC_SUCCESS) {
     if (handle_out)
@@ -309,12 +318,12 @@ int tpm_provision_aik(struct tpm_context *ctx) {
   }
 
   /*
-   * Make key persistent at TPM_AIK_HANDLE.
+   * Make key persistent at ctx->aik_handle.
    * Persistent keys survive TPM reset and power cycles.
    */
   rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, primary_handle,
                          ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                         TPM_AIK_HANDLE, &persistent_handle);
+                         ctx->aik_handle, &persistent_handle);
 
   Esys_FlushContext(ctx->esys_ctx, primary_handle);
   Esys_Free(out_public);
@@ -994,7 +1003,7 @@ int tpm_rotate_aik(struct tpm_context *ctx) {
       ESYS_TR out_handle;
       rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
                              ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                             TPM_AIK_HANDLE, &out_handle);
+                             ctx->aik_handle, &out_handle);
       if (rc != TSS2_RC_SUCCESS)
         return tss2_rc_to_errno(rc);
     }

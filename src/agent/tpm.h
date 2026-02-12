@@ -20,10 +20,9 @@ struct tpm_quote_response;
 
 #define TPM_DEVICE_PATH "/dev/tpmrm0"
 
-/* * TODO: Implement dynamic AIK provisioning.
- * Currently using a hardcoded persistent handle for PoC purposes.
- * Production deployments should load this via configuration or
- * retrieve it from a trusted Key Broker Service.
+/*
+ * Default AIK persistent handle.
+ * Configurable via lota.conf
  *
  * Handle 0x81010002 chosen to avoid conflicts with existing keys
  * (Windows Hello, BitLocker, etc. at 0x81010001).
@@ -75,6 +74,9 @@ struct tpm_context {
   ESYS_CONTEXT *esys_ctx;
   TSS2_TCTI_CONTEXT *tcti_ctx;
   bool initialized;
+
+  /* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
+  uint32_t aik_handle;
 
   /* AIK rotation state */
   struct aik_metadata aik_meta;
@@ -153,7 +155,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * @ctx: Initialized TPM context
  *
  * Creates RSA 2048-bit restricted signing key under Endorsement Hierarchy
- * and persists it at TPM_AIK_HANDLE (0x81010001).
+ * and persists it at the configured AIK handle (default 0x81010002).
  *
  * Properties:
  *   - Restricted: Can only sign TPM-generated data (quotes/certify)

@@ -112,6 +112,10 @@ static void test_config_init_defaults(void) {
     FAIL("aik_ttl != 0");
     return;
   }
+  if (cfg.aik_handle != 0x81010002) {
+    FAIL("aik_handle != 0x81010002");
+    return;
+  }
   if (cfg.daemon != false) {
     FAIL("daemon != false");
     return;
@@ -235,6 +239,7 @@ static void test_config_load_basic_values(void) {
                              "block_ptrace = yes\n"
                              "attest_interval = 600\n"
                              "aik_ttl = 7200\n"
+                             "aik_handle = 0x81010003\n"
                              "daemon = 1\n"
                              "log_level = debug\n");
   config_path("basic.conf", path, sizeof(path));
@@ -272,6 +277,10 @@ static void test_config_load_basic_values(void) {
   }
   if (cfg.aik_ttl != 7200) {
     FAIL("aik_ttl != 7200");
+    return;
+  }
+  if (cfg.aik_handle != 0x81010003) {
+    FAIL("aik_handle != 0x81010003");
     return;
   }
   if (cfg.daemon != true) {
@@ -345,6 +354,7 @@ static void test_config_load_hyphen_keys(void) {
                               "block-ptrace = true\n"
                               "attest-interval = 120\n"
                               "aik-ttl = 3600\n"
+                              "aik-handle = 0x81020001\n"
                               "pid-file = /tmp/test.pid\n"
                               "signing-key = /tmp/sign.key\n"
                               "policy-pubkey = /tmp/sign.pub\n"
@@ -388,6 +398,10 @@ static void test_config_load_hyphen_keys(void) {
   }
   if (cfg.aik_ttl != 3600) {
     FAIL("aik-ttl");
+    return;
+  }
+  if (cfg.aik_handle != 0x81020001) {
+    FAIL("aik-handle");
     return;
   }
   if (strcmp(cfg.pid_file, "/tmp/test.pid") != 0) {
@@ -811,6 +825,7 @@ static void test_config_load_all_known_keys(void) {
                            "block_ptrace = true\n"
                            "attest_interval = 999\n"
                            "aik_ttl = 86400\n"
+                           "aik_handle = 0x81010005\n"
                            "daemon = true\n"
                            "pid_file = /all/pid\n"
                            "signing_key = /all/sign.key\n"
@@ -871,6 +886,10 @@ static void test_config_load_all_known_keys(void) {
   }
   if (cfg.aik_ttl != 86400) {
     FAIL("aik_ttl");
+    return;
+  }
+  if (cfg.aik_handle != 0x81010005) {
+    FAIL("aik_handle");
     return;
   }
   if (!cfg.daemon) {

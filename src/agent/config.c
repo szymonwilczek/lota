@@ -6,6 +6,7 @@
  */
 
 #include "config.h"
+#include "tpm.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -69,6 +70,7 @@ void config_init(struct lota_config *cfg) {
 
   cfg->attest_interval = 0;
   cfg->aik_ttl = 0;
+  cfg->aik_handle = TPM_AIK_HANDLE;
 
   cfg->daemon = false;
   set_str(cfg->pid_file, sizeof(cfg->pid_file), "/run/lota/lota-agent.pid");
@@ -136,6 +138,12 @@ static int apply_key(struct lota_config *cfg, const char *key,
   }
   if (strcmp(key, "aik_ttl") == 0 || strcmp(key, "aik-ttl") == 0) {
     cfg->aik_ttl = (uint32_t)atoi(value);
+    return 0;
+  }
+  if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
+    unsigned long v = strtoul(value, NULL, 0);
+    if (v > 0)
+      cfg->aik_handle = (uint32_t)v;
     return 0;
   }
 
@@ -265,6 +273,7 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
   fprintf(fp, "\n# Attestation\n");
   fprintf(fp, "attest_interval = %d\n", cfg->attest_interval);
   fprintf(fp, "aik_ttl = %u\n", cfg->aik_ttl);
+  fprintf(fp, "aik_handle = 0x%08X\n", cfg->aik_handle);
 
   fprintf(fp, "\n# Daemon\n");
   fprintf(fp, "daemon = %s\n", cfg->daemon ? "true" : "false");
