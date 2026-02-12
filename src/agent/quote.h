@@ -11,20 +11,7 @@
 
 #include <stdint.h>
 
-#include "../../include/lota.h"
-
-/*
- * Maximum size of TPM2B_ATTEST structure.
- * Contains TPMS_ATTEST which includes:
- *   - magic (4 bytes)
- *   - type (2 bytes)
- *   - qualifiedSigner (variable, max ~256)
- *   - extraData (nonce, max 64)
- *   - clockInfo (17 bytes)
- *   - firmwareVersion (8 bytes)
- *   - quote info (PCR selection + digest)
- */
-#define LOTA_MAX_ATTEST_SIZE 1024
+#include "../../include/attestation.h"
 
 /*
  * TPM Quote Response - complete attestation evidence
