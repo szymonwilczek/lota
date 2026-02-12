@@ -139,7 +139,7 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 
 		token := extractBearerToken(r)
 		if token == "" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="lota"'`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="lota"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			writeJSON(w, errorResponse{Error: "missing Authorization header"})
 			return
