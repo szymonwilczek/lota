@@ -200,14 +200,11 @@ bool iommu_verify_full(struct iommu_status *status) {
   iommu_check_dmesg(status);
 
   /*
-   * Minimum requirement: IOMMU must be present in sysfs.
-   * For stricter verification, also require:
-   * - IOMMU_FLAG_DMA_REMAP (confirmed working but not implemented
-   *   yet)
+   * Minimum requirement: IOMMU must be present in sysfs and have
+   * confirmed DMA remapping active.
    *
    * IOMMU_FLAG_CMDLINE_SET is not strictly required
    * on modern systems where UEFI enables IOMMU by default.
-   * I'll think on it.
    */
   return (status->flags & IOMMU_FLAG_SYSFS_PRESENT) &&
          (status->flags & IOMMU_FLAG_DMA_REMAP);
