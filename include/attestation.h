@@ -48,8 +48,10 @@ struct lota_report_header {
  * The verifier MUST verify the signature over attest_data, then parse it
  * to extract the nonce (extraData) and PCR digest for validation.
  *
- * TODO: 'nonce' field is a convenience copy, use the nonce embedded in
- * attest_data.
+ * The nonce field below is a convenience copy of TPMS_ATTEST.extraData.
+ * It allows the verifier to perform O(1) nonce lookup without parsing
+ * the TPMS_ATTEST structure first, while the authoritative value inside
+ * attest_data is used for cryptographic verification.
  */
 struct lota_tpm_evidence {
   /* PCR values - all 24 PCRs, SHA-256 */
