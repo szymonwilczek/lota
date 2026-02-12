@@ -300,9 +300,9 @@ static __always_inline int is_trusted_lib_path(const char *path) {
  * Check if path starts with allowed module directory.
  * Returns 1 if path is allowed, 0 if blocked.
  *
- * Allowed paths (Im writing this on Fedora):
- *   /usr/lib/modules/   - Standard Fedora/RHEL module location
- *   /lib/modules/       - Symlink to /usr/lib/modules on Fedora/RHEL
+ * Allowed paths:
+ *   /usr/lib/modules/   - Standard module location
+ *   /lib/modules/       - Legacy/symlink path
  */
 static __always_inline int is_allowed_module_path(const char *path) {
   char buf[64];
