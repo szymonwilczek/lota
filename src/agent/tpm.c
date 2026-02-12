@@ -747,7 +747,7 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
     /*
      * EK not at standard handle - this is common.
      * Fall back to using AIK fingerprint as hardware ID.
-     * Less ideal but still unique per TPM installation. I'll think on it.
+     * Less ideal but still unique per TPM installation.
      */
     uint8_t aik_buf[LOTA_MAX_AIK_PUB_SIZE];
     size_t aik_size;
