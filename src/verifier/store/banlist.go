@@ -99,8 +99,7 @@ func ParseHardwareID(hexStr string) ([32]byte, error) {
 	return hwid, nil
 }
 
-// implements BanStore using an in-memory map
-// for testing!!!
+// implements BanStore using an in-memory map (testing only)
 type MemoryBanStore struct {
 	mu       sync.RWMutex
 	bans     map[[32]byte]*BanEntry
@@ -181,8 +180,7 @@ func (s *MemoryBanStore) ListBans() []BanEntry {
 	return entries
 }
 
-// implements AuditLog using an in-memory slice
-// for testing!!!
+// implements AuditLog using an in-memory slice (testing only)
 type MemoryAuditLog struct {
 	mu      sync.RWMutex
 	entries []AuditEntry
