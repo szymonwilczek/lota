@@ -248,9 +248,9 @@ static __always_inline int is_trusted_lib(const char *path) {
 /*
  * Check if path starts with a trusted library directory.
  *
- * Trusted prefixes (covers Fedora - not tested in the others for now):
+ * Trusted prefixes:
  *   /usr/lib/      - Standard library location
- *   /usr/lib64/    - 64-bit libraries
+ *   /usr/lib64/    - 64-bit libraries (Fedora, RHEL, SUSE)
  *   /lib/          - Essential libraries
  *   /lib64/        - Essential 64-bit libraries
  *
