@@ -225,6 +225,7 @@ int iommu_status_to_string(const struct iommu_status *status, char *buf,
   case IOMMU_VENDOR_AMD_VI:
     vendor_str = "AMD-Vi";
     break;
+  case IOMMU_VENDOR_NONE:
   default:
     vendor_str = "None";
     break;
