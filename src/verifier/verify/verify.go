@@ -554,7 +554,7 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	return info, true
 }
 
-// returns all known client IDs (note for myself: union of AIK store and nonce store)
+// returns all known client IDs as a union of AIK store and nonce store
 func (v *Verifier) ListClients() []string {
 	seen := make(map[string]struct{})
 	var clients []string
