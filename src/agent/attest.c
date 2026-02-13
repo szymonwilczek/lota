@@ -262,10 +262,13 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   memcpy(report->tpm.pcr_values, quote_resp.pcr_values,
          sizeof(report->tpm.pcr_values));
   report->tpm.quote_sig_size = quote_resp.signature_size;
-  if (quote_resp.signature_size <= LOTA_MAX_SIG_SIZE) {
-    memcpy(report->tpm.quote_signature, quote_resp.signature,
-           quote_resp.signature_size);
+  if (quote_resp.signature_size > LOTA_MAX_SIG_SIZE) {
+    fprintf(stderr, "TPM signature too large: %u > %u\n",
+            quote_resp.signature_size, LOTA_MAX_SIG_SIZE);
+    return -EOVERFLOW;
   }
+  memcpy(report->tpm.quote_signature, quote_resp.signature,
+         quote_resp.signature_size);
 
   /*
    * Copy raw TPMS_ATTEST blob for signature verification.
@@ -274,10 +277,13 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    *                3) compare with challenge nonce
    */
   report->tpm.attest_size = quote_resp.attest_size;
-  if (quote_resp.attest_size <= LOTA_MAX_ATTEST_SIZE) {
-    memcpy(report->tpm.attest_data, quote_resp.attest_data,
-           quote_resp.attest_size);
+  if (quote_resp.attest_size > LOTA_MAX_ATTEST_SIZE) {
+    fprintf(stderr, "TPMS_ATTEST too large: %u > %u\n", quote_resp.attest_size,
+            LOTA_MAX_ATTEST_SIZE);
+    return -EOVERFLOW;
   }
+  memcpy(report->tpm.attest_data, quote_resp.attest_data,
+         quote_resp.attest_size);
 
   /*
    * Export AIK public key for TOFU registration.
