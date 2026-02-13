@@ -190,8 +190,8 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   if (event->filename[0] != '/')
     return -ENOENT;
 
-  /* stat to get (dev, ino) for cache key */
-  if (stat(event->filename, &st) < 0) {
+  /* lstat to get (dev, ino) - must not follow symlinks, matching O_NOFOLLOW */
+  if (lstat(event->filename, &st) < 0) {
     ctx->errors++;
     return -errno;
   }
