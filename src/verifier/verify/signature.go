@@ -123,6 +123,10 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return errors.New("AIK public key is nil")
 	}
 
+	if aikPubKey.N.BitLen() < 2048 {
+		return fmt.Errorf("RSA key too small: %d bits, minimum 2048", aikPubKey.N.BitLen())
+	}
+
 	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
