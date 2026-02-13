@@ -61,6 +61,18 @@ struct {
 } event_scratch SEC(".maps");
 
 /*
+ * Separate per-CPU scratch for sleepable hooks (lsm.s).
+ * Sleepable programs can be preempted mid-execution, allowing a
+ * non-sleepable hook on the same CPU to clobber the shared buffer.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct lota_exec_event);
+} event_scratch_sleepable SEC(".maps");
+
+/*
  * Statistics counters.
  * Extended to 16 entries for new hooks.
  */
@@ -800,7 +812,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   }
 
   /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch, &key);
+  event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
