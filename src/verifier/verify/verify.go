@@ -389,7 +389,14 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 
 	// verify event log -> independent PCR reconstruction
 	if err := VerifyEventLog(report); err != nil {
-		clog.Warn("event log verification issue", "error", err)
+		if len(report.EventLog) > 0 {
+			// present but inconsistent -> boot chain tampered
+			clog.Error("event log verification failed", "error", err)
+			v.metrics.Rejections.Inc("pcr_fail")
+			result.Result = types.VerifyPCRFail
+			return result, fmt.Errorf("event log inconsistency: %w", err)
+		}
+		clog.Debug("event log not provided")
 	} else {
 		clog.Debug("event log verified", "size", len(report.EventLog))
 	}
