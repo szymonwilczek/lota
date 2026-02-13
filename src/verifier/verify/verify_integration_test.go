@@ -112,6 +112,9 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
+	// hardware_id (32 bytes, leave zero for test fallback)
+	offset += types.HardwareIDSize
+
 	// reserved
 	offset += 2
 
@@ -576,7 +579,8 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-	offset += 2 // reserved
+	offset += types.HardwareIDSize // hardware_id (zero)
+	offset += 2                    // reserved
 
 	// system measurement (simplified)
 	offset += types.HashSize * 2                // kernel_hash + agent_hash

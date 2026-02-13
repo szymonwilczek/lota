@@ -268,14 +268,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clientAddr := conn.RemoteAddr().String()
 	clog := s.log.With("remote_addr", clientAddr)
 
-	// IP without port ensures same client gets same baseline across connections
+	// IP without port serves as challenge binding for nonce anti-replay.
+	// verifier derives persistent client identity from the TPM
+	// HardwareID inside the attestation report, so clients behind NAT
+	// are correctly distinguished
 	clientIP, _, err := net.SplitHostPort(clientAddr)
 	if err != nil {
 		clientIP = clientAddr // fallback if no port
 	}
-	clientID := clientIP
+	challengeID := clientIP
 
-	challenge, err := s.verifier.GenerateChallenge(clientID)
+	challenge, err := s.verifier.GenerateChallenge(challengeID)
 	if err != nil {
 		clog.Error("failed to generate challenge", "error", err)
 		s.metrics.ConnectionErrors.Inc()
@@ -335,7 +338,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	clog.Debug("report received", "size", totalSize)
 
-	result, err := s.verifier.VerifyReport(clientID, reportData)
+	result, err := s.verifier.VerifyReport(challengeID, reportData)
 	if err != nil {
 		clog.Warn("verification failed", "error", err)
 	}

@@ -153,11 +153,21 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 
 // performs full verification of attestation report
 // returns verification result ready to send back to client
-func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+//
+// challengeID identifies the transport-level endpoint used when the
+// challenge was generated. It is used exclusively for nonce binding
+// verification. All persistent identity operations (AIK registration,
+// baseline, revocation, bans) use a hardware-derived clientID
+// (hex-encoded HardwareID from the TPM report) so that clients sharing
+// a NAT address are not conflated
+func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
 	startTime := time.Now()
 	v.totalAttests.Add(1)
 	v.metrics.AttestationTotal.Inc()
 
+	// clientID will be derived from HardwareID after parse; until then
+	// use challengeID as provisional identity for early logging
+	clientID := challengeID
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
 	var hwID string
@@ -201,6 +211,17 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 	}
 	hwID = fmt.Sprintf("%x", report.TPM.HardwareID[:8])
 
+	// Derive persistent client identity from HardwareID when available.
+	// This prevents NAT collisions: multiple machines behind the same
+	// NAT gateway will each get a unique clientID based on their TPM
+	// endorsement key hash, rather than sharing the IP address
+	var zeroHWID [types.HardwareIDSize]byte
+	if report.TPM.HardwareID != zeroHWID {
+		clientID = hex.EncodeToString(report.TPM.HardwareID[:])
+		clog = logging.WithClient(v.log, clientID)
+		clog.Debug("client identity derived from hardware ID", "challenge_id", challengeID)
+	}
+
 	// check revocation BEFORE consuming nonce
 	// Why? This prevents wasting nonces on known-revoked clients
 	// and avoids any crypto operations for identities that should be rejected.
@@ -227,7 +248,7 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		}
 	}
 
-	if err := v.nonceStore.VerifyNonce(report, clientID); err != nil {
+	if err := v.nonceStore.VerifyNonce(report, challengeID); err != nil {
 		clog.Error("nonce verification failed", "error", err)
 		v.metrics.Rejections.Inc("nonce_fail")
 		result.Result = types.VerifyNonceFail

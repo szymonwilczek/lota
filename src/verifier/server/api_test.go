@@ -231,6 +231,9 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
+	// hardware_id (32 bytes, leave zero for test fallback)
+	offset += types.HardwareIDSize
+
 	// reserved
 	offset += 2
 
