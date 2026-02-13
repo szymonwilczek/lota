@@ -333,6 +333,9 @@ int net_recv_challenge(struct net_context *ctx,
   while (total < (int)sizeof(buf)) {
     ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
+      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+        continue;
       return -EIO;
     }
     total += ret;
@@ -364,6 +367,9 @@ int net_send_report(struct net_context *ctx, const void *report,
     ret = SSL_write((SSL *)ctx->ssl, (const uint8_t *)report + total,
                     report_size - total);
     if (ret <= 0) {
+      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+        continue;
       return -EIO;
     }
     total += ret;
@@ -383,6 +389,9 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
   while (total < (int)sizeof(buf)) {
     ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
+      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+        continue;
       return -EIO;
     }
     total += ret;
