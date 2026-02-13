@@ -319,45 +319,6 @@ static __always_inline int is_trusted_lib_path(const char *resolved_path) {
 }
 
 /*
- * Check if path starts with allowed module directory.
- * Returns 1 if path is allowed, 0 if blocked.
- *
- * Allowed paths:
- *   /usr/lib/modules/   - Standard module location
- *   /lib/modules/       - Legacy/symlink path
- */
-static __always_inline int is_allowed_module_path(const char *path) {
-  char buf[64];
-  int ret;
-
-  if (!path)
-    return 0;
-
-  ret = bpf_probe_read_kernel_str(buf, sizeof(buf), path);
-  if (ret < 0)
-    return 0;
-
-  /* /usr/lib/modules/ prefix */
-  if (buf[0] == '/' && buf[1] == 'u' && buf[2] == 's' && buf[3] == 'r' &&
-      buf[4] == '/' && buf[5] == 'l' && buf[6] == 'i' && buf[7] == 'b' &&
-      buf[8] == '/' && buf[9] == 'm' && buf[10] == 'o' && buf[11] == 'd' &&
-      buf[12] == 'u' && buf[13] == 'l' && buf[14] == 'e' && buf[15] == 's' &&
-      buf[16] == '/') {
-    return 1;
-  }
-
-  /* /lib/modules/ prefix */
-  if (buf[0] == '/' && buf[1] == 'l' && buf[2] == 'i' && buf[3] == 'b' &&
-      buf[4] == '/' && buf[5] == 'm' && buf[6] == 'o' && buf[7] == 'd' &&
-      buf[8] == 'u' && buf[9] == 'l' && buf[10] == 'e' && buf[11] == 's' &&
-      buf[12] == '/') {
-    return 1;
-  }
-
-  return 0;
-}
-
-/*
  * Check if module name is in whitelist.
  */
 static __always_inline int is_module_whitelisted(const unsigned char *name) {
