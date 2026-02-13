@@ -127,12 +127,18 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
 
-	verifier := NewRSASSAVerifier()
-	if err := verifier.VerifyQuoteSignature(attestData, signature, aikPubKey); err != nil {
-		return fmt.Errorf("TPM quote signature invalid: %w", err)
+	// wire format does not carry sig_alg, so try RSASSA first then PSS
+	rsassaErr := NewRSASSAVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey)
+	if rsassaErr == nil {
+		return nil
 	}
 
-	return nil
+	pssErr := NewRSAPSSVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey)
+	if pssErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("TPM quote signature invalid (tried RSASSA: %v, PSS: %v)", rsassaErr, pssErr)
 }
 
 // parses RSA public key from DER-encoded PKIX/SPKI format
@@ -146,6 +152,11 @@ func ParseRSAPublicKey(keyData []byte) (*rsa.PublicKey, error) {
 	if !ok {
 		return nil, errors.New("not an RSA public key")
 	}
+
+	if rsaPub.N.BitLen() < 2048 {
+		return nil, fmt.Errorf("RSA key too small: %d bits, minimum 2048", rsaPub.N.BitLen())
+	}
+
 	return rsaPub, nil
 }
 

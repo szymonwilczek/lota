@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"fmt"
 	"testing"
 
@@ -270,6 +271,52 @@ func TestVerifyReportSignature_NoAttestData(t *testing.T) {
 	}
 
 	t.Logf("✓ Correctly rejected report without attest data: %v", err)
+}
+
+func TestVerifyReportSignature_PSSSignature(t *testing.T) {
+	t.Log("SECURITY TEST: Report signature verification with RSA-PSS")
+
+	attestData := []byte("TPMS_ATTEST blob signed with PSS")
+	hash := sha256.Sum256(attestData)
+	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+	signature, err := rsa.SignPSS(rand.Reader, testKeyPair, crypto.SHA256, hash[:], opts)
+	if err != nil {
+		t.Fatalf("Failed to create PSS signature: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.AttestSize = uint16(len(attestData))
+	copy(report.TPM.AttestData[:], attestData)
+	report.TPM.QuoteSigSize = uint16(len(signature))
+	copy(report.TPM.QuoteSignature[:], signature)
+
+	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
+	if err != nil {
+		t.Fatalf("PSS report signature verification failed: %v", err)
+	}
+
+	t.Log("✓ Report with PSS signature correctly verified via fallback")
+}
+
+func TestParseRSAPublicKey_RejectsSmallKey(t *testing.T) {
+	t.Log("SECURITY TEST: Rejecting RSA keys smaller than 2048 bits")
+
+	smallKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("Failed to generate small key: %v", err)
+	}
+
+	keyBytes, err := x509.MarshalPKIXPublicKey(&smallKey.PublicKey)
+	if err != nil {
+		t.Fatalf("Failed to marshal key: %v", err)
+	}
+
+	_, err = ParseRSAPublicKey(keyBytes)
+	if err == nil {
+		t.Fatal("SECURITY: 1024-bit RSA key was accepted!")
+	}
+
+	t.Logf("✓ Correctly rejected small key: %v", err)
 }
 
 func TestAIKFingerprint(t *testing.T) {
