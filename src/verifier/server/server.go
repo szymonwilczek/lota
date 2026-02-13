@@ -157,6 +157,19 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// checks if the given address binds to loopback only
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
@@ -173,6 +186,17 @@ func (s *Server) startHTTP() error {
 	ln, err := net.Listen("tcp", s.httpAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.httpAddr, err)
+	}
+
+	if !isLoopbackAddr(s.httpAddr) {
+		if s.tlsConfig == nil {
+			ln.Close()
+			return fmt.Errorf("HTTP API on non-loopback address %s requires TLS; configure CertFile/KeyFile or use 127.0.0.1", s.httpAddr)
+		}
+		ln = tls.NewListener(ln, s.tlsConfig)
+		s.log.Info("HTTP API using TLS (non-loopback address)")
+	} else {
+		s.log.Warn("HTTP API listening without TLS (loopback only)")
 	}
 
 	s.log.Info("LOTA Monitoring API listening",
