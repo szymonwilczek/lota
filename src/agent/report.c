@@ -38,11 +38,19 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
                          uint32_t event_count, const uint8_t *event_log,
                          uint32_t event_log_size, uint8_t *out_buf,
                          size_t out_buf_size) {
-  size_t total = calculate_report_size(event_count, event_log_size);
+  size_t total;
   size_t offset = 0;
 
   if (!report || !out_buf)
     return -EINVAL;
+
+  /* count without data pointer means no events */
+  if (!events)
+    event_count = 0;
+  if (!event_log)
+    event_log_size = 0;
+
+  total = calculate_report_size(event_count, event_log_size);
 
   if (out_buf_size < total)
     return -ENOSPC;
