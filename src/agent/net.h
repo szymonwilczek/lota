@@ -11,8 +11,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct tpm_quote_response;
-
 /* SHA-256 digest size for certificate fingerprint pinning */
 #define NET_PIN_SHA256_LEN 32
 

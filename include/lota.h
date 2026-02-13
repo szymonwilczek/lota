@@ -41,17 +41,6 @@ typedef __u64 uint64_t;
 #define LOTA_MAX_EK_CERT_SIZE 2048  /* Max EK certificate size (DER X.509) */
 #define LOTA_HARDWARE_ID_SIZE 32    /* SHA-256 of EK public key */
 
-/* PCR indices code care about */
-#define LOTA_PCR_BIOS_CODE 0      /* SRTM, firmware code */
-#define LOTA_PCR_BIOS_CONFIG 1    /* BIOS config (includes IOMMU settings) */
-#define LOTA_PCR_OPTION_ROMS 2    /* Option ROMs */
-#define LOTA_PCR_BOOTLOADER 4     /* Boot loader code */
-#define LOTA_PCR_BOOTLOADER_CFG 5 /* Boot loader config */
-#define LOTA_PCR_SECURE_BOOT 7    /* Secure Boot state */
-#define LOTA_PCR_GRUB_CMD 8       /* GRUB commands */
-#define LOTA_PCR_KERNEL_CMDLINE 9 /* Kernel command line */
-#define LOTA_PCR_IMA 10           /* IMA measurements */
-
 /* Number of PCRs to include in attestation */
 #define LOTA_PCR_COUNT 24
 

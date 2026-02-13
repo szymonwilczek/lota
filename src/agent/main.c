@@ -55,7 +55,6 @@
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define DEFAULT_VERIFIER_PORT 8443
-#define DEFAULT_ATTEST_INTERVAL 300 /* 5 minutes */
 
 /* Default AIK TTL */
 #define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
@@ -529,8 +528,8 @@ static void print_usage(const char *prog) {
   printf("  --attest          Perform remote attestation and exit\n");
   printf("  --attest-interval SECS\n");
   printf("                    Continuous attestation interval in seconds\n");
-  printf("                    (default: %d, min: %d, 0=one-shot)\n",
-         DEFAULT_ATTEST_INTERVAL, MIN_ATTEST_INTERVAL);
+  printf("                    (default: 0=one-shot, min: %d for continuous)\n",
+         MIN_ATTEST_INTERVAL);
   printf("  --server HOST     Verifier server address (default: localhost)\n");
   printf("  --port PORT       Verifier server port (default: %d)\n",
          DEFAULT_VERIFIER_PORT);
