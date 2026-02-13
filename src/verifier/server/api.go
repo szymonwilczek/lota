@@ -408,6 +408,7 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var req revokeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
@@ -534,6 +535,7 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req banRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
