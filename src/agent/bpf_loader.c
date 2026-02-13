@@ -91,6 +91,15 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
       goto err_close;
     }
 
+    if (ctx->link_count < BPF_MAX_LSM_LINKS) {
+      ctx->links[ctx->link_count++] = link;
+    } else {
+      fprintf(stderr, "Too many LSM programs, increase BPF_MAX_LSM_LINKS\n");
+      bpf_link__destroy(link);
+      err = -E2BIG;
+      goto err_close;
+    }
+
     fprintf(stderr, "Attached LSM program: %s\n", bpf_program__name(prog));
   }
 
@@ -210,6 +219,12 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
     ring_buffer__free(ctx->ringbuf);
     ctx->ringbuf = NULL;
   }
+
+  for (int i = 0; i < ctx->link_count; i++) {
+    bpf_link__destroy(ctx->links[i]);
+    ctx->links[i] = NULL;
+  }
+  ctx->link_count = 0;
 
   if (ctx->obj) {
     bpf_object__close(ctx->obj);

@@ -14,19 +14,24 @@
 
 struct bpf_object;
 struct ring_buffer;
+struct bpf_link;
+
+#define BPF_MAX_LSM_LINKS 16
 
 /*
  * BPF loader context
  */
 struct bpf_loader_ctx {
-  struct bpf_object *obj;      /* libbpf object */
-  struct ring_buffer *ringbuf; /* Ring buffer for events */
-  int ringbuf_fd;              /* Ring buffer map fd */
-  int stats_fd;                /* Stats map fd */
-  int config_fd;               /* Config map fd */
-  int trusted_libs_fd;         /* Trusted library whitelist map fd */
-  int protected_pids_fd;       /* Protected PIDs map fd */
-  bool loaded;                 /* Program is loaded and attached */
+  struct bpf_object *obj;                    /* libbpf object */
+  struct ring_buffer *ringbuf;               /* Ring buffer for events */
+  struct bpf_link *links[BPF_MAX_LSM_LINKS]; /* attached LSM program links */
+  int link_count;                            /* number of attached links */
+  int ringbuf_fd;                            /* Ring buffer map fd */
+  int stats_fd;                              /* Stats map fd */
+  int config_fd;                             /* Config map fd */
+  int trusted_libs_fd;   /* Trusted library whitelist map fd */
+  int protected_pids_fd; /* Protected PIDs map fd */
+  bool loaded;           /* Program is loaded and attached */
 };
 
 /*
