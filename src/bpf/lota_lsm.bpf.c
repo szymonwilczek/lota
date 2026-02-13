@@ -1227,7 +1227,7 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
     event->tgid = bpf_get_current_pid_tgid() >> 32;
     event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = old_uid;
-    event->target_pid = new_uid; /* reuse target_pid for new UID */
+    event->target_uid = new_uid;
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 

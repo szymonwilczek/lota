@@ -102,7 +102,7 @@ enum lota_mode {
  *   MODULE_LOAD:    pid, comm, filename
  *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
  *   PTRACE:         pid, uid, comm, target_pid
- *   SETUID:         pid, uid, comm, target_pid (new uid)
+ *   SETUID:         pid, uid, comm, target_uid (new uid)
  *   *_BLOCKED:      same as base type
  */
 struct lota_exec_event {
@@ -112,7 +112,10 @@ struct lota_exec_event {
   uint32_t tgid;
   uint32_t uid;
   uint32_t gid;
-  uint32_t target_pid;              /* ptrace target / setuid new_uid */
+  union {
+    uint32_t target_pid; /* ptrace: target process PID */
+    uint32_t target_uid; /* setuid: new UID after transition */
+  };
   uint32_t _pad0;                   /* alignment */
   uint8_t hash[LOTA_HASH_SIZE];     /* inode metadata fingerprint (BPF) */
   char comm[LOTA_MAX_COMM_LEN];     /* Process name */

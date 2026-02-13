@@ -79,7 +79,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   case LOTA_EVENT_SETUID:
     printf("[%llu] SETUID %s: uid %u -> %u (pid=%u)\n",
            (unsigned long long)event->timestamp_ns, event->comm, event->uid,
-           event->target_pid, event->pid);
+           event->target_uid, event->pid);
     return 0;
   case LOTA_EVENT_ANON_EXEC:
     event_type_str = "ANON_EXEC";
