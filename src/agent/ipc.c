@@ -328,27 +328,51 @@ static void handle_get_status(struct ipc_context *ctx,
 }
 
 /*
+ * Write little-endian uint32 into buffer
+ */
+static void write_le32(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v);
+  p[1] = (uint8_t)(v >> 8);
+  p[2] = (uint8_t)(v >> 16);
+  p[3] = (uint8_t)(v >> 24);
+}
+
+/*
+ * Write little-endian uint64 into buffer
+ */
+static void write_le64(uint8_t *p, uint64_t v) {
+  write_le32(p, (uint32_t)v);
+  write_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+/*
  * Compute binding nonce for token
  *
  * Creates a SHA-256 hash of token header fields to use as TPM quote nonce.
  * This binds the TPM signature to the specific token data.
+ * All integers are encoded in little-endian to match the wire format.
  */
 static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
                                 uint32_t flags, const uint8_t *client_nonce,
                                 uint8_t *out_nonce) {
   EVP_MD_CTX *mdctx;
   unsigned int len;
+  uint8_t le_buf[20]; /* 8 + 8 + 4 */
 
   memset(out_nonce, 0, LOTA_NONCE_SIZE);
+
+  write_le64(le_buf, issued_at);
+  write_le64(le_buf + 8, valid_until);
+  write_le32(le_buf + 16, flags);
 
   mdctx = EVP_MD_CTX_new();
   if (!mdctx)
     return;
 
   if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
-      EVP_DigestUpdate(mdctx, &issued_at, sizeof(issued_at)) != 1 ||
-      EVP_DigestUpdate(mdctx, &valid_until, sizeof(valid_until)) != 1 ||
-      EVP_DigestUpdate(mdctx, &flags, sizeof(flags)) != 1 ||
+      EVP_DigestUpdate(mdctx, le_buf, 8) != 1 ||
+      EVP_DigestUpdate(mdctx, le_buf + 8, 8) != 1 ||
+      EVP_DigestUpdate(mdctx, le_buf + 16, 4) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, 32) != 1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1) {
     memset(out_nonce, 0, LOTA_NONCE_SIZE);

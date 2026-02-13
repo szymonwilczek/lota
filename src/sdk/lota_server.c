@@ -176,20 +176,45 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 }
 
 /*
+ * Write little-endian uint32 into buffer
+ */
+static void write_le32(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v);
+  p[1] = (uint8_t)(v >> 8);
+  p[2] = (uint8_t)(v >> 16);
+  p[3] = (uint8_t)(v >> 24);
+}
+
+/*
+ * Write little-endian uint64 into buffer
+ */
+static void write_le64(uint8_t *p, uint64_t v) {
+  write_le32(p, (uint32_t)v);
+  write_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+/*
  * Compute expected nonce: SHA256(issued_at || valid_until || flags || nonce)
- * All integers in little-endian byte order.
+ * All integers encoded in little-endian byte order to match token wire format.
  */
 static int compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
                                   uint32_t flags, const uint8_t nonce[32],
                                   uint8_t out[32]) {
-  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  EVP_MD_CTX *ctx;
+  uint8_t le_buf[20]; /* 8 + 8 + 4 */
+
+  write_le64(le_buf, issued_at);
+  write_le64(le_buf + 8, valid_until);
+  write_le32(le_buf + 16, flags);
+
+  ctx = EVP_MD_CTX_new();
   if (!ctx)
     return -1;
 
   EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-  EVP_DigestUpdate(ctx, &issued_at, 8);
-  EVP_DigestUpdate(ctx, &valid_until, 8);
-  EVP_DigestUpdate(ctx, &flags, 4);
+  EVP_DigestUpdate(ctx, le_buf, 8);
+  EVP_DigestUpdate(ctx, le_buf + 8, 8);
+  EVP_DigestUpdate(ctx, le_buf + 16, 4);
   EVP_DigestUpdate(ctx, nonce, 32);
 
   unsigned int len = 32;
