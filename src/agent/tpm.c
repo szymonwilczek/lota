@@ -171,12 +171,16 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
     return tss2_rc_to_errno(rc);
 
   /* copy pcr value to output */
-  if (pcr_values && pcr_values->count > 0) {
-    size_t copy_size = pcr_values->digests[0].size;
-    if (copy_size > LOTA_HASH_SIZE)
-      copy_size = LOTA_HASH_SIZE;
-    memcpy(value, pcr_values->digests[0].buffer, copy_size);
+  if (!pcr_values || pcr_values->count == 0) {
+    Esys_Free(pcr_values);
+    Esys_Free(pcr_selection_out);
+    return -ENODATA;
   }
+
+  size_t copy_size = pcr_values->digests[0].size;
+  if (copy_size > LOTA_HASH_SIZE)
+    copy_size = LOTA_HASH_SIZE;
+  memcpy(value, pcr_values->digests[0].buffer, copy_size);
 
   /* TPM-allocated memory */
   Esys_Free(pcr_values);
