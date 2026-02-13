@@ -173,6 +173,7 @@ int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
                        size_t buf_size, size_t *written) {
   FILE *mem;
   int ret;
+  long pos;
 
   if (!snap || !buf || buf_size == 0)
     return -EINVAL;
@@ -188,8 +189,22 @@ int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
   ret = policy_emit(snap, mem);
 
   /*
+   * Detect silent truncation: fmemopen does not report an error when
+   * writes exceed the buffer - it simply stops writing. Compare the
+   * stream position to the usable capacity (buf_size - 1, reserving
+   * one byte for the NUL terminator written by fclose).
+   */
+  if (ret == 0) {
+    pos = ftell(mem);
+    if (pos < 0) {
+      ret = -EIO;
+    } else if ((size_t)pos >= buf_size - 1) {
+      ret = -ENOSPC;
+    }
+  }
+
+  /*
    * fclose flushes and NUL-terminates the buffer.
-   * After fclose the stream position equals the number of bytes written.
    */
   if (fclose(mem) != 0 && ret == 0)
     ret = -EIO;
