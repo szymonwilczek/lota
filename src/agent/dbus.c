@@ -156,10 +156,10 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 }
 
 /*
- * GetToken(ay nonce) -> (u result)
+ * GetToken() -> (u flags)
  *
  * Token generation requires TPM and the binary socket protocol
- * due to the variable-length TPM quote blob. Over D-Bus LOTA
+ * due to the variable-length TPM quote blob. Over D-Bus LOTA can
  * only report whether the system is attested, not the full token.
  * Clients that need the actual signed token must use the Unix
  * socket SDK.
@@ -204,7 +204,7 @@ static const sd_bus_vtable agent_vtable[] = {
     SD_BUS_METHOD("Ping", "", "tu", method_ping, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
                   SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("GetToken", "ay", "u", method_get_token,
+    SD_BUS_METHOD("GetToken", "", "u", method_get_token,
                   SD_BUS_VTABLE_UNPRIVILEGED),
 
     /* signals */
