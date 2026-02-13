@@ -468,6 +468,10 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     }
   }
 
+  /* clean shutdown via signal - do not propagate EINTR as failure */
+  if (!g_running)
+    ret = 0;
+
   sdnotify_stopping();
 
   uint64_t total, sent, errs, drops;
