@@ -38,6 +38,22 @@ static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE]) {
     fprintf(out, "%02x", hash[i]);
 }
 
+/*
+ * Write a YAML double-quoted scalar with proper escaping.
+ *
+ * Escapes backslashes and double quotes so that the output is a
+ * valid YAML double-quoted string regardless of input content.
+ */
+static void emit_yaml_string(FILE *out, const char *s) {
+  fputc('"', out);
+  for (; *s; s++) {
+    if (*s == '"' || *s == '\\')
+      fputc('\\', out);
+    fputc(*s, out);
+  }
+  fputc('"', out);
+}
+
 int policy_emit(const struct policy_snapshot *snap, FILE *out) {
   int i;
 
@@ -62,8 +78,12 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out) {
   fprintf(out, "# Load with: lota-verifier --policy <this-file>\n");
   fprintf(out, "\n");
 
-  fprintf(out, "name: \"%s\"\n", snap->name);
-  fprintf(out, "description: \"%s\"\n", snap->description);
+  fprintf(out, "name: ");
+  emit_yaml_string(out, snap->name);
+  fprintf(out, "\n");
+  fprintf(out, "description: ");
+  emit_yaml_string(out, snap->description);
+  fprintf(out, "\n");
   fprintf(out, "\n");
 
   /*
