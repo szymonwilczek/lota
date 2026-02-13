@@ -565,7 +565,16 @@ static int handle_client_read(struct ipc_context *ctx,
     return 0;
 
   process_request(ctx, client);
-  client->recv_len = 0; /* reset for next request */
+
+  /* preserve any leftover bytes from the next pipelined request */
+  size_t consumed = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+  if (client->recv_len > consumed) {
+    memmove(client->recv_buf, client->recv_buf + consumed,
+            client->recv_len - consumed);
+    client->recv_len -= consumed;
+  } else {
+    client->recv_len = 0;
+  }
 
   return 1; /* response ready */
 }
