@@ -781,7 +781,7 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
     }
 
     EVP_MD_CTX_free(md_ctx);
-    return 0;
+    return 1; /* AIK fallback */
   }
 
   rc = Esys_ReadPublic(ctx->esys_ctx, ek_handle, ESYS_TR_NONE, ESYS_TR_NONE,

@@ -239,7 +239,11 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
  * The Endorsement Key is unique per TPM and cannot be modified,
  * making it ideal for hardware binding.
  *
- * Returns: 0 on success, negative errno on failure
+ * If the EK is not available at the standard persistent handle,
+ * falls back to SHA-256(AIK public key) as the identifier.
+ *
+ * Returns: 0 on success (EK-based), 1 on success (AIK fallback),
+ *          negative errno on failure
  */
 int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
 
