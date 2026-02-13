@@ -128,16 +128,30 @@ static void resolve_token_dir(void) {
  * Create the token directory if it does not exist.
  * Mode 0700: only the owning user can read attestation data.
  *
+ * Uses lstat to avoid following symlinks. Rejects existing symlinks
+ * and directories owned by other users to prevent symlink attacks
+ * in shared directories like /tmp.
+ *
  * Returns 0 on success, negative errno on failure.
  */
 static int ensure_token_dir(void) {
   struct stat st;
 
-  if (stat(g_hook.token_dir, &st) == 0) {
-    if (S_ISDIR(st.st_mode))
-      return 0;
-    LOG_ERR("token dir exists but is not a directory: %s", g_hook.token_dir);
-    return -ENOTDIR;
+  if (lstat(g_hook.token_dir, &st) == 0) {
+    if (S_ISLNK(st.st_mode)) {
+      LOG_ERR("token dir is a symlink (possible attack): %s", g_hook.token_dir);
+      return -ELOOP;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+      LOG_ERR("token dir exists but is not a directory: %s", g_hook.token_dir);
+      return -ENOTDIR;
+    }
+    if (st.st_uid != getuid()) {
+      LOG_ERR("token dir owned by uid %u, expected %u: %s", (unsigned)st.st_uid,
+              (unsigned)getuid(), g_hook.token_dir);
+      return -EACCES;
+    }
+    return 0;
   }
 
   if (mkdir(g_hook.token_dir, 0700) < 0 && errno != EEXIST) {
@@ -414,6 +428,20 @@ __attribute__((constructor)) static void lota_wine_hook_init(void) {
   LOG_INF("hook active (pid=%d)", (int)getpid());
 }
 
+/*
+ * Safely unlink a path after verifying it is a regular file
+ * owned by the current user (not a symlink).
+ */
+static void safe_unlink(const char *path) {
+  struct stat st;
+
+  if (lstat(path, &st) < 0)
+    return;
+  if (S_ISLNK(st.st_mode) || st.st_uid != getuid())
+    return;
+  unlink(path);
+}
+
 __attribute__((destructor)) static void lota_wine_hook_fini(void) {
   if (g_hook.init_pid != getpid())
     return;
@@ -436,9 +464,9 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void) {
   }
 
   if (g_hook.status_path[0])
-    unlink(g_hook.status_path);
+    safe_unlink(g_hook.status_path);
   if (g_hook.token_path[0])
-    unlink(g_hook.token_path);
+    safe_unlink(g_hook.token_path);
 
   LOG_INF("hook detached");
 }
