@@ -37,6 +37,6 @@ struct iommu_status {
   uint32_t flags;
   uint32_t unit_count;                         /* Number of IOMMU units found */
   char cmdline_param[IOMMU_CMDLINE_PARAM_MAX]; /* Actual param from cmdline */
-};
+} __attribute__((packed));
 
 #endif /* LOTA_IOMMU_TYPES_H */
