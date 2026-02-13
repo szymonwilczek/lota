@@ -376,30 +376,6 @@ pcrs:
 	t.Logf("Invalid YAML correctly rejected: %v", err)
 }
 
-func TestExamplePolicy(t *testing.T) {
-	t.Log("TEST: ExamplePolicy() provides valid template")
-
-	policy := ExamplePolicy()
-
-	if policy.Name == "" {
-		t.Error("Example policy should have a name")
-	}
-
-	if len(policy.PCRs) == 0 {
-		t.Error("Example policy should demonstrate PCR entries")
-	}
-
-	// should have PCR 0 and 7 as examples
-	if _, ok := policy.PCRs[0]; !ok {
-		t.Error("Example policy should include PCR 0")
-	}
-	if _, ok := policy.PCRs[7]; !ok {
-		t.Error("Example policy should include PCR 7")
-	}
-
-	t.Log("ExamplePolicy provides valid template structure")
-}
-
 func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
 	t.Log("SECURITY TEST: LSM enforce mode requirement")
 

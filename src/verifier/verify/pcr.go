@@ -189,19 +189,6 @@ func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
 	return v.verifyAgainstPolicy(report, policy)
 }
 
-// checks report against specific policy
-func (v *PCRVerifier) VerifyReportWithPolicy(report *types.AttestationReport, policyName string) error {
-	v.mu.RLock()
-	policy, exists := v.policies[policyName]
-	v.mu.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("policy not found: %s", policyName)
-	}
-
-	return v.verifyAgainstPolicy(report, policy)
-}
-
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy) error {
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
@@ -348,51 +335,5 @@ func StrictPolicy() *PCRPolicy {
 		RequireModuleSig:  true,
 		RequireSecureBoot: true,
 		RequireLockdown:   true,
-	}
-}
-
-// creates an example policy demonstrating the structure.
-// Use this as a template when creating site-specific policies.
-//
-// Typical PCR meanings (SHA-256):
-//
-//	PCR 0:  SRTM, BIOS/UEFI firmware measurement
-//	PCR 1:  Host platform configuration
-//	PCR 2:  UEFI driver code
-//	PCR 3:  UEFI driver configuration
-//	PCR 4:  Boot loader code (GRUB/systemd-boot)
-//	PCR 5:  GPT partition table
-//	PCR 7:  Secure Boot state (policies/certificates)
-//	PCR 8:  Kernel command line (grub2-measured)
-//	PCR 9:  Linux IMA measurements (if enabled)
-//	PCR 14: LOTA agent self-measurement
-func ExamplePolicy() *PCRPolicy {
-	return &PCRPolicy{
-		Name:        "example-production",
-		Description: "Example production policy - customize PCR values for your environment",
-		PCRs: map[int]string{
-			// PCR 0: Firmware measurement - unique per hardware/firmware version
-			// Collect with: tpm2_pcrread sha256:0 -o pcr0.bin && xxd -p pcr0.bin
-			0: "<COLLECT_FROM_YOUR_SYSTEM>",
-			// PCR 7: Secure Boot state - changes when certificates updated
-			7: "<COLLECT_FROM_YOUR_SYSTEM>",
-			// PCR 14: LOTA agent - self controlled entirely (TOFU handles this)
-			// 14: handled by TOFU baseline store
-		},
-		KernelHashes: []string{
-			// SHA-256 of /boot/vmlinuz-*
-			// Collect with: sha256sum /boot/vmlinuz-$(uname -r)
-			"<KERNEL_SHA256_HASH>",
-		},
-		AgentHashes: []string{
-			// SHA-256 of lota-agent binary
-			// Collect with: sha256sum /usr/sbin/lota-agent
-			"<AGENT_SHA256_HASH>",
-		},
-		RequireIOMMU:      true, // DMA protection required
-		RequireEnforce:    true, // LSM enforce mode required
-		RequireModuleSig:  true, // signed kernel modules only
-		RequireSecureBoot: true, // UEFI Secure Boot required
-		RequireLockdown:   true, // kernel lockdown mode required
 	}
 }

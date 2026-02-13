@@ -92,18 +92,6 @@ func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikP
 	return nil
 }
 
-// returns appropriate verifier based on signature algorithm
-func SelectVerifier(sigAlg uint16) (SignatureVerifier, error) {
-	switch sigAlg {
-	case 0x0014: // TPM_ALG_RSASSA
-		return NewRSASSAVerifier(), nil
-	case 0x0016: // TPM_ALG_RSAPSS
-		return NewRSAPSSVerifier(), nil
-	default:
-		return nil, fmt.Errorf("unsupported signature algorithm: 0x%04X", sigAlg)
-	}
-}
-
 // verifies the TPM quote signature in the report
 //
 // Verification flow:
