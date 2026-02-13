@@ -86,7 +86,7 @@ int daemonize(void) {
   if (chdir("/") < 0)
     return -errno;
 
-  umask(0);
+  umask(0077);
 
   /*
    * close inherited file descriptors and redirect standard
