@@ -126,6 +126,18 @@ struct {
 } trusted_libs SEC(".maps");
 
 /*
+ * Per-CPU scratch buffer for resolving file paths.
+ * Used by lota_mmap_file to resolve full paths from dentry for
+ * trusted library map lookups and path prefix checks.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, char[LOTA_MAX_PATH_LEN]);
+} path_scratch SEC(".maps");
+
+/*
  * Protected PID map.
  * Key: PID (u32)
  * Value: 1 = protected
@@ -228,20 +240,15 @@ zero:
 
 /*
  * Check if a library path is in the trusted whitelist.
+ * Path must be a resolved full path (eg: "/opt/game/lib/libfoo.so").
  */
-static __always_inline int is_trusted_lib(const char *path) {
-  char key[LOTA_MAX_PATH_LEN] = {};
+static __always_inline int is_trusted_lib(const char *resolved_path) {
   u32 *allowed;
-  int ret;
 
-  if (!path)
+  if (!resolved_path)
     return 0;
 
-  ret = bpf_probe_read_kernel_str(key, sizeof(key), path);
-  if (ret < 0)
-    return 0;
-
-  allowed = bpf_map_lookup_elem(&trusted_libs, key);
+  allowed = bpf_map_lookup_elem(&trusted_libs, resolved_path);
   return allowed && *allowed;
 }
 
@@ -255,41 +262,43 @@ static __always_inline int is_trusted_lib(const char *path) {
  *   /lib64/        - Essential 64-bit libraries
  *
  * Uses byte-by-byte comparison because BPF cannot call strncmp.
+ * Path must be a resolved full path.
  */
-static __always_inline int is_trusted_lib_path(const char *path) {
-  char buf[LOTA_MAX_PATH_LEN];
-  int ret;
-
-  if (!path)
-    return 0;
-
-  ret = bpf_probe_read_kernel_str(buf, sizeof(buf), path);
-  if (ret < 0)
+static __always_inline int is_trusted_lib_path(const char *resolved_path) {
+  if (!resolved_path)
     return 0;
 
   /* /usr/lib64/ */
-  if (buf[0] == '/' && buf[1] == 'u' && buf[2] == 's' && buf[3] == 'r' &&
-      buf[4] == '/' && buf[5] == 'l' && buf[6] == 'i' && buf[7] == 'b' &&
-      buf[8] == '6' && buf[9] == '4' && buf[10] == '/') {
+  if (resolved_path[0] == '/' && resolved_path[1] == 'u' &&
+      resolved_path[2] == 's' && resolved_path[3] == 'r' &&
+      resolved_path[4] == '/' && resolved_path[5] == 'l' &&
+      resolved_path[6] == 'i' && resolved_path[7] == 'b' &&
+      resolved_path[8] == '6' && resolved_path[9] == '4' &&
+      resolved_path[10] == '/') {
     return 1;
   }
 
   /* /usr/lib/ */
-  if (buf[0] == '/' && buf[1] == 'u' && buf[2] == 's' && buf[3] == 'r' &&
-      buf[4] == '/' && buf[5] == 'l' && buf[6] == 'i' && buf[7] == 'b' &&
-      buf[8] == '/') {
+  if (resolved_path[0] == '/' && resolved_path[1] == 'u' &&
+      resolved_path[2] == 's' && resolved_path[3] == 'r' &&
+      resolved_path[4] == '/' && resolved_path[5] == 'l' &&
+      resolved_path[6] == 'i' && resolved_path[7] == 'b' &&
+      resolved_path[8] == '/') {
     return 1;
   }
 
   /* /lib64/ */
-  if (buf[0] == '/' && buf[1] == 'l' && buf[2] == 'i' && buf[3] == 'b' &&
-      buf[4] == '6' && buf[5] == '4' && buf[6] == '/') {
+  if (resolved_path[0] == '/' && resolved_path[1] == 'l' &&
+      resolved_path[2] == 'i' && resolved_path[3] == 'b' &&
+      resolved_path[4] == '6' && resolved_path[5] == '4' &&
+      resolved_path[6] == '/') {
     return 1;
   }
 
   /* /lib/ */
-  if (buf[0] == '/' && buf[1] == 'l' && buf[2] == 'i' && buf[3] == 'b' &&
-      buf[4] == '/') {
+  if (resolved_path[0] == '/' && resolved_path[1] == 'l' &&
+      resolved_path[2] == 'i' && resolved_path[3] == 'b' &&
+      resolved_path[4] == '/') {
     return 1;
   }
 
@@ -903,7 +912,6 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret) {
   struct lota_exec_event *event;
   struct dentry *dentry;
-  const unsigned char *name;
   u32 key = 0;
   u32 mode;
   int blocked = 0;
@@ -979,7 +987,6 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
   /* get the file path for policy decision */
   dentry = BPF_CORE_READ(file, f_path.dentry);
-  name = BPF_CORE_READ(dentry, d_name.name);
 
   /*
    * In ENFORCE mode with strict mmap enabled, block libs from
@@ -987,17 +994,29 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    *  - library is in trusted_libs whitelist map (game-specific)
    *  - library is from standard system paths (/usr/lib, etc)
    *  - otherwise -> block
+   *
+   * Resolve full path via bpf_d_path into scratch buffer for
+   * map lookups and prefix checks. Falls back to dentry walk.
    */
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    if (is_trusted_lib((const char *)name)) {
+    u32 pkey = 0;
+    char *pathbuf = bpf_map_lookup_elem(&path_scratch, &pkey);
+    int resolved = 0;
+
+    if (pathbuf) {
+      long pret = resolve_file_path(file, pathbuf, LOTA_MAX_PATH_LEN);
+      if (pret >= 0 && pathbuf[0] == '/')
+        resolved = 1;
+    }
+
+    if (resolved && is_trusted_lib(pathbuf)) {
       blocked = 0;
-    } else if (is_trusted_lib_path((const char *)name)) {
+    } else if (resolved && is_trusted_lib_path(pathbuf)) {
       blocked = 0;
     } else if (is_trusted_system_path(dentry)) {
       /*
        * dentry walk: check if any parent directory is a trusted
-       * system directory. This handles the case where
-       * d_name.name is just the filename.
+       * system directory. Fallback when bpf_d_path is unavailable.
        */
       blocked = 0;
     } else {
