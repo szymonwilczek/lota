@@ -339,18 +339,21 @@ static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
   EVP_MD_CTX *mdctx;
   unsigned int len;
 
+  memset(out_nonce, 0, LOTA_NONCE_SIZE);
+
   mdctx = EVP_MD_CTX_new();
-  if (!mdctx) {
-    memset(out_nonce, 0, LOTA_NONCE_SIZE);
+  if (!mdctx)
     return;
+
+  if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
+      EVP_DigestUpdate(mdctx, &issued_at, sizeof(issued_at)) != 1 ||
+      EVP_DigestUpdate(mdctx, &valid_until, sizeof(valid_until)) != 1 ||
+      EVP_DigestUpdate(mdctx, &flags, sizeof(flags)) != 1 ||
+      EVP_DigestUpdate(mdctx, client_nonce, 32) != 1 ||
+      EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1) {
+    memset(out_nonce, 0, LOTA_NONCE_SIZE);
   }
 
-  EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
-  EVP_DigestUpdate(mdctx, &issued_at, sizeof(issued_at));
-  EVP_DigestUpdate(mdctx, &valid_until, sizeof(valid_until));
-  EVP_DigestUpdate(mdctx, &flags, sizeof(flags));
-  EVP_DigestUpdate(mdctx, client_nonce, 32);
-  EVP_DigestFinal_ex(mdctx, out_nonce, &len);
   EVP_MD_CTX_free(mdctx);
 }
 
