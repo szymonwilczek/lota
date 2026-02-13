@@ -708,7 +708,7 @@ int main(int argc, char *argv[]) {
     case 'I':
       attest_flag = 1;
       attest_interval = atoi(optarg);
-      if (attest_interval < MIN_ATTEST_INTERVAL) {
+      if (attest_interval != 0 && attest_interval < MIN_ATTEST_INTERVAL) {
         fprintf(stderr,
                 "Warning: interval %d too low, using minimum %d seconds\n",
                 attest_interval, MIN_ATTEST_INTERVAL);
