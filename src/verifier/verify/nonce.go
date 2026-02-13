@@ -258,24 +258,9 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 		return errors.New("unknown nonce - possible replay attack")
 	}
 
-	// remove nonce (one-time use)
-	delete(ns.pending, key)
-
-	// record as used (prevents reuse)
-	ns.usedBackend.Record(key, time.Now())
-
-	// decrement client pending count
-	if cs, ok := ns.clientChallenges[entry.clientID]; ok {
-		cs.pendingCount--
-		if cs.pendingCount < 0 {
-			cs.pendingCount = 0
-		}
-		cs.lastAttestation = time.Now()
-		ns.clientChallenges[entry.clientID] = cs
-	}
-
 	// check lifetime
 	if time.Since(entry.createdAt) > ns.lifetime {
+		delete(ns.pending, key)
 		return errors.New("nonce expired")
 	}
 
@@ -297,6 +282,22 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	if err := VerifyNonceInAttest(attestData, entry.nonce[:]); err != nil {
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
+	}
+
+	// all checks passed, consume nonce
+	delete(ns.pending, key)
+
+	// record as used
+	ns.usedBackend.Record(key, time.Now())
+
+	// update client state
+	if cs, ok := ns.clientChallenges[entry.clientID]; ok {
+		cs.pendingCount--
+		if cs.pendingCount < 0 {
+			cs.pendingCount = 0
+		}
+		cs.lastAttestation = time.Now()
+		ns.clientChallenges[entry.clientID] = cs
 	}
 
 	return nil
