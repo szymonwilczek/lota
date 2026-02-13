@@ -91,8 +91,8 @@ static int check_rate_limit(uid_t uid) {
     }
   }
 
-  /* all slots active and not expired - fail open to avoid DoS on self */
-  return 0;
+  /* all slots active and not expired - deny to prevent bypass */
+  return -1;
 }
 
 /*
