@@ -270,8 +270,6 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us) {
   if (!ctx || !ctx->bus)
     return -EINVAL;
 
-  (void)timeout_us;
-
   for (;;) {
     ret = sd_bus_process(ctx->bus, NULL);
     if (ret < 0) {
@@ -280,6 +278,13 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us) {
     }
     if (ret == 0)
       break; /* no more work */
+  }
+
+  /* wait for new work up to the caller-specified timeout */
+  if (timeout_us > 0) {
+    ret = sd_bus_wait(ctx->bus, timeout_us);
+    if (ret < 0 && ret != -EINTR)
+      return ret;
   }
 
   return 0;
