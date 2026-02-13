@@ -179,12 +179,12 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
  * Compute expected nonce: SHA256(issued_at || valid_until || flags || nonce)
  * All integers in little-endian byte order.
  */
-static void compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
-                                   uint32_t flags, const uint8_t nonce[32],
-                                   uint8_t out[32]) {
+static int compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
+                                  uint32_t flags, const uint8_t nonce[32],
+                                  uint8_t out[32]) {
   EVP_MD_CTX *ctx = EVP_MD_CTX_new();
   if (!ctx)
-    return;
+    return -1;
 
   EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
   EVP_DigestUpdate(ctx, &issued_at, 8);
@@ -195,6 +195,7 @@ static void compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
   unsigned int len = 32;
   EVP_DigestFinal_ex(ctx, out, &len);
   EVP_MD_CTX_free(ctx);
+  return 0;
 }
 
 /*
@@ -352,8 +353,10 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   /* verify nonce binding: extraData ==
    * SHA256(issued_at||valid_until||flags||nonce) */
   uint8_t computed_nonce[32];
-  compute_expected_nonce(hdr.issued_at, hdr.valid_until, hdr.flags, hdr.nonce,
-                         computed_nonce);
+  if (compute_expected_nonce(hdr.issued_at, hdr.valid_until, hdr.flags,
+                             hdr.nonce, computed_nonce) != 0) {
+    return LOTA_SERVER_ERR_NONCE_FAIL;
+  }
 
   if (extra_data_len != 32 || memcmp(extra_data, computed_nonce, 32) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
