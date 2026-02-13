@@ -284,7 +284,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if magic != types.ReportMagic {
 		clog.Warn("invalid report magic", "magic", fmt.Sprintf("0x%08X", magic))
 		s.metrics.ConnectionErrors.Inc()
-		s.sendResult(conn, types.VerifyOldVersion)
+		s.sendErrorResult(conn, types.VerifyOldVersion)
 		return
 	}
 
@@ -293,7 +293,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
 		clog.Warn("invalid report size", "size", totalSize)
 		s.metrics.ConnectionErrors.Inc()
-		s.sendResult(conn, types.VerifyOldVersion)
+		s.sendErrorResult(conn, types.VerifyOldVersion)
 		return
 	}
 
@@ -316,7 +316,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		clog.Warn("verification failed", "error", err)
 	}
 
-	s.sendResult(conn, result.Result)
+	s.sendResult(conn, result)
 
 	if result.Result == types.VerifyOK {
 		clog.Info("attestation successful",
@@ -324,19 +324,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 }
 
-func (s *Server) sendResult(conn net.Conn, resultCode uint32) {
-	result := &types.VerifyResult{
+// sends the full verification result, preserving SessionToken and ValidUntil
+func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
+	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	conn.Write(result.Serialize())
+}
+
+// sends an error result when no full VerifyResult is available
+func (s *Server) sendErrorResult(conn net.Conn, resultCode uint32) {
+	s.sendResult(conn, &types.VerifyResult{
 		Magic:   types.ReportMagic,
 		Version: types.ReportVersion,
 		Result:  resultCode,
-	}
-
-	if resultCode == types.VerifyOK {
-		result.ValidUntil = uint64(time.Now().Add(time.Hour).Unix())
-	}
-
-	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
-	conn.Write(result.Serialize())
+	})
 }
 
 type HealthStatus struct {
