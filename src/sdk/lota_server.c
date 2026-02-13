@@ -140,6 +140,10 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
     uint32_t pcr_sel_count = read_be32(data + off);
     off += 4;
 
+    /* TPM 2.0 spec: TPML_PCR_SELECTION.count <= TPM_NUM_PCR_BANKS */
+    if (pcr_sel_count > 16)
+      return -1;
+
     /* each TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[] */
     for (uint32_t i = 0; i < pcr_sel_count; i++) {
       if (off + 3 > len)
