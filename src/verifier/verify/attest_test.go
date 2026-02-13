@@ -10,8 +10,11 @@ package verify
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // magic:           ff544347 (TPM_GENERATED_VALUE)
@@ -337,4 +340,108 @@ func createTestBlobWithNonceSize(nonceSize int) string {
 
 func contains(s, substr string) bool {
 	return bytes.Contains([]byte(s), []byte(substr))
+}
+
+// builds a TPMS_ATTEST blob with the given PCR digest
+func buildTestAttestBlob(pcrDigest []byte) []byte {
+	blob := mustDecodeHex(
+		"ff544347" + // magic: TPM_GENERATED_VALUE
+			"8018" + // type: TPM_ST_ATTEST_QUOTE
+			"0002" + // qualifiedSigner size: 2
+			"0000" + // minimal signer
+			"0020" + // extraData size: 32 (nonce)
+			"0102030405060708090a0b0c0d0e0f10" +
+			"1112131415161718191a1b1c1d1e1f20" +
+			"0000000000000000" + // clock
+			"00000000" + // resetCount
+			"00000000" + // restartCount
+			"00" + // safe
+			"0000000000000000" + // firmwareVersion
+			"00000001" + // PCR selection count: 1
+			"000b" + // hash algorithm: SHA256
+			"03" + // sizeofSelect: 3
+			"034000" + // PCR bitmap (PCR 0,1,14)
+			"0020", // PCR digest size: 32
+	)
+	blob = append(blob, pcrDigest...)
+	return blob
+}
+
+func TestVerifyPCRDigest_Match(t *testing.T) {
+	t.Log("SECURITY TEST: PCR digest binding verification")
+	t.Log("CRITICAL: Ensures reported PCR values match TPM-signed digest")
+
+	// PCR mask: PCR 0, 1, 14
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+
+	// create known PCR values
+	var pcrValues [types.PCRCount][types.HashSize]byte
+	for i := 0; i < types.HashSize; i++ {
+		pcrValues[0][i] = byte(i)
+		pcrValues[1][i] = byte(i + 0x20)
+		pcrValues[14][i] = byte(i + 0x40)
+	}
+
+	// compute expected digest: SHA-256(PCR0 || PCR1 || PCR14)
+	h := sha256.New()
+	h.Write(pcrValues[0][:])
+	h.Write(pcrValues[1][:])
+	h.Write(pcrValues[14][:])
+	expectedDigest := h.Sum(nil)
+
+	blob := buildTestAttestBlob(expectedDigest)
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err != nil {
+		t.Fatalf("PCR digest should match: %v", err)
+	}
+
+	t.Log("✓ PCR digest correctly verified against reported values")
+}
+
+func TestVerifyPCRDigest_Mismatch(t *testing.T) {
+	t.Log("SECURITY TEST: Detecting tampered PCR values")
+	t.Log("CRITICAL: A malicious agent sending fake PCR values must be caught")
+
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+
+	var pcrValues [types.PCRCount][types.HashSize]byte
+	for i := 0; i < types.HashSize; i++ {
+		pcrValues[0][i] = byte(i)
+		pcrValues[1][i] = byte(i + 0x20)
+		pcrValues[14][i] = byte(i + 0x40)
+	}
+
+	// compute digest from original values
+	h := sha256.New()
+	h.Write(pcrValues[0][:])
+	h.Write(pcrValues[1][:])
+	h.Write(pcrValues[14][:])
+	realDigest := h.Sum(nil)
+
+	blob := buildTestAttestBlob(realDigest)
+
+	// tamper with PCR values (simulate malicious agent)
+	pcrValues[14][0] ^= 0xFF
+
+	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("Expected error for tampered PCR values, got nil")
+	}
+
+	t.Logf("✓ Correctly detected tampered PCR values: %v", err)
+}
+
+func TestVerifyPCRDigest_InvalidAttest(t *testing.T) {
+	t.Log("SECURITY TEST: Rejecting invalid attestation data")
+
+	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
+	var pcrValues [types.PCRCount][types.HashSize]byte
+
+	err := VerifyPCRDigest([]byte{0x00, 0x01, 0x02}, pcrValues, pcrMask)
+	if err == nil {
+		t.Fatal("Expected error for invalid attestation data, got nil")
+	}
+
+	t.Logf("✓ Correctly rejected invalid attestation data: %v", err)
 }

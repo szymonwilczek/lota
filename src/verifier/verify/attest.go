@@ -8,9 +8,12 @@ package verify
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // TPM constants
@@ -175,6 +178,36 @@ func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
 
 	if !bytes.Equal(attest.ExtraData, expectedNonce) {
 		return fmt.Errorf("nonce mismatch: TPMS_ATTEST extraData does not match challenge nonce")
+	}
+
+	return nil
+}
+
+// verifies that PCR values in the report match the TPM-signed PCRDigest
+func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+	attest, err := ParseTPMSAttest(attestData)
+	if err != nil {
+		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
+	}
+
+	if attest.Type != TPMSTAttestQuote {
+		return fmt.Errorf("not a quote attestation (type 0x%04X)", attest.Type)
+	}
+
+	if attest.QuoteInfo == nil {
+		return errors.New("no quote info in attestation")
+	}
+
+	h := sha256.New()
+	for i := 0; i < types.PCRCount; i++ {
+		if pcrMask&(1<<uint(i)) != 0 {
+			h.Write(pcrValues[i][:])
+		}
+	}
+	computed := h.Sum(nil)
+
+	if !bytes.Equal(computed, attest.QuoteInfo.PCRDigest) {
+		return fmt.Errorf("PCR digest mismatch: reported values do not match TPM-signed digest")
 	}
 
 	return nil

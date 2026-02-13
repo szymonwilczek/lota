@@ -188,7 +188,9 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
 	offset += 4
 
-	attestData := buildTPMSAttest(nonce[:])
+	// compute PCR digest from values just written
+	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	attestData := buildTPMSAttest(nonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
@@ -264,8 +266,8 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	return buf
 }
 
-// builds minimal TPMS_ATTEST with embedded nonce
-func buildTPMSAttest(nonce []byte) []byte {
+// builds minimal TPMS_ATTEST with embedded nonce and PCR digest
+func buildTPMSAttest(nonce []byte, pcrDigest []byte) []byte {
 	buf := make([]byte, 0, 128)
 
 	// Magic: TPM_GENERATED_VALUE
@@ -288,7 +290,7 @@ func buildTPMSAttest(nonce []byte) []byte {
 	buf = append(buf, 0x03)                   // sizeofSelect
 	buf = append(buf, 0x03, 0x00, 0x40)       // PCR 0,1,14
 	buf = append(buf, 0x00, 0x20)             // digest size
-	buf = append(buf, make([]byte, 32)...)    // digest
+	buf = append(buf, pcrDigest[:32]...)      // PCR digest
 
 	return buf
 }
@@ -306,6 +308,18 @@ func attestClient(t *testing.T, v *verify.Verifier, clientID string, key *rsa.Pr
 	report := buildSignedReport(t, challenge.Nonce, pcr14, key)
 	result, _ := v.VerifyReport(clientID, report)
 	return result.Result
+}
+
+// computes SHA-256 digest of selected PCR values from report buffer
+func computeTestPCRDigest(buf []byte, pcrOffset int, pcrMask uint32) []byte {
+	h := sha256.New()
+	for i := 0; i < types.PCRCount; i++ {
+		if pcrMask&(1<<uint(i)) != 0 {
+			start := pcrOffset + i*types.HashSize
+			h.Write(buf[start : start+types.HashSize])
+		}
+	}
+	return h.Sum(nil)
 }
 
 func TestHealthEndpoint(t *testing.T) {

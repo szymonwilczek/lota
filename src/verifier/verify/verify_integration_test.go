@@ -69,7 +69,9 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003) // PCR 0,1,14
 	offset += 4
 
-	attestData := createTPMSAttestWithNonce(nonce[:])
+	// compute PCR digest from values just written
+	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	attestData := createTPMSAttestWithNonce(nonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, integrationTestKey, crypto.SHA256, hash[:])
@@ -149,8 +151,8 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	return buf
 }
 
-// builds minimal TPMS_ATTEST structure
-func createTPMSAttestWithNonce(nonce []byte) []byte {
+// builds minimal TPMS_ATTEST structure with correct PCR digest
+func createTPMSAttestWithNonce(nonce []byte, pcrDigest []byte) []byte {
 	buf := make([]byte, 0, 128)
 
 	// Magic: TPM_GENERATED_VALUE
@@ -181,9 +183,21 @@ func createTPMSAttestWithNonce(nonce []byte) []byte {
 	buf = append(buf, 0x03)                   // sizeofSelect
 	buf = append(buf, 0x03, 0x00, 0x40)       // PCR 0,1,14
 	buf = append(buf, 0x00, 0x20)             // digest size
-	buf = append(buf, make([]byte, 32)...)    // PCR digest
+	buf = append(buf, pcrDigest[:32]...)      // PCR digest
 
 	return buf
+}
+
+// computes SHA-256 digest of selected PCR values from report buffer
+func computeTestPCRDigest(buf []byte, pcrOffset int, pcrMask uint32) []byte {
+	h := sha256.New()
+	for i := 0; i < types.PCRCount; i++ {
+		if pcrMask&(1<<uint(i)) != 0 {
+			start := pcrOffset + i*types.HashSize
+			h.Write(buf[start : start+types.HashSize])
+		}
+	}
+	return h.Sum(nil)
 }
 
 // encodes RSA public key in DER format
@@ -528,7 +542,9 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
 	offset += 4
 
-	attestData := createTPMSAttestWithNonce(nonce[:])
+	// compute PCR digest from values just written
+	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	attestData := createTPMSAttestWithNonce(nonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 

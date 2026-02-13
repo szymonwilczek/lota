@@ -368,6 +368,18 @@ func (v *Verifier) VerifyReport(clientID string, reportData []byte) (_ *types.Ve
 		}
 	}
 
+	// verify PCR digest binding: ensure reported PCR values match TPM-signed digest
+	if report.TPM.AttestSize > 0 {
+		attestData := report.TPM.AttestData[:report.TPM.AttestSize]
+		if err := VerifyPCRDigest(attestData, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
+			clog.Error("PCR digest verification failed", "error", err)
+			v.metrics.Rejections.Inc("pcr_fail")
+			result.Result = types.VerifyPCRFail
+			return result, fmt.Errorf("PCR digest binding failed: %w", err)
+		}
+		clog.Debug("PCR digest verified against TPM-signed attestation")
+	}
+
 	if err := v.pcrVerifier.VerifyReport(report); err != nil {
 		clog.Error("PCR verification failed", "error", err)
 		v.metrics.Rejections.Inc("pcr_fail")
