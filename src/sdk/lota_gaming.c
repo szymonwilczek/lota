@@ -359,7 +359,7 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts) {
   if (fd < 0)
     return NULL;
 
-  client = malloc(sizeof(*client));
+  client = calloc(1, sizeof(*client));
   if (!client) {
     close(fd);
     return NULL;
