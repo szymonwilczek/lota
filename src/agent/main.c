@@ -60,6 +60,20 @@
 /* Default AIK TTL */
 #define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
+/*
+ * Safe integer parser.
+ * Returns 0 on success, -1 on error (overflow, empty, trailing garbage).
+ */
+static int safe_parse_long(const char *s, long *out) {
+  char *end;
+  errno = 0;
+  long v = strtol(s, &end, 10);
+  if (errno != 0 || end == s || *end != '\0')
+    return -1;
+  *out = v;
+  return 0;
+}
+
 /* Global state */
 volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_reload = 0;
@@ -707,7 +721,14 @@ int main(int argc, char *argv[]) {
       break;
     case 'I':
       attest_flag = 1;
-      attest_interval = atoi(optarg);
+      {
+        long v;
+        if (safe_parse_long(optarg, &v) < 0 || v < 0 || v > INT_MAX) {
+          fprintf(stderr, "Invalid interval: %s\n", optarg);
+          return 1;
+        }
+        attest_interval = (int)v;
+      }
       if (attest_interval != 0 && attest_interval < MIN_ATTEST_INTERVAL) {
         fprintf(stderr,
                 "Warning: interval %d too low, using minimum %d seconds\n",
@@ -718,9 +739,14 @@ int main(int argc, char *argv[]) {
     case 's':
       server_addr = optarg;
       break;
-    case 'p':
-      server_port = atoi(optarg);
-      break;
+    case 'p': {
+      long v;
+      if (safe_parse_long(optarg, &v) < 0 || v <= 0 || v > 65535) {
+        fprintf(stderr, "Invalid port: %s\n", optarg);
+        return 1;
+      }
+      server_port = (int)v;
+    } break;
     case 'C':
       ca_cert_path = optarg;
       break;
@@ -749,7 +775,12 @@ int main(int argc, char *argv[]) {
       break;
     case 'R':
       if (g_protect_pid_count < 64) {
-        g_protect_pids[g_protect_pid_count++] = (uint32_t)atoi(optarg);
+        long v;
+        if (safe_parse_long(optarg, &v) < 0 || v <= 0 || v > UINT32_MAX) {
+          fprintf(stderr, "Invalid PID: %s\n", optarg);
+          return 1;
+        }
+        g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
       } else {
         fprintf(stderr, "Too many --protect-pid entries (max 64)\n");
       }
@@ -767,8 +798,14 @@ int main(int argc, char *argv[]) {
     case 'D':
       pid_file_path = optarg;
       break;
-    case 'T':
-      aik_ttl = (uint32_t)atoi(optarg);
+    case 'T': {
+      long v;
+      if (safe_parse_long(optarg, &v) < 0 || v < 0 || v > UINT32_MAX) {
+        fprintf(stderr, "Invalid AIK TTL: %s\n", optarg);
+        return 1;
+      }
+      aik_ttl = (uint32_t)v;
+    }
       if (aik_ttl > 0 && aik_ttl < 3600) {
         fprintf(stderr, "Warning: AIK TTL %u too low, using 3600s (1 hour)\n",
                 aik_ttl);

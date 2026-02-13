@@ -10,9 +10,20 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int safe_parse_long(const char *s, long *out) {
+  char *end;
+  errno = 0;
+  long v = strtol(s, &end, 10);
+  if (errno != 0 || end == s || *end != '\0')
+    return -1;
+  *out = v;
+  return 0;
+}
 
 /*
  * Trims leading and trailing whitespace in-place.
@@ -93,9 +104,9 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "port") == 0) {
-    int v = atoi(value);
-    if (v > 0 && v <= 65535)
-      cfg->port = v;
+    long v;
+    if (safe_parse_long(value, &v) == 0 && v > 0 && v <= 65535)
+      cfg->port = (int)v;
     return 0;
   }
   if (strcmp(key, "ca_cert") == 0 || strcmp(key, "ca-cert") == 0) {
@@ -133,11 +144,15 @@ static int apply_key(struct lota_config *cfg, const char *key,
   /* attestation */
   if (strcmp(key, "attest_interval") == 0 ||
       strcmp(key, "attest-interval") == 0) {
-    cfg->attest_interval = atoi(value);
+    long v;
+    if (safe_parse_long(value, &v) == 0 && v >= 0)
+      cfg->attest_interval = (int)v;
     return 0;
   }
   if (strcmp(key, "aik_ttl") == 0 || strcmp(key, "aik-ttl") == 0) {
-    cfg->aik_ttl = (uint32_t)atoi(value);
+    long v;
+    if (safe_parse_long(value, &v) == 0 && v >= 0 && v <= UINT32_MAX)
+      cfg->aik_ttl = (uint32_t)v;
     return 0;
   }
   if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
@@ -178,7 +193,9 @@ static int apply_key(struct lota_config *cfg, const char *key,
   }
   if (strcmp(key, "protect_pid") == 0 || strcmp(key, "protect-pid") == 0) {
     if (cfg->protect_pid_count < LOTA_CONFIG_MAX_PIDS) {
-      cfg->protect_pids[cfg->protect_pid_count++] = (uint32_t)atoi(value);
+      long v;
+      if (safe_parse_long(value, &v) == 0 && v > 0 && v <= UINT32_MAX)
+        cfg->protect_pids[cfg->protect_pid_count++] = (uint32_t)v;
     }
     return 0;
   }
