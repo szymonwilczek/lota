@@ -44,6 +44,10 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     event_type_str = "EXEC";
     has_file = 1;
     break;
+  case LOTA_EVENT_EXEC_BLOCKED:
+    event_type_str = "EXEC_BLOCKED";
+    has_file = 1;
+    break;
   case LOTA_EVENT_MODULE_LOAD:
     event_type_str = "MODULE";
     has_file = 1;

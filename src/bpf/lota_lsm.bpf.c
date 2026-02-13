@@ -83,6 +83,7 @@ struct {
 #define STAT_SETUID_EVENTS 9
 #define STAT_ANON_EXEC 10
 #define STAT_ANON_EXEC_BLOCKED 11
+#define STAT_EXEC_BLOCKED 12
 
 /*
  * Configuration map for runtime policy control.
@@ -609,14 +610,21 @@ int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
   struct lota_exec_event *event;
   struct task_struct *task;
   struct file *file;
+  struct dentry *dentry;
   u32 key = 0;
-  int err;
+  u32 mode;
+  int blocked = 0;
 
   /* dont interfere with previous hook denial */
   if (ret != 0)
     return ret;
 
   inc_stat(STAT_TOTAL_EXECS);
+
+  mode = get_mode();
+
+  if (mode == LOTA_MODE_MAINTENANCE)
+    return 0;
 
   /* scratch space for building event */
   event = bpf_map_lookup_elem(&event_scratch, &key);
@@ -628,7 +636,6 @@ int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
   __builtin_memset(event, 0, sizeof(*event));
 
   event->timestamp_ns = bpf_ktime_get_ns();
-  event->event_type = LOTA_EVENT_EXEC;
 
   /* current task info */
   task = (struct task_struct *)bpf_get_current_task();
@@ -654,24 +661,38 @@ int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
   }
 
   /*
+   * In ENFORCE mode with STRICT_EXEC enabled, block binaries from
+   * untrusted paths. Uses dentry walk since bprm_check_security is
+   * non-sleepable and bpf_d_path is not available.
+   */
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
+    dentry = file ? BPF_CORE_READ(file, f_path.dentry) : NULL;
+    if (!dentry || !is_trusted_system_path(dentry))
+      blocked = 1;
+  }
+
+  event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
+
+  /*
    * Submit event to ring buffer.
    * If ring buffer is full, event is dropped (BPF_RB_NO_WAKEUP skips
    * waking up user-space if buffer was empty - more efficient).
    */
   struct lota_exec_event *rb_event;
   rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (!rb_event) {
+  if (rb_event) {
+    __builtin_memcpy(rb_event, event, sizeof(*event));
+    bpf_ringbuf_submit(rb_event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
     inc_stat(STAT_RINGBUF_DROPS);
-    return 0;
   }
 
-  /* copy event data to ring buffer */
-  __builtin_memcpy(rb_event, event, sizeof(*event));
+  if (blocked) {
+    inc_stat(STAT_EXEC_BLOCKED);
+    return -1; /* -EPERM */
+  }
 
-  bpf_ringbuf_submit(rb_event, 0);
-  inc_stat(STAT_EVENTS_SENT);
-
-  /* Always allow execution - just monitoring */
   return 0;
 }
 

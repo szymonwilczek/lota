@@ -63,6 +63,7 @@ typedef __u64 uint64_t;
 /* Event types for ring buffer */
 enum lota_event_type {
   LOTA_EVENT_EXEC = 1,          /* Binary execution */
+  LOTA_EVENT_EXEC_BLOCKED,      /* Execution blocked by policy */
   LOTA_EVENT_MODULE_LOAD,       /* Kernel module load */
   LOTA_EVENT_MODULE_BLOCKED,    /* Module load blocked by policy */
   LOTA_EVENT_MMAP_EXEC,         /* Executable mmap (library load) */
@@ -89,6 +90,7 @@ enum lota_mode {
 #define LOTA_CFG_STRICT_MMAP 1     /* 1 = block mmap from untrusted paths */
 #define LOTA_CFG_BLOCK_PTRACE 2    /* 1 = block ptrace on protected pids */
 #define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
+#define LOTA_CFG_STRICT_EXEC 4     /* 1 = block exec from untrusted paths */
 #define LOTA_CFG_MAX_ENTRIES 8
 
 /*
