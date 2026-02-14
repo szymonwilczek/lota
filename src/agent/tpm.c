@@ -7,6 +7,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -850,7 +851,7 @@ cleanup:
  * Create directory path recursively.
  */
 static int mkdirs(const char *path, mode_t mode) {
-  char tmp[256];
+  char tmp[PATH_MAX];
   char *p;
   size_t len;
 
