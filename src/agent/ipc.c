@@ -97,6 +97,10 @@ static int check_rate_limit(uid_t uid) {
 
 /*
  * Client connection state
+ *
+ * recv_buf and send_buf are sized to hold exactly one maximum-size
+ * IPC message. The payload_len cap in handle_client_read() ensures
+ * untrusted clients cannot trigger allocations beyond these buffers.
  */
 struct ipc_client {
   int fd;
@@ -113,6 +117,10 @@ struct ipc_client {
   bool notify_pending;     /* notification queued behind current send */
   uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
 };
+
+_Static_assert(
+    LOTA_IPC_MAX_PAYLOAD <= 65536,
+    "IPC payload cap must be bounded to prevent excessive memory use");
 
 static struct ipc_client *clients[MAX_CLIENTS];
 static int client_count = 0;
@@ -585,7 +593,8 @@ static int handle_client_read(struct ipc_context *ctx,
 
   if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
     build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return 1; /* need to send response */
+    client->recv_len = 0; /* discard the malformed request */
+    return 1;             /* need to send response */
   }
 
   /* complete request? */
