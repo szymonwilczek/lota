@@ -71,7 +71,7 @@ const (
 	// PCR matches stored baseline
 	TOFUMatch
 
-	// PCR does NOT match stored baseline - TAMPERING!!!
+	// PCR does NOT match stored baseline - possible tampering
 	TOFUMismatch
 )
 

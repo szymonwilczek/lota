@@ -434,8 +434,8 @@ func TestSQLiteAIK_RotateUpdatesTimestamp(t *testing.T) {
 	store.RegisterAIK("ts-rotate", &key1.PublicKey)
 	regTime1, _ := store.GetRegisteredAt("ts-rotate")
 
-	// SQLite CURRENT_TIMESTAMP has second-level precision
-	// previosuly, i have tried to test for 50ms and this failed
+	// SQLite CURRENT_TIMESTAMP has second-level precision;
+	// sub-second sleeps cause flaky timestamp comparisons
 	time.Sleep(1100 * time.Millisecond)
 
 	store.RotateAIK("ts-rotate", &key2.PublicKey)

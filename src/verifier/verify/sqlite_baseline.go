@@ -84,7 +84,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	}
 
 	if stored != pcr14 {
-		// TAMPERING!!! - do not update
+		// PCR mismatch detected - possible tampering, do not update baseline
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       stored,
 			FirstSeen:   firstSeen,

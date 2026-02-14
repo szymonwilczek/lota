@@ -232,7 +232,7 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
     return 1;
   }
 
-  /* TPM2_RC_HANDLE means object doesnt exist! */
+  /* TPM2_RC_HANDLE means the object doesn't exist */
   if ((rc & 0xFF) == TPM2_RC_HANDLE)
     return 0;
 

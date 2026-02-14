@@ -2,8 +2,7 @@
 // LOTA Verifier - REST Monitoring API tests
 //
 // Unit tests verify individual handler behavior in isolation.
-// I'll update that description in some time to be more precise
-// about what that tests actually are doing.
+// Each test exercises a single HTTP handler with mocked dependencies.
 
 package server
 

@@ -2,7 +2,7 @@
 /*
  * LOTA Agent - Steam Runtime Detection and Container-Aware IPC
  *
- * Detects Steam Runtime pressure-vessel containers (soldier, snappy,
+ * Detects Steam Runtime pressure-vessel containers (soldier, sniper,
  * medic, heavy) and resolves socket paths that are accessible from
  * inside the container sandbox.
  *

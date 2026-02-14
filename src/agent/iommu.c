@@ -19,7 +19,7 @@
 /* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"
 
-/* Kernel log buffer size (1MB should be enough - will be tested) */
+/* Kernel log buffer size (1 MB, covers typical dmesg output) */
 #define KLOG_BUF_SIZE (1 << 20)
 
 /* klogctl actions */

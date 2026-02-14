@@ -29,7 +29,6 @@ import (
 // abstracts used nonce storage for anti-replay protection
 // memory backend is used by default; SQLite backend provides persistence
 // across verifier restarts for production deployments
-// (ill double check it in the near future)
 type UsedNonceBackend interface {
 	// stores a nonce key as used at the given time
 	Record(nonceKey string, usedAt time.Time) error

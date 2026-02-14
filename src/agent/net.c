@@ -71,9 +71,9 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 
   if (skip_verify) {
     /*
-     * INSECURE!!!: Skip all certificate verification.
+     * INSECURE: Skip all certificate verification.
      * This makes the connection vulnerable to MITM attacks.
-     * I only use this for development/testing with self-signed certs
+     * Intended only for development/testing with self-signed certs
      * when the CA certificate is not available.
      */
     fprintf(stderr,
