@@ -65,15 +65,19 @@ SystemCallFilter=bpf perf_event_open
 # block remaining privileged syscalls
 SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
 
 # no user namespace remapping (needs real root for TPM)
 PrivateUsers=no
+
+# block namespace creation (no unshare/containers)
+RestrictNamespaces=yes
 
 # protect kernel tunables (sysctl)
 ProtectKernelTunables=yes
 
 # allow module loading check (BPF monitors it)
-ProtectKernelModules=no
+ProtectKernelModules=yes
 
 # allow reading kernel logs (for event correlation)
 ProtectKernelLogs=no
