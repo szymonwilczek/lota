@@ -343,7 +343,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    * Verifier can compare this against known-good agent hashes.
    */
   {
-    char agent_path[256];
+    char agent_path[PATH_MAX];
     ssize_t len =
         readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
     if (len > 0) {
