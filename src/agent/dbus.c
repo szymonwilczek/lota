@@ -230,7 +230,7 @@ struct dbus_context *dbus_init(struct ipc_context *ipc) {
 
   ret = sd_bus_open_system(&ctx->bus);
   if (ret < 0) {
-    fprintf(stderr, "D-Bus: failed to open system bus: %s\n", strerror(-ret));
+    lota_err("D-Bus: failed to open system bus: %s", strerror(-ret));
     free(ctx);
     return NULL;
   }
@@ -238,7 +238,7 @@ struct dbus_context *dbus_init(struct ipc_context *ipc) {
   ret = sd_bus_add_object_vtable(ctx->bus, &ctx->slot, LOTA_DBUS_OBJECT_PATH,
                                  LOTA_DBUS_INTERFACE, agent_vtable, ctx);
   if (ret < 0) {
-    fprintf(stderr, "D-Bus: failed to register vtable: %s\n", strerror(-ret));
+    lota_err("D-Bus: failed to register vtable: %s", strerror(-ret));
     sd_bus_unref(ctx->bus);
     free(ctx);
     return NULL;
@@ -247,8 +247,8 @@ struct dbus_context *dbus_init(struct ipc_context *ipc) {
   ret = sd_bus_request_name(ctx->bus, LOTA_DBUS_BUS_NAME,
                             SD_BUS_NAME_REPLACE_EXISTING);
   if (ret < 0) {
-    fprintf(stderr, "D-Bus: failed to claim %s: %s\n", LOTA_DBUS_BUS_NAME,
-            strerror(-ret));
+    lota_err("D-Bus: failed to claim %s: %s", LOTA_DBUS_BUS_NAME,
+             strerror(-ret));
     sd_bus_slot_unref(ctx->slot);
     sd_bus_unref(ctx->bus);
     free(ctx);
@@ -274,7 +274,7 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us) {
   for (;;) {
     ret = sd_bus_process(ctx->bus, NULL);
     if (ret < 0) {
-      fprintf(stderr, "D-Bus: process error: %s\n", strerror(-ret));
+      lota_err("D-Bus: process error: %s", strerror(-ret));
       return ret;
     }
     if (ret == 0)

@@ -8,6 +8,7 @@
  */
 
 #include "net.h"
+#include "journal.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -90,15 +91,14 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
      * Intended only for development/testing with self-signed certs
      * when the CA certificate is not available.
      */
-    fprintf(stderr,
-            "WARNING: TLS certificate verification DISABLED (--no-verify-tls)\n"
-            "WARNING: Connection is vulnerable to MITM attacks!\n"
-            "WARNING: Do NOT use in production.\n");
+    lota_warn("TLS certificate verification DISABLED (--no-verify-tls)");
+    lota_warn("Connection is vulnerable to MITM attacks!");
+    lota_warn("Do NOT use in production.");
     SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
   } else if (ca_cert_path) {
     /* custom CA certificate provided */
     if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path, NULL) != 1) {
-      fprintf(stderr, "Failed to load CA certificate: %s\n", ca_cert_path);
+      lota_err("Failed to load CA certificate: %s", ca_cert_path);
       SSL_CTX_free(ssl_ctx);
       return -EINVAL;
     }
@@ -109,9 +109,9 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
      * This verifies the verifier's certificate against trusted system CAs.
      */
     if (SSL_CTX_set_default_verify_paths(ssl_ctx) != 1) {
-      fprintf(stderr, "Failed to load system CA certificates.\n"
-                      "Use --ca-cert to specify verifier's CA certificate,\n"
-                      "or --no-verify-tls for testing (INSECURE).\n");
+      lota_err("Failed to load system CA certificates. "
+               "Use --ca-cert to specify verifier's CA certificate, "
+               "or --no-verify-tls for testing (INSECURE).");
       SSL_CTX_free(ssl_ctx);
       return -ENOENT;
     }
@@ -201,8 +201,7 @@ int net_connect(struct net_context *ctx) {
    */
   if (!ctx->skip_verify) {
     if (SSL_set1_host(ssl, ctx->server_addr) != 1) {
-      fprintf(stderr, "Failed to set hostname verification for: %s\n",
-              ctx->server_addr);
+      lota_err("Failed to set hostname verification for: %s", ctx->server_addr);
       SSL_free(ssl);
       close(sock);
       ctx->socket_fd = -1;
@@ -217,10 +216,9 @@ int net_connect(struct net_context *ctx) {
     unsigned long err_code = ERR_peek_last_error();
 
     if (ssl_err == SSL_ERROR_SSL) {
-      fprintf(stderr, "TLS handshake failed: %s\n",
-              ERR_reason_error_string(err_code));
+      lota_err("TLS handshake failed: %s", ERR_reason_error_string(err_code));
     } else {
-      fprintf(stderr, "TLS handshake failed (SSL_ERROR=%d)\n", ssl_err);
+      lota_err("TLS handshake failed (SSL_ERROR=%d)", ssl_err);
     }
 
     SSL_free(ssl);
@@ -235,11 +233,9 @@ int net_connect(struct net_context *ctx) {
   if (!ctx->skip_verify) {
     long verify_result = SSL_get_verify_result(ssl);
     if (verify_result != X509_V_OK) {
-      fprintf(stderr,
-              "TLS certificate verification failed: %s (code %ld)\n"
-              "Use --ca-cert to specify the verifier's CA certificate,\n"
-              "or --no-verify-tls for testing (INSECURE).\n",
-              X509_verify_cert_error_string(verify_result), verify_result);
+      lota_err("TLS certificate verification failed: %s (code %ld). "
+               "Use --ca-cert or --no-verify-tls for testing",
+               X509_verify_cert_error_string(verify_result), verify_result);
       SSL_shutdown(ssl);
       SSL_free(ssl);
       close(sock);
@@ -250,7 +246,7 @@ int net_connect(struct net_context *ctx) {
     /* verify server presented a certificate */
     X509 *peer_cert = SSL_get1_peer_certificate(ssl);
     if (!peer_cert) {
-      fprintf(stderr, "Verifier did not present a TLS certificate\n");
+      lota_err("Verifier did not present a TLS certificate");
       SSL_shutdown(ssl);
       SSL_free(ssl);
       close(sock);
@@ -267,8 +263,7 @@ int net_connect(struct net_context *ctx) {
   if (ctx->has_pin) {
     X509 *peer_cert = SSL_get1_peer_certificate(ssl);
     if (!peer_cert) {
-      fprintf(stderr,
-              "Certificate pinning failed: server presented no certificate\n");
+      lota_err("Certificate pinning failed: server presented no certificate");
       SSL_shutdown(ssl);
       SSL_free(ssl);
       close(sock);
@@ -281,8 +276,8 @@ int net_connect(struct net_context *ctx) {
 
     if (X509_digest(peer_cert, EVP_sha256(), digest, &digest_len) != 1 ||
         digest_len != NET_PIN_SHA256_LEN) {
-      fprintf(stderr, "Certificate pinning failed: unable to compute "
-                      "SHA-256 fingerprint\n");
+      lota_err(
+          "Certificate pinning failed: unable to compute SHA-256 fingerprint");
       X509_free(peer_cert);
       SSL_shutdown(ssl);
       SSL_free(ssl);
@@ -297,18 +292,18 @@ int net_connect(struct net_context *ctx) {
      * CRYPTO_memcmp returns 0 on match.
      */
     if (CRYPTO_memcmp(digest, ctx->pin_sha256, NET_PIN_SHA256_LEN) != 0) {
-      fprintf(stderr, "SECURITY: Certificate pinning FAILED!\n"
-                      "  Expected: ");
-      for (int i = 0; i < NET_PIN_SHA256_LEN; i++)
-        fprintf(stderr, "%02x", ctx->pin_sha256[i]);
-      fprintf(stderr, "\n  Got:      ");
-      for (int i = 0; i < NET_PIN_SHA256_LEN; i++)
-        fprintf(stderr, "%02x", digest[i]);
-      fprintf(stderr, "\n"
-                      "  The verifier's certificate does not match the "
-                      "pinned fingerprint.\n"
-                      "  This may indicate a MITM attack or certificate "
-                      "rotation.\n");
+      {
+        char expected_hex[NET_PIN_SHA256_LEN * 2 + 1];
+        char got_hex[NET_PIN_SHA256_LEN * 2 + 1];
+        for (int i = 0; i < NET_PIN_SHA256_LEN; i++) {
+          snprintf(expected_hex + i * 2, 3, "%02x", ctx->pin_sha256[i]);
+          snprintf(got_hex + i * 2, 3, "%02x", digest[i]);
+        }
+        lota_err("SECURITY: Certificate pinning FAILED! "
+                 "Expected: %s Got: %s "
+                 "This may indicate a MITM attack or certificate rotation.",
+                 expected_hex, got_hex);
+      }
       SSL_shutdown(ssl);
       SSL_free(ssl);
       close(sock);

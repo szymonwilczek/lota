@@ -16,6 +16,7 @@
 
 #include "../../include/lota.h"
 #include "bpf_loader.h"
+#include "journal.h"
 
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
@@ -37,7 +38,16 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
   if (level == LIBBPF_DEBUG)
     return 0;
 
-  return vfprintf(stderr, format, args);
+  char buf[512];
+  int n = vsnprintf(buf, sizeof(buf), format, args);
+
+  if (n > 0 && buf[n - 1] == '\n')
+    buf[n - 1] = '\0';
+  if (level == LIBBPF_WARN)
+    lota_warn("libbpf: %s", buf);
+  else
+    lota_err("libbpf: %s", buf);
+  return n;
 }
 
 int bpf_loader_init(struct bpf_loader_ctx *ctx) {
@@ -66,13 +76,13 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   ctx->obj = bpf_object__open_file(bpf_obj_path, NULL);
   if (!ctx->obj) {
     err = -errno;
-    fprintf(stderr, "Failed to open BPF object: %s\n", bpf_obj_path);
+    lota_err("Failed to open BPF object: %s", bpf_obj_path);
     return err;
   }
 
   err = bpf_object__load(ctx->obj);
   if (err) {
-    fprintf(stderr, "Failed to load BPF object: %d\n", err);
+    lota_err("Failed to load BPF object: %d", err);
     goto err_close;
   }
 
@@ -86,28 +96,27 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
     link = bpf_program__attach(prog);
     if (!link) {
       err = -errno;
-      fprintf(stderr, "Failed to attach program %s: %d\n",
-              bpf_program__name(prog), err);
+      lota_err("Failed to attach program %s: %d", bpf_program__name(prog), err);
       goto err_close;
     }
 
     if (ctx->link_count < BPF_MAX_LSM_LINKS) {
       ctx->links[ctx->link_count++] = link;
     } else {
-      fprintf(stderr, "Too many LSM programs, increase BPF_MAX_LSM_LINKS\n");
+      lota_err("Too many LSM programs, increase BPF_MAX_LSM_LINKS");
       bpf_link__destroy(link);
       err = -E2BIG;
       goto err_close;
     }
 
-    fprintf(stderr, "Attached LSM program: %s\n", bpf_program__name(prog));
+    lota_info("Attached LSM program: %s", bpf_program__name(prog));
   }
 
   /* Get ring buffer map fd */
   ctx->ringbuf_fd = bpf_object__find_map_fd_by_name(ctx->obj, "events");
   if (ctx->ringbuf_fd < 0) {
     err = ctx->ringbuf_fd;
-    fprintf(stderr, "Failed to find events map\n");
+    lota_err("Failed to find events map");
     goto err_close;
   }
 
@@ -160,7 +169,7 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
   ctx->ringbuf = ring_buffer__new(
       ctx->ringbuf_fd, (ring_buffer_sample_fn)handler, handler_ctx, NULL);
   if (!ctx->ringbuf) {
-    fprintf(stderr, "Failed to create ring buffer\n");
+    lota_err("Failed to create ring buffer");
     return -errno;
   }
 

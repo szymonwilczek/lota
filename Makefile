@@ -280,8 +280,8 @@ $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto
+$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
