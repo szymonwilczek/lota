@@ -10,6 +10,7 @@
 #include "agent.h"
 #include "event.h"
 #include "hash_verify.h"
+#include "journal.h"
 
 /*
  * Format SHA-256 hex string into buffer.
@@ -66,20 +67,22 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     break;
   case LOTA_EVENT_PTRACE:
     event_type_str = "PTRACE";
-    printf("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)\n",
-           (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
-           event->target_pid, event->filename, event->pid, event->uid);
+    lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
+              (unsigned long long)event->timestamp_ns, event_type_str,
+              event->comm, event->target_pid, event->filename, event->pid,
+              event->uid);
     return 0;
   case LOTA_EVENT_PTRACE_BLOCKED:
     event_type_str = "PTRACE_BLOCKED";
-    printf("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)\n",
-           (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
-           event->target_pid, event->filename, event->pid, event->uid);
+    lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
+              (unsigned long long)event->timestamp_ns, event_type_str,
+              event->comm, event->target_pid, event->filename, event->pid,
+              event->uid);
     return 0;
   case LOTA_EVENT_SETUID:
-    printf("[%llu] SETUID %s: uid %u -> %u (pid=%u)\n",
-           (unsigned long long)event->timestamp_ns, event->comm, event->uid,
-           event->target_uid, event->pid);
+    lota_info("[%llu] SETUID %s: uid %u -> %u (pid=%u)",
+              (unsigned long long)event->timestamp_ns, event->comm, event->uid,
+              event->target_uid, event->pid);
     return 0;
   case LOTA_EVENT_ANON_EXEC:
     event_type_str = "ANON_EXEC";
@@ -101,17 +104,17 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     hash_ret = hash_verify_event(&g_hash_ctx, event, content_hash);
     if (hash_ret == 0) {
       format_sha256(content_hash, hash_hex);
-      printf("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)\n",
-             (unsigned long long)event->timestamp_ns, event_type_str,
-             event->comm, event->filename, hash_hex, event->pid, event->uid);
+      lota_info("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)",
+                (unsigned long long)event->timestamp_ns, event_type_str,
+                event->comm, event->filename, hash_hex, event->pid, event->uid);
       return 0;
     }
     /* hash failed -> fall through to log without hash */
   }
 
-  printf("[%llu] %s %s: %s (pid=%u, uid=%u)\n",
-         (unsigned long long)event->timestamp_ns, event_type_str, event->comm,
-         event->filename, event->pid, event->uid);
+  lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
+            (unsigned long long)event->timestamp_ns, event_type_str,
+            event->comm, event->filename, event->pid, event->uid);
 
   return 0;
 }
