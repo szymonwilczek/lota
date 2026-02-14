@@ -19,11 +19,12 @@
 /* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"
 
-/* Kernel log buffer size (1 MB, covers typical dmesg output) */
-#define KLOG_BUF_SIZE (1 << 20)
-
 /* klogctl actions */
+#define SYSLOG_ACTION_SIZE_BUFFER 10
 #define SYSLOG_ACTION_READ_ALL 3
+
+/* upper bound for kernel log buffer allocation */
+#define KLOG_MAX_SIZE (1 << 22) /* 4 MB */
 
 int iommu_check_sysfs(struct iommu_status *status) {
   DIR *dir;
@@ -132,11 +133,18 @@ int iommu_check_cmdline(struct iommu_status *status) {
 int iommu_check_dmesg(struct iommu_status *status) {
   char *log;
   int len;
+  int buf_size;
 
   if (!status)
     return -1;
 
-  log = malloc(KLOG_BUF_SIZE);
+  buf_size = klogctl(SYSLOG_ACTION_SIZE_BUFFER, NULL, 0);
+  if (buf_size <= 0)
+    return -1;
+  if (buf_size > KLOG_MAX_SIZE)
+    buf_size = KLOG_MAX_SIZE;
+
+  log = malloc((size_t)buf_size);
   if (!log)
     return -1;
 
@@ -144,16 +152,16 @@ int iommu_check_dmesg(struct iommu_status *status) {
    * Read kernel ring buffer using klogctl syscall.
    * Requires CAP_SYSLOG capability or root.
    */
-  len = klogctl(SYSLOG_ACTION_READ_ALL, log, KLOG_BUF_SIZE);
+  len = klogctl(SYSLOG_ACTION_READ_ALL, log, buf_size);
   if (len < 0) {
     free(log);
     return -1;
   }
 
-  if (len < KLOG_BUF_SIZE)
+  if (len < buf_size)
     log[len] = '\0';
   else
-    log[KLOG_BUF_SIZE - 1] = '\0';
+    log[buf_size - 1] = '\0';
 
   /*
    * Intel VT-d indicators in dmesg:
