@@ -293,7 +293,7 @@ func generateTestCert() error {
 	}
 
 	// write private key
-	keyFile, err := os.Create("lota-verifier.key")
+	keyFile, err := os.OpenFile("lota-verifier.key", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
