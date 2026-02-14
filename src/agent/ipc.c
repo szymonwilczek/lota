@@ -81,18 +81,16 @@ static int check_rate_limit(uid_t uid) {
     return 0;
   }
 
-  /* table full - evict oldest expired entry, or reject */
-  for (int i = 0; i < rate_count; i++) {
-    if (now - rate_table[i].window_start >= TOKEN_RATE_WINDOW_SEC) {
-      rate_table[i].uid = uid;
-      rate_table[i].count = 1;
-      rate_table[i].window_start = now;
-      return 0;
-    }
+  /* table full - LRU */
+  int oldest = 0;
+  for (int i = 1; i < rate_count; i++) {
+    if (rate_table[i].window_start < rate_table[oldest].window_start)
+      oldest = i;
   }
-
-  /* all slots active and not expired - deny to prevent bypass */
-  return -1;
+  rate_table[oldest].uid = uid;
+  rate_table[oldest].count = 1;
+  rate_table[oldest].window_start = now;
+  return 0;
 }
 
 /*
