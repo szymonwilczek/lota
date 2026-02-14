@@ -110,6 +110,9 @@ type NonceStore struct {
 	maxPending       int           // max outstanding challenges per client
 	rateLimitWindow  time.Duration // rate limit window duration
 	rateLimitMax     int           // max challenges per window
+
+	// stop channel for cleanupLoop goroutine
+	stopCh chan struct{}
 }
 
 type nonceEntry struct {
@@ -176,6 +179,7 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 		maxPending:       cfg.MaxPendingPerClient,
 		rateLimitWindow:  cfg.RateLimitWindow,
 		rateLimitMax:     cfg.RateLimitMax,
+		stopCh:           make(chan struct{}),
 	}
 
 	go ns.cleanupLoop()
@@ -339,13 +343,23 @@ func (ns *NonceStore) checkRateLimit(clientID string) error {
 	return nil
 }
 
+// stops the background cleanup goroutine
+func (ns *NonceStore) Close() {
+	close(ns.stopCh)
+}
+
 // periodically removes expired nonces
 func (ns *NonceStore) cleanupLoop() {
 	ticker := time.NewTicker(ns.lifetime / 2)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		ns.cleanup()
+	for {
+		select {
+		case <-ticker.C:
+			ns.cleanup()
+		case <-ns.stopCh:
+			return
+		}
 	}
 }
 

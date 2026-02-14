@@ -231,6 +231,8 @@ func (s *Server) startHTTP() error {
 func (s *Server) Stop() {
 	close(s.shutdownCh)
 
+	s.verifier.Close()
+
 	// graceful HTTP shutdown
 	if s.httpServer != nil {
 		s.httpServer.Close()

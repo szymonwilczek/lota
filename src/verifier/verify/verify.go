@@ -143,6 +143,12 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	}
 }
 
+// releases resources held by the Verifier, including the
+// background cleanup goroutine in the nonce store
+func (v *Verifier) Close() {
+	v.nonceStore.Close()
+}
+
 // creates a challenge for client attestation
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
 	// PCR selection: 0 (SRTM), 1 (BIOS config), 14 (LOTA self)
