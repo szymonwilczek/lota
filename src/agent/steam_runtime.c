@@ -16,6 +16,7 @@
  */
 
 #include "steam_runtime.h"
+#include "journal.h"
 
 #include <errno.h>
 #include <grp.h>
@@ -274,8 +275,8 @@ int steam_runtime_ensure_socket_dir(const char *dir) {
   struct group *grp = getgrnam(LOTA_GROUP_NAME);
   if (grp) {
     if (chown(dir, 0, grp->gr_gid) < 0)
-      fprintf(stderr, "steam_runtime: chown(%s, 0, %d): %s\n", dir, grp->gr_gid,
-              strerror(errno));
+      lota_warn("steam_runtime: chown(%s, 0, %d): %s", dir, grp->gr_gid,
+                strerror(errno));
   }
 
   return 0;
@@ -285,17 +286,9 @@ void steam_runtime_log_info(const struct steam_runtime_info *info) {
   if (!info)
     return;
 
-  fprintf(stderr, "steam_runtime: type=%s flags=0x%x",
-          steam_runtime_type_str(info->type), info->env_flags);
-
-  if (info->app_id)
-    fprintf(stderr, " app_id=%u", info->app_id);
-
-  if (info->container_id[0])
-    fprintf(stderr, " container=%s", info->container_id);
-
-  if (info->container_socket_path[0])
-    fprintf(stderr, " socket=%s", info->container_socket_path);
-
-  fprintf(stderr, "\n");
+  lota_info(
+      "steam_runtime: type=%s flags=0x%x app_id=%u container=%s socket=%s",
+      steam_runtime_type_str(info->type), info->env_flags, info->app_id,
+      info->container_id[0] ? info->container_id : "(none)",
+      info->container_socket_path[0] ? info->container_socket_path : "(none)");
 }

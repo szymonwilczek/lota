@@ -478,25 +478,18 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   if (bpf_loader_get_extended_stats(&g_bpf_ctx, &total, &sent, &errs, &drops,
                                     &mblocked, &mmexec, &mmblock, &ptratt,
                                     &ptrblk, &setuid_ev) == 0) {
-    printf("\n=== Statistics ===\n");
-    printf("Total executions: %lu\n", total);
-    printf("Events sent: %lu\n", sent);
-    printf("Errors: %lu\n", errs);
-    printf("Ring buffer drops: %lu\n", drops);
-    printf("Modules blocked: %lu\n", mblocked);
-    printf("Executable mmaps: %lu\n", mmexec);
-    printf("Mmaps blocked: %lu\n", mmblock);
-    printf("Ptrace attempts: %lu\n", ptratt);
-    printf("Ptrace blocked: %lu\n", ptrblk);
-    printf("Setuid transitions: %lu\n", setuid_ev);
+    lota_info("Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
+              "mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
+              "ptrace=%lu ptrace_blocked=%lu setuid=%lu",
+              total, sent, errs, drops, mblocked, mmexec, mmblock, ptratt,
+              ptrblk, setuid_ev);
   }
 
   {
     uint64_t h_hits, h_misses, h_errors;
     hash_verify_stats(&g_hash_ctx, &h_hits, &h_misses, &h_errors);
-    printf("Hash cache hits: %lu\n", h_hits);
-    printf("Hash cache misses: %lu\n", h_misses);
-    printf("Hash errors: %lu\n", h_errors);
+    lota_info("Hash cache: hits=%lu misses=%lu errors=%lu", h_hits, h_misses,
+              h_errors);
   }
 
 cleanup_bpf:
