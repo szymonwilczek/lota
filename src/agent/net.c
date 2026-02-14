@@ -27,6 +27,16 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
+/*
+ * Wire-format size assertions.
+ * Protocol sends these structures as flat byte arrays; any compiler
+ * padding would silently break the protocol
+ */
+_Static_assert(sizeof(struct verifier_challenge) == 48,
+               "verifier_challenge must be 48 bytes on wire");
+_Static_assert(sizeof(struct verifier_result) == 56,
+               "verifier_result must be 56 bytes on wire");
+
 static int ssl_initialized = 0;
 
 int net_init(void) {
@@ -333,7 +343,7 @@ void net_disconnect(struct net_context *ctx) {
 
 int net_recv_challenge(struct net_context *ctx,
                        struct verifier_challenge *challenge) {
-  uint8_t buf[48];
+  uint8_t buf[sizeof(struct verifier_challenge)];
   int ret;
   int total = 0;
 
@@ -389,7 +399,7 @@ int net_send_report(struct net_context *ctx, const void *report,
 }
 
 int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
-  uint8_t buf[56];
+  uint8_t buf[sizeof(struct verifier_result)];
   int ret;
   int total = 0;
 
