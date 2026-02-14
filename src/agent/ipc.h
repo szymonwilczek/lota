@@ -125,7 +125,7 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
  *
  * When TPM context is set, GET_TOKEN will generate fresh
  * TPM quotes signed by the AIK. Without TPM context,
- * GET_TOKEN returns unsigned tokens (for testing only!).
+ * GET_TOKEN returns unsigned tokens for development/testing.
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
                  uint32_t pcr_mask);

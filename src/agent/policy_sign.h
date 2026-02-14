@@ -65,7 +65,9 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
                        const char *sig_path);
 
 /*
- * policy_sign_buffer - Sign a buffer with Ed25519 (for testing!)
+ * policy_sign_buffer - Sign a buffer with Ed25519
+ *
+ * Primarily used in unit tests to generate test signatures.
  *
  * @data:             Data to sign
  * @data_len:         Length of data
@@ -78,7 +80,9 @@ int policy_sign_buffer(const uint8_t *data, size_t data_len,
                        const char *privkey_pem_path, uint8_t *sig_out);
 
 /*
- * policy_verify_buffer - Verify Ed25519 signature on buffer (for testing!)
+ * policy_verify_buffer - Verify Ed25519 signature on buffer
+ *
+ * Primarily used in unit tests to verify test signatures.
  *
  * @data:             Data that was signed
  * @data_len:         Length of data
