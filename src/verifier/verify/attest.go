@@ -133,8 +133,10 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 		return nil, fmt.Errorf("failed to read PCR selection count: %w", err)
 	}
 
-	// each is: hash alg (2) + sizeofSelect (1) + select bytes
-	pcrSelectStart := r.Len()
+	// reconstruct the raw TPML_PCR_SELECTION bytes for signature verification
+	var pcrSelectBuf bytes.Buffer
+	binary.Write(&pcrSelectBuf, binary.BigEndian, count)
+
 	for i := uint32(0); i < count; i++ {
 		var hashAlg uint16
 		var sizeOfSelect uint8
@@ -144,17 +146,16 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 		if err := binary.Read(r, binary.BigEndian, &sizeOfSelect); err != nil {
 			return nil, err
 		}
-		// skip select bytes
 		selectBytes := make([]byte, sizeOfSelect)
 		if _, err := r.Read(selectBytes); err != nil {
 			return nil, err
 		}
-	}
-	pcrSelectEnd := r.Len()
 
-	pcrSelectLen := pcrSelectStart - pcrSelectEnd + 4 // +4 for count
-	qi.PCRSelect = make([]byte, pcrSelectLen)
-	// IMPORTANT: For now, just note the selection was parsed
+		binary.Write(&pcrSelectBuf, binary.BigEndian, hashAlg)
+		pcrSelectBuf.WriteByte(sizeOfSelect)
+		pcrSelectBuf.Write(selectBytes)
+	}
+	qi.PCRSelect = pcrSelectBuf.Bytes()
 
 	// PCR digest (TPM2B_DIGEST: 2 bytes size + data)
 	var digestSize uint16
