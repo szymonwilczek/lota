@@ -354,25 +354,26 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (len < LOTA_AC_HEADER_SIZE)
     return -EPROTO;
 
-  const struct lota_ac_heartbeat_wire *hdr =
-      (const struct lota_ac_heartbeat_wire *)data;
+  /* memcpy to avoid unaligned access on packed struct */
+  struct lota_ac_heartbeat_wire hdr;
+  memcpy(&hdr, data, LOTA_AC_HEADER_SIZE);
 
-  if (hdr->magic != LOTA_AC_MAGIC)
+  if (hdr.magic != LOTA_AC_MAGIC)
     return -EPROTO;
-  if (hdr->version != LOTA_AC_VERSION)
+  if (hdr.version != LOTA_AC_VERSION)
     return -EPROTO;
-  if (hdr->total_size > len)
+  if (hdr.total_size > len)
     return -EPROTO;
-  if (hdr->total_size != LOTA_AC_HEADER_SIZE + hdr->token_size)
+  if (hdr.total_size != LOTA_AC_HEADER_SIZE + hdr.token_size)
     return -EPROTO;
-  if (hdr->token_size == 0 || hdr->token_size > LOTA_AC_MAX_TOKEN)
+  if (hdr.token_size == 0 || hdr.token_size > LOTA_AC_MAX_TOKEN)
     return -EPROTO;
-  if (hdr->provider != LOTA_AC_PROVIDER_EAC &&
-      hdr->provider != LOTA_AC_PROVIDER_BATTLEYE)
+  if (hdr.provider != LOTA_AC_PROVIDER_EAC &&
+      hdr.provider != LOTA_AC_PROVIDER_BATTLEYE)
     return -EPROTO;
 
   const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
-  uint16_t token_size = hdr->token_size;
+  uint16_t token_size = hdr.token_size;
 
   struct lota_server_claims claims;
   int ret;
@@ -386,12 +387,12 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (ret != LOTA_SERVER_OK)
     return ret;
 
-  info->provider = (enum lota_ac_provider)hdr->provider;
-  memcpy(info->session_id, hdr->session_id, LOTA_AC_SESSION_ID_SIZE);
+  info->provider = (enum lota_ac_provider)hdr.provider;
+  memcpy(info->session_id, hdr.session_id, LOTA_AC_SESSION_ID_SIZE);
   info->session_start = 0; /* not available from a single heartbeat */
-  info->last_heartbeat = hdr->timestamp;
-  info->heartbeat_seq = hdr->sequence;
-  info->lota_flags = hdr->lota_flags;
+  info->last_heartbeat = hdr.timestamp;
+  info->heartbeat_seq = hdr.sequence;
+  info->lota_flags = hdr.lota_flags;
   info->trusted = !claims.expired && !claims.too_old && (claims.flags != 0);
   info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 
