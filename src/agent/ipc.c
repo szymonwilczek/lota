@@ -146,8 +146,10 @@ static int ensure_socket_dir(void) {
 
   /* set socket directory group to 'lota' if the group exists */
   struct group *grp = getgrnam(LOTA_GROUP_NAME);
-  if (grp)
-    chown(SOCKET_DIR, 0, grp->gr_gid);
+  if (grp) {
+    if (chown(SOCKET_DIR, 0, grp->gr_gid) < 0)
+      lota_warn("chown(%s) failed: %s", SOCKET_DIR, strerror(errno));
+  }
 
   return 0;
 }
@@ -1078,8 +1080,10 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
   chmod(socket_path, 0660);
   {
     struct group *grp = getgrnam(LOTA_GROUP_NAME);
-    if (grp)
-      chown(socket_path, 0, grp->gr_gid);
+    if (grp) {
+      if (chown(socket_path, 0, grp->gr_gid) < 0)
+        lota_warn("chown(%s) failed: %s", socket_path, strerror(errno));
+    }
   }
 
   if (listen(fd, 16) < 0) {

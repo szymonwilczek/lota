@@ -44,9 +44,17 @@ SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong
+CFLAGS += -D_FORTIFY_SOURCE=2
+CFLAGS += -fPIE
+CFLAGS += -Wformat -Wformat-security
 
-# Libraries for agent
-LDFLAGS := -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd
+# Linker hardening
+HARDENING_LDFLAGS := -Wl,-z,relro,-z,now
+
+# Agent link flags
+LDFLAGS := -pie $(HARDENING_LDFLAGS)
+LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd
 
 # BPF compilation flags
 # -target bpf: Generate BPF bytecode
@@ -127,7 +135,7 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 
 # build SDK shared library
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -o $@ $^
+	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^
 	@echo "Built: $@"
 
 # build SDK static library
@@ -137,7 +145,7 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 
 # build server SDK shared library
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -o $@ $^ -lcrypto
+	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 # build server SDK static library
@@ -147,12 +155,12 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 
 # build Wine/Proton hook (self-contained: includes gaming SDK)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -o $@ $^ -lpthread
+	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
 	@echo "Built: $@"
 
 # build anti-cheat compatibility layer (includes gaming + server SDK)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -o $@ $^ -lcrypto
+	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 # build bpf program
