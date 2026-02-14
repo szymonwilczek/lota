@@ -14,6 +14,7 @@
 #include <netdb.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <openssl/err.h>
@@ -22,6 +23,9 @@
 #include <openssl/x509v3.h>
 
 #include "../../include/attestation.h"
+
+/* TLS socket I/O timeout */
+#define NET_IO_TIMEOUT_SEC 30
 
 static int ssl_initialized = 0;
 
@@ -164,6 +168,12 @@ int net_connect(struct net_context *ctx) {
   }
 
   ctx->socket_fd = sock;
+
+  {
+    struct timeval tv = {.tv_sec = NET_IO_TIMEOUT_SEC, .tv_usec = 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  }
 
   ssl = SSL_new((SSL_CTX *)ctx->ssl_ctx);
   if (!ssl) {
