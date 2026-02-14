@@ -9,6 +9,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "ipc.h"
+#include "journal.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -254,7 +255,7 @@ struct dbus_context *dbus_init(struct ipc_context *ipc) {
     return NULL;
   }
 
-  printf("D-Bus: registered %s on system bus\n", LOTA_DBUS_BUS_NAME);
+  lota_info("D-Bus: registered %s on system bus", LOTA_DBUS_BUS_NAME);
   return ctx;
 }
 
@@ -336,5 +337,5 @@ void dbus_cleanup(struct dbus_context *ctx) {
   }
 
   free(ctx);
-  printf("D-Bus: cleaned up\n");
+  lota_info("D-Bus: cleaned up");
 }
