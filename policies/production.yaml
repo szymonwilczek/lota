@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
 # LOTA PCR Policy - Production Template
 #
-# Template for production deployments. You MUST customize the PCR values
-# and hash lists for your specific environment before use.
+# WARNING: This file ships with empty PCR and hash lists.
+# It will NOT verify any measurements until you fill in real values.
+# Run 'sudo lota-agent --export-policy' to generate a complete policy
+# from your live system.
 #
 # How to collect values:
 #   Full policy:   sudo lota-agent --export-policy > my-policy.yaml
