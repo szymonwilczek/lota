@@ -52,7 +52,7 @@ static void setup_tmp_dir(void) {
 static void cleanup_tmp_dir(void) {
   char cmd[512];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
-  (void)system(cmd);
+  int ret = system(cmd); (void)ret;
 }
 
 static void test_pidfile_create_remove(void) {

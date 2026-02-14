@@ -52,7 +52,7 @@ static void setup_tmp_dir(void) {
 static void cleanup_tmp_dir(void) {
   char cmd[256];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
-  (void)system(cmd);
+  int ret = system(cmd); (void)ret;
 }
 
 /*
@@ -184,7 +184,7 @@ static void test_metadata_bad_magic(void) {
     FAIL("cannot create test file");
     return;
   }
-  (void)write(fd, &bad, sizeof(bad));
+  { ssize_t wr_ = write(fd, &bad, sizeof(bad)); (void)wr_; }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);
@@ -220,7 +220,7 @@ static void test_metadata_bad_version(void) {
     FAIL("cannot create test file");
     return;
   }
-  (void)write(fd, &bad, sizeof(bad));
+  { ssize_t wr_ = write(fd, &bad, sizeof(bad)); (void)wr_; }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);
@@ -538,7 +538,7 @@ static void test_metadata_truncated(void) {
     return;
   }
   /* write only 8 bytes, far less than sizeof(aik_metadata) */
-  (void)write(fd, "AIKM\x01\x00\x00\x00", 8);
+  { ssize_t wr_ = write(fd, "AIKM\x01\x00\x00\x00", 8); (void)wr_; }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);

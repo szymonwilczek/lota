@@ -260,7 +260,7 @@ $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_ver
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 	@echo "Built: $@"
 
@@ -268,8 +268,8 @@ $(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGE
 	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
+$(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)

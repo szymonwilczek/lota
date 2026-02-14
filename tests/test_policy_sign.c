@@ -55,7 +55,7 @@ static void setup_tmpdir(void) {
 static void cleanup_tmpdir(void) {
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  int ret = system(cmd); (void)ret;
 }
 
 static void make_paths(const char *base, char *priv, char *pub, size_t len) {
