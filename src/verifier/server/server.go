@@ -36,6 +36,7 @@ type Server struct {
 	addr       string
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
+	connSem    chan struct{} // limits concurrent connections
 
 	// http monitoring api
 	httpServer   *http.Server
@@ -87,14 +88,18 @@ type ServerConfig struct {
 	// timeouts
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// max concurrent attestation connections (0 = unlimited)
+	MaxConnections int
 }
 
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
-		Address:      ":8443",
-		HTTPAddress:  "",
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Address:        ":8443",
+		HTTPAddress:    "",
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxConnections: 256,
 	}
 }
 
@@ -120,7 +125,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		m = metrics.New()
 	}
 
-	return &Server{
+	s := &Server{
 		verifier:       verifier,
 		auditLog:       cfg.AuditLog,
 		tlsConfig:      tlsConfig,
@@ -134,7 +139,13 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		shutdownCh:     make(chan struct{}),
 		readTimeout:    cfg.ReadTimeout,
 		writeTimeout:   cfg.WriteTimeout,
-	}, nil
+	}
+
+	if cfg.MaxConnections > 0 {
+		s.connSem = make(chan struct{}, cfg.MaxConnections)
+	}
+
+	return s, nil
 }
 
 func (s *Server) Start() error {
@@ -258,6 +269,20 @@ func (s *Server) acceptLoop() {
 			}
 		}
 
+		// enforce connection limit
+		if s.connSem != nil {
+			select {
+			case s.connSem <- struct{}{}:
+				// acquired slot
+			default:
+				s.log.Warn("connection limit reached, rejecting",
+					"remote_addr", conn.RemoteAddr())
+				s.metrics.ConnectionErrors.Inc()
+				conn.Close()
+				continue
+			}
+		}
+
 		s.wg.Add(1)
 		go s.handleConnection(conn)
 	}
@@ -266,6 +291,9 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
+	if s.connSem != nil {
+		defer func() { <-s.connSem }()
+	}
 
 	clientAddr := conn.RemoteAddr().String()
 	clog := s.log.With("remote_addr", clientAddr)
