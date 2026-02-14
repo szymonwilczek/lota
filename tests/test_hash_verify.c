@@ -11,7 +11,7 @@
  *   6. hash_verify_event cache miss -> hit
  *   7. hash_verify_event cache invalidation on fingerprint change
  *   8. hash_verify_event rejects relative path
- *   9. LRU eviction with small cache
+ *   9. Direct-mapped eviction with small cache
  *  10. hash_verify_stats correctness
  *  11. hash_verify_file on large file (1 MB, multiple chunks)
  *
@@ -316,15 +316,15 @@ static void test_event_relative_path(void) {
   PASS();
 }
 
-static void test_lru_eviction(void) {
+static void test_eviction(void) {
   struct hash_verify_ctx ctx;
   struct lota_exec_event event;
   uint8_t hash[LOTA_HASH_SIZE];
   uint64_t hits, misses, errors;
-  char *paths[4];
+  char *paths[3];
   int ret;
 
-  TEST("LRU eviction with small cache (capacity=2)");
+  TEST("direct-mapped eviction with small cache (capacity=2)");
 
   ret = hash_verify_init(&ctx, 2);
   ASSERT(ret == 0, "init failed");
@@ -337,43 +337,33 @@ static void test_lru_eviction(void) {
     ASSERT(paths[i] != NULL, "failed to create temp file");
   }
 
-  /* insert file 0 -> miss */
-  memset(&event, 0, sizeof(event));
-  event.event_type = LOTA_EVENT_EXEC;
-  strncpy(event.filename, paths[0], sizeof(event.filename) - 1);
-  memset(event.hash, 0x01, LOTA_HASH_SIZE);
-  ret = hash_verify_event(&ctx, &event, hash);
-  ASSERT(ret == 0, "insert 0 failed");
-
-  /* insert file 1 -> miss */
-  memset(&event, 0, sizeof(event));
-  event.event_type = LOTA_EVENT_EXEC;
-  strncpy(event.filename, paths[1], sizeof(event.filename) - 1);
-  memset(event.hash, 0x02, LOTA_HASH_SIZE);
-  ret = hash_verify_event(&ctx, &event, hash);
-  ASSERT(ret == 0, "insert 1 failed");
-
-  /* insert file 2 -> miss, should evict file 0 (oldest) */
-  memset(&event, 0, sizeof(event));
-  event.event_type = LOTA_EVENT_EXEC;
-  strncpy(event.filename, paths[2], sizeof(event.filename) - 1);
-  memset(event.hash, 0x03, LOTA_HASH_SIZE);
-  ret = hash_verify_event(&ctx, &event, hash);
-  ASSERT(ret == 0, "insert 2 failed");
+  /* insert all 3 -> 3 misses */
+  for (int i = 0; i < 3; i++) {
+    memset(&event, 0, sizeof(event));
+    event.event_type = LOTA_EVENT_EXEC;
+    strncpy(event.filename, paths[i], sizeof(event.filename) - 1);
+    memset(event.hash, (uint8_t)(i + 1), LOTA_HASH_SIZE);
+    ret = hash_verify_event(&ctx, &event, hash);
+    ASSERT(ret == 0, "insert failed");
+  }
 
   hash_verify_stats(&ctx, &hits, &misses, &errors);
-  ASSERT(misses == 3, "expected 3 misses");
+  ASSERT(misses == 3, "expected 3 misses after 3 inserts");
 
-  /* query file 0 again -> should be a miss (evicted) */
-  memset(&event, 0, sizeof(event));
-  event.event_type = LOTA_EVENT_EXEC;
-  strncpy(event.filename, paths[0], sizeof(event.filename) - 1);
-  memset(event.hash, 0x01, LOTA_HASH_SIZE);
-  ret = hash_verify_event(&ctx, &event, hash);
-  ASSERT(ret == 0, "re-query 0 failed");
+  /* re-query all 3: at most 2 can be cached (capacity=2) */
+  uint64_t misses_before = misses;
+  for (int i = 0; i < 3; i++) {
+    memset(&event, 0, sizeof(event));
+    event.event_type = LOTA_EVENT_EXEC;
+    strncpy(event.filename, paths[i], sizeof(event.filename) - 1);
+    memset(event.hash, (uint8_t)(i + 1), LOTA_HASH_SIZE);
+    ret = hash_verify_event(&ctx, &event, hash);
+    ASSERT(ret == 0, "re-query failed");
+  }
 
   hash_verify_stats(&ctx, &hits, &misses, &errors);
-  ASSERT(misses == 4, "expected 4 misses (file 0 was evicted)");
+  ASSERT(misses > misses_before,
+         "expected at least 1 eviction (3 files, 2 slots)");
 
   for (int i = 0; i < 3; i++) {
     unlink(paths[i]);
@@ -500,7 +490,7 @@ int main(void) {
   test_event_cache_miss_then_hit();
   test_event_cache_invalidation();
   test_event_relative_path();
-  test_lru_eviction();
+  test_eviction();
   test_stats();
   test_hash_large_file();
   test_null_args();
