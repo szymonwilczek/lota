@@ -5,6 +5,7 @@
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -909,6 +910,12 @@ int tpm_aik_load_metadata(struct tpm_context *ctx) {
   if (n != (ssize_t)sizeof(meta))
     return -EIO;
 
+  meta.magic = le32toh(meta.magic);
+  meta.version = le32toh(meta.version);
+  meta.generation = le64toh(meta.generation);
+  meta.provisioned_at = (int64_t)le64toh((uint64_t)meta.provisioned_at);
+  meta.last_rotated_at = (int64_t)le64toh((uint64_t)meta.last_rotated_at);
+
   if (meta.magic != TPM_AIK_META_MAGIC)
     return -EINVAL;
 
@@ -940,8 +947,18 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
   if (fd < 0)
     return -errno;
 
-  n = write(fd, &ctx->aik_meta, sizeof(ctx->aik_meta));
-  if (n != (ssize_t)sizeof(ctx->aik_meta)) {
+  struct aik_metadata wire;
+  wire.magic = htole32(ctx->aik_meta.magic);
+  wire.version = htole32(ctx->aik_meta.version);
+  wire.generation = htole64(ctx->aik_meta.generation);
+  wire.provisioned_at =
+      (int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
+  wire.last_rotated_at =
+      (int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
+  memset(wire._reserved, 0, sizeof(wire._reserved));
+
+  n = write(fd, &wire, sizeof(wire));
+  if (n != (ssize_t)sizeof(wire)) {
     close(fd);
     return -EIO;
   }
