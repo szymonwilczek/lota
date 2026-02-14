@@ -135,7 +135,7 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 
 # build SDK shared library
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^
+	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^
 	@echo "Built: $@"
 
 # build SDK static library
@@ -145,7 +145,7 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 
 # build server SDK shared library
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 # build server SDK static library
@@ -155,12 +155,12 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 
 # build Wine/Proton hook (self-contained: includes gaming SDK)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
+	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
 	@echo "Built: $@"
 
 # build anti-cheat compatibility layer (includes gaming + server SDK)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 # build bpf program
