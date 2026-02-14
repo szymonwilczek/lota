@@ -41,40 +41,36 @@ static uint64_t monotonic_now(void) {
 }
 
 /*
+ * Direct-mapped cache index for (dev, ino) pair
+ */
+static inline size_t cache_index(struct hash_verify_ctx *ctx, uint64_t dev,
+                                 uint64_t ino) {
+  uint64_t h = dev ^ ino;
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  return (size_t)(h % ctx->cache_capacity);
+}
+
+/*
  * Find cache entry for (dev, ino).
  * Returns pointer to matching entry, or NULL on miss.
  */
 static struct hash_cache_entry *cache_lookup(struct hash_verify_ctx *ctx,
                                              uint64_t dev, uint64_t ino) {
-  size_t i;
-
-  for (i = 0; i < ctx->cache_capacity; i++) {
-    struct hash_cache_entry *e = &ctx->cache[i];
-    if (e->valid && e->dev == dev && e->ino == ino)
-      return e;
-  }
+  struct hash_cache_entry *e = &ctx->cache[cache_index(ctx, dev, ino)];
+  if (e->valid && e->dev == dev && e->ino == ino)
+    return e;
   return NULL;
 }
 
 /*
- * Find the least-recently-used slot for eviction.
- * Prefers invalid (empty) slots first, then the oldest valid one.
+ * Get the slot for a new entry.
+ * Direct-mapped: always the hashed bucket (evicts on collision)
  */
-static struct hash_cache_entry *cache_evict_slot(struct hash_verify_ctx *ctx) {
-  struct hash_cache_entry *oldest = NULL;
-  uint64_t oldest_ts = UINT64_MAX;
-  size_t i;
-
-  for (i = 0; i < ctx->cache_capacity; i++) {
-    struct hash_cache_entry *e = &ctx->cache[i];
-    if (!e->valid)
-      return e; /* empty slot -> use immediately */
-    if (e->last_used < oldest_ts) {
-      oldest_ts = e->last_used;
-      oldest = e;
-    }
-  }
-  return oldest;
+static struct hash_cache_entry *cache_evict_slot(struct hash_verify_ctx *ctx,
+                                                 uint64_t dev, uint64_t ino) {
+  return &ctx->cache[cache_index(ctx, dev, ino)];
 }
 
 int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size) {
@@ -250,7 +246,7 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
 
   /* update or insert cache entry */
   if (!entry)
-    entry = cache_evict_slot(ctx);
+    entry = cache_evict_slot(ctx, dev, ino);
   if (entry) {
     entry->dev = dev;
     entry->ino = ino;
