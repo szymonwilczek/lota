@@ -400,7 +400,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
       sdnotify_reloading();
       lota_info("SIGHUP received, reloading configuration");
 
-      struct lota_config new_cfg;
+      static struct lota_config new_cfg;
       config_init(&new_cfg);
       int reload_ret = config_load(&new_cfg, config_path);
       if (reload_ret < 0 && reload_ret != -ENOENT) {
@@ -604,7 +604,7 @@ int main(int argc, char *argv[]) {
   const char *pin_sha256_hex = NULL;
   uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
   int has_pin = 0;
-  struct lota_config cfg;
+  static struct lota_config cfg;
   const char *config_path = NULL;
   int dump_config_flag = 0;
 
