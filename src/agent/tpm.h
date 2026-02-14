@@ -154,7 +154,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * tpm_provision_aik - Create and persist Attestation Identity Key
  * @ctx: Initialized TPM context
  *
- * Creates RSA 2048-bit restricted signing key under Endorsement Hierarchy
+ * Creates RSA 2048-bit restricted signing key under Owner Hierarchy
  * and persists it at the configured AIK handle (default 0x81010002).
  *
  * Properties:
