@@ -12,7 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -131,7 +131,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	}
 
 	for _, w := range ValidatePolicy(&policy) {
-		log.Printf("WARNING: %s", w)
+		slog.Warn(w)
 	}
 
 	v.mu.Lock()
@@ -150,7 +150,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 // adds a policy programmatically
 func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) {
 	for _, w := range ValidatePolicy(policy) {
-		log.Printf("WARNING: %s", w)
+		slog.Warn(w)
 	}
 
 	v.mu.Lock()

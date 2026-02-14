@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
@@ -342,13 +342,14 @@ func VerifyEventLog(report *types.AttestationReport) error {
 	mismatches := VerifyEventLogConsistency(report, replay, skipPCRs)
 	if len(mismatches) > 0 {
 		for _, m := range mismatches {
-			log.Printf("WARNING: event log PCR mismatch: %s", m)
+			slog.Warn("event log PCR mismatch", "detail", m)
 		}
 		return fmt.Errorf("event log verification: %d PCR mismatches detected", len(mismatches))
 	}
 
-	log.Printf("event log verified: %d entries, %d PCRs replayed",
-		replay.TotalEntries, countNonZero(replay.ExtendCounts[:]))
+	slog.Info("event log verified",
+		"entries", replay.TotalEntries,
+		"pcrs_replayed", countNonZero(replay.ExtendCounts[:]))
 
 	return nil
 }
