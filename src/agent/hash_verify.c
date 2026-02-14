@@ -102,39 +102,20 @@ void hash_verify_cleanup(struct hash_verify_ctx *ctx) {
   ctx->cache_capacity = 0;
 }
 
-int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]) {
-  int fd = -1;
+/*
+ * Compute SHA-256 from an already-open file descriptor.
+ * The caller is responsible for opening and closing the fd.
+ */
+static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE]) {
   uint8_t *buf = NULL;
   EVP_MD_CTX *md_ctx = NULL;
   unsigned int hash_len = 0;
   ssize_t n;
   int ret = 0;
 
-  if (!path || !sha256_out)
-    return -EINVAL;
-
-  /* reject relative paths and empty strings */
-  if (path[0] != '/')
-    return -ENOENT;
-
-  fd = open(path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-  if (fd < 0)
-    return -errno;
-
-  /* reject non-regular files */
-  {
-    struct stat st;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
-      close(fd);
-      return -EINVAL;
-    }
-  }
-
   buf = malloc(HASH_READ_BUF_SIZE);
-  if (!buf) {
-    ret = -ENOMEM;
-    goto out;
-  }
+  if (!buf)
+    return -ENOMEM;
 
   md_ctx = EVP_MD_CTX_new();
   if (!md_ctx) {
@@ -171,8 +152,35 @@ int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]) {
 out:
   EVP_MD_CTX_free(md_ctx);
   free(buf);
-  if (fd >= 0)
-    close(fd);
+  return ret;
+}
+
+int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]) {
+  int fd;
+  int ret;
+
+  if (!path || !sha256_out)
+    return -EINVAL;
+
+  /* reject relative paths and empty strings */
+  if (path[0] != '/')
+    return -ENOENT;
+
+  fd = open(path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+  if (fd < 0)
+    return -errno;
+
+  /* reject non-regular files */
+  {
+    struct stat st;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+      close(fd);
+      return -EINVAL;
+    }
+  }
+
+  ret = hash_fd(fd, sha256_out);
+  close(fd);
   return ret;
 }
 
@@ -182,6 +190,7 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   struct stat st;
   struct hash_cache_entry *entry;
   uint64_t dev, ino;
+  int fd;
   int ret;
 
   if (!ctx || !event || !sha256_out)
@@ -190,14 +199,22 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   if (event->filename[0] != '/')
     return -ENOENT;
 
-  /* lstat to get (dev, ino) - must not follow symlinks, matching O_NOFOLLOW */
-  if (lstat(event->filename, &st) < 0) {
+  fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+  if (fd < 0) {
     ctx->errors++;
     return -errno;
   }
 
+  if (fstat(fd, &st) < 0) {
+    ctx->errors++;
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
   if (!S_ISREG(st.st_mode)) {
     ctx->errors++;
+    close(fd);
     return -EINVAL;
   }
 
@@ -215,13 +232,15 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
       memcpy(sha256_out, entry->content_sha256, LOTA_HASH_SIZE);
       entry->last_used = monotonic_now();
       ctx->hits++;
+      close(fd);
       return 0;
     }
     /* fingerprint mismatch -> recompute */
   }
 
-  /* cache miss or stale -> compute SHA-256 from disk */
-  ret = hash_verify_file(event->filename, sha256_out);
+  /* cache miss or stale -> compute SHA-256 from the already-open fd */
+  ret = hash_fd(fd, sha256_out);
+  close(fd);
   if (ret < 0) {
     ctx->errors++;
     return ret;
