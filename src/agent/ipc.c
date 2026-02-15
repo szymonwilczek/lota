@@ -875,6 +875,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   }
 
   ctx->listen_fd = fd;
+  ctx->activated = true;
 
   ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
   if (ctx->epoll_fd < 0) {
@@ -927,7 +928,8 @@ void ipc_cleanup(struct ipc_context *ctx) {
     ctx->listen_fd = -1;
   }
 
-  unlink(LOTA_IPC_SOCKET_PATH);
+  if (!ctx->activated)
+    unlink(LOTA_IPC_SOCKET_PATH);
 
   /* close extra listener sockets */
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {

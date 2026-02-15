@@ -54,6 +54,9 @@ struct ipc_context {
   uint32_t attest_count;
   uint32_t fail_count;
   uint8_t mode;
+
+  /* true when using socket activation (do not unlink socket) */
+  bool activated;
 };
 
 /*
