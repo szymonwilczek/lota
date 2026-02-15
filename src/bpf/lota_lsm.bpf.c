@@ -901,7 +901,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
  *
  * Return: 0 to allow, -EPERM to deny
  * ====================================================================== */
-SEC("lsm/mmap_file")
+SEC("lsm.s/mmap_file")
 int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret) {
   struct lota_exec_event *event;
@@ -940,7 +940,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
       anon_blocked = 1;
     }
 
-    event = bpf_map_lookup_elem(&event_scratch, &key);
+    event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
     if (event) {
       __builtin_memset(event, 0, sizeof(*event));
       event->timestamp_ns = bpf_ktime_get_ns();
@@ -1019,7 +1019,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   }
 
   /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch, &key);
+  event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
