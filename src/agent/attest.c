@@ -100,7 +100,7 @@ static uint32_t check_module_security(void) {
  *   PCR 7:  Secure Boot state
  *   PCR 14: LOTA self-measurement
  */
-int export_policy(void) {
+int export_policy(int mode) {
   struct policy_snapshot snap;
   int ret;
   ssize_t len;
@@ -192,7 +192,7 @@ int export_policy(void) {
     struct iommu_status iommu_status;
 
     snap.iommu_enabled = iommu_verify_full(&iommu_status);
-    snap.enforce_mode = (g_mode == LOTA_MODE_ENFORCE);
+    snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
     snap.module_sig = (flags & LOTA_REPORT_FLAG_MODULE_SIG) != 0;
     snap.secureboot = (flags & LOTA_REPORT_FLAG_SECUREBOOT) != 0;
     snap.lockdown = (flags & LOTA_REPORT_FLAG_LOCKDOWN) != 0;
@@ -615,6 +615,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   ret = net_init();
   if (ret < 0) {
     lota_err("Failed to initialize network: %s", strerror(-ret));
+    dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
@@ -624,6 +625,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   if (ret < 0) {
     lota_err("Failed to initialize TPM: %s", strerror(-ret));
     net_cleanup();
+    dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
     return ret;
   }
@@ -641,6 +643,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
     lota_err("Failed to provision AIK: %s", strerror(-ret));
     tpm_cleanup(&g_tpm_ctx);
     net_cleanup();
+    dbus_cleanup(g_dbus_ctx);
     ipc_cleanup(&g_ipc_ctx);
     return ret;
   }

@@ -961,7 +961,7 @@ int main(int argc, char *argv[]) {
     return test_iommu();
 
   if (export_policy_flag)
-    return export_policy();
+    return export_policy(mode);
 
   if (test_ipc_flag) {
     int ret;

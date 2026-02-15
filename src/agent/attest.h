@@ -7,7 +7,7 @@
 #define MIN_ATTEST_INTERVAL 10  /* 10 seconds */
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
-int export_policy(void);
+int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
               int skip_verify, const uint8_t *pin_sha256);
 int do_continuous_attest(const char *server, int port, const char *ca_cert,
