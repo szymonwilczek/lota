@@ -664,7 +664,8 @@ int main(int argc, char *argv[]) {
   journal_init("lota-agent");
 
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+    if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-f") == 0) &&
+        i + 1 < argc) {
       config_path = argv[++i];
     }
   }
