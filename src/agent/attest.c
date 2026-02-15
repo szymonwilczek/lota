@@ -700,8 +700,13 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       sdnotify_status("Attested, valid until %lu", (unsigned long)valid_until);
     } else {
       consecutive_failures++;
-      /* exponential backoff: 10, 20, 40, 80, ... up to max */
-      backoff_sec = MIN_ATTEST_INTERVAL * (1 << (consecutive_failures - 1));
+      /* exponential backoff */
+      {
+        int shift = consecutive_failures - 1;
+        if (shift > 5)
+          shift = 5; /* 10 * 2^5 = 320 > MAX_BACKOFF_SECONDS */
+        backoff_sec = MIN_ATTEST_INTERVAL * (1 << shift);
+      }
       if (backoff_sec > MAX_BACKOFF_SECONDS)
         backoff_sec = MAX_BACKOFF_SECONDS;
 
