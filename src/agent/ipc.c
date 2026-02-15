@@ -670,17 +670,19 @@ static int handle_client_write(struct ipc_context *ctx,
   if (client->send_len == 0)
     return 0;
 
-  remaining = client->send_len - client->send_offset;
-  n = send(client->fd, client->send_buf + client->send_offset, remaining,
-           MSG_NOSIGNAL);
+  while (client->send_offset < client->send_len) {
+    remaining = client->send_len - client->send_offset;
+    n = send(client->fd, client->send_buf + client->send_offset, remaining,
+             MSG_NOSIGNAL);
 
-  if (n < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-      return 0;
-    return -errno;
+    if (n < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+        return 0; /* yield to event loop, EPOLLOUT will re-fire */
+      return -errno;
+    }
+
+    client->send_offset += n;
   }
-
-  client->send_offset += n;
 
   if (client->send_offset >= client->send_len) {
     /* response complete, reset */
