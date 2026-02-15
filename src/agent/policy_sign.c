@@ -34,23 +34,33 @@
  * Read entire file into malloc'd buffer.
  * Returns buffer (caller frees) or NULL on error.
  */
-static uint8_t *read_file_contents(const char *path, size_t *out_len) {
+static uint8_t *read_file_contents(const char *path, size_t *out_len,
+                                   int *err_out) {
   FILE *f;
   long fsize;
   uint8_t *buf;
   size_t nread;
 
   f = fopen(path, "rb");
-  if (!f)
+  if (!f) {
+    *err_out = -errno;
     return NULL;
+  }
 
   if (fseek(f, 0, SEEK_END) != 0) {
+    *err_out = -errno;
     fclose(f);
     return NULL;
   }
 
   fsize = ftell(f);
-  if (fsize < 0 || (size_t)fsize > POLICY_MAX_FILE_SIZE) {
+  if (fsize < 0) {
+    *err_out = -EIO;
+    fclose(f);
+    return NULL;
+  }
+  if ((size_t)fsize > POLICY_MAX_FILE_SIZE) {
+    *err_out = -EFBIG;
     fclose(f);
     return NULL;
   }
@@ -59,6 +69,7 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len) {
 
   buf = malloc((size_t)fsize);
   if (!buf) {
+    *err_out = -ENOMEM;
     fclose(f);
     return NULL;
   }
@@ -67,6 +78,7 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len) {
   fclose(f);
 
   if (nread != (size_t)fsize) {
+    *err_out = -EIO;
     free(buf);
     return NULL;
   }
@@ -279,9 +291,10 @@ int policy_sign_file(const char *file_path, const char *privkey_pem_path,
   if (!file_path || !privkey_pem_path || !sig_path)
     return -EINVAL;
 
-  data = read_file_contents(file_path, &data_len);
+  int read_err = 0;
+  data = read_file_contents(file_path, &data_len, &read_err);
   if (!data)
-    return -errno ? -errno : -EIO;
+    return read_err;
 
   ret = policy_sign_buffer(data, data_len, privkey_pem_path, sig);
   free(data);
@@ -327,9 +340,10 @@ int policy_verify_file(const char *file_path, const char *pubkey_pem_path,
     return -EAUTH;
 
   /* read policy file */
-  data = read_file_contents(file_path, &data_len);
+  int read_err = 0;
+  data = read_file_contents(file_path, &data_len, &read_err);
   if (!data)
-    return -errno ? -errno : -EIO;
+    return read_err;
 
   ret = policy_verify_buffer(data, data_len, pubkey_pem_path, sig);
   free(data);
