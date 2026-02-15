@@ -456,15 +456,21 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 
   if (signature->sigAlg == TPM2_ALG_RSASSA) {
     size_t sig_size = signature->signature.rsassa.sig.size;
-    if (sig_size > LOTA_MAX_SIG_SIZE)
-      sig_size = LOTA_MAX_SIG_SIZE;
+    if (sig_size > LOTA_MAX_SIG_SIZE) {
+      Esys_Free(quoted);
+      Esys_Free(signature);
+      return -ENOSPC;
+    }
     memcpy(response->signature, signature->signature.rsassa.sig.buffer,
            sig_size);
     response->signature_size = (uint16_t)sig_size;
   } else if (signature->sigAlg == TPM2_ALG_RSAPSS) {
     size_t sig_size = signature->signature.rsapss.sig.size;
-    if (sig_size > LOTA_MAX_SIG_SIZE)
-      sig_size = LOTA_MAX_SIG_SIZE;
+    if (sig_size > LOTA_MAX_SIG_SIZE) {
+      Esys_Free(quoted);
+      Esys_Free(signature);
+      return -ENOSPC;
+    }
     memcpy(response->signature, signature->signature.rsapss.sig.buffer,
            sig_size);
     response->signature_size = (uint16_t)sig_size;
