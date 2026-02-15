@@ -1,0 +1,22 @@
+[Unit]
+Description=LOTA Syzkaller Fuzzing Daemon
+After=network.target
+
+[Service]
+Type=simple
+
+# Update this accordingly!
+User=user
+Group=group
+
+# Update this to proper path!
+WorkingDirectory=/path/to/working-dir
+
+# Path to syz-manager binary
+ExecStart=/path/to/syz-manager/binary
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

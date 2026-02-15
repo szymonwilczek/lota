@@ -1,19 +1,20 @@
 {
 	"target": "linux/amd64",
+	"name": "lota-fuzzer",
 	"http": "127.0.0.1:56741",
 	"workdir": "./workdir",
-	"kernel_obj": "/path/to/linux-source",
-	"image": "/path/to/image.img",
-	"sshkey": "/path/to/stretch.id_rsa",
+	"kernel_obj": "/path/to/kernel_obj",
+	"image": "/path/to/image",
+	"sshkey": "/path/to/ssh-key",
 	"syzkaller": "/path/to/syzkaller",
-	"procs": 8,
+	"procs": 2,
 	"type": "qemu",
 	"vm": {
-		"count": 4,
-		"kernel": "/path/to/linux-source/arch/x86/boot/bzImage",
+		"count": 1,
+		"kernel": "/path/to/kernel/bzImage",
 		"cmdline": "net.ifnames=0 biosdevname=0 root=/dev/sda console=ttyS0 oops=panic panic_on_warn=1 panic=1",
 		"cpu": 2,
-		"mem": 2048
+		"mem": 1024
 	},
 	"enable_syscalls": [
 		"bpf",
@@ -31,5 +32,8 @@
 	],
 	"suppressions": [
 		"some_known_bug"
+	],
+	"email_addrs": [
+		"developer@example.com"
 	]
 }

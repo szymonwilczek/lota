@@ -3,3 +3,9 @@ lota-verifier.crt
 lota-verifier.key
 tests/sdk_demo
 src/verifier/verifier
+/linux-6.18.10
+/syzkaller/repo
+/linux-6.18.10.tar.xz
+/syzkaller/workdir
+/syzkaller/lota-fuzz.service
+/syzkaller/lota.cfg
