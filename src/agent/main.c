@@ -600,6 +600,12 @@ int main(int argc, char *argv[]) {
   int test_iommu_flag = 0;
   int test_ipc_flag = 0;
   int test_signed_flag = 0;
+
+  if (daemon_install_signals(&g_running, &g_reload) < 0) {
+    fprintf(stderr, "Failed to install signal handlers: %s\n", strerror(errno));
+    return 1;
+  }
+
   int export_policy_flag = 0;
   int attest_flag = 0;
   const char *gen_signing_key_prefix = NULL;
