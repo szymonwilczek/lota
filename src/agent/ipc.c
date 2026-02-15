@@ -590,9 +590,9 @@ static int handle_client_read(struct ipc_context *ctx,
   req = (void *)client->recv_buf;
 
   if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    client->recv_len = 0; /* discard the malformed request */
-    return 1;             /* need to send response */
+    lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
+              client->peer_uid, req->payload_len);
+    return -1; /* close: cannot recover from protocol desync */
   }
 
   /* complete request? */
