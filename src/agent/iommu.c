@@ -26,6 +26,28 @@
 /* upper bound for kernel log buffer allocation */
 #define KLOG_MAX_SIZE (1 << 22) /* 4 MB */
 
+/*
+ * check if a space-delimited kernel cmdline parameter is present
+ */
+static bool cmdline_has_param(const char *cmdline, const char *param) {
+  size_t plen = strlen(param);
+  const char *p = cmdline;
+
+  while ((p = strstr(p, param)) != NULL) {
+    if (p != cmdline && p[-1] != ' ') {
+      p += plen;
+      continue;
+    }
+
+    if (p[plen] != '\0' && p[plen] != ' ' && p[plen] != '\n') {
+      p += plen;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 int iommu_check_sysfs(struct iommu_status *status) {
   DIR *dir;
   struct dirent *entry;
@@ -94,7 +116,7 @@ int iommu_check_cmdline(struct iommu_status *status) {
    * Check for Intel IOMMU parameters
    * intel_iommu=on enables IOMMU
    */
-  if (strstr(buf, "intel_iommu=on")) {
+  if (cmdline_has_param(buf, "intel_iommu=on")) {
     status->flags |= IOMMU_FLAG_CMDLINE_SET;
     strncpy(status->cmdline_param, "intel_iommu=on",
             IOMMU_CMDLINE_PARAM_MAX - 1);
@@ -106,13 +128,13 @@ int iommu_check_cmdline(struct iommu_status *status) {
    * Check for AMD IOMMU parameters
    * amd_iommu=on or amd_iommu=force
    */
-  if (strstr(buf, "amd_iommu=force")) {
+  if (cmdline_has_param(buf, "amd_iommu=force")) {
     status->flags |= IOMMU_FLAG_CMDLINE_SET;
     strncpy(status->cmdline_param, "amd_iommu=force",
             IOMMU_CMDLINE_PARAM_MAX - 1);
     status->cmdline_param[IOMMU_CMDLINE_PARAM_MAX - 1] = '\0';
     ret = 0;
-  } else if (strstr(buf, "amd_iommu=on")) {
+  } else if (cmdline_has_param(buf, "amd_iommu=on")) {
     status->flags |= IOMMU_FLAG_CMDLINE_SET;
     strncpy(status->cmdline_param, "amd_iommu=on", IOMMU_CMDLINE_PARAM_MAX - 1);
     status->cmdline_param[IOMMU_CMDLINE_PARAM_MAX - 1] = '\0';
@@ -123,7 +145,8 @@ int iommu_check_cmdline(struct iommu_status *status) {
    * Check for strict mode - disables lazy IOMMU TLB flush
    * More secure but slightly lower performance
    */
-  if (strstr(buf, "iommu.strict=1") || strstr(buf, "iommu=strict")) {
+  if (cmdline_has_param(buf, "iommu.strict=1") ||
+      cmdline_has_param(buf, "iommu=strict")) {
     status->flags |= IOMMU_FLAG_STRICT;
   }
 
