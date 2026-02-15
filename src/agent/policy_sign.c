@@ -8,11 +8,14 @@
 #include "policy_sign.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /*
  * EAUTH is not defined on all platforms ->
@@ -145,10 +148,18 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
     goto out;
 
   /* write private key (PKCS#8 PEM, no encryption) */
-  f = fopen(privkey_pem_path, "w");
-  if (!f) {
-    ret = -errno;
-    goto out;
+  {
+    int pk_fd = open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (pk_fd < 0) {
+      ret = -errno;
+      goto out;
+    }
+    f = fdopen(pk_fd, "w");
+    if (!f) {
+      ret = -errno;
+      close(pk_fd);
+      goto out;
+    }
   }
 
   if (!PEM_write_PrivateKey(f, pkey, NULL, NULL, 0, NULL, NULL)) {
