@@ -360,14 +360,12 @@ static void write_le64(uint8_t *p, uint64_t v) {
  * This binds the TPM signature to the specific token data.
  * All integers are encoded in little-endian to match the wire format.
  */
-static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
-                                uint32_t flags, const uint8_t *client_nonce,
-                                uint8_t *out_nonce) {
+static int compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
+                               uint32_t flags, const uint8_t *client_nonce,
+                               uint8_t *out_nonce) {
   EVP_MD_CTX *mdctx;
   unsigned int len;
   uint8_t le_buf[20]; /* 8 + 8 + 4 */
-
-  memset(out_nonce, 0, LOTA_NONCE_SIZE);
 
   write_le64(le_buf, issued_at);
   write_le64(le_buf + 8, valid_until);
@@ -375,7 +373,7 @@ static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
 
   mdctx = EVP_MD_CTX_new();
   if (!mdctx)
-    return;
+    return -ENOMEM;
 
   if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
       EVP_DigestUpdate(mdctx, le_buf, 8) != 1 ||
@@ -383,10 +381,12 @@ static void compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
       EVP_DigestUpdate(mdctx, le_buf + 16, 4) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, 32) != 1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1) {
-    memset(out_nonce, 0, LOTA_NONCE_SIZE);
+    EVP_MD_CTX_free(mdctx);
+    return -EIO;
   }
 
   EVP_MD_CTX_free(mdctx);
+  return 0;
 }
 
 /*
@@ -441,8 +441,13 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     return;
   }
 
-  compute_token_nonce(token->issued_at, token->valid_until, token->flags,
-                      token->client_nonce, binding_nonce);
+  ret = compute_token_nonce(token->issued_at, token->valid_until, token->flags,
+                            token->client_nonce, binding_nonce);
+  if (ret < 0) {
+    lota_err("compute_token_nonce failed: %s", strerror(-ret));
+    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+    return;
+  }
 
   ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
   if (ret < 0) {
