@@ -72,23 +72,23 @@ static uint32_t parse_uint32(const char *s) {
 }
 
 /*
- * Check if a path exists and is a directory.
+ * Check if a path exists and is a directory (not a symlink).
  */
 static int is_directory(const char *path) {
   struct stat st;
 
-  if (stat(path, &st) != 0)
+  if (lstat(path, &st) != 0)
     return 0;
   return S_ISDIR(st.st_mode);
 }
 
 /*
- * Check if a regular file exists.
+ * Check if a regular file exists (not a symlink).
  */
 static int is_regular_file(const char *path) {
   struct stat st;
 
-  if (stat(path, &st) != 0)
+  if (lstat(path, &st) != 0)
     return 0;
   return S_ISREG(st.st_mode);
 }
