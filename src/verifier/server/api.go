@@ -99,16 +99,14 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			h.log.Warn("admin endpoint called but no API key configured",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
-			w.WriteHeader(http.StatusForbidden)
-			writeJSON(w, errorResponse{Error: "admin API key not configured"})
+			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "admin API key not configured"})
 			return
 		}
 
 		token := extractBearerToken(r)
 		if token == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="lota-admin"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			writeJSON(w, errorResponse{Error: "missing Authorization header"})
+			writeJSONStatus(w, http.StatusUnauthorized, errorResponse{Error: "missing Authorization header"})
 			return
 		}
 
@@ -117,8 +115,7 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			logging.Security(h.log, "admin auth failed",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
-			w.WriteHeader(http.StatusForbidden)
-			writeJSON(w, errorResponse{Error: "invalid API key"})
+			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "invalid API key"})
 			return
 		}
 
@@ -140,8 +137,7 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 		token := extractBearerToken(r)
 		if token == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="lota"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			writeJSON(w, errorResponse{Error: "missing Authorization header"})
+			writeJSONStatus(w, http.StatusUnauthorized, errorResponse{Error: "missing Authorization header"})
 			return
 		}
 
@@ -154,8 +150,7 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 			logging.Security(h.log, "reader auth failed",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
-			w.WriteHeader(http.StatusForbidden)
-			writeJSON(w, errorResponse{Error: "invalid API key"})
+			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "invalid API key"})
 			return
 		}
 
@@ -241,8 +236,7 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	if !health.Listening {
 		resp.Status = "degraded"
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, resp)
+		writeJSONStatus(w, http.StatusServiceUnavailable, resp)
 		return
 	}
 
@@ -305,8 +299,7 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 
 	info, found := h.verifier.ClientInfo(clientID)
 	if !found {
-		w.WriteHeader(http.StatusNotFound)
-		writeJSON(w, errorResponse{Error: "client not found"})
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 
@@ -372,8 +365,7 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 
 	clientID := parts[0]
 	if clientID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "missing client ID"})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client ID"})
 		return
 	}
 
@@ -393,8 +385,7 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 			h.handleClientInfo(w, r)
 			return
 		}
-		w.WriteHeader(http.StatusNotFound)
-		writeJSON(w, errorResponse{Error: "unknown action"})
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "unknown action"})
 	}
 }
 
@@ -402,49 +393,42 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "revocation not configured"})
 		return
 	}
 
 	var req revokeRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
 
 	if !store.IsValidReason(req.Reason) {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
 		return
 	}
 
 	if req.Actor == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "actor is required"})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
 		return
 	}
 
 	err := revStore.Revoke(clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyRevoked {
-			w.WriteHeader(http.StatusConflict)
-			writeJSON(w, errorResponse{Error: "client is already revoked"})
+			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
 			return
 		}
 		h.log.Error("revocation failed", "client_id", clientID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, errorResponse{Error: "internal error"})
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
 	logging.Security(h.log, "client revoked",
 		"client_id", clientID, "actor", req.Actor, "reason", req.Reason, "note", req.Note)
 
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{
+	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":    "revoked",
 		"client_id": clientID,
 		"reason":    req.Reason,
@@ -455,21 +439,18 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "revocation not configured"})
 		return
 	}
 
 	err := revStore.Unrevoke(clientID)
 	if err != nil {
 		if err == store.ErrNotRevoked {
-			w.WriteHeader(http.StatusNotFound)
-			writeJSON(w, errorResponse{Error: "client is not revoked"})
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
 			return
 		}
 		h.log.Error("unrevoke failed", "client_id", clientID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, errorResponse{Error: "internal error"})
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
@@ -485,8 +466,7 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Request) {
 	revStore := h.verifier.RevocationStore()
 	if revStore == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "revocation not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "revocation not configured"})
 		return
 	}
 
@@ -529,56 +509,48 @@ type banResponse struct {
 func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "hardware bans not configured"})
 		return
 	}
 
 	var req banRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "invalid JSON: " + err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
 
 	hwid, err := store.ParseHardwareID(req.HardwareID)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "invalid hardware_id: " + err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid hardware_id: " + err.Error()})
 		return
 	}
 
 	if !store.IsValidReason(req.Reason) {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
 		return
 	}
 
 	if req.Actor == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "actor is required"})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
 		return
 	}
 
 	err = banStr.BanHardware(hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyBanned {
-			w.WriteHeader(http.StatusConflict)
-			writeJSON(w, errorResponse{Error: "hardware ID is already banned"})
+			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "hardware ID is already banned"})
 			return
 		}
 		h.log.Error("ban failed", "hardware_id", req.HardwareID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, errorResponse{Error: "internal error"})
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
 	logging.Security(h.log, "hardware banned",
 		"hardware_id", req.HardwareID, "actor", req.Actor, "reason", req.Reason)
 
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{
+	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":      "banned",
 		"hardware_id": req.HardwareID,
 		"reason":      req.Reason,
@@ -589,8 +561,7 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "hardware bans not configured"})
 		return
 	}
 
@@ -598,28 +569,24 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	hwidHex = strings.TrimRight(hwidHex, "/")
 
 	if hwidHex == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "missing hardware ID"})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing hardware ID"})
 		return
 	}
 
 	hwid, err := store.ParseHardwareID(hwidHex)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, errorResponse{Error: "invalid hardware_id: " + err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid hardware_id: " + err.Error()})
 		return
 	}
 
 	err = banStr.UnbanHardware(hwid)
 	if err != nil {
 		if err == store.ErrNotBanned {
-			w.WriteHeader(http.StatusNotFound)
-			writeJSON(w, errorResponse{Error: "hardware ID is not banned"})
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})
 			return
 		}
 		h.log.Error("unban failed", "hardware_id", hwidHex, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, errorResponse{Error: "internal error"})
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
@@ -635,8 +602,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "hardware bans not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "hardware bans not configured"})
 		return
 	}
 
@@ -672,8 +638,7 @@ type auditResponse struct {
 // GET /api/v1/audit?limit=N - query audit log
 func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "audit log not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "audit log not configured"})
 		return
 	}
 
@@ -720,8 +685,7 @@ type attestationResponse struct {
 // GET /api/v1/attestations?limit=N - query attestation decision log
 func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request) {
 	if h.attestationLog == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		writeJSON(w, errorResponse{Error: "attestation log not configured"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "attestation log not configured"})
 		return
 	}
 
@@ -754,7 +718,18 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// writes JSON response with proper headers
+// writes JSON response with proper headers and explicit status code
+func writeJSONStatus(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		slog.Error("JSON encode error", "error", err)
+	}
+}
+
+// writes JSON response with implicit 200 status
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
