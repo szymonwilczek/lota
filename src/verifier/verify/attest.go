@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
@@ -75,7 +76,7 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 		return nil, fmt.Errorf("failed to read signer size: %w", err)
 	}
 	attest.QualifiedSigner = make([]byte, signerSize)
-	if _, err := r.Read(attest.QualifiedSigner); err != nil {
+	if _, err := io.ReadFull(r, attest.QualifiedSigner); err != nil {
 		return nil, fmt.Errorf("failed to read signer: %w", err)
 	}
 
@@ -85,7 +86,7 @@ func ParseTPMSAttest(data []byte) (*TPMSAttest, error) {
 		return nil, fmt.Errorf("failed to read extraData size: %w", err)
 	}
 	attest.ExtraData = make([]byte, extraDataSize)
-	if _, err := r.Read(attest.ExtraData); err != nil {
+	if _, err := io.ReadFull(r, attest.ExtraData); err != nil {
 		return nil, fmt.Errorf("failed to read extraData: %w", err)
 	}
 
@@ -147,7 +148,7 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 			return nil, err
 		}
 		selectBytes := make([]byte, sizeOfSelect)
-		if _, err := r.Read(selectBytes); err != nil {
+		if _, err := io.ReadFull(r, selectBytes); err != nil {
 			return nil, err
 		}
 
@@ -163,7 +164,7 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 		return nil, fmt.Errorf("failed to read PCR digest size: %w", err)
 	}
 	qi.PCRDigest = make([]byte, digestSize)
-	if _, err := r.Read(qi.PCRDigest); err != nil {
+	if _, err := io.ReadFull(r, qi.PCRDigest); err != nil {
 		return nil, fmt.Errorf("failed to read PCR digest: %w", err)
 	}
 
