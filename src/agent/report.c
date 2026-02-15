@@ -14,6 +14,7 @@
  */
 
 #include <errno.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 
@@ -21,13 +22,29 @@
 
 size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size) {
   size_t size = sizeof(struct lota_attestation_report);
+  size_t events_size;
 
   /* BPF event section: count + events */
+  events_size = (size_t)event_count * sizeof(struct lota_exec_event);
+  if (event_count != 0 &&
+      events_size / event_count != sizeof(struct lota_exec_event))
+    return 0;
+
+  if (size + sizeof(uint32_t) < size)
+    return 0;
   size += sizeof(uint32_t); /* event_count */
-  size += (size_t)event_count * sizeof(struct lota_exec_event);
+
+  if (size + events_size < size)
+    return 0;
+  size += events_size;
 
   /* TPM event log section: size + data */
+  if (size + sizeof(uint32_t) < size)
+    return 0;
   size += sizeof(uint32_t); /* event_log_size */
+
+  if (size + event_log_size < size)
+    return 0;
   size += event_log_size;
 
   return size;
@@ -51,6 +68,8 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
     event_log_size = 0;
 
   total = calculate_report_size(event_count, event_log_size);
+  if (total == 0)
+    return -EOVERFLOW;
 
   if (out_buf_size < total)
     return -ENOSPC;
