@@ -164,13 +164,22 @@ func (s *SQLiteAIKStore) RevokeAIK(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// also remove associated baseline
-	_, err := s.db.Exec("DELETE FROM clients WHERE id = ?", clientID)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM baselines WHERE client_id = ?", clientID); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to delete baseline: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM clients WHERE id = ?", clientID); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("failed to revoke AIK: %w", err)
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 func (s *SQLiteAIKStore) ListClients() []string {
