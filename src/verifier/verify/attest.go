@@ -200,6 +200,10 @@ func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSiz
 		return errors.New("no quote info in attestation")
 	}
 
+	if len(attest.QuoteInfo.PCRDigest) == 0 {
+		return errors.New("PCR digest is empty (corrupted quote?)")
+	}
+
 	h := sha256.New()
 	for i := 0; i < types.PCRCount; i++ {
 		if pcrMask&(1<<uint(i)) != 0 {
