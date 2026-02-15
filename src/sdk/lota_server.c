@@ -215,14 +215,20 @@ static int compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
   if (!ctx)
     return -1;
 
-  EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-  EVP_DigestUpdate(ctx, le_buf, 8);
-  EVP_DigestUpdate(ctx, le_buf + 8, 8);
-  EVP_DigestUpdate(ctx, le_buf + 16, 4);
-  EVP_DigestUpdate(ctx, nonce, 32);
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1 ||
+      EVP_DigestUpdate(ctx, le_buf, 8) != 1 ||
+      EVP_DigestUpdate(ctx, le_buf + 8, 8) != 1 ||
+      EVP_DigestUpdate(ctx, le_buf + 16, 4) != 1 ||
+      EVP_DigestUpdate(ctx, nonce, 32) != 1) {
+    EVP_MD_CTX_free(ctx);
+    return -1;
+  }
 
   unsigned int len = 32;
-  EVP_DigestFinal_ex(ctx, out, &len);
+  if (EVP_DigestFinal_ex(ctx, out, &len) != 1) {
+    EVP_MD_CTX_free(ctx);
+    return -1;
+  }
   EVP_MD_CTX_free(ctx);
   return 0;
 }
