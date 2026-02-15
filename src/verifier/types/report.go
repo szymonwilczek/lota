@@ -212,22 +212,37 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += MaxSigSize
 	report.TPM.QuoteSigSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
+	if report.TPM.QuoteSigSize > MaxSigSize {
+		return nil, fmt.Errorf("%w: quote_sig_size %d exceeds max %d", ErrInvalidSize, report.TPM.QuoteSigSize, MaxSigSize)
+	}
 	copy(report.TPM.AttestData[:], data[offset:offset+MaxAttestSize])
 	offset += MaxAttestSize
 	report.TPM.AttestSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
+	if report.TPM.AttestSize > MaxAttestSize {
+		return nil, fmt.Errorf("%w: attest_size %d exceeds max %d", ErrInvalidSize, report.TPM.AttestSize, MaxAttestSize)
+	}
 	copy(report.TPM.AIKPublic[:], data[offset:offset+MaxAIKPubSize])
 	offset += MaxAIKPubSize
 	report.TPM.AIKPublicSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
+	if report.TPM.AIKPublicSize > MaxAIKPubSize {
+		return nil, fmt.Errorf("%w: aik_public_size %d exceeds max %d", ErrInvalidSize, report.TPM.AIKPublicSize, MaxAIKPubSize)
+	}
 	copy(report.TPM.AIKCertificate[:], data[offset:offset+MaxAIKCertSize])
 	offset += MaxAIKCertSize
 	report.TPM.AIKCertSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
+	if report.TPM.AIKCertSize > MaxAIKCertSize {
+		return nil, fmt.Errorf("%w: aik_cert_size %d exceeds max %d", ErrInvalidSize, report.TPM.AIKCertSize, MaxAIKCertSize)
+	}
 	copy(report.TPM.EKCertificate[:], data[offset:offset+MaxEKCertSize])
 	offset += MaxEKCertSize
 	report.TPM.EKCertSize = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
+	if report.TPM.EKCertSize > MaxEKCertSize {
+		return nil, fmt.Errorf("%w: ek_cert_size %d exceeds max %d", ErrInvalidSize, report.TPM.EKCertSize, MaxEKCertSize)
+	}
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
 	copy(report.TPM.HardwareID[:], data[offset:offset+HardwareIDSize])
