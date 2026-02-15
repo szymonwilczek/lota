@@ -170,6 +170,15 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 int tpm_provision_aik(struct tpm_context *ctx);
 
 /*
+ * tpm_hash_fd - Calculate SHA-256 hash from an open file descriptor
+ * @fd: Open file descriptor (read position should be at start)
+ * @hash: Output buffer (LOTA_HASH_SIZE bytes)
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_hash_fd(int fd, uint8_t *hash);
+
+/*
  * tpm_hash_file - Calculate SHA-256 hash of a file
  * @path: Path to file (e.g., /boot/vmlinuz-*)
  * @hash: Output buffer (LOTA_HASH_SIZE bytes)

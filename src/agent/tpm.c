@@ -455,31 +455,23 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   return 0;
 }
 
-int tpm_hash_file(const char *path, uint8_t *hash) {
-  int fd;
+int tpm_hash_fd(int fd, uint8_t *hash) {
   ssize_t n;
   EVP_MD_CTX *md_ctx;
   uint8_t *buf;
   unsigned int hash_len;
   int ret = 0;
 
-  if (!path || !hash)
+  if (fd < 0 || !hash)
     return -EINVAL;
 
-  fd = open(path, O_RDONLY);
-  if (fd < 0)
-    return -errno;
-
   buf = malloc(HASH_READ_BUF_SIZE);
-  if (!buf) {
-    close(fd);
+  if (!buf)
     return -ENOMEM;
-  }
 
   md_ctx = EVP_MD_CTX_new();
   if (!md_ctx) {
     free(buf);
-    close(fd);
     return -ENOMEM;
   }
 
@@ -508,6 +500,22 @@ int tpm_hash_file(const char *path, uint8_t *hash) {
 cleanup:
   EVP_MD_CTX_free(md_ctx);
   free(buf);
+
+  return ret;
+}
+
+int tpm_hash_file(const char *path, uint8_t *hash) {
+  int fd;
+  int ret;
+
+  if (!path || !hash)
+    return -EINVAL;
+
+  fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -errno;
+
+  ret = tpm_hash_fd(fd, hash);
   close(fd);
 
   return ret;

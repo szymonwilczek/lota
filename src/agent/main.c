@@ -16,6 +16,7 @@
  *   --daemon        Run as daemon
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
 #include <signal.h>
@@ -181,41 +182,35 @@ int ipc_init_or_activate(struct ipc_context *ctx) {
  * Returns: 0 on success, negative errno on failure
  */
 int self_measure(struct tpm_context *ctx) {
-  char exe_path[LOTA_MAX_PATH_LEN];
   uint8_t self_hash[LOTA_HASH_SIZE];
-  ssize_t len;
+  int fd;
   int ret;
 
   if (!ctx || !ctx->initialized)
     return -EINVAL;
 
   /*
-   * Get path to own executable via /proc/self/exe.
-   * This symlink points to the actual binary on disk.
+   * Open /proc/self/exe directly to get an fd to the running binary.
+   * This avoids the TOCTOU race in readlink() + open(path): the fd
+   * refers to the inode the kernel is executing, not a pathname that
+   * could be swapped between resolution and open.
    */
-  len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-  if (len < 0) {
+  fd = open("/proc/self/exe", O_RDONLY);
+  if (fd < 0)
     return -errno;
-  }
-  exe_path[len] = '\0';
 
-  /*
-   * Hash the binary using SHA-256.
-   * This captures the complete executable state.
-   */
-  ret = tpm_hash_file(exe_path, self_hash);
-  if (ret < 0) {
+  ret = tpm_hash_fd(fd, self_hash);
+  close(fd);
+  if (ret < 0)
     return ret;
-  }
 
   /*
    * Extend hash into PCR 14.
    * PCR 14 is in the range (8-15) typically reserved for OS use.
    */
   ret = tpm_pcr_extend(ctx, LOTA_PCR_SELF, self_hash);
-  if (ret < 0) {
+  if (ret < 0)
     return ret;
-  }
 
   return 0;
 }
