@@ -108,7 +108,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
     if (safe_parse_long(value, &v) != 0 || v <= 0 || v > 65535) {
       fprintf(stderr, "%s:%d: invalid port '%s' (expected 1-65535)\n", filepath,
               lineno, value);
-      return -1;
+      return 0; /* keep current value, not a fatal error */
     }
     cfg->port = (int)v;
     return 0;
@@ -296,7 +296,6 @@ int config_load(struct lota_config *cfg, const char *path) {
     int ret = apply_key(cfg, key, value, filepath, lineno);
     if (ret == 1) {
       fprintf(stderr, "%s:%d: unknown key '%s'\n", filepath, lineno, key);
-      errors++;
     } else if (ret < 0) {
       errors++;
     }
