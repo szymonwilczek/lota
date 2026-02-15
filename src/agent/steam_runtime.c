@@ -19,6 +19,7 @@
 #include "journal.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <grp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -302,17 +303,26 @@ int steam_runtime_ensure_socket_dir(const char *dir) {
   if (mkdir(dir, 0750) < 0 && errno != EEXIST)
     return -errno;
 
+  int fd = open(dir, O_PATH | O_NOFOLLOW | O_DIRECTORY);
+  if (fd < 0) {
+    if (errno == ELOOP || errno == ENOTDIR)
+      lota_warn("steam_runtime: %s is not a directory or is a symlink!", dir);
+    return -errno;
+  }
+
   /*
    * Set group to 'lota' to match the primary socket directory
    * this allows members of the 'lota' group to access the socket
    */
   struct group *grp = getgrnam(LOTA_GROUP_NAME);
   if (grp) {
-    if (chown(dir, 0, grp->gr_gid) < 0)
-      lota_warn("steam_runtime: chown(%s, 0, %d): %s", dir, grp->gr_gid,
+    if (fchown(fd, -1, grp->gr_gid) < 0) {
+      lota_warn("steam_runtime: fchown(%s, -1, %d): %s", dir, grp->gr_gid,
                 strerror(errno));
+    }
   }
 
+  close(fd);
   return 0;
 }
 
