@@ -50,6 +50,17 @@ static int set_nonblock(int fd) {
 }
 
 /*
+ * Restore socket to blocking mode after non-blocking connect completes.
+ */
+static int clear_nonblock(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+
+  if (flags < 0)
+    return -1;
+  return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+}
+
+/*
  * Wait for socket to be readable/writable with timeout
  */
 static int wait_for_socket(int fd, int events, int timeout_ms) {
@@ -286,6 +297,12 @@ static int try_connect_path(const char *path, int timeout_ms) {
       close(fd);
       return -1;
     }
+  }
+
+  /* restore blocking mode so recv(MSG_WAITALL) works correctly */
+  if (clear_nonblock(fd) < 0) {
+    close(fd);
+    return -1;
   }
 
   return fd;
