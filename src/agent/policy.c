@@ -41,15 +41,49 @@ static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE]) {
 /*
  * Write a YAML double-quoted scalar with proper escaping.
  *
- * Escapes backslashes and double quotes so that the output is a
- * valid YAML double-quoted string regardless of input content.
+ * Escapes backslashes, double quotes and control characters so that
+ * the output is a valid YAML double-quoted string regardless of
+ * input content.
  */
 static void emit_yaml_string(FILE *out, const char *s) {
   fputc('"', out);
   for (; *s; s++) {
-    if (*s == '"' || *s == '\\')
-      fputc('\\', out);
-    fputc(*s, out);
+    unsigned char c = (unsigned char)*s;
+    switch (c) {
+    case '"':
+      fputs("\\\"", out);
+      break;
+    case '\\':
+      fputs("\\\\", out);
+      break;
+    case '\0':
+      fputs("\\0", out);
+      break;
+    case '\a':
+      fputs("\\a", out);
+      break;
+    case '\b':
+      fputs("\\b", out);
+      break;
+    case '\t':
+      fputs("\\t", out);
+      break;
+    case '\n':
+      fputs("\\n", out);
+      break;
+    case '\r':
+      fputs("\\r", out);
+      break;
+    case '\x1b':
+      fputs("\\e", out);
+      break;
+    default:
+      if (c < 0x20 || c == 0x7f)
+        fprintf(out, "\\x%02x", c);
+      else
+        fputc(c, out);
+      break;
+    }
   }
   fputc('"', out);
 }
