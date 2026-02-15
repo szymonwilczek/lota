@@ -68,13 +68,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 	}
 
 	if err != nil {
-		// query failed - conservative: treat as first use
-		return TOFUFirstUse, &ClientBaseline{
-			PCR14:       pcr14,
-			FirstSeen:   now,
-			LastSeen:    now,
-			AttestCount: 1,
-		}
+		// query failed - refuse attestation to prevent re-TOFU with arbitrary PCR14
+		return TOFUError, nil
 	}
 
 	// compare stored baseline

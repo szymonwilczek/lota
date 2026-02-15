@@ -443,6 +443,11 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
+	case TOFUError:
+		clog.Error("baseline store error, refusing attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, fmt.Errorf("FAIL_BASELINE_ERROR: baseline store unavailable")
 	}
 
 	if report.Header.Flags&types.FlagIOMMUOK == 0 {

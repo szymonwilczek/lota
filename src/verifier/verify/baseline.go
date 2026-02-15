@@ -73,6 +73,9 @@ const (
 
 	// PCR does NOT match stored baseline - possible tampering
 	TOFUMismatch
+
+	// Database or store error - must not be treated as first use
+	TOFUError
 )
 
 // performs TOFU validation for PCR 14
