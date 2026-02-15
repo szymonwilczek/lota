@@ -568,6 +568,26 @@ static int handle_client_read(struct ipc_context *ctx,
   size_t need;
   struct lota_ipc_request *req;
 
+  /*
+   * Check if the buffer already contains a complete request from a
+   * previous read (pipelined leftover)
+   */
+  if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
+    goto do_recv;
+
+  req = (void *)client->recv_buf;
+
+  if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
+    lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
+              client->peer_uid, req->payload_len);
+    return -1; /* close: cannot recover from protocol desync */
+  }
+
+  need = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+  if (client->recv_len >= need)
+    goto have_request;
+
+do_recv:
   /* read as much as possible */
   need = sizeof(client->recv_buf) - client->recv_len;
   n = recv(client->fd, client->recv_buf + client->recv_len, need, 0);
@@ -600,16 +620,19 @@ static int handle_client_read(struct ipc_context *ctx,
   if (client->recv_len < need)
     return 0;
 
+have_request:
   process_request(ctx, client);
 
   /* preserve any leftover bytes from the next pipelined request */
-  size_t consumed = LOTA_IPC_REQUEST_SIZE + req->payload_len;
-  if (client->recv_len > consumed) {
-    memmove(client->recv_buf, client->recv_buf + consumed,
-            client->recv_len - consumed);
-    client->recv_len -= consumed;
-  } else {
-    client->recv_len = 0;
+  {
+    size_t consumed = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+    if (client->recv_len > consumed) {
+      memmove(client->recv_buf, client->recv_buf + consumed,
+              client->recv_len - consumed);
+      client->recv_len -= consumed;
+    } else {
+      client->recv_len = 0;
+    }
   }
 
   return 1; /* response ready */
@@ -945,7 +968,9 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
       int ret = 0;
 
       if (events[i].events & EPOLLIN) {
-        ret = handle_client_read(ctx, client);
+        /* drain all complete requests (EPOLLET won't re-notify) */
+        while ((ret = handle_client_read(ctx, client)) > 0)
+          ;
       }
 
       if (events[i].events & EPOLLOUT) {
