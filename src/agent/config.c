@@ -232,8 +232,20 @@ int config_load(struct lota_config *cfg, const char *path) {
     char *eq;
     char *key;
     char *value;
+    size_t len;
 
     lineno++;
+
+    len = strlen(line);
+    if (len > 0 && line[len - 1] != '\n' && !feof(f)) {
+      int ch;
+      fprintf(stderr, "%s:%d: line exceeds %d characters, skipping\n", filepath,
+              lineno, LOTA_CONFIG_MAX_LINE - 1);
+      errors++;
+      while ((ch = fgetc(f)) != EOF && ch != '\n')
+        ;
+      continue;
+    }
 
     trimmed = trim(line);
 
