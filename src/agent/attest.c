@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,8 +250,34 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
            ret == 1 ? "AIK (EK not available)" : "EK");
   }
 
-  ret =
-      tpm_quote(&g_tpm_ctx, challenge->nonce, challenge->pcr_mask, &quote_resp);
+  /*
+   * Compute binding nonce = SHA-256(challenge_nonce || hardware_id).
+   * This cryptographically binds the TPM quote to the hardware identity,
+   * preventing an attacker from zeroing hardware_id in the report
+   * to bypass revocation or re-register TOFU under a new identity.
+   */
+  uint8_t binding_nonce[LOTA_NONCE_SIZE];
+  {
+    EVP_MD_CTX *md = EVP_MD_CTX_new();
+    unsigned int md_len;
+
+    if (!md) {
+      fprintf(stderr, "Failed to allocate EVP_MD_CTX\n");
+      return -ENOMEM;
+    }
+    if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
+        EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) != 1 ||
+        EVP_DigestUpdate(md, report->tpm.hardware_id, LOTA_HARDWARE_ID_SIZE) !=
+            1 ||
+        EVP_DigestFinal_ex(md, binding_nonce, &md_len) != 1) {
+      EVP_MD_CTX_free(md);
+      fprintf(stderr, "Failed to compute binding nonce\n");
+      return -EIO;
+    }
+    EVP_MD_CTX_free(md);
+  }
+
+  ret = tpm_quote(&g_tpm_ctx, binding_nonce, challenge->pcr_mask, &quote_resp);
   if (ret < 0) {
     fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
     return ret;

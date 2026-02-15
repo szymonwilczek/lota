@@ -7,6 +7,7 @@ package verify
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"testing"
@@ -14,6 +15,15 @@ import (
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+// compute binding nonce for tests (zero hardware ID)
+func testBindingNonce(nonce [types.NonceSize]byte) []byte {
+	var zeroHWID [types.HardwareIDSize]byte
+	h := sha256.New()
+	h.Write(nonce[:])
+	h.Write(zeroHWID[:])
+	return h.Sum(nil)
+}
 
 func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	t.Log("SECURITY TEST: Nonce generation and verification")
@@ -47,8 +57,8 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
 
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 	err = store.VerifyNonce(report, "client1")
 	if err != nil {
@@ -68,8 +78,8 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 	// should succeed
 	err := store.VerifyNonce(report, "client1")
@@ -96,8 +106,8 @@ func TestNonceStore_Expiration(t *testing.T) {
 
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -120,8 +130,8 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 	for i := range report.TPM.Nonce {
 		report.TPM.Nonce[i] = byte(i)
 	}
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(report.TPM.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(report.TPM.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report.TPM.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report.TPM.Nonce)))
 
 	err := store.VerifyNonce(report, "client1")
 	if err == nil {
@@ -141,8 +151,8 @@ func TestNonceStore_ClientBinding(t *testing.T) {
 	report := &types.AttestationReport{}
 
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 	err := store.VerifyNonce(report, "client2") // wrong client
 	if err == nil {
@@ -235,8 +245,8 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 	// first use - should succeed
 	err := store.VerifyNonce(report, "client1")
@@ -277,8 +287,8 @@ func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
 
 		report := &types.AttestationReport{}
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
-		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-		copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 		err = store.VerifyNonce(report, "client1")
 		if err != nil {
@@ -351,8 +361,8 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 		// consume to free pending slot
 		report := &types.AttestationReport{}
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
-		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-		copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 		store.VerifyNonce(report, "rate-client")
 	}
 
@@ -416,8 +426,8 @@ func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	// verify one - should decrement
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 	store.VerifyNonce(report, clientID)
 
 	if store.ClientPendingCount(clientID) != 1 {
@@ -456,8 +466,8 @@ func TestNonceStore_ConcurrentSafety(t *testing.T) {
 
 				report := &types.AttestationReport{}
 				copy(report.TPM.Nonce[:], challenge.Nonce[:])
-				report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-				copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+				report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+				copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 				if err := store.VerifyNonce(report, clientID); err != nil {
 					errCh <- fmt.Errorf("client %d, iter %d: verify failed: %w", clientNum, j, err)
@@ -548,8 +558,8 @@ func TestNonceStore_TableDriven(t *testing.T) {
 
 			report := &types.AttestationReport{}
 			copy(report.TPM.Nonce[:], challenge.Nonce[:])
-			report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(challenge.Nonce[:])))
-			copy(report.TPM.AttestData[:], createMockAttestWithNonce(challenge.Nonce[:]))
+			report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(challenge.Nonce))))
+			copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(challenge.Nonce)))
 
 			err := store.VerifyNonce(report, tc.clientVerify)
 

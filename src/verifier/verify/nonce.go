@@ -278,12 +278,15 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	}
 
 	// verify nonce inside tpms_attest (signed by tpm)
+	// compute binding nonce = SHA-256(challenge_nonce || hardware_id)
+	// to verify that the TPM quote is bound to the reported hardware identity
 	if report.TPM.AttestSize == 0 {
 		return errors.New("no attestation data - cannot verify nonce binding")
 	}
 
+	bindingNonce := ComputeBindingNonce(entry.nonce, report.TPM.HardwareID)
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
-	if err := VerifyNonceInAttest(attestData, entry.nonce[:]); err != nil {
+	if err := VerifyNonceInAttest(attestData, bindingNonce[:]); err != nil {
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
 	}
 

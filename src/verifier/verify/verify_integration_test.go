@@ -71,7 +71,13 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
-	attestData := createTPMSAttestWithNonce(nonce[:], pcrDigest)
+
+	var zeroHWID [types.HardwareIDSize]byte
+	bindingHash := sha256.New()
+	bindingHash.Write(nonce[:])
+	bindingHash.Write(zeroHWID[:])
+	bindingNonce := bindingHash.Sum(nil)
+	attestData := createTPMSAttestWithNonce(bindingNonce, pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, integrationTestKey, crypto.SHA256, hash[:])
@@ -547,7 +553,13 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
-	attestData := createTPMSAttestWithNonce(nonce[:], pcrDigest)
+
+	var zeroHWID [types.HardwareIDSize]byte
+	bindingHash := sha256.New()
+	bindingHash.Write(nonce[:])
+	bindingHash.Write(zeroHWID[:])
+	bindingNonce := bindingHash.Sum(nil)
+	attestData := createTPMSAttestWithNonce(bindingNonce, pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 

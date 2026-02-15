@@ -189,7 +189,11 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
-	attestData := buildTPMSAttest(nonce[:], pcrDigest)
+
+	// binding nonce = SHA-256(challenge_nonce || hardware_id)
+	var zeroHWID [types.HardwareIDSize]byte
+	bindingNonce := verify.ComputeBindingNonce(nonce, zeroHWID)
+	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])

@@ -222,3 +222,16 @@ func GetNonceFromAttest(attestData []byte) ([]byte, error) {
 	}
 	return attest.ExtraData, nil
 }
+
+// computes SHA-256(challengeNonce || hardwareID) to cryptographically
+// bind the TPM quote to the hardware identity. Agent uses this as
+// qualifyingData for Esys_Quote, and the verifier reconstructs it from
+// the report fields to verify the TPMS_ATTEST extraData.
+func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, hardwareID [types.HardwareIDSize]byte) [types.NonceSize]byte {
+	h := sha256.New()
+	h.Write(challengeNonce[:])
+	h.Write(hardwareID[:])
+	var out [types.NonceSize]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}

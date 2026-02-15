@@ -724,8 +724,13 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
 
-	// TPMS_ATTEST with nonce
-	attestData := createTPMSAttestWithNonce(nonce[:], pcrDigest)
+	// TPMS_ATTEST with binding nonce = SHA-256(nonce || hardware_id)
+	var zeroHWID [types.HardwareIDSize]byte
+	bindingHash := sha256.New()
+	bindingHash.Write(nonce[:])
+	bindingHash.Write(zeroHWID[:])
+	bindingNonce := bindingHash.Sum(nil)
+	attestData := createTPMSAttestWithNonce(bindingNonce, pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, sqliteTestKey, crypto.SHA256, hash[:])
 	if err != nil {
