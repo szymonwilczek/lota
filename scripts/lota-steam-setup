@@ -188,19 +188,19 @@ echo ""
 
 errors=0
 
-check_xdg_runtime_dir || ((errors++))
-check_agent_running   || ((errors++))
-check_lota_group      || ((errors++))
+check_xdg_runtime_dir || errors=$((errors + 1))
+check_agent_running   || errors=$((errors + 1))
+check_lota_group      || errors=$((errors + 1))
 check_hook_library
 
 echo ""
 
 if ! $verify_only; then
     info "Setting up container-accessible socket directory..."
-    setup_container_socket_dir || ((errors++))
+    setup_container_socket_dir || errors=$((errors + 1))
 fi
 
-check_container_socket || ((errors++))
+check_container_socket || errors=$((errors + 1))
 
 echo ""
 echo "=== Steam Launch Options ==="
