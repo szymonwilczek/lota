@@ -54,6 +54,32 @@ const (
 	VerifyBanned            uint32 = 8 // hardware ID banned
 )
 
+// returns a deterministic string for a result code
+func VerifyResultString(code uint32) string {
+	switch code {
+	case VerifyOK:
+		return "ok"
+	case VerifyNonceFail:
+		return "nonce_fail"
+	case VerifySigFail:
+		return "sig_fail"
+	case VerifyPCRFail:
+		return "pcr_fail"
+	case VerifyIOMMUFail:
+		return "iommu_fail"
+	case VerifyOldVersion:
+		return "old_version"
+	case VerifyIntegrityMismatch:
+		return "integrity_mismatch"
+	case VerifyRevoked:
+		return "revoked"
+	case VerifyBanned:
+		return "banned"
+	default:
+		return fmt.Sprintf("unknown_%d", code)
+	}
+}
+
 // struct lota_report_header (see: include/attestation.h)
 type ReportHeader struct {
 	Magic       uint32 // offset 0

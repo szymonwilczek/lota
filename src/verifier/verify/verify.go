@@ -178,6 +178,11 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	var pcr14Hex string
 	var hwID string
 
+	result := &types.VerifyResult{
+		Magic:   types.ReportMagic,
+		Version: types.ReportVersion,
+	}
+
 	defer func() {
 		duration := time.Since(startTime)
 		v.metrics.VerifyDuration.Observe(duration.Seconds())
@@ -191,7 +196,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		if v.attestationLog != nil {
 			resultStr := "OK"
 			if retErr != nil {
-				resultStr = retErr.Error()
+				resultStr = types.VerifyResultString(result.Result)
 			}
 			_ = v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
@@ -203,11 +208,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			})
 		}
 	}()
-
-	result := &types.VerifyResult{
-		Magic:   types.ReportMagic,
-		Version: types.ReportVersion,
-	}
 
 	report, err := types.ParseReport(reportData)
 	if err != nil {
@@ -476,7 +476,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	result.Result = types.VerifyOK
 	result.ValidUntil = uint64(time.Now().Add(v.sessionTokenLife).Unix())
 
-	// generate session token
+	// Session token is a random challenge returned to the client
+	// for optional application-level use. Verifier is stateless
+	// by design -> the TPM quote is the trust anchor, not this token.
+	// No server-side storage or validation endpoint is needed.
 	if _, err := rand.Read(result.SessionToken[:]); err != nil {
 		return nil, fmt.Errorf("failed to generate session token: %w", err)
 	}
