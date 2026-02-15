@@ -88,17 +88,19 @@ int test_tpm(void) {
 
   /* hash kernel image */
   printf("\nFinding current kernel...\n");
-  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
-  if (ret < 0) {
-    fprintf(stderr, "Failed to find kernel: %s\n", strerror(-ret));
-  } else {
-    printf("Kernel: %s\n", kernel_path);
-    printf("Hashing kernel image...\n");
-    ret = tpm_hash_file(kernel_path, kernel_hash);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to hash kernel: %s\n", strerror(-ret));
+  {
+    int k_err = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+    if (k_err < 0) {
+      fprintf(stderr, "Failed to find kernel: %s\n", strerror(-k_err));
     } else {
-      print_hex("Kernel SHA-256", kernel_hash, LOTA_HASH_SIZE);
+      printf("Kernel: %s\n", kernel_path);
+      printf("Hashing kernel image...\n");
+      k_err = tpm_hash_file(kernel_path, kernel_hash);
+      if (k_err < 0) {
+        fprintf(stderr, "Failed to hash kernel: %s\n", strerror(-k_err));
+      } else {
+        print_hex("Kernel SHA-256", kernel_hash, LOTA_HASH_SIZE);
+      }
     }
   }
 
@@ -109,12 +111,13 @@ int test_tpm(void) {
   if (len < 0) {
     fprintf(stderr, "Failed to read /proc/self/exe: %s\n", strerror(errno));
   } else {
+    int s_err;
     exe_path[len] = '\0';
     printf("Agent binary: %s\n", exe_path);
 
-    ret = tpm_hash_file(exe_path, self_hash);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to hash agent: %s\n", strerror(-ret));
+    s_err = tpm_hash_file(exe_path, self_hash);
+    if (s_err < 0) {
+      fprintf(stderr, "Failed to hash agent: %s\n", strerror(-s_err));
     } else {
       print_hex("Agent SHA-256", self_hash, LOTA_HASH_SIZE);
     }
