@@ -390,6 +390,14 @@ func (ns *NonceStore) cleanup() {
 	// clean old used nonce entries via backend
 	usedCutoff := now.Add(-ns.lifetime * 3) // keep used 3x longer than lifetime
 	ns.usedBackend.Cleanup(usedCutoff)
+
+	// evict stale client entries to bound map growth
+	clientCutoff := now.Add(-ns.lifetime * 3)
+	for id, cs := range ns.clientChallenges {
+		if cs.pendingCount <= 0 && cs.lastAttestation.Before(clientCutoff) {
+			delete(ns.clientChallenges, id)
+		}
+	}
 }
 
 // returns number of outstanding challenges (for monitoring)
