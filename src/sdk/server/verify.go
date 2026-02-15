@@ -493,5 +493,10 @@ func ParseRSAPublicKey(der []byte) (*rsa.PublicKey, error) {
 	if !ok {
 		return nil, errors.New("not an RSA public key")
 	}
+
+	if rsaPub.N.BitLen() < 2048 {
+		return nil, fmt.Errorf("RSA key too small: %d bits (minimum 2048)", rsaPub.N.BitLen())
+	}
+
 	return rsaPub, nil
 }
