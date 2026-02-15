@@ -258,6 +258,12 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
     goto out;
   }
 
+  /* reject weak RSA keys (< 2048 bits) */
+  if (EVP_PKEY_get_bits(pkey) < 2048) {
+    ret = LOTA_SERVER_ERR_CRYPTO;
+    goto out;
+  }
+
   md_ctx = EVP_MD_CTX_new();
   if (!md_ctx) {
     ret = LOTA_SERVER_ERR_CRYPTO;
