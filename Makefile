@@ -381,6 +381,22 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "Start agent in another terminal: sudo ./build/lota-agent --test-ipc"
 	@echo "Then run: ./build/test_sdk_ipc"
 
+# Fuzzing
+FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
+FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
+
+FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o, $(AGENT_OBJS))
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/agent/fuzz/ipc_fuzz.o
+
+$(BUILD_DIR)/agent/fuzz/ipc_fuzz.o: src/agent/fuzz/ipc_fuzz.c | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/agent/fuzz:
+	mkdir -p $@
+
+fuzz-agent: $(FUZZ_AGENT_OBJS)
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
+
 # Help target
 .PHONY: help
 help:
