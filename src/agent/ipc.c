@@ -775,18 +775,19 @@ int ipc_init(struct ipc_context *ctx) {
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-  if (bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  /*
+   * Restrict socket access to owner (root) and 'lota' group
+   */
+  {
+    mode_t old_umask = umask(0117);
+    ret = bind(ctx->listen_fd, (struct sockaddr *)&addr, sizeof(addr));
+    umask(old_umask);
+  }
+  if (ret < 0) {
     ret = -errno;
     lota_err("bind(%s) failed: %s", LOTA_IPC_SOCKET_PATH, strerror(-ret));
     goto err_close;
   }
-
-  /*
-   * Restrict socket access to owner (root) and 'lota' group.
-   * Game processes must be members of the 'lota' group to connect.
-   * Falls back to current group if 'lota' group does not exist.
-   */
-  chmod(LOTA_IPC_SOCKET_PATH, 0660);
   {
     struct group *grp = getgrnam(LOTA_GROUP_NAME);
     if (grp) {
@@ -1101,15 +1102,18 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path) {
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  {
+    mode_t old_umask = umask(0117);
+    ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    umask(old_umask);
+  }
+
+  if (ret < 0) {
     ret = -errno;
     lota_err("bind(%s) failed: %s", socket_path, strerror(-ret));
     close(fd);
     return ret;
   }
-
-  /* match primary socket permissions */
-  chmod(socket_path, 0660);
   {
     struct group *grp = getgrnam(LOTA_GROUP_NAME);
     if (grp) {
