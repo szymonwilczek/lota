@@ -648,6 +648,9 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
+	if limit > 10000 {
+		limit = 10000
+	}
 
 	entries := h.auditLog.Query(limit)
 	resp := make([]auditResponse, len(entries))
@@ -694,6 +697,9 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
 			limit = parsed
 		}
+	}
+	if limit > 10000 {
+		limit = 10000
 	}
 
 	entries := h.attestationLog.QueryAttestations(limit)
