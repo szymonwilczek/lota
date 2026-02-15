@@ -384,7 +384,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 // sends the full verification result, preserving SessionToken and ValidUntil
 func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
 	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
-	conn.Write(result.Serialize())
+	if _, err := conn.Write(result.Serialize()); err != nil {
+		s.log.Warn("failed to send result",
+			"remote_addr", conn.RemoteAddr(), "error", err)
+	}
 }
 
 // sends an error result when no full VerifyResult is available
