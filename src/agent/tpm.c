@@ -1200,6 +1200,21 @@ int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size) {
     total += (size_t)n;
   }
 
+  /*
+   * if the buffer is completely full, try to read one more byte.
+   * if data is available, the log was too large for the buffer
+   * and the caller cannot trust the content.
+   */
+  if (total == buf_size) {
+    uint8_t probe;
+    n = read(fd, &probe, 1);
+    if (n > 0) {
+      close(fd);
+      *out_size = total;
+      return -ENOSPC;
+    }
+  }
+
   close(fd);
   *out_size = total;
   return 0;

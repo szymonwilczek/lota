@@ -350,14 +350,15 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
  * tpm_read_event_log - Read TPM event log from securityfs
  * @buf: Output buffer (caller allocates, recommend TPM_MAX_EVENT_LOG_SIZE)
  * @buf_size: Size of output buffer
- * @out_size: Actual bytes read
+ * @out_size: Actual bytes read (set even on -ENOSPC)
  *
  * Reads the TCG binary event log from
  * /sys/kernel/security/tpm0/binary_bios_measurements.
  * This log records all firmware/bootloader PCR extend operations.
  * The verifier uses it to independently replay and verify PCR values.
  *
- * Returns: 0 on success, negative errno on failure
+ * Returns: 0 on success, -ENOSPC if the log was truncated (buffer too
+ *          small), negative errno on other failures
  */
 int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
 
