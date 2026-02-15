@@ -540,6 +540,11 @@ static void process_request(struct ipc_context *ctx,
     return;
   }
 
+  if (req->version != LOTA_IPC_VERSION) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_VERSION);
+    return;
+  }
+
   /* dispatch command */
   switch (req->cmd) {
   case LOTA_IPC_CMD_PING:
