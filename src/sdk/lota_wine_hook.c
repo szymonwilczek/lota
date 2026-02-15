@@ -128,35 +128,38 @@ static void resolve_token_dir(void) {
  * Create the token directory if it does not exist.
  * Mode 0700: only the owning user can read attestation data.
  *
- * Uses lstat to avoid following symlinks. Rejects existing symlinks
- * and directories owned by other users to prevent symlink attacks
- * in shared directories like /tmp.
+ * Attempts mkdir first, then validates the result with lstat.
+ * This avoids the TOCTOU race of check-then-create in shared
+ * directories like /tmp.
  *
  * Returns 0 on success, negative errno on failure.
  */
 static int ensure_token_dir(void) {
   struct stat st;
 
-  if (lstat(g_hook.token_dir, &st) == 0) {
-    if (S_ISLNK(st.st_mode)) {
-      LOG_ERR("token dir is a symlink (possible attack): %s", g_hook.token_dir);
-      return -ELOOP;
-    }
-    if (!S_ISDIR(st.st_mode)) {
-      LOG_ERR("token dir exists but is not a directory: %s", g_hook.token_dir);
-      return -ENOTDIR;
-    }
-    if (st.st_uid != getuid()) {
-      LOG_ERR("token dir owned by uid %u, expected %u: %s", (unsigned)st.st_uid,
-              (unsigned)getuid(), g_hook.token_dir);
-      return -EACCES;
-    }
-    return 0;
-  }
-
+  /* try to create; EEXIST is fine */
   if (mkdir(g_hook.token_dir, 0700) < 0 && errno != EEXIST) {
     LOG_ERR("mkdir %s: %s", g_hook.token_dir, strerror(errno));
     return -errno;
+  }
+
+  /* validate what actually sits at the path */
+  if (lstat(g_hook.token_dir, &st) != 0) {
+    LOG_ERR("lstat %s: %s", g_hook.token_dir, strerror(errno));
+    return -errno;
+  }
+  if (S_ISLNK(st.st_mode)) {
+    LOG_ERR("token dir is a symlink (possible attack): %s", g_hook.token_dir);
+    return -ELOOP;
+  }
+  if (!S_ISDIR(st.st_mode)) {
+    LOG_ERR("token dir exists but is not a directory: %s", g_hook.token_dir);
+    return -ENOTDIR;
+  }
+  if (st.st_uid != getuid()) {
+    LOG_ERR("token dir owned by uid %u, expected %u: %s", (unsigned)st.st_uid,
+            (unsigned)getuid(), g_hook.token_dir);
+    return -EACCES;
   }
 
   return 0;
