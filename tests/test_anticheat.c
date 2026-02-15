@@ -821,40 +821,41 @@ static void test_verify_battleye_roundtrip(void) {
 }
 
 static void test_verify_null_data(void) {
-  TEST("verify: NULL data -> -EINVAL");
+  TEST("verify: NULL data -> INVALID_ARG");
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, 0, &info) != -EINVAL) {
-    FAIL("expected -EINVAL");
+  if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, 0, &info) !=
+      LOTA_SERVER_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
     return;
   }
   PASS();
 }
 
 static void test_verify_null_info(void) {
-  TEST("verify: NULL info -> -EINVAL");
+  TEST("verify: NULL info -> INVALID_ARG");
   uint8_t data[128] = {0};
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, NULL) !=
-      -EINVAL) {
-    FAIL("expected -EINVAL");
+      LOTA_SERVER_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
     return;
   }
   PASS();
 }
 
 static void test_verify_truncated(void) {
-  TEST("verify: truncated data -> -EPROTO");
+  TEST("verify: truncated data -> BAD_TOKEN");
   uint8_t data[32] = {0};
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      -EPROTO) {
-    FAIL("expected -EPROTO");
+      LOTA_SERVER_ERR_BAD_TOKEN) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
   }
   PASS();
 }
 
 static void test_verify_bad_magic(void) {
-  TEST("verify: bad magic -> -EPROTO");
+  TEST("verify: bad magic -> BAD_TOKEN");
   uint8_t data[LOTA_AC_HEADER_SIZE + 96];
   memset(data, 0, sizeof(data));
 
@@ -867,15 +868,15 @@ static void test_verify_bad_magic(void) {
 
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      -EPROTO) {
-    FAIL("expected -EPROTO");
+      LOTA_SERVER_ERR_BAD_TOKEN) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
   }
   PASS();
 }
 
 static void test_verify_bad_version(void) {
-  TEST("verify: bad version -> -EPROTO");
+  TEST("verify: bad version -> BAD_VERSION");
   uint8_t data[LOTA_AC_HEADER_SIZE + 96];
   memset(data, 0, sizeof(data));
 
@@ -888,15 +889,15 @@ static void test_verify_bad_version(void) {
 
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      -EPROTO) {
-    FAIL("expected -EPROTO");
+      LOTA_SERVER_ERR_BAD_VERSION) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
     return;
   }
   PASS();
 }
 
 static void test_verify_bad_provider(void) {
-  TEST("verify: bad provider -> -EPROTO");
+  TEST("verify: bad provider -> BAD_TOKEN");
   uint8_t data[LOTA_AC_HEADER_SIZE + 96];
   memset(data, 0, sizeof(data));
 
@@ -909,15 +910,15 @@ static void test_verify_bad_provider(void) {
 
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      -EPROTO) {
-    FAIL("expected -EPROTO");
+      LOTA_SERVER_ERR_BAD_TOKEN) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
   }
   PASS();
 }
 
 static void test_verify_size_mismatch(void) {
-  TEST("verify: total_size > actual len -> -EPROTO");
+  TEST("verify: total_size > actual len -> BAD_TOKEN");
   uint8_t data[LOTA_AC_HEADER_SIZE + 96];
   memset(data, 0, sizeof(data));
 
@@ -930,8 +931,8 @@ static void test_verify_size_mismatch(void) {
 
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      -EPROTO) {
-    FAIL("expected -EPROTO");
+      LOTA_SERVER_ERR_BAD_TOKEN) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
   }
   PASS();

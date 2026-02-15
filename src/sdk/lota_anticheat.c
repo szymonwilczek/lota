@@ -349,28 +349,28 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
                              uint32_t max_age_sec, struct lota_ac_info *info) {
   if (!data || !info)
-    return -EINVAL;
+    return LOTA_SERVER_ERR_INVALID_ARG;
 
   if (len < LOTA_AC_HEADER_SIZE)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
 
   /* memcpy to avoid unaligned access on packed struct */
   struct lota_ac_heartbeat_wire hdr;
   memcpy(&hdr, data, LOTA_AC_HEADER_SIZE);
 
   if (hdr.magic != LOTA_AC_MAGIC)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
   if (hdr.version != LOTA_AC_VERSION)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_VERSION;
   if (hdr.total_size > len)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
   if (hdr.total_size != LOTA_AC_HEADER_SIZE + hdr.token_size)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
   if (hdr.token_size == 0 || hdr.token_size > LOTA_AC_MAX_TOKEN)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
   if (hdr.provider != LOTA_AC_PROVIDER_EAC &&
       hdr.provider != LOTA_AC_PROVIDER_BATTLEYE)
-    return -EPROTO;
+    return LOTA_SERVER_ERR_BAD_TOKEN;
 
   const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
   uint16_t token_size = hdr.token_size;
