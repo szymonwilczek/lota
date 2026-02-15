@@ -463,8 +463,9 @@ static __always_inline int is_trusted_system_path(struct dentry *dentry) {
 }
 
 /*
- * Try to determine if module is from standard location.
- * Walks up dentry parents looking for "modules" directory.
+ * Check if module is from standard location.
+ * Walks up dentry parents looking for "modules" directory that sits
+ * directly under / or /usr/ (verified via is_at_root_or_usr()).
  *
  * Returns 1 if appears to be from /lib/modules or /usr/lib/modules
  */
@@ -490,10 +491,11 @@ static __always_inline int is_standard_module_location(struct dentry *dentry) {
     if (bpf_probe_read_kernel_str(buf, sizeof(buf), pname) < 0)
       goto next;
 
-    /* Check if this directory is "modules" */
+    /* Check if this directory is "modules" under / or /usr/ */
     if (buf[0] == 'm' && buf[1] == 'o' && buf[2] == 'd' && buf[3] == 'u' &&
         buf[4] == 'l' && buf[5] == 'e' && buf[6] == 's' && buf[7] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
   next:
