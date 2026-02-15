@@ -981,7 +981,17 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
   if (ret < 0)
     return ret;
 
-  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  /*
+   * write to a temporary file and rename atomically so that a
+   * crash between truncation and write cannot leave an empty
+   * metadata file
+   */
+  char tmp[PATH_MAX];
+  ret = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  if (ret < 0 || (size_t)ret >= sizeof(tmp))
+    return -ENAMETOOLONG;
+
+  fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
   if (fd < 0)
     return -errno;
 
@@ -998,11 +1008,19 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
   n = write(fd, &wire, sizeof(wire));
   if (n != (ssize_t)sizeof(wire)) {
     close(fd);
+    unlink(tmp);
     return -EIO;
   }
 
   fsync(fd);
   close(fd);
+
+  if (rename(tmp, path) != 0) {
+    ret = -errno;
+    unlink(tmp);
+    return ret;
+  }
+
   return 0;
 }
 
