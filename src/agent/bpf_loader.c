@@ -55,6 +55,11 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
     return -EINVAL;
 
   memset(ctx, 0, sizeof(*ctx));
+  ctx->ringbuf_fd = -1;
+  ctx->stats_fd = -1;
+  ctx->config_fd = -1;
+  ctx->trusted_libs_fd = -1;
+  ctx->protected_pids_fd = -1;
 
   libbpf_set_print(libbpf_print_fn);
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
