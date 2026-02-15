@@ -88,6 +88,21 @@ static void emit_yaml_string(FILE *out, const char *s) {
   fputc('"', out);
 }
 
+/*
+ * Write a sanitized YAML comment line.
+ */
+static void emit_yaml_comment(FILE *out, const char *prefix, const char *s) {
+  fprintf(out, "# %s: ", prefix);
+  for (; *s; s++) {
+    unsigned char c = (unsigned char)*s;
+    if (c < 0x20 || c == 0x7f)
+      fputc('?', out);
+    else
+      fputc(c, out);
+  }
+  fputc('\n', out);
+}
+
 int policy_emit(const struct policy_snapshot *snap, FILE *out) {
   int i;
 
@@ -103,9 +118,9 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out) {
   fprintf(out, "# LOTA Policy - Auto-generated from live system\n");
   fprintf(out, "#\n");
   if (snap->hostname[0])
-    fprintf(out, "# Host: %s\n", snap->hostname);
+    emit_yaml_comment(out, "Host", snap->hostname);
   if (snap->timestamp[0])
-    fprintf(out, "# Date: %s\n", snap->timestamp);
+    emit_yaml_comment(out, "Date", snap->timestamp);
   fprintf(out, "# Generator: lota-agent --export-policy\n");
   fprintf(out, "#\n");
   fprintf(out, "# Review all values before production use.\n");
@@ -155,7 +170,7 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out) {
    */
   fprintf(out, "# Allowed kernel image hashes (SHA-256)\n");
   if (snap->kernel_path[0])
-    fprintf(out, "# Source: %s\n", snap->kernel_path);
+    emit_yaml_comment(out, "Source", snap->kernel_path);
 
   if (snap->kernel_hash_valid) {
     fprintf(out, "kernel_hashes:\n");
@@ -172,7 +187,7 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out) {
    */
   fprintf(out, "# Allowed LOTA agent hashes (SHA-256)\n");
   if (snap->agent_path[0])
-    fprintf(out, "# Source: %s\n", snap->agent_path);
+    emit_yaml_comment(out, "Source", snap->agent_path);
 
   if (snap->agent_hash_valid) {
     fprintf(out, "agent_hashes:\n");
