@@ -195,7 +195,21 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   if (event->filename[0] != '/')
     return -ENOENT;
 
-  fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+  /*
+   * prefer /proc/PID/exe which references the exact inode the kernel
+   * executed, immune to path-based TOCTOU races.
+   * fallback to the filename if the process already exited.
+   */
+  {
+    char proc_path[32];
+    snprintf(proc_path, sizeof(proc_path), "/proc/%u/exe", event->pid);
+    fd = open(proc_path, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+  }
+
+  if (fd < 0) {
+    fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
+  }
+
   if (fd < 0) {
     ctx->errors++;
     return -errno;
