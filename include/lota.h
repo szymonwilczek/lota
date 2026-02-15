@@ -11,17 +11,12 @@
 
 /*
  * For BPF programs, types come from vmlinux.h
- * For user-space, use standard headers
+ * For user-space, include linux/types.h
  * BPF programs should include vmlinux.h before this header!!!
  */
-#ifdef __BPF_PROGRAM__
-typedef __u8 uint8_t;
-typedef __u16 uint16_t;
-typedef __u32 uint32_t;
-typedef __u64 uint64_t;
-#else
+#ifndef __BPF_PROGRAM__
+#include <linux/types.h>
 #include <stdbool.h>
-#include <stdint.h>
 #endif
 
 /* Protocol version */
@@ -95,18 +90,18 @@ enum lota_mode {
  *   *_BLOCKED:      same as base type
  */
 struct lota_exec_event {
-  uint64_t timestamp_ns; /* ktime_get_ns() */
-  uint32_t event_type;   /* enum lota_event_type */
-  uint32_t pid;
-  uint32_t tgid;
-  uint32_t uid;
-  uint32_t gid;
+  __u64 timestamp_ns; /* ktime_get_ns() */
+  __u32 event_type;   /* enum lota_event_type */
+  __u32 pid;
+  __u32 tgid;
+  __u32 uid;
+  __u32 gid;
   union {
-    uint32_t target_pid; /* ptrace: target process PID */
-    uint32_t target_uid; /* setuid: new UID after transition */
+    __u32 target_pid; /* ptrace: target process PID */
+    __u32 target_uid; /* setuid: new UID after transition */
   };
-  uint32_t _pad0;                   /* alignment */
-  uint8_t hash[LOTA_HASH_SIZE];     /* inode metadata fingerprint (BPF) */
+  __u32 _pad0;                      /* alignment */
+  __u8 hash[LOTA_HASH_SIZE];        /* inode metadata fingerprint (BPF) */
   char comm[LOTA_MAX_COMM_LEN];     /* Process name */
   char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */
 } __attribute__((packed));
