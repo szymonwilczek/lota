@@ -1055,6 +1055,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
     int resolved = 0;
 
     if (pathbuf) {
+      __builtin_memset(pathbuf, 0, LOTA_MAX_PATH_LEN);
       long pret = resolve_file_path(file, pathbuf, LOTA_MAX_PATH_LEN);
       if (pret >= 0 && pathbuf[0] == '/')
         resolved = 1;
