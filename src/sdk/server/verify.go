@@ -76,6 +76,8 @@ var (
 	ErrSigFail      = errors.New("lota: signature verification failed")
 	ErrNonceFail    = errors.New("lota: nonce mismatch")
 	ErrExpired      = errors.New("lota: token expired")
+	ErrTooOld       = errors.New("lota: token too old")
+	ErrFutureToken  = errors.New("lota: token issued in the future")
 	ErrAttestParse  = errors.New("lota: failed to parse TPMS_ATTEST")
 	ErrNotQuote     = errors.New("lota: TPMS_ATTEST is not a quote")
 	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
@@ -148,8 +150,7 @@ type tokenWire struct {
 //   - expectedNonce: optional 32-byte nonce to verify (nil = skip nonce check)
 //
 // Returns verified Claims on success. Returns error if cryptographic
-// verification fails.
-// Note: expired tokens return Claims with Expired=true (not an error) - the caller decides the policy.
+// verification fails or the token is expired/too old/issued in future.
 func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) (*Claims, error) {
 	if aikPub == nil {
 		return nil, ErrInvalidArg
@@ -216,6 +217,17 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	claims.AgeSeconds = now.Unix() - int64(hdr.issuedAt)
 	claims.TooOld = claims.AgeSeconds > DefaultMaxTokenAge
 	claims.IssuedInFuture = claims.AgeSeconds < -int64(MaxClockSkew)
+
+	// return claims with error for temporal violations
+	if claims.Expired {
+		return claims, ErrExpired
+	}
+	if claims.TooOld {
+		return claims, ErrTooOld
+	}
+	if claims.IssuedInFuture {
+		return claims, ErrFutureToken
+	}
 
 	return claims, nil
 }

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"testing"
 	"time"
 )
@@ -252,8 +253,11 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
-	if err != nil {
-		t.Fatalf("VerifyToken should succeed even for expired: %v", err)
+	if !errors.Is(err, ErrExpired) {
+		t.Fatalf("expected ErrExpired, got: %v", err)
+	}
+	if claims == nil {
+		t.Fatal("expected claims to be returned with ErrExpired")
 	}
 	if !claims.Expired {
 		t.Error("expected Expired=true")
@@ -271,8 +275,11 @@ func TestVerifyToken_StaleToken(t *testing.T) {
 	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0, nil)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
-	if err != nil {
-		t.Fatalf("VerifyToken: %v", err)
+	if !errors.Is(err, ErrTooOld) {
+		t.Fatalf("expected ErrTooOld, got: %v", err)
+	}
+	if claims == nil {
+		t.Fatal("expected claims to be returned with ErrTooOld")
 	}
 	if !claims.TooOld {
 		t.Errorf("expected TooOld=true (age=%d)", claims.AgeSeconds)
@@ -296,8 +303,11 @@ func TestVerifyToken_FutureToken(t *testing.T) {
 	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
-	if err != nil {
-		t.Fatalf("VerifyToken: %v", err)
+	if !errors.Is(err, ErrFutureToken) {
+		t.Fatalf("expected ErrFutureToken, got: %v", err)
+	}
+	if claims == nil {
+		t.Fatal("expected claims to be returned with ErrFutureToken")
 	}
 	if !claims.IssuedInFuture {
 		t.Errorf("expected IssuedInFuture=true (age=%d)", claims.AgeSeconds)
