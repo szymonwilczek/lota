@@ -631,7 +631,18 @@ do_recv:
     return 0;
 
 have_request:
+  /* defer if a previous response is still pending */
+  if (client->send_len > 0)
+    return 0;
   process_request(ctx, client);
+
+  /* arm EPOLLOUT so the event loop will drive the send */
+  if (client->send_len > 0) {
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLOUT;
+    ev.data.fd = client->fd;
+    epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+  }
 
   /* preserve any leftover bytes from the next pipelined request */
   {
@@ -686,6 +697,14 @@ static int handle_client_write(struct ipc_context *ctx,
       client->pending_events = 0;
       build_notification(ctx, client, pending);
     }
+
+    /* disarm EPOLLOUT if nothing left to send */
+    if (client->send_len == 0) {
+      struct epoll_event ev;
+      ev.events = EPOLLIN;
+      ev.data.fd = client->fd;
+      epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+    }
   }
 
   return 0;
@@ -733,7 +752,7 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
     return -ENOMEM;
   }
 
-  ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+  ev.events = EPOLLIN;
   ev.data.fd = fd;
   if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
     client_destroy(client);
@@ -832,7 +851,7 @@ int ipc_init(struct ipc_context *ctx) {
   }
 
   ctx->running = true;
-  ctx->status_flags = LOTA_STATUS_TPM_OK; /* will be updated */
+  ctx->status_flags = 0;
 
   lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
   return 0;
@@ -897,7 +916,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   }
 
   ctx->running = true;
-  ctx->status_flags = LOTA_STATUS_TPM_OK;
+  ctx->status_flags = 0;
 
   lota_info("IPC using socket-activated fd %d", fd);
   return 0;
@@ -981,9 +1000,7 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
       int ret = 0;
 
       if (events[i].events & EPOLLIN) {
-        /* drain all complete requests (EPOLLET won't re-notify) */
-        while ((ret = handle_client_read(ctx, client)) > 0)
-          ;
+        ret = handle_client_read(ctx, client);
       }
 
       if (events[i].events & EPOLLOUT) {
