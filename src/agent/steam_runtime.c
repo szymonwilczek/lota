@@ -94,6 +94,37 @@ static int is_regular_file(const char *path) {
   return S_ISREG(st.st_mode);
 }
 
+/*
+ * Safely get an environment variable with validation.
+ * Returns pointer to value if valid, NULL otherwise.
+ */
+static const char *get_env_safe(const char *name, size_t max_len) {
+  const char *val = getenv(name);
+  size_t len;
+
+  if (!val || val[0] == '\0')
+    return NULL;
+
+  len = strlen(val);
+  if (len > max_len) {
+    lota_warn("steam_runtime: env var %s exceeds limit (%zu > %zu), ignoring",
+              name, len, max_len);
+    return NULL;
+  }
+
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)val[i];
+    if (c < 0x20 || c == 0x7f) {
+      lota_warn("steam_runtime: env var %s contains control char 0x%02x, "
+                "ignoring",
+                name, c);
+      return NULL;
+    }
+  }
+
+  return val;
+}
+
 int steam_runtime_detect(struct steam_runtime_info *info) {
   const char *env;
 
@@ -114,15 +145,15 @@ int steam_runtime_detect(struct steam_runtime_info *info) {
    *
    * Any of these is a definitive signal.
    */
-  env = getenv("PRESSURE_VESSEL_RUNTIME");
-  if (env && env[0]) {
+  env = get_env_safe("PRESSURE_VESSEL_RUNTIME", PATH_MAX);
+  if (env) {
     info->env_flags |= STEAM_ENV_PRESSURE_VESSEL;
     info->type = classify_runtime(env);
   }
 
   if (!(info->env_flags & STEAM_ENV_PRESSURE_VESSEL)) {
-    env = getenv("PRESSURE_VESSEL_RUNTIME_BASE");
-    if (env && env[0]) {
+    env = get_env_safe("PRESSURE_VESSEL_RUNTIME_BASE", 256);
+    if (env) {
       info->env_flags |= STEAM_ENV_PRESSURE_VESSEL;
       info->type = classify_runtime(env);
     }
@@ -143,14 +174,15 @@ int steam_runtime_detect(struct steam_runtime_info *info) {
    * SteamAppId is set for every game launched through Steam.
    * STEAM_COMPAT_DATA_PATH is set when using Proton.
    */
-  env = getenv("SteamAppId");
-  if (env && env[0]) {
+  env = get_env_safe("SteamAppId", 32);
+  if (env) {
     info->env_flags |= STEAM_ENV_STEAM_ACTIVE;
     info->app_id = parse_uint32(env);
   }
 
-  env = getenv("STEAM_COMPAT_DATA_PATH");
-  if (env && env[0]) {
+  env = get_env_safe("STEAM_COMPAT_DATA_PATH",
+                     sizeof(info->steam_compat_path) - 1);
+  if (env) {
     info->env_flags |= STEAM_ENV_STEAM_ACTIVE;
     snprintf(info->steam_compat_path, sizeof(info->steam_compat_path), "%s",
              env);
@@ -159,17 +191,17 @@ int steam_runtime_detect(struct steam_runtime_info *info) {
   /*
    * Detect Proton/Wine.
    */
-  env = getenv("PROTON_VERSION");
+  env = get_env_safe("PROTON_VERSION", 64);
   if (!env)
-    env = getenv("STEAM_COMPAT_TOOL_PATHS");
-  if (env && env[0])
+    env = get_env_safe("STEAM_COMPAT_TOOL_PATHS", PATH_MAX);
+  if (env)
     info->env_flags |= STEAM_ENV_PROTON;
 
   /*
    * Probe XDG_RUNTIME_DIR.
    */
-  env = getenv("XDG_RUNTIME_DIR");
-  if (env && env[0] && is_directory(env)) {
+  env = get_env_safe("XDG_RUNTIME_DIR", sizeof(info->xdg_runtime_dir) - 1);
+  if (env && is_directory(env)) {
     info->env_flags |= STEAM_ENV_XDG_AVAILABLE;
     snprintf(info->xdg_runtime_dir, sizeof(info->xdg_runtime_dir), "%s", env);
   }
@@ -188,8 +220,9 @@ int steam_runtime_detect(struct steam_runtime_info *info) {
   /*
    * Container ID
    */
-  env = getenv("PRESSURE_VESSEL_INSTANCE_ID");
-  if (env && env[0]) {
+  env = get_env_safe("PRESSURE_VESSEL_INSTANCE_ID",
+                     sizeof(info->container_id) - 1);
+  if (env) {
     snprintf(info->container_id, sizeof(info->container_id), "%s", env);
   } else if (info->env_flags & STEAM_ENV_PRESSURE_VESSEL) {
     snprintf(info->container_id, sizeof(info->container_id), "pv-%u",
@@ -224,8 +257,8 @@ int steam_runtime_container_socket_dir(char *buf, size_t bufsz) {
   if (!buf || bufsz == 0)
     return -EINVAL;
 
-  xdg = getenv("XDG_RUNTIME_DIR");
-  if (!xdg || !xdg[0])
+  xdg = get_env_safe("XDG_RUNTIME_DIR", PATH_MAX);
+  if (!xdg)
     return -ENOENT;
 
   n = snprintf(buf, bufsz, "%s/%s", xdg, STEAM_RT_SOCKET_DIR_SUFFIX);
@@ -242,8 +275,8 @@ int steam_runtime_container_socket_path(char *buf, size_t bufsz) {
   if (!buf || bufsz == 0)
     return -EINVAL;
 
-  xdg = getenv("XDG_RUNTIME_DIR");
-  if (!xdg || !xdg[0])
+  xdg = get_env_safe("XDG_RUNTIME_DIR", PATH_MAX);
+  if (!xdg)
     return -ENOENT;
 
   n = snprintf(buf, bufsz, "%s/%s/%s", xdg, STEAM_RT_SOCKET_DIR_SUFFIX,
