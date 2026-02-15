@@ -338,12 +338,61 @@ static __always_inline int is_module_whitelisted(const unsigned char *name) {
 }
 
 /*
+ * Check if a directory dentry sits directly under / or /usr/.
+ *
+ * Root dentry is identified by d_parent == itself.
+ * Returns 1 if:
+ *   - dir->d_parent is root  (dir is /lib, /bin, etc)
+ *   - dir->d_parent is "usr" whose d_parent is root  (/usr/lib, etc)
+ */
+static __always_inline int is_at_root_or_usr(struct dentry *dir) {
+  struct dentry *up;
+  struct dentry *up_parent;
+  const unsigned char *name;
+  char nbuf[8];
+
+  if (!dir)
+    return 0;
+
+  up = BPF_CORE_READ(dir, d_parent);
+  if (!up)
+    return 0;
+
+  /* dir is directly under root? */
+  up_parent = BPF_CORE_READ(up, d_parent);
+  if (up_parent == up)
+    return 1;
+
+  /* dir is under /usr/? check up is "usr" at root level */
+  if (!up_parent)
+    return 0;
+
+  struct dentry *up_grandparent = BPF_CORE_READ(up_parent, d_parent);
+  if (up_grandparent != up_parent)
+    return 0; /* up is not at root level */
+
+  name = BPF_CORE_READ(up, d_name.name);
+  if (!name)
+    return 0;
+
+  if (bpf_probe_read_kernel_str(nbuf, sizeof(nbuf), name) < 0)
+    return 0;
+
+  if (nbuf[0] == 'u' && nbuf[1] == 's' && nbuf[2] == 'r' && nbuf[3] == '\0')
+    return 1;
+
+  return 0;
+}
+
+/*
  * Check if dentry is under a trusted library directory.
  * Walks up dentry parents looking for patterns like:
- *   .../usr/lib/...   .../usr/lib64/...
- *   .../lib/...       .../lib64/...
- *   .../usr/bin/...   .../usr/sbin/...
- *   .../bin/...       .../sbin/...
+ *   /usr/lib/...   /usr/lib64/...   /lib/...   /lib64/...
+ *   /usr/bin/...   /usr/sbin/...    /bin/...   /sbin/...
+ *
+ * Each matched directory is verified to sit at / or /usr/ via
+ * is_at_root_or_usr() to prevent bypass through attacker-controlled
+ * paths like /home/user/lib/.
  *
  * Returns 1 if file appears to be in a trusted system directory.
  */
@@ -369,35 +418,41 @@ static __always_inline int is_trusted_system_path(struct dentry *dentry) {
     /* "lib64" */
     if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '6' &&
         buf[4] == '4' && buf[5] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
     /* "libexec" - (/usr/libexec/) */
     if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == 'e' &&
         buf[4] == 'x' && buf[5] == 'e' && buf[6] == 'c' && buf[7] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
     /* "lib" */
     if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
     /* "bin" */
     if (buf[0] == 'b' && buf[1] == 'i' && buf[2] == 'n' && buf[3] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
     /* "sbin" */
     if (buf[0] == 's' && buf[1] == 'b' && buf[2] == 'i' && buf[3] == 'n' &&
         buf[4] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
     /* "modules" (for kernel module compat) */
     if (buf[0] == 'm' && buf[1] == 'o' && buf[2] == 'd' && buf[3] == 'u' &&
         buf[4] == 'l' && buf[5] == 'e' && buf[6] == 's' && buf[7] == '\0') {
-      return 1;
+      if (is_at_root_or_usr(parent))
+        return 1;
     }
 
   next_trusted:
