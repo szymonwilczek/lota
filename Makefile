@@ -397,6 +397,34 @@ $(BUILD_DIR)/agent/fuzz:
 fuzz-agent: $(FUZZ_AGENT_OBJS)
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
+# Config parser fuzz (standalone, libc only)
+$(BUILD_DIR)/agent/fuzz/config_fuzz.o: src/agent/fuzz/config_fuzz.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/agent/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
+
+fuzz-config: $(BUILD_DIR)/agent/fuzz/config_fuzz.o $(BUILD_DIR)/agent/fuzz/config_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
+
+# Net pin SHA-256 parser fuzz (standalone, libc only)
+$(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o: src/agent/fuzz/net_pin_fuzz.c | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-net-pin: $(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
+
+# Net wire protocol parser fuzz (standalone, libc only)
+$(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o: src/agent/fuzz/net_wire_fuzz.c | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
+
+# Build all fuzz targets
+.PHONY: fuzz-all
+fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
+
 # Help target
 .PHONY: help
 help:
