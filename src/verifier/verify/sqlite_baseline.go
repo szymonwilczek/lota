@@ -9,6 +9,7 @@ package verify
 
 import (
 	"database/sql"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -90,10 +91,13 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 
 	// match
 	newCount := attestCount + 1
-	s.db.Exec(
+	_, err = s.db.Exec(
 		"UPDATE baselines SET last_seen = ?, attest_count = ? WHERE client_id = ?",
 		now.UTC(), newCount, clientID,
 	)
+	if err != nil {
+		slog.Warn("baseline update failed", "client_id", clientID, "error", err)
+	}
 
 	return TOFUMatch, &ClientBaseline{
 		PCR14:       stored,
