@@ -11,6 +11,7 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
@@ -246,7 +247,9 @@ func (s *Server) Stop() {
 
 	// graceful HTTP shutdown
 	if s.httpServer != nil {
-		s.httpServer.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.httpServer.Shutdown(ctx)
 	}
 
 	if s.listener != nil {
