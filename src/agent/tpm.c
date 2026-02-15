@@ -423,10 +423,13 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     return tss2_rc_to_errno(rc);
 
   /* raw attestation data */
-  if (quoted->size <= LOTA_MAX_ATTEST_SIZE) {
-    memcpy(response->attest_data, quoted->attestationData, quoted->size);
-    response->attest_size = quoted->size;
+  if (quoted->size > LOTA_MAX_ATTEST_SIZE) {
+    Esys_Free(quoted);
+    Esys_Free(signature);
+    return -ENOSPC;
   }
+  memcpy(response->attest_data, quoted->attestationData, quoted->size);
+  response->attest_size = quoted->size;
 
   response->sig_alg = signature->sigAlg;
 
