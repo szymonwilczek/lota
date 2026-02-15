@@ -149,6 +149,11 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   return 0;
 
 err_close:
+  for (int i = 0; i < ctx->link_count; i++) {
+    bpf_link__destroy(ctx->links[i]);
+    ctx->links[i] = NULL;
+  }
+  ctx->link_count = 0;
   bpf_object__close(ctx->obj);
   ctx->obj = NULL;
   return err;
