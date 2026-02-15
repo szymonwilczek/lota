@@ -11,6 +11,7 @@
 #include "journal.h"
 
 #include <arpa/inet.h>
+#include <endian.h>
 #include <errno.h>
 #include <netdb.h>
 #include <string.h>
@@ -364,12 +365,17 @@ int net_recv_challenge(struct net_context *ctx,
     total += ret;
   }
 
-  /* challenge parsing (little-endian) */
+  /* challenge parsing (little-endian wire format) */
   memcpy(&challenge->magic, buf + 0, 4);
   memcpy(&challenge->version, buf + 4, 4);
   memcpy(challenge->nonce, buf + 8, 32);
   memcpy(&challenge->pcr_mask, buf + 40, 4);
   memcpy(&challenge->flags, buf + 44, 4);
+
+  challenge->magic = le32toh(challenge->magic);
+  challenge->version = le32toh(challenge->version);
+  challenge->pcr_mask = le32toh(challenge->pcr_mask);
+  challenge->flags = le32toh(challenge->flags);
 
   if (challenge->magic != LOTA_MAGIC) {
     return -EPROTO;
@@ -430,13 +436,19 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
     total += ret;
   }
 
-  /* result parsing (little-endian) */
+  /* result parsing (little-endian wire format) */
   memcpy(&result->magic, buf + 0, 4);
   memcpy(&result->version, buf + 4, 4);
   memcpy(&result->result, buf + 8, 4);
   memcpy(&result->flags, buf + 12, 4);
   memcpy(&result->valid_until, buf + 16, 8);
   memcpy(result->session_token, buf + 24, 32);
+
+  result->magic = le32toh(result->magic);
+  result->version = le32toh(result->version);
+  result->result = le32toh(result->result);
+  result->flags = le32toh(result->flags);
+  result->valid_until = le64toh(result->valid_until);
 
   if (result->magic != LOTA_MAGIC) {
     return -EPROTO;
