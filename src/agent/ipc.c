@@ -1032,6 +1032,9 @@ int ipc_get_fd(struct ipc_context *ctx) { return ctx->epoll_fd; }
  */
 void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
                        uint64_t valid_until) {
+  if (!ctx->running)
+    return;
+
   uint32_t old_flags = ctx->status_flags;
 
   ctx->status_flags = flags;
