@@ -27,6 +27,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,8 +52,8 @@ enum hook_log_level {
 static struct {
   struct lota_client *client;
   pthread_t thread;
-  volatile int running;
-  int thread_started;
+  atomic_int running;
+  atomic_int thread_started;
   int log_level;
   int refresh_sec;
   char token_dir[PATH_MAX - 64]; /* leave room for filename suffix */
