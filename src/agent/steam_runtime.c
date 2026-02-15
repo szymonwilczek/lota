@@ -58,14 +58,15 @@ static enum steam_runtime_type classify_runtime(const char *runtime_str) {
  * Parse a uint32 from a string.  Returns 0 for NULL or invalid.
  */
 static uint32_t parse_uint32(const char *s) {
-  long val;
+  unsigned long val;
   char *end;
 
   if (!s || !s[0])
     return 0;
 
-  val = strtol(s, &end, 10);
-  if (end == s || val < 0 || val > (long)UINT32_MAX)
+  errno = 0;
+  val = strtoul(s, &end, 10);
+  if (end == s || *end != '\0' || errno == ERANGE || val > UINT32_MAX)
     return 0;
 
   return (uint32_t)val;
