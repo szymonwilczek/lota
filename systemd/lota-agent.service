@@ -62,8 +62,6 @@ SystemCallFilter=@system-service @io-event @network-io
 # BPF and perf syscalls required for LSM program
 SystemCallFilter=bpf perf_event_open
 
-# block remaining privileged syscalls
-SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
 SystemCallErrorNumber=EPERM
 
