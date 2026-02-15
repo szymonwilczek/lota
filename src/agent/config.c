@@ -145,7 +145,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
   if (strcmp(key, "attest_interval") == 0 ||
       strcmp(key, "attest-interval") == 0) {
     long v;
-    if (safe_parse_long(value, &v) == 0 && v >= 0)
+    if (safe_parse_long(value, &v) == 0 && v >= 0 && v <= INT_MAX)
       cfg->attest_interval = (int)v;
     return 0;
   }
@@ -159,8 +159,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
     char *end;
     errno = 0;
     unsigned long v = strtoul(value, &end, 0);
-    if (errno == 0 && end != value && *end == '\0' &&
-        v > 0 && v <= UINT32_MAX)
+    if (errno == 0 && end != value && *end == '\0' && v > 0 && v <= UINT32_MAX)
       cfg->aik_handle = (uint32_t)v;
     return 0;
   }
