@@ -28,6 +28,9 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
+/* Maximum number of SSL_ERROR_WANT_READ/WRITE retries before giving up */
+#define NET_SSL_MAX_RETRIES 1024
+
 /*
  * Wire-format size assertions.
  * Protocol sends these structures as flat byte arrays; any compiler
@@ -341,6 +344,7 @@ int net_recv_challenge(struct net_context *ctx,
   uint8_t buf[sizeof(struct verifier_challenge)];
   int ret;
   int total = 0;
+  int retries = 0;
 
   if (!ctx || !ctx->connected || !challenge)
     return -EINVAL;
@@ -349,10 +353,14 @@ int net_recv_challenge(struct net_context *ctx,
     ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
       int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
-      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        if (++retries > NET_SSL_MAX_RETRIES)
+          return -ETIMEDOUT;
         continue;
+      }
       return -EIO;
     }
+    retries = 0;
     total += ret;
   }
 
@@ -374,6 +382,7 @@ int net_send_report(struct net_context *ctx, const void *report,
                     size_t report_size) {
   int ret;
   size_t total = 0;
+  int retries = 0;
 
   if (!ctx || !ctx->connected || !report || report_size == 0)
     return -EINVAL;
@@ -383,10 +392,14 @@ int net_send_report(struct net_context *ctx, const void *report,
                     report_size - total);
     if (ret <= 0) {
       int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
-      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        if (++retries > NET_SSL_MAX_RETRIES)
+          return -ETIMEDOUT;
         continue;
+      }
       return -EIO;
     }
+    retries = 0;
     total += ret;
   }
 
@@ -397,6 +410,7 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
   uint8_t buf[sizeof(struct verifier_result)];
   int ret;
   int total = 0;
+  int retries = 0;
 
   if (!ctx || !ctx->connected || !result)
     return -EINVAL;
@@ -405,10 +419,14 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
     ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
       int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
-      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
+      if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        if (++retries > NET_SSL_MAX_RETRIES)
+          return -ETIMEDOUT;
         continue;
+      }
       return -EIO;
     }
+    retries = 0;
     total += ret;
   }
 
