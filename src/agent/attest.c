@@ -227,9 +227,12 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   report->header.report_size = sizeof(*report);
 
   struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-  report->header.timestamp = ts.tv_sec;
-  report->header.timestamp_ns = ts.tv_nsec;
+  if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+    report->header.timestamp = ts.tv_sec;
+    report->header.timestamp_ns = ts.tv_nsec;
+  } else {
+    lota_err("clock_gettime failed: %s", strerror(errno));
+  }
 
   /* nonce from challenge */
   memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
