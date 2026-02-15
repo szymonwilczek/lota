@@ -51,13 +51,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 			clientID, pcr14[:], now.UTC(), now.UTC(),
 		)
 		if err != nil {
-			// insertion failed - return as first use anyway with in-memory baseline
-			return TOFUFirstUse, &ClientBaseline{
-				PCR14:       pcr14,
-				FirstSeen:   now,
-				LastSeen:    now,
-				AttestCount: 1,
-			}
+			slog.Error("baseline INSERT failed",
+				"client_id", clientID, "error", err)
+			return TOFUError, nil
 		}
 
 		return TOFUFirstUse, &ClientBaseline{
