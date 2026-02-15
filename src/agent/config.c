@@ -97,7 +97,7 @@ void config_init(struct lota_config *cfg) {
  *   1  if the key was unknown (caller should warn)
  */
 static int apply_key(struct lota_config *cfg, const char *key,
-                     const char *value) {
+                     const char *value, const char *filepath, int lineno) {
   /* verifier connection */
   if (strcmp(key, "server") == 0) {
     set_str(cfg->server, sizeof(cfg->server), value);
@@ -105,8 +105,12 @@ static int apply_key(struct lota_config *cfg, const char *key,
   }
   if (strcmp(key, "port") == 0) {
     long v;
-    if (safe_parse_long(value, &v) == 0 && v > 0 && v <= 65535)
-      cfg->port = (int)v;
+    if (safe_parse_long(value, &v) != 0 || v <= 0 || v > 65535) {
+      fprintf(stderr, "%s:%d: invalid port '%s' (expected 1-65535)\n", filepath,
+              lineno, value);
+      return -1;
+    }
+    cfg->port = (int)v;
     return 0;
   }
   if (strcmp(key, "ca_cert") == 0 || strcmp(key, "ca-cert") == 0) {
@@ -145,22 +149,34 @@ static int apply_key(struct lota_config *cfg, const char *key,
   if (strcmp(key, "attest_interval") == 0 ||
       strcmp(key, "attest-interval") == 0) {
     long v;
-    if (safe_parse_long(value, &v) == 0 && v >= 0 && v <= INT_MAX)
-      cfg->attest_interval = (int)v;
+    if (safe_parse_long(value, &v) != 0 || v < 0 || v > INT_MAX) {
+      fprintf(stderr, "%s:%d: invalid attest_interval '%s'\n", filepath, lineno,
+              value);
+      return -1;
+    }
+    cfg->attest_interval = (int)v;
     return 0;
   }
   if (strcmp(key, "aik_ttl") == 0 || strcmp(key, "aik-ttl") == 0) {
     long v;
-    if (safe_parse_long(value, &v) == 0 && v >= 0 && v <= UINT32_MAX)
-      cfg->aik_ttl = (uint32_t)v;
+    if (safe_parse_long(value, &v) != 0 || v < 0 || v > (long)UINT32_MAX) {
+      fprintf(stderr, "%s:%d: invalid aik_ttl '%s'\n", filepath, lineno, value);
+      return -1;
+    }
+    cfg->aik_ttl = (uint32_t)v;
     return 0;
   }
   if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
     char *end;
     errno = 0;
     unsigned long v = strtoul(value, &end, 0);
-    if (errno == 0 && end != value && *end == '\0' && v > 0 && v <= UINT32_MAX)
-      cfg->aik_handle = (uint32_t)v;
+    if (errno != 0 || end == value || *end != '\0' || v == 0 ||
+        v > UINT32_MAX) {
+      fprintf(stderr, "%s:%d: invalid aik_handle '%s'\n", filepath, lineno,
+              value);
+      return -1;
+    }
+    cfg->aik_handle = (uint32_t)v;
     return 0;
   }
 
@@ -194,11 +210,18 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "protect_pid") == 0 || strcmp(key, "protect-pid") == 0) {
-    if (cfg->protect_pid_count < LOTA_CONFIG_MAX_PIDS) {
-      long v;
-      if (safe_parse_long(value, &v) == 0 && v > 0 && v <= UINT32_MAX)
-        cfg->protect_pids[cfg->protect_pid_count++] = (uint32_t)v;
+    if (cfg->protect_pid_count >= LOTA_CONFIG_MAX_PIDS) {
+      fprintf(stderr, "%s:%d: protect_pid limit (%d) exceeded\n", filepath,
+              lineno, LOTA_CONFIG_MAX_PIDS);
+      return -1;
     }
+    long v;
+    if (safe_parse_long(value, &v) != 0 || v <= 0 || v > (long)UINT32_MAX) {
+      fprintf(stderr, "%s:%d: invalid protect_pid '%s'\n", filepath, lineno,
+              value);
+      return -1;
+    }
+    cfg->protect_pids[cfg->protect_pid_count++] = (uint32_t)v;
     return 0;
   }
 
@@ -270,8 +293,12 @@ int config_load(struct lota_config *cfg, const char *path) {
       continue;
     }
 
-    if (apply_key(cfg, key, value) != 0) {
+    int ret = apply_key(cfg, key, value, filepath, lineno);
+    if (ret == 1) {
       fprintf(stderr, "%s:%d: unknown key '%s'\n", filepath, lineno, key);
+      errors++;
+    } else if (ret < 0) {
+      errors++;
     }
   }
 
