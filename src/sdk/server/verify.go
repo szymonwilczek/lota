@@ -449,6 +449,10 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrDigest []byte, err error
 			return extraData, nil, nil // partial success - have extraData
 		}
 
+		if pcrSelCount > 16 {
+			return extraData, nil, nil
+		}
+
 		for i := uint32(0); i < pcrSelCount; i++ {
 			var hashAlg uint16
 			var selectSize uint8
