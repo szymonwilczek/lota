@@ -39,6 +39,29 @@ struct lota_client {
 };
 
 /*
+ * Send all data, handling partial writes
+ */
+static int send_all(int fd, const void *buf, size_t len) {
+  const char *p = buf;
+  size_t remaining = len;
+  ssize_t n;
+
+  while (remaining > 0) {
+    n = send(fd, p, remaining, MSG_NOSIGNAL);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -errno;
+    }
+    if (n == 0)
+      return -EIO;
+    p += n;
+    remaining -= n;
+  }
+  return 0;
+}
+
+/*
  * Set socket to non-blocking mode
  */
 static int set_nonblock(int fd) {
@@ -87,7 +110,6 @@ static int wait_for_socket(int fd, int events, int timeout_ms) {
 static int send_request(struct lota_client *client,
                         const struct lota_ipc_request *req, const void *payload,
                         size_t payload_len) {
-  ssize_t n;
   int ret;
 
   ret = wait_for_socket(client->fd, POLLOUT, client->timeout_ms);
@@ -95,15 +117,15 @@ static int send_request(struct lota_client *client,
     return ret;
 
   /* send header */
-  n = send(client->fd, req, sizeof(*req), MSG_NOSIGNAL);
-  if (n != sizeof(*req))
-    return (n < 0) ? -errno : -EIO;
+  ret = send_all(client->fd, req, sizeof(*req));
+  if (ret < 0)
+    return ret;
 
   /* send payload if present */
   if (payload && payload_len > 0) {
-    n = send(client->fd, payload, payload_len, MSG_NOSIGNAL);
-    if (n != (ssize_t)payload_len)
-      return (n < 0) ? -errno : -EIO;
+    ret = send_all(client->fd, payload, payload_len);
+    if (ret < 0)
+      return ret;
   }
 
   return 0;
@@ -264,7 +286,7 @@ static int try_connect_path(const char *path, int timeout_ms) {
   struct sockaddr_un addr;
   int fd, ret;
 
-  fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0)
     return -1;
 
