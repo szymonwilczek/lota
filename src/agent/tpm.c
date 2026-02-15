@@ -474,6 +474,11 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     memcpy(response->signature, signature->signature.rsapss.sig.buffer,
            sig_size);
     response->signature_size = (uint16_t)sig_size;
+  } else {
+    /* unknown signature algorithm - reject */
+    Esys_Free(quoted);
+    Esys_Free(signature);
+    return -ENOTSUP;
   }
 
   Esys_Free(quoted);
