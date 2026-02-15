@@ -40,6 +40,9 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   if (len < sizeof(*event))
     return 0;
 
+  event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
+  event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
+
   switch (event->event_type) {
   case LOTA_EVENT_EXEC:
     event_type_str = "EXEC";
