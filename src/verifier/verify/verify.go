@@ -415,17 +415,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// verify event log -> independent PCR reconstruction
-	if err := VerifyEventLog(report); err != nil {
-		if len(report.EventLog) > 0 {
+	// verify event log -> independent PCR reconstruction
+	if len(report.EventLog) > 0 {
+		if err := VerifyEventLog(report); err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
 			return result, fmt.Errorf("event log inconsistency: %w", err)
 		}
-		clog.Debug("event log not provided")
-	} else {
 		clog.Debug("event log verified", "size", len(report.EventLog))
+	} else {
+		clog.Debug("event log not provided")
 	}
 
 	// check agent self-measurement against baseline
