@@ -441,7 +441,31 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
           lota_info("Log level changed to %s", new_cfg.log_level);
         }
 
+        /* flush and reload protected PIDs */
+        for (int i = 0; i < g_protect_pid_count; i++)
+          bpf_loader_unprotect_pid(&g_bpf_ctx, g_protect_pids[i]);
+
+        /* flush and reload trusted libraries */
+        for (int i = 0; i < g_trust_lib_count; i++)
+          bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[i]);
+
         *cfg = new_cfg;
+
+        g_protect_pid_count = cfg->protect_pid_count;
+        for (int i = 0; i < g_protect_pid_count; i++) {
+          g_protect_pids[i] = cfg->protect_pids[i];
+          if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]) < 0)
+            lota_warn("Failed to protect PID %u on reload", g_protect_pids[i]);
+        }
+        lota_info("Protected PIDs reloaded (%d entries)", g_protect_pid_count);
+
+        g_trust_lib_count = cfg->trust_lib_count;
+        for (int i = 0; i < g_trust_lib_count; i++) {
+          g_trust_libs[i] = cfg->trust_libs[i];
+          if (bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]) < 0)
+            lota_warn("Failed to trust lib %s on reload", g_trust_libs[i]);
+        }
+        lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
         sdnotify_ready();
         sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
         lota_info("Configuration reloaded");
