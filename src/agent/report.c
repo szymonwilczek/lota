@@ -13,6 +13,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <endian.h>
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
@@ -79,7 +80,10 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
   offset += sizeof(*report);
 
   /* BPF event section */
-  memcpy(out_buf + offset, &event_count, sizeof(event_count));
+  {
+    uint32_t ec_le = htole32(event_count);
+    memcpy(out_buf + offset, &ec_le, sizeof(ec_le));
+  }
   offset += sizeof(event_count);
 
   if (event_count > 0 && events) {
@@ -89,7 +93,10 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
   }
 
   /* TPM event log section */
-  memcpy(out_buf + offset, &event_log_size, sizeof(event_log_size));
+  {
+    uint32_t els_le = htole32(event_log_size);
+    memcpy(out_buf + offset, &els_le, sizeof(els_le));
+  }
   offset += sizeof(event_log_size);
 
   if (event_log_size > 0 && event_log) {
