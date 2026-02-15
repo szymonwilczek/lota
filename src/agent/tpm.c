@@ -241,11 +241,19 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
   return tss2_rc_to_errno(rc);
 }
 
-int tpm_provision_aik(struct tpm_context *ctx) {
+/*
+ * create_aik_primary - Create a transient AIK primary key
+ * @ctx: Initialized TPM context
+ * @out_handle: Receives the transient key handle on success
+ *
+ * Creates an RSA 2048-bit restricted signing key under the Owner
+ * Hierarchy.  The caller is responsible for persisting or flushing
+ * the returned transient handle.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle) {
   TSS2_RC rc;
-  int ret;
-  ESYS_TR primary_handle = ESYS_TR_NONE;
-  ESYS_TR persistent_handle = ESYS_TR_NONE;
   TPM2B_PUBLIC *out_public = NULL;
   TPM2B_CREATION_DATA *creation_data = NULL;
   TPM2B_DIGEST *creation_hash = NULL;
@@ -300,6 +308,28 @@ int tpm_provision_aik(struct tpm_context *ctx) {
   TPM2B_DATA outside_info = {.size = 0};
   TPML_PCR_SELECTION creation_pcr = {.count = 0};
 
+  rc = Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
+                          ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
+                          &outside_info, &creation_pcr, out_handle, &out_public,
+                          &creation_data, &creation_hash, &creation_ticket);
+
+  Esys_Free(out_public);
+  Esys_Free(creation_data);
+  Esys_Free(creation_hash);
+  Esys_Free(creation_ticket);
+
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  return 0;
+}
+
+int tpm_provision_aik(struct tpm_context *ctx) {
+  TSS2_RC rc;
+  int ret;
+  ESYS_TR primary_handle = ESYS_TR_NONE;
+  ESYS_TR persistent_handle = ESYS_TR_NONE;
+
   if (!ctx || !ctx->initialized)
     return -EINVAL;
 
@@ -314,14 +344,9 @@ int tpm_provision_aik(struct tpm_context *ctx) {
    * Create primary key under Owner Hierarchy.
    * Owner hierarchy allows unrestricted use of signing keys.
    */
-  rc = Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
-                          ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
-                          &outside_info, &creation_pcr, &primary_handle,
-                          &out_public, &creation_data, &creation_hash,
-                          &creation_ticket);
-  if (rc != TSS2_RC_SUCCESS) {
-    return tss2_rc_to_errno(rc);
-  }
+  ret = create_aik_primary(ctx, &primary_handle);
+  if (ret < 0)
+    return ret;
 
   /*
    * Make key persistent at ctx->aik_handle.
@@ -332,10 +357,6 @@ int tpm_provision_aik(struct tpm_context *ctx) {
                          ctx->aik_handle, &persistent_handle);
 
   Esys_FlushContext(ctx->esys_ctx, primary_handle);
-  Esys_Free(out_public);
-  Esys_Free(creation_data);
-  Esys_Free(creation_hash);
-  Esys_Free(creation_ticket);
 
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
@@ -1019,6 +1040,8 @@ int tpm_rotate_aik(struct tpm_context *ctx) {
     return ret;
 
   if (ret == 1) {
+    ESYS_TR new_transient = ESYS_TR_NONE;
+
     ret = tpm_get_aik_public(ctx, ctx->prev_aik_public,
                              sizeof(ctx->prev_aik_public), &prev_size);
     if (ret < 0) {
@@ -1030,6 +1053,13 @@ int tpm_rotate_aik(struct tpm_context *ctx) {
     }
     ctx->prev_aik_public_size = prev_size;
 
+    /*
+     * create new AIK as transient BEFORE evicting old key
+     */
+    ret = create_aik_primary(ctx, &new_transient);
+    if (ret < 0)
+      return ret;
+
     /* evict old persistent handle */
     {
       TSS2_RC rc;
@@ -1037,22 +1067,30 @@ int tpm_rotate_aik(struct tpm_context *ctx) {
       rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
                              ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
                              ctx->aik_handle, &out_handle);
+      if (rc != TSS2_RC_SUCCESS) {
+        Esys_FlushContext(ctx->esys_ctx, new_transient);
+        return tss2_rc_to_errno(rc);
+      }
+    }
+
+    /* persist new transient key at the same handle */
+    {
+      TSS2_RC rc;
+      ESYS_TR persistent;
+      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, new_transient,
+                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                             ctx->aik_handle, &persistent);
+      Esys_FlushContext(ctx->esys_ctx, new_transient);
       if (rc != TSS2_RC_SUCCESS)
         return tss2_rc_to_errno(rc);
     }
   } else {
     ctx->prev_aik_public_size = 0;
-  }
 
-  /* create new AIK */
-  ret = tpm_provision_aik(ctx);
-  if (ret < 0) {
-    /*
-     * old key evicted but new key creation failed
-     * persistent handle is empty
-     * log and propagate error!
-     */
-    return ret;
+    /* no existing AIK — provision from scratch */
+    ret = tpm_provision_aik(ctx);
+    if (ret < 0)
+      return ret;
   }
 
   /* update metadata */
