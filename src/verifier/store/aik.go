@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -215,6 +216,10 @@ func (fs *FileStore) saveMeta(clientID string, regTime time.Time) error {
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
+	if err := validateClientID(clientID); err != nil {
+		return nil, err
+	}
+
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -227,6 +232,10 @@ func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 }
 
 func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -273,6 +282,10 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 }
 
 func (fs *FileStore) RevokeAIK(clientID string) error {
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -301,6 +314,10 @@ func (fs *FileStore) ListClients() []string {
 }
 
 func (fs *FileStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	if err := validateClientID(clientID); err != nil {
+		return time.Time{}, err
+	}
+
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -312,6 +329,10 @@ func (fs *FileStore) GetRegisteredAt(clientID string) (time.Time, error) {
 
 // replaces expired AIK with a new key, preserving hardware ID binding
 func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -361,6 +382,10 @@ func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey,
 // registers hardware ID for client or validates against existing
 // implements TOFU: first registration stores the ID, subsequent calls verify match
 func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -384,6 +409,10 @@ func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) er
 
 // retrieves stored hardware ID for client
 func (fs *FileStore) GetHardwareID(clientID string) ([32]byte, error) {
+	if err := validateClientID(clientID); err != nil {
+		return [32]byte{}, err
+	}
+
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -561,6 +590,18 @@ var (
 	ErrHardwareIDMismatch = errors.New("hardware identity mismatch - possible cloning or hardware change")
 	ErrHardwareIDNotFound = errors.New("hardware identity not registered")
 )
+
+// client ID validation error
+var ErrInvalidClientID = errors.New("invalid client ID")
+
+// rejects IDs that could escape the store directory
+// disallows empty strings, path separators, dot-dot sequences, and NUL bytes
+func validateClientID(id string) error {
+	if id == "" || strings.ContainsAny(id, "/\\\x00") || strings.Contains(id, "..") {
+		return ErrInvalidClientID
+	}
+	return nil
+}
 
 // creates a certificate-based store
 // caCertPaths: paths to trusted CA certificates (TPM manufacturers, Privacy CAs)

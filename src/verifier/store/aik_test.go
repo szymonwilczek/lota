@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -888,5 +889,63 @@ func TestCertificateStore_EKCertificateMissingOID(t *testing.T) {
 	}
 	if !errors.Is(err, ErrCertificateEKOID) {
 		t.Errorf("Expected ErrCertificateEKOID, got: %v", err)
+	}
+}
+
+func TestFileStore_PathTraversal(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+	hwid := [32]byte{0xDE, 0xAD}
+
+	malicious := []string{
+		"../etc/shadow",
+		"../../etc/passwd",
+		"foo/bar",
+		"foo\\bar",
+		"clean\x00evil",
+		"..",
+		"",
+	}
+
+	for _, id := range malicious {
+		label := fmt.Sprintf("%q", id)
+
+		if err := store.RegisterAIK(id, &key.PublicKey); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("RegisterAIK(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if _, err := store.GetAIK(id); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("GetAIK(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if err := store.RevokeAIK(id); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("RevokeAIK(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if _, err := store.GetRegisteredAt(id); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("GetRegisteredAt(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if err := store.RotateAIK(id, &key.PublicKey); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("RotateAIK(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if err := store.RegisterHardwareID(id, hwid); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("RegisterHardwareID(%s): want ErrInvalidClientID, got %v", label, err)
+		}
+
+		if _, err := store.GetHardwareID(id); !errors.Is(err, ErrInvalidClientID) {
+			t.Errorf("GetHardwareID(%s): want ErrInvalidClientID, got %v", label, err)
+		}
 	}
 }
