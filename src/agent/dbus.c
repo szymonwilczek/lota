@@ -205,8 +205,7 @@ static const sd_bus_vtable agent_vtable[] = {
     SD_BUS_METHOD("Ping", "", "tu", method_ping, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
                   SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("GetToken", "", "u", method_get_token,
-                  SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
 
     /* signals */
     SD_BUS_SIGNAL("StatusChanged", "u", 0),
