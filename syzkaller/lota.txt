@@ -21,21 +21,20 @@ include <linux/un.h>
 #
 # ==============================================================================
 
-resource sock_unix[sock]
 
 # sockaddr_un for LOTA
 # sun_family = AF_UNIX (1)
 # sun_path = "/run/lota/lota.sock"
 sockaddr_un_lota {
     family  const[AF_UNIX, int16]
-    path    string["/run/lota/lota.sock"]
+    path    string
 }
 
 connect$lota(fd sock_unix, addr ptr[in, sockaddr_un_lota], len len[addr])
 
 # IPC Header
 lota_ipc_request {
-    magic   const[0x4C4F5441, int32] # "LOTA"
+    magic   const[0x4C4F5441, int32]
     version const[1, int32]
     cmd     int32
     len     int32
