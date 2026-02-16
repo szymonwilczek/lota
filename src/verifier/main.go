@@ -49,20 +49,21 @@ import (
 )
 
 var (
-	addr         = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
-	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
-	certFile     = flag.String("cert", "", "TLS certificate file")
-	keyFile      = flag.String("key", "", "TLS private key file")
-	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
-	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
-	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
-	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
-	adminAPIKey  = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
-	readerAPIKey = flag.String("reader-api-key", "", "API key for sensitive read-only endpoints (clients, audit, attestations); if empty, those endpoints are public")
-	generateCert = flag.Bool("generate-cert", false, "Generate self-signed certificate")
-	aikMaxAge    = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
-	logFormat    = flag.String("log-format", "text", "Log output format: text or json")
-	logLevel     = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
+	addr            = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
+	httpAddr        = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	certFile        = flag.String("cert", "", "TLS certificate file")
+	keyFile         = flag.String("key", "", "TLS private key file")
+	aikStorePath    = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
+	dbPath          = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
+	policyFile      = flag.String("policy", "", "PCR policy file (YAML)")
+	policyPubKey    = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
+	adminAPIKey     = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
+	readerAPIKey    = flag.String("reader-api-key", "", "API key for sensitive read-only endpoints (clients, audit, attestations); if empty, those endpoints are public")
+	generateCert    = flag.Bool("generate-cert", false, "Generate self-signed certificate")
+	aikMaxAge       = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
+	logFormat       = flag.String("log-format", "text", "Log output format: text or json")
+	logLevel        = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
+	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
 )
 
 // resolveAPIKey returns the flag value if set, otherwise falls back to the environment variable
@@ -116,6 +117,7 @@ func main() {
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
 	verifierCfg.AIKMaxAge = *aikMaxAge
+	verifierCfg.RequireEventLog = *requireEventLog
 
 	if *aikMaxAge == 0 {
 		logger.Warn("AIK expiry disabled (--aik-max-age=0): registered keys will never expire")

@@ -55,6 +55,9 @@ type Verifier struct {
 	failedAttests  atomic.Int64
 	revokedAttests atomic.Int64
 	bannedAttests  atomic.Int64
+
+	// policy enforcement
+	requireEventLog bool
 }
 
 // holds verifier configuration
@@ -92,6 +95,9 @@ type VerifierConfig struct {
 
 	// optional: attestation decision log (nil = no attestation audit)
 	AttestationLog store.AttestationLog
+
+	// if true, reject attestation reports that do not include an event log
+	RequireEventLog bool
 }
 
 // returns sensible defaults for verifier
@@ -139,6 +145,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
 		aikMaxAge:        cfg.AIKMaxAge,
+		requireEventLog:  cfg.RequireEventLog,
 		startTime:        time.Now(),
 	}
 }
@@ -425,6 +432,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 		clog.Debug("event log verified", "size", len(report.EventLog))
 	} else {
+		if v.requireEventLog {
+			clog.Error("event log required by policy but not provided")
+			v.metrics.Rejections.Inc("pcr_fail")
+			result.Result = types.VerifyPCRFail
+			return result, errors.New("event log required by policy but not provided")
+		}
 		clog.Debug("event log not provided")
 	}
 
