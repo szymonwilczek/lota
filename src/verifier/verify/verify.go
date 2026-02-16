@@ -264,7 +264,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	if err := VerifyTimestamp(report, v.timestampMaxAge); err != nil {
 		clog.Error("timestamp verification failed", "error", err)
-		v.metrics.Rejections.Inc("nonce_fail")
+		v.metrics.Rejections.Inc("timestamp_fail")
 		result.Result = types.VerifyNonceFail
 		return result, err
 	}
