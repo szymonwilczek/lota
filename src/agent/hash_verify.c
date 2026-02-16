@@ -33,6 +33,9 @@
 /* Read buffer for incremental hashing (64 KB) */
 #define HASH_READ_BUF_SIZE (64 * 1024)
 
+/* Sentinel value: pass as cache_size to disable caching entirely */
+#define HASH_CACHE_DISABLED SIZE_MAX
+
 /* Monotonic clock for LRU timestamps */
 static uint64_t monotonic_now(void) {
   struct timespec ts;
@@ -58,7 +61,10 @@ static inline size_t cache_index(struct hash_verify_ctx *ctx, uint64_t dev,
  */
 static struct hash_cache_entry *cache_lookup(struct hash_verify_ctx *ctx,
                                              uint64_t dev, uint64_t ino) {
-  struct hash_cache_entry *e = &ctx->cache[cache_index(ctx, dev, ino)];
+  struct hash_cache_entry *e;
+  if (!ctx->cache)
+    return NULL;
+  e = &ctx->cache[cache_index(ctx, dev, ino)];
   if (e->valid && e->dev == dev && e->ino == ino)
     return e;
   return NULL;
@@ -70,6 +76,8 @@ static struct hash_cache_entry *cache_lookup(struct hash_verify_ctx *ctx,
  */
 static struct hash_cache_entry *cache_evict_slot(struct hash_verify_ctx *ctx,
                                                  uint64_t dev, uint64_t ino) {
+  if (!ctx->cache)
+    return NULL;
   return &ctx->cache[cache_index(ctx, dev, ino)];
 }
 
@@ -78,6 +86,10 @@ int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size) {
     return -EINVAL;
 
   memset(ctx, 0, sizeof(*ctx));
+
+  /* HASH_CACHE_DISABLED (SIZE_MAX) -> no cache, always hash from disk */
+  if (cache_size == HASH_CACHE_DISABLED)
+    return 0;
 
   if (cache_size == 0)
     cache_size = HASH_CACHE_DEFAULT_SIZE;

@@ -89,6 +89,7 @@ static uint32_t g_protect_pids[64];
 static int g_protect_pid_count;
 static const char *g_trust_libs[64];
 static int g_trust_lib_count;
+static int g_no_hash_cache;
 
 static const char *mode_to_string(int mode);
 static int parse_mode(const char *mode_str);
@@ -246,12 +247,16 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   if (wd_enabled)
     lota_info("Watchdog enabled, interval %lu us", (unsigned long)wd_usec);
 
-  ret = hash_verify_init(&g_hash_ctx, 0);
+  ret =
+      hash_verify_init(&g_hash_ctx, g_no_hash_cache ? HASH_CACHE_DISABLED : 0);
   if (ret < 0) {
     lota_err("Failed to initialize hash cache: %s", strerror(-ret));
     return ret;
   }
-  lota_info("Hash verification cache ready");
+  if (g_no_hash_cache)
+    lota_info("Hash cache disabled (--no-hash-cache)");
+  else
+    lota_info("Hash verification cache ready");
 
   lota_info("Starting IPC server");
   ret = ipc_init_or_activate(&g_ipc_ctx);
@@ -662,6 +667,7 @@ int main(int argc, char *argv[]) {
       {"verify-policy", required_argument, 0, 'V'},
       {"signing-key", required_argument, 0, 'k'},
       {"policy-pubkey", required_argument, 0, 'Q'},
+      {"no-hash-cache", no_argument, 0, 'H'},
       {"help", no_argument, 0, 'h'},
       {0, 0, 0, 0}};
 
@@ -719,7 +725,7 @@ int main(int argc, char *argv[]) {
     g_trust_libs[i] = cfg.trust_libs[i];
 
   while ((opt = getopt_long(argc, argv,
-                            "f:ZticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:h",
+                            "f:ZticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:Hh",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -847,6 +853,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'Q':
       policy_pubkey_path = optarg;
+      break;
+    case 'H':
+      g_no_hash_cache = 1;
       break;
     case 'f':
       /* --config: handled in pre-scan above */

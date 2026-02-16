@@ -20,6 +20,9 @@
 /* Default cache size (number of entries) */
 #define HASH_CACHE_DEFAULT_SIZE 4096
 
+/* Sentinel: pass as cache_size to hash_verify_init to disable caching */
+#define HASH_CACHE_DISABLED SIZE_MAX
+
 /*
  * Single cache entry: maps a file identity to its content hash.
  *
