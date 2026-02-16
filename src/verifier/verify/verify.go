@@ -415,7 +415,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// verify event log -> independent PCR reconstruction
-	// verify event log -> independent PCR reconstruction
 	if len(report.EventLog) > 0 {
 		if err := VerifyEventLog(report); err != nil {
 			// present but inconsistent -> boot chain tampered
