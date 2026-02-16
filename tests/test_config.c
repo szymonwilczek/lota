@@ -666,13 +666,15 @@ static void test_config_load_port_bounds(void) {
   char path[PATH_MAX];
   int ret;
 
-  TEST("config_load ignores out-of-range port values");
+  TEST("config_load rejects out-of-range port values");
   write_config("port_bad.conf", "port = 99999\n");
   config_path("port_bad.conf", path, sizeof(path));
   config_init(&cfg);
   ret = config_load(&cfg, path);
-  if (ret != 0) {
-    FAIL("expected 0");
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
     return;
   }
   /* port should remain at default because 99999 > 65535 */
@@ -684,13 +686,15 @@ static void test_config_load_port_bounds(void) {
   }
   PASS();
 
-  TEST("config_load ignores port = 0");
+  TEST("config_load rejects port = 0");
   write_config("port_zero.conf", "port = 0\n");
   config_path("port_zero.conf", path, sizeof(path));
   config_init(&cfg);
   ret = config_load(&cfg, path);
-  if (ret != 0) {
-    FAIL("expected 0");
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
     return;
   }
   if (cfg.port != 8443) {
