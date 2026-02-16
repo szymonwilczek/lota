@@ -64,6 +64,7 @@ var (
 	logFormat       = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel        = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
+	requireCert     = flag.Bool("require-cert", false, "Reject TOFU registrations without AIK/EK certificates")
 )
 
 // resolveAPIKey returns the flag value if set, otherwise falls back to the environment variable
@@ -118,6 +119,7 @@ func main() {
 	verifierCfg.Metrics = m
 	verifierCfg.AIKMaxAge = *aikMaxAge
 	verifierCfg.RequireEventLog = *requireEventLog
+	verifierCfg.RequireCert = *requireCert
 
 	if *aikMaxAge == 0 {
 		logger.Warn("AIK expiry disabled (--aik-max-age=0): registered keys will never expire")

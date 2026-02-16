@@ -58,6 +58,7 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog bool
+	requireCert     bool
 }
 
 // holds verifier configuration
@@ -98,6 +99,10 @@ type VerifierConfig struct {
 
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
+
+	// if true, reject new AIK registrations that do not provide
+	// AIK or EK certificates (disables pure TOFU)
+	RequireCert bool
 }
 
 // returns sensible defaults for verifier
@@ -146,6 +151,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		sessionTokenLife: cfg.SessionTokenLife,
 		aikMaxAge:        cfg.AIKMaxAge,
 		requireEventLog:  cfg.RequireEventLog,
+		requireCert:      cfg.RequireCert,
 		startTime:        time.Now(),
 	}
 }
@@ -354,6 +360,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			fingerprint := AIKFingerprint(aikPubKey)
 			if len(aikCert) > 0 || len(ekCert) > 0 {
 				clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+			} else if v.requireCert {
+				logging.Security(clog, "TOFU rejected: certificate required by policy",
+					"fingerprint", fingerprint)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, errors.New("AIK/EK certificate required by policy but not provided")
 			} else {
 				clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
 			}
