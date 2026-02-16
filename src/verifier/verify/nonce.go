@@ -18,6 +18,7 @@ package verify
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -210,7 +211,7 @@ func (ns *NonceStore) GenerateChallenge(clientID string, pcrMask uint32) (*types
 		return nil, err
 	}
 
-	key := string(nonce[:])
+	key := hex.EncodeToString(nonce[:])
 
 	// paranoid check: ensure nonce was never used before
 	if ns.usedBackend.Contains(key) {
@@ -249,7 +250,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 
-	key := string(report.TPM.Nonce[:])
+	key := hex.EncodeToString(report.TPM.Nonce[:])
 
 	// check used nonce history first (detects replays after restart)
 	if ns.usedBackend.Contains(key) {
