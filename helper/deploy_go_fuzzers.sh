@@ -11,7 +11,7 @@ else
 fi
 
 REMOTE_HOST="${REMOTE_HOST:-dionisus}"
-REMOTE_DIR="${REMOTE_GO_FUZZ_DIR:-/home/wolfie/lota-go-fuzz}"
+REMOTE_DIR="${REMOTE_GO_FUZZ_DIR:-/opt/lota-go-fuzz}"
 BUILD_DIR="build/fuzz"
 
 echo "=== Building Go Fuzzers for $REMOTE_HOST ==="
@@ -79,6 +79,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 mkdir -p logs
+mkdir -p corpus
 
 while true; do
     echo "Starting fuzzers round..."
@@ -96,7 +97,7 @@ while true; do
             for target in \$targets; do
                 echo "   Launching \$target in \$bin_name..."
                 logs_file="logs/\${bin_name}_\${target}.log"
-                nice -n 19 \$f -test.fuzz="^\$target\$" -test.fuzztime=600s -test.parallel=1 > "\$logs_file" 2>&1 &
+                nice -n 19 \$f -test.fuzz="^\$target\$" -test.fuzztime=600s -test.parallel=1 -test.fuzzcachedir=corpus > "\$logs_file" 2>&1 &
                 pid=\$!
                 PIDS="\$PIDS \$pid"
             done
@@ -115,6 +116,7 @@ while true; do
 done
 EOF
 chmod +x "$BUILD_DIR/run_fuzzers.sh"
+cp helper/lota-go-fuzz.service "$BUILD_DIR/"
 
 echo "-> Deploying to $REMOTE_HOST..."
 
@@ -122,8 +124,13 @@ tar -czf build/dist_go_fuzz.tar.gz -C "$BUILD_DIR" .
 scp build/dist_go_fuzz.tar.gz "$REMOTE_HOST:~/"
 
 ssh -t "$REMOTE_HOST" "
-    mkdir -p '$REMOTE_DIR'
-    tar -xzf ~/dist_go_fuzz.tar.gz -C '$REMOTE_DIR'
+    sudo mkdir -p '$REMOTE_DIR'
+    sudo tar -xzf ~/dist_go_fuzz.tar.gz -C '$REMOTE_DIR'
+    sudo chmod +x '$REMOTE_DIR/run_fuzzers.sh'
+    sudo cp '$REMOTE_DIR/lota-go-fuzz.service' /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now lota-go-fuzz
+    sudo systemctl status lota-go-fuzz
 "
 
 echo "=== Deployment Complete ==="

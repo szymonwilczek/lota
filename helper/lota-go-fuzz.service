@@ -1,0 +1,15 @@
+[Unit]
+Description=LOTA Go Fuzzers
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/lota-go-fuzz
+ExecStart=/opt/lota-go-fuzz/run_fuzzers.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
