@@ -9,6 +9,6 @@ src/verifier/verifier
 /syzkaller/workdir
 /syzkaller/lota-fuzz.service
 /syzkaller/lota.cfg
-/helper
 /dist_deploy
 /dist_deploy.tar.gz
+/helper/.env
