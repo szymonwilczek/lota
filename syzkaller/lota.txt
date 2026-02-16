@@ -1,0 +1,80 @@
+# LOTA IPC Protocol Description for Syzkaller
+
+include <sys/socket.h>
+include <sys/un.h>
+include <linux/un.h>
+
+# AGENT IPC (src/agent/ipc.c, net.c)
+#    - Covered by: connect$lota, write$lota_*
+#    - Fuzzer connects to /run/lota/lota.sock and sends valid/invalid
+#      commands, covering the entire request parsing and handling logic.
+#
+# SDK & WINE HOOKS (src/sdk/*.c)
+#    - Covered by: Indirect IPC fuzzing.
+#
+# BPF LSM & BOOTLOADER (src/agent/bpf_loader.c, lota.bpf.c)
+#    - Covered by: Generic syscalls (open, execve, mmap, ptrace).
+#
+# 4. FILESYSTEM INTEGRITY (src/agent/hash_verify.c)
+#    - Covered by: filesystem syscalls (open, write, close) + execve.
+#    - Syscall -> BPF Hook -> Agent Event -> hash_verify.c (Open & Read File).
+#
+# ==============================================================================
+
+resource sock_unix[sock]
+
+# sockaddr_un for LOTA
+# sun_family = AF_UNIX (1)
+# sun_path = "/run/lota/lota.sock"
+sockaddr_un_lota {
+    family  const[AF_UNIX, int16]
+    path    string["/run/lota/lota.sock"]
+}
+
+connect$lota(fd sock_unix, addr ptr[in, sockaddr_un_lota], len len[addr])
+
+# IPC Header
+lota_ipc_request {
+    magic   const[0x4C4F5441, int32] # "LOTA"
+    version const[1, int32]
+    cmd     int32
+    len     int32
+}
+
+# Commands
+# LOTA_IPC_CMD_PING = 0x01
+lota_ping_msg {
+    hdr lota_ipc_request
+}
+
+# LOTA_IPC_CMD_GET_STATUS = 0x02
+lota_status_msg {
+    hdr lota_ipc_request
+}
+
+# LOTA_IPC_CMD_GET_TOKEN = 0x03
+lota_token_msg {
+    hdr lota_ipc_request
+    nonce array[int8, 32]
+}
+
+# LOTA_IPC_CMD_SUBSCRIBE = 0x04
+lota_subscribe_msg {
+    hdr lota_ipc_request
+    mask int32
+}
+
+# PING: cmd=1, len=0
+write$lota_ping(fd sock_unix, data ptr[in, lota_ping_msg], len len[data])
+
+# GET_STATUS: cmd=2, len=0
+write$lota_status(fd sock_unix, data ptr[in, lota_status_msg], len len[data])
+
+# GET_TOKEN: cmd=3, len=32
+write$lota_token(fd sock_unix, data ptr[in, lota_token_msg], len len[data])
+
+# SUBSCRIBE: cmd=4, len=4
+write$lota_subscribe(fd sock_unix, data ptr[in, lota_subscribe_msg], len len[data])
+
+# write for fuzzing broken packets / overflow / invalid commands
+write$lota_generic(fd sock_unix, data ptr[in, array[int8]], len len[data])
