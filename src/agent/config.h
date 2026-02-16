@@ -34,7 +34,6 @@ struct lota_config {
   char server[256];
   int port;
   char ca_cert[PATH_MAX];
-  bool no_verify_tls;
   char pin_sha256[128]; /* hex string, parsed later */
 
   /* BPF / enforcement */

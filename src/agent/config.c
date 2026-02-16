@@ -72,7 +72,6 @@ void config_init(struct lota_config *cfg) {
 
   set_str(cfg->server, sizeof(cfg->server), "localhost");
   cfg->port = 8443;
-  cfg->no_verify_tls = false;
 
   set_str(cfg->bpf_path, sizeof(cfg->bpf_path), "/usr/lib/lota/lota_lsm.bpf.o");
   set_str(cfg->mode, sizeof(cfg->mode), "monitor");
@@ -118,8 +117,11 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "no_verify_tls") == 0 || strcmp(key, "no-verify-tls") == 0) {
-    cfg->no_verify_tls = parse_bool(value);
-    return 0;
+    fprintf(stderr,
+            "%s:%d: no_verify_tls is a security-critical option and cannot\n"
+            "be set via config file. Use --no-verify-tls CLI flag instead.\n",
+            filepath, lineno);
+    return -1;
   }
   if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
     set_str(cfg->pin_sha256, sizeof(cfg->pin_sha256), value);
@@ -317,7 +319,6 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
   fprintf(fp, "port = %d\n", cfg->port);
   if (cfg->ca_cert[0])
     fprintf(fp, "ca_cert = %s\n", cfg->ca_cert);
-  fprintf(fp, "no_verify_tls = %s\n", cfg->no_verify_tls ? "true" : "false");
   if (cfg->pin_sha256[0])
     fprintf(fp, "pin_sha256 = %s\n", cfg->pin_sha256);
 

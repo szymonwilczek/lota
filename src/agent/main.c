@@ -694,7 +694,6 @@ int main(int argc, char *argv[]) {
   server_addr = cfg.server;
   server_port = cfg.port;
   ca_cert_path = cfg.ca_cert[0] ? cfg.ca_cert : NULL;
-  no_verify_tls = cfg.no_verify_tls ? 1 : 0;
   pin_sha256_hex = cfg.pin_sha256[0] ? cfg.pin_sha256 : NULL;
   bpf_path = cfg.bpf_path;
   {

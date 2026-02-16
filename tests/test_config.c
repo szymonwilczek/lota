@@ -50,7 +50,8 @@ static void setup_tmpdir(void) {
 static void cleanup_tmpdir(void) {
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  int ret = system(cmd); (void)ret;
+  int ret = system(cmd);
+  (void)ret;
 }
 
 static int write_config(const char *name, const char *content) {
@@ -82,10 +83,6 @@ static void test_config_init_defaults(void) {
   }
   if (cfg.port != 8443) {
     FAIL("port != 8443");
-    return;
-  }
-  if (cfg.no_verify_tls != false) {
-    FAIL("no_verify_tls != false");
     return;
   }
   if (strcmp(cfg.bpf_path, "/usr/lib/lota/lota_lsm.bpf.o") != 0) {
@@ -347,7 +344,6 @@ static void test_config_load_hyphen_keys(void) {
 
   TEST("config_load accepts hyphen-form keys");
   write_config("hyphen.conf", "ca-cert = /etc/ca.pem\n"
-                              "no-verify-tls = true\n"
                               "pin-sha256 = deadbeef\n"
                               "bpf-path = /opt/bpf.o\n"
                               "strict-mmap = true\n"
@@ -370,10 +366,6 @@ static void test_config_load_hyphen_keys(void) {
   }
   if (strcmp(cfg.ca_cert, "/etc/ca.pem") != 0) {
     FAIL("ca-cert");
-    return;
-  }
-  if (cfg.no_verify_tls != true) {
-    FAIL("no-verify-tls");
     return;
   }
   if (strcmp(cfg.pin_sha256, "deadbeef") != 0) {
@@ -503,9 +495,9 @@ static void test_config_load_boolean_variants(void) {
   int ret;
 
   TEST("config_load boolean: true/yes/1 -> true");
-  write_config("bool_true.conf", "no_verify_tls = true\n"
-                                 "strict_mmap = yes\n"
-                                 "block_ptrace = 1\n");
+  write_config("bool_true.conf", "strict_mmap = true\n"
+                                 "block_ptrace = yes\n"
+                                 "daemon = 1\n");
   config_path("bool_true.conf", path, sizeof(path));
   config_init(&cfg);
   ret = config_load(&cfg, path);
@@ -513,27 +505,27 @@ static void test_config_load_boolean_variants(void) {
     FAIL("load failed");
     return;
   }
-  if (!cfg.no_verify_tls || !cfg.strict_mmap || !cfg.block_ptrace) {
+  if (!cfg.strict_mmap || !cfg.block_ptrace || !cfg.daemon) {
     FAIL("not all true");
     return;
   }
   PASS();
 
   TEST("config_load boolean: false/no/0 -> false");
-  write_config("bool_false.conf", "no_verify_tls = false\n"
-                                  "strict_mmap = no\n"
-                                  "block_ptrace = 0\n");
+  write_config("bool_false.conf", "strict_mmap = false\n"
+                                  "block_ptrace = no\n"
+                                  "daemon = 0\n");
   config_path("bool_false.conf", path, sizeof(path));
   config_init(&cfg);
-  cfg.no_verify_tls = true;
   cfg.strict_mmap = true;
   cfg.block_ptrace = true;
+  cfg.daemon = true;
   ret = config_load(&cfg, path);
   if (ret != 0) {
     FAIL("load failed");
     return;
   }
-  if (cfg.no_verify_tls || cfg.strict_mmap || cfg.block_ptrace) {
+  if (cfg.strict_mmap || cfg.block_ptrace || cfg.daemon) {
     FAIL("not all false");
     return;
   }
@@ -722,7 +714,6 @@ static void test_config_dump_roundtrip(void) {
   snprintf(cfg1.server, sizeof(cfg1.server), "verifier.example.com");
   cfg1.port = 9999;
   snprintf(cfg1.ca_cert, sizeof(cfg1.ca_cert), "/etc/ssl/ca.pem");
-  cfg1.no_verify_tls = true;
   cfg1.strict_mmap = true;
   cfg1.attest_interval = 120;
   snprintf(cfg1.log_level, sizeof(cfg1.log_level), "error");
@@ -764,10 +755,6 @@ static void test_config_dump_roundtrip(void) {
   }
   if (strcmp(cfg2.ca_cert, "/etc/ssl/ca.pem") != 0) {
     FAIL("ca_cert mismatch");
-    return;
-  }
-  if (cfg2.no_verify_tls != true) {
-    FAIL("no_verify_tls mismatch");
     return;
   }
   if (cfg2.strict_mmap != true) {
@@ -817,7 +804,6 @@ static void test_config_load_all_known_keys(void) {
   write_config("all.conf", "server = allhost\n"
                            "port = 5555\n"
                            "ca_cert = /all/ca.pem\n"
-                           "no_verify_tls = true\n"
                            "pin_sha256 = abcdef0123456789\n"
                            "bpf_path = /all/lota.bpf.o\n"
                            "mode = maintenance\n"
@@ -854,10 +840,6 @@ static void test_config_load_all_known_keys(void) {
   }
   if (strcmp(cfg.ca_cert, "/all/ca.pem") != 0) {
     FAIL("ca_cert");
-    return;
-  }
-  if (!cfg.no_verify_tls) {
-    FAIL("no_verify_tls");
     return;
   }
   if (strcmp(cfg.pin_sha256, "abcdef0123456789") != 0) {
