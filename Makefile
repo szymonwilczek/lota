@@ -250,6 +250,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/lota_ipc_test \
 	$(TEST_BIN_DIR)/cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
+	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
@@ -320,8 +321,11 @@ $(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/cross_lang_verify: tests/cross_lang_verify.c $(SDK_DIR)/lota_server.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
 	@echo "Built: $@"
 
 # Full test suite (includes /tests plus agent hardware tests)

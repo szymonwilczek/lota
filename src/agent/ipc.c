@@ -26,8 +26,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX_EVENTS 16
-#define MAX_CLIENTS 64
+#define MAX_EVENTS 64
+#define MAX_CONNECTED_CLIENTS 2048
 #define SOCKET_DIR "/run/lota"
 #define LOTA_GROUP_NAME "lota"
 
@@ -114,13 +114,14 @@ struct ipc_client {
   uint32_t event_mask;     /* LOTA_IPC_EVENT_* subscription mask */
   bool notify_pending;     /* notification queued behind current send */
   uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
+  struct ipc_client *next;
 };
 
 _Static_assert(
     LOTA_IPC_MAX_PAYLOAD <= 65536,
     "IPC payload cap must be bounded to prevent excessive memory use");
 
-static struct ipc_client *clients[MAX_CLIENTS];
+static struct ipc_client *client_list = NULL;
 static int client_count = 0;
 
 /*
@@ -167,8 +168,11 @@ static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
                                         pid_t pid) {
   struct ipc_client *client;
 
-  if (client_count >= MAX_CLIENTS)
+  if (client_count >= MAX_CONNECTED_CLIENTS) {
+    lota_warn("Max clients (%d) reached, rejecting connection",
+              MAX_CONNECTED_CLIENTS);
     return NULL;
+  }
 
   client = calloc(1, sizeof(*client));
   if (!client)
@@ -179,25 +183,22 @@ static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
   client->peer_gid = gid;
   client->peer_pid = pid;
 
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (!clients[i]) {
-      clients[i] = client;
-      client_count++;
-      return client;
-    }
-  }
+  client->next = client_list;
+  client_list = client;
+  client_count++;
 
-  free(client);
-  return NULL;
+  return client;
 }
 
 /*
  * Find client by fd
  */
 static struct ipc_client *client_find(int fd) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i] && clients[i]->fd == fd)
-      return clients[i];
+  struct ipc_client *c = client_list;
+  while (c) {
+    if (c->fd == fd)
+      return c;
+    c = c->next;
   }
   return NULL;
 }
@@ -206,15 +207,18 @@ static struct ipc_client *client_find(int fd) {
  * Remove and free client
  */
 static void client_destroy(struct ipc_client *client) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i] == client) {
-      clients[i] = NULL;
+  struct ipc_client **pp = &client_list;
+
+  while (*pp) {
+    if (*pp == client) {
+      *pp = client->next;
       client_count--;
-      break;
+      close(client->fd);
+      free(client);
+      return;
     }
+    pp = &(*pp)->next;
   }
-  close(client->fd);
-  free(client);
 }
 
 /*
@@ -283,9 +287,11 @@ static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
  * Notify all subscribers about an event.
  */
 static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i] && clients[i]->subscribed)
-      push_notify(ctx, clients[i], events);
+  struct ipc_client *c = client_list;
+  while (c) {
+    if (c->subscribed)
+      push_notify(ctx, c, events);
+    c = c->next;
   }
 }
 
@@ -931,11 +937,9 @@ void ipc_cleanup(struct ipc_context *ctx) {
   ctx->running = false;
 
   /* close all clients */
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clients[i]) {
-      client_destroy(clients[i]);
-      clients[i] = NULL;
-    }
+  /* close all clients */
+  while (client_list) {
+    client_destroy(client_list);
   }
   client_count = 0;
 
