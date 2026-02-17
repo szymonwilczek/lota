@@ -939,7 +939,7 @@ func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
 
 func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
 	t.Log("TEST: Admin key alone does not protect sensitive read-only endpoints")
-	t.Log("Reader protection is opt-in via --reader-api-key flag")
+	t.Log("Reader protection is opt-in via LOTA_READER_API_KEY env var")
 
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "")
 
@@ -963,7 +963,7 @@ func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
 		})
 	}
 
-	t.Log("✓ Sensitive read-only endpoints are public without --reader-api-key")
+	t.Log("✓ Sensitive read-only endpoints are public without reader key")
 }
 
 func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {

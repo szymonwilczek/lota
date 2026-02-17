@@ -13,12 +13,10 @@
 //   --db PATH          SQLite database for persistent storage (default: disabled)
 //   --policy FILE      PCR policy file (YAML)
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
-//   --admin-api-key KEY Admin API key for mutating HTTP endpoints (required for revoke/ban)
-//   --reader-api-key KEY Reader API key for sensitive read-only endpoints (optional)
-//
-// Environment variables (fallback when flag is empty):
-//   LOTA_ADMIN_API_KEY  Equivalent to --admin-api-key
-//   LOTA_READER_API_KEY Equivalent to --reader-api-key
+
+// Environment variables:
+//   LOTA_ADMIN_API_KEY  API key for admin endpoints (revoke, ban); required for mutation
+//   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, public
 //   --aik-max-age DUR  Maximum AIK registration age before forced rotation (default: 720h)
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
@@ -49,16 +47,15 @@ import (
 )
 
 var (
-	addr            = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
-	httpAddr        = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
-	certFile        = flag.String("cert", "", "TLS certificate file")
-	keyFile         = flag.String("key", "", "TLS private key file")
-	aikStorePath    = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
-	dbPath          = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
-	policyFile      = flag.String("policy", "", "PCR policy file (YAML)")
-	policyPubKey    = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
-	adminAPIKey     = flag.String("admin-api-key", "", "API key for admin endpoints (revoke, ban); if empty, admin endpoints are disabled")
-	readerAPIKey    = flag.String("reader-api-key", "", "API key for sensitive read-only endpoints (clients, audit, attestations); if empty, those endpoints are public")
+	addr         = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
+	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	certFile     = flag.String("cert", "", "TLS certificate file")
+	keyFile      = flag.String("key", "", "TLS private key file")
+	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
+	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
+	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
+	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
+
 	generateCert    = flag.Bool("generate-cert", false, "Generate self-signed certificate")
 	aikMaxAge       = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
 	logFormat       = flag.String("log-format", "text", "Log output format: text or json")
@@ -66,14 +63,6 @@ var (
 	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
 	requireCert     = flag.Bool("require-cert", false, "Reject TOFU registrations without AIK/EK certificates")
 )
-
-// resolveAPIKey returns the flag value if set, otherwise falls back to the environment variable
-func resolveAPIKey(flagVal *string, envVar string) string {
-	if *flagVal != "" {
-		return *flagVal
-	}
-	return os.Getenv(envVar)
-}
 
 func main() {
 	flag.Parse()
@@ -197,15 +186,15 @@ func main() {
 		logger.Info("loaded custom policy", "path", *policyFile)
 	}
 
-	// resolve API keys (flag -> env var fallback)
-	adminKey := resolveAPIKey(adminAPIKey, "LOTA_ADMIN_API_KEY")
-	readerKey := resolveAPIKey(readerAPIKey, "LOTA_READER_API_KEY")
+	// resolve API keys (environment variable only for security)
+	adminKey := os.Getenv("LOTA_ADMIN_API_KEY")
+	readerKey := os.Getenv("LOTA_READER_API_KEY")
 
-	if adminKey != *adminAPIKey && adminKey != "" {
-		logger.Info("admin API key loaded from LOTA_ADMIN_API_KEY environment variable")
+	if adminKey != "" {
+		logger.Info("admin API key loaded from LOTA_ADMIN_API_KEY")
 	}
-	if readerKey != *readerAPIKey && readerKey != "" {
-		logger.Info("reader API key loaded from LOTA_READER_API_KEY environment variable")
+	if readerKey != "" {
+		logger.Info("reader API key loaded from LOTA_READER_API_KEY")
 	}
 
 	// initialize tls server
