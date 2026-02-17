@@ -262,7 +262,8 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   ret = ipc_init_or_activate(&g_ipc_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize IPC: %s", strerror(-ret));
-    lota_warn("Continuing without IPC support");
+    hash_verify_cleanup(&g_hash_ctx);
+    return ret;
   } else {
     ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
     setup_container_listener(&g_ipc_ctx);
@@ -281,7 +282,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   ret = tpm_init(&g_tpm_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize TPM: %s", strerror(-ret));
-    lota_warn("Continuing without TPM support");
+    goto cleanup_tpm;
   } else {
     lota_info("TPM initialized");
     status_flags |= LOTA_STATUS_TPM_OK;
@@ -289,8 +290,8 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     lota_info("Provisioning AIK");
     ret = tpm_provision_aik(&g_tpm_ctx);
     if (ret < 0) {
-      lota_warn("AIK provisioning failed: %s", strerror(-ret));
-      lota_warn("Signed tokens will not be available");
+      lota_err("AIK provisioning failed: %s", strerror(-ret));
+      goto cleanup_tpm;
     } else {
       ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
                   (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
@@ -310,7 +311,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     ret = self_measure(&g_tpm_ctx);
     if (ret < 0) {
       lota_err("Self-measurement failed: %s", strerror(-ret));
-      lota_warn("Continuing without self-measurement");
+      goto cleanup_tpm;
     } else {
       lota_info("Self-measurement complete (PCR %d extended)", LOTA_PCR_SELF);
     }
