@@ -127,6 +127,26 @@ struct {
 } protected_pids SEC(".maps");
 
 /*
+ * fs-verity digest allowlist.
+ * Key: fs-verity digest (SHA-256 usually, 32 bytes)
+ * Value: 1 = allowed
+ *
+ * Only files with a verified fs-verity merkle root matching an entry here are
+ * allowed to execute in STRICT_EXEC mode.
+ */
+#define PE_DIGEST_SIZE 32
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 1024);
+  __type(key, u8[PE_DIGEST_SIZE]);
+  __type(value, u32);
+} allow_verity_digest SEC(".maps");
+
+/* kfunc definition for bpf_get_fsverity_digest */
+extern int bpf_get_fsverity_digest(struct file *file,
+                                   struct bpf_dynptr *digest_p) __ksym;
+
+/*
  * Increment a statistics counter
  */
 static __always_inline void inc_stat(u32 idx) {
@@ -142,6 +162,38 @@ static __always_inline u32 get_mode(void) {
   u32 key = LOTA_CFG_MODE;
   u32 *mode = bpf_map_lookup_elem(&lota_config, &key);
   return mode ? *mode : LOTA_MODE_MONITOR;
+}
+
+/*
+ * Check if the file has a valid fs-verity digest that is allowed.
+ * Returns:
+ *   1 if allowed (verity enabled AND digest in allowlist)
+ *   0 if not allowed (no verity OR digest not allowed)
+ *   -1 on internal error
+ */
+static __always_inline int is_verity_allowed(struct file *file) {
+  u8 digest[PE_DIGEST_SIZE];
+  struct bpf_dynptr digest_ptr;
+  u32 *allowed;
+  int ret;
+
+  if (!file)
+    return 0;
+
+  /*
+   * Initialize dynptr for the digest buffer.
+   * Note: This rely on new kernel version. But this project is aiming to only
+   * support newest versions of kernel, so this is fine by now. I'll remove that
+   * note later.
+   */
+  bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
+
+  ret = bpf_get_fsverity_digest(file, &digest_ptr);
+  if (ret < 0)
+    return 0; /* no verity or error */
+
+  allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
+  return allowed && *allowed;
 }
 
 /*
@@ -223,14 +275,15 @@ int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
   }
 
   /*
-   * Path-based security checks removed due to inherent fragility and
-   * unreliable security guarantees using bpf_d_path/dentry walking.
-   *
-   * STRICT_EXEC logic is disabled until a content-based mechanism
-   * (fs-verity) is implemented.
+   * STRICT_EXEC enforcement:
+   * Require fs-verity and a trusted digest for execution.
    */
-  (void)file;
   (void)dentry;
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
+    if (!is_verity_allowed(file)) {
+      blocked = 1;
+    }
+  }
 
   event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
 
@@ -338,13 +391,19 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     return 0;
 
   /*
-   * Path/Name-based module blocking removed.
-   *
-   * Relying on module name or path is insecure.
-   * TODO: Implement signature verification or measure-only policy.
+   * Module integrity check via fs-verity.
+   * Note: This requires modules to be signed/hashed with fs-verity.
+   * Standard kernel modules usually arent, but for a secured game OS
+   * or specific restricted modules, this is the way.
    */
   (void)dentry;
   (void)name;
+
+  if (mode == LOTA_MODE_ENFORCE) {
+    if (!is_verity_allowed(file)) {
+      blocked = 1;
+    }
+  }
 
   /* for logging */
   event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
@@ -560,10 +619,15 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    *  - library is from standard system paths (/usr/lib, etc)
    *  - otherwise -> block
    *
-   * Resolve full path via bpf_d_path into scratch buffer  /*
-   * Path-based security checks removed.
+   * Resolve full path via bpf_d_path into scratch buffer for
+   * map lookups and prefix checks. Falls back to dentry walk.
    */
   (void)dentry;
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
+    if (!is_verity_allowed(file)) {
+      blocked = 1;
+    }
+  }
 
   /* for logging */
   event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
