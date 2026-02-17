@@ -109,48 +109,6 @@ struct {
 } lota_config SEC(".maps");
 
 /*
- * Module whitelist map.
- * Key: module filename (eg. "nvidia.ko")
- * Value: 1 = allowed
- *
- * Userspace can populate this to allow specific modules in ENFORCE mode.
- */
-#define MODULE_NAME_MAX 64
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, 256);
-  __type(key, char[MODULE_NAME_MAX]);
-  __type(value, u32);
-} module_whitelist SEC(".maps");
-
-/*
- * Trusted library whitelist map.
- * Key: library path (eg: "/opt/game/lib/libanticheat.so")
- * Value: 1 = allowed
- *
- * Userspace populates this to allow game-specific libraries
- * in ENFORCE mode, beyond the standard /usr/lib paths.
- */
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, LOTA_MAX_TRUSTED_LIBS);
-  __type(key, char[LOTA_MAX_PATH_LEN]);
-  __type(value, u32);
-} trusted_libs SEC(".maps");
-
-/*
- * Per-CPU scratch buffer for resolving file paths.
- * Used by lota_mmap_file to resolve full paths from dentry for
- * trusted library map lookups and path prefix checks.
- */
-struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, char[LOTA_MAX_PATH_LEN]);
-} path_scratch SEC(".maps");
-
-/*
  * Protected PID map.
  * Key: PID (u32)
  * Value: 1 = protected
@@ -201,343 +159,6 @@ static __always_inline int is_protected_pid(u32 pid) {
   u32 *val = bpf_map_lookup_elem(&protected_pids, &pid);
   return val && *val;
 }
-
-/*
- * Resolve full file path using bpf_d_path.
- *
- * bpf_d_path() walks the dentry/mount tree in kernel and produces the
- * absolute path string.  It is only available from sleepable BPF
- * programs attached to functions on the d_path allowlist.
- *
- * @file: kernel struct file pointer (must be a trusted/BTF pointer)
- * @buf:  destination buffer
- * @sz:   buffer size
- *
- * Returns: >= 0 on success (bytes written), negative on error
- */
-static __always_inline long resolve_file_path(struct file *file, char *buf,
-                                              u32 sz) {
-  struct path *fpath;
-  long ret;
-
-  if (!file || sz == 0)
-    return -1;
-
-  fpath = (struct path *)__builtin_preserve_access_index(&file->f_path);
-  ret = bpf_d_path(fpath, buf, sz);
-  if (ret >= 0)
-    return ret;
-
-  /*
-   * fallback: read basename from dentry.
-   */
-  {
-    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
-    const unsigned char *name;
-
-    if (!dentry)
-      goto zero;
-
-    name = BPF_CORE_READ(dentry, d_name.name);
-    if (!name)
-      goto zero;
-
-    ret = bpf_probe_read_kernel_str(buf, sz, name);
-    return ret;
-  }
-
-zero:
-  buf[0] = '\0';
-  return 0;
-}
-
-/*
- * Check if a library path is in the trusted whitelist.
- * Path must be a resolved full path (eg: "/opt/game/lib/libfoo.so").
- */
-static __always_inline int is_trusted_lib(const char *resolved_path) {
-  u32 *allowed;
-
-  if (!resolved_path)
-    return 0;
-
-  allowed = bpf_map_lookup_elem(&trusted_libs, resolved_path);
-  return allowed && *allowed;
-}
-
-/*
- * Check if path starts with a trusted library directory.
- *
- * Trusted prefixes:
- *   /usr/lib/      - Standard library location
- *   /usr/lib64/    - 64-bit libraries (Fedora, RHEL, SUSE)
- *   /lib/          - Essential libraries
- *   /lib64/        - Essential 64-bit libraries
- *
- * Uses byte-by-byte comparison because BPF cannot call strncmp.
- * Path must be a resolved full path.
- */
-static __always_inline int is_trusted_lib_path(const char *resolved_path) {
-  if (!resolved_path)
-    return 0;
-
-  /* /usr/lib64/ */
-  if (resolved_path[0] == '/' && resolved_path[1] == 'u' &&
-      resolved_path[2] == 's' && resolved_path[3] == 'r' &&
-      resolved_path[4] == '/' && resolved_path[5] == 'l' &&
-      resolved_path[6] == 'i' && resolved_path[7] == 'b' &&
-      resolved_path[8] == '6' && resolved_path[9] == '4' &&
-      resolved_path[10] == '/') {
-    return 1;
-  }
-
-  /* /usr/lib/ */
-  if (resolved_path[0] == '/' && resolved_path[1] == 'u' &&
-      resolved_path[2] == 's' && resolved_path[3] == 'r' &&
-      resolved_path[4] == '/' && resolved_path[5] == 'l' &&
-      resolved_path[6] == 'i' && resolved_path[7] == 'b' &&
-      resolved_path[8] == '/') {
-    return 1;
-  }
-
-  /* /lib64/ */
-  if (resolved_path[0] == '/' && resolved_path[1] == 'l' &&
-      resolved_path[2] == 'i' && resolved_path[3] == 'b' &&
-      resolved_path[4] == '6' && resolved_path[5] == '4' &&
-      resolved_path[6] == '/') {
-    return 1;
-  }
-
-  /* /lib/ */
-  if (resolved_path[0] == '/' && resolved_path[1] == 'l' &&
-      resolved_path[2] == 'i' && resolved_path[3] == 'b' &&
-      resolved_path[4] == '/') {
-    return 1;
-  }
-
-  return 0;
-}
-
-/*
- * Check if module name is in whitelist.
- */
-static __always_inline int is_module_whitelisted(const unsigned char *name) {
-  char key[MODULE_NAME_MAX] = {};
-  u32 *allowed;
-  int ret;
-
-  if (!name)
-    return 0;
-
-  ret = bpf_probe_read_kernel_str(key, sizeof(key), name);
-  if (ret < 0)
-    return 0;
-
-  allowed = bpf_map_lookup_elem(&module_whitelist, key);
-  return allowed && *allowed;
-}
-
-/*
- * Check if a directory dentry sits directly under / or /usr/.
- *
- * Root dentry is identified by d_parent == itself.
- * Returns 1 if:
- *   - dir->d_parent is root  (dir is /lib, /bin, etc)
- *   - dir->d_parent is "usr" whose d_parent is root  (/usr/lib, etc)
- */
-static __always_inline int is_at_root_or_usr(struct dentry *dir) {
-  struct dentry *up;
-  struct dentry *up_parent;
-  const unsigned char *name;
-  char nbuf[8];
-
-  if (!dir)
-    return 0;
-
-  up = BPF_CORE_READ(dir, d_parent);
-  if (!up)
-    return 0;
-
-  /* dir is directly under root? */
-  up_parent = BPF_CORE_READ(up, d_parent);
-  if (up_parent == up)
-    return 1;
-
-  /* dir is under /usr/? check up is "usr" at root level */
-  if (!up_parent)
-    return 0;
-
-  struct dentry *up_grandparent = BPF_CORE_READ(up_parent, d_parent);
-  if (up_grandparent != up_parent)
-    return 0; /* up is not at root level */
-
-  name = BPF_CORE_READ(up, d_name.name);
-  if (!name)
-    return 0;
-
-  if (bpf_probe_read_kernel_str(nbuf, sizeof(nbuf), name) < 0)
-    return 0;
-
-  if (nbuf[0] == 'u' && nbuf[1] == 's' && nbuf[2] == 'r' && nbuf[3] == '\0')
-    return 1;
-
-  return 0;
-}
-
-/*
- * Check if dentry is under a trusted library directory.
- * Walks up dentry parents looking for patterns like:
- *   /usr/lib/...   /usr/lib64/...   /lib/...   /lib64/...
- *   /usr/bin/...   /usr/sbin/...    /bin/...   /sbin/...
- *
- * Each matched directory is verified to sit at / or /usr/ via
- * is_at_root_or_usr() to prevent bypass through attacker-controlled
- * paths like /home/user/lib/.
- *
- * Returns 1 if file appears to be in a trusted system directory.
- */
-static __always_inline int is_trusted_system_path(struct dentry *dentry) {
-  struct dentry *parent;
-  const unsigned char *pname;
-  char buf[12];
-
-  if (!dentry)
-    return 0;
-
-  parent = BPF_CORE_READ(dentry, d_parent);
-
-#pragma unroll
-  for (int i = 0; i < 8 && parent; i++) {
-    pname = BPF_CORE_READ(parent, d_name.name);
-    if (!pname)
-      goto next_trusted;
-
-    if (bpf_probe_read_kernel_str(buf, sizeof(buf), pname) < 0)
-      goto next_trusted;
-
-    /* "lib64" */
-    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '6' &&
-        buf[4] == '4' && buf[5] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-    /* "libexec" - (/usr/libexec/) */
-    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == 'e' &&
-        buf[4] == 'x' && buf[5] == 'e' && buf[6] == 'c' && buf[7] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-    /* "lib" */
-    if (buf[0] == 'l' && buf[1] == 'i' && buf[2] == 'b' && buf[3] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-    /* "bin" */
-    if (buf[0] == 'b' && buf[1] == 'i' && buf[2] == 'n' && buf[3] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-    /* "sbin" */
-    if (buf[0] == 's' && buf[1] == 'b' && buf[2] == 'i' && buf[3] == 'n' &&
-        buf[4] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-    /* "modules" (for kernel module compat) */
-    if (buf[0] == 'm' && buf[1] == 'o' && buf[2] == 'd' && buf[3] == 'u' &&
-        buf[4] == 'l' && buf[5] == 'e' && buf[6] == 's' && buf[7] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-  next_trusted:
-    parent = BPF_CORE_READ(parent, d_parent);
-  }
-
-  return 0;
-}
-
-/*
- * Check if module is from standard location.
- * Walks up dentry parents looking for "modules" directory that sits
- * directly under / or /usr/ (verified via is_at_root_or_usr()).
- *
- * Returns 1 if appears to be from /lib/modules or /usr/lib/modules
- */
-static __always_inline int is_standard_module_location(struct dentry *dentry) {
-  struct dentry *parent;
-  const unsigned char *pname;
-  char buf[12];
-
-  if (!dentry)
-    return 0;
-
-  /*
-   * Walk up to 6 levels of parent directories.
-   * Looking for pattern: .../lib/modules/... or .../usr/lib/modules/...
-   */
-  parent = BPF_CORE_READ(dentry, d_parent);
-#pragma unroll
-  for (int i = 0; i < 6 && parent; i++) {
-    pname = BPF_CORE_READ(parent, d_name.name);
-    if (!pname)
-      goto next;
-
-    if (bpf_probe_read_kernel_str(buf, sizeof(buf), pname) < 0)
-      goto next;
-
-    /* Check if this directory is "modules" under / or /usr/ */
-    if (buf[0] == 'm' && buf[1] == 'o' && buf[2] == 'd' && buf[3] == 'u' &&
-        buf[4] == 'l' && buf[5] == 'e' && buf[6] == 's' && buf[7] == '\0') {
-      if (is_at_root_or_usr(parent))
-        return 1;
-    }
-
-  next:
-    parent = BPF_CORE_READ(parent, d_parent);
-  }
-
-  return 0;
-}
-
-/*
- * Calculate a metadata fingerprint of a file.
- *
- * This is NOT a cryptographic hash. It is a metadata fingerprint that
- * captures all available inode attributes that change when a file is
- * modified. The full SHA-256 content hash is computed in user-space
- * (by the agent via tpm_hash_file) for critical verification.
- *
- * Metadata included in fingerprint:
- *   - i_ino:        inode number (unique per filesystem)
- *   - i_size:       file size in bytes
- *   - i_blocks:     512-byte blocks allocated on disk
- *   - i_mtime_sec:  content modification time (seconds)
- *   - i_mtime_nsec: content modification time (nanoseconds)
- *   - i_ctime_sec:  inode status change time (seconds)
- *   - i_ctime_nsec: inode status change time (nanoseconds)
- *   - i_mode:       file type and permissions
- *   - i_uid/i_gid:  file ownership
- *   - i_nlink:      hard link count
- *   - i_generation: filesystem generation counter
- *   - i_version:    inode version (incremented on any change)
- *
- * Important security note: this fingerprint detects accidental and naive
- * modifications but is NOT tamper-proof against a privileged attacker who can
- * control timestamps and metadata. The TPM-backed attestation (PCR values +
- * signed quote) is the actual trust anchor.
- */
-
-/*
- * 64-bit mixing step: XOR value into accumulator, multiply by a large
- * odd constant, then shift-mix to propagate bit changes.
- * Constants chosen from splitmix64 / murmurhash3 finalizer research.
- */
 
 /*
  * LSM hook: security_bprm_check
@@ -602,15 +223,14 @@ int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
   }
 
   /*
-   * In ENFORCE mode with STRICT_EXEC enabled, block binaries from
-   * untrusted paths. Uses dentry walk since bprm_check_security is
-   * non-sleepable and bpf_d_path is not available.
+   * Path-based security checks removed due to inherent fragility and
+   * unreliable security guarantees using bpf_d_path/dentry walking.
+   *
+   * STRICT_EXEC logic is disabled until a content-based mechanism
+   * (fs-verity) is implemented.
    */
-  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
-    dentry = file ? BPF_CORE_READ(file, f_path.dentry) : NULL;
-    if (!dentry || !is_trusted_system_path(dentry))
-      blocked = 1;
-  }
+  (void)file;
+  (void)dentry;
 
   event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
 
@@ -717,28 +337,14 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   if (mode == LOTA_MODE_MAINTENANCE)
     return 0;
 
-  /* for path validation */
-  dentry = BPF_CORE_READ(file, f_path.dentry);
-
-  /* also get dentry name for whitelist lookup */
-  name = BPF_CORE_READ(dentry, d_name.name);
-
   /*
-   * In ENFORCE mode, LOTA block modules not from standard paths.
-   * LOTA check:
-   *   1. Is module on explicit whitelist? -> allow
-   *   2. Is module from /lib/modules/ or /usr/lib/modules/? -> allow
-   *   3. Otherwise -> block
+   * Path/Name-based module blocking removed.
+   *
+   * Relying on module name or path is insecure.
+   * TODO: Implement signature verification or measure-only policy.
    */
-  if (mode == LOTA_MODE_ENFORCE) {
-    if (is_module_whitelisted(name)) {
-      blocked = 0;
-    } else if (is_standard_module_location(dentry)) {
-      blocked = 0;
-    } else {
-      blocked = 1;
-    }
-  }
+  (void)dentry;
+  (void)name;
 
   /* for logging */
   event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
@@ -753,7 +359,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    resolve_file_path(file, event->filename, sizeof(event->filename));
+    __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
 
     struct lota_exec_event *rb_event;
     rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -954,35 +560,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    *  - library is from standard system paths (/usr/lib, etc)
    *  - otherwise -> block
    *
-   * Resolve full path via bpf_d_path into scratch buffer for
-   * map lookups and prefix checks. Falls back to dentry walk.
+   * Resolve full path via bpf_d_path into scratch buffer  /*
+   * Path-based security checks removed.
    */
-  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    u32 pkey = 0;
-    char *pathbuf = bpf_map_lookup_elem(&path_scratch, &pkey);
-    int resolved = 0;
-
-    if (pathbuf) {
-      __builtin_memset(pathbuf, 0, LOTA_MAX_PATH_LEN);
-      long pret = resolve_file_path(file, pathbuf, LOTA_MAX_PATH_LEN);
-      if (pret >= 0 && pathbuf[0] == '/')
-        resolved = 1;
-    }
-
-    if (resolved && is_trusted_lib(pathbuf)) {
-      blocked = 0;
-    } else if (resolved && is_trusted_lib_path(pathbuf)) {
-      blocked = 0;
-    } else if (is_trusted_system_path(dentry)) {
-      /*
-       * dentry walk: check if any parent directory is a trusted
-       * system directory. Fallback when bpf_d_path is unavailable.
-       */
-      blocked = 0;
-    } else {
-      blocked = 1;
-    }
-  }
+  (void)dentry;
 
   /* for logging */
   event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
@@ -997,7 +578,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    resolve_file_path(file, event->filename, sizeof(event->filename));
+    __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
 
     struct lota_exec_event *rb_event;
     rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
