@@ -318,18 +318,22 @@ $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+$(TEST_BIN_DIR)/cross_lang_verify: tests/cross_lang_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(CURDIR)/$(BUILD_DIR) -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
 	@echo "Built: $@"
 
-# Full test suite (includes /tests plus agent hardware tests)
-test: all $(TEST_BINS)
+# Full test suite (unit + integration + hardware)
+# Note: hardware tests require root. Run 'sudo make test-hardware' for them.
+test: test-unit
+
+test-unit: all $(TEST_BINS)
 	@echo "=== Running unit tests ==="
 	@./build/test_hash_verify
 	@./build/test_dbus
@@ -373,12 +377,14 @@ test: all $(TEST_BINS)
 		echo "SKIP: cross_lang_gen (go not installed)"; \
 	fi
 	@echo ""
+	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."
+
+test-hardware: $(AGENT_BIN)
 	@echo "=== Agent hardware tests (require root) ==="
-	sudo $(AGENT_BIN) --test-iommu
+	$(AGENT_BIN) --test-iommu
 	@echo ""
-	sudo $(AGENT_BIN) --test-tpm
+	$(AGENT_BIN) --test-tpm
 	@echo ""
-	@echo "Tests complete"
 
 test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 	@echo "=== SDK Integration Test ==="
@@ -442,8 +448,9 @@ help:
 	@echo "  wine-hook  - Build only Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat  - Build only anti-cheat compatibility layer"
 	@echo "  clean      - Remove build artifacts"
-	@echo "  install    - Install to /usr (requires sudo)"
-	@echo "  test       - Run basic tests (requires sudo)"
+	@echo "  install    - Install to /usr (requires root)"
+	@echo "  test       - Run basic unit tests"
+	@echo "  test-hardware - Run hardware tests (requires root/sudo)"
 	@echo ""
 	@echo "Prerequisites (Fedora):"
 	@echo "  sudo dnf install clang llvm libbpf-devel tpm2-tss-devel openssl-devel bpftool golang"
