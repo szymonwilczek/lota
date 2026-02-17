@@ -157,6 +157,30 @@ int main(void) {
   test_result("lota_sdk_version()", ver != NULL && strlen(ver) > 0,
               "no version");
   printf("  SDK version: %s\n", ver);
+  printf("\n--- Test 9: Subscription ---\n");
+
+  client = lota_connect();
+  if (client) {
+    ret = lota_subscribe(client, LOTA_EVENT_STATUS, NULL, NULL);
+
+    /* dummy callback */
+    void dummy_cb(const struct lota_status *s, uint32_t e, void *u) {
+      (void)s;
+      (void)e;
+      (void)u;
+    }
+
+    ret = lota_subscribe(client, LOTA_EVENT_STATUS, dummy_cb, NULL);
+    test_result("lota_subscribe()", ret == 0, lota_strerror(ret));
+
+    if (ret == 0) {
+      ret = lota_unsubscribe(client);
+      test_result("lota_unsubscribe()", ret == 0, lota_strerror(ret));
+    }
+    lota_disconnect(client);
+  } else {
+    test_result("Subscription test", 0, "could not connect");
+  }
 
   printf("\n=== Test Summary ===\n");
   printf("Passed: %d\n", tests_passed);

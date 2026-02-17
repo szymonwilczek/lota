@@ -81,6 +81,22 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms);
 
 /*
+ * bpf_loader_get_event_fd - Get the epoll fd for the ring buffer
+ * @ctx: Context
+ *
+ * Returns: file descriptor (>= 0) or negative errno
+ */
+int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx);
+
+/*
+ * bpf_loader_consume - Consume available events without blocking
+ * @ctx: Context
+ *
+ * Returns: Number of events processed, or negative errno
+ */
+int bpf_loader_consume(struct bpf_loader_ctx *ctx);
+
+/*
  * bpf_loader_get_stats - Get BPF statistics
  * @ctx: Loaded context
  * @total_execs: Output - total exec events seen

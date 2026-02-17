@@ -420,6 +420,12 @@ void lota_disconnect(struct lota_client *client) {
   free(client);
 }
 
+int lota_get_fd(struct lota_client *client) {
+  if (!client)
+    return -1;
+  return client->fd;
+}
+
 int lota_ping(struct lota_client *client, uint64_t *uptime_sec) {
   struct lota_ipc_request req;
   struct lota_ipc_response resp;

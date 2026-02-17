@@ -193,6 +193,18 @@ int bpf_loader_poll(struct bpf_loader_ctx *ctx, int timeout_ms) {
   return ring_buffer__poll(ctx->ringbuf, timeout_ms);
 }
 
+int bpf_loader_get_event_fd(struct bpf_loader_ctx *ctx) {
+  if (!ctx || !ctx->ringbuf)
+    return -EINVAL;
+  return ring_buffer__epoll_fd(ctx->ringbuf);
+}
+
+int bpf_loader_consume(struct bpf_loader_ctx *ctx) {
+  if (!ctx || !ctx->ringbuf)
+    return -EINVAL;
+  return ring_buffer__consume(ctx->ringbuf);
+}
+
 int bpf_loader_get_stats(struct bpf_loader_ctx *ctx, uint64_t *total_execs,
                          uint64_t *events_sent, uint64_t *errors,
                          uint64_t *drops) {

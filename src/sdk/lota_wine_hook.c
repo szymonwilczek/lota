@@ -331,33 +331,76 @@ static void refresh_once(void) {
 }
 
 /*
- * Periodically refresh status and token files.
- *
- * Blocks all signals to avoid interfering with Wine's aggressive
- * signal handling.
+ * Callback for push notifications
+ */
+static void hook_status_cb(const struct lota_status *status, uint32_t events,
+                           void *user_data) {
+  int ret;
+
+  (void)events;
+  (void)user_data;
+
+  ret = write_status(status);
+  if (ret < 0)
+    LOG_WRN("write_status: %s", strerror(-ret));
+
+  if (status->flags & LOTA_FLAG_ATTESTED) {
+    ret = write_token(g_hook.client);
+    if (ret < 0 && ret != LOTA_ERR_NOT_ATTESTED)
+      LOG_DBG("write_token: %s", lota_strerror(ret));
+  } else {
+    unlink(g_hook.token_path);
+  }
+}
+
+/*
+ * Event-driven refresh thread.
+ * Subscribes to agent events and waits for notifications.
+ * Falls back to polling on error/timeout.
  */
 static void *refresh_thread_fn(void *arg) {
   sigset_t all;
-  int i;
+  int ret;
 
   (void)arg;
 
   sigfillset(&all);
   pthread_sigmask(SIG_BLOCK, &all, NULL);
 
-  /*
-   * initial sleep: the constructor already wrote the first
-   * snapshot, so wait one full interval before the first
-   * background refresh
-   */
-  for (i = 0; i < g_hook.refresh_sec && g_hook.running; i++)
-    sleep(1);
-
   while (g_hook.running) {
-    refresh_once();
+    /* ensure connection */
+    if (!g_hook.client) {
+      g_hook.client = hook_connect();
+      if (!g_hook.client) {
+        if (g_hook.log_level <= HOOK_LOG_DEBUG)
+          LOG_DBG("agent not available, retrying in %ds", g_hook.refresh_sec);
+        sleep(g_hook.refresh_sec);
+        continue;
+      }
+      LOG_INF("connected to agent");
 
-    for (i = 0; i < g_hook.refresh_sec && g_hook.running; i++)
+      /* initial queries */
+      refresh_once();
+
+      /* subscribe to updates */
+      ret = lota_subscribe(g_hook.client, LOTA_EVENT_STATUS, hook_status_cb,
+                           NULL);
+      if (ret != LOTA_OK)
+        LOG_WRN("subscribe failed: %s", lota_strerror(ret));
+    }
+
+    ret = lota_poll_events(g_hook.client, 5000);
+
+    if (ret == LOTA_ERR_PROTOCOL || ret == LOTA_ERR_NOT_CONNECTED ||
+        ret == -EPIPE || ret == -ECONNRESET) {
+      LOG_WRN("connection lost (%s), reconnecting...", lota_strerror(ret));
+      lota_disconnect(g_hook.client);
+      g_hook.client = NULL;
+      /* avoid tight loop on persistent failure */
       sleep(1);
+    } else if (ret != LOTA_OK && ret != LOTA_ERR_TIMEOUT) {
+      LOG_DBG("poll error: %s", lota_strerror(ret));
+    }
   }
 
   return NULL;

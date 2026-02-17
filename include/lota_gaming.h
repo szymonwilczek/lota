@@ -163,6 +163,13 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
 void lota_disconnect(struct lota_client *client);
 
 /*
+ * lota_get_fd - Get the underlying socket file descriptor
+ *
+ * Returns the file descriptor or -1 if invalid.
+ */
+int lota_get_fd(struct lota_client *client);
+
+/*
  * lota_ping - Check if agent is responsive
  *
  * Returns LOTA_OK if the agent responds, error code otherwise.

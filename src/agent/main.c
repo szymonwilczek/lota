@@ -23,7 +23,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/random.h>
+#include <sys/signalfd.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -235,10 +237,13 @@ static const char *mode_to_string(int mode) {
 static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                       bool block_ptrace, const char *config_path,
                       struct lota_config *cfg) {
-  int ret;
+  int ret, epoll_fd, sfd;
   uint32_t status_flags = 0;
   uint64_t wd_usec = 0;
   bool wd_enabled;
+  sigset_t mask;
+  struct epoll_event ev, events[16];
+  int nfds;
 
   lota_info("LOTA agent starting");
 
@@ -247,10 +252,45 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   if (wd_enabled)
     lota_info("Watchdog enabled, interval %lu us", (unsigned long)wd_usec);
 
+  /* setup signalfd for synchronous signal handling */
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGTERM);
+  sigaddset(&mask, SIGINT);
+  sigaddset(&mask, SIGHUP);
+
+  if (sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
+    lota_err("Failed to block signals: %s", strerror(errno));
+    return -errno;
+  }
+
+  sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+  if (sfd < 0) {
+    lota_err("Failed to create signalfd: %s", strerror(errno));
+    return -errno;
+  }
+
+  epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+  if (epoll_fd < 0) {
+    lota_err("Failed to create epoll instance: %s", strerror(errno));
+    close(sfd);
+    return -errno;
+  }
+
+  ev.events = EPOLLIN;
+  ev.data.fd = sfd;
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sfd, &ev) < 0) {
+    lota_err("Failed to add signalfd to epoll: %s", strerror(errno));
+    close(sfd);
+    close(epoll_fd);
+    return -errno;
+  }
+
   ret =
       hash_verify_init(&g_hash_ctx, g_no_hash_cache ? HASH_CACHE_DISABLED : 0);
   if (ret < 0) {
     lota_err("Failed to initialize hash cache: %s", strerror(-ret));
+    close(sfd);
+    close(epoll_fd);
     return ret;
   }
   if (g_no_hash_cache)
@@ -262,12 +302,28 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   ret = ipc_init_or_activate(&g_ipc_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize IPC: %s", strerror(-ret));
-    hash_verify_cleanup(&g_hash_ctx);
-    return ret;
+    goto cleanup_epoll;
   } else {
     ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
     setup_container_listener(&g_ipc_ctx);
     setup_dbus(&g_ipc_ctx);
+
+    /* IPC epoll fd to main loop */
+    int ipc_fd = ipc_get_fd(&g_ipc_ctx);
+    if (ipc_fd >= 0) {
+      ev.events = EPOLLIN;
+      ev.data.fd = ipc_fd;
+      epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ipc_fd, &ev);
+    }
+
+    if (g_dbus_ctx) {
+      int dbus_fd = dbus_get_fd(g_dbus_ctx);
+      if (dbus_fd >= 0) {
+        ev.events = EPOLLIN;
+        ev.data.fd = dbus_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dbus_fd, &ev);
+      }
+    }
   }
 
   lota_info("Verifying IOMMU");
@@ -332,6 +388,14 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   lota_info("BPF program loaded");
   status_flags |= LOTA_STATUS_BPF_LOADED;
 
+  /* BPF event fd to epoll */
+  int bpf_fd = bpf_loader_get_event_fd(&g_bpf_ctx);
+  if (bpf_fd >= 0) {
+    ev.events = EPOLLIN;
+    ev.data.fd = bpf_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
+  }
+
   ret = bpf_loader_set_mode(&g_bpf_ctx, mode);
   if (ret < 0) {
     lota_warn("Failed to set mode: %s", strerror(-ret));
@@ -392,104 +456,130 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
   sdnotify_ready();
   sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
-  lota_info("Monitoring binary executions");
+  lota_info("Monitoring binary executions (event-driven)");
 
   /* main loop */
   while (g_running) {
-    if (g_reload) {
-      g_reload = 0;
-      sdnotify_reloading();
-      lota_info("SIGHUP received, reloading configuration");
+    int timeout = -1;
+    if (wd_enabled && wd_usec > 0)
+      timeout = (int)(wd_usec / 2000); /* usec -> ms, /2 for safety */
 
-      static struct lota_config new_cfg;
-      config_init(&new_cfg);
-      int reload_ret = config_load(&new_cfg, config_path);
-      if (reload_ret < 0 && reload_ret != -ENOENT) {
-        lota_err("Failed to reload config: %s", strerror(-reload_ret));
-        sdnotify_ready();
-      } else {
-        int new_mode = parse_mode(new_cfg.mode);
-        if (new_mode >= 0 && new_mode != mode) {
-          if (bpf_loader_set_mode(&g_bpf_ctx, new_mode) == 0) {
-            lota_info("Mode changed: %s -> %s", mode_to_string(mode),
-                      mode_to_string(new_mode));
-            mode = new_mode;
-            g_mode = new_mode;
+    nfds = epoll_wait(epoll_fd, events, 16, timeout);
+
+    if (nfds < 0) {
+      if (errno == EINTR)
+        continue;
+      lota_err("epoll_wait failed: %s", strerror(errno));
+      break;
+    }
+
+    if (nfds == 0 && wd_enabled) {
+      sdnotify_watchdog_ping();
+      continue;
+    }
+
+    for (int i = 0; i < nfds; i++) {
+      if (events[i].data.fd == sfd) {
+        struct signalfd_siginfo fdsi;
+        ssize_t s = read(sfd, &fdsi, sizeof(struct signalfd_siginfo));
+        if (s != sizeof(struct signalfd_siginfo))
+          continue;
+
+        if (fdsi.ssi_signo == SIGTERM || fdsi.ssi_signo == SIGINT) {
+          lota_info("Signal received, stopping...");
+          g_running = 0;
+        } else if (fdsi.ssi_signo == SIGHUP) {
+          /* reload */
+          sdnotify_reloading();
+          lota_info("SIGHUP received, reloading configuration");
+
+          static struct lota_config new_cfg;
+          config_init(&new_cfg);
+          int reload_ret = config_load(&new_cfg, config_path);
+          if (reload_ret < 0 && reload_ret != -ENOENT) {
+            lota_err("Failed to reload config: %s", strerror(-reload_ret));
+            sdnotify_ready();
           } else {
-            lota_warn("Failed to apply new mode");
+            int new_mode = parse_mode(new_cfg.mode);
+            if (new_mode >= 0 && new_mode != mode) {
+              if (bpf_loader_set_mode(&g_bpf_ctx, new_mode) == 0) {
+                lota_info("Mode changed: %s -> %s", mode_to_string(mode),
+                          mode_to_string(new_mode));
+                mode = new_mode;
+                g_mode = new_mode;
+              } else {
+                lota_warn("Failed to apply new mode");
+              }
+            }
+
+            if (new_cfg.strict_mmap != strict_mmap) {
+              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+                                    new_cfg.strict_mmap ? 1 : 0);
+              strict_mmap = new_cfg.strict_mmap;
+              lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
+            }
+
+            if (new_cfg.block_ptrace != block_ptrace) {
+              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+                                    new_cfg.block_ptrace ? 1 : 0);
+              block_ptrace = new_cfg.block_ptrace;
+              lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+            }
+
+            if (new_cfg.log_level[0] &&
+                strcmp(new_cfg.log_level, cfg->log_level) != 0) {
+              int lvl = LOG_DEBUG;
+              if (strcmp(new_cfg.log_level, "error") == 0)
+                lvl = LOG_ERR;
+              else if (strcmp(new_cfg.log_level, "warn") == 0)
+                lvl = LOG_WARNING;
+              else if (strcmp(new_cfg.log_level, "info") == 0)
+                lvl = LOG_INFO;
+              journal_set_level(lvl);
+              lota_info("Log level changed to %s", new_cfg.log_level);
+            }
+
+            /* flush and reload */
+            for (int k = 0; k < g_protect_pid_count; k++)
+              bpf_loader_unprotect_pid(&g_bpf_ctx, g_protect_pids[k]);
+            for (int k = 0; k < g_trust_lib_count; k++)
+              bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
+
+            *cfg = new_cfg;
+
+            g_protect_pid_count = cfg->protect_pid_count;
+            for (int k = 0; k < g_protect_pid_count; k++) {
+              g_protect_pids[k] = cfg->protect_pids[k];
+              if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
+                lota_warn("Failed to protect PID %u on reload",
+                          g_protect_pids[k]);
+            }
+            lota_info("Protected PIDs reloaded (%d entries)",
+                      g_protect_pid_count);
+
+            g_trust_lib_count = cfg->trust_lib_count;
+            for (int k = 0; k < g_trust_lib_count; k++) {
+              g_trust_libs[k] = cfg->trust_libs[k];
+              if (bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[k]) < 0)
+                lota_warn("Failed to trust lib %s on reload", g_trust_libs[k]);
+            }
+            lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
+            sdnotify_ready();
+            sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
+            lota_info("Configuration reloaded");
           }
         }
-
-        if (new_cfg.strict_mmap != strict_mmap) {
-          bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
-                                new_cfg.strict_mmap ? 1 : 0);
-          strict_mmap = new_cfg.strict_mmap;
-          lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
-        }
-
-        if (new_cfg.block_ptrace != block_ptrace) {
-          bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
-                                new_cfg.block_ptrace ? 1 : 0);
-          block_ptrace = new_cfg.block_ptrace;
-          lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
-        }
-
-        if (new_cfg.log_level[0] &&
-            strcmp(new_cfg.log_level, cfg->log_level) != 0) {
-          int lvl = LOG_DEBUG;
-          if (strcmp(new_cfg.log_level, "error") == 0)
-            lvl = LOG_ERR;
-          else if (strcmp(new_cfg.log_level, "warn") == 0)
-            lvl = LOG_WARNING;
-          else if (strcmp(new_cfg.log_level, "info") == 0)
-            lvl = LOG_INFO;
-          journal_set_level(lvl);
-          lota_info("Log level changed to %s", new_cfg.log_level);
-        }
-
-        /* flush and reload protected PIDs */
-        for (int i = 0; i < g_protect_pid_count; i++)
-          bpf_loader_unprotect_pid(&g_bpf_ctx, g_protect_pids[i]);
-
-        /* flush and reload trusted libraries */
-        for (int i = 0; i < g_trust_lib_count; i++)
-          bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[i]);
-
-        *cfg = new_cfg;
-
-        g_protect_pid_count = cfg->protect_pid_count;
-        for (int i = 0; i < g_protect_pid_count; i++) {
-          g_protect_pids[i] = cfg->protect_pids[i];
-          if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]) < 0)
-            lota_warn("Failed to protect PID %u on reload", g_protect_pids[i]);
-        }
-        lota_info("Protected PIDs reloaded (%d entries)", g_protect_pid_count);
-
-        g_trust_lib_count = cfg->trust_lib_count;
-        for (int i = 0; i < g_trust_lib_count; i++) {
-          g_trust_libs[i] = cfg->trust_libs[i];
-          if (bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]) < 0)
-            lota_warn("Failed to trust lib %s on reload", g_trust_libs[i]);
-        }
-        lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
-        sdnotify_ready();
-        sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
-        lota_info("Configuration reloaded");
+      } else if (events[i].data.fd == ipc_get_fd(&g_ipc_ctx)) {
+        ipc_process(&g_ipc_ctx, 0);
+      } else if (g_dbus_ctx && events[i].data.fd == dbus_get_fd(g_dbus_ctx)) {
+        dbus_process(g_dbus_ctx, 0);
+      } else if (events[i].data.fd == bpf_loader_get_event_fd(&g_bpf_ctx)) {
+        bpf_loader_consume(&g_bpf_ctx);
       }
     }
 
-    /* non-blocking */
-    ipc_process(&g_ipc_ctx, 0);
-    dbus_process(g_dbus_ctx, 0);
-
     if (wd_enabled)
       sdnotify_watchdog_ping();
-
-    ret = bpf_loader_poll(&g_bpf_ctx, 100); /* 100ms timeout */
-    if (ret < 0 && ret != -EINTR) {
-      lota_err("Poll error: %s", strerror(-ret));
-      break;
-    }
   }
 
   /* clean shutdown via signal - do not propagate EINTR as failure */
@@ -523,7 +613,10 @@ cleanup_tpm:
   tpm_cleanup(&g_tpm_ctx);
   dbus_cleanup(g_dbus_ctx);
   ipc_cleanup(&g_ipc_ctx);
+cleanup_epoll:
   hash_verify_cleanup(&g_hash_ctx);
+  close(sfd);
+  close(epoll_fd);
   return ret;
 }
 
