@@ -219,12 +219,12 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   }
 
   if (fd < 0) {
-    fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
-  }
-
-  if (fd < 0) {
+    /*
+     * It is safer to fail closed (or report unknown) than to lie and attest
+     * content that might not match what was actually executed.
+     */
     ctx->errors++;
-    return -errno;
+    return -ESRCH;
   }
 
   if (fstat(fd, &st) < 0) {
