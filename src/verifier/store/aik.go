@@ -40,9 +40,6 @@ type AIKStore interface {
 	// retrieves stored hardware ID for client
 	GetHardwareID(clientID string) ([32]byte, error)
 
-	// removes trust for client's AIK
-	RevokeAIK(clientID string) error
-
 	// returns all registered client IDs
 	ListClients() []string
 
@@ -281,27 +278,6 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	return nil
 }
 
-func (fs *FileStore) RevokeAIK(clientID string) error {
-	if err := validateClientID(clientID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	path := filepath.Join(fs.storePath, clientID+".pem")
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove key file: %w", err)
-	}
-
-	metaPath := filepath.Join(fs.storePath, clientID+".meta")
-	os.Remove(metaPath)
-
-	delete(fs.cache, clientID)
-	delete(fs.registeredAt, clientID)
-	return nil
-}
-
 func (fs *FileStore) ListClients() []string {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
@@ -481,15 +457,6 @@ func (ms *MemoryStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 
 	ms.keys[clientID] = pubKey
 	ms.registeredAt[clientID] = time.Now()
-	return nil
-}
-
-func (ms *MemoryStore) RevokeAIK(clientID string) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	delete(ms.keys, clientID)
-	delete(ms.registeredAt, clientID)
 	return nil
 }
 
@@ -769,10 +736,6 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 	}
 
 	return nil
-}
-
-func (cs *CertificateStore) RevokeAIK(clientID string) error {
-	return cs.fileStore.RevokeAIK(clientID)
 }
 
 func (cs *CertificateStore) ListClients() []string {

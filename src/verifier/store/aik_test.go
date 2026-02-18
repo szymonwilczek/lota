@@ -144,25 +144,6 @@ func TestMemoryStore_RegisterDuplicateDifferentKey(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_Revoke(t *testing.T) {
-	store := NewMemoryStore()
-	key := generateTestKey(t)
-
-	if err := store.RegisterAIK("client1", &key.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK failed: %v", err)
-	}
-
-	if err := store.RevokeAIK("client1"); err != nil {
-		t.Fatalf("RevokeAIK failed: %v", err)
-	}
-
-	// should not exist after revoke
-	_, err := store.GetAIK("client1")
-	if err == nil {
-		t.Error("Expected error after revoke")
-	}
-}
-
 func TestMemoryStore_ListClients(t *testing.T) {
 	store := NewMemoryStore()
 	key1 := generateTestKey(t)
@@ -926,10 +907,6 @@ func TestFileStore_PathTraversal(t *testing.T) {
 
 		if _, err := store.GetAIK(id); !errors.Is(err, ErrInvalidClientID) {
 			t.Errorf("GetAIK(%s): want ErrInvalidClientID, got %v", label, err)
-		}
-
-		if err := store.RevokeAIK(id); !errors.Is(err, ErrInvalidClientID) {
-			t.Errorf("RevokeAIK(%s): want ErrInvalidClientID, got %v", label, err)
 		}
 
 		if _, err := store.GetRegisteredAt(id); !errors.Is(err, ErrInvalidClientID) {

@@ -100,27 +100,6 @@ func TestSQLiteAIK_DuplicateDifferentKey(t *testing.T) {
 	t.Log("✓ TOFU invariant enforced: different key rejected")
 }
 
-func TestSQLiteAIK_Revoke(t *testing.T) {
-	t.Log("TEST: SQLite AIK revocation")
-
-	store, cleanup := createTestSQLiteAIKStore(t)
-	defer cleanup()
-
-	key := generateTestKey(t)
-	store.RegisterAIK("client1", &key.PublicKey)
-
-	if err := store.RevokeAIK("client1"); err != nil {
-		t.Fatalf("RevokeAIK failed: %v", err)
-	}
-
-	_, err := store.GetAIK("client1")
-	if err == nil {
-		t.Error("Expected error after revoke")
-	}
-
-	t.Log("✓ AIK revocation removes client")
-}
-
 func TestSQLiteAIK_ListClients(t *testing.T) {
 	t.Log("TEST: SQLite AIK list clients")
 

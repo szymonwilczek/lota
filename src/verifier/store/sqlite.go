@@ -160,28 +160,6 @@ func (s *SQLiteAIKStore) GetHardwareID(clientID string) ([32]byte, error) {
 	return result, nil
 }
 
-func (s *SQLiteAIKStore) RevokeAIK(clientID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	if _, err := tx.Exec("DELETE FROM baselines WHERE client_id = ?", clientID); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to delete baseline: %w", err)
-	}
-
-	if _, err := tx.Exec("DELETE FROM clients WHERE id = ?", clientID); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to revoke AIK: %w", err)
-	}
-
-	return tx.Commit()
-}
-
 func (s *SQLiteAIKStore) ListClients() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
