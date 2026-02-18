@@ -182,9 +182,6 @@ static __always_inline int is_verity_allowed(struct file *file) {
 
   /*
    * Initialize dynptr for the digest buffer.
-   * Note: This rely on new kernel version. But this project is aiming to only
-   * support newest versions of kernel, so this is fine by now. I'll remove that
-   * note later.
    */
   bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
 
