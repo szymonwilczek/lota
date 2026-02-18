@@ -22,6 +22,8 @@
 #include <openssl/encoder.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
 
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
@@ -631,11 +633,9 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
   EVP_PKEY_CTX *pctx = NULL;
   OSSL_PARAM_BLD *bld = NULL;
   OSSL_PARAM *params = NULL;
-  OSSL_ENCODER_CTX *ectx = NULL;
   BIGNUM *n = NULL;
   BIGNUM *e = NULL;
-  unsigned char *der_out = NULL;
-  size_t der_len = 0;
+  int der_len = 0;
 
   if (!ctx || !ctx->initialized || !buf || !out_size)
     return -EINVAL;
@@ -664,9 +664,6 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 
   /*
    * Convert TPM RSA public key to OpenSSL EVP_PKEY.
-   * TPM2B_PUBLIC contains:
-   *   - publicArea.unique.rsa.buffer: modulus (big-endian)
-   *   - publicArea.parameters.rsaDetail.exponent: e (0 means 65537)
    */
   n = BN_bin2bn(out_public->publicArea.unique.rsa.buffer,
                 out_public->publicArea.unique.rsa.size, NULL);
@@ -703,7 +700,6 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
     goto cleanup;
   }
 
-  /* for RSA key generation from data */
   pctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
   if (!pctx) {
     ret = -ENOMEM;
@@ -721,37 +717,30 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
   }
 
   /*
-   * Encode as DER SubjectPublicKeyInfo using OSSL_ENCODER.
+   * Encode as DER SubjectPublicKeyInfo using i2d_PUBKEY.
    */
-  ectx = OSSL_ENCODER_CTX_new_for_pkey(pkey, EVP_PKEY_PUBLIC_KEY, "DER",
-                                       "SubjectPublicKeyInfo", NULL);
-  if (!ectx) {
-    ret = -ENOMEM;
-    goto cleanup;
-  }
-
-  /* first call with null to get size */
-  if (!OSSL_ENCODER_to_data(ectx, &der_out, &der_len)) {
+  der_len = i2d_PUBKEY(pkey, NULL);
+  if (der_len < 0) {
     ret = -EINVAL;
     goto cleanup;
   }
 
-  if (der_len > buf_size) {
-    OPENSSL_free(der_out);
+  if ((size_t)der_len > buf_size) {
     ret = -ENOSPC;
     goto cleanup;
   }
 
-  memcpy(buf, der_out, der_len);
-  OPENSSL_free(der_out);
-  der_out = NULL;
+  unsigned char *p = buf;
+  der_len = i2d_PUBKEY(pkey, &p);
+  if (der_len < 0) {
+    ret = -EINVAL;
+    goto cleanup;
+  }
 
   *out_size = der_len;
   ret = 0;
 
 cleanup:
-  if (ectx)
-    OSSL_ENCODER_CTX_free(ectx);
   if (pctx)
     EVP_PKEY_CTX_free(pctx);
   if (params)
