@@ -32,9 +32,6 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
-/* Maximum number of SSL_ERROR_WANT_READ/WRITE retries before giving up */
-#define NET_SSL_MAX_RETRIES 1024
-
 /*
  * Wire-format size assertions.
  * Protocol sends these structures as flat byte arrays; any compiler

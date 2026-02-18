@@ -56,17 +56,29 @@ HARDENING_LDFLAGS := -Wl,-z,relro,-z,now
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
 LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd
 
+# Detect architecture from compiler if not specified
+ifndef ARCH
+	HOST_ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
+	ARCH := $(HOST_ARCH)
+endif
+
+# BPF target architecture mapping
+BPF_ARCH := $(ARCH)
+ifeq ($(ARCH),x86_64)
+	BPF_ARCH := x86
+endif
+ifeq ($(ARCH),aarch64)
+	BPF_ARCH := arm64
+endif
+
 # BPF compilation flags
 # -target bpf: Generate BPF bytecode
 # -g: Include debug info
 # -O2: Optimization level (for BPF verifier)
 BPF_CFLAGS := -target bpf -g -O2
-BPF_CFLAGS += -D__TARGET_ARCH_x86
+BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
-
-# Detect kernel architecture
-ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 
 # Agent source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
