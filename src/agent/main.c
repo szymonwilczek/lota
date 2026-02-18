@@ -693,6 +693,180 @@ static int parse_mode(const char *mode_str) {
   return -1;
 }
 
+static int handle_policy_ops(const char *gen_signing_key_prefix,
+                             const char *sign_policy_file,
+                             const char *verify_policy_file,
+                             const char *signing_key_path,
+                             const char *policy_pubkey_path) {
+  if (gen_signing_key_prefix) {
+    char priv_path[PATH_MAX];
+    char pub_path[PATH_MAX];
+    int ret;
+
+    snprintf(priv_path, sizeof(priv_path), "%s.key", gen_signing_key_prefix);
+    snprintf(pub_path, sizeof(pub_path), "%s.pub", gen_signing_key_prefix);
+
+    ret = policy_sign_generate_keypair(priv_path, pub_path);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to generate keypair: %s\n", strerror(-ret));
+      return 1;
+    }
+    printf("Generated Ed25519 keypair:\n");
+    printf("  Private key: %s\n", priv_path);
+    printf("  Public key:  %s\n", pub_path);
+    return 0;
+  }
+
+  if (sign_policy_file) {
+    char sig_path[PATH_MAX];
+    int ret;
+
+    if (!signing_key_path) {
+      fprintf(stderr, "--sign-policy requires --signing-key\n");
+      return 1;
+    }
+
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", sign_policy_file);
+
+    ret = policy_sign_file(sign_policy_file, signing_key_path, sig_path);
+    if (ret < 0) {
+      fprintf(stderr, "Failed to sign policy: %s\n", strerror(-ret));
+      return 1;
+    }
+    printf("Signed: %s\n", sign_policy_file);
+    printf("Signature: %s\n", sig_path);
+    return 0;
+  }
+
+  if (verify_policy_file) {
+    char sig_path[PATH_MAX];
+    int ret;
+
+    if (!policy_pubkey_path) {
+      fprintf(stderr, "--verify-policy requires --policy-pubkey\n");
+      return 1;
+    }
+
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", verify_policy_file);
+
+    ret = policy_verify_file(verify_policy_file, policy_pubkey_path, sig_path);
+    if (ret == 0) {
+      printf("Signature valid: %s\n", verify_policy_file);
+      return 0;
+    } else if (ret == -EAUTH) {
+      fprintf(stderr, "Signature INVALID: %s\n", verify_policy_file);
+      return 1;
+    } else {
+      fprintf(stderr, "Verification failed: %s\n", strerror(-ret));
+      return 1;
+    }
+  }
+
+  return -1; /* not handled */
+}
+
+static int run_ipc_test_server(void) {
+  int ret;
+  uint64_t valid_until;
+  printf("=== IPC Test Server (Unsigned) ===\n\n");
+  printf("Starting IPC server for testing...\n");
+  ret = ipc_init_or_activate(&g_ipc_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
+    return 1;
+  }
+  setup_container_listener(&g_ipc_ctx);
+  setup_dbus(&g_ipc_ctx);
+
+  valid_until = (uint64_t)(time(NULL) + 3600);
+  ipc_update_status(&g_ipc_ctx,
+                    LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
+                        LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+                    valid_until);
+  ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
+  ipc_record_attestation(&g_ipc_ctx, true);
+
+  printf("IPC server running (simulated ATTESTED state, no TPM).\n");
+  printf("Tokens will be UNSIGNED.\n");
+  printf("Press Ctrl+C to stop.\n\n");
+
+  sdnotify_ready();
+
+  while (g_running) {
+    ipc_process(&g_ipc_ctx, 1000);
+    dbus_process(g_dbus_ctx, 0);
+  }
+
+  sdnotify_stopping();
+  printf("\nShutting down IPC test server...\n");
+  dbus_cleanup(g_dbus_ctx);
+  ipc_cleanup(&g_ipc_ctx);
+  return 0;
+}
+
+static int run_signed_ipc_test_server(void) {
+  int ret;
+  uint64_t valid_until;
+  printf("=== IPC Test Server (Signed Tokens) ===\n\n");
+
+  printf("Initializing TPM...\n");
+  ret = tpm_init(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    return 1;
+  }
+  printf("TPM initialized\n");
+
+  printf("Provisioning AIK...\n");
+  ret = tpm_provision_aik(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
+    tpm_cleanup(&g_tpm_ctx);
+    return 1;
+  }
+  printf("AIK ready\n\n");
+
+  printf("Starting IPC server...\n");
+  ret = ipc_init_or_activate(&g_ipc_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
+    tpm_cleanup(&g_tpm_ctx);
+    return 1;
+  }
+  setup_container_listener(&g_ipc_ctx);
+  setup_dbus(&g_ipc_ctx);
+
+  /* enable signed tokens with PCRs 0, 1, 14 */
+  ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
+              (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
+
+  valid_until = (uint64_t)(time(NULL) + 3600);
+  ipc_update_status(&g_ipc_ctx,
+                    LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
+                        LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+                    valid_until);
+  ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
+  ipc_record_attestation(&g_ipc_ctx, true);
+
+  printf("IPC server running (simulated ATTESTED state).\n");
+  printf("Tokens will be SIGNED by TPM AIK!\n");
+  printf("Press Ctrl+C to stop.\n\n");
+
+  sdnotify_ready();
+
+  while (g_running) {
+    ipc_process(&g_ipc_ctx, 1000);
+    dbus_process(g_dbus_ctx, 0);
+  }
+
+  sdnotify_stopping();
+  printf("\nShutting down...\n");
+  dbus_cleanup(g_dbus_ctx);
+  ipc_cleanup(&g_ipc_ctx);
+  tpm_cleanup(&g_tpm_ctx);
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   int opt;
   int test_tpm_flag = 0;
@@ -999,68 +1173,12 @@ int main(int argc, char *argv[]) {
   }
 
   /* policy signing operations */
-  if (gen_signing_key_prefix) {
-    char priv_path[PATH_MAX];
-    char pub_path[PATH_MAX];
-    int ret;
-
-    snprintf(priv_path, sizeof(priv_path), "%s.key", gen_signing_key_prefix);
-    snprintf(pub_path, sizeof(pub_path), "%s.pub", gen_signing_key_prefix);
-
-    ret = policy_sign_generate_keypair(priv_path, pub_path);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to generate keypair: %s\n", strerror(-ret));
-      return 1;
-    }
-    printf("Generated Ed25519 keypair:\n");
-    printf("  Private key: %s\n", priv_path);
-    printf("  Public key:  %s\n", pub_path);
-    return 0;
-  }
-
-  if (sign_policy_file) {
-    char sig_path[PATH_MAX];
-    int ret;
-
-    if (!signing_key_path) {
-      fprintf(stderr, "--sign-policy requires --signing-key\n");
-      return 1;
-    }
-
-    snprintf(sig_path, sizeof(sig_path), "%s.sig", sign_policy_file);
-
-    ret = policy_sign_file(sign_policy_file, signing_key_path, sig_path);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to sign policy: %s\n", strerror(-ret));
-      return 1;
-    }
-    printf("Signed: %s\n", sign_policy_file);
-    printf("Signature: %s\n", sig_path);
-    return 0;
-  }
-
-  if (verify_policy_file) {
-    char sig_path[PATH_MAX];
-    int ret;
-
-    if (!policy_pubkey_path) {
-      fprintf(stderr, "--verify-policy requires --policy-pubkey\n");
-      return 1;
-    }
-
-    snprintf(sig_path, sizeof(sig_path), "%s.sig", verify_policy_file);
-
-    ret = policy_verify_file(verify_policy_file, policy_pubkey_path, sig_path);
-    if (ret == 0) {
-      printf("Signature valid: %s\n", verify_policy_file);
-      return 0;
-    } else if (ret == -EAUTH) {
-      fprintf(stderr, "Signature INVALID: %s\n", verify_policy_file);
-      return 1;
-    } else {
-      fprintf(stderr, "Verification failed: %s\n", strerror(-ret));
-      return 1;
-    }
+  {
+    int ret = handle_policy_ops(gen_signing_key_prefix, sign_policy_file,
+                                verify_policy_file, signing_key_path,
+                                policy_pubkey_path);
+    if (ret != -1)
+      return ret;
   }
 
   if (test_tpm_flag)
@@ -1072,107 +1190,11 @@ int main(int argc, char *argv[]) {
   if (export_policy_flag)
     return export_policy(mode);
 
-  if (test_ipc_flag) {
-    int ret;
-    uint64_t valid_until;
-    printf("=== IPC Test Server (Unsigned) ===\n\n");
-    printf("Starting IPC server for testing...\n");
-    ret = ipc_init_or_activate(&g_ipc_ctx);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
-      return 1;
-    }
-    setup_container_listener(&g_ipc_ctx);
-    setup_dbus(&g_ipc_ctx);
+  if (test_ipc_flag)
+    return run_ipc_test_server();
 
-    valid_until = (uint64_t)(time(NULL) + 3600);
-    ipc_update_status(&g_ipc_ctx,
-                      LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-                          LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-                      valid_until);
-    ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
-    ipc_record_attestation(&g_ipc_ctx, true);
-
-    printf("IPC server running (simulated ATTESTED state, no TPM).\n");
-    printf("Tokens will be UNSIGNED.\n");
-    printf("Press Ctrl+C to stop.\n\n");
-
-    sdnotify_ready();
-
-    while (g_running) {
-      ipc_process(&g_ipc_ctx, 1000);
-      dbus_process(g_dbus_ctx, 0);
-    }
-
-    sdnotify_stopping();
-    printf("\nShutting down IPC test server...\n");
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
-    return 0;
-  }
-
-  if (test_signed_flag) {
-    int ret;
-    uint64_t valid_until;
-    printf("=== IPC Test Server (Signed Tokens) ===\n\n");
-
-    printf("Initializing TPM...\n");
-    ret = tpm_init(&g_tpm_ctx);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
-      return 1;
-    }
-    printf("TPM initialized\n");
-
-    printf("Provisioning AIK...\n");
-    ret = tpm_provision_aik(&g_tpm_ctx);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
-      tpm_cleanup(&g_tpm_ctx);
-      return 1;
-    }
-    printf("AIK ready\n\n");
-
-    printf("Starting IPC server...\n");
-    ret = ipc_init_or_activate(&g_ipc_ctx);
-    if (ret < 0) {
-      fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
-      tpm_cleanup(&g_tpm_ctx);
-      return 1;
-    }
-    setup_container_listener(&g_ipc_ctx);
-    setup_dbus(&g_ipc_ctx);
-
-    /* enable signed tokens with PCRs 0, 1, 14 */
-    ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
-                (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
-
-    valid_until = (uint64_t)(time(NULL) + 3600);
-    ipc_update_status(&g_ipc_ctx,
-                      LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-                          LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-                      valid_until);
-    ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
-    ipc_record_attestation(&g_ipc_ctx, true);
-
-    printf("IPC server running (simulated ATTESTED state).\n");
-    printf("Tokens will be SIGNED by TPM AIK!\n");
-    printf("Press Ctrl+C to stop.\n\n");
-
-    sdnotify_ready();
-
-    while (g_running) {
-      ipc_process(&g_ipc_ctx, 1000);
-      dbus_process(g_dbus_ctx, 0);
-    }
-
-    sdnotify_stopping();
-    printf("\nShutting down...\n");
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
-    tpm_cleanup(&g_tpm_ctx);
-    return 0;
-  }
+  if (test_signed_flag)
+    return run_signed_ipc_test_server();
 
   if (attest_flag) {
     if (no_verify_tls && ca_cert_path) {
