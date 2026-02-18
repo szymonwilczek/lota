@@ -37,7 +37,7 @@ var migrations = []migration{
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
-				aik_pem     TEXT NOT NULL,
+				aik_der     BLOB NOT NULL,
 				hardware_id BLOB,
 				created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			);

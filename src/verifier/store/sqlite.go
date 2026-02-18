@@ -11,7 +11,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"database/sql"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"sync"
@@ -34,10 +33,10 @@ func (s *SQLiteAIKStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var aikPEM string
+	var aikDER []byte
 	err := s.db.QueryRow(
-		"SELECT aik_pem FROM clients WHERE id = ?", clientID,
-	).Scan(&aikPEM)
+		"SELECT aik_der FROM clients WHERE id = ?", clientID,
+	).Scan(&aikDER)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("AIK not found")
@@ -46,7 +45,17 @@ func (s *SQLiteAIKStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("failed to query AIK: %w", err)
 	}
 
-	return decodePEMPublicKey(aikPEM)
+	pub, err := x509.ParsePKIXPublicKey(aikDER)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
+
+	return rsaPub, nil
 }
 
 func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
@@ -54,17 +63,23 @@ func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) err
 	defer s.mu.Unlock()
 
 	// check if already registered
-	var existingPEM string
+	var existingDER []byte
 	err := s.db.QueryRow(
-		"SELECT aik_pem FROM clients WHERE id = ?", clientID,
-	).Scan(&existingPEM)
+		"SELECT aik_der FROM clients WHERE id = ?", clientID,
+	).Scan(&existingDER)
 
 	if err == nil {
 		// client exists — verify same key (TOFU invariant)
-		existingKey, parseErr := decodePEMPublicKey(existingPEM)
+		pub, parseErr := x509.ParsePKIXPublicKey(existingDER)
 		if parseErr != nil {
 			return fmt.Errorf("corrupt stored key: %w", parseErr)
 		}
+
+		existingKey, ok := pub.(*rsa.PublicKey)
+		if !ok {
+			return errors.New("stored key is not an RSA public key")
+		}
+
 		if !publicKeysEqual(existingKey, pubKey) {
 			return errors.New("client already registered with different key")
 		}
@@ -76,14 +91,14 @@ func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) err
 	}
 
 	// encode and insert new client
-	pemText, err := encodePEMPublicKey(pubKey)
+	derBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to encode public key: %w", err)
 	}
 
 	_, err = s.db.Exec(
-		"INSERT INTO clients (id, aik_pem) VALUES (?, ?)",
-		clientID, pemText,
+		"INSERT INTO clients (id, aik_der) VALUES (?, ?)",
+		clientID, derBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store AIK: %w", err)
@@ -205,14 +220,14 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pemText, err := encodePEMPublicKey(newKey)
+	derBytes, err := x509.MarshalPKIXPublicKey(newKey)
 	if err != nil {
 		return fmt.Errorf("failed to encode new key: %w", err)
 	}
 
 	result, err := s.db.Exec(
-		"UPDATE clients SET aik_pem = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?",
-		pemText, clientID,
+		"UPDATE clients SET aik_der = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?",
+		derBytes, clientID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to rotate AIK: %w", err)
@@ -224,39 +239,4 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 	}
 
 	return nil
-}
-
-// marshals an RSA public key to PEM text
-func encodePEMPublicKey(pubKey *rsa.PublicKey) (string, error) {
-	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal public key: %w", err)
-	}
-
-	block := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: keyBytes,
-	}
-
-	return string(pem.EncodeToMemory(block)), nil
-}
-
-// parses PEM text back to an RSA public key
-func decodePEMPublicKey(pemText string) (*rsa.PublicKey, error) {
-	block, _ := pem.Decode([]byte(pemText))
-	if block == nil {
-		return nil, errors.New("failed to decode PEM block")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key: %w", err)
-	}
-
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("not an RSA public key")
-	}
-
-	return rsaPub, nil
 }
