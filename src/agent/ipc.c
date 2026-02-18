@@ -335,6 +335,7 @@ static void handle_get_status(struct ipc_context *ctx,
   status->attest_count = ctx->attest_count;
   status->fail_count = ctx->fail_count;
   status->mode = ctx->mode;
+  status->_reserved1 = 0;
   memset(status->reserved, 0, sizeof(status->reserved));
 
   client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*status);

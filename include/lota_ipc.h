@@ -95,6 +95,7 @@ struct lota_ipc_ping_response {
  */
 struct lota_ipc_status {
   uint32_t flags;            /* LOTA_STATUS_* bitmask */
+  uint32_t _reserved1;       /* Padding for alignment */
   uint64_t last_attest_time; /* Unix timestamp of last attestation */
   uint64_t valid_until;      /* Token valid until (Unix timestamp) */
   uint32_t attest_count;     /* Total successful attestations */
