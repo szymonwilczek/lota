@@ -164,9 +164,7 @@ func (v *Verifier) Close() {
 
 // creates a challenge for client attestation
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
-	// PCR selection: 0 (SRTM), 1 (BIOS config), 14 (LOTA self)
-	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
-
+	pcrMask := v.pcrVerifier.GetActivePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 

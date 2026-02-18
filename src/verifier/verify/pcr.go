@@ -337,3 +337,39 @@ func StrictPolicy() *PCRPolicy {
 		RequireLockdown:   true,
 	}
 }
+
+// calculates the PCR mask required by this policy
+// always includes PCR 14 (LOTA self-measurement) as it is required for baseline verification
+func (p *PCRPolicy) GetRequiredMask() uint32 {
+	mask := uint32(0)
+
+	// PCRs defined in the policy
+	for pcrIdx := range p.PCRs {
+		if pcrIdx >= 0 && pcrIdx < types.PCRCount {
+			mask |= (1 << uint(pcrIdx))
+		}
+	}
+
+	// PCR 14
+	mask |= (1 << 14)
+
+	// PCR 0 (SRTM) and PCR 1 (BIOS) for debugging context
+	if len(p.PCRs) == 0 {
+		mask |= (1 << 0) | (1 << 1)
+	}
+
+	return mask
+}
+
+// returns the PCR mask required by the currently active policy
+func (v *PCRVerifier) GetActivePolicyMask() uint32 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if policy, exists := v.policies[v.active]; exists {
+		return policy.GetRequiredMask()
+	}
+
+	// fallback if no active policy
+	return DefaultPolicy().GetRequiredMask()
+}
