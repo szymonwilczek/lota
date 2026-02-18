@@ -123,7 +123,6 @@ struct lota_ipc_token_request {
  * - Check PCR digest in attest_data matches expected policy
  */
 struct lota_ipc_token {
-  uint64_t issued_at;       /* Unix timestamp */
   uint64_t valid_until;     /* Unix timestamp */
   uint32_t flags;           /* LOTA_STATUS_* at issue time */
   uint8_t client_nonce[32]; /* Echo of client nonce */

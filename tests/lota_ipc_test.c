@@ -184,7 +184,6 @@ static int do_token(int fd) {
 
   printf("Response: %s\n", result_str(resp.result));
   if (resp.result == LOTA_IPC_OK) {
-    printf("  Issued at: %lu\n", (unsigned long)token.issued_at);
     printf("  Valid until: %lu\n", (unsigned long)token.valid_until);
     printf("  Flags: 0x%08X\n", token.flags);
     printf("  Signature length: %u\n", token.sig_size);

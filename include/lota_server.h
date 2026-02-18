@@ -52,24 +52,6 @@ extern "C" {
 #include "lota_token.h"
 
 /*
- * Token freshness policy defaults.
- *
- * LOTA_TOKEN_DEFAULT_MAX_AGE:
- *   Maximum acceptable age (in seconds) for a token. If the token's
- *   issued_at timestamp is older than (now - max_age), the token is
- *   considered stale. Default is 300 seconds (5 minutes).
- *   Game servers can override by checking claims.age_seconds directly.
- *
- * LOTA_TOKEN_MAX_CLOCK_SKEW:
- *   Maximum allowed clock difference (in seconds) between the token
- *   issuer and the verifier. Tokens with issued_at in the future
- *   (beyond this tolerance) are flagged as issued_in_future.
- *   Default is 60 seconds.
- */
-#define LOTA_TOKEN_DEFAULT_MAX_AGE 300
-#define LOTA_TOKEN_MAX_CLOCK_SKEW 60
-
-/*
  * Server-side error codes
  */
 enum lota_server_error {
@@ -83,8 +65,6 @@ enum lota_server_error {
   LOTA_SERVER_ERR_ATTEST_PARSE = -7, /* Failed to parse TPMS_ATTEST */
   LOTA_SERVER_ERR_CRYPTO = -8,       /* OpenSSL internal error */
   LOTA_SERVER_ERR_BUFFER = -9,       /* Buffer too small */
-  LOTA_SERVER_ERR_TOO_OLD = -10,     /* Token age exceeds max_age_sec */
-  LOTA_SERVER_ERR_FUTURE = -11,      /* Token issued in the future */
 };
 
 /*
@@ -94,7 +74,6 @@ enum lota_server_error {
  * that has been cryptographically validated.
  */
 struct lota_server_claims {
-  uint64_t issued_at;     /* Token issue time (Unix timestamp) */
   uint64_t valid_until;   /* Token expiry time (Unix timestamp) */
   uint32_t flags;         /* LOTA_FLAG_* bitmask at issue time */
   uint8_t nonce[32];      /* Client nonce echoed from token */
@@ -102,9 +81,6 @@ struct lota_server_claims {
   uint8_t pcr_digest[32]; /* PCR composite hash from TPMS_ATTEST */
   size_t pcr_digest_len;  /* Actual length of pcr_digest (0 if absent) */
   int expired;            /* 1 if token has expired, 0 otherwise */
-  int too_old;            /* 1 if age > effective max_age threshold */
-  int issued_in_future;   /* 1 if issued_at > now + LOTA_TOKEN_MAX_CLOCK_SKEW */
-  int64_t age_seconds;    /* Token age: now - issued_at (negative if future) */
 };
 
 /*
@@ -141,7 +117,6 @@ struct lota_server_claims {
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
                              const uint8_t *expected_nonce,
-                             uint32_t max_age_sec,
                              struct lota_server_claims *claims);
 
 /*
@@ -156,7 +131,6 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
  * Returns LOTA_SERVER_OK on success, negative error on parse failure.
  */
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
-                            uint32_t max_age_sec,
                             struct lota_server_claims *claims);
 
 /*

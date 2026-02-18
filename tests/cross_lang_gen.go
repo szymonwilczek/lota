@@ -35,7 +35,7 @@ func main() {
 	// build token
 	nonce := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
 	now := uint64(time.Now().Unix())
-	issuedAt := now
+
 	validUntil := now + 3600
 	flags := uint32(0x07)
 	pcrDigest := make([]byte, 32)
@@ -43,12 +43,11 @@ func main() {
 		pcrDigest[i] = byte(i)
 	}
 
-	// compute expected nonce = SHA256(issued_at||valid_until||flags||nonce) in LE
-	var buf [52]byte
-	binary.LittleEndian.PutUint64(buf[0:8], issuedAt)
-	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
-	binary.LittleEndian.PutUint32(buf[16:20], flags)
-	copy(buf[20:52], nonce[:])
+	// compute expected nonce = SHA256(valid_until||flags||nonce) in LE
+	var buf [44]byte
+	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
+	binary.LittleEndian.PutUint32(buf[8:12], flags)
+	copy(buf[12:44], nonce[:])
 	expectedNonce := sha256.Sum256(buf[:])
 
 	// fake TPMS_ATTEST
@@ -65,7 +64,7 @@ func main() {
 	fmt.Printf("[Go] Signature: %d bytes\n", len(sig))
 
 	// serialize token
-	tokBytes, err := server.SerializeToken(issuedAt, validUntil, flags, nonce,
+	tokBytes, err := server.SerializeToken(validUntil, flags, nonce,
 		0x0014, 0x000B, 0x4001, attestData, sig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serialize: %v\n", err)

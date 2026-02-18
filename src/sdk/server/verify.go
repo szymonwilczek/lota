@@ -38,8 +38,8 @@ import (
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
 	TokenVersion    uint16 = 0x0001
-	TokenHeaderSize        = 72
-	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1608 bytes
+	TokenHeaderSize        = 64
+	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1600 bytes
 
 	MaxAttestSize = 1024
 	MaxSigSize    = 512
@@ -88,9 +88,6 @@ var (
 // represents the verified claims extracted from a LOTA attestation token
 // after successful VerifyToken(), all fields are cryptographically validated
 type Claims struct {
-	// when the token was issued by the LOTA agent
-	IssuedAt time.Time
-
 	// when the token expires
 	ExpiresAt time.Time
 
@@ -115,15 +112,6 @@ type Claims struct {
 
 	// true if the token has passed its ExpiresAt time
 	Expired bool
-
-	// true if the token age exceeds DefaultMaxTokenAge
-	TooOld bool
-
-	// true if IssuedAt is ahead of now by more than MaxClockSkew
-	IssuedInFuture bool
-
-	// signed token age: now - IssuedAt (negative if issued in the future)
-	AgeSeconds int64
 }
 
 // represents the parsed wire-format header
@@ -131,7 +119,6 @@ type tokenWire struct {
 	magic      uint32
 	version    uint16
 	totalSize  uint16
-	issuedAt   uint64
 	validUntil uint64
 	flags      uint32
 	nonce      [32]byte
@@ -183,8 +170,8 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
 	}
 
-	// verify nonce binding: extraData == SHA256(issued_at||valid_until||flags||nonce)
-	computedNonce := computeExpectedNonce(hdr.issuedAt, hdr.validUntil, hdr.flags, hdr.nonce)
+	// verify nonce binding: extraData == SHA256(valid_until||flags||nonce)
+	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.nonce)
 	if !bytes.Equal(extraData, computedNonce[:]) {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
@@ -197,7 +184,6 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	claims := &Claims{
-		IssuedAt:  time.Unix(int64(hdr.issuedAt), 0),
 		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
 		Flags:     hdr.flags,
 		Nonce:     hdr.nonce,
@@ -213,20 +199,9 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		claims.Expired = true
 	}
 
-	// check freshness
-	claims.AgeSeconds = now.Unix() - int64(hdr.issuedAt)
-	claims.TooOld = claims.AgeSeconds > DefaultMaxTokenAge
-	claims.IssuedInFuture = claims.AgeSeconds < -int64(MaxClockSkew)
-
 	// return claims with error for temporal violations
 	if claims.Expired {
 		return claims, ErrExpired
-	}
-	if claims.TooOld {
-		return claims, ErrTooOld
-	}
-	if claims.IssuedInFuture {
-		return claims, ErrFutureToken
 	}
 
 	return claims, nil
@@ -241,7 +216,6 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 	}
 
 	claims := &Claims{
-		IssuedAt:  time.Unix(int64(hdr.issuedAt), 0),
 		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
 		Flags:     hdr.flags,
 		Nonce:     hdr.nonce,
@@ -263,19 +237,13 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		claims.Expired = true
 	}
 
-	// check freshness
-	now := time.Now()
-	claims.AgeSeconds = now.Unix() - int64(hdr.issuedAt)
-	claims.TooOld = claims.AgeSeconds > DefaultMaxTokenAge
-	claims.IssuedInFuture = claims.AgeSeconds < -int64(MaxClockSkew)
-
 	return claims, nil
 }
 
 // creates the wire-format representation of a token
 // This is the Go equivalent of lota_token_serialize() from the C gaming SDK.
 // For more information see: include/lota_gaming.h
-func SerializeToken(issuedAt, validUntil uint64, flags uint32, nonce [32]byte,
+func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	sigAlg, hashAlg uint16, pcrMask uint32,
 	attestData, signature []byte,
 ) ([]byte, error) {
@@ -293,15 +261,14 @@ func SerializeToken(issuedAt, validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
 	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize))
-	binary.LittleEndian.PutUint64(buf[8:16], issuedAt)
-	binary.LittleEndian.PutUint64(buf[16:24], validUntil)
-	binary.LittleEndian.PutUint32(buf[24:28], flags)
-	copy(buf[28:60], nonce[:])
-	binary.LittleEndian.PutUint16(buf[60:62], sigAlg)
-	binary.LittleEndian.PutUint16(buf[62:64], hashAlg)
-	binary.LittleEndian.PutUint32(buf[64:68], pcrMask)
-	binary.LittleEndian.PutUint16(buf[68:70], uint16(len(attestData)))
-	binary.LittleEndian.PutUint16(buf[70:72], uint16(len(signature)))
+	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
+	binary.LittleEndian.PutUint32(buf[16:20], flags)
+	copy(buf[20:52], nonce[:])
+	binary.LittleEndian.PutUint16(buf[52:54], sigAlg)
+	binary.LittleEndian.PutUint16(buf[54:56], hashAlg)
+	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
+	binary.LittleEndian.PutUint16(buf[60:62], uint16(len(attestData)))
+	binary.LittleEndian.PutUint16(buf[62:64], uint16(len(signature)))
 
 	// variable data
 	copy(buf[TokenHeaderSize:], attestData)
@@ -332,15 +299,14 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 		return nil, fmt.Errorf("%w: total_size %d invalid (have %d bytes)", ErrBadToken, hdr.totalSize, len(data))
 	}
 
-	hdr.issuedAt = binary.LittleEndian.Uint64(data[8:16])
-	hdr.validUntil = binary.LittleEndian.Uint64(data[16:24])
-	hdr.flags = binary.LittleEndian.Uint32(data[24:28])
-	copy(hdr.nonce[:], data[28:60])
-	hdr.sigAlg = binary.LittleEndian.Uint16(data[60:62])
-	hdr.hashAlg = binary.LittleEndian.Uint16(data[62:64])
-	hdr.pcrMask = binary.LittleEndian.Uint32(data[64:68])
-	hdr.attestSize = binary.LittleEndian.Uint16(data[68:70])
-	hdr.sigSize = binary.LittleEndian.Uint16(data[70:72])
+	hdr.validUntil = binary.LittleEndian.Uint64(data[8:16])
+	hdr.flags = binary.LittleEndian.Uint32(data[16:20])
+	copy(hdr.nonce[:], data[20:52])
+	hdr.sigAlg = binary.LittleEndian.Uint16(data[52:54])
+	hdr.hashAlg = binary.LittleEndian.Uint16(data[54:56])
+	hdr.pcrMask = binary.LittleEndian.Uint32(data[56:60])
+	hdr.attestSize = binary.LittleEndian.Uint16(data[60:62])
+	hdr.sigSize = binary.LittleEndian.Uint16(data[62:64])
 
 	// validate sizes
 	expected := int(TokenHeaderSize) + int(hdr.attestSize) + int(hdr.sigSize)
@@ -374,14 +340,11 @@ func verifyRSASignature(attestData, signature []byte, sigAlg uint16, aikPub *rsa
 	}
 }
 
-// computes SHA256(issued_at || valid_until || flags || nonce)
-// all integers in little-endian byte order
-func computeExpectedNonce(issuedAt, validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
-	var buf [52]byte // 8 + 8 + 4 + 32
-	binary.LittleEndian.PutUint64(buf[0:8], issuedAt)
-	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
-	binary.LittleEndian.PutUint32(buf[16:20], flags)
-	copy(buf[20:52], nonce[:])
+func computeExpectedNonce(validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
+	var buf [44]byte // 8 + 4 + 32
+	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
+	binary.LittleEndian.PutUint32(buf[8:12], flags)
+	copy(buf[12:44], nonce[:])
 	return sha256.Sum256(buf[:])
 }
 

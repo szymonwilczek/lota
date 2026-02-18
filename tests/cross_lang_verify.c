@@ -67,21 +67,19 @@ int main(void) {
 
   /* untrusted first */
   struct lota_server_claims parse_claims;
-  int ret = lota_server_parse_token(tok, tok_len, 300, &parse_claims);
+  int ret = lota_server_parse_token(tok, tok_len, &parse_claims);
   if (ret != LOTA_SERVER_OK) {
     printf(RED "[C] Parse failed: %s\n" RESET, lota_server_strerror(ret));
     return 1;
   }
-  printf("[C] Parse OK — issued_at=%lu, valid_until=%lu, flags=0x%X, "
+  printf("[C] Parse OK — valid_until=%lu, flags=0x%X, "
          "pcr_mask=0x%X\n",
-         (unsigned long)parse_claims.issued_at,
          (unsigned long)parse_claims.valid_until, parse_claims.flags,
          parse_claims.pcr_mask);
 
   /* full verify with nonce */
   struct lota_server_claims claims;
-  ret =
-      lota_server_verify_token(tok, tok_len, aik, aik_len, nonce, 300, &claims);
+  ret = lota_server_verify_token(tok, tok_len, aik, aik_len, nonce, &claims);
   if (ret != LOTA_SERVER_OK) {
     printf(RED "[C] VERIFY FAILED: %s (code %d)\n" RESET,
            lota_server_strerror(ret), ret);

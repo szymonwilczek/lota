@@ -43,17 +43,29 @@ extern "C" {
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0001
-#define LOTA_TOKEN_HEADER_SIZE 72
+#define LOTA_TOKEN_HEADER_SIZE 64
 #define LOTA_TOKEN_MAX_SIZE (LOTA_TOKEN_HEADER_SIZE + 1024 + 512)
 
 /*
  * Token wire format header (packed, little-endian)
  */
 struct lota_token_wire {
+  /*   6       2     total_size     (header + variable data) */
+  /*   8       8     valid_until    (Unix timestamp) */
+  /*   16      4     flags          (LOTA_FLAG_* bitmask) */
+  /*   20      32    nonce          (client nonce) */
+  /*   52      2     sig_alg        (TPM signature algorithm) */
+  /*   54      2     hash_alg       (TPM hash algorithm) */
+  /*   56      4     pcr_mask       (PCR selection bitmask) */
+  /*   60      2     attest_size    (TPMS_ATTEST blob size) */
+  /*   62      2     sig_size       (TPM signature size) */
+  /*   ---     ---   -------------------------------- */
+  /*   64      var   attest_data[attest_size] */
+  /*   64+A    var   signature[sig_size] */
+
   uint32_t magic;
   uint16_t version;
   uint16_t total_size;
-  uint64_t issued_at;
   uint64_t valid_until;
   uint32_t flags;
   uint8_t nonce[32];

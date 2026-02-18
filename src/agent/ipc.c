@@ -367,25 +367,22 @@ static void write_le64(uint8_t *p, uint64_t v) {
  * This binds the TPM signature to the specific token data.
  * All integers are encoded in little-endian to match the wire format.
  */
-static int compute_token_nonce(uint64_t issued_at, uint64_t valid_until,
-                               uint32_t flags, const uint8_t *client_nonce,
+static int compute_token_nonce(uint64_t valid_until, uint32_t flags,
+                               const uint8_t *client_nonce,
                                uint8_t *out_nonce) {
   EVP_MD_CTX *mdctx;
   unsigned int len;
-  uint8_t le_buf[20]; /* 8 + 8 + 4 */
+  uint8_t le_buf[12]; /* 8 + 4 */
 
-  write_le64(le_buf, issued_at);
-  write_le64(le_buf + 8, valid_until);
-  write_le32(le_buf + 16, flags);
+  write_le64(le_buf, valid_until);
+  write_le32(le_buf + 8, flags);
 
   mdctx = EVP_MD_CTX_new();
   if (!mdctx)
     return -ENOMEM;
 
   if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
-      EVP_DigestUpdate(mdctx, le_buf, 8) != 1 ||
-      EVP_DigestUpdate(mdctx, le_buf + 8, 8) != 1 ||
-      EVP_DigestUpdate(mdctx, le_buf + 16, 4) != 1 ||
+      EVP_DigestUpdate(mdctx, le_buf, 12) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, 32) != 1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1) {
     EVP_MD_CTX_free(mdctx);
@@ -433,7 +430,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   /* build token header */
   token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  token->issued_at = (uint64_t)time(NULL);
+
   token->valid_until = ctx->valid_until;
   token->flags = ctx->status_flags;
 
@@ -448,7 +445,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     return;
   }
 
-  ret = compute_token_nonce(token->issued_at, token->valid_until, token->flags,
+  ret = compute_token_nonce(token->valid_until, token->flags,
                             token->client_nonce, binding_nonce);
   if (ret < 0) {
     lota_err("compute_token_nonce failed: %s", strerror(-ret));

@@ -38,13 +38,11 @@ static void print_status(const struct lota_status *status) {
 }
 
 static void print_token(const struct lota_token *token) {
-  time_t issued = (time_t)token->issued_at;
   time_t valid = (time_t)token->valid_until;
   char flags_str[128];
 
   lota_flags_to_string(token->flags, flags_str, sizeof(flags_str));
 
-  printf("  Issued at: %s", ctime(&issued));
   printf("  Valid until: %s", ctime(&valid));
   printf("  Flags: 0x%08X (%s)\n", token->flags,
          flags_str[0] ? flags_str : "none");

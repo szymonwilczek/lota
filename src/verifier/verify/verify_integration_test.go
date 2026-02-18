@@ -44,10 +44,7 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportVersion)
 	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], 0) // timestamp_ns
-	offset += 8
+
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
@@ -70,7 +67,7 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
 	var zeroHWID [types.HardwareIDSize]byte
 	bindingHash := sha256.New()
@@ -156,6 +153,7 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Add(-time.Hour).Unix()))
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
+	offset += 8
 
 	return buf
 }
@@ -221,7 +219,7 @@ func marshalRSAPublicKey(pub *rsa.PublicKey) []byte {
 // creates a Verifier with default policy for testing
 func createTestVerifier(aikStore store.AIKStore) *Verifier {
 	cfg := DefaultConfig()
-	cfg.TimestampMaxAge = 5 * time.Minute
+	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, aikStore)
 
 	// default policy that allows any values
@@ -392,37 +390,6 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	t.Logf("✓ SECURITY: Replay attack correctly blocked: %v", err)
 }
 
-func TestIntegration_StaleTimestamp(t *testing.T) {
-	t.Log("INTEGRATION TEST: Stale timestamp rejection")
-
-	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK("stale-client", &integrationTestKey.PublicKey)
-
-	cfg := DefaultConfig()
-	cfg.TimestampMaxAge = 1 * time.Second
-	verifier := NewVerifier(cfg, aikStore)
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.SetActivePolicy("default")
-
-	clientID := "stale-client"
-
-	challenge, _ := verifier.GenerateChallenge(clientID)
-	pcr14 := [32]byte{}
-	reportData := createValidReport(t, challenge.Nonce, pcr14)
-
-	// manually make timestamp old
-	oldTimestamp := uint64(time.Now().Add(-5 * time.Minute).Unix())
-	binary.LittleEndian.PutUint64(reportData[8:16], oldTimestamp)
-
-	result, _ := verifier.VerifyReport(clientID, reportData)
-
-	if result.Result != types.VerifyNonceFail {
-		t.Logf("Note: Stale timestamp check may be after nonce verify")
-	}
-
-	t.Log("✓ Timestamp staleness handling verified")
-}
-
 func TestIntegration_InvalidSignature(t *testing.T) {
 	t.Log("INTEGRATION TEST: Invalid signature rejection")
 
@@ -528,9 +495,7 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportVersion)
 	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	offset += 8 // timestamp_ns
+
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
@@ -552,7 +517,7 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
 	var zeroHWID [types.HardwareIDSize]byte
 	bindingHash := sha256.New()
@@ -607,6 +572,7 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
+	offset += 8
 
 	return buf
 }
@@ -629,27 +595,4 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 	}
 
 	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,14)", challenge.PCRMask)
-}
-
-func BenchmarkFullVerification(b *testing.B) {
-	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK("bench-client", &integrationTestKey.PublicKey)
-
-	cfg := DefaultConfig()
-	verifier := NewVerifier(cfg, aikStore)
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.SetActivePolicy("default")
-
-	// pre-establish baseline
-	challenge0, _ := verifier.GenerateChallenge("bench-client")
-	pcr14 := [32]byte{}
-	report0 := createValidReportWithKey(challenge0.Nonce, pcr14, integrationTestKey)
-	verifier.VerifyReport("bench-client", report0)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		challenge, _ := verifier.GenerateChallenge("bench-client")
-		report := createValidReportWithKey(challenge.Nonce, pcr14, integrationTestKey)
-		verifier.VerifyReport("bench-client", report)
-	}
 }

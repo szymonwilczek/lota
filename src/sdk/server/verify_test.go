@@ -65,13 +65,13 @@ func signAttest(t *testing.T, priv *rsa.PrivateKey, attestData []byte) []byte {
 }
 
 // builds a complete serialized token for testing
-func buildTestToken(t *testing.T, priv *rsa.PrivateKey, issuedAt, validUntil uint64,
+func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 	flags uint32, nonce [32]byte, pcrMask uint32, pcrDigest []byte,
 ) []byte {
 	t.Helper()
 
-	// compute expected nonce = SHA256(issued_at||valid_until||flags||nonce)
-	expectedNonce := computeExpectedNonce(issuedAt, validUntil, flags, nonce)
+	// compute expected nonce = SHA256(valid_until||flags||nonce)
+	expectedNonce := computeExpectedNonce(validUntil, flags, nonce)
 
 	// build TPMS_ATTEST with the expected nonce as extraData
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
@@ -80,7 +80,7 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, issuedAt, validUntil uin
 	signature := signAttest(t, priv, attestData)
 
 	// serialize
-	tok, err := SerializeToken(issuedAt, validUntil, flags, nonce,
+	tok, err := SerializeToken(validUntil, flags, nonce,
 		TPMAlgRSASSA, 0x000B, pcrMask, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
@@ -100,14 +100,13 @@ func generateTestKey(t *testing.T) *rsa.PrivateKey {
 
 func TestSerializeParseRoundtrip(t *testing.T) {
 	nonce := [32]byte{1, 2, 3, 4, 5}
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 	flags := uint32(0x07) // ATTESTED|TPM_OK|IOMMU_OK
 
 	attestData := []byte("fake-attest-data-for-testing")
 	signature := []byte("fake-signature-for-testing")
 
-	tok, err := SerializeToken(issuedAt, validUntil, flags, nonce,
+	tok, err := SerializeToken(validUntil, flags, nonce,
 		TPMAlgRSASSA, 0x000B, 0x4001, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
@@ -125,9 +124,6 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 		t.Fatalf("ParseToken: %v", err)
 	}
 
-	if claims.IssuedAt.Unix() != int64(issuedAt) {
-		t.Errorf("IssuedAt = %d, want %d", claims.IssuedAt.Unix(), issuedAt)
-	}
 	if claims.ExpiresAt.Unix() != int64(validUntil) {
 		t.Errorf("ExpiresAt = %d, want %d", claims.ExpiresAt.Unix(), validUntil)
 	}
@@ -151,22 +147,18 @@ func TestVerifyToken_Success(t *testing.T) {
 	nonce := [32]byte{}
 	rand.Read(nonce[:])
 
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 	flags := uint32(0x07)
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, flags, nonce, 0x4001, pcrDigest)
+	tok := buildTestToken(t, key, validUntil, flags, nonce, 0x4001, pcrDigest)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
 	if err != nil {
 		t.Fatalf("VerifyToken: %v", err)
 	}
 
-	if claims.IssuedAt.Unix() != int64(issuedAt) {
-		t.Errorf("IssuedAt = %d, want %d", claims.IssuedAt.Unix(), issuedAt)
-	}
 	if claims.Expired {
 		t.Errorf("token should not be expired")
 	}
@@ -182,10 +174,9 @@ func TestVerifyToken_WithExpectedNonce(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0xAA, 0xBB, 0xCC}
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
+	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
 	// correct nonce
 	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
@@ -209,10 +200,9 @@ func TestVerifyToken_BadSignature(t *testing.T) {
 	otherKey := generateTestKey(t)
 
 	nonce := [32]byte{}
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
+	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
 	// verify with wrong key
 	_, err := VerifyToken(tok, &otherKey.PublicKey, nil)
@@ -225,10 +215,9 @@ func TestVerifyToken_TamperedToken(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{}
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0, nil)
+	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0, nil)
 
 	// tamper with flags field (offset 24-28)
 	tampered := make([]byte, len(tok))
@@ -247,10 +236,9 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{}
-	issuedAt := uint64(time.Now().Add(-2 * time.Hour).Unix())
 	validUntil := uint64(time.Now().Add(-1 * time.Hour).Unix()) // expired 1h ago
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
+	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
 	if !errors.Is(err, ErrExpired) {
@@ -264,84 +252,21 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	}
 }
 
-func TestVerifyToken_StaleToken(t *testing.T) {
-	key := generateTestKey(t)
-
-	nonce := [32]byte{0xAA}
-	// issued 1 hour ago, still valid (valid_until in future)
-	issuedAt := uint64(time.Now().Add(-1 * time.Hour).Unix())
-	validUntil := uint64(time.Now().Add(1 * time.Hour).Unix())
-
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0, nil)
-
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
-	if !errors.Is(err, ErrTooOld) {
-		t.Fatalf("expected ErrTooOld, got: %v", err)
-	}
-	if claims == nil {
-		t.Fatal("expected claims to be returned with ErrTooOld")
-	}
-	if !claims.TooOld {
-		t.Errorf("expected TooOld=true (age=%d)", claims.AgeSeconds)
-	}
-	if claims.Expired {
-		t.Error("should not be expired (valid_until is future)")
-	}
-	if claims.AgeSeconds < 3500 {
-		t.Errorf("AgeSeconds=%d, expected ~3600", claims.AgeSeconds)
-	}
-}
-
-func TestVerifyToken_FutureToken(t *testing.T) {
-	key := generateTestKey(t)
-
-	nonce := [32]byte{0xBB}
-	// issued 10 minutes in the future
-	issuedAt := uint64(time.Now().Add(10 * time.Minute).Unix())
-	validUntil := uint64(time.Now().Add(2 * time.Hour).Unix())
-
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0, nonce, 0, nil)
-
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
-	if !errors.Is(err, ErrFutureToken) {
-		t.Fatalf("expected ErrFutureToken, got: %v", err)
-	}
-	if claims == nil {
-		t.Fatal("expected claims to be returned with ErrFutureToken")
-	}
-	if !claims.IssuedInFuture {
-		t.Errorf("expected IssuedInFuture=true (age=%d)", claims.AgeSeconds)
-	}
-	if claims.AgeSeconds >= 0 {
-		t.Errorf("AgeSeconds=%d, expected negative", claims.AgeSeconds)
-	}
-}
-
 func TestVerifyToken_FreshToken(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0xCC}
 	// issued just now
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(1 * time.Hour).Unix())
 
-	tok := buildTestToken(t, key, issuedAt, validUntil, 0x07, nonce, 0x4001, nil)
+	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0x4001, nil)
 
 	claims, err := VerifyToken(tok, &key.PublicKey, nil)
 	if err != nil {
 		t.Fatalf("VerifyToken: %v", err)
 	}
-	if claims.TooOld {
-		t.Errorf("fresh token should not be TooOld (age=%d)", claims.AgeSeconds)
-	}
-	if claims.IssuedInFuture {
-		t.Errorf("fresh token should not be IssuedInFuture (age=%d)", claims.AgeSeconds)
-	}
 	if claims.Expired {
 		t.Error("fresh token should not be Expired")
-	}
-	if claims.AgeSeconds < 0 || claims.AgeSeconds > 5 {
-		t.Errorf("AgeSeconds=%d, expected ~0", claims.AgeSeconds)
 	}
 }
 
@@ -387,13 +312,12 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0x42}
-	issuedAt := uint64(time.Now().Unix())
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 	flags := uint32(0x07)
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(issuedAt, validUntil, flags, nonce)
+	expectedNonce := computeExpectedNonce(validUntil, flags, nonce)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
 
 	// sign with PSS
@@ -407,7 +331,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 		t.Fatalf("SignPSS: %v", err)
 	}
 
-	tok, err := SerializeToken(issuedAt, validUntil, flags, nonce,
+	tok, err := SerializeToken(validUntil, flags, nonce,
 		TPMAlgRSAPSS, 0x000B, 0x4001, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
@@ -427,14 +351,14 @@ func TestSerializeToken_Limits(t *testing.T) {
 
 	// attest_data too large
 	bigAttest := make([]byte, MaxAttestSize+1)
-	_, err := SerializeToken(0, 0, 0, nonce, 0, 0, 0, bigAttest, nil)
+	_, err := SerializeToken(0, 0, nonce, 0, 0, 0, bigAttest, nil)
 	if err == nil {
 		t.Fatal("expected error for too-large attest_data")
 	}
 
 	// signature too large
 	bigSig := make([]byte, MaxSigSize+1)
-	_, err = SerializeToken(0, 0, 0, nonce, 0, 0, 0, nil, bigSig)
+	_, err = SerializeToken(0, 0, nonce, 0, 0, 0, nil, bigSig)
 	if err == nil {
 		t.Fatal("expected error for too-large signature")
 	}
@@ -442,7 +366,7 @@ func TestSerializeToken_Limits(t *testing.T) {
 
 func TestParseToken_NoAttest(t *testing.T) {
 	nonce := [32]byte{}
-	tok, err := SerializeToken(100, 200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, nil, nil)
+	tok, err := SerializeToken(200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -458,14 +382,14 @@ func TestParseToken_NoAttest(t *testing.T) {
 
 func TestComputeExpectedNonce_Deterministic(t *testing.T) {
 	nonce := [32]byte{1, 2, 3}
-	n1 := computeExpectedNonce(100, 200, 7, nonce)
-	n2 := computeExpectedNonce(100, 200, 7, nonce)
+	n1 := computeExpectedNonce(200, 7, nonce)
+	n2 := computeExpectedNonce(200, 7, nonce)
 	if n1 != n2 {
 		t.Error("computeExpectedNonce should be deterministic")
 	}
 
 	// different flags -> different result
-	n3 := computeExpectedNonce(100, 200, 8, nonce)
+	n3 := computeExpectedNonce(200, 8, nonce)
 	if n1 == n3 {
 		t.Error("different flags should produce different nonce")
 	}

@@ -226,14 +226,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   report->header.version = LOTA_VERSION;
   report->header.report_size = sizeof(*report);
 
-  struct timespec ts;
-  if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
-    report->header.timestamp = ts.tv_sec;
-    report->header.timestamp_ns = ts.tv_nsec;
-  } else {
-    lota_err("clock_gettime failed: %s", strerror(errno));
-  }
-
   /* nonce from challenge */
   memcpy(report->tpm.nonce, challenge->nonce, LOTA_NONCE_SIZE);
   report->tpm.pcr_mask = challenge->pcr_mask;

@@ -415,7 +415,6 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
-	cfg.TimestampMaxAge = 5 * time.Minute
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -473,7 +472,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// first verifier instance
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg1 := DefaultConfig()
-	cfg1.TimestampMaxAge = 5 * time.Minute
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -493,7 +491,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := store.NewSQLiteAIKStore(db)
 	cfg2 := DefaultConfig()
-	cfg2.TimestampMaxAge = 5 * time.Minute
+
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -528,7 +526,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// establish baseline
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg1 := DefaultConfig()
-	cfg1.TimestampMaxAge = 5 * time.Minute
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -547,7 +544,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := store.NewSQLiteAIKStore(db)
 	cfg2 := DefaultConfig()
-	cfg2.TimestampMaxAge = 5 * time.Minute
+
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -581,7 +578,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
-	cfg.TimestampMaxAge = 5 * time.Minute
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -648,7 +644,6 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 	// TOFU registers AIK
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
-	cfg.TimestampMaxAge = 5 * time.Minute
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -697,9 +692,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportVersion)
 	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	offset += 8 // timestamp_ns
+
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
@@ -722,7 +715,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
 	// TPMS_ATTEST with binding nonce = SHA-256(nonce || hardware_id)
 	var zeroHWID [types.HardwareIDSize]byte
@@ -770,6 +763,9 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
+	// hardware_id
+	offset += types.HardwareIDSize
+
 	// reserved
 	offset += 2
 
@@ -794,6 +790,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
+	offset += 8
 
 	return buf
 }

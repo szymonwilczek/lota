@@ -24,10 +24,6 @@ func createTestReportBytes() []byte {
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], ReportVersion) // version
 	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], 1700000000) // timestamp
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], 123456789) // timestamp_ns
-	offset += 8
 	binary.LittleEndian.PutUint32(buf[offset:], MinReportSize) // report_size
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], FlagTPMQuoteOK|FlagModuleSig) // flags
@@ -139,12 +135,6 @@ func TestParseReport_ValidReport(t *testing.T) {
 		}
 		if report.Header.Version != ReportVersion {
 			t.Errorf("Version: got 0x%08X, want 0x%08X", report.Header.Version, ReportVersion)
-		}
-		if report.Header.Timestamp != 1700000000 {
-			t.Errorf("Timestamp: got %d, want 1700000000", report.Header.Timestamp)
-		}
-		if report.Header.TimestampNs != 123456789 {
-			t.Errorf("TimestampNs: got %d, want 123456789", report.Header.TimestampNs)
 		}
 		if report.Header.ReportSize != MinReportSize {
 			t.Errorf("ReportSize: got %d, want %d", report.Header.ReportSize, MinReportSize)
@@ -289,29 +279,27 @@ func TestParseReport_Alignment(t *testing.T) {
 	expectedOffsets := map[string]int{
 		"Header.Magic":       0,
 		"Header.Version":     4,
-		"Header.Timestamp":   8,
-		"Header.TimestampNs": 16,
-		"Header.ReportSize":  24,
-		"Header.Flags":       28,
-		"TPM.PCRValues":      32,
-		"TPM.PCRMask":        32 + 768,
-		"TPM.QuoteSignature": 32 + 768 + 4,
-		"TPM.QuoteSigSize":   32 + 768 + 4 + 512,
-		"TPM.AttestData":     32 + 768 + 4 + 512 + 2,
-		"TPM.AttestSize":     32 + 768 + 4 + 512 + 2 + 1024,
-		"TPM.AIKPublic":      32 + 768 + 4 + 512 + 2 + 1024 + 2,
-		"TPM.AIKPublicSize":  32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512,
-		"TPM.AIKCertificate": 32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2,
-		"TPM.AIKCertSize":    32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048,
-		"TPM.EKCertificate":  32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2,
-		"TPM.EKCertSize":     32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
-		"TPM.Nonce":          32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
-		"TPM.HardwareID":     32 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32,
-		"System.KernelHash":  32 + 6992,
-		"System.AgentHash":   32 + 6992 + 32,
-		"System.KernelPath":  32 + 6992 + 64,
-		"System.IOMMU":       32 + 6992 + 64 + 256,
-		"BPF.TotalExec":      32 + 6992 + 396,
+		"Header.ReportSize":  8,
+		"Header.Flags":       12,
+		"TPM.PCRValues":      16,
+		"TPM.PCRMask":        16 + 768,
+		"TPM.QuoteSignature": 16 + 768 + 4,
+		"TPM.QuoteSigSize":   16 + 768 + 4 + 512,
+		"TPM.AttestData":     16 + 768 + 4 + 512 + 2,
+		"TPM.AttestSize":     16 + 768 + 4 + 512 + 2 + 1024,
+		"TPM.AIKPublic":      16 + 768 + 4 + 512 + 2 + 1024 + 2,
+		"TPM.AIKPublicSize":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512,
+		"TPM.AIKCertificate": 16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2,
+		"TPM.AIKCertSize":    16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048,
+		"TPM.EKCertificate":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2,
+		"TPM.EKCertSize":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
+		"TPM.Nonce":          16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
+		"TPM.HardwareID":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32,
+		"System.KernelHash":  16 + 6992,
+		"System.AgentHash":   16 + 6992 + 32,
+		"System.KernelPath":  16 + 6992 + 64,
+		"System.IOMMU":       16 + 6992 + 64 + 256,
+		"BPF.TotalExec":      16 + 6992 + 396,
 	}
 
 	data := createTestReportBytes()
@@ -327,11 +315,11 @@ func TestParseReport_Alignment(t *testing.T) {
 	}
 
 	// final check: fixed size matches C struct, min size includes variable sections header
-	if FixedReportSize != 7444 {
-		t.Errorf("FixedReportSize: got %d, want 7444", FixedReportSize)
+	if FixedReportSize != 7428 {
+		t.Errorf("FixedReportSize: got %d, want 7428", FixedReportSize)
 	}
-	if MinReportSize != 7452 {
-		t.Errorf("MinReportSize: got %d, want 7452", MinReportSize)
+	if MinReportSize != 7436 {
+		t.Errorf("MinReportSize: got %d, want 7436", MinReportSize)
 	}
 	t.Logf("✓ Fixed report size: %d bytes, minimum wire size: %d bytes", FixedReportSize, MinReportSize)
 }

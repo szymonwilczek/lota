@@ -162,10 +162,7 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportVersion)
 	offset += 4
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
-	offset += 8
-	binary.LittleEndian.PutUint64(buf[offset:], 0) // timestamp_ns
-	offset += 8
+
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
 	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
@@ -188,7 +185,7 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 32, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
 	// binding nonce = SHA-256(challenge_nonce || hardware_id)
 	var zeroHWID [types.HardwareIDSize]byte

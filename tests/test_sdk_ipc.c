@@ -89,7 +89,6 @@ int main(void) {
   test_result("lota_get_token()", ret == 0, lota_strerror(ret));
 
   if (ret == 0) {
-    printf("  Issued at: %lu\n", (unsigned long)token.issued_at);
     printf("  Valid until: %lu\n", (unsigned long)token.valid_until);
     printf("  Token flags: 0x%02x\n", token.flags);
     printf("  Has signature: %s\n", token.signature_len > 0 ? "yes" : "no");
@@ -102,8 +101,7 @@ int main(void) {
     test_result("Client nonce echoed", nonce_match, "nonce mismatch");
 
     /* token validity check */
-    int valid_times =
-        (token.issued_at > 0 && token.valid_until > token.issued_at);
+    int valid_times = (token.valid_until > 0);
     test_result("Valid timestamps", valid_times, "invalid timestamps");
 
     /* for --test-signed mode, signature should be present */
@@ -126,7 +124,7 @@ int main(void) {
   memset(&token2, 0, sizeof(token2));
   ret = lota_get_token(client, client_nonce, &token2);
   if (ret == 0) {
-    int fresh = (token2.issued_at >= token.issued_at);
+    int fresh = (token2.valid_until >= token.valid_until);
     test_result("Token timestamp fresh", fresh, "timestamp not advancing");
     lota_token_free(&token2);
   }

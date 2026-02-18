@@ -567,7 +567,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 
   /* parse token header */
   ipc_token = (struct lota_ipc_token *)buf;
-  token->issued_at = ipc_token->issued_at;
+
   token->valid_until = ipc_token->valid_until;
   token->flags = ipc_token->flags;
   memcpy(token->nonce, ipc_token->client_nonce, 32);
@@ -657,7 +657,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
   wire.magic = LOTA_TOKEN_MAGIC;
   wire.version = LOTA_TOKEN_VERSION;
   wire.total_size = (uint16_t)total;
-  wire.issued_at = token->issued_at;
+
   wire.valid_until = token->valid_until;
   wire.flags = token->flags;
   memcpy(wire.nonce, token->nonce, 32);

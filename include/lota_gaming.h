@@ -112,7 +112,6 @@ struct lota_status {
  * - Verifying PCR digest matches expected policy
  */
 struct lota_token {
-  uint64_t issued_at;   /* When the token was issued (Unix timestamp) */
   uint64_t valid_until; /* Token expiration (Unix timestamp) */
   uint32_t flags;       /* Status flags at issue time */
   uint8_t nonce[32];    /* Client nonce (if provided) */

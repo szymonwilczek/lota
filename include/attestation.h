@@ -18,12 +18,11 @@
  * Attestation report header
  */
 struct lota_report_header {
-  uint32_t magic;        /* LOTA_MAGIC */
-  uint32_t version;      /* LOTA_VERSION */
-  uint64_t timestamp;    /* Unix timestamp (seconds) */
-  uint64_t timestamp_ns; /* Nanosecond precision */
-  uint32_t report_size;  /* Total size including variable data */
-  uint32_t flags;        /* Report flags */
+  uint32_t magic;   /* LOTA_MAGIC */
+  uint32_t version; /* LOTA_VERSION */
+
+  uint32_t report_size; /* Total size including variable data */
+  uint32_t flags;       /* Report flags */
 } __attribute__((packed));
 
 /* Report flags */

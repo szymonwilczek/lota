@@ -56,6 +56,18 @@ enum lota_ac_state {
   LOTA_AC_STATE_ERROR = 4,     /* cannot reach agent / internal fault */
 };
 
+/* error codes */
+enum {
+  LOTA_AC_ERR_OK = 0,
+  LOTA_AC_ERR_INVALID_ARG = -1,
+  LOTA_AC_ERR_MALFORMED = -2,
+  LOTA_AC_ERR_VERSION = -3,
+  LOTA_AC_ERR_SIG_FAIL = -4,
+  LOTA_AC_ERR_NONCE_FAIL = -5,
+  LOTA_AC_ERR_EXPIRED = -6,
+  LOTA_AC_ERR_CRYPTO = -7,
+};
+
 struct lota_ac_config {
   enum lota_ac_provider provider;
   const char *game_id;             /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
@@ -196,7 +208,7 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  */
 int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
-                             uint32_t max_age_sec, struct lota_ac_info *info);
+                             struct lota_ac_info *info);
 
 const char *lota_ac_state_str(enum lota_ac_state state);
 const char *lota_ac_provider_str(enum lota_ac_provider provider);

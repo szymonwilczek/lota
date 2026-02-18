@@ -44,7 +44,6 @@ type Verifier struct {
 
 	// configuration
 	nonceLifetime    time.Duration
-	timestampMaxAge  time.Duration
 	sessionTokenLife time.Duration
 	aikMaxAge        time.Duration
 
@@ -65,9 +64,6 @@ type Verifier struct {
 type VerifierConfig struct {
 	// how long a challenge nonce is valid
 	NonceLifetime time.Duration
-
-	// maximum age of report timestamp
-	TimestampMaxAge time.Duration
 
 	// how long issued tokens are valid
 	SessionTokenLife time.Duration
@@ -109,7 +105,6 @@ type VerifierConfig struct {
 func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:    5 * time.Minute,
-		TimestampMaxAge:  2 * time.Minute,
 		SessionTokenLife: 1 * time.Hour,
 		AIKMaxAge:        30 * 24 * time.Hour, // 30 days
 	}
@@ -147,7 +142,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		metrics:          m,
 		attestationLog:   cfg.AttestationLog,
 		nonceLifetime:    cfg.NonceLifetime,
-		timestampMaxAge:  cfg.TimestampMaxAge,
 		sessionTokenLife: cfg.SessionTokenLife,
 		aikMaxAge:        cfg.AIKMaxAge,
 		requireEventLog:  cfg.RequireEventLog,
@@ -272,13 +266,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, err
 	}
 	clog.Debug("nonce verified", "method", "challenge-response+TPMS_ATTEST")
-
-	if err := VerifyTimestamp(report, v.timestampMaxAge); err != nil {
-		clog.Error("timestamp verification failed", "error", err)
-		v.metrics.Rejections.Inc("timestamp_fail")
-		result.Result = types.VerifyNonceFail
-		return result, err
-	}
 
 	// check if registered AIK has exceeded its maximum age.
 	// expired AIKs are rotated via re-TOFU on the next attestation.

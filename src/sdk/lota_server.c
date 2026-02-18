@@ -198,27 +198,23 @@ static void write_le64(uint8_t *p, uint64_t v) {
 }
 
 /*
- * Compute expected nonce: SHA256(issued_at || valid_until || flags || nonce)
+ * Compute expected nonce: SHA256(valid_until || flags || nonce)
  * All integers encoded in little-endian byte order to match token wire format.
  */
-static int compute_expected_nonce(uint64_t issued_at, uint64_t valid_until,
-                                  uint32_t flags, const uint8_t nonce[32],
-                                  uint8_t out[32]) {
+static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
+                                  const uint8_t nonce[32], uint8_t out[32]) {
   EVP_MD_CTX *ctx;
-  uint8_t le_buf[20]; /* 8 + 8 + 4 */
+  uint8_t le_buf[12]; /* 8 + 4 */
 
-  write_le64(le_buf, issued_at);
-  write_le64(le_buf + 8, valid_until);
-  write_le32(le_buf + 16, flags);
+  write_le64(le_buf, valid_until);
+  write_le32(le_buf + 8, flags);
 
   ctx = EVP_MD_CTX_new();
   if (!ctx)
     return -1;
 
   if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1 ||
-      EVP_DigestUpdate(ctx, le_buf, 8) != 1 ||
-      EVP_DigestUpdate(ctx, le_buf + 8, 8) != 1 ||
-      EVP_DigestUpdate(ctx, le_buf + 16, 4) != 1 ||
+      EVP_DigestUpdate(ctx, le_buf, 12) != 1 ||
       EVP_DigestUpdate(ctx, nonce, 32) != 1) {
     EVP_MD_CTX_free(ctx);
     return -1;
@@ -322,15 +318,14 @@ static int parse_wire_header(const uint8_t *data, size_t len,
   if (hdr->total_size > len || hdr->total_size < LOTA_TOKEN_HEADER_SIZE)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  hdr->issued_at = read_le64(data + 8);
-  hdr->valid_until = read_le64(data + 16);
-  hdr->flags = read_le32(data + 24);
-  memcpy(hdr->nonce, data + 28, 32);
-  hdr->sig_alg = read_le16(data + 60);
-  hdr->hash_alg = read_le16(data + 62);
-  hdr->pcr_mask = read_le32(data + 64);
-  hdr->attest_size = read_le16(data + 68);
-  hdr->sig_size = read_le16(data + 70);
+  hdr->valid_until = read_le64(data + 8);
+  hdr->flags = read_le32(data + 16);
+  memcpy(hdr->nonce, data + 20, 32);
+  hdr->sig_alg = read_le16(data + 52);
+  hdr->hash_alg = read_le16(data + 54);
+  hdr->pcr_mask = read_le32(data + 56);
+  hdr->attest_size = read_le16(data + 60);
+  hdr->sig_size = read_le16(data + 62);
 
   /* validate sizes */
   size_t expected =
@@ -346,19 +341,14 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
                              const uint8_t *aik_pub_der, size_t aik_pub_len,
                              const uint8_t *expected_nonce,
-                             uint32_t max_age_sec,
                              struct lota_server_claims *claims) {
   struct lota_token_wire hdr;
   int ret;
-  uint32_t effective_max_age;
 
   if (!token_data || !aik_pub_der || !claims)
     return LOTA_SERVER_ERR_INVALID_ARG;
   if (token_len == 0 || aik_pub_len == 0)
     return LOTA_SERVER_ERR_INVALID_ARG;
-
-  effective_max_age =
-      (max_age_sec > 0) ? max_age_sec : LOTA_TOKEN_DEFAULT_MAX_AGE;
 
   memset(claims, 0, sizeof(*claims));
 
@@ -392,10 +382,10 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   }
 
   /* verify nonce binding: extraData ==
-   * SHA256(issued_at||valid_until||flags||nonce) */
+   * SHA256(valid_until||flags||nonce) */
   uint8_t computed_nonce[32];
-  if (compute_expected_nonce(hdr.issued_at, hdr.valid_until, hdr.flags,
-                             hdr.nonce, computed_nonce) != 0) {
+  if (compute_expected_nonce(hdr.valid_until, hdr.flags, hdr.nonce,
+                             computed_nonce) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
 
@@ -410,7 +400,6 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   }
 
   /* fill claims */
-  claims->issued_at = hdr.issued_at;
   claims->valid_until = hdr.valid_until;
   claims->flags = hdr.flags;
   memcpy(claims->nonce, hdr.nonce, 32);
@@ -425,35 +414,19 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
-  /* check freshness against caller-specified max age */
-  claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
-  claims->too_old = (claims->age_seconds > (int64_t)effective_max_age) ? 1 : 0;
-  claims->issued_in_future =
-      (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
-
-  /* hard rejection: expired, too old, or future */
   if (claims->expired)
     return LOTA_SERVER_ERR_EXPIRED;
-  if (claims->too_old)
-    return LOTA_SERVER_ERR_TOO_OLD;
-  if (claims->issued_in_future)
-    return LOTA_SERVER_ERR_FUTURE;
 
   return LOTA_SERVER_OK;
 }
 
 int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
-                            uint32_t max_age_sec,
                             struct lota_server_claims *claims) {
   struct lota_token_wire hdr;
   int ret;
-  uint32_t effective_max_age;
 
   if (!token_data || !claims)
     return LOTA_SERVER_ERR_INVALID_ARG;
-
-  effective_max_age =
-      (max_age_sec > 0) ? max_age_sec : LOTA_TOKEN_DEFAULT_MAX_AGE;
 
   memset(claims, 0, sizeof(*claims));
 
@@ -461,7 +434,6 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
   if (ret != LOTA_SERVER_OK)
     return ret;
 
-  claims->issued_at = hdr.issued_at;
   claims->valid_until = hdr.valid_until;
   claims->flags = hdr.flags;
   memcpy(claims->nonce, hdr.nonce, 32);
@@ -484,12 +456,6 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
   uint64_t now = (uint64_t)time(NULL);
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
-
-  /* check freshness against caller-specified max age */
-  claims->age_seconds = (int64_t)now - (int64_t)hdr.issued_at;
-  claims->too_old = (claims->age_seconds > (int64_t)effective_max_age) ? 1 : 0;
-  claims->issued_in_future =
-      (claims->age_seconds < -(int64_t)LOTA_TOKEN_MAX_CLOCK_SKEW) ? 1 : 0;
 
   return LOTA_SERVER_OK;
 }
@@ -516,10 +482,7 @@ const char *lota_server_strerror(int error) {
     return "Cryptographic error";
   case LOTA_SERVER_ERR_BUFFER:
     return "Buffer too small";
-  case LOTA_SERVER_ERR_TOO_OLD:
-    return "Token too old (exceeds max_age_sec)";
-  case LOTA_SERVER_ERR_FUTURE:
-    return "Token issued in the future";
+
   default:
     return "Unknown error";
   }

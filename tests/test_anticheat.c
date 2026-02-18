@@ -77,8 +77,7 @@ static void write_test_file(const char *dir, const char *name, const void *data,
  */
 static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags) {
   struct lota_token tok = {0};
-  tok.issued_at = (uint64_t)time(NULL);
-  tok.valid_until = tok.issued_at + 3600;
+  tok.valid_until = (uint64_t)time(NULL) + 3600;
   tok.flags = flags;
   tok.sig_alg = 0x0014;
   tok.hash_alg = 0x000B;
@@ -749,7 +748,7 @@ static void test_verify_roundtrip(void) {
 
   /* verify (parse-only, no AIK) */
   struct lota_ac_info verified;
-  ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, 300, &verified);
+  ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, &verified);
   if (ret != 0) {
     char reason[64];
     snprintf(reason, sizeof(reason), "verify failed: %d", ret);
@@ -808,7 +807,7 @@ static void test_verify_battleye_roundtrip(void) {
   lota_ac_shutdown(s);
 
   struct lota_ac_info info;
-  int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, 300, &info);
+  int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, &info);
   if (ret != 0) {
     FAIL("verify failed");
     return;
@@ -823,9 +822,9 @@ static void test_verify_battleye_roundtrip(void) {
 static void test_verify_null_data(void) {
   TEST("verify: NULL data -> INVALID_ARG");
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, 0, &info) !=
-      LOTA_SERVER_ERR_INVALID_ARG) {
-    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+  if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, &info) !=
+      LOTA_AC_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_AC_ERR_INVALID_ARG");
     return;
   }
   PASS();
@@ -834,9 +833,9 @@ static void test_verify_null_data(void) {
 static void test_verify_null_info(void) {
   TEST("verify: NULL info -> INVALID_ARG");
   uint8_t data[128] = {0};
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, NULL) !=
-      LOTA_SERVER_ERR_INVALID_ARG) {
-    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, NULL) !=
+      LOTA_AC_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_AC_ERR_INVALID_ARG");
     return;
   }
   PASS();
@@ -846,7 +845,7 @@ static void test_verify_truncated(void) {
   TEST("verify: truncated data -> BAD_TOKEN");
   uint8_t data[32] = {0};
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, &info) !=
       LOTA_SERVER_ERR_BAD_TOKEN) {
     FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
@@ -867,7 +866,7 @@ static void test_verify_bad_magic(void) {
   hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, &info) !=
       LOTA_SERVER_ERR_BAD_TOKEN) {
     FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
@@ -888,9 +887,9 @@ static void test_verify_bad_version(void) {
   hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
-      LOTA_SERVER_ERR_BAD_VERSION) {
-    FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, &info) !=
+      LOTA_AC_ERR_VERSION) {
+    FAIL("expected LOTA_AC_ERR_VERSION");
     return;
   }
   PASS();
@@ -909,7 +908,7 @@ static void test_verify_bad_provider(void) {
   hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, &info) !=
       LOTA_SERVER_ERR_BAD_TOKEN) {
     FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;
@@ -930,7 +929,7 @@ static void test_verify_size_mismatch(void) {
   hdr->token_size = 128;
 
   struct lota_ac_info info;
-  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, 0, &info) !=
+  if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0, &info) !=
       LOTA_SERVER_ERR_BAD_TOKEN) {
     FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
     return;

@@ -82,12 +82,10 @@ func VerifyResultString(code uint32) string {
 
 // struct lota_report_header (see: include/attestation.h)
 type ReportHeader struct {
-	Magic       uint32 // offset 0
-	Version     uint32 // offset 4
-	Timestamp   uint64 // offset 8
-	TimestampNs uint64 // offset 16
-	ReportSize  uint32 // offset 24
-	Flags       uint32 // offset 28
+	Magic      uint32 // offset 0
+	Version    uint32 // offset 4
+	ReportSize uint32 // offset 8
+	Flags      uint32 // offset 12
 }
 
 // struct lota_tpm_evidence (see: include/attestation.h)
@@ -188,11 +186,11 @@ var (
 )
 
 // minimum binary size of serialized report on wire
-// Header(32) + TPM(6992) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7452
-const MinReportSize = 7452
+// Header(16) + TPM(6992) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7436
+const MinReportSize = 7436
 
 // fixed struct portion (without variable-length sections)
-const FixedReportSize = 7444
+const FixedReportSize = 7428
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -217,10 +215,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 			ErrInvalidVersion, report.Header.Version, ReportVersion)
 	}
 
-	report.Header.Timestamp = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
-	report.Header.TimestampNs = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
 	report.Header.ReportSize = binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 	report.Header.Flags = binary.LittleEndian.Uint32(data[offset:])

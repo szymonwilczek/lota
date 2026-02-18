@@ -459,21 +459,3 @@ func (ns *NonceStore) ListActiveClients() []string {
 	}
 	return clients
 }
-
-// checks report timestamp is recent
-// this is an additional freshness check beyond nonce
-func VerifyTimestamp(report *types.AttestationReport, maxAge time.Duration) error {
-	reportTime := time.Unix(int64(report.Header.Timestamp), int64(report.Header.TimestampNs))
-	age := time.Since(reportTime)
-
-	if age < -time.Minute {
-		// time traveller from the future
-		return errors.New("report timestamp in future")
-	}
-
-	if age > maxAge {
-		return errors.New("report timestamp too old")
-	}
-
-	return nil
-}
