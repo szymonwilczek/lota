@@ -75,6 +75,7 @@ enum lota_mode {
 #define LOTA_CFG_BLOCK_PTRACE 2    /* 1 = block ptrace on protected pids */
 #define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
 #define LOTA_CFG_STRICT_EXEC 4     /* 1 = block exec from untrusted paths */
+#define LOTA_CFG_STRICT_MODULES 5  /* 1 = enforce verified modules/firmware */
 #define LOTA_CFG_MAX_ENTRIES 8
 
 /*

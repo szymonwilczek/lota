@@ -49,32 +49,7 @@ struct {
 } events SEC(".maps");
 
 /*
- * Per-CPU array for temporary event storage.
- * We build the event here before submitting to ring buffer.
- * This avoids stack size limits (512 bytes in BPF).
- */
-struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct lota_exec_event);
-} event_scratch SEC(".maps");
-
-/*
- * Separate per-CPU scratch for sleepable hooks (lsm.s).
- * Sleepable programs can be preempted mid-execution, allowing a
- * non-sleepable hook on the same CPU to clobber the shared buffer.
- */
-struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct lota_exec_event);
-} event_scratch_sleepable SEC(".maps");
-
-/*
  * Statistics counters.
- * Extended to 16 entries for new hooks.
  */
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -208,178 +183,30 @@ static __always_inline int is_protected_pid(u32 pid) {
   u32 *val = bpf_map_lookup_elem(&protected_pids, &pid);
   return val && *val;
 }
-
-/*
- * LSM hook: security_bprm_check
- *
- * Called when a new program is about to be executed.
- * This is after the binary is loaded but before it runs.
- *
- * @bprm: Binary program descriptor containing:
- *   - file: The executable file
- *   - filename: Path to the executable
- *   - cred: Credentials to use
- *
- * Return: 0 to allow, negative to deny (always allow in monitor mode)
- */
-SEC("lsm/bprm_check_security")
-int BPF_PROG(lota_bprm_check, struct linux_binprm *bprm, int ret) {
-  struct lota_exec_event *event;
-  struct task_struct *task;
-  struct file *file;
-  struct dentry *dentry;
-  u32 key = 0;
-  u32 mode;
-  int blocked = 0;
-
-  /* dont interfere with previous hook denial */
-  if (ret != 0)
-    return ret;
-
-  inc_stat(STAT_TOTAL_EXECS);
-
-  mode = get_mode();
-
-  if (mode == LOTA_MODE_MAINTENANCE)
-    return 0;
-
-  /* scratch space for building event */
-  event = bpf_map_lookup_elem(&event_scratch, &key);
-  if (!event) {
-    inc_stat(STAT_ERRORS);
-    return 0;
-  }
-
-  __builtin_memset(event, 0, sizeof(*event));
-
-  event->timestamp_ns = bpf_ktime_get_ns();
-
-  /* current task info */
-  task = (struct task_struct *)bpf_get_current_task();
-
-  event->pid = BPF_CORE_READ(task, pid);
-  event->tgid = BPF_CORE_READ(task, tgid);
-  event->uid = BPF_CORE_READ(task, cred, uid.val);
-  event->gid = BPF_CORE_READ(task, cred, gid.val);
-
-  /* process name */
-  bpf_get_current_comm(event->comm, sizeof(event->comm));
-
-  const char *filename = BPF_CORE_READ(bprm, filename);
-  if (filename) {
-    bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
-                              filename);
-  }
-
-  /*
-   * STRICT_EXEC enforcement:
-   * Require fs-verity and a trusted digest for execution.
-   */
-  (void)dentry;
-  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
-    if (!is_verity_allowed(file)) {
-      blocked = 1;
-    }
-  }
-
-  event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
-
-  /*
-   * Submit event to ring buffer.
-   * If ring buffer is full, event is dropped (BPF_RB_NO_WAKEUP skips
-   * waking up user-space if buffer was empty - more efficient).
-   */
-  struct lota_exec_event *rb_event;
-  rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (rb_event) {
-    __builtin_memcpy(rb_event, event, sizeof(*event));
-    bpf_ringbuf_submit(rb_event, 0);
-    inc_stat(STAT_EVENTS_SENT);
-  } else {
-    inc_stat(STAT_RINGBUF_DROPS);
-  }
-
-  if (blocked) {
-    inc_stat(STAT_EXEC_BLOCKED);
-    return -1; /* -EPERM */
-  }
-
-  return 0;
-}
-
-/*
- * LSM hook: kernel_module_request
- * Called when kernel requests a module by name (eg., via modprobe).
- * This is triggered by request_module() in kernel code.
- */
-SEC("lsm/kernel_module_request")
-int BPF_PROG(lota_module_request, char *kmod_name, int ret) {
-  struct lota_exec_event *event;
-  u32 key = 0;
-
-  if (ret != 0)
-    return ret;
-
-  event = bpf_map_lookup_elem(&event_scratch, &key);
-  if (!event)
-    return 0;
-
-  __builtin_memset(event, 0, sizeof(*event));
-  event->timestamp_ns = bpf_ktime_get_ns();
-  event->event_type = LOTA_EVENT_MODULE_LOAD;
-  event->tgid = bpf_get_current_pid_tgid() >> 32;
-  event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-
-  bpf_get_current_comm(event->comm, sizeof(event->comm));
-
-  if (kmod_name) {
-    bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
-                              kmod_name);
-  }
-
-  struct lota_exec_event *rb_event;
-  rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (rb_event) {
-    __builtin_memcpy(rb_event, event, sizeof(*event));
-    bpf_ringbuf_submit(rb_event, 0);
-  }
-
-  return 0;
-}
-
-/*
- * LSM hook: security_kernel_read_file
- *
- * Called when kernel reads a file for internal use (modules, firmware, etc.)
- * This is the enforcement point for blocking unauthorized kernel modules.
- *
- * @file: The file being read
- * @id: Type of read operation (enum kernel_read_file_id):
- *        READING_MODULE = 2 - Kernel module (.ko file)
- *        READING_FIRMWARE = 1 - Device firmware
- *        READING_KEXEC_IMAGE = 5 - Kexec kernel image
- * @contents: Whether contents are being read (vs just opened)
- *
- * Return: 0 to allow, -EPERM to deny
- */
 SEC("lsm.s/kernel_read_file")
 int BPF_PROG(lota_kernel_read_file, struct file *file,
              enum kernel_read_file_id id, bool contents, int ret) {
   struct lota_exec_event *event;
-  struct dentry *dentry;
-  const unsigned char *name;
   u32 mode;
-  u32 key = 0;
   int blocked = 0;
+  struct task_struct *task;
 
   /* Dont interfere with previous hook denial */
   if (ret != 0)
     return ret;
 
   /*
-   * Only enforce on kernel module loads (id == 2 - READING_MODULE).
+   * Filter relevant IDs.
+   * - MODULE (2)
+   * - FIRMWARE (1)
+   * - KEXEC_IMAGE (3)
+   * - KEXEC_INITRAMFS (4)
+   * - POLICY (5)
+   * - X509_CERTIFICATE (6)
    */
-  if (id != 2)
+  if (id != READING_MODULE && id != READING_FIRMWARE &&
+      id != READING_KEXEC_IMAGE && id != READING_KEXEC_INITRAMFS &&
+      id != READING_POLICY && id != READING_X509_CERTIFICATE)
     return 0;
 
   mode = get_mode();
@@ -388,22 +215,17 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     return 0;
 
   /*
-   * Module integrity check via fs-verity.
-   * Note: This requires modules to be signed/hashed with fs-verity.
-   * Standard kernel modules usually arent, but for a secured game OS
-   * or specific restricted modules, this is the way.
+   * Integrity checks via fs-verity.
+   * In ENFORCE mode, significant kernel components must be verity-protected
+   * if LOTA_CFG_STRICT_MODULES is enabled.
    */
-  (void)dentry;
-  (void)name;
-
-  if (mode == LOTA_MODE_ENFORCE) {
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MODULES)) {
     if (!is_verity_allowed(file)) {
       blocked = 1;
     }
   }
 
-  /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -411,18 +233,40 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
         blocked ? LOTA_EVENT_MODULE_BLOCKED : LOTA_EVENT_MODULE_LOAD;
     event->tgid = bpf_get_current_pid_tgid() >> 32;
     event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-    event->uid = 0; /* will be root for module loads */
+    event->uid = 0; /* limits to root for these ops roughly */
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
+    /*
+     * attempt to extract filename from dentry
+     */
+    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
+    const unsigned char *name = NULL;
+    int ret_path = -1;
 
-    struct lota_exec_event *rb_event;
-    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (rb_event) {
-      __builtin_memcpy(rb_event, event, sizeof(*event));
-      bpf_ringbuf_submit(rb_event, 0);
+    if (dentry) {
+      name = BPF_CORE_READ(dentry, d_name.name);
+      if (name) {
+        ret_path = bpf_probe_read_kernel_str(event->filename,
+                                             sizeof(event->filename), name);
+      }
     }
+
+    if (ret_path < 0) {
+      if (id == READING_MODULE)
+        __builtin_memcpy(event->filename, "kernel_module", 13);
+      else if (id == READING_FIRMWARE)
+        __builtin_memcpy(event->filename, "firmware", 8);
+      else if (id == READING_KEXEC_IMAGE)
+        __builtin_memcpy(event->filename, "kexec_image", 11);
+      else
+        __builtin_memcpy(event->filename, "kernel_assets", 13);
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   if (blocked) {
@@ -478,7 +322,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
   }
 
   /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch, &key);
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -492,12 +336,10 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     /* memory-loaded module */
     __builtin_memcpy(event->filename, "[memory]", 9);
 
-    struct lota_exec_event *rb_event;
-    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (rb_event) {
-      __builtin_memcpy(rb_event, event, sizeof(*event));
-      bpf_ringbuf_submit(rb_event, 0);
-    }
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   if (blocked) {
@@ -531,7 +373,6 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
 SEC("lsm.s/mmap_file")
 int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret) {
-  struct lota_exec_event *event;
   struct dentry *dentry;
   u32 key = 0;
   u32 mode;
@@ -563,11 +404,13 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
     if (mode == LOTA_MODE_MAINTENANCE)
       return 0;
 
+    struct lota_exec_event *event;
+
     if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC)) {
       anon_blocked = 1;
     }
 
-    event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (event) {
       __builtin_memset(event, 0, sizeof(*event));
       event->timestamp_ns = bpf_ktime_get_ns();
@@ -580,15 +423,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
       bpf_get_current_comm(event->comm, sizeof(event->comm));
       __builtin_memcpy(event->filename, "(anon-exec)", 12);
 
-      struct lota_exec_event *rb_event;
-      rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-      if (rb_event) {
-        __builtin_memcpy(rb_event, event, sizeof(*event));
-        bpf_ringbuf_submit(rb_event, 0);
-        inc_stat(STAT_EVENTS_SENT);
-      } else {
-        inc_stat(STAT_RINGBUF_DROPS);
-      }
+      bpf_ringbuf_submit(event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
     }
 
     if (anon_blocked) {
@@ -627,7 +465,8 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   }
 
   /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch_sleepable, &key);
+  struct lota_exec_event *event;
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -641,15 +480,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
 
-    struct lota_exec_event *rb_event;
-    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (rb_event) {
-      __builtin_memcpy(rb_event, event, sizeof(*event));
-      bpf_ringbuf_submit(rb_event, 0);
-      inc_stat(STAT_EVENTS_SENT);
-    } else {
-      inc_stat(STAT_RINGBUF_DROPS);
-    }
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   if (blocked) {
@@ -710,7 +544,7 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
   }
 
   /* for logging */
-  event = bpf_map_lookup_elem(&event_scratch, &key);
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -728,15 +562,10 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
       bpf_probe_read_kernel_str(event->filename, LOTA_MAX_COMM_LEN, child_comm);
     }
 
-    struct lota_exec_event *rb_event;
-    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (rb_event) {
-      __builtin_memcpy(rb_event, event, sizeof(*event));
-      bpf_ringbuf_submit(rb_event, 0);
-      inc_stat(STAT_EVENTS_SENT);
-    } else {
-      inc_stat(STAT_RINGBUF_DROPS);
-    }
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   if (blocked) {
@@ -785,7 +614,7 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
   if (get_mode() == LOTA_MODE_MAINTENANCE)
     return 0;
 
-  event = bpf_map_lookup_elem(&event_scratch, &key);
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -797,15 +626,10 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    struct lota_exec_event *rb_event;
-    rb_event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (rb_event) {
-      __builtin_memcpy(rb_event, event, sizeof(*event));
-      bpf_ringbuf_submit(rb_event, 0);
-      inc_stat(STAT_EVENTS_SENT);
-    } else {
-      inc_stat(STAT_RINGBUF_DROPS);
-    }
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   /* kernel handles setuid policy via capabilities */
