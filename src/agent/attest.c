@@ -741,7 +741,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       dbus_process(g_dbus_ctx, 0);
       if (wd_enabled)
         sdnotify_watchdog_ping();
-      usleep(900000);
+#define TPM_PCR_EXTEND_DELAY_US 900000
+      usleep(TPM_PCR_EXTEND_DELAY_US);
     }
   }
 

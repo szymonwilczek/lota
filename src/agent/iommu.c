@@ -90,7 +90,8 @@ int iommu_check_sysfs(struct iommu_status *status) {
 
 int iommu_check_cmdline(struct iommu_status *status) {
   int fd;
-  char buf[4096];
+#define IOMMU_READ_BUF_SIZE 4096
+  char buf[IOMMU_READ_BUF_SIZE];
   ssize_t n;
   int ret = -1;
 

@@ -13,8 +13,10 @@
 #include <arpa/inet.h>
 #include <endian.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -168,8 +170,39 @@ int net_connect(struct net_context *ctx) {
     if (sock < 0)
       continue;
 
-    if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0)
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    ret = connect(sock, rp->ai_addr, rp->ai_addrlen);
+    if (ret == 0) {
+      /* immediate success */
+      fcntl(sock, F_SETFL, flags); /* restore blocking */
       break;
+    }
+
+    if (errno == EINPROGRESS) {
+      int epfd = epoll_create1(EPOLL_CLOEXEC);
+      struct epoll_event ev;
+      ev.events = EPOLLOUT | EPOLLERR | EPOLLHUP;
+      ev.data.fd = sock;
+
+      if (epfd >= 0 && epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev) == 0) {
+        int n = epoll_wait(epfd, &ev, 1, 10000); /* 10s timeout */
+        if (n > 0) {
+          int err = 0;
+          socklen_t len = sizeof(err);
+          if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &len) == 0 &&
+              err == 0) {
+            /* connected successfully */
+            close(epfd);
+            fcntl(sock, F_SETFL, flags); /* restore blocking */
+            break;
+          }
+        }
+      }
+      if (epfd >= 0)
+        close(epfd);
+    }
 
     close(sock);
     sock = -1;
