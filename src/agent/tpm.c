@@ -1213,3 +1213,100 @@ int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size) {
   *out_size = total;
   return 0;
 }
+
+/*
+ * Query TPM capability for a property.
+ * Returns: 0 on success, negative errno on failure.
+ */
+static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
+                        uint32_t *out_val) {
+  TSS2_RC rc;
+  TPMS_CAPABILITY_DATA *cap_data = NULL;
+  TPMI_YES_NO more = TPM2_NO;
+
+  if (!ctx || !ctx->initialized || !out_val)
+    return -EINVAL;
+
+  rc = Esys_GetCapability(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                          ESYS_TR_NONE, TPM2_CAP_TPM_PROPERTIES, prop, 1, &more,
+                          &cap_data);
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  if (cap_data->data.tpmProperties.count == 0 ||
+      cap_data->data.tpmProperties.tpmProperty[0].property != prop) {
+    Esys_Free(cap_data);
+    return -ENOENT;
+  }
+
+  *out_val = cap_data->data.tpmProperties.tpmProperty[0].value;
+  Esys_Free(cap_data);
+  return 0;
+}
+
+int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
+                    size_t *out_size) {
+  TSS2_RC rc;
+  ESYS_TR nv_handle = ESYS_TR_NONE;
+  TPM2B_NV_PUBLIC *nv_public = NULL;
+  TPM2B_NAME *nv_name = NULL;
+  uint32_t max_nv_size = 1024; /* conservative default */
+  uint32_t prop_val;
+
+  if (!ctx || !ctx->initialized || !buf || !out_size)
+    return -EINVAL;
+
+  *out_size = 0;
+
+  /* query unlimited max NV buffer size */
+  if (tpm_get_prop(ctx, TPM2_PT_NV_BUFFER_MAX, &prop_val) == 0) {
+    max_nv_size = prop_val;
+  }
+
+  /* ESYS handle for NV index */
+  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_CERT_HANDLE, ESYS_TR_NONE,
+                             ESYS_TR_NONE, ESYS_TR_NONE, &nv_handle);
+  if (rc != TSS2_RC_SUCCESS) {
+    if ((rc & 0xFF) == TPM2_RC_HANDLE)
+      return -ENOENT; /* no certificate at this handle */
+    return tss2_rc_to_errno(rc);
+  }
+
+  /* read NV public to get size */
+  rc = Esys_NV_ReadPublic(ctx->esys_ctx, nv_handle, ESYS_TR_NONE, ESYS_TR_NONE,
+                          ESYS_TR_NONE, &nv_public, &nv_name);
+  if (rc != TSS2_RC_SUCCESS) {
+    return tss2_rc_to_errno(rc);
+  }
+
+  size_t data_size = nv_public->nvPublic.dataSize;
+  Esys_Free(nv_public);
+  Esys_Free(nv_name);
+
+  if (data_size > buf_size) {
+    return -ENOSPC;
+  }
+
+  uint16_t offset = 0;
+  while (offset < data_size) {
+    TPM2B_MAX_NV_BUFFER *nv_data = NULL;
+    uint32_t size_to_read = data_size - offset;
+
+    if (size_to_read > max_nv_size)
+      size_to_read = max_nv_size;
+
+    rc = Esys_NV_Read(ctx->esys_ctx, ESYS_TR_RH_OWNER, nv_handle,
+                      ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                      (uint16_t)size_to_read, offset, &nv_data);
+    if (rc != TSS2_RC_SUCCESS) {
+      return tss2_rc_to_errno(rc);
+    }
+
+    memcpy(buf + offset, nv_data->buffer, nv_data->size);
+    offset += nv_data->size;
+    Esys_Free(nv_data);
+  }
+
+  *out_size = data_size;
+  return 0;
+}

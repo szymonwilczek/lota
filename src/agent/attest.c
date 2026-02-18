@@ -326,6 +326,27 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     }
   }
 
+  /*
+   * Export EK certificate (if available).
+   */
+  {
+    size_t ek_cert_size = 0;
+    ret = tpm_get_ek_cert(&g_tpm_ctx, report->tpm.ek_certificate,
+                          LOTA_MAX_EK_CERT_SIZE, &ek_cert_size);
+    if (ret == 0) {
+      report->tpm.ek_cert_size = (uint16_t)ek_cert_size;
+      printf("EK certificate exported (%zu bytes, DER X.509)\n", ek_cert_size);
+    } else if (ret == -ENOENT) {
+      printf("No EK certificate found (TOFU will require approval if strict "
+             "mode)\n");
+      report->tpm.ek_cert_size = 0;
+    } else {
+      fprintf(stderr, "Warning: Failed to read EK certificate: %s\n",
+              strerror(-ret));
+      report->tpm.ek_cert_size = 0;
+    }
+  }
+
   /* AIK rotation metadata */
   if (g_tpm_ctx.aik_meta_loaded) {
     report->tpm.aik_generation = g_tpm_ctx.aik_meta.generation;

@@ -21,6 +21,11 @@ struct tpm_quote_response;
 #define TPM_DEVICE_PATH "/dev/tpmrm0"
 
 /*
+ * EK Certificate handle (RSA 2048)
+ */
+#define TPM_EK_CERT_HANDLE 0x01c00002
+
+/*
  * Default AIK persistent handle.
  * Configurable via lota.conf
  *
@@ -238,6 +243,21 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  */
 int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
                        size_t *out_size);
+
+/*
+ * tpm_get_ek_cert - Read Endorsement Key certificate from NVRAM
+ * @ctx: Initialized TPM context
+ * @buf: Output buffer for DER-encoded certificate
+ * @buf_size: Size of output buffer (recommend LOTA_MAX_EK_CERT_SIZE)
+ * @out_size: Actual size of read certificate
+ *
+ * Reads the EK certificate from the standard NV index 0x01c00002.
+ * The certificate is stored in DER format (X.509).
+ *
+ * Returns: 0 on success, -ENOENT if not found, negative errno on failure
+ */
+int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
+                    size_t *out_size);
 
 /*
  * tpm_get_hardware_id - Compute unique hardware identifier
