@@ -19,6 +19,7 @@
 
 #include "../../include/lota_gaming.h"
 #include "../../include/lota_ipc.h"
+#include "../../include/lota_token.h"
 
 #define DEFAULT_TIMEOUT_MS 5000
 
@@ -627,19 +628,15 @@ void lota_token_free(struct lota_token *token) {
 }
 
 /*
- * Token wire format constants (must match include/lota_server.h!)
+ * Serialization using shared definitions
  */
-#define LOTA_TOKEN_MAGIC 0x4B544F4C
-#define LOTA_TOKEN_VERSION 0x0001
-#define TOKEN_WIRE_HEADER_SIZE 72
-
 size_t lota_token_serialized_size(const struct lota_token *token) {
   if (!token)
     return 0;
   if (token->attest_size > 1024 || token->signature_len > 512)
     return 0;
 
-  return TOKEN_WIRE_HEADER_SIZE + token->attest_size + token->signature_len;
+  return LOTA_TOKEN_HEADER_SIZE + token->attest_size + token->signature_len;
 }
 
 int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
@@ -653,69 +650,34 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
   if (buflen < total)
     return LOTA_ERR_BUFFER_TOO_SMALL;
 
-  /* helper: write little-endian values */
-  size_t off = 0;
+  /* populate header struct */
+  struct lota_token_wire wire;
+  memset(&wire, 0, sizeof(wire));
 
-  /* magic (4 bytes) */
-  uint32_t magic = LOTA_TOKEN_MAGIC;
-  memcpy(buf + off, &magic, 4);
-  off += 4;
+  wire.magic = LOTA_TOKEN_MAGIC;
+  wire.version = LOTA_TOKEN_VERSION;
+  wire.total_size = (uint16_t)total;
+  wire.issued_at = token->issued_at;
+  wire.valid_until = token->valid_until;
+  wire.flags = token->flags;
+  memcpy(wire.nonce, token->nonce, 32);
+  wire.sig_alg = token->sig_alg;
+  wire.hash_alg = token->hash_alg;
+  wire.pcr_mask = token->pcr_mask;
+  wire.attest_size = (uint16_t)token->attest_size;
+  wire.sig_size = (uint16_t)token->signature_len;
 
-  /* version (2 bytes) */
-  uint16_t version = LOTA_TOKEN_VERSION;
-  memcpy(buf + off, &version, 2);
-  off += 2;
+  /* write header */
+  memcpy(buf, &wire, sizeof(wire));
+  size_t off = sizeof(wire);
 
-  /* total_size (2 bytes) */
-  uint16_t total_u16 = (uint16_t)total;
-  memcpy(buf + off, &total_u16, 2);
-  off += 2;
-
-  /* issued_at (8 bytes) */
-  memcpy(buf + off, &token->issued_at, 8);
-  off += 8;
-
-  /* valid_until (8 bytes) */
-  memcpy(buf + off, &token->valid_until, 8);
-  off += 8;
-
-  /* flags (4 bytes) */
-  memcpy(buf + off, &token->flags, 4);
-  off += 4;
-
-  /* nonce (32 bytes) */
-  memcpy(buf + off, token->nonce, 32);
-  off += 32;
-
-  /* sig_alg (2 bytes) */
-  memcpy(buf + off, &token->sig_alg, 2);
-  off += 2;
-
-  /* hash_alg (2 bytes) */
-  memcpy(buf + off, &token->hash_alg, 2);
-  off += 2;
-
-  /* pcr_mask (4 bytes) */
-  memcpy(buf + off, &token->pcr_mask, 4);
-  off += 4;
-
-  /* attest_size (2 bytes) */
-  uint16_t asize = (uint16_t)token->attest_size;
-  memcpy(buf + off, &asize, 2);
-  off += 2;
-
-  /* sig_size (2 bytes) */
-  uint16_t ssize = (uint16_t)token->signature_len;
-  memcpy(buf + off, &ssize, 2);
-  off += 2;
-
-  /* attest_data (variable) */
+  /* write attest_data */
   if (token->attest_size > 0 && token->attest_data) {
     memcpy(buf + off, token->attest_data, token->attest_size);
     off += token->attest_size;
   }
 
-  /* signature (variable) */
+  /* write signature */
   if (token->signature_len > 0 && token->signature) {
     memcpy(buf + off, token->signature, token->signature_len);
     off += token->signature_len;
