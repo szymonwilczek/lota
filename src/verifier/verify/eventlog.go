@@ -113,13 +113,10 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 	for offset < len(data) {
 		entry, consumed, err := parsePCREvent2(data[offset:], algList)
 		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				break // truncated log is acceptable
-			}
-			break // stop on parse errors, use what we have
+			return nil, fmt.Errorf("event log truncated or malformed at offset %d: %w", offset, err)
 		}
 		if consumed == 0 {
-			break
+			return nil, fmt.Errorf("event log parser consumed zero bytes at offset %d", offset)
 		}
 		result.Entries = append(result.Entries, *entry)
 		offset += consumed
