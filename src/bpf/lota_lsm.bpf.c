@@ -187,8 +187,6 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
     return 0;
   }
 
-  bpf_printk("LOTA: Integrity baseline OK: sig_enforce=1 lockdown=%d",
-             lockdown);
   return 1;
 }
 
