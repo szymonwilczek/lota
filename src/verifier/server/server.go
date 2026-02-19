@@ -348,8 +348,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// get total size
-	totalSize := binary.LittleEndian.Uint32(headerBuf[24:28])
+	// get total size from report header.report_size (offset 8)
+	totalSize := binary.LittleEndian.Uint32(headerBuf[8:12])
 	if totalSize < 32 || totalSize > 64*1024 { // 64KB max
 		clog.Warn("invalid report size", "size", totalSize)
 		s.metrics.ConnectionErrors.Inc()
