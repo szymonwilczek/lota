@@ -378,7 +378,6 @@ test-unit: all $(TEST_BINS)
 	@./build/test_policy_export
 	@./build/test_aik_rotation
 	@./build/test_server_sdk
-	@./build/test_server_sdk
 	@./build/test_anticheat
 	@./build/test_loader_symbols
 	@echo ""
