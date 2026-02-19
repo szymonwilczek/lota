@@ -591,10 +591,14 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             /* flush and reload */
             int old_protect_pid_count = g_protect_pid_count;
             uint32_t *old_protect_pids = g_protect_pids;
+            int old_trust_lib_count = g_trust_lib_count;
+            char old_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
+            for (int k = 0; k < old_trust_lib_count; k++) {
+              snprintf(old_trust_libs[k], sizeof(old_trust_libs[k]), "%s",
+                       g_trust_libs[k]);
+            }
             for (int k = 0; k < old_protect_pid_count; k++)
               bpf_loader_unprotect_pid(&g_bpf_ctx, old_protect_pids[k]);
-            for (int k = 0; k < g_trust_lib_count; k++)
-              bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
 
             if (new_cfg.protect_pid_count > 0) {
               uint32_t *new_pids =
@@ -653,19 +657,61 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             lota_info("Protected PIDs reloaded (%d entries)",
                       g_protect_pid_count);
 
-            g_trust_lib_count = new_cfg.trust_lib_count;
+            bool trust_reload_failed = false;
             int applied_libs = 0;
-            for (int k = 0; k < g_trust_lib_count; k++) {
+
+            for (int k = 0; k < old_trust_lib_count; k++) {
+              int untrust_ret =
+                  bpf_loader_untrust_lib(&g_bpf_ctx, old_trust_libs[k]);
+              if (untrust_ret < 0 && untrust_ret != -ENOENT) {
+                lota_warn("Failed to remove trusted lib %s on reload: %s",
+                          old_trust_libs[k], strerror(-untrust_ret));
+                trust_reload_failed = true;
+                break;
+              }
+            }
+
+            for (int k = 0; !trust_reload_failed && k < new_cfg.trust_lib_count;
+                 k++) {
               const char *lib = new_cfg.trust_libs[k];
-              if (bpf_loader_trust_lib(&g_bpf_ctx, lib) < 0) {
-                lota_warn("Failed to trust lib %s on reload", lib);
-                continue;
+              int trust_ret = bpf_loader_trust_lib(&g_bpf_ctx, lib);
+              if (trust_ret < 0) {
+                lota_warn("Failed to trust lib %s on reload: %s", lib,
+                          strerror(-trust_ret));
+                trust_reload_failed = true;
+                break;
               }
               snprintf(g_trust_libs[applied_libs],
                        sizeof(g_trust_libs[applied_libs]), "%s", lib);
               applied_libs++;
             }
-            g_trust_lib_count = applied_libs;
+
+            if (trust_reload_failed) {
+              for (int k = 0; k < applied_libs; k++)
+                bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
+
+              int restored_libs = 0;
+              for (int k = 0; k < old_trust_lib_count; k++) {
+                int restore_ret =
+                    bpf_loader_trust_lib(&g_bpf_ctx, old_trust_libs[k]);
+                if (restore_ret < 0) {
+                  lota_warn("Failed to restore trusted lib %s after reload "
+                            "error: %s",
+                            old_trust_libs[k], strerror(-restore_ret));
+                  continue;
+                }
+                snprintf(g_trust_libs[restored_libs],
+                         sizeof(g_trust_libs[restored_libs]), "%s",
+                         old_trust_libs[k]);
+                restored_libs++;
+              }
+              g_trust_lib_count = restored_libs;
+              lota_warn("Keeping previous trusted library set after reload "
+                        "errors");
+            } else {
+              g_trust_lib_count = applied_libs;
+            }
+
             lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
 
             /* synchronize config snapshot without pointer aliasing */
