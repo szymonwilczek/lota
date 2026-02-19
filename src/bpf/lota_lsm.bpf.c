@@ -323,7 +323,6 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   int blocked = 0;
   uint32_t key = 0;
   uint32_t mode = get_mode();
-  int ret_path = 0;
 
   bpf_printk("LOTA: kernel_read_file id=%d mode=%d", id, mode);
 
@@ -525,7 +524,6 @@ SEC("lsm.s/mmap_file")
 int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret) {
   struct dentry *dentry;
-  u32 key = 0;
   u32 mode;
   int blocked = 0;
 
@@ -753,7 +751,6 @@ SEC("lsm/task_fix_setuid")
 int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
              int flags, int ret) {
   struct lota_exec_event *event;
-  u32 key = 0;
   u32 old_uid, new_uid;
 
   /* dont interfere with previous hook denial */
