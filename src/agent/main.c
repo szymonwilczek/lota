@@ -438,25 +438,52 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
       lota_info("Anonymous executable mappings: BLOCKED");
   }
 
-  /* apply protected PIDs from CLI */
-  for (int i = 0; i < g_protect_pid_count; i++) {
-    ret = bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]);
-    if (ret < 0) {
-      lota_warn("Failed to protect PID %u: %s", g_protect_pids[i],
-                strerror(-ret));
-    } else {
+  /* apply protected PIDs from CLI/config */
+  {
+    int applied_pids = 0;
+    for (int i = 0; i < g_protect_pid_count; i++) {
+      ret = bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]);
+      if (ret < 0) {
+        lota_err("Failed to protect PID %u at startup: %s", g_protect_pids[i],
+                 strerror(-ret));
+        for (int k = 0; k < applied_pids; k++) {
+          int rollback_ret =
+              bpf_loader_unprotect_pid(&g_bpf_ctx, g_protect_pids[k]);
+          if (rollback_ret < 0) {
+            lota_warn("Failed to rollback protected PID %u: %s",
+                      g_protect_pids[k], strerror(-rollback_ret));
+          }
+        }
+        goto cleanup_bpf;
+      }
+      applied_pids++;
       lota_dbg("Protected PID: %u", g_protect_pids[i]);
     }
+    lota_info("Protected PIDs applied (%d entries)", applied_pids);
   }
 
-  /* apply trusted libraries from CLI */
-  for (int i = 0; i < g_trust_lib_count; i++) {
-    ret = bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]);
-    if (ret < 0) {
-      lota_warn("Failed to trust lib %s: %s", g_trust_libs[i], strerror(-ret));
-    } else {
+  /* apply trusted libraries from CLI/config */
+  {
+    int applied_libs = 0;
+    for (int i = 0; i < g_trust_lib_count; i++) {
+      ret = bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[i]);
+      if (ret < 0) {
+        lota_err("Failed to trust lib %s at startup: %s", g_trust_libs[i],
+                 strerror(-ret));
+        for (int k = 0; k < applied_libs; k++) {
+          int rollback_ret =
+              bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
+          if (rollback_ret < 0) {
+            lota_warn("Failed to rollback trusted lib %s: %s", g_trust_libs[k],
+                      strerror(-rollback_ret));
+          }
+        }
+        goto cleanup_bpf;
+      }
+      applied_libs++;
       lota_dbg("Trusted lib: %s", g_trust_libs[i]);
     }
+    lota_info("Trusted libs applied (%d entries)", applied_libs);
   }
 
   ret = bpf_loader_setup_ringbuf(&g_bpf_ctx, handle_exec_event, NULL);
