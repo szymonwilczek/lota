@@ -533,6 +533,25 @@ static void test_config_load_boolean_variants(void) {
   PASS();
 }
 
+static void test_config_load_invalid_boolean(void) {
+  struct lota_config cfg;
+  char path[PATH_MAX];
+  int ret;
+
+  TEST("config_load rejects invalid boolean tokens");
+  write_config("bool_invalid.conf", "strict_mmap = maybe\n");
+  config_path("bool_invalid.conf", path, sizeof(path));
+  config_init(&cfg);
+  ret = config_load(&cfg, path);
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
 static void test_config_load_whitespace_trimming(void) {
   struct lota_config cfg;
   char path[PATH_MAX];
@@ -990,6 +1009,7 @@ int main(void) {
   test_config_load_trust_libs_multiple();
   test_config_load_protect_pids_multiple();
   test_config_load_boolean_variants();
+  test_config_load_invalid_boolean();
   test_config_load_whitespace_trimming();
   test_config_load_unknown_keys();
   test_config_load_malformed_lines();

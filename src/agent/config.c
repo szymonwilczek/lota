@@ -46,9 +46,23 @@ static char *trim(char *s) {
   return s;
 }
 
-static bool parse_bool(const char *val) {
-  return (strcmp(val, "true") == 0 || strcmp(val, "yes") == 0 ||
-          strcmp(val, "1") == 0);
+static int parse_bool_strict(const char *val, bool *out) {
+  if (!val || !out)
+    return -1;
+
+  if (strcmp(val, "true") == 0 || strcmp(val, "yes") == 0 ||
+      strcmp(val, "1") == 0) {
+    *out = true;
+    return 0;
+  }
+
+  if (strcmp(val, "false") == 0 || strcmp(val, "no") == 0 ||
+      strcmp(val, "0") == 0) {
+    *out = false;
+    return 0;
+  }
+
+  return -1;
 }
 
 /*
@@ -145,21 +159,45 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "strict_mmap") == 0 || strcmp(key, "strict-mmap") == 0) {
-    cfg->strict_mmap = parse_bool(value);
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid strict_mmap '%s' (use true/false)\n",
+              filepath, lineno, value);
+      return -1;
+    }
+    cfg->strict_mmap = parsed;
     return 0;
   }
   if (strcmp(key, "block_ptrace") == 0 || strcmp(key, "block-ptrace") == 0) {
-    cfg->block_ptrace = parse_bool(value);
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid block_ptrace '%s' (use true/false)\n",
+              filepath, lineno, value);
+      return -1;
+    }
+    cfg->block_ptrace = parsed;
     return 0;
   }
   if (strcmp(key, "strict_modules") == 0 ||
       strcmp(key, "strict-modules") == 0) {
-    cfg->strict_modules = parse_bool(value);
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid strict_modules '%s' (use true/false)\n",
+              filepath, lineno, value);
+      return -1;
+    }
+    cfg->strict_modules = parsed;
     return 0;
   }
   if (strcmp(key, "block_anon_exec") == 0 ||
       strcmp(key, "block-anon-exec") == 0) {
-    cfg->block_anon_exec = parse_bool(value);
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid block_anon_exec '%s' (use true/false)\n",
+              filepath, lineno, value);
+      return -1;
+    }
+    cfg->block_anon_exec = parsed;
     return 0;
   }
 
@@ -200,7 +238,13 @@ static int apply_key(struct lota_config *cfg, const char *key,
 
   /* daemon */
   if (strcmp(key, "daemon") == 0) {
-    cfg->daemon = parse_bool(value);
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid daemon '%s' (use true/false)\n", filepath,
+              lineno, value);
+      return -1;
+    }
+    cfg->daemon = parsed;
     return 0;
   }
   if (strcmp(key, "pid_file") == 0 || strcmp(key, "pid-file") == 0) {
