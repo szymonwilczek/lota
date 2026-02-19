@@ -508,6 +508,11 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
           lota_info("SIGHUP received, reloading configuration");
 
           static struct lota_config new_cfg;
+          if (new_cfg.protect_pids) {
+            free(new_cfg.protect_pids);
+            new_cfg.protect_pids = NULL;
+            new_cfg.protect_pid_count = 0;
+          }
           config_init(&new_cfg);
           int reload_ret = config_load(&new_cfg, config_path);
           if (reload_ret < 0 && reload_ret != -ENOENT) {
@@ -574,15 +579,13 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             for (int k = 0; k < g_trust_lib_count; k++)
               bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
 
-            *cfg = new_cfg;
-
-            g_protect_pid_count = cfg->protect_pid_count;
+            g_protect_pid_count = new_cfg.protect_pid_count;
             if (g_protect_pid_count > 0) {
               g_protect_pids = realloc(g_protect_pids,
                                        g_protect_pid_count * sizeof(uint32_t));
               if (g_protect_pids) {
                 for (int k = 0; k < g_protect_pid_count; k++) {
-                  g_protect_pids[k] = cfg->protect_pids[k];
+                  g_protect_pids[k] = new_cfg.protect_pids[k];
                   if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
                     lota_warn("Failed to protect PID %u on reload",
                               g_protect_pids[k]);
@@ -599,13 +602,55 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             lota_info("Protected PIDs reloaded (%d entries)",
                       g_protect_pid_count);
 
-            g_trust_lib_count = cfg->trust_lib_count;
+            g_trust_lib_count = new_cfg.trust_lib_count;
             for (int k = 0; k < g_trust_lib_count; k++) {
-              g_trust_libs[k] = cfg->trust_libs[k];
+              g_trust_libs[k] = new_cfg.trust_libs[k];
               if (bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[k]) < 0)
                 lota_warn("Failed to trust lib %s on reload", g_trust_libs[k]);
             }
             lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
+
+            /* synchronize config snapshot without pointer aliasing */
+            memcpy(cfg->server, new_cfg.server, sizeof(cfg->server));
+            cfg->port = new_cfg.port;
+            memcpy(cfg->ca_cert, new_cfg.ca_cert, sizeof(cfg->ca_cert));
+            memcpy(cfg->pin_sha256, new_cfg.pin_sha256,
+                   sizeof(cfg->pin_sha256));
+            memcpy(cfg->bpf_path, new_cfg.bpf_path, sizeof(cfg->bpf_path));
+            memcpy(cfg->mode, new_cfg.mode, sizeof(cfg->mode));
+            cfg->strict_mmap = new_cfg.strict_mmap;
+            cfg->block_ptrace = new_cfg.block_ptrace;
+            cfg->strict_modules = new_cfg.strict_modules;
+            cfg->block_anon_exec = new_cfg.block_anon_exec;
+            cfg->attest_interval = new_cfg.attest_interval;
+            cfg->aik_ttl = new_cfg.aik_ttl;
+            cfg->aik_handle = new_cfg.aik_handle;
+            cfg->daemon = new_cfg.daemon;
+            memcpy(cfg->pid_file, new_cfg.pid_file, sizeof(cfg->pid_file));
+            memcpy(cfg->signing_key, new_cfg.signing_key,
+                   sizeof(cfg->signing_key));
+            memcpy(cfg->policy_pubkey, new_cfg.policy_pubkey,
+                   sizeof(cfg->policy_pubkey));
+            cfg->trust_lib_count = new_cfg.trust_lib_count;
+            memcpy(cfg->trust_libs, new_cfg.trust_libs,
+                   sizeof(cfg->trust_libs));
+            memcpy(cfg->log_level, new_cfg.log_level, sizeof(cfg->log_level));
+
+            free(cfg->protect_pids);
+            cfg->protect_pids = NULL;
+            cfg->protect_pid_count = 0;
+            if (new_cfg.protect_pid_count > 0) {
+              cfg->protect_pids =
+                  malloc(new_cfg.protect_pid_count * sizeof(uint32_t));
+              if (!cfg->protect_pids) {
+                lota_warn("Failed to update config snapshot protected PIDs");
+              } else {
+                memcpy(cfg->protect_pids, new_cfg.protect_pids,
+                       new_cfg.protect_pid_count * sizeof(uint32_t));
+                cfg->protect_pid_count = new_cfg.protect_pid_count;
+              }
+            }
+
             sdnotify_ready();
             sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
             lota_info("Configuration reloaded");
