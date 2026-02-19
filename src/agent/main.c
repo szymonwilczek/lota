@@ -561,44 +561,109 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
               }
             }
 
-            if (new_cfg.strict_mmap != strict_mmap) {
-              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
-                                        new_cfg.strict_mmap ? 1 : 0) == 0) {
-                strict_mmap = new_cfg.strict_mmap;
-                lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
-              } else {
-                lota_warn("Failed to apply strict mmap on reload");
-              }
-            }
+            {
+              bool old_strict_mmap = strict_mmap;
+              bool old_block_ptrace = block_ptrace;
+              bool old_strict_modules = strict_modules;
+              bool old_block_anon_exec = block_anon_exec;
+              bool runtime_flags_failed = false;
 
-            if (new_cfg.block_ptrace != block_ptrace) {
-              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
-                                        new_cfg.block_ptrace ? 1 : 0) == 0) {
-                block_ptrace = new_cfg.block_ptrace;
-                lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
-              } else {
-                lota_warn("Failed to apply block ptrace on reload");
+              if (new_cfg.strict_mmap != strict_mmap) {
+                if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+                                          new_cfg.strict_mmap ? 1 : 0) == 0) {
+                  strict_mmap = new_cfg.strict_mmap;
+                } else {
+                  lota_warn("Failed to apply strict mmap on reload");
+                  runtime_flags_failed = true;
+                }
               }
-            }
 
-            if (new_cfg.strict_modules != strict_modules) {
-              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
-                                        new_cfg.strict_modules ? 1 : 0) == 0) {
-                strict_modules = new_cfg.strict_modules;
-                lota_info("Strict modules: %s", strict_modules ? "ON" : "OFF");
-              } else {
-                lota_warn("Failed to apply strict modules on reload");
+              if (!runtime_flags_failed &&
+                  new_cfg.block_ptrace != block_ptrace) {
+                if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+                                          new_cfg.block_ptrace ? 1 : 0) == 0) {
+                  block_ptrace = new_cfg.block_ptrace;
+                } else {
+                  lota_warn("Failed to apply block ptrace on reload");
+                  runtime_flags_failed = true;
+                }
               }
-            }
 
-            if (new_cfg.block_anon_exec != block_anon_exec) {
-              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
-                                        new_cfg.block_anon_exec ? 1 : 0) == 0) {
-                block_anon_exec = new_cfg.block_anon_exec;
-                lota_info("Block anonymous exec: %s",
-                          block_anon_exec ? "ON" : "OFF");
+              if (!runtime_flags_failed &&
+                  new_cfg.strict_modules != strict_modules) {
+                if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+                                          new_cfg.strict_modules ? 1 : 0) ==
+                    0) {
+                  strict_modules = new_cfg.strict_modules;
+                } else {
+                  lota_warn("Failed to apply strict modules on reload");
+                  runtime_flags_failed = true;
+                }
+              }
+
+              if (!runtime_flags_failed &&
+                  new_cfg.block_anon_exec != block_anon_exec) {
+                if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+                                          new_cfg.block_anon_exec ? 1 : 0) ==
+                    0) {
+                  block_anon_exec = new_cfg.block_anon_exec;
+                } else {
+                  lota_warn("Failed to apply block anonymous exec on reload");
+                  runtime_flags_failed = true;
+                }
+              }
+
+              if (runtime_flags_failed) {
+                if (strict_mmap != old_strict_mmap) {
+                  if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+                                            old_strict_mmap ? 1 : 0) == 0) {
+                    strict_mmap = old_strict_mmap;
+                  } else {
+                    lota_warn("Failed to rollback strict mmap after reload "
+                              "error");
+                  }
+                }
+                if (block_ptrace != old_block_ptrace) {
+                  if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+                                            old_block_ptrace ? 1 : 0) == 0) {
+                    block_ptrace = old_block_ptrace;
+                  } else {
+                    lota_warn("Failed to rollback block ptrace after reload "
+                              "error");
+                  }
+                }
+                if (strict_modules != old_strict_modules) {
+                  if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+                                            old_strict_modules ? 1 : 0) == 0) {
+                    strict_modules = old_strict_modules;
+                  } else {
+                    lota_warn("Failed to rollback strict modules after reload "
+                              "error");
+                  }
+                }
+                if (block_anon_exec != old_block_anon_exec) {
+                  if (bpf_loader_set_config(&g_bpf_ctx,
+                                            LOTA_CFG_BLOCK_ANON_EXEC,
+                                            old_block_anon_exec ? 1 : 0) == 0) {
+                    block_anon_exec = old_block_anon_exec;
+                  } else {
+                    lota_warn("Failed to rollback block anonymous exec after "
+                              "reload error");
+                  }
+                }
+                lota_warn("Keeping previous runtime enforcement flags after "
+                          "reload errors");
               } else {
-                lota_warn("Failed to apply block anonymous exec on reload");
+                if (strict_mmap != old_strict_mmap)
+                  lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
+                if (block_ptrace != old_block_ptrace)
+                  lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+                if (strict_modules != old_strict_modules)
+                  lota_info("Strict modules: %s",
+                            strict_modules ? "ON" : "OFF");
+                if (block_anon_exec != old_block_anon_exec)
+                  lota_info("Block anonymous exec: %s",
+                            block_anon_exec ? "ON" : "OFF");
               }
             }
 
