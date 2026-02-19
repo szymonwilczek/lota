@@ -187,9 +187,18 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
-	// binding nonce = SHA-256(challenge_nonce || hardware_id)
-	var zeroHWID [types.HardwareIDSize]byte
-	bindingNonce := verify.ComputeBindingNonce(nonce, zeroHWID)
+	bindingReport := &types.AttestationReport{}
+	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	for i := 0; i < types.HashSize; i++ {
+		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
+		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
+	}
+	bindingReport.System.IOMMU.Vendor = 0x8086
+	bindingReport.System.IOMMU.Flags = 0x07
+	bindingReport.System.IOMMU.UnitCount = 2
+	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
+
+	bindingNonce := verify.ComputeBindingNonce(nonce, bindingReport)
 	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)

@@ -179,6 +179,20 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   report->tpm.pcr_mask = challenge->pcr_mask;
 
   /*
+   * report LSM enforcement mode
+   * this flag is part of nonce binding (signed by TPM quote extraData)
+   */
+  if (g_mode == LOTA_MODE_ENFORCE)
+    report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
+
+  /*
+   * report BPF LSM status
+   * this flag is part of nonce binding (signed by TPM quote extraData)
+   */
+  if (g_bpf_ctx.loaded)
+    report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
+
+  /*
    * Get hardware identity (SHA-256 of EK public key).
    * This provides a unique, immutable identifier for this TPM.
    * Used by verifier to detect unauthorized hardware changes.
@@ -193,16 +207,64 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
            ret == 1 ? "AIK (EK not available)" : "EK");
   }
 
+  /* system info: kernel hash */
+  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+  if (ret == 0) {
+    size_t kpath_len = strlen(kernel_path);
+    if (kpath_len >= sizeof(report->system.kernel_path))
+      kpath_len = sizeof(report->system.kernel_path) - 1;
+    memcpy(report->system.kernel_path, kernel_path, kpath_len);
+    report->system.kernel_path[kpath_len] = '\0';
+
+    ret = tpm_hash_file(kernel_path, report->system.kernel_hash);
+    if (ret == 0) {
+      report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
+    } else {
+      fprintf(stderr, "Warning: Failed to hash kernel\n");
+    }
+  }
+
   /*
-   * Compute binding nonce = SHA-256(challenge_nonce || hardware_id).
-   * This cryptographically binds the TPM quote to the hardware identity,
-   * preventing an attacker from zeroing hardware_id in the report
-   * to bypass revocation or re-register TOFU under a new identity.
+   * Agent self-hash: hash LOTA own binary for integrity verification.
+   * Verifier can compare this against known-good agent hashes.
+   */
+  {
+    char agent_path[PATH_MAX];
+    ssize_t len =
+        readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
+    if (len > 0) {
+      agent_path[len] = '\0';
+      ret = tpm_hash_file(agent_path, report->system.agent_hash);
+      if (ret == 0) {
+        printf("Agent binary hashed: %s\n", agent_path);
+      } else {
+        fprintf(stderr, "Warning: Failed to hash agent binary\n");
+      }
+    }
+  }
+
+  if (iommu_verify_full(&iommu_status))
+    report->header.flags |= LOTA_REPORT_FLAG_IOMMU_OK;
+  memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
+
+  /*
+   * Compute binding nonce = SHA-256(
+   *   challenge_nonce || hardware_id || signed_flags ||
+   *   kernel_hash || agent_hash || iommu_status
+   * ).
    */
   uint8_t binding_nonce[LOTA_NONCE_SIZE];
   {
     EVP_MD_CTX *md = EVP_MD_CTX_new();
     unsigned int md_len;
+    uint32_t signed_flags =
+        report->header.flags & ~LOTA_REPORT_FLAG_TPM_QUOTE_OK;
+    uint8_t flags_le[sizeof(signed_flags)];
+
+    flags_le[0] = (uint8_t)(signed_flags);
+    flags_le[1] = (uint8_t)(signed_flags >> 8);
+    flags_le[2] = (uint8_t)(signed_flags >> 16);
+    flags_le[3] = (uint8_t)(signed_flags >> 24);
 
     if (!md) {
       fprintf(stderr, "Failed to allocate EVP_MD_CTX\n");
@@ -212,6 +274,13 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
         EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) != 1 ||
         EVP_DigestUpdate(md, report->tpm.hardware_id, LOTA_HARDWARE_ID_SIZE) !=
             1 ||
+        EVP_DigestUpdate(md, flags_le, sizeof(flags_le)) != 1 ||
+        EVP_DigestUpdate(md, report->system.kernel_hash,
+                         sizeof(report->system.kernel_hash)) != 1 ||
+        EVP_DigestUpdate(md, report->system.agent_hash,
+                         sizeof(report->system.agent_hash)) != 1 ||
+        EVP_DigestUpdate(md, &report->system.iommu,
+                         sizeof(report->system.iommu)) != 1 ||
         EVP_DigestFinal_ex(md, binding_nonce, &md_len) != 1) {
       EVP_MD_CTX_free(md);
       fprintf(stderr, "Failed to compute binding nonce\n");
@@ -311,57 +380,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
 
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
-
-  /* system info: kernel hash */
-  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
-  if (ret == 0) {
-    size_t kpath_len = strlen(kernel_path);
-    if (kpath_len >= sizeof(report->system.kernel_path))
-      kpath_len = sizeof(report->system.kernel_path) - 1;
-    memcpy(report->system.kernel_path, kernel_path, kpath_len);
-    report->system.kernel_path[kpath_len] = '\0';
-
-    ret = tpm_hash_file(kernel_path, report->system.kernel_hash);
-    if (ret == 0) {
-      report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
-    } else {
-      fprintf(stderr, "Warning: Failed to hash kernel\n");
-    }
-  }
-
-  /*
-   * Agent self-hash: hash LOTA own binary for integrity verification.
-   * Verifier can compare this against known-good agent hashes.
-   */
-  {
-    char agent_path[PATH_MAX];
-    ssize_t len =
-        readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
-    if (len > 0) {
-      agent_path[len] = '\0';
-      ret = tpm_hash_file(agent_path, report->system.agent_hash);
-      if (ret == 0) {
-        printf("Agent binary hashed: %s\n", agent_path);
-      } else {
-        fprintf(stderr, "Warning: Failed to hash agent binary\n");
-      }
-    }
-  }
-
-  if (iommu_verify_full(&iommu_status)) {
-    report->header.flags |= LOTA_REPORT_FLAG_IOMMU_OK;
-  }
-  memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
-
-  /* report LSM enforcement mode */
-  if (g_mode == LOTA_MODE_ENFORCE) {
-    report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
-  }
-
-  /* report BPF LSM status */
-  if (g_bpf_ctx.loaded) {
-    report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
-  }
 
   return 0;
 }

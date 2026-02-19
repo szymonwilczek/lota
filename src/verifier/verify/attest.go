@@ -228,14 +228,47 @@ func GetNonceFromAttest(attestData []byte) ([]byte, error) {
 	return attest.ExtraData, nil
 }
 
-// computes SHA-256(challengeNonce || hardwareID) to cryptographically
-// bind the TPM quote to the hardware identity. Agent uses this as
-// qualifyingData for Esys_Quote, and the verifier reconstructs it from
-// the report fields to verify the TPMS_ATTEST extraData.
-func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, hardwareID [types.HardwareIDSize]byte) [types.NonceSize]byte {
+// computes SHA-256(
+//
+//	challengeNonce || hardwareID || signedFlags ||
+//	kernelHash || agentHash || iommuStatus
+//
+// )
+// to cryptographically bind TPM quote extraData to security-relevant
+// report fields that are otherwise not covered by the quote signature.
+// signedFlags is report.Header.Flags with FlagTPMQuoteOK masked out because
+// that bit is set only after quote generation.
+func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
+	var flagsLE [4]byte
+	signedFlags := uint32(0)
+	if report != nil {
+		signedFlags = report.Header.Flags &^ types.FlagTPMQuoteOK
+	}
+	binary.LittleEndian.PutUint32(flagsLE[:], signedFlags)
+
 	h := sha256.New()
 	h.Write(challengeNonce[:])
-	h.Write(hardwareID[:])
+	if report != nil {
+		h.Write(report.TPM.HardwareID[:])
+	} else {
+		h.Write(make([]byte, types.HardwareIDSize))
+	}
+	h.Write(flagsLE[:])
+	if report != nil {
+		h.Write(report.System.KernelHash[:])
+		h.Write(report.System.AgentHash[:])
+
+		var iommuHdr [12]byte
+		binary.LittleEndian.PutUint32(iommuHdr[0:4], report.System.IOMMU.Vendor)
+		binary.LittleEndian.PutUint32(iommuHdr[4:8], report.System.IOMMU.Flags)
+		binary.LittleEndian.PutUint32(iommuHdr[8:12], report.System.IOMMU.UnitCount)
+		h.Write(iommuHdr[:])
+		h.Write(report.System.IOMMU.CmdlineParam[:])
+	} else {
+		h.Write(make([]byte, types.HashSize))
+		h.Write(make([]byte, types.HashSize))
+		h.Write(make([]byte, 12+types.CmdlineParamMax))
+	}
 	var out [types.NonceSize]byte
 	copy(out[:], h.Sum(nil))
 	return out

@@ -69,12 +69,19 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
-	var zeroHWID [types.HardwareIDSize]byte
-	bindingHash := sha256.New()
-	bindingHash.Write(nonce[:])
-	bindingHash.Write(zeroHWID[:])
-	bindingNonce := bindingHash.Sum(nil)
-	attestData := createTPMSAttestWithNonce(bindingNonce, pcrDigest)
+	bindingReport := &types.AttestationReport{}
+	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	for i := 0; i < types.HashSize; i++ {
+		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
+		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
+	}
+	bindingReport.System.IOMMU.Vendor = 0x8086
+	bindingReport.System.IOMMU.Flags = 0x07
+	bindingReport.System.IOMMU.UnitCount = 2
+	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
+
+	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, integrationTestKey, crypto.SHA256, hash[:])
@@ -519,12 +526,10 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 	// compute PCR digest from values just written
 	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
 
-	var zeroHWID [types.HardwareIDSize]byte
-	bindingHash := sha256.New()
-	bindingHash.Write(nonce[:])
-	bindingHash.Write(zeroHWID[:])
-	bindingNonce := bindingHash.Sum(nil)
-	attestData := createTPMSAttestWithNonce(bindingNonce, pcrDigest)
+	bindingReport := &types.AttestationReport{}
+	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
+	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 

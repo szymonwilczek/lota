@@ -285,7 +285,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 		return errors.New("no attestation data - cannot verify nonce binding")
 	}
 
-	bindingNonce := ComputeBindingNonce(entry.nonce, report.TPM.HardwareID)
+	bindingNonce := ComputeBindingNonce(entry.nonce, report)
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	if err := VerifyNonceInAttest(attestData, bindingNonce[:]); err != nil {
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
