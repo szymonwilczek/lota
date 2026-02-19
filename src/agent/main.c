@@ -532,32 +532,44 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             }
 
             if (new_cfg.strict_mmap != strict_mmap) {
-              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
-                                    new_cfg.strict_mmap ? 1 : 0);
-              strict_mmap = new_cfg.strict_mmap;
-              lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
+              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+                                        new_cfg.strict_mmap ? 1 : 0) == 0) {
+                strict_mmap = new_cfg.strict_mmap;
+                lota_info("Strict mmap: %s", strict_mmap ? "ON" : "OFF");
+              } else {
+                lota_warn("Failed to apply strict mmap on reload");
+              }
             }
 
             if (new_cfg.block_ptrace != block_ptrace) {
-              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
-                                    new_cfg.block_ptrace ? 1 : 0);
-              block_ptrace = new_cfg.block_ptrace;
-              lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+                                        new_cfg.block_ptrace ? 1 : 0) == 0) {
+                block_ptrace = new_cfg.block_ptrace;
+                lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+              } else {
+                lota_warn("Failed to apply block ptrace on reload");
+              }
             }
 
             if (new_cfg.strict_modules != strict_modules) {
-              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
-                                    new_cfg.strict_modules ? 1 : 0);
-              strict_modules = new_cfg.strict_modules;
-              lota_info("Strict modules: %s", strict_modules ? "ON" : "OFF");
+              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+                                        new_cfg.strict_modules ? 1 : 0) == 0) {
+                strict_modules = new_cfg.strict_modules;
+                lota_info("Strict modules: %s", strict_modules ? "ON" : "OFF");
+              } else {
+                lota_warn("Failed to apply strict modules on reload");
+              }
             }
 
             if (new_cfg.block_anon_exec != block_anon_exec) {
-              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
-                                    new_cfg.block_anon_exec ? 1 : 0);
-              block_anon_exec = new_cfg.block_anon_exec;
-              lota_info("Block anonymous exec: %s",
-                        block_anon_exec ? "ON" : "OFF");
+              if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+                                        new_cfg.block_anon_exec ? 1 : 0) == 0) {
+                block_anon_exec = new_cfg.block_anon_exec;
+                lota_info("Block anonymous exec: %s",
+                          block_anon_exec ? "ON" : "OFF");
+              } else {
+                lota_warn("Failed to apply block anonymous exec on reload");
+              }
             }
 
             if (new_cfg.log_level[0] &&
@@ -617,11 +629,17 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             memcpy(cfg->pin_sha256, new_cfg.pin_sha256,
                    sizeof(cfg->pin_sha256));
             memcpy(cfg->bpf_path, new_cfg.bpf_path, sizeof(cfg->bpf_path));
-            memcpy(cfg->mode, new_cfg.mode, sizeof(cfg->mode));
-            cfg->strict_mmap = new_cfg.strict_mmap;
-            cfg->block_ptrace = new_cfg.block_ptrace;
-            cfg->strict_modules = new_cfg.strict_modules;
-            cfg->block_anon_exec = new_cfg.block_anon_exec;
+            if (mode == LOTA_MODE_ENFORCE)
+              snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+            else if (mode == LOTA_MODE_MAINTENANCE)
+              snprintf(cfg->mode, sizeof(cfg->mode), "maintenance");
+            else
+              snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
+
+            cfg->strict_mmap = strict_mmap;
+            cfg->block_ptrace = block_ptrace;
+            cfg->strict_modules = strict_modules;
+            cfg->block_anon_exec = block_anon_exec;
             cfg->attest_interval = new_cfg.attest_interval;
             cfg->aik_ttl = new_cfg.aik_ttl;
             cfg->aik_handle = new_cfg.aik_handle;
