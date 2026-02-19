@@ -507,16 +507,19 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
           sdnotify_reloading();
           lota_info("SIGHUP received, reloading configuration");
 
-          static struct lota_config new_cfg;
-          if (new_cfg.protect_pids) {
-            free(new_cfg.protect_pids);
-            new_cfg.protect_pids = NULL;
-            new_cfg.protect_pid_count = 0;
-          }
+          struct lota_config new_cfg;
           config_init(&new_cfg);
           int reload_ret = config_load(&new_cfg, config_path);
-          if (reload_ret < 0 && reload_ret != -ENOENT) {
+          if (reload_ret == -ENOENT) {
+            lota_warn("Config file not found on reload, keeping current state");
+            free(new_cfg.protect_pids);
+            sdnotify_ready();
+            continue;
+          }
+
+          if (reload_ret < 0) {
             lota_err("Failed to reload config: %s", strerror(-reload_ret));
+            free(new_cfg.protect_pids);
             sdnotify_ready();
           } else {
             int new_mode = parse_mode(new_cfg.mode);
@@ -663,6 +666,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             for (int k = 0; k < g_trust_lib_count; k++) {
               snprintf(cfg->trust_libs[k], sizeof(cfg->trust_libs[k]), "%s",
                        g_trust_libs[k]);
+              g_trust_libs[k] = cfg->trust_libs[k];
             }
             memcpy(cfg->log_level, new_cfg.log_level, sizeof(cfg->log_level));
 
@@ -680,6 +684,8 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                 cfg->protect_pid_count = g_protect_pid_count;
               }
             }
+
+            free(new_cfg.protect_pids);
 
             sdnotify_ready();
             sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
