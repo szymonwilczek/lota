@@ -16,6 +16,7 @@
 #include "attest.h"
 #include "config.h"
 #include "daemon.h"
+#include "dbus.h"
 #include "journal.h"
 #include "policy_sign.h"
 #include "sdnotify.h"
@@ -24,6 +25,8 @@
 #ifndef EAUTH
 #define EAUTH 80
 #endif
+
+extern struct dbus_context *g_dbus_ctx;
 
 const char *mode_to_string(int mode) {
   switch (mode) {
@@ -186,6 +189,14 @@ int handle_policy_ops(const char *gen_signing_key_prefix,
   }
 
   return -1; /* not handled */
+}
+
+void setup_dbus(struct ipc_context *ctx) {
+  g_dbus_ctx = dbus_init(ctx);
+  if (g_dbus_ctx)
+    ipc_set_dbus(ctx, g_dbus_ctx);
+  else
+    lota_warn("D-Bus unavailable, using socket IPC only");
 }
 
 void setup_container_listener(struct ipc_context *ctx) {

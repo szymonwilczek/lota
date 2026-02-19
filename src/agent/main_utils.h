@@ -17,6 +17,7 @@ int handle_policy_ops(const char *gen_signing_key_prefix,
                       const char *verify_policy_file,
                       const char *signing_key_path,
                       const char *policy_pubkey_path);
+void setup_dbus(struct ipc_context *ctx);
 void setup_container_listener(struct ipc_context *ctx);
 int ipc_init_or_activate(struct ipc_context *ctx);
 int self_measure(struct tpm_context *ctx);

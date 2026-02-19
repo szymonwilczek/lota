@@ -51,6 +51,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "steam_runtime.h"
+#include "test_servers.h"
 #include "tpm.h"
 
 #define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
@@ -89,20 +90,6 @@ static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
 static int g_no_hash_cache;
-
-/*
- * Set up D-Bus interface on the system bus.
- *
- * Non-fatal: if D-Bus is unavailable the agent continues with Unix socket IPC
- * only.
- */
-void setup_dbus(struct ipc_context *ctx) {
-  g_dbus_ctx = dbus_init(ctx);
-  if (g_dbus_ctx)
-    ipc_set_dbus(ctx, g_dbus_ctx);
-  else
-    lota_warn("D-Bus unavailable, using socket IPC only");
-}
 
 /*
  * Main daemon loop
@@ -465,108 +452,6 @@ cleanup_epoll:
   close(sfd);
   close(epoll_fd);
   return ret;
-}
-
-static int run_ipc_test_server(void) {
-  int ret;
-  uint64_t valid_until;
-  printf("=== IPC Test Server (Unsigned) ===\n\n");
-  printf("Starting IPC server for testing...\n");
-  ret = ipc_init_or_activate(&g_ipc_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
-    return 1;
-  }
-  setup_container_listener(&g_ipc_ctx);
-  setup_dbus(&g_ipc_ctx);
-
-  valid_until = (uint64_t)(time(NULL) + 3600);
-  ipc_update_status(&g_ipc_ctx,
-                    LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-                        LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-                    valid_until);
-  ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
-  ipc_record_attestation(&g_ipc_ctx, true);
-
-  printf("IPC server running (simulated ATTESTED state, no TPM).\n");
-  printf("Tokens will be UNSIGNED.\n");
-  printf("Press Ctrl+C to stop.\n\n");
-
-  sdnotify_ready();
-
-  while (g_running) {
-    ipc_process(&g_ipc_ctx, 1000);
-    dbus_process(g_dbus_ctx, 0);
-  }
-
-  sdnotify_stopping();
-  printf("\nShutting down IPC test server...\n");
-  dbus_cleanup(g_dbus_ctx);
-  ipc_cleanup(&g_ipc_ctx);
-  return 0;
-}
-
-static int run_signed_ipc_test_server(void) {
-  int ret;
-  uint64_t valid_until;
-  printf("=== IPC Test Server (Signed Tokens) ===\n\n");
-
-  printf("Initializing TPM...\n");
-  ret = tpm_init(&g_tpm_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
-    return 1;
-  }
-  printf("TPM initialized\n");
-
-  printf("Provisioning AIK...\n");
-  ret = tpm_provision_aik(&g_tpm_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
-    return 1;
-  }
-  printf("AIK ready\n\n");
-
-  printf("Starting IPC server...\n");
-  ret = ipc_init_or_activate(&g_ipc_ctx);
-  if (ret < 0) {
-    fprintf(stderr, "Failed to initialize IPC: %s\n", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
-    return 1;
-  }
-  setup_container_listener(&g_ipc_ctx);
-  setup_dbus(&g_ipc_ctx);
-
-  /* enable signed tokens with PCRs 0, 1, 14 */
-  ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
-              (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
-
-  valid_until = (uint64_t)(time(NULL) + 3600);
-  ipc_update_status(&g_ipc_ctx,
-                    LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-                        LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
-                    valid_until);
-  ipc_set_mode(&g_ipc_ctx, LOTA_MODE_MONITOR);
-  ipc_record_attestation(&g_ipc_ctx, true);
-
-  printf("IPC server running (simulated ATTESTED state).\n");
-  printf("Tokens will be SIGNED by TPM AIK!\n");
-  printf("Press Ctrl+C to stop.\n\n");
-
-  sdnotify_ready();
-
-  while (g_running) {
-    ipc_process(&g_ipc_ctx, 1000);
-    dbus_process(g_dbus_ctx, 0);
-  }
-
-  sdnotify_stopping();
-  printf("\nShutting down...\n");
-  dbus_cleanup(g_dbus_ctx);
-  ipc_cleanup(&g_ipc_ctx);
-  tpm_cleanup(&g_tpm_ctx);
-  return 0;
 }
 
 int main(int argc, char *argv[]) {
