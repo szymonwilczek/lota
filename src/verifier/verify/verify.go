@@ -150,6 +150,11 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	}
 }
 
+func aikStoreSupportsCertVerification(aikStore store.AIKStore) bool {
+	_, ok := aikStore.(*store.CertificateStore)
+	return ok
+}
+
 // releases resources held by the Verifier, including the
 // background cleanup goroutine in the nonce store
 func (v *Verifier) Close() {
@@ -323,6 +328,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			logging.Security(clog, "AIK rotated after expiry",
 				"fingerprint", fingerprint, "max_age", v.aikMaxAge)
 		} else {
+			if v.requireCert && !aikStoreSupportsCertVerification(v.aikStore) {
+				logging.Security(clog, "require-cert enabled but AIK store does not verify certificates",
+					"store_type", fmt.Sprintf("%T", v.aikStore))
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, errors.New("AIK certificate verification required but configured AIK store does not support certificate validation")
+			}
+
 			// first connection: extract certificates and register via TOFU
 			var aikCert, ekCert []byte
 			if report.TPM.AIKCertSize > 0 {
@@ -344,7 +357,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 			fingerprint := AIKFingerprint(aikPubKey)
 			if len(aikCert) > 0 || len(ekCert) > 0 {
-				clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+				if aikStoreSupportsCertVerification(v.aikStore) {
+					clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+				} else {
+					clog.Warn("AIK certificates provided but store does not verify certificates; TOFU fallback applied",
+						"fingerprint", fingerprint, "store_type", fmt.Sprintf("%T", v.aikStore))
+				}
 			} else if v.requireCert {
 				logging.Security(clog, "TOFU rejected: certificate required by policy",
 					"fingerprint", fingerprint)
