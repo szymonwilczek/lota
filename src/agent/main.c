@@ -1393,16 +1393,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* signal handlers: SIGTERM/SIGINT -> shutdown, SIGHUP -> reload */
-  {
-    int sig_ret = daemon_install_signals(&g_running, &g_reload);
-    if (sig_ret < 0) {
-      fprintf(stderr, "Failed to install signal handlers: %s\n",
-              strerror(-sig_ret));
-      return 1;
-    }
-  }
-
   /* policy signing operations */
   {
     int ret = handle_policy_ops(gen_signing_key_prefix, sign_policy_file,
