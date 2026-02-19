@@ -589,35 +589,66 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             }
 
             /* flush and reload */
-            for (int k = 0; k < g_protect_pid_count; k++)
-              bpf_loader_unprotect_pid(&g_bpf_ctx, g_protect_pids[k]);
+            int old_protect_pid_count = g_protect_pid_count;
+            uint32_t *old_protect_pids = g_protect_pids;
+            for (int k = 0; k < old_protect_pid_count; k++)
+              bpf_loader_unprotect_pid(&g_bpf_ctx, old_protect_pids[k]);
             for (int k = 0; k < g_trust_lib_count; k++)
               bpf_loader_untrust_lib(&g_bpf_ctx, g_trust_libs[k]);
 
-            g_protect_pid_count = new_cfg.protect_pid_count;
-            if (g_protect_pid_count > 0) {
-              uint32_t *new_pids = realloc(
-                  g_protect_pids, g_protect_pid_count * sizeof(uint32_t));
-              if (new_pids) {
-                g_protect_pids = new_pids;
+            if (new_cfg.protect_pid_count > 0) {
+              uint32_t *new_pids =
+                  malloc((size_t)new_cfg.protect_pid_count * sizeof(uint32_t));
+              if (!new_pids) {
+                lota_err(
+                    "Failed to allocate memory for protected PIDs on reload; "
+                    "restoring previous PID protection set");
+                for (int k = 0; k < old_protect_pid_count; k++) {
+                  if (bpf_loader_protect_pid(&g_bpf_ctx, old_protect_pids[k]) <
+                      0) {
+                    lota_warn("Failed to restore protected PID %u after reload "
+                              "allocation failure",
+                              old_protect_pids[k]);
+                  }
+                }
+              } else {
                 int applied_pids = 0;
-                for (int k = 0; k < g_protect_pid_count; k++) {
+                bool apply_failed = false;
+                for (int k = 0; k < new_cfg.protect_pid_count; k++) {
                   uint32_t pid = new_cfg.protect_pids[k];
                   if (bpf_loader_protect_pid(&g_bpf_ctx, pid) < 0) {
                     lota_warn("Failed to protect PID %u on reload", pid);
-                    continue;
+                    apply_failed = true;
+                    break;
                   }
-                  g_protect_pids[applied_pids++] = pid;
+                  new_pids[applied_pids++] = pid;
                 }
-                g_protect_pid_count = applied_pids;
-              } else {
-                lota_err(
-                    "Failed to allocate memory for protected PIDs on reload");
-                g_protect_pid_count = 0;
+
+                if (apply_failed) {
+                  for (int k = 0; k < applied_pids; k++)
+                    bpf_loader_unprotect_pid(&g_bpf_ctx, new_pids[k]);
+                  for (int k = 0; k < old_protect_pid_count; k++) {
+                    if (bpf_loader_protect_pid(&g_bpf_ctx,
+                                               old_protect_pids[k]) < 0) {
+                      lota_warn(
+                          "Failed to restore protected PID %u after reload "
+                          "apply failure",
+                          old_protect_pids[k]);
+                    }
+                  }
+                  free(new_pids);
+                  lota_warn("Keeping previous protected PID set after reload "
+                            "errors");
+                } else {
+                  free(old_protect_pids);
+                  g_protect_pids = new_pids;
+                  g_protect_pid_count = applied_pids;
+                }
               }
             } else {
-              free(g_protect_pids);
+              free(old_protect_pids);
               g_protect_pids = NULL;
+              g_protect_pid_count = 0;
             }
             lota_info("Protected PIDs reloaded (%d entries)",
                       g_protect_pid_count);
