@@ -1256,6 +1256,11 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Invalid PID: %s\n", optarg);
         return 1;
       }
+      if (g_protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
+        fprintf(stderr, "Too many --protect-pid entries (max %d)\n",
+                LOTA_MAX_PROTECTED_PIDS);
+        return 1;
+      }
       uint32_t *new_pids =
           realloc(g_protect_pids, (g_protect_pid_count + 1) * sizeof(uint32_t));
       if (!new_pids) {
@@ -1273,6 +1278,7 @@ int main(int argc, char *argv[]) {
       } else {
         fprintf(stderr, "Too many --trust-lib entries (max %d)\n",
                 LOTA_CONFIG_MAX_LIBS);
+        return 1;
       }
       break;
     case 'd':

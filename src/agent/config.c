@@ -6,6 +6,7 @@
  */
 
 #include "config.h"
+#include "lota.h"
 #include "tpm.h"
 
 #include <ctype.h>
@@ -219,11 +220,15 @@ static int apply_key(struct lota_config *cfg, const char *key,
 
   /* lists */
   if (strcmp(key, "trust_lib") == 0 || strcmp(key, "trust-lib") == 0) {
-    if (cfg->trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
-      set_str(cfg->trust_libs[cfg->trust_lib_count], sizeof(cfg->trust_libs[0]),
-              value);
-      cfg->trust_lib_count++;
+    if (cfg->trust_lib_count >= LOTA_CONFIG_MAX_LIBS) {
+      fprintf(stderr, "%s:%d: too many trust_lib entries (max %d)\n", filepath,
+              lineno, LOTA_CONFIG_MAX_LIBS);
+      return -1;
     }
+
+    set_str(cfg->trust_libs[cfg->trust_lib_count], sizeof(cfg->trust_libs[0]),
+            value);
+    cfg->trust_lib_count++;
     return 0;
   }
   if (strcmp(key, "protect_pid") == 0 || strcmp(key, "protect-pid") == 0) {
@@ -231,6 +236,12 @@ static int apply_key(struct lota_config *cfg, const char *key,
     if (safe_parse_long(value, &v) != 0 || v <= 0 || v > (long)UINT32_MAX) {
       fprintf(stderr, "%s:%d: invalid protect_pid '%s'\n", filepath, lineno,
               value);
+      return -1;
+    }
+
+    if (cfg->protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
+      fprintf(stderr, "%s:%d: too many protect_pid entries (max %d)\n",
+              filepath, lineno, LOTA_MAX_PROTECTED_PIDS);
       return -1;
     }
 
