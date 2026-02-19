@@ -1296,6 +1296,69 @@ int main(int argc, char *argv[]) {
   }
 
   if (dump_config_flag) {
+    snprintf(cfg.server, sizeof(cfg.server), "%s", server_addr);
+    cfg.port = server_port;
+    if (ca_cert_path)
+      snprintf(cfg.ca_cert, sizeof(cfg.ca_cert), "%s", ca_cert_path);
+    else
+      cfg.ca_cert[0] = '\0';
+    if (pin_sha256_hex)
+      snprintf(cfg.pin_sha256, sizeof(cfg.pin_sha256), "%s", pin_sha256_hex);
+    else
+      cfg.pin_sha256[0] = '\0';
+
+    snprintf(cfg.bpf_path, sizeof(cfg.bpf_path), "%s", bpf_path);
+    if (mode == LOTA_MODE_ENFORCE)
+      snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
+    else if (mode == LOTA_MODE_MAINTENANCE)
+      snprintf(cfg.mode, sizeof(cfg.mode), "maintenance");
+    else
+      snprintf(cfg.mode, sizeof(cfg.mode), "monitor");
+
+    cfg.strict_mmap = strict_mmap;
+    cfg.block_ptrace = block_ptrace;
+    cfg.strict_modules = strict_modules;
+    cfg.block_anon_exec = block_anon_exec;
+    cfg.attest_interval = attest_interval;
+    cfg.aik_ttl = aik_ttl;
+    cfg.aik_handle = g_tpm_ctx.aik_handle;
+    cfg.daemon = daemon_flag ? true : false;
+    snprintf(cfg.pid_file, sizeof(cfg.pid_file), "%s", pid_file_path);
+
+    if (signing_key_path)
+      snprintf(cfg.signing_key, sizeof(cfg.signing_key), "%s",
+               signing_key_path);
+    else
+      cfg.signing_key[0] = '\0';
+
+    if (policy_pubkey_path)
+      snprintf(cfg.policy_pubkey, sizeof(cfg.policy_pubkey), "%s",
+               policy_pubkey_path);
+    else
+      cfg.policy_pubkey[0] = '\0';
+
+    cfg.trust_lib_count = g_trust_lib_count;
+    for (int i = 0; i < g_trust_lib_count; i++) {
+      snprintf(cfg.trust_libs[i], sizeof(cfg.trust_libs[i]), "%s",
+               g_trust_libs[i]);
+    }
+
+    free(cfg.protect_pids);
+    cfg.protect_pids = NULL;
+    cfg.protect_pid_count = 0;
+    if (g_protect_pid_count > 0) {
+      cfg.protect_pids = malloc(g_protect_pid_count * sizeof(uint32_t));
+      if (!cfg.protect_pids) {
+        fprintf(
+            stderr,
+            "Warning: failed to allocate protect_pid list for dump-config\n");
+      } else {
+        memcpy(cfg.protect_pids, g_protect_pids,
+               g_protect_pid_count * sizeof(uint32_t));
+        cfg.protect_pid_count = g_protect_pid_count;
+      }
+    }
+
     config_dump(&cfg, stdout);
     return 0;
   }
