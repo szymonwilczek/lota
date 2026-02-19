@@ -186,29 +186,28 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
 
 unsigned long resolve_kernel_symbol(const char *name);
 
+struct bpf_extended_stats {
+  uint64_t total_execs;
+  uint64_t events_sent;
+  uint64_t errors;
+  uint64_t drops;
+  uint64_t modules_blocked;
+  uint64_t mmap_execs;
+  uint64_t mmap_blocked;
+  uint64_t ptrace_attempts;
+  uint64_t ptrace_blocked;
+  uint64_t setuid_events;
+};
+
 /*
  * bpf_loader_get_extended_stats - Get all statistics including new hooks
  * @ctx: Loaded context
- * @total_execs: Output - total exec events
- * @events_sent: Output - events sent to ring buffer
- * @errors: Output - error count
- * @drops: Output - ring buffer drops
- * @modules_blocked: Output - modules blocked
- * @mmap_execs: Output - executable mmaps
- * @mmap_blocked: Output - mmaps blocked
- * @ptrace_attempts: Output - ptrace attempts
- * @ptrace_blocked: Output - ptrace blocked
- * @setuid_events: Output - setuid transitions
- *
- * Any output pointer may be NULL if that stat is not needed.
+ * @stats: Output statistics structure
  *
  * Returns: 0 on success, negative errno on failure
  */
-int bpf_loader_get_extended_stats(
-    struct bpf_loader_ctx *ctx, uint64_t *total_execs, uint64_t *events_sent,
-    uint64_t *errors, uint64_t *drops, uint64_t *modules_blocked,
-    uint64_t *mmap_execs, uint64_t *mmap_blocked, uint64_t *ptrace_attempts,
-    uint64_t *ptrace_blocked, uint64_t *setuid_events);
+int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
+                                  struct bpf_extended_stats *stats);
 
 /*
  * bpf_loader_cleanup - Unload BPF program and clean up

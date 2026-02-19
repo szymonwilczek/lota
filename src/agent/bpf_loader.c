@@ -451,34 +451,21 @@ static int read_stat(int stats_fd, uint32_t key, uint64_t *out) {
   return 0;
 }
 
-int bpf_loader_get_extended_stats(
-    struct bpf_loader_ctx *ctx, uint64_t *total_execs, uint64_t *events_sent,
-    uint64_t *errors, uint64_t *drops, uint64_t *modules_blocked,
-    uint64_t *mmap_execs, uint64_t *mmap_blocked, uint64_t *ptrace_attempts,
-    uint64_t *ptrace_blocked, uint64_t *setuid_events) {
-  if (!ctx || !ctx->loaded || ctx->stats_fd < 0)
+int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
+                                  struct bpf_extended_stats *stats) {
+  if (!ctx || !stats || !ctx->loaded || ctx->stats_fd < 0)
     return -EINVAL;
 
-  if (total_execs)
-    read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, total_execs);
-  if (events_sent)
-    read_stat(ctx->stats_fd, STAT_EVENTS_SENT, events_sent);
-  if (errors)
-    read_stat(ctx->stats_fd, STAT_ERRORS, errors);
-  if (drops)
-    read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, drops);
-  if (modules_blocked)
-    read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, modules_blocked);
-  if (mmap_execs)
-    read_stat(ctx->stats_fd, STAT_MMAP_EXECS, mmap_execs);
-  if (mmap_blocked)
-    read_stat(ctx->stats_fd, STAT_MMAP_BLOCKED, mmap_blocked);
-  if (ptrace_attempts)
-    read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, ptrace_attempts);
-  if (ptrace_blocked)
-    read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, ptrace_blocked);
-  if (setuid_events)
-    read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, setuid_events);
+  read_stat(ctx->stats_fd, STAT_TOTAL_EXECS, &stats->total_execs);
+  read_stat(ctx->stats_fd, STAT_EVENTS_SENT, &stats->events_sent);
+  read_stat(ctx->stats_fd, STAT_ERRORS, &stats->errors);
+  read_stat(ctx->stats_fd, STAT_RINGBUF_DROPS, &stats->drops);
+  read_stat(ctx->stats_fd, STAT_MODULES_BLOCKED, &stats->modules_blocked);
+  read_stat(ctx->stats_fd, STAT_MMAP_EXECS, &stats->mmap_execs);
+  read_stat(ctx->stats_fd, STAT_MMAP_BLOCKED, &stats->mmap_blocked);
+  read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, &stats->ptrace_attempts);
+  read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, &stats->ptrace_blocked);
+  read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, &stats->setuid_events);
 
   return 0;
 }

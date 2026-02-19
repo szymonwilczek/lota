@@ -93,20 +93,48 @@ static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
 static int g_no_hash_cache;
 
+struct run_daemon_params {
+  const char *bpf_path;
+  int mode;
+  bool strict_mmap;
+  bool block_ptrace;
+  bool strict_modules;
+  bool block_anon_exec;
+  const char *config_path;
+  struct lota_config *cfg;
+};
+
 /*
  * Main daemon loop
  */
 
-static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
-                      bool block_ptrace, bool strict_modules,
-                      bool block_anon_exec, const char *config_path,
-                      struct lota_config *cfg) {
+static int run_daemon(const struct run_daemon_params *params) {
   int ret, epoll_fd, sfd;
   uint32_t status_flags = 0;
   uint64_t wd_usec = 0;
   bool wd_enabled;
+  int mode;
+  bool strict_mmap;
+  bool block_ptrace;
+  bool strict_modules;
+  bool block_anon_exec;
+  const char *bpf_path;
+  const char *config_path;
+  struct lota_config *cfg;
   sigset_t mask;
   struct epoll_event ev;
+
+  if (!params)
+    return -EINVAL;
+
+  bpf_path = params->bpf_path;
+  mode = params->mode;
+  strict_mmap = params->strict_mmap;
+  block_ptrace = params->block_ptrace;
+  strict_modules = params->strict_modules;
+  block_anon_exec = params->block_anon_exec;
+  config_path = params->config_path;
+  cfg = params->cfg;
 
   lota_info("LOTA agent starting");
 
@@ -259,9 +287,19 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
   }
 
-  ret = agent_apply_startup_policy(
-      mode, strict_mmap, block_ptrace, strict_modules, block_anon_exec,
-      g_protect_pids, g_protect_pid_count, g_trust_libs, g_trust_lib_count);
+  struct agent_startup_policy startup_policy = {
+      .mode = mode,
+      .strict_mmap = strict_mmap,
+      .block_ptrace = block_ptrace,
+      .strict_modules = strict_modules,
+      .block_anon_exec = block_anon_exec,
+      .protect_pids = g_protect_pids,
+      .protect_pid_count = g_protect_pid_count,
+      .trust_libs = g_trust_libs,
+      .trust_lib_count = g_trust_lib_count,
+  };
+
+  ret = agent_apply_startup_policy(&startup_policy);
   if (ret < 0)
     goto cleanup_bpf;
 
@@ -307,16 +345,14 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
   sdnotify_stopping();
 
-  uint64_t total, sent, errs, drops;
-  uint64_t mblocked, mmexec, mmblock, ptratt, ptrblk, setuid_ev;
-  if (bpf_loader_get_extended_stats(&g_bpf_ctx, &total, &sent, &errs, &drops,
-                                    &mblocked, &mmexec, &mmblock, &ptratt,
-                                    &ptrblk, &setuid_ev) == 0) {
+  struct bpf_extended_stats stats;
+  if (bpf_loader_get_extended_stats(&g_bpf_ctx, &stats) == 0) {
     lota_info("Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
               "mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
               "ptrace=%lu ptrace_blocked=%lu setuid=%lu",
-              total, sent, errs, drops, mblocked, mmexec, mmblock, ptratt,
-              ptrblk, setuid_ev);
+              stats.total_execs, stats.events_sent, stats.errors, stats.drops,
+              stats.modules_blocked, stats.mmap_execs, stats.mmap_blocked,
+              stats.ptrace_attempts, stats.ptrace_blocked, stats.setuid_events);
   }
 
   {
@@ -745,9 +781,14 @@ int main(int argc, char *argv[]) {
 
   /* policy signing operations */
   {
-    int ret = handle_policy_ops(gen_signing_key_prefix, sign_policy_file,
-                                verify_policy_file, signing_key_path,
-                                policy_pubkey_path);
+    struct policy_ops_args policy_ops = {
+        .gen_signing_key_prefix = gen_signing_key_prefix,
+        .sign_policy_file = sign_policy_file,
+        .verify_policy_file = verify_policy_file,
+        .signing_key_path = signing_key_path,
+        .policy_pubkey_path = policy_pubkey_path,
+    };
+    int ret = handle_policy_ops(&policy_ops);
     if (ret != -1)
       return ret;
   }
@@ -802,8 +843,17 @@ int main(int argc, char *argv[]) {
   }
 
   {
-    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace,
-                         strict_modules, block_anon_exec, config_path, &cfg);
+    struct run_daemon_params run_params = {
+        .bpf_path = bpf_path,
+        .mode = mode,
+        .strict_mmap = strict_mmap,
+        .block_ptrace = block_ptrace,
+        .strict_modules = strict_modules,
+        .block_anon_exec = block_anon_exec,
+        .config_path = config_path,
+        .cfg = &cfg,
+    };
+    int ret = run_daemon(&run_params);
     pidfile_remove(pid_file_path, pid_fd);
     return ret;
   }

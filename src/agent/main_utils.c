@@ -119,18 +119,19 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf("  --help            Show this help\n");
 }
 
-int handle_policy_ops(const char *gen_signing_key_prefix,
-                      const char *sign_policy_file,
-                      const char *verify_policy_file,
-                      const char *signing_key_path,
-                      const char *policy_pubkey_path) {
-  if (gen_signing_key_prefix) {
+int handle_policy_ops(const struct policy_ops_args *args) {
+  if (!args)
+    return -1;
+
+  if (args->gen_signing_key_prefix) {
     char priv_path[PATH_MAX];
     char pub_path[PATH_MAX];
     int ret;
 
-    snprintf(priv_path, sizeof(priv_path), "%s.key", gen_signing_key_prefix);
-    snprintf(pub_path, sizeof(pub_path), "%s.pub", gen_signing_key_prefix);
+    snprintf(priv_path, sizeof(priv_path), "%s.key",
+             args->gen_signing_key_prefix);
+    snprintf(pub_path, sizeof(pub_path), "%s.pub",
+             args->gen_signing_key_prefix);
 
     ret = policy_sign_generate_keypair(priv_path, pub_path);
     if (ret < 0) {
@@ -143,44 +144,46 @@ int handle_policy_ops(const char *gen_signing_key_prefix,
     return 0;
   }
 
-  if (sign_policy_file) {
+  if (args->sign_policy_file) {
     char sig_path[PATH_MAX];
     int ret;
 
-    if (!signing_key_path) {
+    if (!args->signing_key_path) {
       fprintf(stderr, "--sign-policy requires --signing-key\n");
       return 1;
     }
 
-    snprintf(sig_path, sizeof(sig_path), "%s.sig", sign_policy_file);
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", args->sign_policy_file);
 
-    ret = policy_sign_file(sign_policy_file, signing_key_path, sig_path);
+    ret = policy_sign_file(args->sign_policy_file, args->signing_key_path,
+                           sig_path);
     if (ret < 0) {
       fprintf(stderr, "Failed to sign policy: %s\n", strerror(-ret));
       return 1;
     }
-    printf("Signed: %s\n", sign_policy_file);
+    printf("Signed: %s\n", args->sign_policy_file);
     printf("Signature: %s\n", sig_path);
     return 0;
   }
 
-  if (verify_policy_file) {
+  if (args->verify_policy_file) {
     char sig_path[PATH_MAX];
     int ret;
 
-    if (!policy_pubkey_path) {
+    if (!args->policy_pubkey_path) {
       fprintf(stderr, "--verify-policy requires --policy-pubkey\n");
       return 1;
     }
 
-    snprintf(sig_path, sizeof(sig_path), "%s.sig", verify_policy_file);
+    snprintf(sig_path, sizeof(sig_path), "%s.sig", args->verify_policy_file);
 
-    ret = policy_verify_file(verify_policy_file, policy_pubkey_path, sig_path);
+    ret = policy_verify_file(args->verify_policy_file, args->policy_pubkey_path,
+                             sig_path);
     if (ret == 0) {
-      printf("Signature valid: %s\n", verify_policy_file);
+      printf("Signature valid: %s\n", args->verify_policy_file);
       return 0;
     } else if (ret == -EAUTH) {
-      fprintf(stderr, "Signature INVALID: %s\n", verify_policy_file);
+      fprintf(stderr, "Signature INVALID: %s\n", args->verify_policy_file);
       return 1;
     } else {
       fprintf(stderr, "Verification failed: %s\n", strerror(-ret));
