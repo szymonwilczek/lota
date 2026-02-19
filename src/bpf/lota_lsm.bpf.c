@@ -147,6 +147,48 @@ static __always_inline u32 get_mode(void) {
 }
 
 /*
+ * Verify kernel integrity baseline directly from kernel memory.
+ * Returns 1 if baseline is satisfied, 0 otherwise.
+ */
+static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
+  int sig_enforce = 0;
+  int lockdown = 0;
+
+  if (!cfg)
+    return 0;
+
+  if (!cfg->sig_enforce_addr)
+    return 0;
+
+  if (bpf_probe_read_kernel(&sig_enforce, sizeof(sig_enforce),
+                            (void *)cfg->sig_enforce_addr) < 0)
+    return 0;
+
+  if (sig_enforce != 1) {
+    bpf_printk("LOTA: BLOCKING module load: sig_enforce=%d", sig_enforce);
+    return 0;
+  }
+
+  if (!cfg->lockdown_addr) {
+    bpf_printk("LOTA: BLOCKING module load: lockdown symbol unavailable");
+    return 0;
+  }
+
+  if (bpf_probe_read_kernel(&lockdown, sizeof(lockdown),
+                            (void *)cfg->lockdown_addr) < 0)
+    return 0;
+
+  if (lockdown <= 0) {
+    bpf_printk("LOTA: BLOCKING module load: lockdown=%d", lockdown);
+    return 0;
+  }
+
+  bpf_printk("LOTA: Integrity baseline OK: sig_enforce=1 lockdown=%d",
+             lockdown);
+  return 1;
+}
+
+/*
  * Scratch buffer for fs-verity digest.
  */
 struct digest_slot {
@@ -304,19 +346,9 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     struct integrity_data *integrity;
     integrity = bpf_map_lookup_elem(&integrity_config, &key);
 
-    if (integrity && id == READING_MODULE && integrity->sig_enforce_addr) {
-      int enforce = 0;
-      bpf_probe_read_kernel(&enforce, sizeof(enforce),
-                            (void *)integrity->sig_enforce_addr);
-      if (enforce == 0) {
-        /*
-         * signatures are NOT enforced
-         */
-        bpf_printk("LOTA: BLOCKING module load: sig_enforce=0");
+    if (id == READING_MODULE) {
+      if (!integrity_baseline_ok(integrity))
         blocked = 1;
-      } else {
-        bpf_printk("LOTA: Sig enforce checked: 1");
-      }
     }
 
     if (get_config(LOTA_CFG_STRICT_MODULES)) {
@@ -416,21 +448,9 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     struct integrity_data *integrity;
 
     integrity = bpf_map_lookup_elem(&integrity_config, &key);
-    if (integrity) {
-      if (id == LOADING_MODULE && integrity->sig_enforce_addr) {
-        int enforce = 0;
-        bpf_probe_read_kernel(&enforce, sizeof(enforce),
-                              (void *)integrity->sig_enforce_addr);
-        if (enforce == 0) {
-          /*
-           * signatures are NOT enforced
-           */
-          bpf_printk("LOTA: BLOCKING module load (mem): sig_enforce=0");
-          blocked = 1;
-        } else {
-          bpf_printk("LOTA: Module load allowed (mem): sig_enforce=1");
-        }
-      }
+    if (id == LOADING_MODULE) {
+      if (!integrity_baseline_ok(integrity))
+        blocked = 1;
     }
 
     if (id == LOADING_FIRMWARE || id == LOADING_KEXEC_IMAGE ||

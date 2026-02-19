@@ -177,6 +177,11 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
     unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
 
     if (!lockdown) {
+      /* fallback for kernels exposing internal lockdown state symbol */
+      lockdown = resolve_kernel_symbol("kernel_locked_down");
+    }
+
+    if (!lockdown) {
       /* fallback for older kernels */
       lockdown = resolve_kernel_symbol("security_lockdown_enabled");
     }
