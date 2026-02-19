@@ -89,7 +89,7 @@ int g_mode = LOTA_MODE_MONITOR;
 /* Runtime config from CLI */
 static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
-static const char *g_trust_libs[64];
+static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
 static int g_no_hash_cache;
 
@@ -630,7 +630,9 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                 lota_warn("Failed to trust lib %s on reload", lib);
                 continue;
               }
-              g_trust_libs[applied_libs++] = lib;
+              snprintf(g_trust_libs[applied_libs],
+                       sizeof(g_trust_libs[applied_libs]), "%s", lib);
+              applied_libs++;
             }
             g_trust_lib_count = applied_libs;
             lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
@@ -666,7 +668,6 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             for (int k = 0; k < g_trust_lib_count; k++) {
               snprintf(cfg->trust_libs[k], sizeof(cfg->trust_libs[k]), "%s",
                        g_trust_libs[k]);
-              g_trust_libs[k] = cfg->trust_libs[k];
             }
             memcpy(cfg->log_level, new_cfg.log_level, sizeof(cfg->log_level));
 
@@ -1134,7 +1135,7 @@ int main(int argc, char *argv[]) {
   }
   g_trust_lib_count = cfg.trust_lib_count;
   for (int i = 0; i < cfg.trust_lib_count; i++)
-    g_trust_libs[i] = cfg.trust_libs[i];
+    snprintf(g_trust_libs[i], sizeof(g_trust_libs[i]), "%s", cfg.trust_libs[i]);
 
   while ((opt = getopt_long(argc, argv,
                             "f:ZticSEaI:s:p:C:KF:b:m:MPJXR:L:dD:T:G:g:V:k:Q:Hh",
@@ -1234,10 +1235,13 @@ int main(int argc, char *argv[]) {
       g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
     } break;
     case 'L':
-      if (g_trust_lib_count < 64) {
-        g_trust_libs[g_trust_lib_count++] = optarg;
+      if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
+        snprintf(g_trust_libs[g_trust_lib_count],
+                 sizeof(g_trust_libs[g_trust_lib_count]), "%s", optarg);
+        g_trust_lib_count++;
       } else {
-        fprintf(stderr, "Too many --trust-lib entries (max 64)\n");
+        fprintf(stderr, "Too many --trust-lib entries (max %d)\n",
+                LOTA_CONFIG_MAX_LIBS);
       }
       break;
     case 'd':
