@@ -125,7 +125,7 @@ func TestMigrations_TablesExist(t *testing.T) {
 }
 
 func TestMigrations_IndexExists(t *testing.T) {
-	t.Log("TEST: Verifying used_nonces index exists")
+	t.Log("TEST: Verifying required indexes exist")
 
 	db, err := OpenDB(":memory:")
 	if err != nil {
@@ -133,15 +133,20 @@ func TestMigrations_IndexExists(t *testing.T) {
 	}
 	defer db.Close()
 
-	var name string
-	err = db.QueryRow(
-		"SELECT name FROM sqlite_master WHERE type='index' AND name='idx_used_nonces_used_at'",
-	).Scan(&name)
-	if err != nil {
-		t.Errorf("Index idx_used_nonces_used_at not found: %v", err)
+	for _, indexName := range []string{"idx_used_nonces_used_at", "idx_clients_aik_der_unique"} {
+		t.Run(indexName, func(t *testing.T) {
+			var name string
+			err = db.QueryRow(
+				"SELECT name FROM sqlite_master WHERE type='index' AND name=?",
+				indexName,
+			).Scan(&name)
+			if err != nil {
+				t.Errorf("Index %s not found: %v", indexName, err)
+			}
+		})
 	}
 
-	t.Log("✓ used_nonces index exists for efficient cleanup")
+	t.Log("✓ Required indexes exist")
 }
 
 func TestMigrations_PCR14Constraint(t *testing.T) {

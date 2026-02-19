@@ -144,6 +144,20 @@ func TestMemoryStore_RegisterDuplicateDifferentKey(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_GlobalAIKUniquenessAcrossClients(t *testing.T) {
+	store := NewMemoryStore()
+	key := generateTestKey(t)
+
+	if err := store.RegisterAIK("client1", &key.PublicKey); err != nil {
+		t.Fatalf("First RegisterAIK failed: %v", err)
+	}
+
+	err := store.RegisterAIK("client2", &key.PublicKey)
+	if !errors.Is(err, ErrAIKAlreadyRegistered) {
+		t.Fatalf("Expected ErrAIKAlreadyRegistered, got: %v", err)
+	}
+}
+
 func TestMemoryStore_ListClients(t *testing.T) {
 	store := NewMemoryStore()
 	key1 := generateTestKey(t)
@@ -225,6 +239,30 @@ func TestFileStore_Persistence(t *testing.T) {
 
 	if !publicKeysEqual(gotKey, &key.PublicKey) {
 		t.Error("Key not persisted correctly")
+	}
+}
+
+func TestFileStore_GlobalAIKUniquenessAcrossClients(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+
+	if err := store.RegisterAIK("client1", &key.PublicKey); err != nil {
+		t.Fatalf("First RegisterAIK failed: %v", err)
+	}
+
+	err = store.RegisterAIK("client2", &key.PublicKey)
+	if !errors.Is(err, ErrAIKAlreadyRegistered) {
+		t.Fatalf("Expected ErrAIKAlreadyRegistered, got: %v", err)
 	}
 }
 

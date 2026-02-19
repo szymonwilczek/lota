@@ -595,6 +595,11 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 			defer wg.Done()
 			clientID := fmt.Sprintf("concurrent-sqlite-%d", n)
 			pcr14 := [32]byte{byte(n)}
+			clientKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+			if keyErr != nil {
+				errCh <- fmt.Errorf("client %d: keygen: %w", n, keyErr)
+				return
+			}
 
 			// each client does 2 attestations
 			for j := 0; j < 2; j++ {
@@ -604,7 +609,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 					return
 				}
 
-				rep := createSQLiteTestReport(nil, clientID, ch.Nonce, pcr14)
+				rep := createSQLiteTestReportWithKey(nil, clientID, ch.Nonce, pcr14, clientKey)
 				result, err := verifier.VerifyReport(clientID, rep)
 				if err != nil || result.Result != types.VerifyOK {
 					errCh <- fmt.Errorf("client %d iter %d: verify: %v (result=%d)", n, j, err, result.Result)
@@ -681,6 +686,10 @@ func init() {
 }
 
 func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
+	return createSQLiteTestReportWithKey(t, clientID, nonce, pcr14, sqliteTestKey)
+}
+
+func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	if t != nil {
 		t.Helper()
 	}
@@ -730,7 +739,7 @@ func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14
 	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, sqliteTestKey, crypto.SHA256, hash[:])
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
 	if err != nil {
 		panic("failed to sign: " + err.Error())
 	}
@@ -748,7 +757,7 @@ func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14
 	offset += 2
 
 	// AIK public key
-	aikDER, _ := x509.MarshalPKIXPublicKey(&sqliteTestKey.PublicKey)
+	aikDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	copy(buf[offset:], aikDER)
 	offset += types.MaxAIKPubSize
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikDER)))

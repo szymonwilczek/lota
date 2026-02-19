@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,7 +31,11 @@ import (
 )
 
 // simulated TPM Attestation Identity Key shared across tests
-var testAIK *rsa.PrivateKey
+var (
+	testAIK      *rsa.PrivateKey
+	clientAIKMu  sync.Mutex
+	clientAIKMap = make(map[string]*rsa.PrivateKey)
+)
 
 func init() {
 	var err error
@@ -43,6 +48,23 @@ func init() {
 func persistentClientID(challengeID string) string {
 	hwID := sha256.Sum256([]byte(challengeID))
 	return hex.EncodeToString(hwID[:])
+}
+
+func getClientTestAIK(clientID string) *rsa.PrivateKey {
+	clientAIKMu.Lock()
+	defer clientAIKMu.Unlock()
+
+	if key, ok := clientAIKMap[clientID]; ok {
+		return key
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("failed to generate client test AIK: " + err.Error())
+	}
+
+	clientAIKMap[clientID] = key
+	return key
 }
 
 // creates a test verifier and HTTP mux for API testing
@@ -679,7 +701,7 @@ func TestIntegrationAPI_AttestationCounters(t *testing.T) {
 	pcr14 := [32]byte{0x14}
 
 	// successful attestation
-	code := attestClient(t, v, clientID, testAIK, pcr14)
+	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 	if code != types.VerifyOK {
 		t.Fatalf("Expected VerifyOK, got %d", code)
 	}
@@ -839,7 +861,7 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	clientID := "attested-client"
 	pcr14 := [32]byte{0x14, 0x15, 0x16}
 
-	code := attestClient(t, v, clientID, testAIK, pcr14)
+	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 	if code != types.VerifyOK {
 		t.Fatalf("Attestation failed with code %d", code)
 	}
@@ -895,7 +917,7 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	pcr14 := [32]byte{0x44}
 
 	for i := 0; i < 5; i++ {
-		code := attestClient(t, v, clientID, testAIK, pcr14)
+		code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 		if code != types.VerifyOK {
 			t.Fatalf("Attestation %d failed with code %d", i+1, code)
 		}
@@ -945,7 +967,7 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 	pcr14 := [32]byte{0x77}
 
 	for _, c := range clients {
-		code := attestClient(t, v, c, testAIK, pcr14)
+		code := attestClient(t, v, c, getClientTestAIK(c), pcr14)
 		if code != types.VerifyOK {
 			t.Fatalf("Attestation for %s failed: %d", c, code)
 		}
@@ -992,7 +1014,7 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 	}
 
 	// first attest with correct key to register AIK via TOFU
-	code := attestClient(t, v, clientID, testAIK, pcr14)
+	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 	if code != types.VerifyOK {
 		t.Fatalf("Initial TOFU attestation failed: %d", code)
 	}
@@ -1031,7 +1053,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	originalPCR14 := [32]byte{0xAA, 0xBB, 0xCC}
 
 	// establish baseline
-	code := attestClient(t, v, clientID, testAIK, originalPCR14)
+	code := attestClient(t, v, clientID, getClientTestAIK(clientID), originalPCR14)
 	if code != types.VerifyOK {
 		t.Fatalf("Baseline attestation failed: %d", code)
 	}
@@ -1039,7 +1061,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	// tampered PCR14
 	tamperedPCR14 := [32]byte{0xFF, 0xBB, 0xCC}
 	challenge, _ := v.GenerateChallenge(clientID)
-	report := buildSignedReport(t, clientID, challenge.Nonce, tamperedPCR14, testAIK)
+	report := buildSignedReport(t, clientID, challenge.Nonce, tamperedPCR14, getClientTestAIK(clientID))
 	result, _ := v.VerifyReport(clientID, report)
 
 	if result.Result != types.VerifyIntegrityMismatch {
@@ -1064,9 +1086,9 @@ func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
 	pcr14 := [32]byte{0x14}
 
 	// 3 successful attestations from 2 clients
-	attestClient(t, v, "prom-client-1", testAIK, pcr14)
-	attestClient(t, v, "prom-client-1", testAIK, pcr14)
-	attestClient(t, v, "prom-client-2", testAIK, pcr14)
+	attestClient(t, v, "prom-client-1", getClientTestAIK("prom-client-1"), pcr14)
+	attestClient(t, v, "prom-client-1", getClientTestAIK("prom-client-1"), pcr14)
+	attestClient(t, v, "prom-client-2", getClientTestAIK("prom-client-2"), pcr14)
 
 	// 1 failed attestation (garbage)
 	v.GenerateChallenge("prom-fail")
@@ -1142,7 +1164,7 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 	for i := 0; i < numClients; i++ {
 		go func(n int) {
 			clientID := fmt.Sprintf("concurrent-%d", n)
-			code := attestClient(t, v, clientID, testAIK, pcr14)
+			code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 			done <- (code == types.VerifyOK)
 		}(i)
 	}
@@ -1195,7 +1217,8 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 
 	// 3 successful
 	for i := 0; i < 3; i++ {
-		code := attestClient(t, v, fmt.Sprintf("success-%d", i), testAIK, pcr14)
+		clientID := fmt.Sprintf("success-%d", i)
+		code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 		if code != types.VerifyOK {
 			t.Fatalf("Attestation %d failed: %d", i, code)
 		}

@@ -243,6 +243,15 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 		return nil // same key, no-op
 	}
 
+	for existingClientID, existingKey := range fs.cache {
+		if existingClientID == clientID {
+			continue
+		}
+		if publicKeysEqual(existingKey, pubKey) {
+			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
+		}
+	}
+
 	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
@@ -314,6 +323,15 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 
 	if _, exists := fs.cache[clientID]; !exists {
 		return errors.New("client not registered")
+	}
+
+	for existingClientID, existingKey := range fs.cache {
+		if existingClientID == clientID {
+			continue
+		}
+		if publicKeysEqual(existingKey, newKey) {
+			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
+		}
 	}
 
 	keyBytes, err := x509.MarshalPKIXPublicKey(newKey)
@@ -455,6 +473,15 @@ func (ms *MemoryStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 		return nil
 	}
 
+	for existingClientID, existingKey := range ms.keys {
+		if existingClientID == clientID {
+			continue
+		}
+		if publicKeysEqual(existingKey, pubKey) {
+			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
+		}
+	}
+
 	ms.keys[clientID] = pubKey
 	ms.registeredAt[clientID] = time.Now()
 	return nil
@@ -493,6 +520,15 @@ func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 
 	if _, exists := ms.keys[clientID]; !exists {
 		return errors.New("client not registered")
+	}
+
+	for existingClientID, existingKey := range ms.keys {
+		if existingClientID == clientID {
+			continue
+		}
+		if publicKeysEqual(existingKey, newKey) {
+			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
+		}
 	}
 
 	ms.keys[clientID] = newKey
@@ -554,8 +590,9 @@ var (
 
 // hardware identity errors
 var (
-	ErrHardwareIDMismatch = errors.New("hardware identity mismatch - possible cloning or hardware change")
-	ErrHardwareIDNotFound = errors.New("hardware identity not registered")
+	ErrHardwareIDMismatch   = errors.New("hardware identity mismatch - possible cloning or hardware change")
+	ErrHardwareIDNotFound   = errors.New("hardware identity not registered")
+	ErrAIKAlreadyRegistered = errors.New("AIK already registered to another client")
 )
 
 // client ID validation error

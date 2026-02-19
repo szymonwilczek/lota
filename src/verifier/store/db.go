@@ -103,6 +103,13 @@ var migrations = []migration{
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
 		`,
 	},
+	{
+		version:     2,
+		description: "enforce global AIK uniqueness across clients",
+		sql: `
+			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

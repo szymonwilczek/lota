@@ -96,6 +96,17 @@ func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) err
 		return fmt.Errorf("failed to encode public key: %w", err)
 	}
 
+	var duplicateClientID string
+	err = s.db.QueryRow(
+		"SELECT id FROM clients WHERE aik_der = ? LIMIT 1", derBytes,
+	).Scan(&duplicateClientID)
+	if err == nil {
+		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, duplicateClientID)
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("failed to check global AIK uniqueness: %w", err)
+	}
+
 	_, err = s.db.Exec(
 		"INSERT INTO clients (id, aik_der) VALUES (?, ?)",
 		clientID, derBytes,
@@ -223,6 +234,17 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 	derBytes, err := x509.MarshalPKIXPublicKey(newKey)
 	if err != nil {
 		return fmt.Errorf("failed to encode new key: %w", err)
+	}
+
+	var duplicateClientID string
+	err = s.db.QueryRow(
+		"SELECT id FROM clients WHERE aik_der = ? AND id <> ? LIMIT 1", derBytes, clientID,
+	).Scan(&duplicateClientID)
+	if err == nil {
+		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, duplicateClientID)
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("failed to check global AIK uniqueness on rotation: %w", err)
 	}
 
 	result, err := s.db.Exec(

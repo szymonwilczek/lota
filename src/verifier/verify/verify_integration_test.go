@@ -467,7 +467,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 				pcr14[j] = byte(clientNum ^ j)
 			}
 
-			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, integrationTestKey)
+			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, clientKeys[clientNum])
 
 			result, err := verifier.VerifyReport(clientID, reportData)
 			if err != nil || result.Result != types.VerifyOK {

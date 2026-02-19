@@ -8,6 +8,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -98,6 +99,29 @@ func TestSQLiteAIK_DuplicateDifferentKey(t *testing.T) {
 	}
 
 	t.Log("✓ TOFU invariant enforced: different key rejected")
+}
+
+func TestSQLiteAIK_GlobalAIKUniquenessAcrossClients(t *testing.T) {
+	t.Log("SECURITY TEST: SQLite enforces global AIK uniqueness across clients")
+
+	store, cleanup := createTestSQLiteAIKStore(t)
+	defer cleanup()
+
+	key := generateTestKey(t)
+
+	if err := store.RegisterAIK("client-a", &key.PublicKey); err != nil {
+		t.Fatalf("First RegisterAIK failed: %v", err)
+	}
+
+	err := store.RegisterAIK("client-b", &key.PublicKey)
+	if err == nil {
+		t.Fatal("SECURITY: Accepted same AIK for two different clients")
+	}
+	if !errors.Is(err, ErrAIKAlreadyRegistered) {
+		t.Fatalf("Expected ErrAIKAlreadyRegistered, got: %v", err)
+	}
+
+	t.Log("✓ Global AIK uniqueness enforced")
 }
 
 func TestSQLiteAIK_ListClients(t *testing.T) {
