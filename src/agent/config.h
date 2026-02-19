@@ -27,7 +27,6 @@
 
 /* Maximum number of trust-lib / protect-pid entries */
 #define LOTA_CONFIG_MAX_LIBS 64
-#define LOTA_CONFIG_MAX_LIBS 64
 
 struct lota_config {
   /* Verifier connection */
@@ -41,6 +40,8 @@ struct lota_config {
   char mode[32]; /* "monitor", "enforce", "maintenance" */
   bool strict_mmap;
   bool block_ptrace;
+  bool strict_modules;
+  bool block_anon_exec;
 
   /* Attestation */
   int attest_interval; /* 0 = one-shot */

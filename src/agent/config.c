@@ -77,6 +77,8 @@ void config_init(struct lota_config *cfg) {
   set_str(cfg->mode, sizeof(cfg->mode), "monitor");
   cfg->strict_mmap = false;
   cfg->block_ptrace = false;
+  cfg->strict_modules = false;
+  cfg->block_anon_exec = false;
 
   cfg->attest_interval = 0;
   cfg->aik_ttl = 0;
@@ -147,6 +149,16 @@ static int apply_key(struct lota_config *cfg, const char *key,
   }
   if (strcmp(key, "block_ptrace") == 0 || strcmp(key, "block-ptrace") == 0) {
     cfg->block_ptrace = parse_bool(value);
+    return 0;
+  }
+  if (strcmp(key, "strict_modules") == 0 ||
+      strcmp(key, "strict-modules") == 0) {
+    cfg->strict_modules = parse_bool(value);
+    return 0;
+  }
+  if (strcmp(key, "block_anon_exec") == 0 ||
+      strcmp(key, "block-anon-exec") == 0) {
+    cfg->block_anon_exec = parse_bool(value);
     return 0;
   }
 
@@ -335,6 +347,9 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
   fprintf(fp, "mode = %s\n", cfg->mode);
   fprintf(fp, "strict_mmap = %s\n", cfg->strict_mmap ? "true" : "false");
   fprintf(fp, "block_ptrace = %s\n", cfg->block_ptrace ? "true" : "false");
+  fprintf(fp, "strict_modules = %s\n", cfg->strict_modules ? "true" : "false");
+  fprintf(fp, "block_anon_exec = %s\n",
+          cfg->block_anon_exec ? "true" : "false");
 
   fprintf(fp, "\n# Attestation\n");
   fprintf(fp, "attest_interval = %d\n", cfg->attest_interval);

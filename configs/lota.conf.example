@@ -40,6 +40,12 @@ strict_mmap = false
 # Block all ptrace attach attempts (requires enforce mode)
 block_ptrace = false
 
+# Enforce strict module/firmware loading checks (requires enforce mode)
+strict_modules = false
+
+# Block anonymous executable mappings (requires enforce mode)
+block_anon_exec = false
+
 # ---- Attestation ---------------------------------------------------------
 
 # Continuous attestation interval in seconds (0 = one-shot when --attest)

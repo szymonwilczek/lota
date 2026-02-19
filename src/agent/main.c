@@ -232,7 +232,8 @@ static const char *mode_to_string(int mode) {
 }
 
 static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
-                      bool block_ptrace, const char *config_path,
+                      bool block_ptrace, bool strict_modules,
+                      bool block_anon_exec, const char *config_path,
                       struct lota_config *cfg) {
   int ret, epoll_fd, sfd;
   uint32_t status_flags = 0;
@@ -421,6 +422,22 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
       lota_info("Global ptrace blocking: ON");
   }
 
+  if (strict_modules) {
+    ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES, 1);
+    if (ret < 0)
+      lota_warn("Failed to enable strict modules: %s", strerror(-ret));
+    else
+      lota_info("Strict modules enforcement: ON");
+  }
+
+  if (block_anon_exec) {
+    ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC, 1);
+    if (ret < 0)
+      lota_warn("Failed to enable anonymous exec blocking: %s", strerror(-ret));
+    else
+      lota_info("Anonymous executable mappings: BLOCKED");
+  }
+
   /* apply protected PIDs from CLI */
   for (int i = 0; i < g_protect_pid_count; i++) {
     ret = bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[i]);
@@ -521,6 +538,21 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                                     new_cfg.block_ptrace ? 1 : 0);
               block_ptrace = new_cfg.block_ptrace;
               lota_info("Block ptrace: %s", block_ptrace ? "ON" : "OFF");
+            }
+
+            if (new_cfg.strict_modules != strict_modules) {
+              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+                                    new_cfg.strict_modules ? 1 : 0);
+              strict_modules = new_cfg.strict_modules;
+              lota_info("Strict modules: %s", strict_modules ? "ON" : "OFF");
+            }
+
+            if (new_cfg.block_anon_exec != block_anon_exec) {
+              bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+                                    new_cfg.block_anon_exec ? 1 : 0);
+              block_anon_exec = new_cfg.block_anon_exec;
+              lota_info("Block anonymous exec: %s",
+                        block_anon_exec ? "ON" : "OFF");
             }
 
             if (new_cfg.log_level[0] &&
@@ -671,6 +703,10 @@ static void print_usage(const char *prog) {
   printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted libraries\n");
   printf("                    (requires --mode enforce)\n");
   printf("  --block-ptrace    Block all ptrace attach attempts\n");
+  printf("                    (requires --mode enforce)\n");
+  printf("  --strict-modules  Enforce strict module/firmware loading policy\n");
+  printf("                    (requires --mode enforce)\n");
+  printf("  --block-anon-exec Block anonymous executable mappings\n");
   printf("                    (requires --mode enforce)\n");
   printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
   printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
@@ -901,6 +937,8 @@ int main(int argc, char *argv[]) {
   int mode = LOTA_MODE_MONITOR;
   bool strict_mmap = false;
   bool block_ptrace = false;
+  bool strict_modules = false;
+  bool block_anon_exec = false;
   int daemon_flag = 0;
   const char *pid_file_path = NULL;
   int pid_fd = -1;
@@ -935,6 +973,8 @@ int main(int argc, char *argv[]) {
       {"mode", required_argument, 0, 'm'},
       {"strict-mmap", no_argument, 0, 'M'},
       {"block-ptrace", no_argument, 0, 'P'},
+      {"strict-modules", no_argument, 0, 'J'},
+      {"block-anon-exec", no_argument, 0, 'X'},
       {"protect-pid", required_argument, 0, 'R'},
       {"trust-lib", required_argument, 0, 'L'},
       {"daemon", no_argument, 0, 'd'},
@@ -987,6 +1027,8 @@ int main(int argc, char *argv[]) {
   }
   strict_mmap = cfg.strict_mmap;
   block_ptrace = cfg.block_ptrace;
+  strict_modules = cfg.strict_modules;
+  block_anon_exec = cfg.block_anon_exec;
   attest_interval = cfg.attest_interval;
   aik_ttl = cfg.aik_ttl;
   g_tpm_ctx.aik_handle = cfg.aik_handle;
@@ -1013,7 +1055,7 @@ int main(int argc, char *argv[]) {
     g_trust_libs[i] = cfg.trust_libs[i];
 
   while ((opt = getopt_long(argc, argv,
-                            "f:ZticSEaI:s:p:C:KF:b:m:MPR:L:dD:T:G:g:V:k:Q:Hh",
+                            "f:ZticSEaI:s:p:C:KF:b:m:MPJXR:L:dD:T:G:g:V:k:Q:Hh",
                             long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
@@ -1087,6 +1129,12 @@ int main(int argc, char *argv[]) {
       break;
     case 'P':
       block_ptrace = true;
+      break;
+    case 'J':
+      strict_modules = true;
+      break;
+    case 'X':
+      block_anon_exec = true;
       break;
     case 'R': {
       long v;
@@ -1253,8 +1301,8 @@ int main(int argc, char *argv[]) {
   }
 
   {
-    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace, config_path,
-                         &cfg);
+    int ret = run_daemon(bpf_path, mode, strict_mmap, block_ptrace,
+                         strict_modules, block_anon_exec, config_path, &cfg);
     pidfile_remove(pid_file_path, pid_fd);
     return ret;
   }
