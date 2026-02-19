@@ -13,24 +13,15 @@
 #include "reload.h"
 #include "sdnotify.h"
 
-int agent_run_event_loop(int epoll_fd, int sfd, bool wd_enabled,
-                         uint64_t wd_usec, const char *config_path,
-                         struct lota_config *cfg, int *mode, bool *strict_mmap,
-                         bool *block_ptrace, bool *strict_modules,
-                         bool *block_anon_exec, uint32_t **protect_pids,
-                         int *protect_pid_count, char trust_libs[][PATH_MAX],
-                         int *trust_lib_count, struct ipc_context *ipc_ctx,
-                         struct dbus_context *dbus_ctx,
-                         struct bpf_loader_ctx *bpf_ctx,
-                         volatile sig_atomic_t *running) {
+int agent_run_event_loop(struct agent_loop_ctx *ctx) {
   struct epoll_event events[16];
 
-  while (*running) {
+  while (*ctx->running) {
     int timeout = -1;
-    if (wd_enabled && wd_usec > 0)
-      timeout = (int)(wd_usec / 2000);
+    if (ctx->wd_enabled && ctx->wd_usec > 0)
+      timeout = (int)(ctx->wd_usec / 2000);
 
-    int nfds = epoll_wait(epoll_fd, events, 16, timeout);
+    int nfds = epoll_wait(ctx->epoll_fd, events, 16, timeout);
 
     if (nfds < 0) {
       if (errno == EINTR)
@@ -39,40 +30,42 @@ int agent_run_event_loop(int epoll_fd, int sfd, bool wd_enabled,
       break;
     }
 
-    if (nfds == 0 && wd_enabled) {
+    if (nfds == 0 && ctx->wd_enabled) {
       sdnotify_watchdog_ping();
       continue;
     }
 
     for (int i = 0; i < nfds; i++) {
-      if (events[i].data.fd == sfd) {
+      if (events[i].data.fd == ctx->sfd) {
         struct signalfd_siginfo fdsi;
-        ssize_t got = read(sfd, &fdsi, sizeof(struct signalfd_siginfo));
+        ssize_t got = read(ctx->sfd, &fdsi, sizeof(struct signalfd_siginfo));
         if (got != sizeof(struct signalfd_siginfo))
           continue;
 
         if (fdsi.ssi_signo == SIGTERM || fdsi.ssi_signo == SIGINT) {
           lota_info("Signal received, stopping...");
-          *running = 0;
+          *ctx->running = 0;
         } else if (fdsi.ssi_signo == SIGHUP) {
           sdnotify_reloading();
           lota_info("SIGHUP received, reloading configuration");
 
-          (void)agent_reload_config(
-              config_path, cfg, mode, strict_mmap, block_ptrace, strict_modules,
-              block_anon_exec, protect_pids, protect_pid_count, trust_libs,
-              trust_lib_count);
+          (void)agent_reload_config(ctx->config_path, ctx->cfg, ctx->mode,
+                                    ctx->strict_mmap, ctx->block_ptrace,
+                                    ctx->strict_modules, ctx->block_anon_exec,
+                                    ctx->protect_pids, ctx->protect_pid_count,
+                                    ctx->trust_libs, ctx->trust_lib_count);
         }
-      } else if (events[i].data.fd == ipc_get_fd(ipc_ctx)) {
-        ipc_process(ipc_ctx, 0);
-      } else if (dbus_ctx && events[i].data.fd == dbus_get_fd(dbus_ctx)) {
-        dbus_process(dbus_ctx, 0);
-      } else if (events[i].data.fd == bpf_loader_get_event_fd(bpf_ctx)) {
-        bpf_loader_consume(bpf_ctx);
+      } else if (events[i].data.fd == ipc_get_fd(ctx->ipc_ctx)) {
+        ipc_process(ctx->ipc_ctx, 0);
+      } else if (ctx->dbus_ctx &&
+                 events[i].data.fd == dbus_get_fd(ctx->dbus_ctx)) {
+        dbus_process(ctx->dbus_ctx, 0);
+      } else if (events[i].data.fd == bpf_loader_get_event_fd(ctx->bpf_ctx)) {
+        bpf_loader_consume(ctx->bpf_ctx);
       }
     }
 
-    if (wd_enabled)
+    if (ctx->wd_enabled)
       sdnotify_watchdog_ping();
   }
 

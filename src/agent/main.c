@@ -166,26 +166,26 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   if (ret < 0) {
     lota_err("Failed to initialize IPC: %s", strerror(-ret));
     goto cleanup_epoll;
-  } else {
-    ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
-    setup_container_listener(&g_ipc_ctx);
-    setup_dbus(&g_ipc_ctx);
+  }
 
-    /* IPC epoll fd to main loop */
-    int ipc_fd = ipc_get_fd(&g_ipc_ctx);
-    if (ipc_fd >= 0) {
+  ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
+  setup_container_listener(&g_ipc_ctx);
+  setup_dbus(&g_ipc_ctx);
+
+  /* IPC epoll fd to main loop */
+  int ipc_fd = ipc_get_fd(&g_ipc_ctx);
+  if (ipc_fd >= 0) {
+    ev.events = EPOLLIN;
+    ev.data.fd = ipc_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ipc_fd, &ev);
+  }
+
+  if (g_dbus_ctx) {
+    int dbus_fd = dbus_get_fd(g_dbus_ctx);
+    if (dbus_fd >= 0) {
       ev.events = EPOLLIN;
-      ev.data.fd = ipc_fd;
-      epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ipc_fd, &ev);
-    }
-
-    if (g_dbus_ctx) {
-      int dbus_fd = dbus_get_fd(g_dbus_ctx);
-      if (dbus_fd >= 0) {
-        ev.events = EPOLLIN;
-        ev.data.fd = dbus_fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dbus_fd, &ev);
-      }
+      ev.data.fd = dbus_fd;
+      epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dbus_fd, &ev);
     }
   }
 
@@ -278,11 +278,28 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
   lota_info("Monitoring binary executions (event-driven)");
 
-  ret = agent_run_event_loop(
-      epoll_fd, sfd, wd_enabled, wd_usec, config_path, cfg, &mode, &strict_mmap,
-      &block_ptrace, &strict_modules, &block_anon_exec, &g_protect_pids,
-      &g_protect_pid_count, g_trust_libs, &g_trust_lib_count, &g_ipc_ctx,
-      g_dbus_ctx, &g_bpf_ctx, &g_running);
+  struct agent_loop_ctx loop_ctx = {
+      .epoll_fd = epoll_fd,
+      .sfd = sfd,
+      .wd_enabled = wd_enabled,
+      .wd_usec = wd_usec,
+      .config_path = config_path,
+      .cfg = cfg,
+      .mode = &mode,
+      .strict_mmap = &strict_mmap,
+      .block_ptrace = &block_ptrace,
+      .strict_modules = &strict_modules,
+      .block_anon_exec = &block_anon_exec,
+      .protect_pids = &g_protect_pids,
+      .protect_pid_count = &g_protect_pid_count,
+      .trust_libs = g_trust_libs,
+      .trust_lib_count = &g_trust_lib_count,
+      .ipc_ctx = &g_ipc_ctx,
+      .dbus_ctx = g_dbus_ctx,
+      .bpf_ctx = &g_bpf_ctx,
+      .running = &g_running,
+  };
+  ret = agent_run_event_loop(&loop_ctx);
 
   /* clean shutdown via signal - do not propagate EINTR as failure */
   if (!g_running)
