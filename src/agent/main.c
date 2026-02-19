@@ -597,12 +597,16 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                   g_protect_pids, g_protect_pid_count * sizeof(uint32_t));
               if (new_pids) {
                 g_protect_pids = new_pids;
+                int applied_pids = 0;
                 for (int k = 0; k < g_protect_pid_count; k++) {
-                  g_protect_pids[k] = new_cfg.protect_pids[k];
-                  if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
-                    lota_warn("Failed to protect PID %u on reload",
-                              g_protect_pids[k]);
+                  uint32_t pid = new_cfg.protect_pids[k];
+                  if (bpf_loader_protect_pid(&g_bpf_ctx, pid) < 0) {
+                    lota_warn("Failed to protect PID %u on reload", pid);
+                    continue;
+                  }
+                  g_protect_pids[applied_pids++] = pid;
                 }
+                g_protect_pid_count = applied_pids;
               } else {
                 lota_err(
                     "Failed to allocate memory for protected PIDs on reload");
@@ -616,11 +620,16 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                       g_protect_pid_count);
 
             g_trust_lib_count = new_cfg.trust_lib_count;
+            int applied_libs = 0;
             for (int k = 0; k < g_trust_lib_count; k++) {
-              g_trust_libs[k] = new_cfg.trust_libs[k];
-              if (bpf_loader_trust_lib(&g_bpf_ctx, g_trust_libs[k]) < 0)
-                lota_warn("Failed to trust lib %s on reload", g_trust_libs[k]);
+              const char *lib = new_cfg.trust_libs[k];
+              if (bpf_loader_trust_lib(&g_bpf_ctx, lib) < 0) {
+                lota_warn("Failed to trust lib %s on reload", lib);
+                continue;
+              }
+              g_trust_libs[applied_libs++] = lib;
             }
+            g_trust_lib_count = applied_libs;
             lota_info("Trusted libs reloaded (%d entries)", g_trust_lib_count);
 
             /* synchronize config snapshot without pointer aliasing */
@@ -650,23 +659,25 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
                    sizeof(cfg->signing_key));
             memcpy(cfg->policy_pubkey, new_cfg.policy_pubkey,
                    sizeof(cfg->policy_pubkey));
-            cfg->trust_lib_count = new_cfg.trust_lib_count;
-            memcpy(cfg->trust_libs, new_cfg.trust_libs,
-                   sizeof(cfg->trust_libs));
+            cfg->trust_lib_count = g_trust_lib_count;
+            for (int k = 0; k < g_trust_lib_count; k++) {
+              snprintf(cfg->trust_libs[k], sizeof(cfg->trust_libs[k]), "%s",
+                       g_trust_libs[k]);
+            }
             memcpy(cfg->log_level, new_cfg.log_level, sizeof(cfg->log_level));
 
             free(cfg->protect_pids);
             cfg->protect_pids = NULL;
             cfg->protect_pid_count = 0;
-            if (new_cfg.protect_pid_count > 0) {
+            if (g_protect_pid_count > 0) {
               cfg->protect_pids =
-                  malloc(new_cfg.protect_pid_count * sizeof(uint32_t));
+                  malloc(g_protect_pid_count * sizeof(uint32_t));
               if (!cfg->protect_pids) {
                 lota_warn("Failed to update config snapshot protected PIDs");
               } else {
-                memcpy(cfg->protect_pids, new_cfg.protect_pids,
-                       new_cfg.protect_pid_count * sizeof(uint32_t));
-                cfg->protect_pid_count = new_cfg.protect_pid_count;
+                memcpy(cfg->protect_pids, g_protect_pids,
+                       g_protect_pid_count * sizeof(uint32_t));
+                cfg->protect_pid_count = g_protect_pid_count;
               }
             }
 
