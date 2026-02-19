@@ -214,8 +214,6 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
   ctx->misses++;
 
   return 0;
-
-  return 0;
 }
 
 void hash_verify_stats(const struct hash_verify_ctx *ctx, uint64_t *hits,

@@ -39,6 +39,10 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+#ifndef EPERM
+#define EPERM 1
+#endif
+
 /*
  * Ring buffer for sending events to user-space.
  * Size is defined in user-space when creating the map.
@@ -407,7 +411,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
   if (blocked) {
     inc_stat(STAT_MODULES_BLOCKED);
-    return -1; /* -EPERM */
+    return -EPERM;
   }
 
   return 0;
@@ -491,7 +495,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
 
   if (blocked) {
     inc_stat(STAT_MODULES_BLOCKED);
-    return -1; /* -EPERM */
+    return -EPERM;
   }
 
   return 0;
@@ -578,7 +582,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     if (anon_blocked) {
       inc_stat(STAT_ANON_EXEC_BLOCKED);
-      return -1; /* -EPERM */
+      return -EPERM;
     }
 
     return 0;
@@ -642,7 +646,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
   if (blocked) {
     inc_stat(STAT_MMAP_BLOCKED);
-    return -1; /* -EPERM */
+    return -EPERM;
   }
 
   return 0;
@@ -724,7 +728,7 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
   if (blocked) {
     inc_stat(STAT_PTRACE_BLOCKED);
-    return -1; /* -EPERM */
+    return -EPERM;
   }
 
   return 0;
