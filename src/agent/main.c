@@ -1296,18 +1296,24 @@ int main(int argc, char *argv[]) {
   }
 
   if (dump_config_flag) {
-    snprintf(cfg.server, sizeof(cfg.server), "%s", server_addr);
+    if (server_addr != cfg.server)
+      snprintf(cfg.server, sizeof(cfg.server), "%s", server_addr);
     cfg.port = server_port;
-    if (ca_cert_path)
-      snprintf(cfg.ca_cert, sizeof(cfg.ca_cert), "%s", ca_cert_path);
-    else
+    if (ca_cert_path) {
+      if (ca_cert_path != cfg.ca_cert)
+        snprintf(cfg.ca_cert, sizeof(cfg.ca_cert), "%s", ca_cert_path);
+    } else {
       cfg.ca_cert[0] = '\0';
-    if (pin_sha256_hex)
-      snprintf(cfg.pin_sha256, sizeof(cfg.pin_sha256), "%s", pin_sha256_hex);
-    else
+    }
+    if (pin_sha256_hex) {
+      if (pin_sha256_hex != cfg.pin_sha256)
+        snprintf(cfg.pin_sha256, sizeof(cfg.pin_sha256), "%s", pin_sha256_hex);
+    } else {
       cfg.pin_sha256[0] = '\0';
+    }
 
-    snprintf(cfg.bpf_path, sizeof(cfg.bpf_path), "%s", bpf_path);
+    if (bpf_path != cfg.bpf_path)
+      snprintf(cfg.bpf_path, sizeof(cfg.bpf_path), "%s", bpf_path);
     if (mode == LOTA_MODE_ENFORCE)
       snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
     else if (mode == LOTA_MODE_MAINTENANCE)
@@ -1323,19 +1329,24 @@ int main(int argc, char *argv[]) {
     cfg.aik_ttl = aik_ttl;
     cfg.aik_handle = g_tpm_ctx.aik_handle;
     cfg.daemon = daemon_flag ? true : false;
-    snprintf(cfg.pid_file, sizeof(cfg.pid_file), "%s", pid_file_path);
+    if (pid_file_path != cfg.pid_file)
+      snprintf(cfg.pid_file, sizeof(cfg.pid_file), "%s", pid_file_path);
 
-    if (signing_key_path)
-      snprintf(cfg.signing_key, sizeof(cfg.signing_key), "%s",
-               signing_key_path);
-    else
+    if (signing_key_path) {
+      if (signing_key_path != cfg.signing_key)
+        snprintf(cfg.signing_key, sizeof(cfg.signing_key), "%s",
+                 signing_key_path);
+    } else {
       cfg.signing_key[0] = '\0';
+    }
 
-    if (policy_pubkey_path)
-      snprintf(cfg.policy_pubkey, sizeof(cfg.policy_pubkey), "%s",
-               policy_pubkey_path);
-    else
+    if (policy_pubkey_path) {
+      if (policy_pubkey_path != cfg.policy_pubkey)
+        snprintf(cfg.policy_pubkey, sizeof(cfg.policy_pubkey), "%s",
+                 policy_pubkey_path);
+    } else {
       cfg.policy_pubkey[0] = '\0';
+    }
 
     cfg.trust_lib_count = g_trust_lib_count;
     for (int i = 0; i < g_trust_lib_count; i++) {
