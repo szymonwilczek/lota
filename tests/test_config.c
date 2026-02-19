@@ -486,6 +486,7 @@ static void test_config_load_protect_pids_multiple(void) {
     FAIL("pid values");
     return;
   }
+  free(cfg.protect_pids);
   PASS();
 }
 
@@ -723,7 +724,13 @@ static void test_config_dump_roundtrip(void) {
   snprintf(cfg1.log_level, sizeof(cfg1.log_level), "error");
   cfg1.trust_lib_count = 1;
   snprintf(cfg1.trust_libs[0], sizeof(cfg1.trust_libs[0]), "/usr/lib/foo.so");
+  /* allocate memory for PIDs */
   cfg1.protect_pid_count = 2;
+  cfg1.protect_pids = malloc(2 * sizeof(uint32_t));
+  if (!cfg1.protect_pids) {
+    FAIL("malloc failed");
+    return;
+  }
   cfg1.protect_pids[0] = 11;
   cfg1.protect_pids[1] = 22;
 
@@ -785,6 +792,8 @@ static void test_config_dump_roundtrip(void) {
     FAIL("protect_pids mismatch");
     return;
   }
+  free(cfg1.protect_pids);
+  free(cfg2.protect_pids);
   PASS();
 }
 

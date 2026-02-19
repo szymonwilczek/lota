@@ -85,6 +85,9 @@ void config_init(struct lota_config *cfg) {
   cfg->daemon = false;
   set_str(cfg->pid_file, sizeof(cfg->pid_file), "/run/lota/lota-agent.pid");
 
+  cfg->protect_pids = NULL;
+  cfg->protect_pid_count = 0;
+
   set_str(cfg->log_level, sizeof(cfg->log_level), "info");
 }
 
@@ -212,17 +215,22 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "protect_pid") == 0 || strcmp(key, "protect-pid") == 0) {
-    if (cfg->protect_pid_count >= LOTA_CONFIG_MAX_PIDS) {
-      fprintf(stderr, "%s:%d: protect_pid limit (%d) exceeded\n", filepath,
-              lineno, LOTA_CONFIG_MAX_PIDS);
-      return -1;
-    }
     long v;
     if (safe_parse_long(value, &v) != 0 || v <= 0 || v > (long)UINT32_MAX) {
       fprintf(stderr, "%s:%d: invalid protect_pid '%s'\n", filepath, lineno,
               value);
       return -1;
     }
+
+    uint32_t *new_pids = realloc(
+        cfg->protect_pids, (cfg->protect_pid_count + 1) * sizeof(uint32_t));
+    if (!new_pids) {
+      fprintf(stderr, "%s:%d: memory allocation failed for protect_pid\n",
+              filepath, lineno);
+      return -1;
+    }
+
+    cfg->protect_pids = new_pids;
     cfg->protect_pids[cfg->protect_pid_count++] = (uint32_t)v;
     return 0;
   }

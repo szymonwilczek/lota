@@ -27,7 +27,7 @@
 
 /* Maximum number of trust-lib / protect-pid entries */
 #define LOTA_CONFIG_MAX_LIBS 64
-#define LOTA_CONFIG_MAX_PIDS 64
+#define LOTA_CONFIG_MAX_LIBS 64
 
 struct lota_config {
   /* Verifier connection */
@@ -60,7 +60,7 @@ struct lota_config {
   int trust_lib_count;
 
   /* Protected PIDs */
-  uint32_t protect_pids[LOTA_CONFIG_MAX_PIDS];
+  uint32_t *protect_pids;
   int protect_pid_count;
 
   /* Log level: "debug", "info", "warn", "error" */

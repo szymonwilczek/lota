@@ -34,57 +34,6 @@
 #include "tpm.h"
 
 /*
- * Check kernel module security status.
- * Returns: bitmask of LOTA_REPORT_FLAG_* for module security
- *
- * Checks:
- *   - /sys/module/module/parameters/sig_enforce - module signature enforcement
- *   - /sys/kernel/security/lockdown - kernel lockdown mode
- *   - /sys/firmware/efi/efivars or dmesg for Secure Boot
- */
-static uint32_t check_module_security(void) {
-  uint32_t flags = 0;
-  char buf[64];
-  FILE *f;
-  ssize_t n;
-
-  f = fopen("/sys/module/module/parameters/sig_enforce", "r");
-  if (f) {
-    if (fgets(buf, sizeof(buf), f)) {
-      if (buf[0] == 'Y' || buf[0] == '1') {
-        flags |= LOTA_REPORT_FLAG_MODULE_SIG;
-      }
-    }
-    fclose(f);
-  }
-
-  f = fopen("/sys/kernel/security/lockdown", "r");
-  if (f) {
-    if (fgets(buf, sizeof(buf), f)) {
-      if (strstr(buf, "[integrity]") || strstr(buf, "[confidentiality]")) {
-        flags |= LOTA_REPORT_FLAG_LOCKDOWN;
-      }
-    }
-    fclose(f);
-  }
-
-  /* secure boot status via efi variable */
-  f = fopen("/sys/firmware/efi/efivars/"
-            "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
-            "rb");
-  if (f) {
-    uint8_t efi_buf[5];
-    n = fread(efi_buf, 1, sizeof(efi_buf), f);
-    if (n == 5 && efi_buf[4] == 1) {
-      flags |= LOTA_REPORT_FLAG_SECUREBOOT;
-    }
-    fclose(f);
-  }
-
-  return flags;
-}
-
-/*
  * Export a complete YAML policy from the current system state.
  *
  * Collects PCR values, binary hashes, and security feature flags,
@@ -188,14 +137,13 @@ int export_policy(int mode) {
 
   /* Security feature detection */
   {
-    uint32_t flags = check_module_security();
     struct iommu_status iommu_status;
 
     snap.iommu_enabled = iommu_verify_full(&iommu_status);
     snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
-    snap.module_sig = (flags & LOTA_REPORT_FLAG_MODULE_SIG) != 0;
-    snap.secureboot = (flags & LOTA_REPORT_FLAG_SECUREBOOT) != 0;
-    snap.lockdown = (flags & LOTA_REPORT_FLAG_LOCKDOWN) != 0;
+    snap.module_sig = false;
+    snap.secureboot = false;
+    snap.lockdown = false;
   }
 
   tpm_cleanup(&g_tpm_ctx);
@@ -404,8 +352,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     report->header.flags |= LOTA_REPORT_FLAG_IOMMU_OK;
   }
   memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
-
-  report->header.flags |= check_module_security();
 
   /* report LSM enforcement mode */
   if (g_mode == LOTA_MODE_ENFORCE) {

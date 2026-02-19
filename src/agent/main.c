@@ -87,8 +87,8 @@ struct dbus_context *g_dbus_ctx;
 int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
-static uint32_t g_protect_pids[64];
-static int g_protect_pid_count;
+static uint32_t *g_protect_pids = NULL;
+static int g_protect_pid_count = 0;
 static const char *g_trust_libs[64];
 static int g_trust_lib_count;
 static int g_no_hash_cache;
@@ -98,9 +98,6 @@ static int parse_mode(const char *mode_str);
 
 /*
  * Set up a container-accessible extra listener socket.
- *
- * Failures are non-fatal: the primary socket still works for
- * host-side clients.
  */
 void setup_container_listener(struct ipc_context *ctx) {
   char dir[PATH_MAX];
@@ -548,11 +545,24 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
             *cfg = new_cfg;
 
             g_protect_pid_count = cfg->protect_pid_count;
-            for (int k = 0; k < g_protect_pid_count; k++) {
-              g_protect_pids[k] = cfg->protect_pids[k];
-              if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
-                lota_warn("Failed to protect PID %u on reload",
-                          g_protect_pids[k]);
+            if (g_protect_pid_count > 0) {
+              g_protect_pids = realloc(g_protect_pids,
+                                       g_protect_pid_count * sizeof(uint32_t));
+              if (g_protect_pids) {
+                for (int k = 0; k < g_protect_pid_count; k++) {
+                  g_protect_pids[k] = cfg->protect_pids[k];
+                  if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
+                    lota_warn("Failed to protect PID %u on reload",
+                              g_protect_pids[k]);
+                }
+              } else {
+                lota_err(
+                    "Failed to allocate memory for protected PIDs on reload");
+                g_protect_pid_count = 0;
+              }
+            } else {
+              free(g_protect_pids);
+              g_protect_pids = NULL;
             }
             lota_info("Protected PIDs reloaded (%d entries)",
                       g_protect_pid_count);
@@ -1068,18 +1078,20 @@ int main(int argc, char *argv[]) {
     case 'P':
       block_ptrace = true;
       break;
-    case 'R':
-      if (g_protect_pid_count < 64) {
-        long v;
-        if (safe_parse_long(optarg, &v) < 0 || v <= 0 || v > UINT32_MAX) {
-          fprintf(stderr, "Invalid PID: %s\n", optarg);
-          return 1;
-        }
-        g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
-      } else {
-        fprintf(stderr, "Too many --protect-pid entries (max 64)\n");
+    case 'R': {
+      long v;
+      if (safe_parse_long(optarg, &v) < 0 || v <= 0 || v > UINT32_MAX) {
+        fprintf(stderr, "Invalid PID: %s\n", optarg);
+        return 1;
       }
-      break;
+      g_protect_pids =
+          realloc(g_protect_pids, (g_protect_pid_count + 1) * sizeof(uint32_t));
+      if (!g_protect_pids) {
+        fprintf(stderr, "Memory allocation failed for protected PID\n");
+        return 1;
+      }
+      g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
+    } break;
     case 'L':
       if (g_trust_lib_count < 64) {
         g_trust_libs[g_trust_lib_count++] = optarg;
