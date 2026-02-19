@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -37,6 +38,11 @@ func init() {
 	if err != nil {
 		panic("failed to generate test AIK: " + err.Error())
 	}
+}
+
+func persistentClientID(challengeID string) string {
+	hwID := sha256.Sum256([]byte(challengeID))
+	return hex.EncodeToString(hwID[:])
 }
 
 // creates a test verifier and HTTP mux for API testing
@@ -151,8 +157,9 @@ func (d *dummyListener) Addr() net.Addr {
 }
 
 // builds a complete attestation report with valid TPM quote signature
-func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
+func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	t.Helper()
+	hwID := sha256.Sum256([]byte(clientID))
 
 	buf := make([]byte, types.MinReportSize)
 	offset := 0
@@ -189,6 +196,7 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
 		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
@@ -240,7 +248,8 @@ func buildSignedReport(t *testing.T, nonce [32]byte, pcr14 [32]byte, key *rsa.Pr
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
-	// hardware_id (32 bytes, leave zero for test fallback)
+	// hardware_id (32 bytes, stable per-client identity)
+	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
 	offset += types.HardwareIDSize
 
 	// reserved
@@ -317,7 +326,7 @@ func attestClient(t *testing.T, v *verify.Verifier, clientID string, key *rsa.Pr
 		t.Fatalf("GenerateChallenge(%s) failed: %v", clientID, err)
 	}
 
-	report := buildSignedReport(t, challenge.Nonce, pcr14, key)
+	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, key)
 	result, _ := v.VerifyReport(clientID, report)
 	return result.Result
 }
@@ -761,7 +770,7 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 	})
 
 	// complete attestation: pending -1, used +1
-	report := buildSignedReport(t, challenge.Nonce, pcr14, testAIK)
+	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, testAIK)
 	result, err := v.VerifyReport(clientID, report)
 	if err != nil || result.Result != types.VerifyOK {
 		t.Fatalf("Attestation failed: %v (code=%d)", err, result.Result)
@@ -788,7 +797,7 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 	pcr14 := [32]byte{0x14}
 
 	challenge, _ := v.GenerateChallenge(clientID)
-	report := buildSignedReport(t, challenge.Nonce, pcr14, testAIK)
+	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, testAIK)
 
 	// first submission: success
 	result1, _ := v.VerifyReport(clientID, report)
@@ -834,8 +843,9 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if code != types.VerifyOK {
 		t.Fatalf("Attestation failed with code %d", code)
 	}
+	persistentID := persistentClientID(clientID)
 
-	req := httptest.NewRequest("GET", "/api/v1/clients/"+clientID, nil)
+	req := httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -846,8 +856,8 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	var resp clientInfoResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.ClientID != clientID {
-		t.Errorf("client_id: got '%s', want '%s'", resp.ClientID, clientID)
+	if resp.ClientID != persistentID {
+		t.Errorf("client_id: got '%s', want '%s'", resp.ClientID, persistentID)
 	}
 	if !resp.HasAIK {
 		t.Error("Expected has_aik=true after TOFU registration")
@@ -855,8 +865,8 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if resp.AttestCount != 1 {
 		t.Errorf("attestation_count: got %d, want 1", resp.AttestCount)
 	}
-	if resp.MonotonicCounter != 1 {
-		t.Errorf("monotonic_counter: got %d, want 1", resp.MonotonicCounter)
+	if resp.MonotonicCounter != 0 {
+		t.Errorf("monotonic_counter: got %d, want 0 for persistent ID", resp.MonotonicCounter)
 	}
 	if resp.PCR14Baseline == "" {
 		t.Error("Expected non-empty pcr14_baseline after attestation")
@@ -868,8 +878,12 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 		t.Error("Expected non-empty hardware_id after TOFU")
 	}
 
+	prefix := resp.PCR14Baseline
+	if len(prefix) > 16 {
+		prefix = prefix[:16]
+	}
 	t.Logf("✓ Client info fully populated: AIK=%v, attests=%d, pcr14=%s...",
-		resp.HasAIK, resp.AttestCount, resp.PCR14Baseline[:16])
+		resp.HasAIK, resp.AttestCount, prefix)
 }
 
 func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
@@ -886,8 +900,9 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 			t.Fatalf("Attestation %d failed with code %d", i+1, code)
 		}
 	}
+	persistentID := persistentClientID(clientID)
 
-	req := httptest.NewRequest("GET", "/api/v1/clients/"+clientID, nil)
+	req := httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -897,11 +912,11 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	if resp.AttestCount != 5 {
 		t.Errorf("attestation_count: got %d, want 5", resp.AttestCount)
 	}
-	if resp.MonotonicCounter != 5 {
-		t.Errorf("monotonic_counter: got %d, want 5", resp.MonotonicCounter)
+	if resp.MonotonicCounter != 0 {
+		t.Errorf("monotonic_counter: got %d, want 0 for persistent ID", resp.MonotonicCounter)
 	}
-	if resp.LastAttestation == "" {
-		t.Error("Expected last_attestation to be set")
+	if resp.LastAttestation != "" {
+		t.Errorf("Expected empty last_attestation for persistent ID, got %q", resp.LastAttestation)
 	}
 	if resp.PendingChallenges != 0 {
 		t.Errorf("pending_challenges: got %d, want 0 (all consumed)", resp.PendingChallenges)
@@ -943,8 +958,8 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 	var resp clientListResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.Count != 3 {
-		t.Errorf("client count: got %d, want 3", resp.Count)
+	if resp.Count != 6 {
+		t.Errorf("client count: got %d, want 6 (challenge IDs + persistent IDs)", resp.Count)
 	}
 
 	// verify all clients present
@@ -953,8 +968,9 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 		clientSet[c] = true
 	}
 	for _, c := range clients {
-		if !clientSet[c] {
-			t.Errorf("Client '%s' missing from list", c)
+		pid := persistentClientID(c)
+		if !clientSet[pid] {
+			t.Errorf("Client '%s' (persistent '%s') missing from list", c, pid)
 		}
 	}
 
@@ -983,7 +999,7 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 
 	// second attest with WRONG key - should fail signature check
 	challenge, _ := v.GenerateChallenge(clientID)
-	badReport := buildSignedReport(t, challenge.Nonce, pcr14, wrongKey)
+	badReport := buildSignedReport(t, clientID, challenge.Nonce, pcr14, wrongKey)
 	result, _ := v.VerifyReport(clientID, badReport)
 
 	if result.Result != types.VerifySigFail {
@@ -1023,7 +1039,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 	// tampered PCR14
 	tamperedPCR14 := [32]byte{0xFF, 0xBB, 0xCC}
 	challenge, _ := v.GenerateChallenge(clientID)
-	report := buildSignedReport(t, challenge.Nonce, tamperedPCR14, testAIK)
+	report := buildSignedReport(t, clientID, challenge.Nonce, tamperedPCR14, testAIK)
 	result, _ := v.VerifyReport(clientID, report)
 
 	if result.Result != types.VerifyIntegrityMismatch {
@@ -1092,7 +1108,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	})
 
 	// consume first challenge only
-	report := buildSignedReport(t, challenges[0], pcr14, testAIK)
+	report := buildSignedReport(t, clientID, challenges[0], pcr14, testAIK)
 	v.VerifyReport(clientID, report)
 
 	assertStats(t, mux, func(s statsResponse) {
@@ -1102,7 +1118,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 	})
 
 	// consume second
-	report2 := buildSignedReport(t, challenges[1], pcr14, testAIK)
+	report2 := buildSignedReport(t, clientID, challenges[1], pcr14, testAIK)
 	v.VerifyReport(clientID, report2)
 
 	assertStats(t, mux, func(s statsResponse) {
@@ -1162,8 +1178,8 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 	var list clientListResponse
 	json.NewDecoder(rec.Body).Decode(&list)
 
-	if list.Count != numClients {
-		t.Errorf("client list: %d, want %d", list.Count, numClients)
+	if list.Count != numClients*2 {
+		t.Errorf("client list: %d, want %d", list.Count, numClients*2)
 	}
 
 	t.Logf("✓ %d concurrent attestations tracked: %d registered, %d attested",

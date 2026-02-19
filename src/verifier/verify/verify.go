@@ -173,9 +173,9 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 // challengeID identifies the transport-level endpoint used when the
 // challenge was generated. It is used exclusively for nonce binding
 // verification. All persistent identity operations (AIK registration,
-// baseline, revocation, bans) use a hardware-derived clientID
-// (hex-encoded HardwareID from the TPM report) so that clients sharing
-// a NAT address are not conflated
+// baseline, revocation, bans) require a non-zero hardware-derived
+// clientID (hex-encoded HardwareID from the TPM report) so that
+// transport identity (e.g. NATed IP) is never used as durable identity.
 func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
 	startTime := time.Now()
 	v.totalAttests.Add(1)
@@ -227,16 +227,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 	hwID = fmt.Sprintf("%x", report.TPM.HardwareID[:8])
 
-	// Derive persistent client identity from HardwareID when available.
-	// This prevents NAT collisions: multiple machines behind the same
-	// NAT gateway will each get a unique clientID based on their TPM
-	// endorsement key hash, rather than sharing the IP address
 	var zeroHWID [types.HardwareIDSize]byte
-	if report.TPM.HardwareID != zeroHWID {
-		clientID = hex.EncodeToString(report.TPM.HardwareID[:])
-		clog = logging.WithClient(v.log, clientID)
-		clog.Debug("client identity derived from hardware ID", "challenge_id", challengeID)
+	if report.TPM.HardwareID == zeroHWID {
+		logging.Security(clog, "attestation rejected: missing hardware identity",
+			"detail", "zero hardware_id is not allowed", "challenge_id", challengeID)
+		v.metrics.Rejections.Inc("sig_fail")
+		result.Result = types.VerifySigFail
+		return result, errors.New("hardware ID missing or zero")
 	}
+
+	clientID = hex.EncodeToString(report.TPM.HardwareID[:])
+	clog = logging.WithClient(v.log, clientID)
+	clog.Debug("client identity derived from hardware ID", "challenge_id", challengeID)
 
 	// check revocation BEFORE consuming nonce
 	// Why? This prevents wasting nonces on known-revoked clients

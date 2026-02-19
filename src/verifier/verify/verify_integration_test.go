@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"testing"
 	"time"
@@ -33,8 +34,9 @@ func init() {
 }
 
 // builds a complete attestation report with valid signatures
-func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
+func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
 	t.Helper()
+	hwID := sha256.Sum256([]byte(clientID))
 
 	buf := make([]byte, types.MinReportSize)
 	offset := 0
@@ -71,6 +73,7 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
 		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
@@ -122,7 +125,8 @@ func createValidReport(t *testing.T, nonce [32]byte, pcr14 [32]byte) []byte {
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
-	// hardware_id (32 bytes, leave zero for test fallback)
+	// hardware_id (32 bytes, stable per-client identity)
+	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
 	offset += types.HardwareIDSize
 
 	// reserved
@@ -223,6 +227,11 @@ func marshalRSAPublicKey(pub *rsa.PublicKey) []byte {
 	return der
 }
 
+func persistentClientID(challengeID string) string {
+	hwID := sha256.Sum256([]byte(challengeID))
+	return hex.EncodeToString(hwID[:])
+}
+
 // creates a Verifier with default policy for testing
 func createTestVerifier(aikStore store.AIKStore) *Verifier {
 	cfg := DefaultConfig()
@@ -256,7 +265,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 		pcr14[i] = byte(0x14 ^ i)
 	}
 
-	reportData := createValidReport(t, challenge.Nonce, pcr14)
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	t.Logf("✓ Report created (%d bytes)", len(reportData))
 
 	result, err := verifier.VerifyReport(clientID, reportData)
@@ -268,7 +277,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 		t.Errorf("Expected VerifyOK, got result code %d", result.Result)
 	}
 
-	registeredAIK, err := aikStore.GetAIK(clientID)
+	registeredAIK, err := aikStore.GetAIK(persistentClientID(clientID))
 	if err != nil {
 		t.Fatalf("AIK not registered after TOFU: %v", err)
 	}
@@ -281,7 +290,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	t.Log("INTEGRATION TEST: Subsequent attestation with registered AIK")
 
 	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK("test-client", &integrationTestKey.PublicKey)
+	aikStore.RegisterAIK(persistentClientID("test-client"), &integrationTestKey.PublicKey)
 
 	verifier := createTestVerifier(aikStore)
 
@@ -293,7 +302,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	for i := range pcr14 {
 		pcr14[i] = byte(0x14 ^ i)
 	}
-	report1 := createValidReport(t, challenge1.Nonce, pcr14)
+	report1 := createValidReport(t, clientID, challenge1.Nonce, pcr14)
 	result1, err := verifier.VerifyReport(clientID, report1)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v (result=%d)", err, result1.Result)
@@ -302,7 +311,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 
 	// should match baseline
 	challenge2, _ := verifier.GenerateChallenge(clientID)
-	report2 := createValidReport(t, challenge2.Nonce, pcr14)
+	report2 := createValidReport(t, clientID, challenge2.Nonce, pcr14)
 	result2, err := verifier.VerifyReport(clientID, report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
@@ -315,7 +324,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	t.Log("CRITICAL SECURITY TEST: Detects agent tampering")
 
 	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK("compromised-client", &integrationTestKey.PublicKey)
+	aikStore.RegisterAIK(persistentClientID("compromised-client"), &integrationTestKey.PublicKey)
 
 	verifier := createTestVerifier(aikStore)
 
@@ -327,7 +336,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	for i := range originalPCR14 {
 		originalPCR14[i] = byte(0x14 ^ i)
 	}
-	report1 := createValidReport(t, challenge1.Nonce, originalPCR14)
+	report1 := createValidReport(t, clientID, challenge1.Nonce, originalPCR14)
 	result1, _ := verifier.VerifyReport(clientID, report1)
 	if result1.Result != types.VerifyOK {
 		t.Fatalf("Baseline establishment failed")
@@ -340,7 +349,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	copy(tamperedPCR14[:], originalPCR14[:])
 	tamperedPCR14[0] ^= 0xFF // flip first byte - TAMPERING!
 
-	report2 := createValidReport(t, challenge2.Nonce, tamperedPCR14)
+	report2 := createValidReport(t, clientID, challenge2.Nonce, tamperedPCR14)
 	result2, err := verifier.VerifyReport(clientID, report2)
 
 	// MUST detect the tampering
@@ -366,7 +375,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	t.Log("CRITICAL SECURITY TEST: Prevents attestation replay")
 
 	aikStore := store.NewMemoryStore()
-	aikStore.RegisterAIK("replay-victim", &integrationTestKey.PublicKey)
+	aikStore.RegisterAIK(persistentClientID("replay-victim"), &integrationTestKey.PublicKey)
 
 	verifier := createTestVerifier(aikStore)
 	clientID := "replay-victim"
@@ -375,7 +384,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	for i := range pcr14 {
 		pcr14[i] = byte(0x14 ^ i)
 	}
-	reportData := createValidReport(t, challenge.Nonce, pcr14)
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
 	// should succeed
 	result1, err := verifier.VerifyReport(clientID, reportData)
@@ -402,7 +411,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 
 	aikStore := store.NewMemoryStore()
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	aikStore.RegisterAIK("wrong-key-client", &otherKey.PublicKey)
+	aikStore.RegisterAIK(persistentClientID("wrong-key-client"), &otherKey.PublicKey)
 
 	verifier := createTestVerifier(aikStore)
 
@@ -410,7 +419,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 
 	challenge, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := [32]byte{}
-	reportData := createValidReport(t, challenge.Nonce, pcr14)
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
 	result, err := verifier.VerifyReport(clientID, reportData)
 
@@ -458,7 +467,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 				pcr14[j] = byte(clientNum ^ j)
 			}
 
-			reportData := createValidReportWithKey(challenge.Nonce, pcr14, integrationTestKey)
+			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, integrationTestKey)
 
 			result, err := verifier.VerifyReport(clientID, reportData)
 			if err != nil || result.Result != types.VerifyOK {
@@ -493,7 +502,8 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 }
 
 // helper for concurrent test
-func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
+func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
+	hwID := sha256.Sum256([]byte(clientID))
 	buf := make([]byte, types.MinReportSize)
 	offset := 0
 
@@ -528,6 +538,7 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
@@ -561,8 +572,9 @@ func createValidReportWithKey(nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKe
 
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
-	offset += types.HardwareIDSize // hardware_id (zero)
-	offset += 2                    // reserved
+	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
+	offset += types.HardwareIDSize
+	offset += 2 // reserved
 
 	// system measurement (simplified)
 	offset += types.HashSize * 2                // kernel_hash + agent_hash

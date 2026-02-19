@@ -431,7 +431,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 
-	reportData := createSQLiteTestReport(t, challenge.Nonce, pcr14)
+	reportData := createSQLiteTestReport(t, clientID, challenge.Nonce, pcr14)
 	result, err := verifier.VerifyReport(clientID, reportData)
 	if err != nil {
 		t.Fatalf("VerifyReport failed: %v", err)
@@ -442,7 +442,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	// second attestation (should match baseline)
 	challenge2, _ := verifier.GenerateChallenge(clientID)
-	report2 := createSQLiteTestReport(t, challenge2.Nonce, pcr14)
+	report2 := createSQLiteTestReport(t, clientID, challenge2.Nonce, pcr14)
 	result2, err := verifier.VerifyReport(clientID, report2)
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
@@ -481,7 +481,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 
 	// successful attestation
 	challenge, _ := v1.GenerateChallenge("restart-client")
-	report := createSQLiteTestReport(t, challenge.Nonce, pcr14)
+	report := createSQLiteTestReport(t, "restart-client", challenge.Nonce, pcr14)
 	result1, err := v1.VerifyReport("restart-client", report)
 	if err != nil || result1.Result != types.VerifyOK {
 		t.Fatalf("First attestation failed: %v", err)
@@ -534,7 +534,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	v1.SetActivePolicy("default")
 
 	ch1, _ := v1.GenerateChallenge("baseline-client")
-	rep1 := createSQLiteTestReport(t, ch1.Nonce, originalPCR14)
+	rep1 := createSQLiteTestReport(t, "baseline-client", ch1.Nonce, originalPCR14)
 	r1, err := v1.VerifyReport("baseline-client", rep1)
 	if err != nil || r1.Result != types.VerifyOK {
 		t.Fatalf("Baseline attestation failed: %v", err)
@@ -554,7 +554,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 
 	// tampered PCR14 should be detected even after restart
 	ch2, _ := v2.GenerateChallenge("baseline-client")
-	rep2 := createSQLiteTestReport(t, ch2.Nonce, tamperedPCR14)
+	rep2 := createSQLiteTestReport(t, "baseline-client", ch2.Nonce, tamperedPCR14)
 	r2, err := v2.VerifyReport("baseline-client", rep2)
 
 	if r2.Result != types.VerifyIntegrityMismatch {
@@ -604,7 +604,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 					return
 				}
 
-				rep := createSQLiteTestReport(nil, ch.Nonce, pcr14)
+				rep := createSQLiteTestReport(nil, clientID, ch.Nonce, pcr14)
 				result, err := verifier.VerifyReport(clientID, rep)
 				if err != nil || result.Result != types.VerifyOK {
 					errCh <- fmt.Errorf("client %d iter %d: verify: %v (result=%d)", n, j, err, result.Result)
@@ -652,7 +652,7 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 	v1.SetActivePolicy("default")
 
 	ch, _ := v1.GenerateChallenge("aik-persist-client")
-	rep := createSQLiteTestReport(t, ch.Nonce, pcr14)
+	rep := createSQLiteTestReport(t, "aik-persist-client", ch.Nonce, pcr14)
 	r, err := v1.VerifyReport("aik-persist-client", rep)
 	if err != nil || r.Result != types.VerifyOK {
 		t.Fatalf("TOFU attestation failed: %v", err)
@@ -660,7 +660,8 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 
 	// second verifier: check AIK exists
 	aikStore2 := store.NewSQLiteAIKStore(db)
-	_, err = aikStore2.GetAIK("aik-persist-client")
+	hwID := sha256.Sum256([]byte("aik-persist-client"))
+	_, err = aikStore2.GetAIK(fmt.Sprintf("%x", hwID[:]))
 	if err != nil {
 		t.Fatalf("AIK not persisted after restart: %v", err)
 	}
@@ -679,10 +680,11 @@ func init() {
 	}
 }
 
-func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte {
+func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
 	if t != nil {
 		t.Helper()
 	}
+	hwID := sha256.Sum256([]byte(clientID))
 
 	buf := make([]byte, types.MinReportSize)
 	offset := 0
@@ -720,6 +722,7 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	// TPMS_ATTEST with binding nonce including security-relevant report fields
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07
 	bindingReport.System.IOMMU.UnitCount = 2
@@ -765,7 +768,8 @@ func createSQLiteTestReport(t testing.TB, nonce [32]byte, pcr14 [32]byte) []byte
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
 
-	// hardware_id
+	// hardware_id (stable per-client identity)
+	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
 	offset += types.HardwareIDSize
 
 	// reserved

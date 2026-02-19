@@ -421,6 +421,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 
 	mux, v := setupTestAPIListening(t)
 	clientID := "revoke-attest-client"
+	persistentID := persistentClientID(clientID)
 	pcr14 := [32]byte{0x14}
 
 	// successful attestation first
@@ -431,7 +432,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 
 	// revoke via API
 	body := `{"reason":"cheating","actor":"game-server"}`
-	req := adminRequest("POST", "/api/v1/clients/"+clientID+"/revoke", body)
+	req := adminRequest("POST", "/api/v1/clients/"+persistentID+"/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -453,7 +454,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 	})
 
 	// client info should show revoked
-	req = httptest.NewRequest("GET", "/api/v1/clients/"+clientID, nil)
+	req = httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -475,6 +476,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 
 	mux, v := setupTestAPIListening(t)
 	clientID := "unrevoke-attest-client"
+	persistentID := persistentClientID(clientID)
 	pcr14 := [32]byte{0x14}
 
 	// initial attestation
@@ -485,7 +487,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 
 	// revoke
 	body := `{"reason":"admin","actor":"admin"}`
-	req := adminRequest("POST", "/api/v1/clients/"+clientID+"/revoke", body)
+	req := adminRequest("POST", "/api/v1/clients/"+persistentID+"/revoke", body)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -496,7 +498,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 	}
 
 	// unrevoke
-	req = adminRequest("DELETE", "/api/v1/clients/"+clientID+"/revoke", "")
+	req = adminRequest("DELETE", "/api/v1/clients/"+persistentID+"/revoke", "")
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -518,6 +520,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 
 	mux, v := setupTestAPIListening(t)
 	clientID := "ban-attest-client"
+	persistentID := persistentClientID(clientID)
 	pcr14 := [32]byte{0x14}
 
 	// successful attestation first
@@ -527,7 +530,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 	}
 
 	// get hardware ID from client info
-	req := httptest.NewRequest("GET", "/api/v1/clients/"+clientID, nil)
+	req := httptest.NewRequest("GET", "/api/v1/clients/"+persistentID, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
