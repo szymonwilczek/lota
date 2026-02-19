@@ -995,9 +995,19 @@ int main(int argc, char *argv[]) {
   signing_key_path = cfg.signing_key[0] ? cfg.signing_key : NULL;
   policy_pubkey_path = cfg.policy_pubkey[0] ? cfg.policy_pubkey : NULL;
 
-  g_protect_pid_count = cfg.protect_pid_count;
-  for (int i = 0; i < cfg.protect_pid_count; i++)
-    g_protect_pids[i] = cfg.protect_pids[i];
+  g_protect_pid_count = 0;
+  if (cfg.protect_pid_count > 0) {
+    g_protect_pids =
+        realloc(g_protect_pids, cfg.protect_pid_count * sizeof(uint32_t));
+    if (!g_protect_pids) {
+      fprintf(stderr, "Memory allocation failed while loading protected PIDs "
+                      "from config\n");
+      return 1;
+    }
+    for (int i = 0; i < cfg.protect_pid_count; i++)
+      g_protect_pids[i] = cfg.protect_pids[i];
+    g_protect_pid_count = cfg.protect_pid_count;
+  }
   g_trust_lib_count = cfg.trust_lib_count;
   for (int i = 0; i < cfg.trust_lib_count; i++)
     g_trust_libs[i] = cfg.trust_libs[i];

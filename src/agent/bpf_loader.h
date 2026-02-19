@@ -29,7 +29,6 @@ struct bpf_loader_ctx {
   int ringbuf_fd;                            /* Ring buffer map fd */
   int stats_fd;                              /* Stats map fd */
   int config_fd;                             /* 'lota_config' map fd */
-  int integrity_config_fd;                   /* Integrity config map fd */
   int integrity_fd;                          /* 'integrity_config' map fd */
   int trusted_libs_fd;                       /* 'trusted_libs' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
