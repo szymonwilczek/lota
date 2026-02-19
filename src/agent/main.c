@@ -37,6 +37,7 @@
 #include "bpf_loader.h"
 #include "config.h"
 #include "daemon.h"
+#include "daemon_loop.h"
 #include "dbus.h"
 #include "event.h"
 #include "hash_verify.h"
@@ -105,8 +106,7 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   uint64_t wd_usec = 0;
   bool wd_enabled;
   sigset_t mask;
-  struct epoll_event ev, events[16];
-  int nfds;
+  struct epoll_event ev;
 
   lota_info("LOTA agent starting");
 
@@ -278,58 +278,11 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
   sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
   lota_info("Monitoring binary executions (event-driven)");
 
-  /* main loop */
-  while (g_running) {
-    int timeout = -1;
-    if (wd_enabled && wd_usec > 0)
-      timeout = (int)(wd_usec / 2000); /* usec -> ms, /2 for safety */
-
-    nfds = epoll_wait(epoll_fd, events, 16, timeout);
-
-    if (nfds < 0) {
-      if (errno == EINTR)
-        continue;
-      lota_err("epoll_wait failed: %s", strerror(errno));
-      break;
-    }
-
-    if (nfds == 0 && wd_enabled) {
-      sdnotify_watchdog_ping();
-      continue;
-    }
-
-    for (int i = 0; i < nfds; i++) {
-      if (events[i].data.fd == sfd) {
-        struct signalfd_siginfo fdsi;
-        ssize_t s = read(sfd, &fdsi, sizeof(struct signalfd_siginfo));
-        if (s != sizeof(struct signalfd_siginfo))
-          continue;
-
-        if (fdsi.ssi_signo == SIGTERM || fdsi.ssi_signo == SIGINT) {
-          lota_info("Signal received, stopping...");
-          g_running = 0;
-        } else if (fdsi.ssi_signo == SIGHUP) {
-          /* reload */
-          sdnotify_reloading();
-          lota_info("SIGHUP received, reloading configuration");
-
-          (void)agent_reload_config(
-              config_path, cfg, &mode, &strict_mmap, &block_ptrace,
-              &strict_modules, &block_anon_exec, &g_protect_pids,
-              &g_protect_pid_count, g_trust_libs, &g_trust_lib_count);
-        }
-      } else if (events[i].data.fd == ipc_get_fd(&g_ipc_ctx)) {
-        ipc_process(&g_ipc_ctx, 0);
-      } else if (g_dbus_ctx && events[i].data.fd == dbus_get_fd(g_dbus_ctx)) {
-        dbus_process(g_dbus_ctx, 0);
-      } else if (events[i].data.fd == bpf_loader_get_event_fd(&g_bpf_ctx)) {
-        bpf_loader_consume(&g_bpf_ctx);
-      }
-    }
-
-    if (wd_enabled)
-      sdnotify_watchdog_ping();
-  }
+  ret = agent_run_event_loop(
+      epoll_fd, sfd, wd_enabled, wd_usec, config_path, cfg, &mode, &strict_mmap,
+      &block_ptrace, &strict_modules, &block_anon_exec, &g_protect_pids,
+      &g_protect_pid_count, g_trust_libs, &g_trust_lib_count, &g_ipc_ctx,
+      g_dbus_ctx, &g_bpf_ctx, &g_running);
 
   /* clean shutdown via signal - do not propagate EINTR as failure */
   if (!g_running)

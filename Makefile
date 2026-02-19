@@ -96,6 +96,7 @@ AGTEST_SRCS = tests/test_main.c \
 
 # Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
+			  $(AGENT_DIR)/daemon_loop.c \
 			  $(AGENT_DIR)/main_utils.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
@@ -431,7 +432,7 @@ test-sdk: $(TEST_SDK_BIN) $(SDK_LIB) $(AGENT_BIN)
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
-FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o, $(AGENT_OBJS))
+FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
 FUZZ_AGENT_OBJS += $(BUILD_DIR)/agent/fuzz/ipc_fuzz.o
 
 $(BUILD_DIR)/agent/fuzz/ipc_fuzz.o: src/agent/fuzz/ipc_fuzz.c | $(BUILD_DIR)/agent/fuzz
