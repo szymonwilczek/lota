@@ -96,6 +96,7 @@ AGTEST_SRCS = tests/test_main.c \
 
 # Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
+			  $(AGENT_DIR)/main_utils.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/iommu.c \
               $(AGENT_DIR)/bpf_loader.c \
