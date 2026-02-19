@@ -183,6 +183,44 @@ static __always_inline int is_protected_pid(u32 pid) {
   u32 *val = bpf_map_lookup_elem(&protected_pids, &pid);
   return val && *val;
 }
+/*
+ * Check if a file is heuristically trusted (root-owned, not writable by
+ * others). Used as a fallback when fs-verity is not available.
+ *
+ * Returns:
+ *   1 if trusted (owned by root, mode 755 or stricter)
+ *   0 if not trusted
+ */
+static __always_inline int is_file_trusted_heuristic(struct file *file) {
+  struct inode *inode;
+  uid_t uid;
+  umode_t mode;
+
+  if (!file)
+    return 0;
+
+  inode = BPF_CORE_READ(file, f_inode);
+  if (!inode)
+    return 0;
+
+  uid = BPF_CORE_READ(inode, i_uid.val);
+  mode = BPF_CORE_READ(inode, i_mode);
+
+  /* must be owned by root */
+  if (uid != 0)
+    return 0;
+
+  /* must not be world-writable (S_IWOTH = 00002) */
+  if (mode & 00002)
+    return 0;
+
+  /* must not be group-writable (S_IWGRP = 00020) */
+  if (mode & 00020)
+    return 0;
+
+  return 1;
+}
+
 SEC("lsm.s/kernel_read_file")
 int BPF_PROG(lota_kernel_read_file, struct file *file,
              enum kernel_read_file_id id, bool contents, int ret) {
@@ -221,7 +259,14 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
    */
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MODULES)) {
     if (!is_verity_allowed(file)) {
-      blocked = 1;
+      /*
+       * If strict modules are required, LOTA generally demand fs-verity.
+       * However, to avoid bricking on standard distros, LOTA allow
+       * root-owned system files if they are not writable.
+       */
+      if (!is_file_trusted_heuristic(file)) {
+        blocked = 1;
+      }
     }
   }
 
@@ -302,9 +347,17 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     return ret;
 
   /*
-   * Only enforce on kernel module loads (id == 2 - LOADING_MODULE).
+   * Filter relevant IDs.
+   * - LOADING_FIRMWARE (1)
+   * - LOADING_MODULE (2)
+   * - LOADING_KEXEC_IMAGE (3)
+   * - LOADING_KEXEC_INITRAMFS (4)
+   * - LOADING_POLICY (5)
+   * - LOADING_X509_CERTIFICATE (6)
    */
-  if (id != 2)
+  if (id != LOADING_FIRMWARE && id != LOADING_MODULE &&
+      id != LOADING_KEXEC_IMAGE && id != LOADING_KEXEC_INITRAMFS &&
+      id != LOADING_POLICY && id != LOADING_X509_CERTIFICATE)
     return 0;
 
   mode = get_mode();
@@ -313,7 +366,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     return 0;
 
   /*
-   * In ENFORCE mode, block ALL memory-loaded modules.
+   * In ENFORCE mode, block ALL memory-loaded assets for these sensitive types.
    * Memory loading bypasses file-based path checks, so LOTA is strict here.
    * Only initramfs modules (loaded before LOTA starts) should use this path.
    */
@@ -334,7 +387,14 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id, bool contents,
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
     /* memory-loaded module */
-    __builtin_memcpy(event->filename, "[memory]", 9);
+    if (id == LOADING_MODULE)
+      __builtin_memcpy(event->filename, "[mem:module]", 12);
+    else if (id == LOADING_FIRMWARE)
+      __builtin_memcpy(event->filename, "[mem:firmware]", 14);
+    else if (id == LOADING_KEXEC_IMAGE)
+      __builtin_memcpy(event->filename, "[mem:kexec]", 11);
+    else
+      __builtin_memcpy(event->filename, "[mem:asset]", 11);
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
@@ -460,7 +520,14 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   (void)dentry;
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
     if (!is_verity_allowed(file)) {
-      blocked = 1;
+      /*
+       * Fallback to heuristic: allow if root-owned and not writable.
+       * Prevents bricking on non-verity systems while still blocking
+       * random user libraries.
+       */
+      if (!is_file_trusted_heuristic(file)) {
+        blocked = 1;
+      }
     }
   }
 
