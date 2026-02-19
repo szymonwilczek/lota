@@ -80,7 +80,21 @@ BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
 
-# Agent source files
+# Agent test source files
+AGTEST_SRCS = tests/test_main.c \
+            tests/test_config.c \
+            tests/test_policy.c \
+            tests/test_tpm_aik.c \
+            tests/test_server_sdk.c \
+            tests/test_anticheat_compat.c \
+            tests/test_loader_symbols.c \
+              $(AGENT_DIR)/report.c \
+              $(AGENT_DIR)/hash_verify.c \
+              $(AGENT_DIR)/daemon.c \
+              $(AGENT_DIR)/policy.c \
+              $(AGENT_DIR)/policy_sign.c \
+
+# Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/iommu.c \
@@ -263,6 +277,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_ipc_dos \
+	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
@@ -341,6 +356,10 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd
+	@echo "Built: $@"
+
 # Full test suite (unit + integration + hardware)
 # Note: hardware tests require root. Run 'sudo make test-hardware' for them.
 test: test-unit
@@ -359,7 +378,9 @@ test-unit: all $(TEST_BINS)
 	@./build/test_policy_export
 	@./build/test_aik_rotation
 	@./build/test_server_sdk
+	@./build/test_server_sdk
 	@./build/test_anticheat
+	@./build/test_loader_symbols
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -S /run/lota/lota.sock ]; then \

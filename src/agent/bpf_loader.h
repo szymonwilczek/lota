@@ -28,10 +28,12 @@ struct bpf_loader_ctx {
   int link_count;                            /* number of attached links */
   int ringbuf_fd;                            /* Ring buffer map fd */
   int stats_fd;                              /* Stats map fd */
-  int config_fd;                             /* Config map fd */
-  int trusted_libs_fd;   /* Trusted library whitelist map fd */
-  int protected_pids_fd; /* Protected PIDs map fd */
-  bool loaded;           /* Program is loaded and attached */
+  int config_fd;                             /* 'lota_config' map fd */
+  int integrity_config_fd;                   /* Integrity config map fd */
+  int integrity_fd;                          /* 'integrity_config' map fd */
+  int trusted_libs_fd;                       /* 'trusted_libs' map fd */
+  int protected_pids_fd;                     /* Protected PIDs map fd */
+  bool loaded; /* Program is loaded and attached */
 };
 
 /*
@@ -182,6 +184,8 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
+
+unsigned long resolve_kernel_symbol(const char *name);
 
 /*
  * bpf_loader_get_extended_stats - Get all statistics including new hooks

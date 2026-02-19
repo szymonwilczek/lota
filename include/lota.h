@@ -133,4 +133,13 @@ struct lota_exec_event {
  */
 #define LOTA_MAX_TRUSTED_LIBS 512
 
+/*
+ * Kernel integrity configuration.
+ * Stores addresses of kernel symbols for direct memory verification.
+ */
+struct integrity_data {
+  __u64 sig_enforce_addr;
+  __u64 lockdown_addr;
+};
+
 #endif /* LOTA_H */

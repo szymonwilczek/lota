@@ -38,16 +38,41 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
   if (level == LIBBPF_DEBUG)
     return 0;
 
-  char buf[512];
-  int n = vsnprintf(buf, sizeof(buf), format, args);
-
-  if (n > 0 && buf[n - 1] == '\n')
-    buf[n - 1] = '\0';
-  if (level == LIBBPF_WARN)
-    lota_warn("libbpf: %s", buf);
-  else
-    lota_err("libbpf: %s", buf);
+  fprintf(stderr, "libbpf: ");
+  int n = vfprintf(stderr, format, args);
   return n;
+}
+
+/*
+ * Resolve kernel symbol address from /proc/kallsyms.
+ * Returns 0 on failure.
+ */
+unsigned long resolve_kernel_symbol(const char *name) {
+  FILE *f;
+  char line[512];
+  unsigned long addr = 0;
+
+  f = fopen("/proc/kallsyms", "r");
+  if (!f) {
+    lota_warn("Failed to open /proc/kallsyms: %s", strerror(errno));
+    return 0;
+  }
+
+  while (fgets(line, sizeof(line), f)) {
+    char sym_name[256];
+    char type;
+    unsigned long a;
+
+    if (sscanf(line, "%lx %c %s", &a, &type, sym_name) == 3) {
+      if (strcmp(name, sym_name) == 0) {
+        addr = a;
+        break;
+      }
+    }
+  }
+
+  fclose(f);
+  return addr;
 }
 
 int bpf_loader_init(struct bpf_loader_ctx *ctx) {
@@ -78,11 +103,19 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   if (ctx->loaded)
     return -EALREADY;
 
-  ctx->obj = bpf_object__open_file(bpf_obj_path, NULL);
+  struct bpf_object_open_opts opts = {
+      .sz = sizeof(struct bpf_object_open_opts),
+      .kernel_log_level = 1,
+  };
+
+  ctx->obj = bpf_object__open_file(bpf_obj_path, &opts);
   if (!ctx->obj) {
-    err = -errno;
-    lota_err("Failed to open BPF object: %s", bpf_obj_path);
-    return err;
+    lota_err("Failed to open BPF object %s: %s", bpf_obj_path, strerror(errno));
+    return -errno;
+  }
+
+  bpf_object__for_each_program(prog, ctx->obj) {
+    bpf_program__set_log_level(prog, 2);
   }
 
   err = bpf_object__load(ctx->obj);
@@ -134,6 +167,37 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
   if (ctx->config_fd < 0) {
     ctx->config_fd = -1;
+  }
+
+  /* Integrity config map */
+  ctx->integrity_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
+  if (ctx->integrity_fd >= 0) {
+    unsigned long sig_enforce = resolve_kernel_symbol("sig_enforce");
+    unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
+
+    if (!lockdown) {
+      /* fallback for older kernels */
+      lockdown = resolve_kernel_symbol("security_lockdown_enabled");
+    }
+
+    lota_info("Resolved kernel symbols: sig_enforce=0x%lx, lockdown=0x%lx",
+              sig_enforce, lockdown);
+
+    uint32_t key = 0;
+    struct {
+      uint64_t sig_enforce_addr;
+      uint64_t lockdown_addr;
+    } cfg = {
+        .sig_enforce_addr = sig_enforce,
+        .lockdown_addr = lockdown,
+    };
+
+    if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg, BPF_ANY) < 0) {
+      lota_err("Failed to update integrity_config map: %s", strerror(errno));
+    }
+  } else {
+    lota_warn("integrity_config map not found in BPF object");
   }
 
   /* Get trusted libraries map fd */
@@ -266,6 +330,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
+  ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
 }
