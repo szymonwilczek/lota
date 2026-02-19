@@ -593,9 +593,10 @@ static int run_daemon(const char *bpf_path, int mode, bool strict_mmap,
 
             g_protect_pid_count = new_cfg.protect_pid_count;
             if (g_protect_pid_count > 0) {
-              g_protect_pids = realloc(g_protect_pids,
-                                       g_protect_pid_count * sizeof(uint32_t));
-              if (g_protect_pids) {
+              uint32_t *new_pids = realloc(
+                  g_protect_pids, g_protect_pid_count * sizeof(uint32_t));
+              if (new_pids) {
+                g_protect_pids = new_pids;
                 for (int k = 0; k < g_protect_pid_count; k++) {
                   g_protect_pids[k] = new_cfg.protect_pids[k];
                   if (bpf_loader_protect_pid(&g_bpf_ctx, g_protect_pids[k]) < 0)
@@ -1102,13 +1103,14 @@ int main(int argc, char *argv[]) {
 
   g_protect_pid_count = 0;
   if (cfg.protect_pid_count > 0) {
-    g_protect_pids =
+    uint32_t *new_pids =
         realloc(g_protect_pids, cfg.protect_pid_count * sizeof(uint32_t));
-    if (!g_protect_pids) {
+    if (!new_pids) {
       fprintf(stderr, "Memory allocation failed while loading protected PIDs "
                       "from config\n");
       return 1;
     }
+    g_protect_pids = new_pids;
     for (int i = 0; i < cfg.protect_pid_count; i++)
       g_protect_pids[i] = cfg.protect_pids[i];
     g_protect_pid_count = cfg.protect_pid_count;
@@ -1205,12 +1207,13 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Invalid PID: %s\n", optarg);
         return 1;
       }
-      g_protect_pids =
+      uint32_t *new_pids =
           realloc(g_protect_pids, (g_protect_pid_count + 1) * sizeof(uint32_t));
-      if (!g_protect_pids) {
+      if (!new_pids) {
         fprintf(stderr, "Memory allocation failed for protected PID\n");
         return 1;
       }
+      g_protect_pids = new_pids;
       g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
     } break;
     case 'L':
