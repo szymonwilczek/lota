@@ -20,9 +20,6 @@ port = 8443
 # CA certificate for TLS verification (default: system CA store)
 # ca_cert = /etc/lota/ca.pem
 
-# Disable TLS certificate verification (INSECURE, for testing only)
-no_verify_tls = false
-
 # Pin verifier certificate by SHA-256 fingerprint (64 hex chars)
 # pin_sha256 = aabbccdd...
 
