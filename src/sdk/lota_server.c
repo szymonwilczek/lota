@@ -164,6 +164,10 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
     if (off + digest_size > len)
       return -1;
 
+    /* LOTA verifier expects SHA-256 PCR digest exactly */
+    if (digest_size != SHA256_DIGEST_LENGTH)
+      return -1;
+
     if (pcr_digest)
       *pcr_digest = data + off;
     if (pcr_digest_len)
@@ -405,10 +409,11 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   memcpy(claims->nonce, hdr.nonce, 32);
   claims->pcr_mask = hdr.pcr_mask;
 
-  if (pcr_digest && pcr_digest_len > 0 && pcr_digest_len <= 32) {
-    memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
-    claims->pcr_digest_len = pcr_digest_len;
-  }
+  if (!pcr_digest || pcr_digest_len != SHA256_DIGEST_LENGTH)
+    return LOTA_SERVER_ERR_ATTEST_PARSE;
+
+  memcpy(claims->pcr_digest, pcr_digest, SHA256_DIGEST_LENGTH);
+  claims->pcr_digest_len = SHA256_DIGEST_LENGTH;
 
   /* check expiry */
   uint64_t now = (uint64_t)time(NULL);
@@ -447,9 +452,9 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
     if (parse_tpms_attest(attest_data, hdr.attest_size, NULL, NULL, &pcr_digest,
                           &pcr_digest_len) == 0) {
-      if (pcr_digest && pcr_digest_len > 0 && pcr_digest_len <= 32) {
-        memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
-        claims->pcr_digest_len = pcr_digest_len;
+      if (pcr_digest && pcr_digest_len == SHA256_DIGEST_LENGTH) {
+        memcpy(claims->pcr_digest, pcr_digest, SHA256_DIGEST_LENGTH);
+        claims->pcr_digest_len = SHA256_DIGEST_LENGTH;
       }
     }
   }
