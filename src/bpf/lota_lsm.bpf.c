@@ -221,6 +221,34 @@ static __always_inline int is_protected_pid(u32 pid) {
 }
 
 /*
+ * Returns 1 when current task runs in a non-initial user namespace.
+ *
+ * In ENFORCE mode LOTA treat user namespaces as untrusted for executable
+ * mappings and module-loading paths to avoid UID-based trust confusion.
+ */
+static __always_inline int in_non_init_userns(void) {
+  struct task_struct *task;
+  const struct cred *cred;
+  struct user_namespace *user_ns;
+  u32 level;
+
+  task = (struct task_struct *)bpf_get_current_task_btf();
+  if (!task)
+    return 0;
+
+  cred = BPF_CORE_READ(task, cred);
+  if (!cred)
+    return 0;
+
+  user_ns = BPF_CORE_READ(cred, user_ns);
+  if (!user_ns)
+    return 0;
+
+  level = BPF_CORE_READ(user_ns, level);
+  return level > 0;
+}
+
+/*
  * Check if a file is heuristically trusted (root-owned, not writable by
  * others). Used as a fallback when fs-verity is not available.
  *
@@ -232,6 +260,10 @@ static __always_inline int is_file_trusted_heuristic(struct file *file) {
   struct inode *inode;
   uid_t uid;
   umode_t mode;
+
+  /* never trust heuristic checks from non-initial user namespaces */
+  if (in_non_init_userns())
+    return 0;
 
   if (!file)
     return 0;
@@ -339,6 +371,9 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   }
 
   if (mode == LOTA_MODE_ENFORCE) {
+    if (in_non_init_userns())
+      blocked = 1;
+
     /* always allow policy files */
     if (id == READING_POLICY)
       return 0;
@@ -445,6 +480,9 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     return 0;
 
   if (mode == LOTA_MODE_ENFORCE) {
+    if (in_non_init_userns())
+      blocked = 1;
+
     u32 key = 0;
     struct integrity_data *integrity;
 
