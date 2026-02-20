@@ -23,12 +23,20 @@
  *
  *   PCR 0:  SRTM / firmware measurement
  *   PCR 1:  BIOS / UEFI configuration
+ *   PCR 4:  Boot manager / loader stage
  *   PCR 7:  Secure Boot state
+ *   PCR 8:  Boot config / command line measurements
+ *   PCR 9:  Kernel/initrd measurements (bootloader-dependent)
+ *   PCR 11: Unified Kernel Image (UKI) measurements
  *   PCR 14: LOTA agent self-measurement
  */
 #define POLICY_PCR_0 0
 #define POLICY_PCR_1 1
+#define POLICY_PCR_4 4
 #define POLICY_PCR_7 7
+#define POLICY_PCR_8 8
+#define POLICY_PCR_9 9
+#define POLICY_PCR_11 11
 #define POLICY_PCR_14 14
 
 #define POLICY_MAX_PCRS 24
@@ -52,7 +60,7 @@ struct policy_snapshot {
   } pcrs[POLICY_MAX_PCRS];
   int pcr_count;
 
-  /* Kernel image hash */
+  /* Boot-chain measurement digest (kernel-relevant measured-boot PCR) */
   char kernel_path[LOTA_MAX_PATH_LEN];
   uint8_t kernel_hash[LOTA_HASH_SIZE];
   bool kernel_hash_valid;

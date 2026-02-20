@@ -28,8 +28,9 @@ struct lota_report_header {
 /* Report flags */
 #define LOTA_REPORT_FLAG_IOMMU_OK (1U << 0)     /* IOMMU verification passed */
 #define LOTA_REPORT_FLAG_TPM_QUOTE_OK (1U << 1) /* TPM quote succeeded */
-#define LOTA_REPORT_FLAG_KERNEL_HASH_OK (1U << 2) /* Kernel hash computed */
-#define LOTA_REPORT_FLAG_BPF_ACTIVE (1U << 3)     /* eBPF LSM is loaded */
+#define LOTA_REPORT_FLAG_KERNEL_HASH_OK                                        \
+  (1U << 2) /* Boot measurement digest captured (kernel-relevant PCR) */
+#define LOTA_REPORT_FLAG_BPF_ACTIVE (1U << 3) /* eBPF LSM is loaded */
 #define LOTA_REPORT_FLAG_MODULE_SIG (1U << 4) /* Kernel enforces module sigs*/
 #define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
@@ -129,7 +130,7 @@ struct lota_tpm_evidence {
  * System measurement section
  */
 struct lota_system_measurement {
-  /* SHA-256 of running kernel image */
+  /* TPM measured-boot digest (kernel-relevant PCR, SHA-256) */
   uint8_t kernel_hash[LOTA_HASH_SIZE];
 
   /* SHA-256 of lota-agent binary (self-measurement) */

@@ -35,6 +35,36 @@
 #include "tpm.h"
 
 /*
+ * Select a boot measurement PCR that best represents the booted kernel path.
+ * Priority reflects common Linux boot flows:
+ *   - PCR 11: UKI / systemd-stub
+ *   - PCR 9:  initrd + kernel-related GRUB measurements
+ *   - PCR 8:  GRUB command line / boot config flow
+ *   - PCR 4:  boot manager/loader stage
+ */
+static int read_kernel_measurement_digest(struct tpm_context *ctx,
+                                          uint8_t out_hash[LOTA_HASH_SIZE],
+                                          int *selected_pcr) {
+  static const int candidates[] = {11, 9, 8, 4};
+
+  if (!ctx || !out_hash)
+    return -EINVAL;
+
+  for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+    int ret = tpm_read_pcr(ctx, candidates[i], TPM2_ALG_SHA256, out_hash);
+    if (ret == 0) {
+      if (selected_pcr)
+        *selected_pcr = candidates[i];
+      return 0;
+    }
+  }
+
+  if (selected_pcr)
+    *selected_pcr = -1;
+  return -ENOENT;
+}
+
+/*
  * Export a complete YAML policy from the current system state.
  *
  * Collects PCR values, binary hashes, and security feature flags,
@@ -57,8 +87,9 @@ int export_policy(int mode) {
   time_t now;
   struct tm tm_buf;
 
-  static const int pcrs_to_export[] = {POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_7,
-                                       POLICY_PCR_14};
+  static const int pcrs_to_export[] = {
+      POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4,  POLICY_PCR_7,
+      POLICY_PCR_8, POLICY_PCR_9, POLICY_PCR_11, POLICY_PCR_14};
 
   memset(&snap, 0, sizeof(snap));
 
@@ -108,18 +139,29 @@ int export_policy(int mode) {
     }
   }
 
-  /* Kernel image hash */
+  /* Boot-chain measurement digest (kernel-relevant PCR selection) */
   ret = tpm_get_current_kernel_path(&g_tpm_ctx, snap.kernel_path,
                                     sizeof(snap.kernel_path));
-  if (ret == 0) {
-    ret = tpm_hash_file(snap.kernel_path, snap.kernel_hash);
+  if (ret < 0) {
+    fprintf(stderr, "Warning: Failed to find kernel path metadata: %s\n",
+            strerror(-ret));
+  }
+
+  {
+    int selected_pcr = -1;
+    ret = read_kernel_measurement_digest(&g_tpm_ctx, snap.kernel_hash,
+                                         &selected_pcr);
     if (ret == 0) {
       snap.kernel_hash_valid = true;
+      fprintf(stderr,
+              "Kernel measurement digest source: PCR %d (measured boot)\n",
+              selected_pcr);
     } else {
-      fprintf(stderr, "Warning: Failed to hash kernel: %s\n", strerror(-ret));
+      fprintf(stderr,
+              "Warning: Failed to read kernel-relevant measured boot PCR "
+              "(tried 11/9/8/4): %s\n",
+              strerror(-ret));
     }
-  } else {
-    fprintf(stderr, "Warning: Failed to find kernel: %s\n", strerror(-ret));
   }
 
   /* Agent binary hash */
@@ -211,7 +253,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
            ret == 1 ? "AIK (EK not available)" : "EK");
   }
 
-  /* system info: kernel hash */
+  /* system info: kernel path metadata + measured-boot digest */
   ret =
       tpm_get_current_kernel_path(&g_tpm_ctx, kernel_path, sizeof(kernel_path));
   if (ret == 0) {
@@ -220,12 +262,19 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
       kpath_len = sizeof(report->system.kernel_path) - 1;
     memcpy(report->system.kernel_path, kernel_path, kpath_len);
     report->system.kernel_path[kpath_len] = '\0';
+  }
 
-    ret = tpm_hash_file(kernel_path, report->system.kernel_hash);
+  {
+    int selected_pcr = -1;
+    ret = read_kernel_measurement_digest(&g_tpm_ctx, report->system.kernel_hash,
+                                         &selected_pcr);
     if (ret == 0) {
       report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
+      printf("Kernel measurement digest captured from PCR %d\n", selected_pcr);
     } else {
-      fprintf(stderr, "Warning: Failed to hash kernel\n");
+      fprintf(stderr,
+              "Warning: Failed to read kernel-relevant measured boot PCR "
+              "(tried 11/9/8/4)\n");
     }
   }
 
