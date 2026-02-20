@@ -192,20 +192,6 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
 }
 
 /*
- * Scratch buffer for fs-verity digest.
- */
-struct digest_slot {
-  u8 bytes[64];
-};
-
-struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, struct digest_slot);
-} digest_buffer SEC(".maps");
-
-/*
  * Get a boolean config value, defaults to 0 (disabled).
  */
 static __always_inline u32 get_config(u32 key) {
@@ -327,20 +313,14 @@ static __noinline int is_verity_allowed(struct file *file) {
   if (!file)
     return 0;
 
-  u32 key = 0;
-  struct digest_slot *slot = bpf_map_lookup_elem(&digest_buffer, &key);
-  if (!slot)
-    return 0;
-
-  __builtin_memset(slot->bytes, 0, sizeof(slot->bytes));
-
-  void *digest = slot->bytes;
+  u8 digest[64];
+  __builtin_memset(digest, 0, sizeof(digest));
 
   struct bpf_dynptr digest_ptr;
   int ret;
   u32 *allowed;
 
-  ret = bpf_dynptr_from_mem(digest, 64, 0, &digest_ptr);
+  ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
   if (ret < 0) {
     bpf_printk("LOTA: dynptr_from_mem failed: %d", ret);
     return 0;
