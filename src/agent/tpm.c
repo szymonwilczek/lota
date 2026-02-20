@@ -913,6 +913,43 @@ static int mkdirs(const char *path, mode_t mode) {
   return 0;
 }
 
+static int fsync_parent_dir(const char *path) {
+  char dir[PATH_MAX];
+  const char *slash;
+  int dfd;
+
+  if (!path || !path[0])
+    return -EINVAL;
+
+  slash = strrchr(path, '/');
+  if (!slash) {
+    dir[0] = '.';
+    dir[1] = '\0';
+  } else if (slash == path) {
+    dir[0] = '/';
+    dir[1] = '\0';
+  } else {
+    size_t len = (size_t)(slash - path);
+    if (len >= sizeof(dir))
+      return -ENAMETOOLONG;
+    memcpy(dir, path, len);
+    dir[len] = '\0';
+  }
+
+  dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (dfd < 0)
+    return -errno;
+
+  if (fsync(dfd) < 0) {
+    int ret = -errno;
+    close(dfd);
+    return ret;
+  }
+
+  close(dfd);
+  return 0;
+}
+
 int tpm_aik_load_metadata(struct tpm_context *ctx) {
   const char *path;
   int fd;
@@ -1014,7 +1051,12 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
     return -EIO;
   }
 
-  fsync(fd);
+  if (fsync(fd) != 0) {
+    ret = -errno;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
   close(fd);
 
   if (rename(tmp, path) != 0) {
@@ -1022,6 +1064,10 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
     unlink(tmp);
     return ret;
   }
+
+  ret = fsync_parent_dir(path);
+  if (ret < 0)
+    return ret;
 
   return 0;
 }
