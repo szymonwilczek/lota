@@ -5,6 +5,7 @@
  * Client library for games to query local attestation status.
  */
 
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -738,18 +739,18 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
   struct lota_token_wire wire;
   memset(&wire, 0, sizeof(wire));
 
-  wire.magic = LOTA_TOKEN_MAGIC;
-  wire.version = LOTA_TOKEN_VERSION;
-  wire.total_size = (uint16_t)total;
+  wire.magic = htole32(LOTA_TOKEN_MAGIC);
+  wire.version = htole16(LOTA_TOKEN_VERSION);
+  wire.total_size = htole16((uint16_t)total);
 
-  wire.valid_until = token->valid_until;
-  wire.flags = token->flags;
+  wire.valid_until = htole64(token->valid_until);
+  wire.flags = htole32(token->flags);
   memcpy(wire.nonce, token->nonce, 32);
-  wire.sig_alg = token->sig_alg;
-  wire.hash_alg = token->hash_alg;
-  wire.pcr_mask = token->pcr_mask;
-  wire.attest_size = (uint16_t)token->attest_size;
-  wire.sig_size = (uint16_t)token->signature_len;
+  wire.sig_alg = htole16(token->sig_alg);
+  wire.hash_alg = htole16(token->hash_alg);
+  wire.pcr_mask = htole32(token->pcr_mask);
+  wire.attest_size = htole16((uint16_t)token->attest_size);
+  wire.sig_size = htole16((uint16_t)token->signature_len);
 
   /* write header */
   memcpy(buf, &wire, sizeof(wire));
