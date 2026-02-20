@@ -11,6 +11,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,8 @@ type APIHandler struct {
 	startTime      time.Time
 	adminAPIKey    string // if non-empty, required for mutating endpoints
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
+	adminKeyHash   [32]byte
+	readerKeyHash  [32]byte
 }
 
 // creates a new API handler and registers routes on the given mux
@@ -66,6 +69,13 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 		startTime:      time.Now(),
 		adminAPIKey:    adminAPIKey,
 		readerAPIKey:   readerAPIKey,
+	}
+
+	if adminAPIKey != "" {
+		h.adminKeyHash = sha256.Sum256([]byte(adminAPIKey))
+	}
+	if readerAPIKey != "" {
+		h.readerKeyHash = sha256.Sum256([]byte(readerAPIKey))
 	}
 
 	// public monitoring endpoints (no auth required)
@@ -111,8 +121,7 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// constant-time comparison to prevent timing side-channels
-		if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminAPIKey)) != 1 {
+		if !tokenMatchesHash(token, h.adminKeyHash) {
 			logging.Security(h.log, "admin auth failed",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
@@ -142,10 +151,8 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		readerOK := h.readerAPIKey != "" &&
-			subtle.ConstantTimeCompare([]byte(token), []byte(h.readerAPIKey)) == 1
-		adminOK := h.adminAPIKey != "" &&
-			subtle.ConstantTimeCompare([]byte(token), []byte(h.adminAPIKey)) == 1
+		readerOK := h.readerAPIKey != "" && tokenMatchesHash(token, h.readerKeyHash)
+		adminOK := h.adminAPIKey != "" && tokenMatchesHash(token, h.adminKeyHash)
 
 		if !readerOK && !adminOK {
 			logging.Security(h.log, "reader auth failed",
@@ -167,6 +174,13 @@ func extractBearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(auth[len(prefix):])
+}
+
+// compares provided token against expected key hash using fixed-size
+// constant-time comparison to avoid key-length timing side channels
+func tokenMatchesHash(token string, expectedHash [32]byte) bool {
+	tokenHash := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) == 1
 }
 
 // response structs (JSON serialization)
