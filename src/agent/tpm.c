@@ -514,14 +514,22 @@ int tpm_hash_fd(int fd, uint8_t *hash) {
     goto cleanup;
   }
 
-  while ((n = read(fd, buf, HASH_READ_BUF_SIZE)) > 0) {
-    if (EVP_DigestUpdate(md_ctx, buf, (size_t)n) != 1) {
-      ret = -EIO;
-      goto cleanup;
+  for (;;) {
+    n = read(fd, buf, HASH_READ_BUF_SIZE);
+    if (n > 0) {
+      if (EVP_DigestUpdate(md_ctx, buf, (size_t)n) != 1) {
+        ret = -EIO;
+        goto cleanup;
+      }
+      continue;
     }
-  }
 
-  if (n < 0) {
+    if (n == 0)
+      break;
+
+    if (errno == EINTR)
+      continue;
+
     ret = -errno;
     goto cleanup;
   }
