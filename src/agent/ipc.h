@@ -46,6 +46,7 @@ struct ipc_context {
 
   /* D-Bus context (optional, NULL if D-Bus unavailable) */
   struct dbus_context *dbus;
+  int dbus_fd;
 
   /* Attestation state */
   uint32_t status_flags;

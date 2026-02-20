@@ -713,13 +713,31 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
     int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
     lota_dbg("Next attestation in %d seconds", sleep_time);
 
-    for (int i = 0; i < sleep_time && g_running; i++) {
-      ipc_process(&g_ipc_ctx, 100); /* 100ms timeout */
-      dbus_process(g_dbus_ctx, 0);
+    struct timespec now_ts;
+    clock_gettime(CLOCK_MONOTONIC, &now_ts);
+    uint64_t target_ms = (uint64_t)now_ts.tv_sec * 1000 +
+                         (uint64_t)now_ts.tv_nsec / 1000000 +
+                         (uint64_t)sleep_time * 1000;
+
+    while (g_running) {
+      clock_gettime(CLOCK_MONOTONIC, &now_ts);
+      uint64_t current_ms =
+          (uint64_t)now_ts.tv_sec * 1000 + (uint64_t)now_ts.tv_nsec / 1000000;
+
+      if (current_ms >= target_ms)
+        break;
+
+      int timeout_ms = (int)(target_ms - current_ms);
+
+      if (wd_enabled && wd_usec > 0) {
+        int wd_timeout_ms = (int)(wd_usec / 2000);
+        if (timeout_ms > wd_timeout_ms)
+          timeout_ms = wd_timeout_ms;
+      }
+
+      ipc_process(&g_ipc_ctx, timeout_ms);
       if (wd_enabled)
         sdnotify_watchdog_ping();
-#define TPM_PCR_EXTEND_DELAY_US 900000
-      usleep(TPM_PCR_EXTEND_DELAY_US);
     }
   }
 

@@ -858,6 +858,7 @@ int ipc_init(struct ipc_context *ctx) {
 
   ctx->running = true;
   ctx->status_flags = 0;
+  ctx->dbus_fd = -1;
 
   lota_info("IPC listening on %s", LOTA_IPC_SOCKET_PATH);
   return 0;
@@ -923,6 +924,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
 
   ctx->running = true;
   ctx->status_flags = 0;
+  ctx->dbus_fd = -1;
 
   lota_info("IPC using socket-activated fd %d", fd);
   return 0;
@@ -990,6 +992,12 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
 
   for (int i = 0; i < nfds; i++) {
     int fd = events[i].data.fd;
+
+    if (ctx->dbus && ctx->dbus_fd >= 0 && fd == ctx->dbus_fd) {
+      dbus_process(ctx->dbus, 0);
+      processed++;
+      continue;
+    }
 
     if (fd == ctx->listen_fd || ipc_is_listener(ctx, fd)) {
       /* new connection on primary or extra listener */
@@ -1197,6 +1205,33 @@ int ipc_is_listener(struct ipc_context *ctx, int fd) {
 }
 
 void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus) {
-  if (ctx)
-    ctx->dbus = dbus;
+  int old_fd;
+  int new_fd = -1;
+
+  if (!ctx)
+    return;
+
+  old_fd = ctx->dbus_fd;
+  if (dbus)
+    new_fd = dbus_get_fd(dbus);
+
+  if (ctx->epoll_fd >= 0 && old_fd >= 0 && old_fd != new_fd)
+    epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, old_fd, NULL);
+
+  ctx->dbus = dbus;
+  ctx->dbus_fd = new_fd;
+
+  if (ctx->epoll_fd >= 0 && new_fd >= 0) {
+    struct epoll_event ev;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data.fd = new_fd;
+
+    if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, new_fd, &ev) < 0 &&
+        errno != EEXIST) {
+      lota_warn("Failed to add D-Bus fd %d to epoll: %s", new_fd,
+                strerror(errno));
+    }
+  }
 }
