@@ -1065,11 +1065,11 @@ int tpm_aik_save_metadata(struct tpm_context *ctx) {
    * metadata file
    */
   char tmp[PATH_MAX];
-  ret = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  ret = snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path);
   if (ret < 0 || (size_t)ret >= sizeof(tmp))
     return -ENAMETOOLONG;
 
-  fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  fd = mkstemp(tmp);
   if (fd < 0)
     return -errno;
 
