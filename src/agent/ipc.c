@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,11 @@ struct uid_rate {
 #define MAX_RATE_ENTRIES 256
 static struct uid_rate rate_table[MAX_RATE_ENTRIES];
 static int rate_count = 0;
+
+static void ipc_secure_bzero(void *ptr, size_t len) {
+  if (ptr && len)
+    OPENSSL_cleanse(ptr, len);
+}
 
 /*
  * Check and update rate limit for a UID.
@@ -213,6 +219,8 @@ static void client_destroy(struct ipc_client *client) {
     if (*pp == client) {
       *pp = client->next;
       client_count--;
+      ipc_secure_bzero(client->recv_buf, sizeof(client->recv_buf));
+      ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
       close(client->fd);
       free(client);
       return;
@@ -226,6 +234,8 @@ static void client_destroy(struct ipc_client *client) {
  */
 static void build_error_response(struct ipc_client *client, uint32_t result) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
+
+  ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
 
   resp->magic = LOTA_IPC_MAGIC;
   resp->version = LOTA_IPC_VERSION;
@@ -373,24 +383,31 @@ static int compute_token_nonce(uint64_t valid_until, uint32_t flags,
   EVP_MD_CTX *mdctx;
   unsigned int len;
   uint8_t le_buf[12]; /* 8 + 4 */
+  int ret = 0;
 
   write_le64(le_buf, valid_until);
   write_le32(le_buf + 8, flags);
 
   mdctx = EVP_MD_CTX_new();
-  if (!mdctx)
-    return -ENOMEM;
+  if (!mdctx) {
+    ret = -ENOMEM;
+    goto cleanup;
+  }
 
   if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
       EVP_DigestUpdate(mdctx, le_buf, 12) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, 32) != 1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1) {
-    EVP_MD_CTX_free(mdctx);
-    return -EIO;
+    ret = -EIO;
+    goto cleanup;
   }
 
+cleanup:
   EVP_MD_CTX_free(mdctx);
-  return 0;
+  if (ret < 0)
+    ipc_secure_bzero(out_nonce, LOTA_NONCE_SIZE);
+  ipc_secure_bzero(le_buf, sizeof(le_buf));
+  return ret;
 }
 
 /*
@@ -406,23 +423,29 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   struct lota_ipc_response *resp = (void *)client->send_buf;
   struct lota_ipc_token *token;
   const struct lota_ipc_token_request *req = NULL;
-  uint8_t binding_nonce[LOTA_NONCE_SIZE];
+  uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
   struct tpm_quote_response quote;
   uint8_t *data_ptr;
   size_t total_size;
   int ret;
+  bool fail = false;
+  uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
+
+  memset(&quote, 0, sizeof(quote));
 
   if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
-    build_error_response(client, LOTA_IPC_ERR_NOT_ATTESTED);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
+    goto out;
   }
 
   /* rate limit GET_TOKEN per peer UID */
   if (check_rate_limit(client->peer_uid) < 0) {
     lota_warn("rate limited GET_TOKEN for uid=%d pid=%d", client->peer_uid,
               client->peer_pid);
-    build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_RATE_LIMITED;
+    goto out;
   }
 
   if (payload_len >= sizeof(*req))
@@ -441,23 +464,26 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   /* TPM context is required - refuse to issue unsigned tokens */
   if (!ctx->tpm) {
-    build_error_response(client, LOTA_IPC_ERR_TPM_FAILURE);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+    goto out;
   }
 
   ret = compute_token_nonce(token->valid_until, token->flags,
                             token->client_nonce, binding_nonce);
   if (ret < 0) {
     lota_err("compute_token_nonce failed: %s", strerror(-ret));
-    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
   }
 
   ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
   if (ret < 0) {
     lota_err("tpm_quote failed: %s", strerror(-ret));
-    build_error_response(client, LOTA_IPC_ERR_TPM_FAILURE);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+    goto out;
   }
 
   /* check buffer space */
@@ -465,8 +491,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
       LOTA_IPC_TOKEN_HEADER_SIZE + quote.attest_size + quote.signature_size;
   if (total_size > LOTA_IPC_MAX_PAYLOAD) {
     lota_err("token too large (%zu bytes)", total_size);
-    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
-    return;
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
   }
 
   token->attest_size = quote.attest_size;
@@ -490,6 +517,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   client->send_len = LOTA_IPC_RESPONSE_SIZE + total_size;
   client->send_offset = 0;
+
+out:
+  ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
+  ipc_secure_bzero(&quote, sizeof(quote));
+  if (fail)
+    build_error_response(client, fail_code);
 }
 
 /*
@@ -652,10 +685,12 @@ have_request:
   {
     size_t consumed = LOTA_IPC_REQUEST_SIZE + req->payload_len;
     if (client->recv_len > consumed) {
+      ipc_secure_bzero(client->recv_buf, consumed);
       memmove(client->recv_buf, client->recv_buf + consumed,
               client->recv_len - consumed);
       client->recv_len -= consumed;
     } else {
+      ipc_secure_bzero(client->recv_buf, client->recv_len);
       client->recv_len = 0;
     }
   }
@@ -690,6 +725,7 @@ static int handle_client_write(struct ipc_context *ctx,
 
   if (client->send_offset >= client->send_len) {
     /* response complete, reset */
+    ipc_secure_bzero(client->send_buf, client->send_len);
     client->send_len = 0;
     client->send_offset = 0;
 

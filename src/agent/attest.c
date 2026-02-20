@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -167,8 +168,10 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   struct tpm_quote_response quote_resp;
   struct iommu_status iommu_status;
   char kernel_path[LOTA_MAX_PATH_LEN];
+  uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
   int ret;
 
+  memset(&quote_resp, 0, sizeof(quote_resp));
   memset(report, 0, sizeof(*report));
 
   report->header.magic = LOTA_MAGIC;
@@ -255,7 +258,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    *   kernel_hash || agent_hash || iommu_status
    * ).
    */
-  uint8_t binding_nonce[LOTA_NONCE_SIZE];
   {
     EVP_MD_CTX *md = EVP_MD_CTX_new();
     unsigned int md_len;
@@ -270,7 +272,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 
     if (!md) {
       fprintf(stderr, "Failed to allocate EVP_MD_CTX\n");
-      return -ENOMEM;
+      ret = -ENOMEM;
+      goto cleanup;
     }
     if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
         EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) != 1 ||
@@ -286,7 +289,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
         EVP_DigestFinal_ex(md, binding_nonce, &md_len) != 1) {
       EVP_MD_CTX_free(md);
       fprintf(stderr, "Failed to compute binding nonce\n");
-      return -EIO;
+      ret = -EIO;
+      goto cleanup;
     }
     EVP_MD_CTX_free(md);
   }
@@ -294,7 +298,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   ret = tpm_quote(&g_tpm_ctx, binding_nonce, challenge->pcr_mask, &quote_resp);
   if (ret < 0) {
     fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
-    return ret;
+    goto cleanup;
   }
   printf("TPM quote generated (sig: %u bytes, attest: %u bytes)\n",
          quote_resp.signature_size, quote_resp.attest_size);
@@ -306,7 +310,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   if (quote_resp.signature_size > LOTA_MAX_SIG_SIZE) {
     fprintf(stderr, "TPM signature too large: %u > %u\n",
             quote_resp.signature_size, LOTA_MAX_SIG_SIZE);
-    return -EOVERFLOW;
+    ret = -EOVERFLOW;
+    goto cleanup;
   }
   memcpy(report->tpm.quote_signature, quote_resp.signature,
          quote_resp.signature_size);
@@ -321,7 +326,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   if (quote_resp.attest_size > LOTA_MAX_ATTEST_SIZE) {
     fprintf(stderr, "TPMS_ATTEST too large: %u > %u\n", quote_resp.attest_size,
             LOTA_MAX_ATTEST_SIZE);
-    return -EOVERFLOW;
+    ret = -EOVERFLOW;
+    goto cleanup;
   }
   memcpy(report->tpm.attest_data, quote_resp.attest_data,
          quote_resp.attest_size);
@@ -383,7 +389,12 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 
   report->header.flags |= LOTA_REPORT_FLAG_TPM_QUOTE_OK;
 
-  return 0;
+  ret = 0;
+
+cleanup:
+  OPENSSL_cleanse(binding_nonce, sizeof(binding_nonce));
+  OPENSSL_cleanse(&quote_resp, sizeof(quote_resp));
+  return ret;
 }
 
 /*
@@ -401,8 +412,13 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   uint8_t *event_log = NULL;
   size_t event_log_size = 0;
   uint8_t *wire_buf = NULL;
-  ssize_t wire_size;
+  size_t wire_buf_size = 0;
+  ssize_t wire_size = 0;
   int ret;
+
+  memset(&challenge, 0, sizeof(challenge));
+  memset(&result, 0, sizeof(result));
+  memset(&report, 0, sizeof(report));
 
   if (verbose)
     printf("Connecting to verifier at %s:%d...\n", server, port);
@@ -463,6 +479,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   /* serialize report with variable-length sections */
   {
     size_t total = calculate_report_size(0, (uint32_t)event_log_size);
+    wire_buf_size = total;
     wire_buf = malloc(total);
     if (!wire_buf) {
       fprintf(stderr, "Failed to allocate serialization buffer\n");
@@ -509,6 +526,13 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   ret = (result.result == VERIFY_OK) ? 0 : 1;
 
 cleanup:
+  OPENSSL_cleanse(&challenge, sizeof(challenge));
+  OPENSSL_cleanse(&result, sizeof(result));
+  OPENSSL_cleanse(&report, sizeof(report));
+  if (wire_buf)
+    OPENSSL_cleanse(wire_buf, wire_buf_size);
+  if (event_log)
+    OPENSSL_cleanse(event_log, event_log_size);
   free(wire_buf);
   free(event_log);
   net_context_cleanup(&net_ctx);
