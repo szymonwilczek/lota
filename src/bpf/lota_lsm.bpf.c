@@ -687,6 +687,116 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 }
 
 /* ======================================================================
+ * LSM hook: security_file_mprotect
+ *
+ * Called when protection of existing VMA is changed (mprotect).
+ *
+ * This closes W^X bypass where attacker maps RW first and later upgrades
+ * mapping to executable via mprotect(PROT_EXEC).
+ *
+ * @vma: Target VMA
+ * @reqprot: Requested protection flags
+ * @prot: Effective protection flags
+ *
+ * Return: 0 to allow, -EPERM to deny
+ * ====================================================================== */
+SEC("lsm/file_mprotect")
+int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
+             unsigned long reqprot, unsigned long prot, int ret) {
+  struct file *file;
+  struct lota_exec_event *event;
+  u32 mode;
+  int blocked = 0;
+
+  (void)reqprot;
+
+  if (ret != 0)
+    return ret;
+
+  /* only care when resulting mapping is executable */
+  if (!(prot & 0x4))
+    return 0;
+
+  mode = get_mode();
+  if (mode == LOTA_MODE_MAINTENANCE)
+    return 0;
+
+  file = BPF_CORE_READ(vma, vm_file);
+
+  if (!file) {
+    int anon_blocked = 0;
+
+    inc_stat(STAT_ANON_EXEC);
+
+    if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC))
+      anon_blocked = 1;
+
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (event) {
+      __builtin_memset(event, 0, sizeof(*event));
+      event->timestamp_ns = bpf_ktime_get_ns();
+      event->event_type =
+          anon_blocked ? LOTA_EVENT_ANON_EXEC_BLOCKED : LOTA_EVENT_ANON_EXEC;
+      event->tgid = bpf_get_current_pid_tgid() >> 32;
+      event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+      event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+
+      bpf_get_current_comm(event->comm, sizeof(event->comm));
+      __builtin_memcpy(event->filename, "(anon-mprotect-exec)", 20);
+
+      bpf_ringbuf_submit(event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
+    }
+
+    if (anon_blocked) {
+      inc_stat(STAT_ANON_EXEC_BLOCKED);
+      return -EPERM;
+    }
+
+    return 0;
+  }
+
+  inc_stat(STAT_MMAP_EXECS);
+
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
+    if (!is_verity_allowed(file)) {
+      if (!is_file_trusted_heuristic(file)) {
+        blocked = 1;
+      }
+    }
+  }
+
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type =
+        blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+    __builtin_memcpy(event->filename, "(mprotect-path_resolution_disabled)",
+                     35);
+
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
+  }
+
+  if (blocked) {
+    inc_stat(STAT_MMAP_BLOCKED);
+    return -EPERM;
+  }
+
+  return 0;
+}
+
+/* ======================================================================
  * LSM hook: security_ptrace_access_check
  *
  * Called when one process attempts to trace/debug another via ptrace.
