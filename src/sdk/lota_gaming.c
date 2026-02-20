@@ -168,6 +168,8 @@ static int recv_response(struct lota_client *client,
       size_t nlen =
           resp->payload_len < sizeof(nbuf) ? resp->payload_len : sizeof(nbuf);
 
+      memset(nbuf, 0, sizeof(nbuf));
+
       ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
       if (ret < 0)
         return ret;
@@ -774,6 +776,8 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
     if (resp.payload_len > 0) {
       size_t nlen =
           resp.payload_len < sizeof(buf) ? resp.payload_len : sizeof(buf);
+
+      memset(buf, 0, sizeof(buf));
 
       ret = wait_for_socket(client->fd, POLLIN,
                             timeout_ms > 0 ? timeout_ms : 1000);
