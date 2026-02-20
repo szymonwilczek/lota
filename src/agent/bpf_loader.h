@@ -150,6 +150,9 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
  * Protected PIDs get extra security in ENFORCE mode:
  *   - ptrace on these PIDs is blocked
  *
+ * Identity is bound to PID start time from /proc/<pid>/stat
+ * to prevent trust leakage on PID reuse.
+ *
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);

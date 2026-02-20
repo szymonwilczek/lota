@@ -97,19 +97,20 @@ struct {
 /*
  * Protected PID map.
  * Key: PID (u32)
- * Value: 1 = protected
+ * Value: identity binding for that PID instance.
  *
- * Processes in this map receive extra protection in ENFORCE mode:
- *   - ptrace attach is blocked
- *   - All executable mmaps are logged
- *
- * Userspace should add game server PIDs here.
+ * start_time_ticks is /proc/<pid>/stat field 22 (clock ticks since boot).
+ * Binding PID with start time prevents trust leakage via PID reuse.
  */
+struct protected_pid_entry {
+  u64 start_time_ticks;
+};
+
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, LOTA_MAX_PROTECTED_PIDS);
   __type(key, u32);
-  __type(value, u32);
+  __type(value, struct protected_pid_entry);
 } protected_pids SEC(".maps");
 
 /*
@@ -215,9 +216,38 @@ static __always_inline u32 get_config(u32 key) {
 /*
  * Check if a PID is in the protected set.
  */
-static __always_inline int is_protected_pid(u32 pid) {
-  u32 *val = bpf_map_lookup_elem(&protected_pids, &pid);
-  return val && *val;
+#define LOTA_USER_HZ 100ULL
+#define LOTA_NSEC_PER_SEC 1000000000ULL
+
+static __always_inline u64 get_task_start_ticks(struct task_struct *task) {
+  u64 start_ns;
+
+  if (!task)
+    return 0;
+
+  if (bpf_core_field_exists(task->start_boottime))
+    start_ns = BPF_CORE_READ(task, start_boottime);
+  else
+    start_ns = BPF_CORE_READ(task, start_time);
+
+  return start_ns / (LOTA_NSEC_PER_SEC / LOTA_USER_HZ);
+}
+
+static __always_inline int is_protected_task(struct task_struct *task) {
+  u32 pid;
+  u64 task_start_ticks;
+  struct protected_pid_entry *entry;
+
+  if (!task)
+    return 0;
+
+  pid = BPF_CORE_READ(task, pid);
+  entry = bpf_map_lookup_elem(&protected_pids, &pid);
+  if (!entry)
+    return 0;
+
+  task_start_ticks = get_task_start_ticks(task);
+  return task_start_ticks && entry->start_time_ticks == task_start_ticks;
 }
 
 /*
@@ -838,7 +868,7 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
    * Also block if LOTA_CFG_BLOCK_PTRACE is set.
    */
   if (lota_mode == LOTA_MODE_ENFORCE) {
-    if (is_protected_pid(child_pid)) {
+    if (is_protected_task(child)) {
       blocked = 1;
     } else if (get_config(LOTA_CFG_BLOCK_PTRACE)) {
       blocked = 1;
@@ -875,6 +905,25 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
     return -EPERM;
   }
 
+  return 0;
+}
+
+/* ======================================================================
+ * LSM hook: task_free
+ *
+ * Called when task exits and resources are being freed.
+ * Removes stale protected PID entries to reduce residency window and
+ * prevent stale metadata accumulation.
+ * ====================================================================== */
+SEC("lsm/task_free")
+int BPF_PROG(lota_task_free, struct task_struct *task) {
+  u32 pid;
+
+  if (!task)
+    return 0;
+
+  pid = BPF_CORE_READ(task, pid);
+  bpf_map_delete_elem(&protected_pids, &pid);
   return 0;
 }
 

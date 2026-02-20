@@ -30,6 +30,64 @@
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
 
+struct protected_pid_entry {
+  uint64_t start_time_ticks;
+};
+
+/*
+ * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
+ */
+static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks) {
+  char path[64];
+  FILE *fp;
+  char line[4096];
+  char *rparen;
+  char *field;
+  char *saveptr = NULL;
+  int field_index = 3;
+
+  if (!start_time_ticks)
+    return -EINVAL;
+
+  snprintf(path, sizeof(path), "/proc/%u/stat", pid);
+  fp = fopen(path, "r");
+  if (!fp)
+    return -errno;
+
+  if (!fgets(line, sizeof(line), fp)) {
+    int err = ferror(fp) ? -errno : -EIO;
+    fclose(fp);
+    return err;
+  }
+  fclose(fp);
+
+  rparen = strrchr(line, ')');
+  if (!rparen)
+    return -EINVAL;
+
+  field = rparen + 2; /* skip ") " before field 3 */
+  if (*field == '\0')
+    return -EINVAL;
+
+  for (char *tok = strtok_r(field, " ", &saveptr); tok;
+       tok = strtok_r(NULL, " ", &saveptr), field_index++) {
+    if (field_index == 22) {
+      char *end = NULL;
+      unsigned long long val;
+
+      errno = 0;
+      val = strtoull(tok, &end, 10);
+      if (errno != 0 || end == tok || (end && *end != '\0'))
+        return -EINVAL;
+
+      *start_time_ticks = (uint64_t)val;
+      return 0;
+    }
+  }
+
+  return -EINVAL;
+}
+
 /*
  * libbpf print callback - redirect to stderr with prefix
  */
@@ -377,13 +435,21 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 }
 
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
-  uint32_t value = 1;
+  struct protected_pid_entry value = {0};
+  int ret;
 
   if (!ctx || !ctx->loaded)
     return -EINVAL;
 
   if (ctx->protected_pids_fd < 0)
     return -ENOTSUP;
+
+  ret = read_pid_start_time_ticks(pid, &value.start_time_ticks);
+  if (ret < 0)
+    return ret;
+
+  if (value.start_time_ticks == 0)
+    return -EINVAL;
 
   return bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY);
 }
