@@ -43,8 +43,9 @@ type ClockInfo struct {
 
 // TPMS_QUOTE_INFO
 type QuoteInfo struct {
-	PCRSelect []byte // TPML_PCR_SELECTION
-	PCRDigest []byte // TPM2B_DIGEST - hash of selected PCR values
+	PCRSelect  []byte // TPML_PCR_SELECTION
+	PCRDigest  []byte // TPM2B_DIGEST - hash of selected PCR values
+	PCRHashAlg uint16 // hash algorithm from TPMS_PCR_SELECTION
 }
 
 // parses raw TPMS_ATTEST blob from TPM
@@ -137,12 +138,18 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 	// reconstruct the raw TPML_PCR_SELECTION bytes for signature verification
 	var pcrSelectBuf bytes.Buffer
 	binary.Write(&pcrSelectBuf, binary.BigEndian, count)
+	var pcrHashAlg uint16
 
 	for i := uint32(0); i < count; i++ {
 		var hashAlg uint16
 		var sizeOfSelect uint8
 		if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
 			return nil, err
+		}
+		if i == 0 {
+			pcrHashAlg = hashAlg
+		} else if hashAlg != pcrHashAlg {
+			return nil, fmt.Errorf("mixed PCR hash algorithms in TPMS_ATTEST: 0x%04X and 0x%04X", pcrHashAlg, hashAlg)
 		}
 		if err := binary.Read(r, binary.BigEndian, &sizeOfSelect); err != nil {
 			return nil, err
@@ -157,6 +164,7 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 		pcrSelectBuf.Write(selectBytes)
 	}
 	qi.PCRSelect = pcrSelectBuf.Bytes()
+	qi.PCRHashAlg = pcrHashAlg
 
 	// PCR digest (TPM2B_DIGEST: 2 bytes size + data)
 	var digestSize uint16

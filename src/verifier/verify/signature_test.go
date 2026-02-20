@@ -6,11 +6,14 @@
 package verify
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
+	"encoding/binary"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -185,7 +188,7 @@ func TestVerifyReportSignature_ValidReport(t *testing.T) {
 	t.Log("SECURITY TEST: Full report signature verification")
 	t.Log("End-to-end test of signature verification pipeline")
 
-	attestData := []byte("real TPMS_ATTEST blob would be here")
+	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA256, sha256.Size)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, hash[:])
 
@@ -236,7 +239,7 @@ func TestVerifyReportSignature_NoAttestData(t *testing.T) {
 func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	t.Log("SECURITY TEST: Report signature verification with RSA-PSS")
 
-	attestData := []byte("TPMS_ATTEST blob signed with PSS")
+	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA256, sha256.Size)
 	hash := sha256.Sum256(attestData)
 	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
 	signature, err := rsa.SignPSS(rand.Reader, testKeyPair, crypto.SHA256, hash[:], opts)
@@ -256,6 +259,81 @@ func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	}
 
 	t.Log("✓ Report with PSS signature correctly verified via fallback")
+}
+
+func TestVerifyReportSignature_SHA384FromTPMSAttest(t *testing.T) {
+	t.Log("SECURITY TEST: Signature verification uses TPM-provided SHA-384 hash algorithm")
+
+	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA384, sha512.Size384)
+	h := sha512.Sum384(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA384, h[:])
+	if err != nil {
+		t.Fatalf("Failed to create SHA-384 signature: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.AttestSize = uint16(len(attestData))
+	copy(report.TPM.AttestData[:], attestData)
+	report.TPM.QuoteSigSize = uint16(len(signature))
+	copy(report.TPM.QuoteSignature[:], signature)
+
+	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
+	if err != nil {
+		t.Fatalf("SHA-384 report signature verification failed: %v", err)
+	}
+
+	t.Log("✓ Report with SHA-384 TPM hash metadata correctly verified")
+}
+
+func TestVerifyReportSignature_SHA512FromTPMSAttest(t *testing.T) {
+	t.Log("SECURITY TEST: Signature verification uses TPM-provided SHA-512 hash algorithm")
+
+	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA512, sha512.Size)
+	h := sha512.Sum512(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA512, h[:])
+	if err != nil {
+		t.Fatalf("Failed to create SHA-512 signature: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.AttestSize = uint16(len(attestData))
+	copy(report.TPM.AttestData[:], attestData)
+	report.TPM.QuoteSigSize = uint16(len(signature))
+	copy(report.TPM.QuoteSignature[:], signature)
+
+	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
+	if err != nil {
+		t.Fatalf("SHA-512 report signature verification failed: %v", err)
+	}
+
+	t.Log("✓ Report with SHA-512 TPM hash metadata correctly verified")
+}
+
+func buildQuoteAttestForSignatureTest(hashAlg uint16, digestSize int) []byte {
+	var buf bytes.Buffer
+
+	binary.Write(&buf, binary.BigEndian, uint32(TPMGeneratedValue))
+	binary.Write(&buf, binary.BigEndian, uint16(TPMSTAttestQuote))
+
+	binary.Write(&buf, binary.BigEndian, uint16(0))
+	binary.Write(&buf, binary.BigEndian, uint16(32))
+	buf.Write(bytes.Repeat([]byte{0xAB}, 32))
+
+	binary.Write(&buf, binary.BigEndian, uint64(1))
+	binary.Write(&buf, binary.BigEndian, uint32(0))
+	binary.Write(&buf, binary.BigEndian, uint32(0))
+	buf.WriteByte(1)
+	binary.Write(&buf, binary.BigEndian, uint64(1))
+
+	binary.Write(&buf, binary.BigEndian, uint32(1))
+	binary.Write(&buf, binary.BigEndian, hashAlg)
+	buf.WriteByte(3)
+	buf.Write([]byte{0x00, 0x00, 0x01})
+
+	binary.Write(&buf, binary.BigEndian, uint16(digestSize))
+	buf.Write(bytes.Repeat([]byte{0xCD}, digestSize))
+
+	return buf.Bytes()
 }
 
 func TestParseRSAPublicKey_RejectsSmallKey(t *testing.T) {

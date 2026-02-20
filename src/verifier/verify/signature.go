@@ -46,14 +46,24 @@ func (v *RSASSAVerifier) Name() string {
 }
 
 func (v *RSASSAVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
+	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
+}
+
+func (v *RSASSAVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
+	if !hashAlg.Available() {
+		return fmt.Errorf("hash algorithm unavailable: %v", hashAlg)
+	}
 
-	// TPM signs SHA-256 hash of attestData
-	hash := sha256.Sum256(attestData)
+	h := hashAlg.New()
+	if _, err := h.Write(attestData); err != nil {
+		return fmt.Errorf("failed to hash attestation data: %w", err)
+	}
+	digest := h.Sum(nil)
 
-	err := rsa.VerifyPKCS1v15(aikPubKey, crypto.SHA256, hash[:], signature)
+	err := rsa.VerifyPKCS1v15(aikPubKey, hashAlg, digest, signature)
 	if err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
@@ -73,18 +83,29 @@ func (v *RSAPSSVerifier) Name() string {
 }
 
 func (v *RSAPSSVerifier) VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error {
+	return v.VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, crypto.SHA256)
+}
+
+func (v *RSAPSSVerifier) VerifyQuoteSignatureWithHash(attestData, signature []byte, aikPubKey *rsa.PublicKey, hashAlg crypto.Hash) error {
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
+	if !hashAlg.Available() {
+		return fmt.Errorf("hash algorithm unavailable: %v", hashAlg)
+	}
 
-	hash := sha256.Sum256(attestData)
+	h := hashAlg.New()
+	if _, err := h.Write(attestData); err != nil {
+		return fmt.Errorf("failed to hash attestation data: %w", err)
+	}
+	digest := h.Sum(nil)
 
 	opts := &rsa.PSSOptions{
 		SaltLength: rsa.PSSSaltLengthEqualsHash,
-		Hash:       crypto.SHA256,
+		Hash:       hashAlg,
 	}
 
-	err := rsa.VerifyPSS(aikPubKey, crypto.SHA256, hash[:], signature, opts)
+	err := rsa.VerifyPSS(aikPubKey, hashAlg, digest, signature, opts)
 	if err != nil {
 		return fmt.Errorf("PSS signature verification failed: %w", err)
 	}
@@ -126,19 +147,77 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
+	hashAlg, hashSource, err := selectQuoteHashAlgorithm(attestData)
+	if err != nil {
+		return err
+	}
 
 	// wire format does not carry sig_alg, so try RSASSA first then PSS
-	rsassaErr := NewRSASSAVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey)
+	rsassaErr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
 	if rsassaErr == nil {
 		return nil
 	}
 
-	pssErr := NewRSAPSSVerifier().VerifyQuoteSignature(attestData, signature, aikPubKey)
+	pssErr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
 	if pssErr == nil {
 		return nil
 	}
 
-	return fmt.Errorf("TPM quote signature invalid (tried RSASSA: %v, PSS: %v)", rsassaErr, pssErr)
+	return fmt.Errorf("TPM quote signature invalid (hash=%s source=%s, tried RSASSA: %v, PSS: %v)", hashName(hashAlg), hashSource, rsassaErr, pssErr)
+}
+
+const (
+	tpmAlgSHA1   = 0x0004
+	tpmAlgSHA256 = 0x000B
+	tpmAlgSHA384 = 0x000C
+	tpmAlgSHA512 = 0x000D
+)
+
+func tpmAlgToCryptoHash(tpmAlg uint16) (crypto.Hash, error) {
+	switch tpmAlg {
+	case tpmAlgSHA256:
+		return crypto.SHA256, nil
+	case tpmAlgSHA384:
+		return crypto.SHA384, nil
+	case tpmAlgSHA512:
+		return crypto.SHA512, nil
+	case tpmAlgSHA1:
+		return 0, fmt.Errorf("TPM hash algorithm SHA-1 (0x%04X) is not allowed", tpmAlg)
+	default:
+		return 0, fmt.Errorf("unsupported TPM hash algorithm: 0x%04X", tpmAlg)
+	}
+}
+
+func selectQuoteHashAlgorithm(attestData []byte) (crypto.Hash, string, error) {
+	attest, err := ParseTPMSAttest(attestData)
+	if err != nil {
+		return 0, "tpms_attest.pcr_hash_alg", fmt.Errorf("failed to parse TPMS_ATTEST for hash selection: %w", err)
+	}
+	if attest == nil || attest.QuoteInfo == nil || attest.QuoteInfo.PCRHashAlg == 0 {
+		return 0, "tpms_attest.pcr_hash_alg", errors.New("TPMS_ATTEST missing PCR hash algorithm metadata")
+	}
+
+	h, mapErr := tpmAlgToCryptoHash(attest.QuoteInfo.PCRHashAlg)
+	if mapErr != nil {
+		return 0, "tpms_attest.pcr_hash_alg", mapErr
+	}
+	if !h.Available() {
+		return 0, "tpms_attest.pcr_hash_alg", fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
+	}
+	return h, "tpms_attest.pcr_hash_alg", nil
+}
+
+func hashName(h crypto.Hash) string {
+	switch h {
+	case crypto.SHA256:
+		return "SHA-256"
+	case crypto.SHA384:
+		return "SHA-384"
+	case crypto.SHA512:
+		return "SHA-512"
+	default:
+		return fmt.Sprintf("hash(%d)", int(h))
+	}
 }
 
 // parses RSA public key from DER-encoded PKIX/SPKI format
@@ -167,6 +246,6 @@ func AIKFingerprint(aikPubKey *rsa.PublicKey) string {
 	if err != nil {
 		return ""
 	}
-	hash := sha256.Sum256(keyBytes)
-	return hex.EncodeToString(hash[:])
+	h := sha256.Sum256(keyBytes)
+	return hex.EncodeToString(h[:])
 }
