@@ -422,7 +422,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
                              const uint8_t *payload, uint32_t payload_len) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
   struct lota_ipc_token *token;
-  const struct lota_ipc_token_request *req = NULL;
+  struct lota_ipc_token_request req_local;
+  bool has_req = false;
   uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
   struct tpm_quote_response quote;
   uint8_t *data_ptr;
@@ -448,8 +449,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     goto out;
   }
 
-  if (payload_len >= sizeof(*req))
-    req = (const void *)payload;
+  if (payload_len >= sizeof(req_local)) {
+    memcpy(&req_local, payload, sizeof(req_local));
+    has_req = true;
+  }
 
   /* build token header */
   token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
@@ -457,8 +460,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   token->valid_until = ctx->valid_until;
   token->flags = ctx->status_flags;
 
-  if (req)
-    memcpy(token->client_nonce, req->nonce, 32);
+  if (has_req)
+    memcpy(token->client_nonce, req_local.nonce, 32);
   else
     memset(token->client_nonce, 0, 32);
 
@@ -534,24 +537,24 @@ out:
 static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
                              const uint8_t *payload, uint32_t payload_len) {
   struct lota_ipc_response *resp = (void *)client->send_buf;
-  const struct lota_ipc_subscribe_request *sub;
+  struct lota_ipc_subscribe_request sub;
   (void)ctx;
 
-  if (payload_len < sizeof(*sub)) {
+  if (payload_len < sizeof(sub)) {
     build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
     return;
   }
 
-  sub = (const void *)payload;
+  memcpy(&sub, payload, sizeof(sub));
 
-  if (sub->event_mask == 0) {
+  if (sub.event_mask == 0) {
     client->subscribed = false;
     client->event_mask = 0;
     client->notify_pending = false;
     client->pending_events = 0;
   } else {
     client->subscribed = true;
-    client->event_mask = sub->event_mask;
+    client->event_mask = sub.event_mask;
   }
 
   resp->magic = LOTA_IPC_MAGIC;
@@ -568,22 +571,25 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
  */
 static void process_request(struct ipc_context *ctx,
                             struct ipc_client *client) {
-  struct lota_ipc_request *req = (void *)client->recv_buf;
+  struct lota_ipc_request req;
   uint8_t *payload = client->recv_buf + LOTA_IPC_REQUEST_SIZE;
-  uint32_t payload_len = req->payload_len;
+  uint32_t payload_len;
 
-  if (req->magic != LOTA_IPC_MAGIC) {
+  memcpy(&req, client->recv_buf, sizeof(req));
+  payload_len = req.payload_len;
+
+  if (req.magic != LOTA_IPC_MAGIC) {
     build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
     return;
   }
 
-  if (req->version != LOTA_IPC_VERSION) {
+  if (req.version != LOTA_IPC_VERSION) {
     build_error_response(client, LOTA_IPC_ERR_BAD_VERSION);
     return;
   }
 
   /* dispatch command */
-  switch (req->cmd) {
+  switch (req.cmd) {
   case LOTA_IPC_CMD_PING:
     handle_ping(ctx, client);
     break;
@@ -613,7 +619,7 @@ static int handle_client_read(struct ipc_context *ctx,
                               struct ipc_client *client) {
   ssize_t n;
   size_t need;
-  struct lota_ipc_request *req;
+  struct lota_ipc_request req;
 
   /*
    * Check if the buffer already contains a complete request from a
@@ -622,15 +628,15 @@ static int handle_client_read(struct ipc_context *ctx,
   if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
     goto do_recv;
 
-  req = (void *)client->recv_buf;
+  memcpy(&req, client->recv_buf, sizeof(req));
 
-  if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
+  if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
     lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
-              client->peer_uid, req->payload_len);
+              client->peer_uid, req.payload_len);
     return -1; /* close: cannot recover from protocol desync */
   }
 
-  need = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+  need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
   if (client->recv_len >= need)
     goto have_request;
 
@@ -654,16 +660,16 @@ do_recv:
   if (client->recv_len < LOTA_IPC_REQUEST_SIZE)
     return 0;
 
-  req = (void *)client->recv_buf;
+  memcpy(&req, client->recv_buf, sizeof(req));
 
-  if (req->payload_len > LOTA_IPC_MAX_PAYLOAD) {
+  if (req.payload_len > LOTA_IPC_MAX_PAYLOAD) {
     lota_warn("oversized payload from pid=%d uid=%d (len=%u)", client->peer_pid,
-              client->peer_uid, req->payload_len);
+              client->peer_uid, req.payload_len);
     return -1; /* close: cannot recover from protocol desync */
   }
 
   /* complete request? */
-  need = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+  need = LOTA_IPC_REQUEST_SIZE + req.payload_len;
   if (client->recv_len < need)
     return 0;
 
@@ -683,7 +689,7 @@ have_request:
 
   /* preserve any leftover bytes from the next pipelined request */
   {
-    size_t consumed = LOTA_IPC_REQUEST_SIZE + req->payload_len;
+    size_t consumed = LOTA_IPC_REQUEST_SIZE + req.payload_len;
     if (client->recv_len > consumed) {
       ipc_secure_bzero(client->recv_buf, consumed);
       memmove(client->recv_buf, client->recv_buf + consumed,
