@@ -69,6 +69,26 @@ type BanStore interface {
 	ListBans() []BanEntry
 }
 
+// optional interface for stores that support SQL-level pagination.
+type PaginatedBanLister interface {
+	ListBansPage(limit, offset int) []BanEntry
+}
+
+// optional interface for stores that can return pagination errors.
+type PaginatedBanListerWithError interface {
+	ListBansPageE(limit, offset int) ([]BanEntry, error)
+}
+
+// optional interface for retrieving total ban count efficiently.
+type BanCounter interface {
+	CountBans() int
+}
+
+// optional interface for retrieving total ban count with error propagation.
+type BanCounterWithError interface {
+	CountBansE() (int, error)
+}
+
 // records all enforcement actions for forensic review
 // Log is append-only - entries are never modified or deleted.
 type AuditLog interface {
@@ -178,6 +198,30 @@ func (s *MemoryBanStore) ListBans() []BanEntry {
 		entries = append(entries, *entry)
 	}
 	return entries
+}
+
+func (s *MemoryBanStore) ListBansPage(limit, offset int) []BanEntry {
+	entries := s.ListBans()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(entries) {
+		return []BanEntry{}
+	}
+	if limit <= 0 {
+		return entries[offset:]
+	}
+	end := offset + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	return entries[offset:end]
+}
+
+func (s *MemoryBanStore) CountBans() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.bans)
 }
 
 // implements AuditLog using an in-memory slice (testing only)

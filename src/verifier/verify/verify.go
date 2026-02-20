@@ -669,3 +669,13 @@ func (v *Verifier) RevocationStore() store.RevocationStore {
 func (v *Verifier) BanStore() store.BanStore {
 	return v.banStore
 }
+
+// returns the configured AIK store implementation
+func (v *Verifier) AIKStore() store.AIKStore {
+	return v.aikStore
+}
+
+// returns client IDs currently present in the nonce store
+func (v *Verifier) ListActiveClients() []string {
+	return v.nonceStore.ListActiveClients()
+}

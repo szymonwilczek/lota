@@ -124,7 +124,6 @@ func (s *SQLiteRevocationStore) ListRevocations() []RevocationEntry {
 
 // implements BanStore using the hardware_bans table
 type SQLiteBanStore struct {
-	mu       sync.RWMutex
 	db       *sql.DB
 	auditLog AuditLog
 }
@@ -136,9 +135,6 @@ func NewSQLiteBanStore(db *sql.DB, auditLog AuditLog) *SQLiteBanStore {
 }
 
 func (s *SQLiteBanStore) BanHardware(hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// check if already banned
 	var existing []byte
 	err := s.db.QueryRow("SELECT hardware_id FROM hardware_bans WHERE hardware_id = ?", hardwareID[:]).Scan(&existing)
@@ -166,9 +162,6 @@ func (s *SQLiteBanStore) BanHardware(hardwareID [32]byte, reason RevocationReaso
 }
 
 func (s *SQLiteBanStore) IsBanned(hardwareID [32]byte) (*BanEntry, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var entry BanEntry
 	var hwid []byte
 	var reason string
@@ -188,9 +181,6 @@ func (s *SQLiteBanStore) IsBanned(hardwareID [32]byte) (*BanEntry, bool) {
 }
 
 func (s *SQLiteBanStore) UnbanHardware(hardwareID [32]byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE hardware_id = ?", hardwareID[:])
 	if err != nil {
 		return err
@@ -209,14 +199,32 @@ func (s *SQLiteBanStore) UnbanHardware(hardwareID [32]byte) error {
 }
 
 func (s *SQLiteBanStore) ListBans() []BanEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.ListBansPage(0, 0)
+}
 
-	rows, err := s.db.Query(
-		"SELECT hardware_id, reason, banned_at, banned_by, note FROM hardware_bans ORDER BY banned_at DESC",
-	)
+func (s *SQLiteBanStore) ListBansPage(limit, offset int) []BanEntry {
+	entries, err := s.ListBansPageE(limit, offset)
 	if err != nil {
 		return nil
+	}
+	return entries
+}
+
+func (s *SQLiteBanStore) ListBansPageE(limit, offset int) ([]BanEntry, error) {
+	query := "SELECT hardware_id, reason, banned_at, banned_by, note FROM hardware_bans ORDER BY banned_at DESC"
+	args := make([]any, 0, 2)
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+		if offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, offset)
+		}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -233,7 +241,28 @@ func (s *SQLiteBanStore) ListBans() []BanEntry {
 			entries = append(entries, entry)
 		}
 	}
-	return entries
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+func (s *SQLiteBanStore) CountBans() int {
+	total, err := s.CountBansE()
+	if err != nil {
+		return 0
+	}
+	return total
+}
+
+func (s *SQLiteBanStore) CountBansE() (int, error) {
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM hardware_bans").Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // implements AuditLog using the audit_log table
