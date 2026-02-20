@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../../include/lota_gaming.h"
@@ -28,6 +29,7 @@
  */
 #define MAX_DISCOVERY_PATHS 4
 #define VERSION_STRING "1.0.0"
+#define DRAIN_READ_TIMEOUT_MS 50
 
 /*
  * Client context
@@ -135,7 +137,65 @@ static int send_request(struct lota_client *client,
 /* for helpers used by recv_response */
 static int dispatch_notification(struct lota_client *client,
                                  const void *payload, size_t payload_len);
-static void drain_payload(int fd, size_t remaining);
+static int drain_payload(int fd, size_t remaining, int timeout_ms);
+
+static int64_t monotonic_ms(void) {
+  struct timespec ts;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    return 0;
+
+  return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+/*
+ * Receive exactly len bytes using non-blocking recv + poll-based timeout.
+ */
+static int recv_exact_timeout(int fd, void *buf, size_t len, int timeout_ms) {
+  uint8_t *p = buf;
+  size_t remaining = len;
+  int64_t deadline_ms;
+
+  if (timeout_ms < 0)
+    timeout_ms = DEFAULT_TIMEOUT_MS;
+
+  deadline_ms = monotonic_ms() + timeout_ms;
+
+  while (remaining > 0) {
+    ssize_t n = recv(fd, p, remaining, MSG_DONTWAIT);
+
+    if (n > 0) {
+      p += n;
+      remaining -= (size_t)n;
+      continue;
+    }
+
+    if (n == 0)
+      return -ECONNRESET;
+
+    if (errno == EINTR)
+      continue;
+
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      int wait_ms = timeout_ms;
+      if (timeout_ms > 0) {
+        int64_t now_ms = monotonic_ms();
+        wait_ms = (int)(deadline_ms - now_ms);
+        if (wait_ms <= 0)
+          return -ETIMEDOUT;
+      }
+
+      int ret = wait_for_socket(fd, POLLIN, wait_ms);
+      if (ret < 0)
+        return ret;
+      continue;
+    }
+
+    return -errno;
+  }
+
+  return 0;
+}
 
 /*
  * Receive response with timeout
@@ -143,7 +203,6 @@ static void drain_payload(int fd, size_t remaining);
 static int recv_response(struct lota_client *client,
                          struct lota_ipc_response *resp, void *payload,
                          size_t payload_size, size_t *payload_len) {
-  ssize_t n;
   int ret;
 
   /*
@@ -152,13 +211,10 @@ static int recv_response(struct lota_client *client,
    * response are dispatched via the callback and skipped.
    */
   for (;;) {
-    ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
+    ret =
+        recv_exact_timeout(client->fd, resp, sizeof(*resp), client->timeout_ms);
     if (ret < 0)
       return ret;
-
-    n = recv(client->fd, resp, sizeof(*resp), MSG_WAITALL);
-    if (n != sizeof(*resp))
-      return (n < 0) ? -errno : -EIO;
 
     if (resp->magic != LOTA_IPC_MAGIC)
       return LOTA_ERR_PROTOCOL;
@@ -170,16 +226,13 @@ static int recv_response(struct lota_client *client,
 
       memset(nbuf, 0, sizeof(nbuf));
 
-      ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
+      ret = recv_exact_timeout(client->fd, nbuf, nlen, client->timeout_ms);
       if (ret < 0)
         return ret;
 
-      n = recv(client->fd, nbuf, nlen, MSG_WAITALL);
-      if (n != (ssize_t)nlen)
-        return (n < 0) ? -errno : -EIO;
-
       if (resp->payload_len > sizeof(nbuf))
-        drain_payload(client->fd, resp->payload_len - sizeof(nbuf));
+        drain_payload(client->fd, resp->payload_len - sizeof(nbuf),
+                      client->timeout_ms);
 
       dispatch_notification(client, nbuf, nlen);
       continue;
@@ -191,17 +244,14 @@ static int recv_response(struct lota_client *client,
   /* receive payload if present */
   if (resp->payload_len > 0) {
     if (resp->payload_len > payload_size) {
-      drain_payload(client->fd, resp->payload_len);
+      drain_payload(client->fd, resp->payload_len, client->timeout_ms);
       return LOTA_ERR_BUFFER_TOO_SMALL;
     }
 
-    ret = wait_for_socket(client->fd, POLLIN, client->timeout_ms);
+    ret = recv_exact_timeout(client->fd, payload, resp->payload_len,
+                             client->timeout_ms);
     if (ret < 0)
       return ret;
-
-    n = recv(client->fd, payload, resp->payload_len, MSG_WAITALL);
-    if (n != (ssize_t)resp->payload_len)
-      return (n < 0) ? -errno : -EIO;
 
     if (payload_len)
       *payload_len = resp->payload_len;
@@ -265,17 +315,49 @@ static int dispatch_notification(struct lota_client *client,
 /*
  * Drain and discard a response payload from the socket.
  */
-static void drain_payload(int fd, size_t remaining) {
+static int drain_payload(int fd, size_t remaining, int timeout_ms) {
   char discard[256];
+  int64_t deadline_ms;
+
+  if (timeout_ms < 0)
+    timeout_ms = DEFAULT_TIMEOUT_MS;
+
+  deadline_ms = monotonic_ms() + timeout_ms;
 
   while (remaining > 0) {
     size_t chunk = remaining < sizeof(discard) ? remaining : sizeof(discard);
-    ssize_t n = recv(fd, discard, chunk, 0);
+    ssize_t n = recv(fd, discard, chunk, MSG_DONTWAIT);
 
-    if (n <= 0)
-      break;
-    remaining -= (size_t)n;
+    if (n > 0) {
+      remaining -= (size_t)n;
+      continue;
+    }
+
+    if (n == 0)
+      return -ECONNRESET;
+
+    if (errno == EINTR)
+      continue;
+
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      int wait_ms = timeout_ms;
+      if (timeout_ms > 0) {
+        int64_t now_ms = monotonic_ms();
+        wait_ms = (int)(deadline_ms - now_ms);
+        if (wait_ms <= 0)
+          return -ETIMEDOUT;
+      }
+
+      int ret = wait_for_socket(fd, POLLIN, wait_ms);
+      if (ret < 0)
+        return ret;
+      continue;
+    }
+
+    return -errno;
   }
+
+  return 0;
 }
 
 struct lota_client *lota_connect(void) { return lota_connect_opts(NULL); }
@@ -743,7 +825,6 @@ int lota_unsubscribe(struct lota_client *client) {
 int lota_poll_events(struct lota_client *client, int timeout_ms) {
   struct lota_ipc_response resp;
   uint8_t buf[sizeof(struct lota_ipc_notify)];
-  ssize_t n;
   int ret;
   int dispatched = 0;
 
@@ -757,10 +838,14 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
     if (ret < 0)
       return LOTA_ERR_PROTOCOL;
 
-    n = recv(client->fd, &resp, sizeof(resp), MSG_WAITALL);
-    if (n == 0)
+    ret =
+        recv_exact_timeout(client->fd, &resp, sizeof(resp),
+                           timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
+    if (ret == -ETIMEDOUT)
+      break;
+    if (ret == -ECONNRESET)
       return LOTA_ERR_NOT_CONNECTED;
-    if (n != sizeof(resp))
+    if (ret < 0)
       return LOTA_ERR_PROTOCOL;
 
     if (resp.magic != LOTA_IPC_MAGIC)
@@ -769,7 +854,8 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
     if (resp.result != LOTA_IPC_NOTIFY) {
       /* unexpected non-notification -> drain and skip */
       if (resp.payload_len > 0)
-        drain_payload(client->fd, resp.payload_len);
+        drain_payload(client->fd, resp.payload_len,
+                      timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
       continue;
     }
 
@@ -779,17 +865,15 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
 
       memset(buf, 0, sizeof(buf));
 
-      ret = wait_for_socket(client->fd, POLLIN,
-                            timeout_ms > 0 ? timeout_ms : 1000);
+      ret = recv_exact_timeout(client->fd, buf, nlen,
+                               timeout_ms > 0 ? timeout_ms
+                                              : DRAIN_READ_TIMEOUT_MS);
       if (ret < 0)
-        break;
-
-      n = recv(client->fd, buf, nlen, MSG_WAITALL);
-      if (n != (ssize_t)nlen)
         return LOTA_ERR_PROTOCOL;
 
       if (resp.payload_len > sizeof(buf))
-        drain_payload(client->fd, resp.payload_len - sizeof(buf));
+        drain_payload(client->fd, resp.payload_len - sizeof(buf),
+                      timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
 
       dispatched += dispatch_notification(client, buf, nlen);
     }
