@@ -52,6 +52,38 @@ type AIKStore interface {
 	RotateAIK(clientID string, newKey *rsa.PublicKey) error
 }
 
+// optional interface for database-backed stores to avoid loading all clients
+// into memory for API list endpoints.
+type PaginatedClientLister interface {
+	ListClientsPage(limit, offset int) []string
+}
+
+// optional interface for stores that can return pagination errors.
+type PaginatedClientListerWithError interface {
+	ListClientsPageE(limit, offset int) ([]string, error)
+}
+
+// optional interface for retrieving total client count efficiently.
+type ClientCounter interface {
+	CountClients() int
+}
+
+// optional interface for retrieving total client count with error propagation.
+type ClientCounterWithError interface {
+	CountClientsE() (int, error)
+}
+
+// optional interface for checking if a client exists in the persistent store.
+type ClientExistenceChecker interface {
+	HasClient(clientID string) (bool, error)
+}
+
+// optional interface for checking existence of multiple client IDs efficiently.
+// intended for DB-backed stores to avoid N+1 queries in API list endpoints.
+type ClientExistenceBatchChecker interface {
+	ExistingClients(clientIDs []string) (map[string]struct{}, error)
+}
+
 // metadata persisted alongside AIK public keys for lifecycle management
 // used by FileStore to track registration time in a sidecar JSON file
 type aikMeta struct {
@@ -298,6 +330,30 @@ func (fs *FileStore) ListClients() []string {
 	return clients
 }
 
+func (fs *FileStore) ListClientsPage(limit, offset int) []string {
+	clients := fs.ListClients()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(clients) {
+		return []string{}
+	}
+	if limit <= 0 {
+		return clients[offset:]
+	}
+	end := offset + limit
+	if end > len(clients) {
+		end = len(clients)
+	}
+	return clients[offset:end]
+}
+
+func (fs *FileStore) CountClients() int {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	return len(fs.cache)
+}
+
 func (fs *FileStore) GetRegisteredAt(clientID string) (time.Time, error) {
 	if err := validateClientID(clientID); err != nil {
 		return time.Time{}, err
@@ -496,6 +552,30 @@ func (ms *MemoryStore) ListClients() []string {
 		clients = append(clients, clientID)
 	}
 	return clients
+}
+
+func (ms *MemoryStore) ListClientsPage(limit, offset int) []string {
+	clients := ms.ListClients()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(clients) {
+		return []string{}
+	}
+	if limit <= 0 {
+		return clients[offset:]
+	}
+	end := offset + limit
+	if end > len(clients) {
+		end = len(clients)
+	}
+	return clients[offset:end]
+}
+
+func (ms *MemoryStore) CountClients() int {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return len(ms.keys)
 }
 
 // for MemoryStore falls back to TOFU (no cert verification)
@@ -777,6 +857,14 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 
 func (cs *CertificateStore) ListClients() []string {
 	return cs.fileStore.ListClients()
+}
+
+func (cs *CertificateStore) ListClientsPage(limit, offset int) []string {
+	return cs.fileStore.ListClientsPage(limit, offset)
+}
+
+func (cs *CertificateStore) CountClients() int {
+	return cs.fileStore.CountClients()
 }
 
 func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {

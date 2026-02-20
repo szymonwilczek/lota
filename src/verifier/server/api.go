@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -199,6 +200,9 @@ type statsResponse struct {
 type clientListResponse struct {
 	Clients []string `json:"clients"`
 	Count   int      `json:"count"`
+	Total   int      `json:"total"`
+	Limit   int      `json:"limit"`
+	Offset  int      `json:"offset"`
 }
 
 type clientInfoResponse struct {
@@ -273,7 +277,113 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/v1/clients - list all registered clients
 func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
-	clients := h.verifier.ListClients()
+	const (
+		defaultLimit = 100
+		maxLimit     = 1000
+	)
+
+	limit, offset := parsePagination(r, defaultLimit, maxLimit)
+
+	var clients []string
+	total := 0
+
+	aikStore := h.verifier.AIKStore()
+	if lister, ok := aikStore.(store.PaginatedClientLister); ok {
+		if listerE, ok := aikStore.(store.PaginatedClientListerWithError); ok {
+			var err error
+			clients, err = listerE.ListClientsPageE(limit, offset)
+			if err != nil {
+				h.log.Error("failed to list clients page", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+		} else {
+			clients = lister.ListClientsPage(limit, offset)
+		}
+
+		dbTotal := 0
+		if counterE, ok := aikStore.(store.ClientCounterWithError); ok {
+			var err error
+			dbTotal, err = counterE.CountClientsE()
+			if err != nil {
+				h.log.Error("failed to count clients", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+		} else if counter, ok := aikStore.(store.ClientCounter); ok {
+			dbTotal = counter.CountClients()
+		}
+
+		active := h.verifier.ListActiveClients()
+		activeOnly := make([]string, 0, len(active))
+
+		if batchChecker, ok := aikStore.(store.ClientExistenceBatchChecker); ok {
+			existing, err := batchChecker.ExistingClients(active)
+			if err != nil {
+				h.log.Error("failed to check active client existence in batch", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+
+			for _, id := range active {
+				if _, exists := existing[id]; !exists {
+					activeOnly = append(activeOnly, id)
+				}
+			}
+		} else if checker, ok := aikStore.(store.ClientExistenceChecker); ok {
+			for _, id := range active {
+				exists, err := checker.HasClient(id)
+				if err != nil {
+					h.log.Error("failed to check client existence", "client_id", id, "error", err)
+					writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+					return
+				}
+				if !exists {
+					activeOnly = append(activeOnly, id)
+				}
+			}
+		} else {
+			registered := make(map[string]struct{})
+			for _, id := range aikStore.ListClients() {
+				registered[id] = struct{}{}
+			}
+			for _, id := range active {
+				if _, ok := registered[id]; !ok {
+					activeOnly = append(activeOnly, id)
+				}
+			}
+		}
+
+		sort.Strings(activeOnly)
+
+		total = dbTotal + len(activeOnly)
+
+		if len(clients) < limit {
+			activeOffset := 0
+			if offset > dbTotal {
+				activeOffset = offset - dbTotal
+			}
+
+			if activeOffset < len(activeOnly) {
+				need := limit - len(clients)
+				end := activeOffset + need
+				if end > len(activeOnly) {
+					end = len(activeOnly)
+				}
+				clients = append(clients, activeOnly[activeOffset:end]...)
+			}
+		}
+	} else {
+		all := h.verifier.ListClients()
+		total = len(all)
+		if offset < len(all) {
+			end := offset + limit
+			if end > len(all) {
+				end = len(all)
+			}
+			clients = all[offset:end]
+		}
+	}
 
 	if clients == nil {
 		clients = []string{}
@@ -282,6 +392,9 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 	resp := clientListResponse{
 		Clients: clients,
 		Count:   len(clients),
+		Total:   total,
+		Limit:   limit,
+		Offset:  offset,
 	}
 
 	writeJSON(w, resp)
@@ -505,6 +618,29 @@ type banResponse struct {
 	Note       string `json:"note"`
 }
 
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int) {
+	limit := defaultLimit
+	offset := 0
+
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	return limit, offset
+}
+
 // POST /api/v1/bans - ban a hardware identity
 func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
@@ -598,7 +734,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// GET /api/v1/bans - list all active hardware bans
+// GET /api/v1/bans?limit=N&offset=M - list active hardware bans (paged)
 func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
@@ -606,7 +742,56 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries := banStr.ListBans()
+	const (
+		defaultLimit = 100
+		maxLimit     = 1000
+	)
+
+	limit, offset := parsePagination(r, defaultLimit, maxLimit)
+
+	var entries []store.BanEntry
+	total := 0
+
+	if lister, ok := banStr.(store.PaginatedBanLister); ok {
+		if listerE, ok := banStr.(store.PaginatedBanListerWithError); ok {
+			var err error
+			entries, err = listerE.ListBansPageE(limit, offset)
+			if err != nil {
+				h.log.Error("failed to list bans page", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+		} else {
+			entries = lister.ListBansPage(limit, offset)
+		}
+
+		if counterE, ok := banStr.(store.BanCounterWithError); ok {
+			var err error
+			total, err = counterE.CountBansE()
+			if err != nil {
+				h.log.Error("failed to count bans", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+		} else if counter, ok := banStr.(store.BanCounter); ok {
+			total = counter.CountBans()
+		}
+	} else {
+		all := banStr.ListBans()
+		total = len(all)
+		if offset < len(all) {
+			end := offset + limit
+			if end > len(all) {
+				end = len(all)
+			}
+			entries = all[offset:end]
+		}
+	}
+
+	if entries == nil {
+		entries = []store.BanEntry{}
+	}
+
 	resp := make([]banResponse, len(entries))
 	for i, e := range entries {
 		resp[i] = banResponse{
@@ -619,8 +804,11 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"bans":  resp,
-		"count": len(resp),
+		"bans":   resp,
+		"count":  len(resp),
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 

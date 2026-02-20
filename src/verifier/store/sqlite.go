@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -173,9 +174,33 @@ func (s *SQLiteAIKStore) GetHardwareID(clientID string) ([32]byte, error) {
 }
 
 func (s *SQLiteAIKStore) ListClients() []string {
-	rows, err := s.db.Query("SELECT id FROM clients ORDER BY id")
+	return s.ListClientsPage(0, 0)
+}
+
+func (s *SQLiteAIKStore) ListClientsPage(limit, offset int) []string {
+	clients, err := s.ListClientsPageE(limit, offset)
 	if err != nil {
 		return nil
+	}
+	return clients
+}
+
+func (s *SQLiteAIKStore) ListClientsPageE(limit, offset int) ([]string, error) {
+	query := "SELECT id FROM clients ORDER BY id"
+	args := make([]any, 0, 2)
+
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+		if offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, offset)
+		}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -187,7 +212,94 @@ func (s *SQLiteAIKStore) ListClients() []string {
 		}
 	}
 
-	return clients
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return clients, nil
+}
+
+func (s *SQLiteAIKStore) CountClients() int {
+	total, err := s.CountClientsE()
+	if err != nil {
+		return 0
+	}
+	return total
+}
+
+func (s *SQLiteAIKStore) CountClientsE() (int, error) {
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM clients").Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *SQLiteAIKStore) HasClient(clientID string) (bool, error) {
+	var dummy int
+	err := s.db.QueryRow("SELECT 1 FROM clients WHERE id = ? LIMIT 1", clientID).Scan(&dummy)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *SQLiteAIKStore) ExistingClients(clientIDs []string) (map[string]struct{}, error) {
+	existing := make(map[string]struct{})
+	if len(clientIDs) == 0 {
+		return existing, nil
+	}
+
+	unique := make(map[string]struct{}, len(clientIDs))
+	ids := make([]string, 0, len(clientIDs))
+	for _, id := range clientIDs {
+		if _, seen := unique[id]; seen {
+			continue
+		}
+		unique[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	const chunkSize = 500
+	for i := 0; i < len(ids); i += chunkSize {
+		end := i + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+
+		chunk := ids[i:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, len(chunk))
+		for j, id := range chunk {
+			placeholders[j] = "?"
+			args[j] = id
+		}
+
+		query := "SELECT id FROM clients WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			existing[id] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+
+	return existing, nil
 }
 
 func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
