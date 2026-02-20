@@ -332,6 +332,8 @@ static __noinline int is_verity_allowed(struct file *file) {
   if (!slot)
     return 0;
 
+  __builtin_memset(slot->bytes, 0, sizeof(slot->bytes));
+
   void *digest = slot->bytes;
 
   struct bpf_dynptr digest_ptr;
@@ -349,6 +351,17 @@ static __noinline int is_verity_allowed(struct file *file) {
    */
   ret = bpf_get_fsverity_digest(file, &digest_ptr);
   if (ret < 0) {
+    bpf_printk("LOTA: fsverity_digest failed: %d", ret);
+    return 0;
+  }
+
+  if (ret == 0) {
+    bpf_printk("LOTA: fsverity digest unavailable");
+    return 0;
+  }
+
+  if (ret != PE_DIGEST_SIZE) {
+    bpf_printk("LOTA: fsverity digest size mismatch: %d", ret);
     return 0;
   }
 
