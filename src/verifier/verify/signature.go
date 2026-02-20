@@ -107,6 +107,14 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return errors.New("no attestation data in report")
 	}
 
+	if int(report.TPM.AttestSize) > len(report.TPM.AttestData) {
+		return fmt.Errorf("invalid attest size: %d > %d", report.TPM.AttestSize, len(report.TPM.AttestData))
+	}
+
+	if int(report.TPM.QuoteSigSize) > len(report.TPM.QuoteSignature) {
+		return fmt.Errorf("invalid quote signature size: %d > %d", report.TPM.QuoteSigSize, len(report.TPM.QuoteSignature))
+	}
+
 	if aikPubKey == nil {
 		return errors.New("AIK public key is nil")
 	}
