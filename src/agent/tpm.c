@@ -60,14 +60,19 @@ int tpm_init(struct tpm_context *ctx) {
   TSS2_RC rc;
   size_t tcti_size;
   uint32_t saved_handle;
+  char saved_kernel_path[PATH_MAX];
 
   if (!ctx)
     return -EINVAL;
 
   /* preserve caller-configured handle across memset */
   saved_handle = ctx->aik_handle;
+  memcpy(saved_kernel_path, ctx->kernel_path_override,
+         sizeof(saved_kernel_path));
   memset(ctx, 0, sizeof(*ctx));
   ctx->aik_handle = saved_handle;
+  memcpy(ctx->kernel_path_override, saved_kernel_path,
+         sizeof(ctx->kernel_path_override));
 
   /*
    * Initialize TCTI context for device access.
@@ -563,12 +568,46 @@ int tpm_hash_file(const char *path, uint8_t *hash) {
   return ret;
 }
 
-int tpm_get_current_kernel_path(char *buf, size_t buf_len) {
+int tpm_set_kernel_path(struct tpm_context *ctx, const char *path) {
+  size_t len;
+
+  if (!ctx)
+    return -EINVAL;
+
+  if (!path || !path[0]) {
+    ctx->kernel_path_override[0] = '\0';
+    return 0;
+  }
+
+  if (path[0] != '/')
+    return -EINVAL;
+
+  len = strlen(path);
+  if (len >= sizeof(ctx->kernel_path_override))
+    return -ENAMETOOLONG;
+
+  memcpy(ctx->kernel_path_override, path, len + 1);
+  return 0;
+}
+
+int tpm_get_current_kernel_path(struct tpm_context *ctx, char *buf,
+                                size_t buf_len) {
   struct utsname uname_buf;
   int ret;
 
-  if (!buf || buf_len == 0)
+  if (!ctx || !buf || buf_len == 0)
     return -EINVAL;
+
+  if (ctx->kernel_path_override[0]) {
+    ret = snprintf(buf, buf_len, "%s", ctx->kernel_path_override);
+    if (ret < 0 || (size_t)ret >= buf_len)
+      return -ENAMETOOLONG;
+
+    if (access(buf, R_OK) != 0)
+      return -errno;
+
+    return 0;
+  }
 
   ret = uname(&uname_buf);
   if (ret < 0)

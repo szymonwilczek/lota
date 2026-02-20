@@ -51,6 +51,10 @@ attest_interval = 0
 # AIK key lifetime in seconds before rotation (0 = default 30 days)
 aik_ttl = 0
 
+# Optional absolute path to currently booted kernel image.
+# Use this on distros that do not expose /boot/vmlinuz-<release>.
+# kernel_path = /efi/EFI/Linux/linux.efi
+
 # ---- Daemon --------------------------------------------------------------
 
 # Fork to background (not needed under systemd)

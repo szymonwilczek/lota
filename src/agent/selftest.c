@@ -89,7 +89,8 @@ int test_tpm(void) {
   /* hash kernel image */
   printf("\nFinding current kernel...\n");
   {
-    int k_err = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+    int k_err = tpm_get_current_kernel_path(&g_tpm_ctx, kernel_path,
+                                            sizeof(kernel_path));
     if (k_err < 0) {
       fprintf(stderr, "Failed to find kernel: %s\n", strerror(-k_err));
     } else {

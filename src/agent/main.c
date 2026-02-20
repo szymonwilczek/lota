@@ -494,6 +494,14 @@ int main(int argc, char *argv[]) {
   attest_interval = cfg.attest_interval;
   aik_ttl = cfg.aik_ttl;
   g_tpm_ctx.aik_handle = cfg.aik_handle;
+  {
+    int kret = tpm_set_kernel_path(&g_tpm_ctx,
+                                   cfg.kernel_path[0] ? cfg.kernel_path : NULL);
+    if (kret < 0) {
+      fprintf(stderr, "Invalid kernel_path in config: %s\n", strerror(-kret));
+      return 1;
+    }
+  }
   daemon_flag = cfg.daemon ? 1 : 0;
   pid_file_path = cfg.pid_file;
   signing_key_path = cfg.signing_key[0] ? cfg.signing_key : NULL;

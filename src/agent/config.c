@@ -235,6 +235,10 @@ static int apply_key(struct lota_config *cfg, const char *key,
     cfg->aik_handle = (uint32_t)v;
     return 0;
   }
+  if (strcmp(key, "kernel_path") == 0 || strcmp(key, "kernel-path") == 0) {
+    set_str(cfg->kernel_path, sizeof(cfg->kernel_path), value);
+    return 0;
+  }
 
   /* daemon */
   if (strcmp(key, "daemon") == 0) {
@@ -410,6 +414,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
   fprintf(fp, "attest_interval = %d\n", cfg->attest_interval);
   fprintf(fp, "aik_ttl = %u\n", cfg->aik_ttl);
   fprintf(fp, "aik_handle = 0x%08X\n", cfg->aik_handle);
+  if (cfg->kernel_path[0])
+    fprintf(fp, "kernel_path = %s\n", cfg->kernel_path);
 
   fprintf(fp, "\n# Daemon\n");
   fprintf(fp, "daemon = %s\n", cfg->daemon ? "true" : "false");

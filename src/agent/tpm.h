@@ -9,6 +9,7 @@
 #ifndef LOTA_TPM_H
 #define LOTA_TPM_H
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <tss2/tss2_esys.h>
@@ -79,6 +80,9 @@ struct tpm_context {
   ESYS_CONTEXT *esys_ctx;
   TSS2_TCTI_CONTEXT *tcti_ctx;
   bool initialized;
+
+  /* Optional explicit kernel image path override */
+  char kernel_path_override[PATH_MAX];
 
   /* AIK persistent handle (configurable, default TPM_AIK_HANDLE) */
   uint32_t aik_handle;
@@ -196,7 +200,20 @@ int tpm_hash_fd(int fd, uint8_t *hash);
 int tpm_hash_file(const char *path, uint8_t *hash);
 
 /*
+ * tpm_set_kernel_path - Configure explicit kernel image path
+ * @ctx: TPM context storing runtime overrides
+ * @path: Absolute path to kernel image, or NULL/empty to clear override
+ *
+ * When set, tpm_get_current_kernel_path() uses this path instead of
+ * distro-specific autodetection fallback.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int tpm_set_kernel_path(struct tpm_context *ctx, const char *path);
+
+/*
  * tpm_get_current_kernel_path - Find current running kernel image
+ * @ctx: TPM context containing optional kernel path override
  * @buf: Output buffer for path
  * @buf_len: Buffer size
  *
@@ -204,7 +221,8 @@ int tpm_hash_file(const char *path, uint8_t *hash);
  *
  * Returns: 0 on success, negative errno on failure
  */
-int tpm_get_current_kernel_path(char *buf, size_t buf_len);
+int tpm_get_current_kernel_path(struct tpm_context *ctx, char *buf,
+                                size_t buf_len);
 
 /*
  * tpm_self_test - Run TPM self-test

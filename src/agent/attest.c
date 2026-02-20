@@ -108,7 +108,8 @@ int export_policy(int mode) {
   }
 
   /* Kernel image hash */
-  ret = tpm_get_current_kernel_path(snap.kernel_path, sizeof(snap.kernel_path));
+  ret = tpm_get_current_kernel_path(&g_tpm_ctx, snap.kernel_path,
+                                    sizeof(snap.kernel_path));
   if (ret == 0) {
     ret = tpm_hash_file(snap.kernel_path, snap.kernel_hash);
     if (ret == 0) {
@@ -208,7 +209,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
 
   /* system info: kernel hash */
-  ret = tpm_get_current_kernel_path(kernel_path, sizeof(kernel_path));
+  ret =
+      tpm_get_current_kernel_path(&g_tpm_ctx, kernel_path, sizeof(kernel_path));
   if (ret == 0) {
     size_t kpath_len = strlen(kernel_path);
     if (kpath_len >= sizeof(report->system.kernel_path))
