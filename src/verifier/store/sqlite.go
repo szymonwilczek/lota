@@ -13,14 +13,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 )
 
 // implements AIKStore using a SQLite database
 // provides persistence across verifier restarts without filesystem overhead
 type SQLiteAIKStore struct {
-	mu sync.RWMutex
 	db *sql.DB
 }
 
@@ -30,9 +28,6 @@ func NewSQLiteAIKStore(db *sql.DB) *SQLiteAIKStore {
 }
 
 func (s *SQLiteAIKStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var aikDER []byte
 	err := s.db.QueryRow(
 		"SELECT aik_der FROM clients WHERE id = ?", clientID,
@@ -59,9 +54,6 @@ func (s *SQLiteAIKStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 }
 
 func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// check if already registered
 	var existingDER []byte
 	err := s.db.QueryRow(
@@ -125,9 +117,6 @@ func (s *SQLiteAIKStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Public
 
 // stores or validates hardware identity (TOFU binding)
 func (s *SQLiteAIKStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var existing []byte
 	err := s.db.QueryRow(
 		"SELECT hardware_id FROM clients WHERE id = ?", clientID,
@@ -162,9 +151,6 @@ func (s *SQLiteAIKStore) RegisterHardwareID(clientID string, hardwareID [32]byte
 }
 
 func (s *SQLiteAIKStore) GetHardwareID(clientID string) ([32]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var hwid []byte
 	err := s.db.QueryRow(
 		"SELECT hardware_id FROM clients WHERE id = ?", clientID,
@@ -187,9 +173,6 @@ func (s *SQLiteAIKStore) GetHardwareID(clientID string) ([32]byte, error) {
 }
 
 func (s *SQLiteAIKStore) ListClients() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	rows, err := s.db.Query("SELECT id FROM clients ORDER BY id")
 	if err != nil {
 		return nil
@@ -208,9 +191,6 @@ func (s *SQLiteAIKStore) ListClients() []string {
 }
 
 func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var t time.Time
 	err := s.db.QueryRow(
 		"SELECT created_at FROM clients WHERE id = ?", clientID,
@@ -228,9 +208,6 @@ func (s *SQLiteAIKStore) GetRegisteredAt(clientID string) (time.Time, error) {
 
 // replaces expired AIK with a new key, preserving hardware ID binding
 func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	derBytes, err := x509.MarshalPKIXPublicKey(newKey)
 	if err != nil {
 		return fmt.Errorf("failed to encode new key: %w", err)
