@@ -626,6 +626,14 @@ int do_attest(const char *server, int port, const char *ca_cert,
     return ret;
   }
 
+  ret = tpm_aik_load_metadata(&g_tpm_ctx);
+  if (ret < 0) {
+    fprintf(stderr, "Failed to load AIK metadata: %s\n", strerror(-ret));
+    tpm_cleanup(&g_tpm_ctx);
+    net_cleanup();
+    return ret;
+  }
+
   ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 1);
 
   printf("\n=== Attestation %s ===\n", ret == 0 ? "Successful" : "Failed");
@@ -708,7 +716,12 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
   ret = tpm_aik_load_metadata(&g_tpm_ctx);
   if (ret < 0) {
-    lota_warn("Failed to load AIK metadata: %s", strerror(-ret));
+    lota_err("Failed to load AIK metadata: %s", strerror(-ret));
+    tpm_cleanup(&g_tpm_ctx);
+    net_cleanup();
+    dbus_cleanup(g_dbus_ctx);
+    ipc_cleanup(&g_ipc_ctx);
+    return ret;
   } else {
     int64_t age = tpm_aik_age(&g_tpm_ctx);
     lota_info("AIK generation: %lu, age: %ld seconds",

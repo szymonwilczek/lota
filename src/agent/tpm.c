@@ -1000,15 +1000,20 @@ int tpm_aik_load_metadata(struct tpm_context *ctx) {
 
   path = ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
 
-  fd = open(path, O_RDONLY);
+  fd = open(path, O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     if (errno != ENOENT)
       return -errno;
 
-    /*
-     * file does not exist -> first run after install
-     * initialize default metadata with current time
-     */
+    {
+      int exists = aik_exists(ctx, NULL);
+      if (exists < 0)
+        return exists;
+      if (exists == 1)
+        return -EKEYREVOKED;
+    }
+
+    /* no AIK exists yet -> first run after install: initialize defaults */
     memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
     ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
     ctx->aik_meta.version = TPM_AIK_META_VERSION;

@@ -249,7 +249,8 @@ static int run_daemon(const struct run_daemon_params *params) {
 
       ret = tpm_aik_load_metadata(&g_tpm_ctx);
       if (ret < 0) {
-        lota_warn("Failed to load AIK metadata: %s", strerror(-ret));
+        lota_err("Failed to load AIK metadata: %s", strerror(-ret));
+        goto cleanup_tpm;
       } else {
         int64_t age = tpm_aik_age(&g_tpm_ctx);
         lota_info("AIK generation: %lu, age: %ld seconds",
