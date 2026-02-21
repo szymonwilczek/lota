@@ -438,6 +438,9 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   }
 
   if (mode == LOTA_MODE_ENFORCE) {
+    if (id == READING_KEXEC_IMAGE || id == READING_KEXEC_INITRAMFS)
+      blocked = 1;
+
     if (in_non_init_userns())
       blocked = 1;
 
@@ -547,6 +550,9 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     return 0;
 
   if (mode == LOTA_MODE_ENFORCE) {
+    if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS)
+      blocked = 1;
+
     if (in_non_init_userns())
       blocked = 1;
 
