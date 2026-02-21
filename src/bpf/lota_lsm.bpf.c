@@ -308,48 +308,6 @@ static __always_inline int in_non_init_userns(void) {
   return level > 0;
 }
 
-/*
- * Check if a file is heuristically trusted (root-owned, not writable by
- * others). Used as a fallback when fs-verity is not available.
- *
- * Returns:
- *   1 if trusted (owned by root, mode 755 or stricter)
- *   0 if not trusted
- */
-static __always_inline int is_file_trusted_heuristic(struct file *file) {
-  struct inode *inode;
-  uid_t uid;
-  umode_t mode;
-
-  /* never trust heuristic checks from non-initial user namespaces */
-  if (in_non_init_userns())
-    return 0;
-
-  if (!file)
-    return 0;
-
-  inode = BPF_CORE_READ(file, f_inode);
-  if (!inode)
-    return 0;
-
-  uid = BPF_CORE_READ(inode, i_uid.val);
-  mode = BPF_CORE_READ(inode, i_mode);
-
-  /* must be owned by root */
-  if (uid != 0)
-    return 0;
-
-  /* must not be world-writable (S_IWOTH = 00002) */
-  if (mode & 00002)
-    return 0;
-
-  /* must not be group-writable (S_IWGRP = 00020) */
-  if (mode & 00020)
-    return 0;
-
-  return 1;
-}
-
 static __noinline int is_verity_allowed(struct file *file) {
   if (!bpf_get_fsverity_digest)
     return 0;
@@ -459,10 +417,8 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
     if (get_config(LOTA_CFG_STRICT_MODULES)) {
       if (!is_verity_allowed(file)) {
-        if (!is_file_trusted_heuristic(file)) {
-          bpf_printk("LOTA: BLOCKING module load: untrusted file");
-          blocked = 1;
-        }
+        bpf_printk("LOTA: BLOCKING module load: no allowed fs-verity digest");
+        blocked = 1;
       }
     }
   }
@@ -718,14 +674,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   (void)dentry;
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
     if (!is_verity_allowed(file)) {
-      /*
-       * Fallback to heuristic: allow if root-owned and not writable.
-       * Prevents bricking on non-verity systems while still blocking
-       * random user libraries.
-       */
-      if (!is_file_trusted_heuristic(file)) {
-        blocked = 1;
-      }
+      blocked = 1;
     }
   }
 
@@ -835,9 +784,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
     if (!is_verity_allowed(file)) {
-      if (!is_file_trusted_heuristic(file)) {
-        blocked = 1;
-      }
+      blocked = 1;
     }
   }
 
