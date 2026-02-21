@@ -11,8 +11,12 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -25,6 +29,34 @@ import (
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+func sameRSAPublicKey(a, b *rsa.PublicKey) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.N.Cmp(b.N) != 0 {
+		return false
+	}
+	return a.E == b.E
+}
+
+func deriveHardwareIDFromEKCert(ekCertDER []byte) ([types.HardwareIDSize]byte, error) {
+	var out [types.HardwareIDSize]byte
+	cert, err := x509.ParseCertificate(ekCertDER)
+	if err != nil {
+		return out, fmt.Errorf("failed to parse EK certificate: %w", err)
+	}
+
+	switch pub := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		// match agent: SHA-256(modulus bytes)
+		sum := sha256.Sum256(pub.N.Bytes())
+		copy(out[:], sum[:])
+		return out, nil
+	default:
+		return out, fmt.Errorf("unsupported EK public key type: %T", cert.PublicKey)
+	}
+}
 
 // main verification engine
 type Verifier struct {
@@ -75,6 +107,9 @@ func validateTPMFieldSizes(report *types.AttestationReport) error {
 	}
 	if int(report.TPM.QuoteSigSize) > len(report.TPM.QuoteSignature) {
 		return fmt.Errorf("invalid quote_sig_size: %d > %d", report.TPM.QuoteSigSize, len(report.TPM.QuoteSignature))
+	}
+	if int(report.TPM.PrevAIKSize) > len(report.TPM.PrevAIKPublic) {
+		return fmt.Errorf("invalid prev_aik_public_size: %d > %d", report.TPM.PrevAIKSize, len(report.TPM.PrevAIKPublic))
 	}
 	return nil
 }
@@ -302,7 +337,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clog.Debug("nonce verified", "method", "challenge-response+TPMS_ATTEST")
 
 	// check if registered AIK has exceeded its maximum age.
-	// expired AIKs are rotated via re-TOFU on the next attestation.
+	// IMPORTANT: expiry is a policy hint; rotation MUST NOT be performed via TOFU
+	// on an existing identity, otherwise an attacker can hijack the client
 	aikExpired := false
 	if v.aikMaxAge > 0 {
 		if regTime, err := v.aikStore.GetRegisteredAt(clientID); err == nil && !regTime.IsZero() {
@@ -316,94 +352,81 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 	}
 
-	aikPubKey, err := v.aikStore.GetAIK(clientID)
+	storedAIK, err := v.aikStore.GetAIK(clientID)
 	newClient := err != nil
 
-	if newClient || aikExpired {
-		// extract the AIK from the report and verify the signature before trusting the key
-		if report.TPM.AIKPublicSize == 0 {
-			clog.Error("no AIK public key in report")
-			v.metrics.Rejections.Inc("sig_fail")
-			result.Result = types.VerifySigFail
-			return result, errors.New("no AIK public key in report")
-		}
-
+	// extract the AIK from the report (untrusted input)
+	var reportAIK *rsa.PublicKey
+	if report.TPM.AIKPublicSize > 0 {
 		aikData := report.TPM.AIKPublic[:report.TPM.AIKPublicSize]
-		aikPubKey, err = ParseRSAPublicKey(aikData)
+		reportAIK, err = ParseRSAPublicKey(aikData)
 		if err != nil {
 			clog.Error("failed to parse AIK public key", "error", err)
 			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("failed to parse AIK: %w", err)
 		}
+	}
 
-		// verify signature before registering or rotating
-		if err := VerifyReportSignature(report, aikPubKey); err != nil {
+	if newClient {
+		// first connection: TOFU registration (optionally certificate-backed).
+		// signature that verifies against a key from the same report is NOT an identity proof,
+		// but LOTA still require it to be internally consistent to reject corrupted reports.
+		if reportAIK == nil {
+			clog.Error("no AIK public key in report")
+			v.metrics.Rejections.Inc("sig_fail")
+			result.Result = types.VerifySigFail
+			return result, errors.New("no AIK public key in report")
+		}
+		if err := VerifyReportSignature(report, reportAIK); err != nil {
 			clog.Error("signature verification failed", "error", err)
 			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, err
 		}
 
-		if aikExpired {
-			// key rotation: replace expired AIK, preserve hardware binding
-			if err := v.aikStore.RotateAIK(clientID, aikPubKey); err != nil {
-				clog.Error("failed to rotate AIK", "error", err)
-				v.metrics.Rejections.Inc("sig_fail")
-				result.Result = types.VerifySigFail
-				return result, fmt.Errorf("AIK rotation failed: %w", err)
-			}
-			fingerprint := AIKFingerprint(aikPubKey)
-			logging.Security(clog, "AIK rotated after expiry",
-				"fingerprint", fingerprint, "max_age", v.aikMaxAge)
-		} else {
-			if v.requireCert && !aikStoreSupportsCertVerification(v.aikStore) {
-				logging.Security(clog, "require-cert enabled but AIK store does not verify certificates",
-					"store_type", fmt.Sprintf("%T", v.aikStore))
-				v.metrics.Rejections.Inc("sig_fail")
-				result.Result = types.VerifySigFail
-				return result, errors.New("AIK certificate verification required but configured AIK store does not support certificate validation")
-			}
+		if v.requireCert && !aikStoreSupportsCertVerification(v.aikStore) {
+			logging.Security(clog, "require-cert enabled but AIK store does not verify certificates",
+				"store_type", fmt.Sprintf("%T", v.aikStore))
+			v.metrics.Rejections.Inc("sig_fail")
+			result.Result = types.VerifySigFail
+			return result, errors.New("AIK certificate verification required but configured AIK store does not support certificate validation")
+		}
 
-			// first connection: extract certificates and register via TOFU
-			var aikCert, ekCert []byte
-			if report.TPM.AIKCertSize > 0 {
-				aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
-				clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
-			}
-			if report.TPM.EKCertSize > 0 {
-				ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
-				clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
-			}
+		var aikCert, ekCert []byte
+		if report.TPM.AIKCertSize > 0 {
+			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
+			clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
+		}
+		if report.TPM.EKCertSize > 0 {
+			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
+			clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
+		}
 
-			// register AIK with certificate verification (if certs provided)
-			if err := v.aikStore.RegisterAIKWithCert(clientID, aikPubKey, aikCert, ekCert); err != nil {
-				clog.Error("failed to register AIK", "error", err)
-				v.metrics.Rejections.Inc("sig_fail")
-				result.Result = types.VerifySigFail
-				return result, fmt.Errorf("AIK registration failed: %w", err)
-			}
+		if err := v.aikStore.RegisterAIKWithCert(clientID, reportAIK, aikCert, ekCert); err != nil {
+			clog.Error("failed to register AIK", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("AIK registration failed: %w", err)
+		}
 
-			fingerprint := AIKFingerprint(aikPubKey)
-			if len(aikCert) > 0 || len(ekCert) > 0 {
-				if aikStoreSupportsCertVerification(v.aikStore) {
-					clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
-				} else {
-					clog.Warn("AIK certificates provided but store does not verify certificates; TOFU fallback applied",
-						"fingerprint", fingerprint, "store_type", fmt.Sprintf("%T", v.aikStore))
-				}
-			} else if v.requireCert {
+		fingerprint := AIKFingerprint(reportAIK)
+		if len(aikCert) == 0 && len(ekCert) == 0 {
+			if v.requireCert {
 				logging.Security(clog, "TOFU rejected: certificate required by policy",
 					"fingerprint", fingerprint)
 				v.metrics.Rejections.Inc("sig_fail")
 				result.Result = types.VerifySigFail
 				return result, errors.New("AIK/EK certificate required by policy but not provided")
-			} else {
-				clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
 			}
+			clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
+		} else if aikStoreSupportsCertVerification(v.aikStore) {
+			clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
+		} else {
+			clog.Warn("AIK certificates provided but store does not verify certificates; TOFU fallback applied",
+				"fingerprint", fingerprint, "store_type", fmt.Sprintf("%T", v.aikStore))
 		}
 
-		// register or validate hardware ID
 		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
 			if errors.Is(err, store.ErrHardwareIDMismatch) {
 				logging.Security(clog, "hardware identity mismatch",
@@ -417,20 +440,115 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("hardware ID registration failed: %w", err)
 		}
-		if newClient {
-			clog.Info("hardware ID registered", "hwid", hwID)
-		}
+		clog.Info("hardware ID registered", "hwid", hwID)
 	} else {
-		// already registered and not expired - verify signature
-		if err := VerifyReportSignature(report, aikPubKey); err != nil {
-			clog.Error("signature verification failed", "error", err)
-			v.metrics.Rejections.Inc("sig_fail")
-			result.Result = types.VerifySigFail
-			return result, err
+		// existing client: NEVER authenticate using a key extracted from the same untrusted report.
+		if err := VerifyReportSignature(report, storedAIK); err != nil {
+			if aikExpired {
+				clog.Warn("signature failed with registered AIK on expired registration; attempting certificate-backed rotation", "error", err)
+
+				if reportAIK == nil {
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("rotation attempt missing new AIK public key")
+				}
+
+				// continuity hint: agent should include the previous AIK public key during grace period
+				if report.TPM.PrevAIKSize == 0 {
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("rotation attempt missing prev_aik_public")
+				}
+				prevKey, perr := ParseRSAPublicKey(report.TPM.PrevAIKPublic[:report.TPM.PrevAIKSize])
+				if perr != nil {
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, fmt.Errorf("failed to parse prev_aik_public: %w", perr)
+				}
+				if !sameRSAPublicKey(prevKey, storedAIK) {
+					logging.Security(clog, "rotation continuity check failed",
+						"detail", "prev_aik_public does not match registered AIK")
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("rotation continuity check failed")
+				}
+
+				// strict cert-backed verification for rotation
+				if !v.requireCert {
+					logging.Security(clog, "rotation rejected: require-cert is disabled",
+						"detail", "refusing insecure AIK rotation")
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("AIK rotation requires certificates")
+				}
+				certVerifier, ok := v.aikStore.(store.AIKCertificateVerifier)
+				if !ok {
+					logging.Security(clog, "rotation rejected: AIK store cannot verify certificates",
+						"store_type", fmt.Sprintf("%T", v.aikStore))
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("AIK store does not support certificate-backed rotation")
+				}
+
+				if report.TPM.AIKCertSize == 0 || report.TPM.EKCertSize == 0 {
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("AIK rotation requires both AIK and EK certificates")
+				}
+				aikCert := report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
+				ekCert := report.TPM.EKCertificate[:report.TPM.EKCertSize]
+
+				// reported hardware_id must be consistent with EK certificate
+				derivedHWID, derr := deriveHardwareIDFromEKCert(ekCert)
+				if derr != nil {
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, derr
+				}
+				if !bytes.Equal(derivedHWID[:], report.TPM.HardwareID[:]) {
+					logging.Security(clog, "rotation rejected: hardware_id does not match EK certificate")
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, errors.New("hardware_id/EK mismatch")
+				}
+
+				// verify cert chain and key match
+				if verr := certVerifier.VerifyCertificatesForAIK(reportAIK, aikCert, ekCert); verr != nil {
+					logging.Security(clog, "rotation rejected: certificate verification failed", "error", verr)
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, verr
+				}
+
+				// verify the report signature with the NEW AIK (quote is signed by it)
+				if serr := VerifyReportSignature(report, reportAIK); serr != nil {
+					clog.Error("signature verification failed with new AIK", "error", serr)
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, serr
+				}
+
+				if rerr := v.aikStore.RotateAIK(clientID, reportAIK); rerr != nil {
+					clog.Error("failed to rotate AIK", "error", rerr)
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, fmt.Errorf("AIK rotation failed: %w", rerr)
+				}
+
+				fingerprint := AIKFingerprint(reportAIK)
+				logging.Security(clog, "AIK rotated after expiry (certificate-backed)",
+					"fingerprint", fingerprint, "max_age", v.aikMaxAge, "generation", report.TPM.AIKGeneration)
+
+				storedAIK = reportAIK
+			} else {
+				clog.Error("signature verification failed", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, err
+			}
 		}
 		clog.Debug("signature verified with registered AIK")
 
-		// verify hardware ID matches registered value
 		if err := v.aikStore.RegisterHardwareID(clientID, report.TPM.HardwareID); err != nil {
 			if errors.Is(err, store.ErrHardwareIDMismatch) {
 				logging.Security(clog, "hardware identity mismatch",

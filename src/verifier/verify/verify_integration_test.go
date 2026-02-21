@@ -129,6 +129,15 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
 	offset += types.HardwareIDSize
 
+	// aik_generation
+	binary.LittleEndian.PutUint64(buf[offset:], 1)
+	offset += 8
+
+	// prev_aik_public (grace period; empty in tests)
+	offset += types.MaxAIKPubSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	offset += 2
+
 	// reserved
 	offset += 2
 
@@ -574,6 +583,13 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	offset += types.NonceSize
 	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
 	offset += types.HardwareIDSize
+	// aik_generation
+	binary.LittleEndian.PutUint64(buf[offset:], 1)
+	offset += 8
+	// prev_aik_public (empty)
+	offset += types.MaxAIKPubSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	offset += 2
 	offset += 2 // reserved
 
 	// system measurement (simplified)

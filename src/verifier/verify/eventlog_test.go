@@ -473,8 +473,8 @@ func TestParseReport_WithEventLog(t *testing.T) {
 	buf = append(buf, eventLogSizeBuf...)
 	buf = append(buf, []byte("hello")...)
 
-	// update report_size header
-	binary.LittleEndian.PutUint32(buf[24:28], uint32(len(buf)))
+	// update report_size header (offset 8)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	report, err := types.ParseReport(buf)
 	if err != nil {

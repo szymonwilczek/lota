@@ -52,6 +52,15 @@ type AIKStore interface {
 	RotateAIK(clientID string, newKey *rsa.PublicKey) error
 }
 
+// stores that have trust anchors for certificate validation
+// can implement this to allow certificate-backed AIK rotation.
+//
+// this is intentionally separate from RegisterAIKWithCert because
+// rotation needs to verify certificates without attempting a TOFU registration.
+type AIKCertificateVerifier interface {
+	VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error
+}
+
 // optional interface for database-backed stores to avoid loading all clients
 // into memory for API list endpoints.
 type PaginatedClientLister interface {
@@ -764,6 +773,26 @@ func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Pub
 	}
 
 	return cs.fileStore.RegisterAIK(clientID, pubKey)
+}
+
+func (cs *CertificateStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
+	if pubKey == nil {
+		return errors.New("nil AIK public key")
+	}
+	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
+		return ErrNoCertificate
+	}
+	if len(aikCertDER) > 0 {
+		if err := cs.verifyAIKCertificate(aikCertDER, pubKey); err != nil {
+			return fmt.Errorf("AIK certificate verification failed: %w", err)
+		}
+	}
+	if len(ekCertDER) > 0 {
+		if err := cs.verifyEKCertificate(ekCertDER); err != nil {
+			return fmt.Errorf("EK certificate verification failed: %w", err)
+		}
+	}
+	return nil
 }
 
 // validates AIK certificate against trusted CAs

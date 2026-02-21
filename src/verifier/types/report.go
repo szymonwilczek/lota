@@ -104,8 +104,11 @@ type ReportHeader struct {
 //	ek_cert_size             2 bytes
 //	nonce[32]               32 bytes
 //	hardware_id[32]         32 bytes
+//	aik_generation           8 bytes
+//	prev_aik_public[512]   512 bytes
+//	prev_aik_public_size     2 bytes
 //	reserved[2]              2 bytes
-//	TOTAL:                6992 bytes
+//	TOTAL:                7514 bytes
 type TPMEvidence struct {
 	PCRValues      [PCRCount][HashSize]byte // 768 bytes
 	PCRMask        uint32                   // 4 bytes
@@ -121,6 +124,9 @@ type TPMEvidence struct {
 	EKCertSize     uint16                   // 2 bytes
 	Nonce          [NonceSize]byte          // 32 bytes
 	HardwareID     [HardwareIDSize]byte     // 32 bytes
+	AIKGeneration  uint64                   // 8 bytes
+	PrevAIKPublic  [MaxAIKPubSize]byte      // 512 bytes
+	PrevAIKSize    uint16                   // 2 bytes
 	Reserved       [2]byte                  // 2 bytes alignment
 }
 
@@ -186,11 +192,12 @@ var (
 )
 
 // minimum binary size of serialized report on wire
-// Header(16) + TPM(6992) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7436
-const MinReportSize = 7436
+// Header(16) + TPM(7514) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7958
+const MinReportSize = 7958
 
 // fixed struct portion (without variable-length sections)
-const FixedReportSize = 7428
+// Header(16) + TPM(7514) + System(396) + BPF(24) = 7950
+const FixedReportSize = 7950
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -267,6 +274,15 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += NonceSize
 	copy(report.TPM.HardwareID[:], data[offset:offset+HardwareIDSize])
 	offset += HardwareIDSize
+	report.TPM.AIKGeneration = binary.LittleEndian.Uint64(data[offset:])
+	offset += 8
+	copy(report.TPM.PrevAIKPublic[:], data[offset:offset+MaxAIKPubSize])
+	offset += MaxAIKPubSize
+	report.TPM.PrevAIKSize = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	if report.TPM.PrevAIKSize > MaxAIKPubSize {
+		return nil, fmt.Errorf("%w: prev_aik_public_size %d exceeds max %d", ErrInvalidSize, report.TPM.PrevAIKSize, MaxAIKPubSize)
+	}
 	offset += 2 // reserved
 
 	// system measurement (396 bytes)

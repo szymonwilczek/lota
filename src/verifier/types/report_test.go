@@ -79,7 +79,15 @@ func createTestReportBytes() []byte {
 		buf[offset+i] = byte(0xDD ^ i)
 	}
 	offset += HardwareIDSize
-	// reserved (2 bytes)
+	// aik_generation (8)
+	binary.LittleEndian.PutUint64(buf[offset:], 1)
+	offset += 8
+	// prev_aik_public (512) + size
+	copy(buf[offset:], []byte("PREV_AIK_PUBLIC_KEY"))
+	offset += MaxAIKPubSize
+	binary.LittleEndian.PutUint16(buf[offset:], 0)
+	offset += 2
+	// reserved
 	offset += 2
 
 	// System Measurement (396 bytes)
@@ -295,11 +303,14 @@ func TestParseReport_Alignment(t *testing.T) {
 		"TPM.EKCertSize":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
 		"TPM.Nonce":          16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
 		"TPM.HardwareID":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32,
-		"System.KernelHash":  16 + 6992,
-		"System.AgentHash":   16 + 6992 + 32,
-		"System.KernelPath":  16 + 6992 + 64,
-		"System.IOMMU":       16 + 6992 + 64 + 256,
-		"BPF.TotalExec":      16 + 6992 + 396,
+		"TPM.AIKGeneration":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32,
+		"TPM.PrevAIKPublic":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8,
+		"TPM.PrevAIKSize":    16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8 + 512,
+		"System.KernelHash":  16 + 7514,
+		"System.AgentHash":   16 + 7514 + 32,
+		"System.KernelPath":  16 + 7514 + 64,
+		"System.IOMMU":       16 + 7514 + 64 + 256,
+		"BPF.TotalExec":      16 + 7514 + 396,
 	}
 
 	data := createTestReportBytes()
@@ -315,11 +326,11 @@ func TestParseReport_Alignment(t *testing.T) {
 	}
 
 	// final check: fixed size matches C struct, min size includes variable sections header
-	if FixedReportSize != 7428 {
-		t.Errorf("FixedReportSize: got %d, want 7428", FixedReportSize)
+	if FixedReportSize != 7950 {
+		t.Errorf("FixedReportSize: got %d, want 7950", FixedReportSize)
 	}
-	if MinReportSize != 7436 {
-		t.Errorf("MinReportSize: got %d, want 7436", MinReportSize)
+	if MinReportSize != 7958 {
+		t.Errorf("MinReportSize: got %d, want 7958", MinReportSize)
 	}
 	t.Logf("✓ Fixed report size: %d bytes, minimum wire size: %d bytes", FixedReportSize, MinReportSize)
 }
