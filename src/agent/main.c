@@ -349,10 +349,11 @@ static int run_daemon(const struct run_daemon_params *params) {
   if (bpf_loader_get_extended_stats(&g_bpf_ctx, &stats) == 0) {
     lota_info("Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
               "mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
-              "ptrace=%lu ptrace_blocked=%lu setuid=%lu",
+              "ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu",
               stats.total_execs, stats.events_sent, stats.errors, stats.drops,
               stats.modules_blocked, stats.mmap_execs, stats.mmap_blocked,
-              stats.ptrace_attempts, stats.ptrace_blocked, stats.setuid_events);
+              stats.ptrace_attempts, stats.ptrace_blocked, stats.setuid_events,
+              stats.bpf_syscall_blocked);
   }
 
   {
@@ -363,6 +364,18 @@ static int run_daemon(const struct run_daemon_params *params) {
   }
 
 cleanup_bpf:
+  if (g_tpm_ctx.initialized && g_bpf_ctx.loaded) {
+    int poison_ret = poison_runtime_pcr(&g_tpm_ctx);
+    if (poison_ret < 0) {
+      lota_err("Failed to poison runtime PCR before BPF unload: %s",
+               strerror(-poison_ret));
+      if (ret == 0)
+        ret = poison_ret;
+    } else {
+      lota_notice("Runtime PCR poisoned before BPF unload");
+    }
+  }
+
   bpf_loader_cleanup(&g_bpf_ctx);
 cleanup_tpm:
   tpm_cleanup(&g_tpm_ctx);

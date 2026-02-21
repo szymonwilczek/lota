@@ -30,6 +30,7 @@ struct bpf_loader_ctx {
   int stats_fd;                              /* Stats map fd */
   int config_fd;                             /* 'lota_config' map fd */
   int integrity_fd;                          /* 'integrity_config' map fd */
+  int bpf_admin_tgid_fd;                     /* 'bpf_admin_tgid' map fd */
   int trusted_libs_fd;                       /* 'trusted_libs' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
   bool loaded; /* Program is loaded and attached */
@@ -200,6 +201,7 @@ struct bpf_extended_stats {
   uint64_t ptrace_attempts;
   uint64_t ptrace_blocked;
   uint64_t setuid_events;
+  uint64_t bpf_syscall_blocked;
 };
 
 /*

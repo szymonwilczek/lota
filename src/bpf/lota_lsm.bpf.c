@@ -93,6 +93,19 @@ struct {
 #define STAT_ANON_EXEC 10
 #define STAT_ANON_EXEC_BLOCKED 11
 #define STAT_EXEC_BLOCKED 12
+#define STAT_BPF_SYSCALL_BLOCKED 13
+
+/*
+ * Authorized LOTA agent TGID (process ID) allowed to perform bpf() syscalls
+ * while BPF lock is enabled.
+ * Key 0 -> TGID.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, u32);
+} bpf_admin_tgid SEC(".maps");
 
 /*
  * Protected PID map.
@@ -234,6 +247,17 @@ static __always_inline int is_protected_task(struct task_struct *task) {
 
   task_start_ticks = get_task_start_ticks(task);
   return task_start_ticks && entry->start_time_ticks == task_start_ticks;
+}
+
+static __always_inline int is_bpf_admin_task(void) {
+  u32 key = 0;
+  u32 current_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
+  u32 *admin_tgid = bpf_map_lookup_elem(&bpf_admin_tgid, &key);
+
+  if (!admin_tgid || *admin_tgid == 0)
+    return 0;
+
+  return *admin_tgid == current_tgid;
 }
 
 /*
@@ -977,4 +1001,50 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 
   /* kernel handles setuid policy via capabilities */
   return 0;
+}
+
+/* ======================================================================
+ * LSM hook: bpf
+ *
+ * Called on bpf() syscall. In ENFORCE mode with LOTA_CFG_LOCK_BPF enabled,
+ * deny all bpf() operations from processes other than the authorized agent.
+ *
+ * This prevents root-level attackers from detaching/overwriting LOTA links
+ * via bpftool while runtime protection is active.
+ * ====================================================================== */
+SEC("lsm/bpf")
+int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size) {
+  u32 mode;
+  int destructive_cmd = 0;
+
+  (void)attr;
+  (void)size;
+
+  mode = get_mode();
+  if (mode != LOTA_MODE_ENFORCE)
+    return 0;
+
+  if (!get_config(LOTA_CFG_LOCK_BPF))
+    return 0;
+
+  if (is_bpf_admin_task())
+    return 0;
+
+  switch (cmd) {
+  case BPF_PROG_DETACH:
+  case BPF_LINK_DETACH:
+  case BPF_MAP_UPDATE_ELEM:
+  case BPF_MAP_DELETE_ELEM:
+    destructive_cmd = 1;
+    break;
+  default:
+    destructive_cmd = 0;
+    break;
+  }
+
+  if (!destructive_cmd)
+    return 0;
+
+  inc_stat(STAT_BPF_SYSCALL_BLOCKED);
+  return -EPERM;
 }

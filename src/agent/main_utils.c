@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <unistd.h>
 
 #include "../../include/lota.h"
@@ -281,4 +282,34 @@ int self_measure(struct tpm_context *ctx) {
     return ret;
 
   return 0;
+}
+
+int poison_runtime_pcr(struct tpm_context *ctx) {
+  uint8_t poison_digest[LOTA_HASH_SIZE];
+  size_t off = 0;
+  int use_fallback = 0;
+
+  if (!ctx || !ctx->initialized)
+    return -EINVAL;
+
+  while (off < sizeof(poison_digest)) {
+    ssize_t got =
+        getrandom(poison_digest + off, sizeof(poison_digest) - off, 0);
+    if (got < 0) {
+      if (errno == EINTR)
+        continue;
+      use_fallback = 1;
+      break;
+    }
+    if (got == 0) {
+      use_fallback = 1;
+      break;
+    }
+    off += (size_t)got;
+  }
+
+  if (use_fallback)
+    memset(poison_digest, 0xDE, sizeof(poison_digest));
+
+  return tpm_pcr_extend(ctx, LOTA_PCR_SELF, poison_digest);
 }

@@ -65,6 +65,12 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
       lota_info("Anonymous executable mappings: BLOCKED");
   }
 
+  ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_LOCK_BPF, 1);
+  if (ret < 0)
+    lota_warn("Failed to enable bpf syscall lock: %s", strerror(-ret));
+  else
+    lota_info("BPF syscall lock: ON (non-agent bpf() denied in ENFORCE)");
+
   {
     int applied_pids = 0;
     for (int i = 0; i < policy->protect_pid_count; i++) {
@@ -93,16 +99,14 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
     for (int i = 0; i < policy->trust_lib_count; i++) {
       ret = bpf_loader_trust_lib(&g_bpf_ctx, policy->trust_libs[i]);
       if (ret < 0) {
-        lota_err("Failed to trust lib %s at startup: %s",
-                 policy->trust_libs[i],
+        lota_err("Failed to trust lib %s at startup: %s", policy->trust_libs[i],
                  strerror(-ret));
         for (int k = 0; k < applied_libs; k++) {
           int rollback_ret =
               bpf_loader_untrust_lib(&g_bpf_ctx, policy->trust_libs[k]);
           if (rollback_ret < 0) {
             lota_warn("Failed to rollback trusted lib %s: %s",
-                      policy->trust_libs[k],
-                      strerror(-rollback_ret));
+                      policy->trust_libs[k], strerror(-rollback_ret));
           }
         }
         return ret;

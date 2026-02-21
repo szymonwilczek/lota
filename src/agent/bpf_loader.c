@@ -29,6 +29,7 @@
 #define STAT_PTRACE_ATTEMPTS 7
 #define STAT_PTRACE_BLOCKED 8
 #define STAT_SETUID_EVENTS 9
+#define STAT_BPF_SYSCALL_BLOCKED 13
 
 struct protected_pid_entry {
   uint64_t start_time_ticks;
@@ -141,6 +142,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
+  ctx->bpf_admin_tgid_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
 
@@ -225,6 +227,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
   if (ctx->config_fd < 0) {
     ctx->config_fd = -1;
+  }
+
+  ctx->bpf_admin_tgid_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "bpf_admin_tgid");
+  if (ctx->bpf_admin_tgid_fd >= 0) {
+    uint32_t key = 0;
+    uint32_t tgid = (uint32_t)getpid();
+    if (bpf_map_update_elem(ctx->bpf_admin_tgid_fd, &key, &tgid, BPF_ANY) < 0) {
+      lota_err("Failed to set bpf admin tgid: %s", strerror(errno));
+      err = -errno;
+      goto err_close;
+    }
+  } else {
+    lota_warn("bpf_admin_tgid map not found in BPF object");
   }
 
   /* Integrity config map */
@@ -393,6 +409,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
+  ctx->bpf_admin_tgid_fd = -1;
   ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
@@ -532,6 +549,8 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
   read_stat(ctx->stats_fd, STAT_PTRACE_ATTEMPTS, &stats->ptrace_attempts);
   read_stat(ctx->stats_fd, STAT_PTRACE_BLOCKED, &stats->ptrace_blocked);
   read_stat(ctx->stats_fd, STAT_SETUID_EVENTS, &stats->setuid_events);
+  read_stat(ctx->stats_fd, STAT_BPF_SYSCALL_BLOCKED,
+            &stats->bpf_syscall_blocked);
 
   return 0;
 }
