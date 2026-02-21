@@ -3,6 +3,7 @@
  * LOTA Agent - BPF ring buffer event handler
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -21,6 +22,14 @@ static void format_sha256(const uint8_t hash[LOTA_HASH_SIZE], char *buf) {
     snprintf(buf + i * 2, 3, "%02x", hash[i]);
 }
 
+static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE]) {
+  for (int i = 0; i < LOTA_HASH_SIZE; i++) {
+    if (hash[i] != 0)
+      return true;
+  }
+  return false;
+}
+
 /*
  * Ring buffer event handler.
  *
@@ -34,6 +43,8 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   uint8_t content_hash[LOTA_HASH_SIZE];
   char hash_hex[LOTA_HASH_SIZE * 2 + 1];
   int has_file = 0;
+  bool is_exec = false;
+  bool is_blocked = false;
   int hash_ret;
   (void)ctx;
 
@@ -47,10 +58,13 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   case LOTA_EVENT_EXEC:
     event_type_str = "EXEC";
     has_file = 1;
+    is_exec = true;
     break;
   case LOTA_EVENT_EXEC_BLOCKED:
     event_type_str = "EXEC_BLOCKED";
     has_file = 1;
+    is_exec = true;
+    is_blocked = true;
     break;
   case LOTA_EVENT_MODULE_LOAD:
     event_type_str = "MODULE";
@@ -59,6 +73,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   case LOTA_EVENT_MODULE_BLOCKED:
     event_type_str = "BLOCKED";
     has_file = 1;
+    is_blocked = true;
     break;
   case LOTA_EVENT_MMAP_EXEC:
     event_type_str = "MMAP_EXEC";
@@ -67,6 +82,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   case LOTA_EVENT_MMAP_BLOCKED:
     event_type_str = "MMAP_BLOCKED";
     has_file = 1;
+    is_blocked = true;
     break;
   case LOTA_EVENT_PTRACE:
     event_type_str = "PTRACE";
@@ -104,6 +120,18 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
    * are not re-hashed on every event.
    */
   if (has_file && event->filename[0] == '/') {
+    if (is_exec && hash_is_nonzero(event->hash)) {
+      format_sha256(event->hash, hash_hex);
+      lota_info("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)",
+                (unsigned long long)event->timestamp_ns, event_type_str,
+                event->comm, event->filename, hash_hex, event->pid, event->uid);
+      return 0;
+    }
+
+    /* never hash blocked exec events: /proc/<pid>/exe is not the new image */
+    if (is_exec && is_blocked)
+      goto log_no_hash;
+
     hash_ret = hash_verify_event(&g_hash_ctx, event, content_hash);
     if (hash_ret == 0) {
       format_sha256(content_hash, hash_hex);
@@ -114,6 +142,8 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     }
     /* hash failed -> fall through to log without hash */
   }
+
+log_no_hash:
 
   lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
             (unsigned long long)event->timestamp_ns, event_type_str,

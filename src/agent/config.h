@@ -39,6 +39,7 @@ struct lota_config {
   char bpf_path[PATH_MAX];
   char mode[32]; /* "monitor", "enforce", "maintenance" */
   bool strict_mmap;
+  bool strict_exec;
   bool block_ptrace;
   bool strict_modules;
   bool block_anon_exec;

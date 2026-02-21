@@ -91,6 +91,7 @@ void config_init(struct lota_config *cfg) {
   set_str(cfg->bpf_path, sizeof(cfg->bpf_path), "/usr/lib/lota/lota_lsm.bpf.o");
   set_str(cfg->mode, sizeof(cfg->mode), "monitor");
   cfg->strict_mmap = false;
+  cfg->strict_exec = false;
   cfg->block_ptrace = false;
   cfg->strict_modules = false;
   cfg->block_anon_exec = false;
@@ -166,6 +167,16 @@ static int apply_key(struct lota_config *cfg, const char *key,
       return -1;
     }
     cfg->strict_mmap = parsed;
+    return 0;
+  }
+  if (strcmp(key, "strict_exec") == 0 || strcmp(key, "strict-exec") == 0) {
+    bool parsed;
+    if (parse_bool_strict(value, &parsed) != 0) {
+      fprintf(stderr, "%s:%d: invalid strict_exec '%s' (use true/false)\n",
+              filepath, lineno, value);
+      return -1;
+    }
+    cfg->strict_exec = parsed;
     return 0;
   }
   if (strcmp(key, "block_ptrace") == 0 || strcmp(key, "block-ptrace") == 0) {
@@ -405,6 +416,7 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
   fprintf(fp, "bpf_path = %s\n", cfg->bpf_path);
   fprintf(fp, "mode = %s\n", cfg->mode);
   fprintf(fp, "strict_mmap = %s\n", cfg->strict_mmap ? "true" : "false");
+  fprintf(fp, "strict_exec = %s\n", cfg->strict_exec ? "true" : "false");
   fprintf(fp, "block_ptrace = %s\n", cfg->block_ptrace ? "true" : "false");
   fprintf(fp, "strict_modules = %s\n", cfg->strict_modules ? "true" : "false");
   fprintf(fp, "block_anon_exec = %s\n",

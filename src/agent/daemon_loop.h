@@ -22,6 +22,7 @@ struct agent_loop_ctx {
   struct lota_config *cfg;
   int *mode;
   bool *strict_mmap;
+  bool *strict_exec;
   bool *block_ptrace;
   bool *strict_modules;
   bool *block_anon_exec;

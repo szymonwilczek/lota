@@ -41,6 +41,14 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
       lota_info("Strict mmap enforcement: ON");
   }
 
+  if (policy->strict_exec) {
+    ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_EXEC, 1);
+    if (ret < 0)
+      lota_warn("Failed to enable strict exec: %s", strerror(-ret));
+    else
+      lota_info("Strict exec enforcement: ON");
+  }
+
   if (policy->block_ptrace) {
     ret = bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE, 1);
     if (ret < 0)

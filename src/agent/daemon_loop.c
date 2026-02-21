@@ -49,11 +49,11 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx) {
           sdnotify_reloading();
           lota_info("SIGHUP received, reloading configuration");
 
-          (void)agent_reload_config(ctx->config_path, ctx->cfg, ctx->mode,
-                                    ctx->strict_mmap, ctx->block_ptrace,
-                                    ctx->strict_modules, ctx->block_anon_exec,
-                                    ctx->protect_pids, ctx->protect_pid_count,
-                                    ctx->trust_libs, ctx->trust_lib_count);
+          (void)agent_reload_config(
+              ctx->config_path, ctx->cfg, ctx->mode, ctx->strict_mmap,
+              ctx->strict_exec, ctx->block_ptrace, ctx->strict_modules,
+              ctx->block_anon_exec, ctx->protect_pids, ctx->protect_pid_count,
+              ctx->trust_libs, ctx->trust_lib_count);
         }
       } else if (events[i].data.fd == ipc_get_fd(ctx->ipc_ctx)) {
         ipc_process(ctx->ipc_ctx, 0);

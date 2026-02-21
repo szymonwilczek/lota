@@ -315,7 +315,7 @@ static __noinline int is_verity_allowed(struct file *file) {
   if (!file)
     return 0;
 
-  u8 digest[64];
+  u8 digest[PE_DIGEST_SIZE];
   __builtin_memset(digest, 0, sizeof(digest));
 
   struct bpf_dynptr digest_ptr;
@@ -323,38 +323,96 @@ static __noinline int is_verity_allowed(struct file *file) {
   u32 *allowed;
 
   ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
-  if (ret < 0) {
-    bpf_printk("LOTA: dynptr_from_mem failed: %d", ret);
+  if (ret < 0)
     return 0;
-  }
 
-  /*
-   * if bpf_get_fsverity_digest returns > 0, the file has a digest
-   */
   ret = bpf_get_fsverity_digest(file, &digest_ptr);
-  if (ret < 0) {
-    bpf_printk("LOTA: fsverity_digest failed: %d", ret);
+  if (ret != PE_DIGEST_SIZE)
     return 0;
-  }
 
-  if (ret == 0) {
-    bpf_printk("LOTA: fsverity digest unavailable");
-    return 0;
-  }
-
-  if (ret != PE_DIGEST_SIZE) {
-    bpf_printk("LOTA: fsverity digest size mismatch: %d", ret);
-    return 0;
-  }
-
-  /*
-   * Check if this digest is in trusted hashes map
-   * Note: The digest is now in the map memory 'digest'.
-   */
   allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
-  if (allowed && *allowed) {
-    bpf_printk("LOTA: Verity digest allowed");
-    return 1;
+  return (allowed && *allowed) ? 1 : 0;
+}
+
+/* =====================================================================
+ * LSM hook: bprm_check_security
+ *
+ * Called during execve() before the new image is committed.
+ *
+ * This is the place to enforce integrity (no TOCTOU): if STRICT_EXEC
+ * is enabled in ENFORCE mode, only fs-verity-allowed files can be executed.
+ * ====================================================================== */
+SEC("lsm/bprm_check_security")
+int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
+  struct file *file;
+  struct lota_exec_event *event;
+  u32 mode;
+  int blocked = 0;
+  u8 digest[PE_DIGEST_SIZE];
+  int have_digest = 0;
+
+  inc_stat(STAT_TOTAL_EXECS);
+
+  mode = get_mode();
+  if (mode == LOTA_MODE_MAINTENANCE)
+    return 0;
+
+  file = BPF_CORE_READ(bprm, file);
+
+  /* fetch fs-verity digest once (if supported) and reuse it below */
+  if (bpf_get_fsverity_digest && file) {
+    __builtin_memset(digest, 0, sizeof(digest));
+    struct bpf_dynptr digest_ptr;
+    int ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
+    if (ret == 0) {
+      ret = bpf_get_fsverity_digest(file, &digest_ptr);
+      if (ret == PE_DIGEST_SIZE)
+        have_digest = 1;
+    }
+  }
+
+  if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
+    if (!have_digest) {
+      blocked = 1;
+    } else {
+      u8 *allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
+      if (!(allowed && *allowed))
+        blocked = 1;
+    }
+  }
+
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+    event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+    /* best-effort filename from binprm; may be relative */
+    {
+      const char *fn = BPF_CORE_READ(bprm, filename);
+      if (fn)
+        bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), fn);
+    }
+
+    /* if fs-verity digest is present, include it as event->hash (32 bytes) */
+    if (have_digest)
+      __builtin_memcpy(event->hash, digest, PE_DIGEST_SIZE);
+
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
+  }
+
+  if (blocked) {
+    inc_stat(STAT_EXEC_BLOCKED);
+    return -EPERM;
   }
 
   return 0;

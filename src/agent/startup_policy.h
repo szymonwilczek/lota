@@ -9,6 +9,7 @@
 struct agent_startup_policy {
     int mode;
     bool strict_mmap;
+    bool strict_exec;
     bool block_ptrace;
     bool strict_modules;
     bool block_anon_exec;

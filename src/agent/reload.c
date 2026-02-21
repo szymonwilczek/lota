@@ -21,12 +21,11 @@ static void copy_path(char dst[PATH_MAX], const char *src) {
   dst[len] = '\0';
 }
 
-static void apply_runtime_flags_transactional(const struct lota_config *new_cfg,
-                                              bool *strict_mmap,
-                                              bool *block_ptrace,
-                                              bool *strict_modules,
-                                              bool *block_anon_exec) {
+static void apply_runtime_flags_transactional(
+    const struct lota_config *new_cfg, bool *strict_mmap, bool *strict_exec,
+    bool *block_ptrace, bool *strict_modules, bool *block_anon_exec) {
   bool old_strict_mmap = *strict_mmap;
+  bool old_strict_exec = *strict_exec;
   bool old_block_ptrace = *block_ptrace;
   bool old_strict_modules = *strict_modules;
   bool old_block_anon_exec = *block_anon_exec;
@@ -48,6 +47,16 @@ static void apply_runtime_flags_transactional(const struct lota_config *new_cfg,
       *block_ptrace = new_cfg->block_ptrace;
     } else {
       lota_warn("Failed to apply block ptrace on reload");
+      runtime_flags_failed = true;
+    }
+  }
+
+  if (!runtime_flags_failed && new_cfg->strict_exec != *strict_exec) {
+    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_EXEC,
+                              new_cfg->strict_exec ? 1 : 0) == 0) {
+      *strict_exec = new_cfg->strict_exec;
+    } else {
+      lota_warn("Failed to apply strict exec on reload");
       runtime_flags_failed = true;
     }
   }
@@ -89,6 +98,14 @@ static void apply_runtime_flags_transactional(const struct lota_config *new_cfg,
         lota_warn("Failed to rollback block ptrace after reload error");
       }
     }
+    if (*strict_exec != old_strict_exec) {
+      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_EXEC,
+                                old_strict_exec ? 1 : 0) == 0) {
+        *strict_exec = old_strict_exec;
+      } else {
+        lota_warn("Failed to rollback strict exec after reload error");
+      }
+    }
     if (*strict_modules != old_strict_modules) {
       if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
                                 old_strict_modules ? 1 : 0) == 0) {
@@ -111,6 +128,8 @@ static void apply_runtime_flags_transactional(const struct lota_config *new_cfg,
 
   if (*strict_mmap != old_strict_mmap)
     lota_info("Strict mmap: %s", *strict_mmap ? "ON" : "OFF");
+  if (*strict_exec != old_strict_exec)
+    lota_info("Strict exec: %s", *strict_exec ? "ON" : "OFF");
   if (*block_ptrace != old_block_ptrace)
     lota_info("Block ptrace: %s", *block_ptrace ? "ON" : "OFF");
   if (*strict_modules != old_strict_modules)
@@ -242,7 +261,7 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 
 static void sync_config_snapshot(
     struct lota_config *cfg, const struct lota_config *new_cfg, int mode,
-    bool strict_mmap, bool block_ptrace, bool strict_modules,
+    bool strict_mmap, bool strict_exec, bool block_ptrace, bool strict_modules,
     bool block_anon_exec, uint32_t *protect_pids, int protect_pid_count,
     char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX], int trust_lib_count) {
   memcpy(cfg->server, new_cfg->server, sizeof(cfg->server));
@@ -258,6 +277,7 @@ static void sync_config_snapshot(
     snprintf(cfg->mode, sizeof(cfg->mode), "monitor");
 
   cfg->strict_mmap = strict_mmap;
+  cfg->strict_exec = strict_exec;
   cfg->block_ptrace = block_ptrace;
   cfg->strict_modules = strict_modules;
   cfg->block_anon_exec = block_anon_exec;
@@ -291,9 +311,10 @@ static void sync_config_snapshot(
 }
 
 int agent_reload_config(const char *config_path, struct lota_config *cfg,
-                        int *mode, bool *strict_mmap, bool *block_ptrace,
-                        bool *strict_modules, bool *block_anon_exec,
-                        uint32_t **protect_pids, int *protect_pid_count,
+                        int *mode, bool *strict_mmap, bool *strict_exec,
+                        bool *block_ptrace, bool *strict_modules,
+                        bool *block_anon_exec, uint32_t **protect_pids,
+                        int *protect_pid_count,
                         char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
                         int *trust_lib_count) {
   struct lota_config new_cfg;
@@ -326,8 +347,9 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
     }
   }
 
-  apply_runtime_flags_transactional(&new_cfg, strict_mmap, block_ptrace,
-                                    strict_modules, block_anon_exec);
+  apply_runtime_flags_transactional(&new_cfg, strict_mmap, strict_exec,
+                                    block_ptrace, strict_modules,
+                                    block_anon_exec);
 
   if (new_cfg.log_level[0] && strcmp(new_cfg.log_level, cfg->log_level) != 0) {
     int lvl = LOG_DEBUG;
@@ -347,9 +369,10 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
   reload_trust_libs(&new_cfg, trust_libs, trust_lib_count);
   lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
 
-  sync_config_snapshot(cfg, &new_cfg, *mode, *strict_mmap, *block_ptrace,
-                       *strict_modules, *block_anon_exec, *protect_pids,
-                       *protect_pid_count, trust_libs, *trust_lib_count);
+  sync_config_snapshot(cfg, &new_cfg, *mode, *strict_mmap, *strict_exec,
+                       *block_ptrace, *strict_modules, *block_anon_exec,
+                       *protect_pids, *protect_pid_count, trust_libs,
+                       *trust_lib_count);
 
   free(new_cfg.protect_pids);
 

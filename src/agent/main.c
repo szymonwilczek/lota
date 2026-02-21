@@ -97,6 +97,7 @@ struct run_daemon_params {
   const char *bpf_path;
   int mode;
   bool strict_mmap;
+  bool strict_exec;
   bool block_ptrace;
   bool strict_modules;
   bool block_anon_exec;
@@ -115,6 +116,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   bool wd_enabled;
   int mode;
   bool strict_mmap;
+  bool strict_exec;
   bool block_ptrace;
   bool strict_modules;
   bool block_anon_exec;
@@ -130,6 +132,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   bpf_path = params->bpf_path;
   mode = params->mode;
   strict_mmap = params->strict_mmap;
+  strict_exec = params->strict_exec;
   block_ptrace = params->block_ptrace;
   strict_modules = params->strict_modules;
   block_anon_exec = params->block_anon_exec;
@@ -303,6 +306,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   struct agent_startup_policy startup_policy = {
       .mode = mode,
       .strict_mmap = strict_mmap,
+      .strict_exec = strict_exec,
       .block_ptrace = block_ptrace,
       .strict_modules = strict_modules,
       .block_anon_exec = block_anon_exec,
@@ -338,6 +342,7 @@ static int run_daemon(const struct run_daemon_params *params) {
       .cfg = cfg,
       .mode = &mode,
       .strict_mmap = &strict_mmap,
+      .strict_exec = &strict_exec,
       .block_ptrace = &block_ptrace,
       .strict_modules = &strict_modules,
       .block_anon_exec = &block_anon_exec,
@@ -424,6 +429,7 @@ int main(int argc, char *argv[]) {
   uint32_t aik_ttl = DEFAULT_AIK_TTL;
   int mode = LOTA_MODE_MONITOR;
   bool strict_mmap = false;
+  bool strict_exec = false;
   bool block_ptrace = false;
   bool strict_modules = false;
   bool block_anon_exec = false;
@@ -460,6 +466,7 @@ int main(int argc, char *argv[]) {
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
       {"strict-mmap", no_argument, 0, 'M'},
+      {"strict-exec", no_argument, 0, 'Y'},
       {"block-ptrace", no_argument, 0, 'P'},
       {"strict-modules", no_argument, 0, 'J'},
       {"block-anon-exec", no_argument, 0, 'X'},
@@ -514,6 +521,7 @@ int main(int argc, char *argv[]) {
       mode = cfg_mode;
   }
   strict_mmap = cfg.strict_mmap;
+  strict_exec = cfg.strict_exec;
   block_ptrace = cfg.block_ptrace;
   strict_modules = cfg.strict_modules;
   block_anon_exec = cfg.block_anon_exec;
@@ -551,9 +559,9 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < cfg.trust_lib_count; i++)
     snprintf(g_trust_libs[i], sizeof(g_trust_libs[i]), "%s", cfg.trust_libs[i]);
 
-  while ((opt = getopt_long(argc, argv,
-                            "f:ZticSEaI:s:p:C:KF:b:m:MPJXR:L:dD:T:G:g:V:k:Q:Hh",
-                            long_options, NULL)) != -1) {
+  while ((opt = getopt_long(
+              argc, argv, "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:dD:T:G:g:V:k:Q:Hh",
+              long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
@@ -623,6 +631,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'M':
       strict_mmap = true;
+      break;
+    case 'Y':
+      strict_exec = true;
       break;
     case 'P':
       block_ptrace = true;
@@ -881,6 +892,7 @@ int main(int argc, char *argv[]) {
         .bpf_path = bpf_path,
         .mode = mode,
         .strict_mmap = strict_mmap,
+        .strict_exec = strict_exec,
         .block_ptrace = block_ptrace,
         .strict_modules = strict_modules,
         .block_anon_exec = block_anon_exec,
