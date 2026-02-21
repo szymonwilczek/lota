@@ -1,39 +1,80 @@
 {
-	"target": "linux/amd64",
-	"name": "lota-fuzzer",
-	"http": "127.0.0.1:56741",
-	"workdir": "./workdir",
-	"kernel_obj": "/path/to/kernel_obj",
-	"image": "/path/to/image",
-	"sshkey": "/path/to/ssh-key",
-	"syzkaller": "/path/to/syzkaller",
-	"procs": 2,
-	"type": "qemu",
-	"vm": {
-		"count": 1,
-		"kernel": "/path/to/kernel/bzImage",
-		"cmdline": "net.ifnames=0 biosdevname=0 root=/dev/sda console=ttyS0 oops=panic panic_on_warn=1 panic=1",
-		"cpu": 2,
-		"mem": 1024
-	},
-	"enable_syscalls": [
-		"bpf",
-		"execve",
-		"ptrace",
-		"mmap",
-		"socket",
-		"connect",
-		"sendto",
-		"recvfrom",
-		"bind",
-		"listen",
-		"accept",
-		"ioctl"
-	],
-	"suppressions": [
-		"some_known_bug"
-	],
-	"email_addrs": [
-		"developer@example.com"
-	]
+  "target": "linux/amd64",
+  "name": "lota-fuzzer",
+  "http": "127.0.0.1:56741",
+  "workdir": "./workdir",
+  "kernel_obj": "/path/to/linux-build-dir",
+  "image": "/path/to/trixie.img",
+  "sshkey": "/path/to/trixie.id_rsa",
+  "syzkaller": "/path/to/syzkaller/repo",
+
+  "type": "qemu",
+  "sandbox": "none",
+  "procs": 6,
+  "cover": true,
+  "reproduce": true,
+
+  "vm": {
+    "count": 4,
+    "kernel": "/path/to/linux/arch/x86/boot/bzImage",
+    "cpu": 2,
+    "mem": 3072,
+    "cmdline": "root=/dev/sda console=ttyS0 earlyprintk=serial net.ifnames=0 biosdevname=0 oops=panic panic=1 panic_on_warn=1 panic_on_oops=1 slab_nomerge pti=on mitigations=auto,nosmt lsm=lockdown,yama,integrity,apparmor,bpf"
+  },
+
+  "enable_syscalls": [
+    "socket$unix",
+    "connect",
+    "sendto",
+    "recvfrom",
+    "read",
+    "write",
+    "shutdown",
+    "close",
+
+    "connect$lota",
+    "write$lota_ping",
+    "write$lota_status",
+    "write$lota_token",
+    "write$lota_subscribe",
+    "write$lota_fuzz_small",
+    "write$lota_fuzz_big",
+    "write$lota_raw",
+    "sendto$lota_raw",
+    "read$lota",
+    "recvfrom$lota",
+    "shutdown$lota",
+    "close$lota",
+
+    "bpf$MAP_CREATE",
+    "bpf$MAP_LOOKUP_ELEM",
+    "bpf$MAP_UPDATE_ELEM",
+    "bpf$MAP_DELETE_ELEM",
+    "bpf$BPF_PROG_ATTACH",
+    "bpf$BPF_PROG_DETACH",
+    "bpf$LINK_DETACH",
+    "bpf$OBJ_PIN_MAP",
+    "bpf$OBJ_GET_MAP",
+
+    "ptrace$cont",
+    "ptrace$setopts",
+    "ptrace$poke",
+    "ptrace$peek",
+    "kill",
+    "tgkill",
+
+    "kexec_load",
+
+    "mmap",
+    "mprotect",
+    "execve",
+    "execveat",
+    "openat",
+    "faccessat"
+  ],
+
+  "suppressions": [],
+  "email_addrs": [
+    "email@example.com"
+  ]
 }

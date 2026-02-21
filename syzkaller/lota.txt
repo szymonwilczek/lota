@@ -1,79 +1,98 @@
-# LOTA IPC Protocol Description for Syzkaller
+# LOTA IPC Syzlang profile
+#
+# Target: src/agent/ipc.c request parsing and command dispatch.
+# Socket: /run/lota/lota.sock
+#
+# This file intentionally mixes:
+# - protocol-correct frames,
+# - malformed headers,
+# - oversized/truncated payloads,
+# to force parser edge cases and state-machine desync handling.
 
 include <sys/socket.h>
 include <sys/un.h>
 include <linux/un.h>
 
-# AGENT IPC (src/agent/ipc.c, net.c)
-#    - Covered by: connect$lota, write$lota_*
-#    - Fuzzer connects to /run/lota/lota.sock and sends valid/invalid
-#      commands, covering the entire request parsing and handling logic.
-#
-# SDK & WINE HOOKS (src/sdk/*.c)
-#    - Covered by: Indirect IPC fuzzing.
-#
-# BPF LSM & BOOTLOADER (src/agent/bpf_loader.c, lota.bpf.c)
-#    - Covered by: Generic syscalls (open, execve, mmap, ptrace).
-#
-# 4. FILESYSTEM INTEGRITY (src/agent/hash_verify.c)
-#    - Covered by: filesystem syscalls (open, write, close) + execve.
-#    - Syscall -> BPF Hook -> Agent Event -> hash_verify.c (Open & Read File).
-#
-# ==============================================================================
+resource lota_sock[sock_unix]
 
-
-# sockaddr_un for LOTA
-# sun_family = AF_UNIX (1)
-# sun_path = "/run/lota/lota.sock"
-sockaddr_un_lota {
-    family  const[AF_UNIX, int16]
-    path    string
+lota_sockaddr_un {
+	family	const[AF_UNIX, int16]
+	path	string["/run/lota/lota.sock"]
 }
 
-connect$lota(fd sock_unix, addr ptr[in, sockaddr_un_lota], len len[addr])
+socket$lota_unix(domain const[AF_UNIX], type const[SOCK_STREAM], proto const[0]) lota_sock
+connect$lota(fd lota_sock, addr ptr[in, lota_sockaddr_un], len len[addr])
 
-# IPC Header
-lota_ipc_request {
-    magic   const[0x4C4F5441, int32]
-    version const[1, int32]
-    cmd     int32
-    len     int32
+# LOTA wire protocol constants
+# magic   = 0x4C4F5441
+# version = 1
+# max payload = 4096
+
+lota_ipc_req_hdr_fuzz {
+	magic		int32
+	version		int32
+	cmd		int32
+	payload_len	int32
 }
 
-# Commands
-# LOTA_IPC_CMD_PING = 0x01
-lota_ping_msg {
-    hdr lota_ipc_request
+# Known command payloads (valid path)
+lota_req_ping {
+	magic		const[0x4c4f5441, int32]
+	version		const[1, int32]
+	cmd		const[0x01, int32]
+	payload_len	const[0, int32]
 }
 
-# LOTA_IPC_CMD_GET_STATUS = 0x02
-lota_status_msg {
-    hdr lota_ipc_request
+lota_req_status {
+	magic		const[0x4c4f5441, int32]
+	version		const[1, int32]
+	cmd		const[0x02, int32]
+	payload_len	const[0, int32]
 }
 
-# LOTA_IPC_CMD_GET_TOKEN = 0x03
-lota_token_msg {
-    hdr lota_ipc_request
-    nonce array[int8, 32]
+lota_req_token {
+	magic		const[0x4c4f5441, int32]
+	version		const[1, int32]
+	cmd		const[0x03, int32]
+	payload_len	const[32, int32]
+	nonce	array[int8, 32]
 }
 
-# LOTA_IPC_CMD_SUBSCRIBE = 0x04
-lota_subscribe_msg {
-    hdr lota_ipc_request
-    mask int32
+lota_req_subscribe {
+	magic		const[0x4c4f5441, int32]
+	version		const[1, int32]
+	cmd		const[0x04, int32]
+	payload_len	const[4, int32]
+	event_mask	int32
 }
 
-# PING: cmd=1, len=0
-write$lota_ping(fd sock_unix, data ptr[in, lota_ping_msg], len len[data])
+# Header + arbitrary payload (for malformed payload_len/cmd/version paths)
+lota_req_fuzz_small {
+	hdr	lota_ipc_req_hdr_fuzz
+	payload	array[int8, 0:256]
+}
 
-# GET_STATUS: cmd=2, len=0
-write$lota_status(fd sock_unix, data ptr[in, lota_status_msg], len len[data])
+lota_req_fuzz_big {
+	hdr	lota_ipc_req_hdr_fuzz
+	payload	array[int8, 0:8192]
+}
 
-# GET_TOKEN: cmd=3, len=32
-write$lota_token(fd sock_unix, data ptr[in, lota_token_msg], len len[data])
+# Happy-path protocol calls
+write$lota_ping(fd lota_sock, data ptr[in, lota_req_ping], len len[data])
+write$lota_status(fd lota_sock, data ptr[in, lota_req_status], len len[data])
+write$lota_token(fd lota_sock, data ptr[in, lota_req_token], len len[data])
+write$lota_subscribe(fd lota_sock, data ptr[in, lota_req_subscribe], len len[data])
 
-# SUBSCRIBE: cmd=4, len=4
-write$lota_subscribe(fd sock_unix, data ptr[in, lota_subscribe_msg], len len[data])
+# Parser abuse: mutated headers and payload lengths
+write$lota_fuzz_small(fd lota_sock, data ptr[in, lota_req_fuzz_small], len len[data])
+write$lota_fuzz_big(fd lota_sock, data ptr[in, lota_req_fuzz_big], len len[data])
 
-# write for fuzzing broken packets / overflow / invalid commands
-write$lota_generic(fd sock_unix, data ptr[in, array[int8]], len len[data])
+# Raw byte noise directly on connected socket
+write$lota_raw(fd lota_sock, data ptr[in, array[int8, 0:16384]], len len[data])
+sendto$lota_raw(fd lota_sock, data ptr[in, array[int8, 0:16384]], len len[data], flags flags[send_flags], addr ptr[in, lota_sockaddr_un], addrlen len[addr])
+
+# Drive response/error paths and backpressure handling
+read$lota(fd lota_sock, buf ptr[out, array[int8, 0:16384]], count len[buf])
+recvfrom$lota(fd lota_sock, buf ptr[out, array[int8, 0:16384]], len len[buf], flags flags[recv_flags], src ptr[out, sockaddr], srclen ptr[inout, len[src, int32]])
+shutdown$lota(fd lota_sock, how flags[shutdown_cmd])
+close$lota(fd lota_sock)

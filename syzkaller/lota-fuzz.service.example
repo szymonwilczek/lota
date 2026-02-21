@@ -1,22 +1,28 @@
 [Unit]
-Description=LOTA Syzkaller Fuzzing Daemon
-After=network.target
+Description=LOTA Syzkaller Manager
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+User=syz
+Group=syz
+WorkingDirectory=/srv/lota/syzkaller
 
-# Update this accordingly!
-User=user
-Group=group
-
-# Update this to proper path!
-WorkingDirectory=/path/to/working-dir
-
-# Path to syz-manager binary
-ExecStart=/path/to/syz-manager/binary
+ExecStart=/srv/lota/syzkaller/repo/bin/syz-manager -config /srv/lota/syzkaller/lota.cfg
 
 Restart=always
-RestartSec=10
+RestartSec=5
+
+AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+LimitNPROC=65535
+TasksMax=infinity
+
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

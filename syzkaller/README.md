@@ -12,15 +12,19 @@ This directory contains configuration for fuzzing the LOTA kernel environment us
 ## Setup
 
 1.  **Build Syzkaller**:
+
     ```bash
     git clone https://github.com/google/syzkaller syzkaller/repo
+    cp syzkaller/lota.txt syzkaller/repo/sys/linux/lota.txt
     cd syzkaller/repo
     make
     ```
+
     The binaries will be in `bin/` (e.g., `bin/syz-manager`, `bin/linux_amd64/syz-prog2c`).
 
 2.  **Compile Linux Kernel**:
     Use a config with KASAN, KCOV, etc. enabled. Download Linux 6.18.10 (or latest stable).
+
     ```bash
     wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.10.tar.xz
     tar xJf linux-6.18.10.tar.xz
@@ -32,11 +36,13 @@ This directory contains configuration for fuzzing the LOTA kernel environment us
 
 3.  **Create Image**:
     Create a Debian strech image using `create-image.sh` script from Syzkaller repo:
+
     ```bash
     wget https://raw.githubusercontent.com/google/syzkaller/master/tools/create-image.sh -O create-image.sh
     chmod +x create-image.sh
     ./create-image.sh
     ```
+
     This creates `stretch.img` and `stretch.id_rsa`.
 
 4.  **Configure**:
@@ -45,6 +51,9 @@ This directory contains configuration for fuzzing the LOTA kernel environment us
     - `image`: Path to `stretch.img`.
     - `sshkey`: Path to `stretch.id_rsa`.
     - `syzkaller`: Path to syzkaller repo (if cloned) or leave default if installed.
+
+    Use `sandbox: "none"` and keep BPF/kexec/ptrace syscalls enabled if you
+    want to stress LOTA ENFORCE hooks instead of only generic kernel paths.
 
 5.  **Reporting**:
     To receive crash reports via email, configure the `email_addrs` list in `lota.cfg`:
