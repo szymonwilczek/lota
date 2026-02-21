@@ -188,7 +188,8 @@ echo ""
 echo "Test email: echo 'Test body' | mailx -v -s 'Test subject' your_email@gmail.com"
 echo ""
 echo "---------- 5. INSTALL SERVICE ----------"
-echo "ssh $REMOTE_HOST 'sudo cp $REMOTE_DIR/lota-fuzz.service /etc/systemd/system/lota-fuzz.service && sudo systemctl daemon-reload && sudo systemctl enable --now lota-fuzz.service'"
+echo "ssh -t $REMOTE_HOST 'sudo systemctl stop lota-fuzz.service || true'"
+echo "ssh -t $REMOTE_HOST 'sudo cp $REMOTE_DIR/lota-fuzz.service /etc/systemd/system/lota-fuzz.service && sudo systemctl daemon-reload && sudo systemctl enable lota-fuzz.service && sudo systemctl restart lota-fuzz.service'"
 echo ""
 echo "---------- 6. VERIFY ----------"
 echo "ssh $REMOTE_HOST 'sudo journalctl -u lota-fuzz.service -f'"
@@ -199,21 +200,45 @@ if [[ "$AUTO_DEPLOY" -eq 1 ]]; then
     echo "-> Uploading archive..."
     scp "$DIST_DIR.tar.gz" "$REMOTE_HOST:~/dist_deploy.tar.gz"
 
+    HAS_SUDO_N=0
+    if ssh -o BatchMode=yes -o ConnectTimeout=8 "$REMOTE_HOST" 'sudo -n true' >/dev/null 2>&1; then
+        HAS_SUDO_N=1
+    fi
+
+    echo "-> Stopping existing lota-fuzz.service (if any)..."
+    if [[ "$HAS_SUDO_N" -eq 1 ]]; then
+        ssh "$REMOTE_HOST" "set -e; sudo systemctl stop lota-fuzz.service >/dev/null 2>&1 || true"
+    else
+        if [[ -t 0 ]]; then
+            ssh -t "$REMOTE_HOST" "sudo systemctl stop lota-fuzz.service || true" || true
+        else
+            echo "WARNING: cannot stop lota-fuzz.service automatically (sudo requires TTY/password)."
+        fi
+    fi
+
     echo "-> Extracting to $REMOTE_DIR..."
     ssh "$REMOTE_HOST" "set -e; mkdir -p '$REMOTE_DIR' && tar xzf ~/dist_deploy.tar.gz -C '$REMOTE_DIR'"
 
     echo "-> Installing/refreshing systemd service..."
-    if ssh -o BatchMode=yes -o ConnectTimeout=8 "$REMOTE_HOST" 'sudo -n true' >/dev/null 2>&1; then
-        ssh "$REMOTE_HOST" "set -e; sudo cp '$REMOTE_DIR/lota-fuzz.service' /etc/systemd/system/lota-fuzz.service; sudo systemctl daemon-reload; sudo systemctl enable --now lota-fuzz.service"
+    if [[ "$HAS_SUDO_N" -eq 1 ]]; then
+        ssh "$REMOTE_HOST" "set -e; sudo cp '$REMOTE_DIR/lota-fuzz.service' /etc/systemd/system/lota-fuzz.service; sudo systemctl daemon-reload; sudo systemctl enable lota-fuzz.service; sudo systemctl restart lota-fuzz.service"
 
         echo "-> Service status:"
         ssh "$REMOTE_HOST" "systemctl --no-pager --full status lota-fuzz.service || true"
     else
-        echo "WARNING: non-interactive sudo is not available on $REMOTE_HOST (password/TTY required)."
-        echo "The bundle is extracted to: $REMOTE_DIR"
-        echo "Run this manually (interactive) to install the service:"
-        echo "  ssh -t $REMOTE_HOST 'sudo cp $REMOTE_DIR/lota-fuzz.service /etc/systemd/system/lota-fuzz.service && sudo systemctl daemon-reload && sudo systemctl enable --now lota-fuzz.service'"
-        echo "Then follow logs with:"
-        echo "  ssh -t $REMOTE_HOST 'sudo journalctl -u lota-fuzz.service -f'"
+        if [[ -t 0 ]]; then
+            echo "-> Non-interactive sudo unavailable; switching to interactive sudo (ssh -t)..."
+            ssh -t "$REMOTE_HOST" "set -e; sudo cp '$REMOTE_DIR/lota-fuzz.service' /etc/systemd/system/lota-fuzz.service; sudo systemctl daemon-reload; sudo systemctl enable lota-fuzz.service; sudo systemctl restart lota-fuzz.service"
+            echo "-> Service status:"
+            ssh "$REMOTE_HOST" "systemctl --no-pager --full status lota-fuzz.service || true"
+        else
+            echo "WARNING: non-interactive sudo is not available on $REMOTE_HOST (password/TTY required)."
+            echo "The bundle is extracted to: $REMOTE_DIR"
+            echo "Run this manually (interactive) to install the service:"
+            echo "  ssh -t $REMOTE_HOST 'sudo systemctl stop lota-fuzz.service || true'"
+            echo "  ssh -t $REMOTE_HOST 'sudo cp $REMOTE_DIR/lota-fuzz.service /etc/systemd/system/lota-fuzz.service && sudo systemctl daemon-reload && sudo systemctl enable lota-fuzz.service && sudo systemctl restart lota-fuzz.service'"
+            echo "Then follow logs with:"
+            echo "  ssh -t $REMOTE_HOST 'sudo journalctl -u lota-fuzz.service -f'"
+        fi
     fi
 fi

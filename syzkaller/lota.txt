@@ -77,6 +77,36 @@ lota_req_fuzz_big {
 	payload	array[int8, 0:8192]
 }
 
+# Semi-valid headers: correct magic/version but fuzz cmd/len to reach deeper
+# parser logic (bounds checks, cmd dispatch, payload_len mismatch).
+lota_ipc_req_hdr_semivalid {
+	magic		const[0x4c4f5441, int32]
+	version		const[1, int32]
+	cmd		int32
+	payload_len	int32
+}
+
+lota_req_semivalid_small {
+	hdr	lota_ipc_req_hdr_semivalid
+	payload	array[int8, 0:256]
+}
+
+lota_req_semivalid_big {
+	hdr	lota_ipc_req_hdr_semivalid
+	payload	array[int8, 0:8192]
+}
+
+# Two requests coalesced into a single write 
+lota_req_two_hdrs {
+	a	lota_ipc_req_hdr_semivalid
+	b	lota_ipc_req_hdr_semivalid
+}
+
+lota_req_ping_plus_hdr {
+	a	lota_req_ping
+	b	lota_ipc_req_hdr_semivalid
+}
+
 # Happy-path protocol calls
 write$lota_ping(fd lota_sock, data ptr[in, lota_req_ping], len len[data])
 write$lota_status(fd lota_sock, data ptr[in, lota_req_status], len len[data])
@@ -86,6 +116,14 @@ write$lota_subscribe(fd lota_sock, data ptr[in, lota_req_subscribe], len len[dat
 # Parser abuse: mutated headers and payload lengths
 write$lota_fuzz_small(fd lota_sock, data ptr[in, lota_req_fuzz_small], len len[data])
 write$lota_fuzz_big(fd lota_sock, data ptr[in, lota_req_fuzz_big], len len[data])
+
+# Semi-valid protocol calls (magic+version valid, rest fuzzed)
+write$lota_semivalid_small(fd lota_sock, data ptr[in, lota_req_semivalid_small], len len[data])
+write$lota_semivalid_big(fd lota_sock, data ptr[in, lota_req_semivalid_big], len len[data])
+
+# Multi-frame in one write
+write$lota_two_hdrs(fd lota_sock, data ptr[in, lota_req_two_hdrs], len len[data])
+write$lota_ping_plus_hdr(fd lota_sock, data ptr[in, lota_req_ping_plus_hdr], len len[data])
 
 # Raw byte noise directly on connected socket
 write$lota_raw(fd lota_sock, data ptr[in, array[int8, 0:16384]], len len[data])
