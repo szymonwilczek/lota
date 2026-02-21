@@ -279,6 +279,19 @@ static int run_daemon(const struct run_daemon_params *params) {
   lota_info("BPF program loaded");
   status_flags |= LOTA_STATUS_BPF_LOADED;
 
+  ret = bpf_loader_set_agent_pid(&g_bpf_ctx, (uint32_t)getpid());
+  if (ret < 0) {
+    lota_err("Failed to set lota-agent PID in BPF globals: %s", strerror(-ret));
+    goto cleanup_bpf;
+  }
+
+  ret = bpf_loader_protect_pid(&g_bpf_ctx, (uint32_t)getpid());
+  if (ret < 0) {
+    lota_err("Failed to self-protect lota-agent PID: %s", strerror(-ret));
+    goto cleanup_bpf;
+  }
+  lota_info("LOTA agent self-protection active (pid=%u)", (unsigned)getpid());
+
   /* BPF event fd to epoll */
   int bpf_fd = bpf_loader_get_event_fd(&g_bpf_ctx);
   if (bpf_fd >= 0) {

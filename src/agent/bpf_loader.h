@@ -144,6 +144,15 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
                           uint32_t value);
 
 /*
+ * bpf_loader_set_agent_pid - Set runtime lota-agent TGID in BPF globals
+ * @ctx: Loaded context
+ * @pid: Agent TGID (process id)
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
+
+/*
  * bpf_loader_protect_pid - Add a PID to the protected set
  * @ctx: Loaded context
  * @pid: Process ID to protect

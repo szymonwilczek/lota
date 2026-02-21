@@ -451,6 +451,28 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
   return bpf_map_update_elem(ctx->config_fd, &key, &value, BPF_ANY);
 }
 
+int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
+  struct bpf_map *bss_map;
+  int bss_fd;
+  uint32_t key = 0;
+
+  if (!ctx || !ctx->loaded || pid == 0)
+    return -EINVAL;
+
+  bss_map = bpf_object__find_map_by_name(ctx->obj, ".bss");
+  if (!bss_map)
+    return -ENOENT;
+
+  bss_fd = bpf_map__fd(bss_map);
+  if (bss_fd < 0)
+    return bss_fd;
+
+  if (bpf_map_update_elem(bss_fd, &key, &pid, BPF_ANY) < 0)
+    return -errno;
+
+  return 0;
+}
+
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
   struct protected_pid_entry value = {0};
   int ret;

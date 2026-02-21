@@ -39,6 +39,11 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+/*
+ * Runtime TGID of lota-agent process (set from user-space via .bss map).
+ */
+volatile u32 lota_agent_pid;
+
 #ifndef EPERM
 #define EPERM 1
 #endif
@@ -258,6 +263,21 @@ static __always_inline int is_bpf_admin_task(void) {
     return 0;
 
   return *admin_tgid == current_tgid;
+}
+
+static __always_inline int is_lota_agent_task(struct task_struct *task) {
+  u32 agent_tgid;
+  u32 task_tgid;
+
+  if (!task)
+    return 0;
+
+  agent_tgid = lota_agent_pid;
+  if (agent_tgid == 0)
+    return 0;
+
+  task_tgid = BPF_CORE_READ(task, tgid);
+  return task_tgid == agent_tgid;
 }
 
 /*
@@ -878,13 +898,17 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
   child_pid = BPF_CORE_READ(child, pid);
 
+  if (is_lota_agent_task(child)) {
+    blocked = 1;
+  }
+
   /*
    * In ENFORCE mode, block ptrace on protected PIDs.
    * Protected PIDs are managed by user-space.
    *
    * Also block if LOTA_CFG_BLOCK_PTRACE is set.
    */
-  if (lota_mode == LOTA_MODE_ENFORCE) {
+  if (!blocked && lota_mode == LOTA_MODE_ENFORCE) {
     if (is_protected_task(child)) {
       blocked = 1;
     } else if (get_config(LOTA_CFG_BLOCK_PTRACE)) {
@@ -923,6 +947,30 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
   }
 
   return 0;
+}
+
+/* ======================================================================
+ * LSM hook: task_kill
+ *
+ * Blocks signal delivery to lota-agent from foreign tasks.
+ * ====================================================================== */
+SEC("lsm/task_kill")
+int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
+             int sig, const struct cred *cred) {
+  u32 sender_tgid;
+
+  (void)info;
+  (void)sig;
+  (void)cred;
+
+  if (!is_lota_agent_task(p))
+    return 0;
+
+  sender_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
+  if (sender_tgid == lota_agent_pid)
+    return 0;
+
+  return -EPERM;
 }
 
 /* ======================================================================
