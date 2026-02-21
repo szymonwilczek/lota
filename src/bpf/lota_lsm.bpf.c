@@ -1007,7 +1007,8 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
  * LSM hook: bpf
  *
  * Called on bpf() syscall. In ENFORCE mode with LOTA_CFG_LOCK_BPF enabled,
- * deny all bpf() operations from processes other than the authorized agent.
+ * deny destructive bpf() operations from processes other than the authorized
+ * agent.
  *
  * This prevents root-level attackers from detaching/overwriting LOTA links
  * via bpftool while runtime protection is active.
@@ -1015,10 +1016,12 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size) {
   u32 mode;
-  int destructive_cmd = 0;
+  int deny = 0;
 
-  (void)attr;
   (void)size;
+
+  if (!attr)
+    return 0;
 
   mode = get_mode();
   if (mode != LOTA_MODE_ENFORCE)
@@ -1035,14 +1038,13 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size) {
   case BPF_LINK_DETACH:
   case BPF_MAP_UPDATE_ELEM:
   case BPF_MAP_DELETE_ELEM:
-    destructive_cmd = 1;
+    deny = 1;
     break;
   default:
-    destructive_cmd = 0;
     break;
   }
 
-  if (!destructive_cmd)
+  if (!deny)
     return 0;
 
   inc_stat(STAT_BPF_SYSCALL_BLOCKED);
