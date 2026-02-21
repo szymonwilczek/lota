@@ -94,5 +94,5 @@ sendto$lota_raw(fd lota_sock, data ptr[in, array[int8, 0:16384]], len len[data],
 # Drive response/error paths and backpressure handling
 read$lota(fd lota_sock, buf ptr[out, array[int8, 0:16384]], count len[buf])
 recvfrom$lota(fd lota_sock, buf ptr[out, array[int8, 0:16384]], len len[buf], flags flags[recv_flags], src ptr[out, sockaddr], srclen ptr[inout, len[src, int32]])
-shutdown$lota(fd lota_sock, how flags[shutdown_cmd])
+shutdown$lota(fd lota_sock, how int32)
 close$lota(fd lota_sock)
