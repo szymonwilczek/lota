@@ -20,7 +20,18 @@ static int safe_parse_long(const char *s, long *out) {
   char *end;
   errno = 0;
   long v = strtol(s, &end, 10);
-  if (errno != 0 || end == s || *end != '\0')
+  /* errno catches overflow/underflow (ERANGE) and other conversion errors */
+  if (errno == ERANGE || errno != 0 || end == s || *end != '\0')
+    return -1;
+  *out = v;
+  return 0;
+}
+
+static int safe_parse_ulong_base(const char *s, int base, unsigned long *out) {
+  char *end;
+  errno = 0;
+  unsigned long v = strtoul(s, &end, base);
+  if (errno == ERANGE || errno != 0 || end == s || *end != '\0')
     return -1;
   *out = v;
   return 0;
@@ -234,11 +245,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {
-    char *end;
-    errno = 0;
-    unsigned long v = strtoul(value, &end, 0);
-    if (errno != 0 || end == value || *end != '\0' || v == 0 ||
-        v > UINT32_MAX) {
+    unsigned long v;
+    if (safe_parse_ulong_base(value, 0, &v) != 0 || v == 0 || v > UINT32_MAX) {
       fprintf(stderr, "%s:%d: invalid aik_handle '%s'\n", filepath, lineno,
               value);
       return -1;
