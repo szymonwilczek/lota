@@ -36,6 +36,7 @@ import (
 	"math/big"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -80,6 +81,8 @@ var (
 	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
 	requireCert     = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	aikCACerts      stringSliceFlag
+	nonceDBPath     = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	allowMemNonces  = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
 
 func main() {
@@ -164,6 +167,30 @@ func main() {
 		ver, _ := store.SchemaVersion(db)
 		logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 	} else {
+		// persist used nonce history even without --db
+		// otherwise, a verifier restart re-opens a replay window within nonce TTL
+		if !*allowMemNonces {
+			path := *nonceDBPath
+			if path == "" {
+				path = filepath.Join(*aikStorePath, "used_nonces.sqlite")
+			}
+			db, err := store.OpenDB(path)
+			if err != nil {
+				logger.Error("failed to open nonce DB (required for anti-replay persistence)",
+					"path", path,
+					"error", err,
+					"hint", "use --nonce-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-nonces")
+				os.Exit(1)
+			}
+			defer db.Close()
+			verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
+			logger.Info("persistent used nonce backend enabled",
+				"path", path)
+		} else {
+			logger.Warn("INSECURE: using memory-only used nonce backend; verifier restart re-opens replay window",
+				"nonce_lifetime", verifierCfg.NonceLifetime)
+		}
+
 		// file-based AIK store (optionally certificate-backed)
 		if *requireCert && len(aikCACerts) == 0 {
 			logger.Error("--require-cert requires trusted CA roots for AIK/EK verification",
