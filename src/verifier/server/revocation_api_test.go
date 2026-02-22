@@ -770,12 +770,14 @@ func TestAuth_ReaderKeyRequiredForSensitiveEndpoints(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
 
 	sensitiveEndpoints := []string{
+		"/api/v1/stats",
 		"/api/v1/clients",
 		"/api/v1/clients/some-id",
 		"/api/v1/revocations",
 		"/api/v1/bans",
 		"/api/v1/audit",
 		"/api/v1/attestations",
+		"/metrics",
 	}
 
 	for _, ep := range sensitiveEndpoints {
@@ -799,11 +801,13 @@ func TestAuth_ReaderKeyGrantsReadAccess(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
 
 	sensitiveEndpoints := []string{
+		"/api/v1/stats",
 		"/api/v1/clients",
 		"/api/v1/revocations",
 		"/api/v1/bans",
 		"/api/v1/audit",
 		"/api/v1/attestations",
+		"/metrics",
 	}
 
 	for _, ep := range sensitiveEndpoints {
@@ -828,11 +832,13 @@ func TestAuth_AdminKeyGrantsReadAccess(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "reader-key")
 
 	sensitiveEndpoints := []string{
+		"/api/v1/stats",
 		"/api/v1/clients",
 		"/api/v1/revocations",
 		"/api/v1/bans",
 		"/api/v1/audit",
 		"/api/v1/attestations",
+		"/metrics",
 	}
 
 	for _, ep := range sensitiveEndpoints {
@@ -918,11 +924,13 @@ func TestAuth_NoReaderKeyMakesEndpointsPublic(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "", "")
 
 	sensitiveEndpoints := []string{
+		"/api/v1/stats",
 		"/api/v1/clients",
 		"/api/v1/revocations",
 		"/api/v1/bans",
 		"/api/v1/audit",
 		"/api/v1/attestations",
+		"/metrics",
 	}
 
 	for _, ep := range sensitiveEndpoints {
@@ -947,11 +955,13 @@ func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
 	mux, _ := setupTestAPIListeningWithKeys(t, "admin-key", "")
 
 	sensitiveEndpoints := []string{
+		"/api/v1/stats",
 		"/api/v1/clients",
 		"/api/v1/revocations",
 		"/api/v1/bans",
 		"/api/v1/audit",
 		"/api/v1/attestations",
+		"/metrics",
 	}
 
 	for _, ep := range sensitiveEndpoints {
@@ -970,7 +980,7 @@ func TestAuth_AdminKeyOnlyDoesNotProtectReads(t *testing.T) {
 }
 
 func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
-	t.Log("TEST: Health, stats, and metrics are always public regardless of key config")
+	t.Log("TEST: /health is always public regardless of key config")
 
 	configs := []struct {
 		name      string
@@ -985,8 +995,6 @@ func TestAuth_PublicEndpointsAlwaysPublic(t *testing.T) {
 
 	publicEndpoints := []string{
 		"/health",
-		"/api/v1/stats",
-		"/metrics",
 	}
 
 	for _, cfg := range configs {

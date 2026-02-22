@@ -80,8 +80,10 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 
 	// public monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /health", h.handleHealth)
-	mux.HandleFunc("GET /api/v1/stats", h.handleStats)
-	mux.HandleFunc("GET /metrics", h.handleMetrics)
+
+	// operational intelligence endpoints (reader or admin auth required)
+	mux.HandleFunc("GET /api/v1/stats", h.requireReader(h.handleStats))
+	mux.HandleFunc("GET /metrics", h.requireReader(h.handleMetrics))
 
 	// sensitive read-only endpoints (reader or admin auth required)
 	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
