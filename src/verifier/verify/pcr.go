@@ -106,6 +106,18 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 	return warnings
 }
 
+// returns true if the policy does not define any measurement allowlists:
+// neither explicit PCR values nor kernel/agent hash allowlists.
+//
+// NOTE: This is intentionally different from ValidatePolicy() definition of
+// "effectively permissive".
+func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
+	if policy == nil {
+		return true
+	}
+	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
+}
+
 // loads a policy from YAML file
 // if a policy public key has been set via SetPolicyPublicKey,
 // the file must have a valid detached Ed25519 signature at path+".sig"!
@@ -286,6 +298,15 @@ func (v *PCRVerifier) GetActivePolicy() string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.active
+}
+
+// returns the currently active policy configuration
+// returned pointer must be treated as read-only by callers
+func (v *PCRVerifier) GetActivePolicyConfig() (*PCRPolicy, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	return policy, ok
 }
 
 // returns names of all loaded policies

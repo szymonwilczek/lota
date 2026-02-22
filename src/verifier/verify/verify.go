@@ -697,6 +697,12 @@ func (v *Verifier) SetActivePolicy(name string) error {
 	return v.pcrVerifier.SetActivePolicy(name)
 }
 
+// returns the currently active PCR policy
+// returned pointer must be treated as read-only by callers
+func (v *Verifier) ActivePolicyConfig() (*PCRPolicy, bool) {
+	return v.pcrVerifier.GetActivePolicyConfig()
+}
+
 // returns verifier statistics
 type Stats struct {
 	PendingChallenges int

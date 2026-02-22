@@ -80,6 +80,7 @@ var (
 	logLevel        = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
 	requireCert     = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
+	allowPermissive = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts      stringSliceFlag
 	nonceDBPath     = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	allowMemNonces  = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
@@ -255,6 +256,16 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("loaded custom policy", "path", *policyFile)
+	}
+
+	// fail closed on a policy with no measurement allowlists unless explicitly allowed
+	if policy, ok := verifier.ActivePolicyConfig(); ok {
+		if verify.IsMeasurementEmptyPolicy(policy) && !*allowPermissive {
+			logger.Error("refusing to start with measurement-empty PCR policy",
+				"policy", policy.Name,
+				"hint", "define pcrs and/or kernel_hashes/agent_hashes in a policy file via --policy, or pass --allow-permissive-policy (INSECURE)")
+			os.Exit(1)
+		}
 	}
 
 	// resolve API keys (environment variable only for security)
