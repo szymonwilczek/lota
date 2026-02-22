@@ -1083,11 +1083,23 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
  * via bpftool while runtime protection is active.
  * ====================================================================== */
 SEC("lsm/bpf")
-int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size) {
+int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
+             int ret) {
   u32 mode;
   int deny = 0;
 
   (void)size;
+
+  /*
+   * Unlike most of other LSM programs, the in-kernel LSM hook prototype
+   * for bpf() does not include a 'ret' argument.
+   *
+   * The 'ret' parameter here is the BPF trampoline's current return value and
+   * exists to support chaining multiple BPF LSM programs attached to the same
+   * hook. If a previous program already denied, do not override it.
+   */
+  if (ret != 0)
+    return ret;
 
   if (!attr)
     return 0;
