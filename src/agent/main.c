@@ -442,6 +442,7 @@ int main(int argc, char *argv[]) {
   int server_port = DEFAULT_VERIFIER_PORT;
   const char *ca_cert_path = NULL;
   int no_verify_tls = 0;
+  int insecure_allow_no_verify_tls = 0;
   const char *pin_sha256_hex = NULL;
   uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
   int has_pin = 0;
@@ -463,6 +464,7 @@ int main(int argc, char *argv[]) {
       {"port", required_argument, 0, 'p'},
       {"ca-cert", required_argument, 0, 'C'},
       {"no-verify-tls", no_argument, 0, 'K'},
+      {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
       {"pin-sha256", required_argument, 0, 'F'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
@@ -615,6 +617,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'K':
       no_verify_tls = 1;
+      break;
+    case 1000:
+      insecure_allow_no_verify_tls = 1;
       break;
     case 'F':
       pin_sha256_hex = optarg;
@@ -855,6 +860,13 @@ int main(int argc, char *argv[]) {
     return run_signed_ipc_test_server();
 
   if (attest_flag) {
+    if (no_verify_tls && !insecure_allow_no_verify_tls) {
+      fprintf(stderr,
+              "ERROR: --no-verify-tls is INSECURE and requires explicit "
+              "confirmation.\n"
+              "Re-run with: --no-verify-tls --insecure-allow-no-verify-tls\n");
+      return 1;
+    }
     if (no_verify_tls && ca_cert_path) {
       fprintf(stderr,
               "Warning: --ca-cert ignored when --no-verify-tls is set\n");

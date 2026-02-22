@@ -295,6 +295,19 @@ int net_connect(struct net_context *ctx) {
     return -ECONNABORTED;
   }
 
+  if (ctx->skip_verify) {
+    if (ctx->has_pin) {
+      lota_err("INSECURE TLS: certificate verification DISABLED for %s:%d "
+               "(--no-verify-tls). Pinning is enabled, but hostname/CA "
+               "verification is bypassed.",
+               ctx->server_addr, ctx->server_port);
+    } else {
+      lota_err("INSECURE TLS: certificate verification DISABLED for %s:%d "
+               "(--no-verify-tls). Connection is vulnerable to MITM.",
+               ctx->server_addr, ctx->server_port);
+    }
+  }
+
   /*
    * Post-handshake certificate verification.
    */

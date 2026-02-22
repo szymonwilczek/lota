@@ -82,6 +82,9 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf(
       "  --no-verify-tls   Disable TLS certificate verification (INSECURE)\n");
   printf("                    Only for development/testing!\n");
+  printf("                    Requires: --insecure-allow-no-verify-tls\n");
+  printf("  --insecure-allow-no-verify-tls\n");
+  printf("                    Acknowledge the risk of --no-verify-tls\n");
   printf("  --pin-sha256 HEX  Pin verifier certificate by SHA-256 "
          "fingerprint\n");
   printf("                    (64 hex chars, colons/spaces allowed)\n");
