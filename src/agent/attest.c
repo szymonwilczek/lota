@@ -455,6 +455,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
                        int skip_verify, const uint8_t *pin_sha256,
                        int verbose) {
   struct net_context net_ctx;
+  int net_ctx_inited = 0;
   struct verifier_challenge challenge;
   struct verifier_result result;
   struct lota_attestation_report report;
@@ -465,6 +466,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   ssize_t wire_size = 0;
   int ret;
 
+  memset(&net_ctx, 0, sizeof(net_ctx));
   memset(&challenge, 0, sizeof(challenge));
   memset(&result, 0, sizeof(result));
   memset(&report, 0, sizeof(report));
@@ -477,15 +479,15 @@ static int attest_once(const char *server, int port, const char *ca_cert,
   if (ret < 0) {
     if (verbose)
       fprintf(stderr, "Failed to initialize connection: %s\n", strerror(-ret));
-    return ret;
+    goto cleanup;
   }
+  net_ctx_inited = 1;
 
   ret = net_connect(&net_ctx);
   if (ret < 0) {
     if (verbose)
       fprintf(stderr, "Failed to connect to verifier: %s\n", strerror(-ret));
-    net_context_cleanup(&net_ctx);
-    return ret;
+    goto cleanup;
   }
 
   if (verbose)
@@ -584,7 +586,9 @@ cleanup:
     OPENSSL_cleanse(event_log, event_log_size);
   free(wire_buf);
   free(event_log);
-  net_context_cleanup(&net_ctx);
+  if (net_ctx_inited)
+    net_context_cleanup(&net_ctx);
+  OPENSSL_cleanse(&net_ctx, sizeof(net_ctx));
   return ret;
 }
 
