@@ -8,6 +8,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <limits.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
@@ -25,6 +26,11 @@
 #define TPM_ST_ATTEST_QUOTE 0x8018
 #define TPM_ALG_RSASSA 0x0014
 #define TPM_ALG_RSAPSS 0x0016
+
+/*
+ * Upper bound for DER-encoded AIK public key
+ */
+#define LOTA_MAX_AIK_PUB_DER_SIZE 512
 
 /*
  * Read big-endian uint16 from buffer
@@ -245,6 +251,13 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
   EVP_PKEY_CTX *pkey_ctx = NULL;
   const uint8_t *der_ptr;
   int ret = LOTA_SERVER_ERR_SIG_FAIL;
+
+  if (!aik_pub_der || aik_pub_len == 0)
+    return LOTA_SERVER_ERR_INVALID_ARG;
+  if (aik_pub_len > (size_t)LONG_MAX)
+    return LOTA_SERVER_ERR_INVALID_ARG;
+  if (aik_pub_len > LOTA_MAX_AIK_PUB_DER_SIZE)
+    return LOTA_SERVER_ERR_INVALID_ARG;
 
   /* parse DER-encoded public key (PKIX / SubjectPublicKeyInfo) */
   der_ptr = aik_pub_der;
