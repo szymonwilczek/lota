@@ -152,14 +152,10 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return err
 	}
 
-	// wire format does not carry sig_alg, so try RSASSA first then PSS
 	rsassaErr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
-	if rsassaErr == nil {
-		return nil
-	}
-
 	pssErr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
-	if pssErr == nil {
+
+	if rsassaErr == nil || pssErr == nil {
 		return nil
 	}
 
