@@ -17,6 +17,7 @@
 #include <grp.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +43,7 @@
 struct uid_rate {
   uid_t uid;
   int count;
-  time_t window_start;
+  uint64_t window_start_sec;
 };
 
 #define MAX_RATE_ENTRIES 256
@@ -54,20 +55,30 @@ static void ipc_secure_bzero(void *ptr, size_t len) {
     OPENSSL_cleanse(ptr, len);
 }
 
+static uint64_t monotonic_now_sec(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+    return (uint64_t)ts.tv_sec;
+
+  /* fallback only if CLOCK_MONOTONIC is unavailable (should not happen) */
+  return (uint64_t)time(NULL);
+}
+
 /*
  * Check and update rate limit for a UID.
  * Returns 0 if allowed, -1 if rate limited.
  */
 static int check_rate_limit(uid_t uid) {
-  time_t now = time(NULL);
+  uint64_t now = monotonic_now_sec();
 
   /* existing entry */
   for (int i = 0; i < rate_count; i++) {
     if (rate_table[i].uid == uid) {
       /* reset window if expired */
-      if (now - rate_table[i].window_start >= TOKEN_RATE_WINDOW_SEC) {
+      if (now < rate_table[i].window_start_sec ||
+          now - rate_table[i].window_start_sec >= TOKEN_RATE_WINDOW_SEC) {
         rate_table[i].count = 1;
-        rate_table[i].window_start = now;
+        rate_table[i].window_start_sec = now;
         return 0;
       }
       /* within window: check limit */
@@ -82,7 +93,7 @@ static int check_rate_limit(uid_t uid) {
   if (rate_count < MAX_RATE_ENTRIES) {
     rate_table[rate_count].uid = uid;
     rate_table[rate_count].count = 1;
-    rate_table[rate_count].window_start = now;
+    rate_table[rate_count].window_start_sec = now;
     rate_count++;
     return 0;
   }
@@ -90,12 +101,12 @@ static int check_rate_limit(uid_t uid) {
   /* table full - LRU */
   int oldest = 0;
   for (int i = 1; i < rate_count; i++) {
-    if (rate_table[i].window_start < rate_table[oldest].window_start)
+    if (rate_table[i].window_start_sec < rate_table[oldest].window_start_sec)
       oldest = i;
   }
   rate_table[oldest].uid = uid;
   rate_table[oldest].count = 1;
-  rate_table[oldest].window_start = now;
+  rate_table[oldest].window_start_sec = now;
   return 0;
 }
 
