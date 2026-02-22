@@ -113,12 +113,12 @@ struct {
 } bpf_admin_tgid SEC(".maps");
 
 /*
- * Protected PID map.
- * Key: PID (u32)
- * Value: identity binding for that PID instance.
+ * Protected process map.
+ * Key: TGID (u32) ("process ID" as seen from user-space)
+ * Value: identity binding for that TGID instance.
  *
- * start_time_ticks is /proc/<pid>/stat field 22 (clock ticks since boot).
- * Binding PID with start time prevents trust leakage via PID reuse.
+ * start_time_ticks is /proc/<tgid>/stat field 22 (clock ticks since boot).
+ * Binding TGID with start time prevents trust leakage via PID reuse.
  */
 struct protected_pid_entry {
   u64 start_time_ticks;
@@ -238,19 +238,23 @@ static __always_inline u64 get_task_start_ticks(struct task_struct *task) {
 }
 
 static __always_inline int is_protected_task(struct task_struct *task) {
-  u32 pid;
+  u32 tgid;
   u64 task_start_ticks;
   struct protected_pid_entry *entry;
 
   if (!task)
     return 0;
 
-  pid = BPF_CORE_READ(task, pid);
-  entry = bpf_map_lookup_elem(&protected_pids, &pid);
+  tgid = BPF_CORE_READ(task, tgid);
+  entry = bpf_map_lookup_elem(&protected_pids, &tgid);
   if (!entry)
     return 0;
 
-  task_start_ticks = get_task_start_ticks(task);
+  struct task_struct *leader = BPF_CORE_READ(task, group_leader);
+  if (leader)
+    task_start_ticks = get_task_start_ticks(leader);
+  else
+    task_start_ticks = get_task_start_ticks(task);
   return task_start_ticks && entry->start_time_ticks == task_start_ticks;
 }
 
@@ -994,12 +998,18 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 SEC("lsm/task_free")
 int BPF_PROG(lota_task_free, struct task_struct *task) {
   u32 pid;
+  u32 tgid;
 
   if (!task)
     return 0;
 
   pid = BPF_CORE_READ(task, pid);
-  bpf_map_delete_elem(&protected_pids, &pid);
+  tgid = BPF_CORE_READ(task, tgid);
+
+  if (pid != tgid)
+    return 0;
+
+  bpf_map_delete_elem(&protected_pids, &tgid);
   return 0;
 }
 
