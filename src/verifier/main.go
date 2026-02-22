@@ -46,6 +46,23 @@ import (
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	if s == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", []string(*s))
+}
+
+func (s *stringSliceFlag) Set(v string) error {
+	if v == "" {
+		return fmt.Errorf("empty value")
+	}
+	*s = append(*s, v)
+	return nil
+}
+
 var (
 	addr         = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
 	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
@@ -62,9 +79,11 @@ var (
 	logLevel        = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
 	requireCert     = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
+	aikCACerts      stringSliceFlag
 )
 
 func main() {
+	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted CA certificate (PEM) for AIK/EK certificate chain verification; may be repeated")
 	flag.Parse()
 
 	// initialize structured logger
@@ -117,6 +136,11 @@ func main() {
 	}
 
 	if *dbPath != "" {
+		if *requireCert {
+			logger.Error("--require-cert is enabled but SQLite AIK store does not support certificate chain verification",
+				"hint", "run without --db and configure --aik-ca-cert to use CertificateStore, or disable --require-cert (INSECURE)")
+			os.Exit(1)
+		}
 		db, err := store.OpenDB(*dbPath)
 		if err != nil {
 			logger.Error("failed to open database", "path", *dbPath, "error", err)
@@ -140,13 +164,35 @@ func main() {
 		ver, _ := store.SchemaVersion(db)
 		logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 	} else {
-		// file-based AIK store + in-memory baseline/nonce stores
-		fileStore, err := store.NewFileStore(*aikStorePath)
-		if err != nil {
-			logger.Error("failed to initialize AIK store", "path", *aikStorePath, "error", err)
+		// file-based AIK store (optionally certificate-backed)
+		if *requireCert && len(aikCACerts) == 0 {
+			logger.Error("--require-cert requires trusted CA roots for AIK/EK verification",
+				"hint", "provide one or more --aik-ca-cert PEM paths (TPM manufacturer / Privacy CA), or disable --require-cert (INSECURE)")
 			os.Exit(1)
 		}
-		aikStore = fileStore
+
+		if len(aikCACerts) > 0 || *requireCert {
+			cs, err := store.NewCertificateStore(*aikStorePath, []string(aikCACerts), *requireCert)
+			if err != nil {
+				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
+				os.Exit(1)
+			}
+			aikStore = cs
+			logger.Info("certificate-backed AIK store initialized",
+				"path", *aikStorePath,
+				"trusted_cas", len(aikCACerts),
+				"require_cert", *requireCert,
+				"registered_clients", len(cs.ListClients()))
+		} else {
+			fileStore, err := store.NewFileStore(*aikStorePath)
+			if err != nil {
+				logger.Error("failed to initialize AIK store", "path", *aikStorePath, "error", err)
+				os.Exit(1)
+			}
+			aikStore = fileStore
+			logger.Info("file-based AIK store initialized",
+				"path", *aikStorePath, "registered_clients", len(fileStore.ListClients()))
+		}
 
 		// in-memory enforcement stores
 		auditLog = store.NewMemoryAuditLog()
@@ -157,8 +203,6 @@ func main() {
 		attestLog = store.NewMemoryAttestationLog()
 		verifierCfg.AttestationLog = attestLog
 
-		logger.Info("file-based AIK store initialized",
-			"path", *aikStorePath, "registered_clients", len(fileStore.ListClients()))
 	}
 
 	verifier := verify.NewVerifier(verifierCfg, aikStore)

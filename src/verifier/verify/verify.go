@@ -205,7 +205,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 }
 
 func aikStoreSupportsCertVerification(aikStore store.AIKStore) bool {
-	_, ok := aikStore.(*store.CertificateStore)
+	_, ok := aikStore.(store.AIKCertificateVerifier)
 	return ok
 }
 
@@ -385,14 +385,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			return result, err
 		}
 
-		if v.requireCert && !aikStoreSupportsCertVerification(v.aikStore) {
-			logging.Security(clog, "require-cert enabled but AIK store does not verify certificates",
-				"store_type", fmt.Sprintf("%T", v.aikStore))
-			v.metrics.Rejections.Inc("sig_fail")
-			result.Result = types.VerifySigFail
-			return result, errors.New("AIK certificate verification required but configured AIK store does not support certificate validation")
-		}
-
 		var aikCert, ekCert []byte
 		if report.TPM.AIKCertSize > 0 {
 			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
@@ -401,6 +393,35 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		if report.TPM.EKCertSize > 0 {
 			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
 			clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
+		}
+
+		// enforce certificate-backed registration before touching persistent state
+		if v.requireCert {
+			if len(aikCert) == 0 || len(ekCert) == 0 {
+				fingerprint := AIKFingerprint(reportAIK)
+				logging.Security(clog, "TOFU rejected: certificate required by policy",
+					"fingerprint", fingerprint,
+					"has_aik_cert", len(aikCert) > 0,
+					"has_ek_cert", len(ekCert) > 0)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, errors.New("AIK and EK certificates required by policy")
+			}
+
+			certVerifier, ok := v.aikStore.(store.AIKCertificateVerifier)
+			if !ok {
+				logging.Security(clog, "require-cert enabled but AIK store does not verify certificates",
+					"store_type", fmt.Sprintf("%T", v.aikStore))
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, errors.New("AIK certificate verification required but configured AIK store does not support certificate validation")
+			}
+			if err := certVerifier.VerifyCertificatesForAIK(reportAIK, aikCert, ekCert); err != nil {
+				logging.Security(clog, "TOFU rejected: certificate verification failed", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, err
+			}
 		}
 
 		if err := v.aikStore.RegisterAIKWithCert(clientID, reportAIK, aikCert, ekCert); err != nil {
@@ -412,13 +433,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 		fingerprint := AIKFingerprint(reportAIK)
 		if len(aikCert) == 0 && len(ekCert) == 0 {
-			if v.requireCert {
-				logging.Security(clog, "TOFU rejected: certificate required by policy",
-					"fingerprint", fingerprint)
-				v.metrics.Rejections.Inc("sig_fail")
-				result.Result = types.VerifySigFail
-				return result, errors.New("AIK/EK certificate required by policy but not provided")
-			}
 			clog.Warn("TOFU: AIK registered without certificate", "fingerprint", fingerprint)
 		} else if aikStoreSupportsCertVerification(v.aikStore) {
 			clog.Info("AIK registered with certificate verification", "fingerprint", fingerprint)
