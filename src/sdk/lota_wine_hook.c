@@ -37,6 +37,7 @@
 #include <unistd.h>
 
 #include "../../include/lota_gaming.h"
+#include "../../include/lota_snapshot.h"
 #include "../../include/lota_wine_hook.h"
 
 /* log levels */
@@ -60,6 +61,7 @@ static struct {
   char socket_path[PATH_MAX];    /* empty -> default */
   char status_path[PATH_MAX];
   char token_path[PATH_MAX];
+  char snapshot_path[PATH_MAX];
   pid_t init_pid;
 } g_hook;
 
@@ -238,6 +240,60 @@ static int write_status(const struct lota_status *status) {
   return atomic_write(g_hook.status_path, buf, (size_t)len);
 }
 
+static void write_le16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+  p[2] = (uint8_t)((v >> 16) & 0xFF);
+  p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+static int write_snapshot(uint32_t flags, const uint8_t *token_wire,
+                          size_t token_size) {
+  uint8_t buf[sizeof(struct lota_snapshot_wire_hdr) + 2048];
+  if (!token_wire || token_size == 0 || token_size > 2048)
+    return -EINVAL;
+
+  uint8_t *p = buf;
+  write_le32(p + 0, LOTA_SNAPSHOT_MAGIC);
+  write_le16(p + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
+  write_le16(p + 6, 0);
+  write_le32(p + 8, flags);
+  write_le32(p + 12, (uint32_t)token_size);
+  memcpy(p + sizeof(struct lota_snapshot_wire_hdr), token_wire, token_size);
+
+  return atomic_write(g_hook.snapshot_path, buf,
+                      sizeof(struct lota_snapshot_wire_hdr) + token_size);
+}
+
+static int fetch_token_wire(struct lota_client *client, uint8_t *wire,
+                            size_t wire_sz, size_t *written) {
+  struct lota_token token;
+  int ret;
+
+  if (!client || !wire || !written)
+    return LOTA_ERR_INVALID_ARG;
+
+  ret = lota_get_token(client, NULL, &token);
+  if (ret != LOTA_OK) {
+    LOG_DBG("get_token: %s", lota_strerror(ret));
+    return ret;
+  }
+
+  ret = lota_token_serialize(&token, wire, wire_sz, written);
+  lota_token_free(&token);
+  if (ret != LOTA_OK) {
+    LOG_WRN("token_serialize: %s", lota_strerror(ret));
+    return ret;
+  }
+
+  return LOTA_OK;
+}
+
 /* Runtime-only: refresh, thread, fork safety, constructor/destructor */
 #ifndef LOTA_HOOK_TESTING
 
@@ -250,28 +306,24 @@ static int write_status(const struct lota_status *status) {
  * challenge. Games requiring challenge-response freshness should
  * use the SDK directly.
  */
-static int write_token(struct lota_client *client) {
-  struct lota_token token;
+static int write_token(struct lota_client *client, uint32_t flags) {
   uint8_t wire[2048];
-  size_t written;
+  size_t written = 0;
   int ret;
 
-  ret = lota_get_token(client, NULL, &token);
+  ret = fetch_token_wire(client, wire, sizeof(wire), &written);
   if (ret != LOTA_OK) {
-    LOG_DBG("get_token: %s", lota_strerror(ret));
     unlink(g_hook.token_path);
+    unlink(g_hook.snapshot_path);
     return ret;
   }
 
-  ret = lota_token_serialize(&token, wire, sizeof(wire), &written);
-  lota_token_free(&token);
+  int wr = atomic_write(g_hook.token_path, wire, written);
+  if (wr < 0)
+    return wr;
 
-  if (ret != LOTA_OK) {
-    LOG_WRN("token_serialize: %s", lota_strerror(ret));
-    return ret;
-  }
-
-  return atomic_write(g_hook.token_path, wire, written);
+  (void)write_snapshot(flags, wire, written);
+  return 0;
 }
 
 /*
@@ -322,11 +374,12 @@ static void refresh_once(void) {
     LOG_WRN("write_status: %s", strerror(-ret));
 
   if (status.flags & LOTA_FLAG_ATTESTED) {
-    ret = write_token(g_hook.client);
+    ret = write_token(g_hook.client, status.flags);
     if (ret < 0 && ret != LOTA_ERR_NOT_ATTESTED)
       LOG_DBG("write_token: %s", lota_strerror(ret));
   } else {
     unlink(g_hook.token_path);
+    unlink(g_hook.snapshot_path);
   }
 }
 
@@ -345,11 +398,12 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
     LOG_WRN("write_status: %s", strerror(-ret));
 
   if (status->flags & LOTA_FLAG_ATTESTED) {
-    ret = write_token(g_hook.client);
+    ret = write_token(g_hook.client, status->flags);
     if (ret < 0 && ret != LOTA_ERR_NOT_ATTESTED)
       LOG_DBG("write_token: %s", lota_strerror(ret));
   } else {
     unlink(g_hook.token_path);
+    unlink(g_hook.snapshot_path);
   }
 }
 
@@ -445,6 +499,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void) {
            g_hook.token_dir, LOTA_HOOK_STATUS_FILE);
   snprintf(g_hook.token_path, sizeof(g_hook.token_path), "%s/%s",
            g_hook.token_dir, LOTA_HOOK_TOKEN_FILE);
+  snprintf(g_hook.snapshot_path, sizeof(g_hook.snapshot_path), "%s/%s",
+           g_hook.token_dir, LOTA_HOOK_SNAPSHOT_FILE);
 
   /* export token directory for wine-side discovery */
   setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
@@ -514,6 +570,8 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void) {
     safe_unlink(g_hook.status_path);
   if (g_hook.token_path[0])
     safe_unlink(g_hook.token_path);
+  if (g_hook.snapshot_path[0])
+    safe_unlink(g_hook.snapshot_path);
 
   LOG_INF("hook detached");
 }

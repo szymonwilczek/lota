@@ -20,9 +20,12 @@
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
+#include "lota_snapshot.h"
 
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
                "heartbeat wire header must be exactly 74 bytes");
+
+static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
 struct lota_ac_session {
   enum lota_ac_provider provider;
@@ -47,11 +50,50 @@ struct lota_ac_session {
   char token_dir[256];
   char status_path[512];
   char token_path[512];
+  char snapshot_path[512];
+  int snapshot_warned;
 
   /* cached token (wire format) */
   uint8_t token_buf[LOTA_AC_MAX_TOKEN];
   size_t token_len;
 };
+
+static uint16_t read_le16_u(const uint8_t *p) {
+  return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static uint32_t read_le32_u(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
+
+static int read_snapshot(struct lota_ac_session *session) {
+  uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN];
+  ssize_t n = read_file_buf(session->snapshot_path, buf, sizeof(buf));
+  if (n < 0)
+    return (int)n;
+  if (n < LOTA_SNAPSHOT_HEADER_SIZE)
+    return -EIO;
+
+  if (read_le32_u(buf + 0) != LOTA_SNAPSHOT_MAGIC)
+    return -EIO;
+  if (read_le16_u(buf + 4) != (uint16_t)LOTA_SNAPSHOT_VERSION)
+    return -EIO;
+  if (read_le16_u(buf + 6) != 0)
+    return -EIO;
+
+  uint32_t flags = read_le32_u(buf + 8);
+  uint32_t token_size = read_le32_u(buf + 12);
+  if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
+    return -EIO;
+  if ((size_t)n < LOTA_SNAPSHOT_HEADER_SIZE + (size_t)token_size)
+    return -EIO;
+
+  session->lota_flags = flags;
+  memcpy(session->token_buf, buf + LOTA_SNAPSHOT_HEADER_SIZE, token_size);
+  session->token_len = (size_t)token_size;
+  return 0;
+}
 
 static int sha256_hash(const void *data, size_t len, uint8_t out[32]) {
   EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -207,6 +249,8 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg) {
                s->token_dir);
       snprintf(s->token_path, sizeof(s->token_path), "%s/lota-token.bin",
                s->token_dir);
+      snprintf(s->snapshot_path, sizeof(s->snapshot_path), "%s/%s",
+               s->token_dir, LOTA_SNAPSHOT_FILE_NAME);
       s->state = LOTA_AC_STATE_RUNNING;
     }
   }
@@ -287,12 +331,23 @@ int lota_ac_tick(struct lota_ac_session *session) {
       session->token_len = 0;
     }
   } else {
-    /* file mode: read status + token files */
-    session->lota_flags = parse_status_flags(session->status_path);
+    int sret = read_snapshot(session);
+    if (sret == -ENOENT) {
+      /* legacy fallback: separate status + token files */
+      session->lota_flags = parse_status_flags(session->status_path);
 
-    ssize_t n = read_file_buf(session->token_path, session->token_buf,
-                              LOTA_AC_MAX_TOKEN);
-    session->token_len = n > 0 ? (size_t)n : 0;
+      ssize_t n = read_file_buf(session->token_path, session->token_buf,
+                                LOTA_AC_MAX_TOKEN);
+      session->token_len = n > 0 ? (size_t)n : 0;
+    } else if (sret < 0) {
+      if (!session->snapshot_warned) {
+        fprintf(stderr, "lota-ac: snapshot read failed (%s): %s\n",
+                session->snapshot_path, strerror(-sret));
+        session->snapshot_warned = 1;
+      }
+      session->lota_flags = 0;
+      session->token_len = 0;
+    }
   }
 
   /* update state machine */

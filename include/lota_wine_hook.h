@@ -20,6 +20,8 @@
 #ifndef LOTA_WINE_HOOK_H
 #define LOTA_WINE_HOOK_H
 
+#include "lota_snapshot.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -66,6 +68,13 @@ extern "C" {
  * Can be sent directly to a game server for verification.
  */
 #define LOTA_HOOK_TOKEN_FILE "lota-token.bin"
+
+/*
+ * Atomic combined snapshot file (header + token wire bytes).
+ * Readers should prefer this file in order to avoid TOCTOU races between
+ * reading status and token separately.
+ */
+#define LOTA_HOOK_SNAPSHOT_FILE LOTA_SNAPSHOT_FILE_NAME
 
 /* defaults */
 #define LOTA_HOOK_DEFAULT_REFRESH_SEC 60

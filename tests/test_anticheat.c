@@ -17,6 +17,7 @@
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
+#include "lota_snapshot.h"
 
 static int tests_run;
 static int tests_passed;
@@ -70,6 +71,37 @@ static void write_test_file(const char *dir, const char *name, const void *data,
   close(fd);
 }
 
+static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags);
+
+static void write_le16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+  p[2] = (uint8_t)((v >> 16) & 0xFF);
+  p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+static void write_mock_snapshot(const char *dir, uint32_t flags) {
+  uint8_t tok[2048];
+  size_t tok_len = build_mock_token(tok, sizeof(tok), flags);
+  if (tok_len == 0)
+    return;
+
+  uint8_t buf[16 + 2048];
+  write_le32(buf + 0, LOTA_SNAPSHOT_MAGIC);
+  write_le16(buf + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
+  write_le16(buf + 6, 0);
+  write_le32(buf + 8, flags);
+  write_le32(buf + 12, (uint32_t)tok_len);
+  memcpy(buf + 16, tok, tok_len);
+
+  write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf, 16 + tok_len);
+}
+
 /*
  * minimal valid LOTA token wire blob using the gaming SDK
  * attest/sig data is fabricated (not cryptographically valid),
@@ -97,6 +129,12 @@ static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags) {
 }
 
 static void write_mock_status(const char *dir, uint32_t flags) {
+  {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
+    unlink(path);
+  }
+
   char data[256];
   int n = snprintf(data, sizeof(data),
                    "LOTA_ATTESTED=%d\n"
@@ -112,6 +150,12 @@ static void write_mock_status(const char *dir, uint32_t flags) {
 }
 
 static void write_mock_token(const char *dir, uint32_t flags) {
+  {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
+    unlink(path);
+  }
+
   uint8_t tok[2048];
   size_t tok_len = build_mock_token(tok, sizeof(tok), flags);
   if (tok_len > 0)
@@ -201,6 +245,31 @@ static void test_init_eac_file_mode(void) {
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
       .game_id = "test-game-eac",
+      .token_dir = test_dir,
+  };
+  struct lota_ac_session *s = lota_ac_init(&cfg);
+  if (!s) {
+    FAIL("returned NULL");
+    return;
+  }
+  enum lota_ac_state state = lota_ac_get_state(s);
+  if (state != LOTA_AC_STATE_TRUSTED) {
+    FAIL("expected TRUSTED");
+    lota_ac_shutdown(s);
+    return;
+  }
+  lota_ac_shutdown(s);
+  PASS();
+}
+
+static void test_init_eac_file_mode_snapshot_only(void) {
+  TEST("init: EAC file mode snapshot-only (atomic)");
+
+  write_mock_snapshot(test_dir, 0x07);
+
+  struct lota_ac_config cfg = {
+      .provider = LOTA_AC_PROVIDER_EAC,
+      .game_id = "test-game-eac-snap",
       .token_dir = test_dir,
   };
   struct lota_ac_session *s = lota_ac_init(&cfg);
@@ -1058,6 +1127,7 @@ int main(void) {
 
   printf("\nSession Lifecycle:\n");
   test_init_eac_file_mode();
+  test_init_eac_file_mode_snapshot_only();
   test_init_battleye_file_mode();
   test_shutdown_null();
   test_get_state_null();
