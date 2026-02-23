@@ -14,17 +14,20 @@
 
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
-#define LOTA_IPC_VERSION 3
+#define LOTA_IPC_VERSION 4
 #define LOTA_IPC_MAX_PAYLOAD 4096
 
 /*
  * IPC Commands
  */
 enum lota_ipc_cmd {
-  LOTA_IPC_CMD_PING = 0x01,       /* Whether agent is alive */
-  LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
-  LOTA_IPC_CMD_GET_TOKEN = 0x03,  /* Signed attestation token */
-  LOTA_IPC_CMD_SUBSCRIBE = 0x04,  /* Subscribe to status changes */
+  LOTA_IPC_CMD_PING = 0x01,        /* Whether agent is alive */
+  LOTA_IPC_CMD_GET_STATUS = 0x02,  /* Attestation status */
+  LOTA_IPC_CMD_GET_TOKEN = 0x03,   /* Signed attestation token */
+  LOTA_IPC_CMD_SUBSCRIBE = 0x04,   /* Subscribe to status changes */
+  LOTA_IPC_CMD_PROTECT_PID = 0x05, /* Hot-add protected PID (requires root) */
+  LOTA_IPC_CMD_UNPROTECT_PID =
+      0x06, /* Hot-remove protected PID (requires root) */
 };
 
 /*
@@ -186,6 +189,18 @@ struct lota_ipc_notify {
   uint32_t fail_count;       /* Total failed attestations */
   uint8_t mode;              /* Current mode (enum lota_mode) */
   uint8_t reserved[3];
+} __attribute__((packed));
+
+/* PROTECT_PID / UNPROTECT_PID request payload */
+struct lota_ipc_pid_request {
+  uint32_t pid;
+} __attribute__((packed));
+
+/* PROTECT_PID / UNPROTECT_PID response payload */
+struct lota_ipc_policy_update {
+  uint8_t policy_digest[32];
+  uint32_t protect_pid_count;
+  uint32_t _reserved1;
 } __attribute__((packed));
 
 #endif /* LOTA_IPC_H */
