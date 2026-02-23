@@ -69,6 +69,27 @@ static uint32_t read_le32_u(const uint8_t *p) {
          ((uint32_t)p[3] << 24);
 }
 
+static uint64_t read_le64_u(const uint8_t *p) {
+  return (uint64_t)read_le32_u(p) | ((uint64_t)read_le32_u(p + 4) << 32);
+}
+
+static void write_le16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)((v >> 8) & 0xFF);
+  p[2] = (uint8_t)((v >> 16) & 0xFF);
+  p[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+static void write_le64(uint8_t *p, uint64_t v) {
+  write_le32(p + 0, (uint32_t)v);
+  write_le32(p + 4, (uint32_t)(v >> 32));
+}
+
 static int read_snapshot(struct lota_ac_session *session) {
   uint8_t buf[LOTA_SNAPSHOT_HEADER_SIZE + LOTA_AC_MAX_TOKEN];
   ssize_t n = read_file_buf(session->snapshot_path, buf, sizeof(buf));
@@ -398,24 +419,23 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
   if (buflen < total)
     return -ENOSPC;
 
-  struct lota_ac_heartbeat_wire hdr = {
-      .magic = LOTA_AC_MAGIC,
-      .version = LOTA_AC_VERSION,
-      .provider = (uint8_t)session->provider,
-      .total_size = (uint16_t)total,
-      .sequence = session->heartbeat_seq,
-      .lota_flags = session->lota_flags,
-      .timestamp = (uint64_t)time(NULL),
-      .token_size = (uint16_t)session->token_len,
-  };
-  memcpy(hdr.session_id, session->session_id, LOTA_AC_SESSION_ID_SIZE);
-  memcpy(hdr.game_id_hash, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
+  uint64_t timestamp = (uint64_t)time(NULL);
 
-  memcpy(buf, &hdr, LOTA_AC_HEADER_SIZE);
+  write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
+  buf[4] = (uint8_t)LOTA_AC_VERSION;
+  buf[5] = (uint8_t)session->provider;
+  write_le16(buf + 6, (uint16_t)total);
+  memcpy(buf + 8, session->session_id, LOTA_AC_SESSION_ID_SIZE);
+  write_le32(buf + 24, session->heartbeat_seq);
+  write_le32(buf + 28, session->lota_flags);
+  write_le64(buf + 32, timestamp);
+  memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
+  write_le16(buf + 72, (uint16_t)session->token_len);
+
   memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf, session->token_len);
 
   session->heartbeat_seq++;
-  session->last_heartbeat = hdr.timestamp;
+  session->last_heartbeat = timestamp;
 
   *written = total;
   return 0;
@@ -430,26 +450,29 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (len < LOTA_AC_HEADER_SIZE)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  /* memcpy to avoid unaligned access on packed struct */
-  struct lota_ac_heartbeat_wire hdr;
-  memcpy(&hdr, data, LOTA_AC_HEADER_SIZE);
+  uint32_t magic = read_le32_u(data + 0);
+  uint8_t version = data[4];
+  uint8_t provider = data[5];
+  uint16_t total_size = read_le16_u(data + 6);
+  uint32_t sequence = read_le32_u(data + 24);
+  uint32_t lota_flags = read_le32_u(data + 28);
+  uint64_t timestamp = read_le64_u(data + 32);
+  uint16_t token_size = read_le16_u(data + 72);
 
-  if (hdr.magic != LOTA_AC_MAGIC)
+  if (magic != LOTA_AC_MAGIC)
     return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr.version != LOTA_AC_VERSION)
+  if (version != LOTA_AC_VERSION)
     return LOTA_SERVER_ERR_BAD_VERSION;
-  if (hdr.total_size > len)
+  if ((size_t)total_size > len)
     return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr.total_size != LOTA_AC_HEADER_SIZE + hdr.token_size)
+  if ((size_t)total_size != LOTA_AC_HEADER_SIZE + (size_t)token_size)
     return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr.token_size == 0 || hdr.token_size > LOTA_AC_MAX_TOKEN)
+  if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
     return LOTA_SERVER_ERR_BAD_TOKEN;
-  if (hdr.provider != LOTA_AC_PROVIDER_EAC &&
-      hdr.provider != LOTA_AC_PROVIDER_BATTLEYE)
+  if (provider != LOTA_AC_PROVIDER_EAC && provider != LOTA_AC_PROVIDER_BATTLEYE)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
   const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
-  uint16_t token_size = hdr.token_size;
 
   struct lota_server_claims claims;
   int ret;
@@ -463,12 +486,12 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (ret != LOTA_SERVER_OK)
     return ret;
 
-  info->provider = (enum lota_ac_provider)hdr.provider;
-  memcpy(info->session_id, hdr.session_id, LOTA_AC_SESSION_ID_SIZE);
+  info->provider = (enum lota_ac_provider)provider;
+  memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);
   info->session_start = 0; /* not available from a single heartbeat */
-  info->last_heartbeat = hdr.timestamp;
-  info->heartbeat_seq = hdr.sequence;
-  info->lota_flags = hdr.lota_flags;
+  info->last_heartbeat = timestamp;
+  info->heartbeat_seq = sequence;
+  info->lota_flags = lota_flags;
   info->trusted = !claims.expired && (claims.flags != 0);
   info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 
