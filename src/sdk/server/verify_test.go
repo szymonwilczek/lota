@@ -239,6 +239,43 @@ func TestVerifyToken_TamperedToken(t *testing.T) {
 	}
 }
 
+func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{}
+	rand.Read(nonce[:])
+
+	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	policyDigest := [32]byte{0x11, 0x22, 0x33}
+
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest)
+
+	fullAttest := buildFakeTPMSAttest(expectedNonce[:], bytes.Repeat([]byte{0x42}, 32))
+	if len(fullAttest) < 2 {
+		t.Fatalf("unexpected fake attest size: %d", len(fullAttest))
+	}
+
+	// truncate inside the QUOTE-specific section (pcrDigest payload)
+	truncatedAttest := fullAttest[:len(fullAttest)-1]
+
+	signature := signAttest(t, key, truncatedAttest)
+	tok, err := SerializeToken(validUntil, flags, nonce,
+		TPMAlgRSASSA, TPMAlgSHA256, pcrMask, policyDigest, truncatedAttest, signature)
+	if err != nil {
+		t.Fatalf("SerializeToken: %v", err)
+	}
+
+	_, err = VerifyToken(tok, &key.PublicKey, nil)
+	if err == nil {
+		t.Fatal("expected VerifyToken to fail for truncated attest")
+	}
+	if !errors.Is(err, ErrAttestParse) {
+		t.Fatalf("expected ErrAttestParse, got: %v", err)
+	}
+}
+
 func TestVerifyToken_ExpiredToken(t *testing.T) {
 	key := generateTestKey(t)
 
