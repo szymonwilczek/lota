@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "lota.h"
+#include "parse_utils.h"
 #include "tpm.h"
 
 #include <ctype.h>
@@ -15,27 +16,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static int safe_parse_long(const char *s, long *out) {
-  char *end;
-  errno = 0;
-  long v = strtol(s, &end, 10);
-  /* errno catches overflow/underflow (ERANGE) and other conversion errors */
-  if (errno == ERANGE || errno != 0 || end == s || *end != '\0')
-    return -1;
-  *out = v;
-  return 0;
-}
-
-static int safe_parse_ulong_base(const char *s, int base, unsigned long *out) {
-  char *end;
-  errno = 0;
-  unsigned long v = strtoul(s, &end, base);
-  if (errno == ERANGE || errno != 0 || end == s || *end != '\0')
-    return -1;
-  *out = v;
-  return 0;
-}
 
 /*
  * Trims leading and trailing whitespace in-place.

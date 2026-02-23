@@ -46,6 +46,7 @@
 #include "journal.h"
 #include "main_utils.h"
 #include "net.h"
+#include "parse_utils.h"
 #include "policy.h"
 #include "quote.h"
 #include "reload.h"
@@ -61,20 +62,6 @@
 
 /* Default AIK TTL */
 #define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
-
-/*
- * Safe integer parser.
- * Returns 0 on success, -1 on error (overflow, empty, trailing garbage).
- */
-static int safe_parse_long(const char *s, long *out) {
-  char *end;
-  errno = 0;
-  long v = strtol(s, &end, 10);
-  if (errno != 0 || end == s || *end != '\0')
-    return -1;
-  *out = v;
-  return 0;
-}
 
 /* Global state */
 struct agent_globals g_agent = {
