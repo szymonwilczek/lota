@@ -348,7 +348,7 @@ static __noinline int is_verity_allowed(struct file *file) {
  *
  * Called during execve() before the new image is committed.
  *
- * This is the place to enforce integrity (no TOCTOU): if STRICT_EXEC
+ * This is the place to enforce integrity: if STRICT_EXEC
  * is enabled in ENFORCE mode, only fs-verity-allowed files can be executed.
  * ====================================================================== */
 SEC("lsm/bprm_check_security")
@@ -374,6 +374,14 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
     struct bpf_dynptr digest_ptr;
     int ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
     if (ret == 0) {
+      /*
+       * Note on TOCTOU:
+       * - bprm->file is an already-open file; path renames after open(2) do
+       *   not change the inode behind this file descriptor.
+       * - fs-verity is enforced by the kernel: enabling verity makes the inode
+       *   content immutable and the helper returns an error if verity is not
+       *   enabled for this file.
+       */
       ret = bpf_get_fsverity_digest(file, &digest_ptr);
       if (ret == PE_DIGEST_SIZE)
         have_digest = 1;
