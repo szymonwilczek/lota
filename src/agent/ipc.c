@@ -70,6 +70,7 @@ static uint64_t monotonic_now_sec(void) {
  */
 static int check_rate_limit(uid_t uid) {
   uint64_t now = monotonic_now_sec();
+  static uint64_t last_table_full_warn_sec = 0;
 
   /* existing entry */
   for (int i = 0; i < rate_count; i++) {
@@ -98,16 +99,30 @@ static int check_rate_limit(uid_t uid) {
     return 0;
   }
 
-  /* table full - LRU */
-  int oldest = 0;
-  for (int i = 1; i < rate_count; i++) {
-    if (rate_table[i].window_start_sec < rate_table[oldest].window_start_sec)
-      oldest = i;
+  /*
+   * Table full: do NOT evict an active UID entry.
+   * Reuse only an entry whose window has already expired; otherwise
+   * refuse the request to prevent trivial UID-exhaustion bypass
+   * (an attacker filling the table to evict legitimate rate state).
+   */
+  for (int i = 0; i < rate_count; i++) {
+    if (now < rate_table[i].window_start_sec ||
+        now - rate_table[i].window_start_sec >= TOKEN_RATE_WINDOW_SEC) {
+      rate_table[i].uid = uid;
+      rate_table[i].count = 1;
+      rate_table[i].window_start_sec = now;
+      return 0;
+    }
   }
-  rate_table[oldest].uid = uid;
-  rate_table[oldest].count = 1;
-  rate_table[oldest].window_start_sec = now;
-  return 0;
+
+  if (now >= last_table_full_warn_sec + 60) {
+    last_table_full_warn_sec = now;
+    lota_warn(
+        "IPC rate limiter table exhausted (%d entries); refusing new UID %u",
+        rate_count, (unsigned)uid);
+  }
+
+  return -1;
 }
 
 /*
