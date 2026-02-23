@@ -44,7 +44,6 @@ type AIKStore interface {
 	ListClients() []string
 
 	// returns when the AIK was first registered for the client
-	// falls back to file modification time for legacy entries without metadata
 	GetRegisteredAt(clientID string) (time.Time, error)
 
 	// replaces the AIK for an existing client (key rotation)
@@ -172,15 +171,6 @@ func (fs *FileStore) loadAll() error {
 				continue
 			}
 			fs.registeredAt[clientID] = meta.RegisteredAt
-		}
-	}
-
-	// backfill registration time from PEM file mtime for legacy entries
-	for clientID := range fs.cache {
-		if _, hasMeta := fs.registeredAt[clientID]; !hasMeta {
-			if info, err := os.Stat(filepath.Join(fs.storePath, clientID+".pem")); err == nil {
-				fs.registeredAt[clientID] = info.ModTime()
-			}
 		}
 	}
 

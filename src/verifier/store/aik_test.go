@@ -749,40 +749,6 @@ func TestFileStore_RotatePreservesHardwareID(t *testing.T) {
 	}
 }
 
-func TestFileStore_LegacyMtimeFallback(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	store, err := NewFileStore(tempDir)
-	if err != nil {
-		t.Fatalf("NewFileStore failed: %v", err)
-	}
-
-	key := generateTestKey(t)
-	store.RegisterAIK("legacy", &key.PublicKey)
-
-	// delete .meta file to simulate legacy entry
-	metaPath := filepath.Join(tempDir, "legacy.meta")
-	os.Remove(metaPath)
-
-	// reload store - should fall back to PEM file mtime
-	store2, err := NewFileStore(tempDir)
-	if err != nil {
-		t.Fatalf("NewFileStore (reload) failed: %v", err)
-	}
-
-	regTime, err := store2.GetRegisteredAt("legacy")
-	if err != nil {
-		t.Fatalf("GetRegisteredAt should fallback to mtime: %v", err)
-	}
-	if regTime.IsZero() {
-		t.Error("Registration time should not be zero for legacy entry")
-	}
-}
-
 // generates an EK certificate signed by a CA with the TCG EK OID in EKU
 func generateEKCertificate(t *testing.T, key *rsa.PrivateKey, ca *x509.Certificate, caKey *rsa.PrivateKey) []byte {
 	t.Helper()
