@@ -166,7 +166,7 @@ void net_context_cleanup(struct net_context *ctx) {
   net_disconnect(ctx);
 
   if (ctx->ssl_ctx) {
-    SSL_CTX_free((SSL_CTX *)ctx->ssl_ctx);
+    SSL_CTX_free(ctx->ssl_ctx);
     ctx->ssl_ctx = NULL;
   }
 }
@@ -253,7 +253,7 @@ int net_connect(struct net_context *ctx) {
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
   }
 
-  ssl = SSL_new((SSL_CTX *)ctx->ssl_ctx);
+  ssl = SSL_new(ctx->ssl_ctx);
   if (!ssl) {
     close(sock);
     ctx->socket_fd = -1;
@@ -404,8 +404,8 @@ void net_disconnect(struct net_context *ctx) {
     return;
 
   if (ctx->ssl) {
-    SSL_shutdown((SSL *)ctx->ssl);
-    SSL_free((SSL *)ctx->ssl);
+    SSL_shutdown(ctx->ssl);
+    SSL_free(ctx->ssl);
     ctx->ssl = NULL;
   }
 
@@ -427,11 +427,11 @@ int net_recv_challenge(struct net_context *ctx,
     return -EINVAL;
 
   while (total < (int)sizeof(buf)) {
-    ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
+    ret = SSL_read(ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
-      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      int ssl_err = SSL_get_error(ctx->ssl, ret);
       if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-        int wait_ret = ssl_wait((SSL *)ctx->ssl, ssl_err);
+        int wait_ret = ssl_wait(ctx->ssl, ssl_err);
         if (wait_ret < 0)
           return wait_ret;
         continue;
@@ -469,12 +469,12 @@ int net_send_report(struct net_context *ctx, const void *report,
     return -EINVAL;
 
   while (total < report_size) {
-    ret = SSL_write((SSL *)ctx->ssl, (const uint8_t *)report + total,
+    ret = SSL_write(ctx->ssl, (const uint8_t *)report + total,
                     report_size - total);
     if (ret <= 0) {
-      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      int ssl_err = SSL_get_error(ctx->ssl, ret);
       if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-        int wait_ret = ssl_wait((SSL *)ctx->ssl, ssl_err);
+        int wait_ret = ssl_wait(ctx->ssl, ssl_err);
         if (wait_ret < 0)
           return wait_ret;
         continue;
@@ -497,11 +497,11 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
     return -EINVAL;
 
   while (total < (int)sizeof(buf)) {
-    ret = SSL_read((SSL *)ctx->ssl, buf + total, sizeof(buf) - total);
+    ret = SSL_read(ctx->ssl, buf + total, sizeof(buf) - total);
     if (ret <= 0) {
-      int ssl_err = SSL_get_error((SSL *)ctx->ssl, ret);
+      int ssl_err = SSL_get_error(ctx->ssl, ret);
       if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
-        int wait_ret = ssl_wait((SSL *)ctx->ssl, ssl_err);
+        int wait_ret = ssl_wait(ctx->ssl, ssl_err);
         if (wait_ret < 0)
           return wait_ret;
         continue;

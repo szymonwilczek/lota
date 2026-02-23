@@ -14,12 +14,15 @@
 /* SHA-256 digest size for certificate fingerprint pinning */
 #define NET_PIN_SHA256_LEN 32
 
+typedef struct ssl_st SSL;
+typedef struct ssl_ctx_st SSL_CTX;
+
 /*
  * Network context - holds TLS connection state
  */
 struct net_context {
-  void *ssl_ctx;
-  void *ssl;
+  SSL_CTX *ssl_ctx;
+  SSL *ssl;
   int socket_fd;
   int connected;
   char server_addr[256];
