@@ -600,16 +600,17 @@ static void test_config_load_unknown_keys(void) {
   char path[PATH_MAX];
   int ret;
 
-  TEST("config_load logs unknown keys but returns 0");
+  TEST("config_load rejects unknown keys (fail-closed)");
   write_config("unknown.conf", "server = ok\n"
                                "totally_bogus_key = whatever\n"
                                "port = 1234\n");
   config_path("unknown.conf", path, sizeof(path));
   config_init(&cfg);
   ret = config_load(&cfg, path);
-  /* unknown keys are logged but don't cause error return */
-  if (ret != 0) {
-    FAIL("expected 0");
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
     return;
   }
   /* valid keys should still be applied */

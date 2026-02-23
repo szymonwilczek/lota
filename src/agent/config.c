@@ -499,6 +499,7 @@ int config_load(struct lota_config *cfg, const char *path) {
     int ret = apply_key(cfg, key, value, filepath, lineno);
     if (ret == 1) {
       fprintf(stderr, "%s:%d: unknown key '%s'\n", filepath, lineno, key);
+      errors++;
     } else if (ret < 0) {
       errors++;
     }

@@ -97,7 +97,7 @@ void config_init(struct lota_config *cfg);
  *   -EINVAL  if a line is malformed (logged to stderr, keeps going)
  *   -errno   on I/O error
  *
- * Unknown keys are logged to stderr and skipped.
+ * Unknown keys are logged to stderr and cause an error return (fail-closed).
  * Malformed lines are logged but do not stop parsing.
  */
 int config_load(struct lota_config *cfg, const char *path);
