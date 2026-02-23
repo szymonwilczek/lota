@@ -287,7 +287,7 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 
   /* domain separator */
   {
-    static const uint8_t prefix[] = "LOTA_POLICY_V2";
+    static const uint8_t prefix[] = "LOTA_POLICY_V1";
     if (EVP_DigestUpdate(mdctx, prefix, sizeof(prefix) - 1) != 1) {
       ret = -EIO;
       goto out;

@@ -42,7 +42,7 @@ extern "C" {
  * Maximum token size: 96 + 1024 + 512 = 1632 bytes
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
-#define LOTA_TOKEN_VERSION 0x0002
+#define LOTA_TOKEN_VERSION 0x0001
 #define LOTA_TOKEN_HEADER_SIZE 96
 #define LOTA_TOKEN_MAX_SIZE (LOTA_TOKEN_HEADER_SIZE + 1024 + 512)
 

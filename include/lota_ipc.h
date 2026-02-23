@@ -14,7 +14,7 @@
 
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
-#define LOTA_IPC_VERSION 4
+#define LOTA_IPC_VERSION 1
 #define LOTA_IPC_MAX_PAYLOAD 4096
 
 /*
