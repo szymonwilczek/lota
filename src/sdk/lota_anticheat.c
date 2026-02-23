@@ -164,44 +164,6 @@ static ssize_t read_file_buf(const char *path, void *buf, size_t buflen) {
 }
 
 /*
- * Parse lota-status file for LOTA_FLAGS=0x... line.
- * Returns the flags value, or 0 on parse failure.
- */
-static uint32_t parse_status_flags(const char *path) {
-  char buf[512];
-  ssize_t n = read_file_buf(path, buf, sizeof(buf) - 1);
-  if (n <= 0)
-    return 0;
-
-  buf[n] = '\0';
-  const char *p = strstr(buf, "LOTA_FLAGS=");
-  if (!p)
-    return 0;
-
-  p += sizeof("LOTA_FLAGS=") - 1;
-  while (*p == ' ' || *p == '\t')
-    p++;
-
-  errno = 0;
-  char *end = NULL;
-  unsigned long v = strtoul(p, &end, 0);
-  if (errno != 0 || end == p)
-    return 0;
-
-  while (*end == ' ' || *end == '\t')
-    end++;
-
-  /* reject trailing garbage; status files are multi-line */
-  if (*end != '\0' && *end != '\n' && *end != '\r')
-    return 0;
-
-  if (v > (unsigned long)UINT32_MAX)
-    return 0;
-
-  return (uint32_t)v;
-}
-
-/*
  * Resolve token directory for file mode.
  * Priority: cfg->token_dir > $LOTA_HOOK_TOKEN_DIR > $XDG_RUNTIME_DIR/lota
  */
@@ -374,14 +336,7 @@ int lota_ac_tick(struct lota_ac_session *session) {
     }
   } else {
     int sret = read_snapshot(session);
-    if (sret == -ENOENT) {
-      /* legacy fallback: separate status + token files */
-      session->lota_flags = parse_status_flags(session->status_path);
-
-      ssize_t n = read_file_buf(session->token_path, session->token_buf,
-                                LOTA_AC_MAX_TOKEN);
-      session->token_len = n > 0 ? (size_t)n : 0;
-    } else if (sret < 0) {
+    if (sret < 0) {
       if (!session->snapshot_warned) {
         fprintf(stderr, "lota-ac: snapshot read failed (%s): %s\n",
                 session->snapshot_path, strerror(-sret));

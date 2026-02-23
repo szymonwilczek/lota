@@ -102,6 +102,16 @@ static void write_mock_snapshot(const char *dir, uint32_t flags) {
   write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf, 16 + tok_len);
 }
 
+static void write_mock_snapshot_no_token(const char *dir, uint32_t flags) {
+  uint8_t buf[16];
+  write_le32(buf + 0, LOTA_SNAPSHOT_MAGIC);
+  write_le16(buf + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
+  write_le16(buf + 6, 0);
+  write_le32(buf + 8, flags);
+  write_le32(buf + 12, 0);
+  write_test_file(dir, LOTA_SNAPSHOT_FILE_NAME, buf, sizeof(buf));
+}
+
 /*
  * minimal valid LOTA token wire blob using the gaming SDK
  * attest/sig data is fabricated (not cryptographically valid),
@@ -126,40 +136,6 @@ static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags) {
   if (lota_token_serialize(&tok, buf, buflen, &written) != LOTA_OK)
     return 0;
   return written;
-}
-
-static void write_mock_status(const char *dir, uint32_t flags) {
-  {
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
-    unlink(path);
-  }
-
-  char data[256];
-  int n = snprintf(data, sizeof(data),
-                   "LOTA_ATTESTED=%d\n"
-                   "LOTA_FLAGS=0x%08X\n"
-                   "LOTA_VALID_UNTIL=%lu\n"
-                   "LOTA_ATTEST_COUNT=1\n"
-                   "LOTA_FAIL_COUNT=0\n"
-                   "LOTA_UPDATED=%lu\n"
-                   "LOTA_PID=%d\n",
-                   flags ? 1 : 0, flags, (unsigned long)(time(NULL) + 3600),
-                   (unsigned long)time(NULL), (int)getpid());
-  write_test_file(dir, "lota-status", data, (size_t)n);
-}
-
-static void write_mock_token(const char *dir, uint32_t flags) {
-  {
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s", dir, LOTA_SNAPSHOT_FILE_NAME);
-    unlink(path);
-  }
-
-  uint8_t tok[2048];
-  size_t tok_len = build_mock_token(tok, sizeof(tok), flags);
-  if (tok_len > 0)
-    write_test_file(dir, "lota-token.bin", tok, tok_len);
 }
 
 static void test_init_null_config(void) {
@@ -239,8 +215,7 @@ static void test_init_invalid_provider(void) {
 
 static void test_init_eac_file_mode(void) {
   TEST("init: EAC file mode with valid mock data");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -289,8 +264,7 @@ static void test_init_eac_file_mode_snapshot_only(void) {
 
 static void test_init_battleye_file_mode(void) {
   TEST("init: BattlEye file mode with valid mock data");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_BATTLEYE,
@@ -338,8 +312,7 @@ static void test_get_info_null(void) {
 
 static void test_get_info_null_info(void) {
   TEST("get_info(session, NULL) -> -EINVAL");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -362,8 +335,7 @@ static void test_get_info_null_info(void) {
 
 static void test_get_info_fields(void) {
   TEST("get_info returns correct session fields");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -417,8 +389,7 @@ static void test_get_info_fields(void) {
 
 static void test_state_untrusted_zero_flags(void) {
   TEST("state: zero flags -> UNTRUSTED");
-  write_mock_status(test_dir, 0x00);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x00);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -442,8 +413,7 @@ static void test_state_untrusted_zero_flags(void) {
 
 static void test_state_required_flags(void) {
   TEST("state: missing required flags -> UNTRUSTED");
-  write_mock_status(test_dir, 0x03); /* ATTESTED + TPM_OK but no IOMMU */
-  write_mock_token(test_dir, 0x03);
+  write_mock_snapshot(test_dir, 0x03); /* ATTESTED + TPM_OK but no IOMMU */
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_BATTLEYE,
@@ -467,8 +437,7 @@ static void test_state_required_flags(void) {
 
 static void test_state_required_flags_met(void) {
   TEST("state: required flags met -> TRUSTED");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -527,8 +496,7 @@ static void test_wire_header_size(void) {
 
 static void test_heartbeat_generation(void) {
   TEST("heartbeat: generates valid packet");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -592,8 +560,7 @@ static void test_heartbeat_generation(void) {
 
 static void test_heartbeat_sequence_increments(void) {
   TEST("heartbeat: sequence increments per call");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -630,8 +597,7 @@ static void test_heartbeat_sequence_increments(void) {
 
 static void test_heartbeat_session_id_stable(void) {
   TEST("heartbeat: session_id stable across heartbeats");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_BATTLEYE,
@@ -664,8 +630,7 @@ static void test_heartbeat_session_id_stable(void) {
 
 static void test_heartbeat_game_id_hash(void) {
   TEST("heartbeat: game_id_hash differs per game");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   uint8_t buf1[LOTA_AC_MAX_HEARTBEAT], buf2[LOTA_AC_MAX_HEARTBEAT];
   size_t w1, w2;
@@ -701,8 +666,7 @@ static void test_heartbeat_game_id_hash(void) {
 
 static void test_heartbeat_buf_too_small(void) {
   TEST("heartbeat: buffer too small -> -ENOSPC");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -731,8 +695,8 @@ static void test_heartbeat_no_token(void) {
   char empty_dir[512];
   snprintf(empty_dir, sizeof(empty_dir), "%s/notoken", test_dir);
   mkdir(empty_dir, 0700);
-  /* write status but no token */
-  write_mock_status(empty_dir, 0x07);
+  /* snapshot exists, but no token payload */
+  write_mock_snapshot_no_token(empty_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -764,8 +728,7 @@ static void test_heartbeat_null_args(void) {
   if (lota_ac_heartbeat(NULL, buf, sizeof(buf), &written) != -EINVAL)
     ok = 0;
 
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
       .game_id = "test-null",
@@ -787,8 +750,7 @@ static void test_heartbeat_null_args(void) {
 
 static void test_verify_roundtrip(void) {
   TEST("verify: generate -> parse roundtrip");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
@@ -856,8 +818,7 @@ static void test_verify_roundtrip(void) {
 
 static void test_verify_battleye_roundtrip(void) {
   TEST("verify: BattlEye roundtrip");
-  write_mock_status(test_dir, 0x1F);
-  write_mock_token(test_dir, 0x1F);
+  write_mock_snapshot(test_dir, 0x1F);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_BATTLEYE,
@@ -1084,8 +1045,7 @@ static void test_tick_null(void) {
 
 static void test_session_id_unique(void) {
   TEST("session_id: different sessions have different IDs");
-  write_mock_status(test_dir, 0x07);
-  write_mock_token(test_dir, 0x07);
+  write_mock_snapshot(test_dir, 0x07);
 
   struct lota_ac_config cfg = {
       .provider = LOTA_AC_PROVIDER_EAC,
