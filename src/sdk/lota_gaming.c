@@ -608,7 +608,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
   struct lota_ipc_response resp;
   struct lota_ipc_token_request token_req;
   uint8_t buf[LOTA_IPC_TOKEN_MAX_SIZE];
-  struct lota_ipc_token *ipc_token;
+  struct lota_ipc_token ipc_token_hdr;
   uint8_t *data_ptr;
   size_t payload_len;
   int ret;
@@ -651,49 +651,49 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
     return LOTA_ERR_PROTOCOL;
 
   /* parse token header */
-  ipc_token = (struct lota_ipc_token *)buf;
+  memcpy(&ipc_token_hdr, buf, sizeof(ipc_token_hdr));
 
-  token->valid_until = ipc_token->valid_until;
-  token->flags = ipc_token->flags;
-  memcpy(token->nonce, ipc_token->client_nonce, 32);
-  token->sig_alg = ipc_token->sig_alg;
-  token->hash_alg = ipc_token->hash_alg;
-  token->pcr_mask = ipc_token->pcr_mask;
+  token->valid_until = ipc_token_hdr.valid_until;
+  token->flags = ipc_token_hdr.flags;
+  memcpy(token->nonce, ipc_token_hdr.client_nonce, 32);
+  token->sig_alg = ipc_token_hdr.sig_alg;
+  token->hash_alg = ipc_token_hdr.hash_alg;
+  token->pcr_mask = ipc_token_hdr.pcr_mask;
 
   /* validate sizes */
-  if (ipc_token->attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
-      ipc_token->sig_size > LOTA_IPC_TOKEN_MAX_SIG)
+  if (ipc_token_hdr.attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
+      ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
     return LOTA_ERR_PROTOCOL;
 
-  size_t expected_len =
-      LOTA_IPC_TOKEN_HEADER_SIZE + ipc_token->attest_size + ipc_token->sig_size;
+  size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE + ipc_token_hdr.attest_size +
+                        ipc_token_hdr.sig_size;
   if (payload_len < expected_len)
     return LOTA_ERR_PROTOCOL;
 
   data_ptr = buf + LOTA_IPC_TOKEN_HEADER_SIZE;
 
   /* copy attest_data if present */
-  if (ipc_token->attest_size > 0) {
-    token->attest_data = malloc(ipc_token->attest_size);
+  if (ipc_token_hdr.attest_size > 0) {
+    token->attest_data = malloc(ipc_token_hdr.attest_size);
     if (!token->attest_data)
       return LOTA_ERR_NO_MEMORY;
 
-    memcpy(token->attest_data, data_ptr, ipc_token->attest_size);
-    token->attest_size = ipc_token->attest_size;
-    data_ptr += ipc_token->attest_size;
+    memcpy(token->attest_data, data_ptr, ipc_token_hdr.attest_size);
+    token->attest_size = ipc_token_hdr.attest_size;
+    data_ptr += ipc_token_hdr.attest_size;
   }
 
   /* copy signature if present */
-  if (ipc_token->sig_size > 0) {
-    token->signature = malloc(ipc_token->sig_size);
+  if (ipc_token_hdr.sig_size > 0) {
+    token->signature = malloc(ipc_token_hdr.sig_size);
     if (!token->signature) {
       free(token->attest_data);
       token->attest_data = NULL;
       return LOTA_ERR_NO_MEMORY;
     }
 
-    memcpy(token->signature, data_ptr, ipc_token->sig_size);
-    token->signature_len = ipc_token->sig_size;
+    memcpy(token->signature, data_ptr, ipc_token_hdr.sig_size);
+    token->signature_len = ipc_token_hdr.sig_size;
   }
 
   return LOTA_OK;
