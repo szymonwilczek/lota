@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
@@ -350,6 +351,75 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	}
 	if claims.SigAlg != TPMAlgRSAPSS {
 		t.Errorf("SigAlg = 0x%04X, want 0x%04X", claims.SigAlg, TPMAlgRSAPSS)
+	}
+}
+
+func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0x99}
+	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	flags := uint32(0x07)
+	policyDigest := [32]byte{0x10, 0x20}
+	pcrMask := uint32(0x4001)
+
+	pcrDigest := make([]byte, 32)
+	rand.Read(pcrDigest)
+
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+
+	digest := sha512.Sum384(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA384, digest[:])
+	if err != nil {
+		t.Fatalf("SignPKCS1v15(SHA-384): %v", err)
+	}
+
+	tok, err := SerializeToken(validUntil, flags, nonce,
+		TPMAlgRSASSA, TPMAlgSHA384, pcrMask, policyDigest, attestData, signature)
+	if err != nil {
+		t.Fatalf("SerializeToken: %v", err)
+	}
+
+	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	if err != nil {
+		t.Fatalf("VerifyToken (SHA-384): %v", err)
+	}
+	if claims.HashAlg != TPMAlgSHA384 {
+		t.Errorf("HashAlg = 0x%04X, want 0x%04X", claims.HashAlg, TPMAlgSHA384)
+	}
+}
+
+func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
+	key := generateTestKey(t)
+
+	nonce := [32]byte{0x42}
+	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	flags := uint32(0x07)
+	policyDigest := [32]byte{0x10, 0x20}
+	pcrMask := uint32(0x4001)
+
+	pcrDigest := make([]byte, 32)
+	rand.Read(pcrDigest)
+
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+
+	hash := sha256.Sum256(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
+	if err != nil {
+		t.Fatalf("SignPKCS1v15: %v", err)
+	}
+
+	tok, err := SerializeToken(validUntil, flags, nonce,
+		TPMAlgRSASSA, 0x1234, pcrMask, policyDigest, attestData, signature)
+	if err != nil {
+		t.Fatalf("SerializeToken: %v", err)
+	}
+
+	_, err = VerifyToken(tok, &key.PublicKey, nil)
+	if err == nil {
+		t.Fatal("expected verification error for unsupported hash_alg")
 	}
 }
 

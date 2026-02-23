@@ -60,6 +60,10 @@ const (
 const (
 	TPMAlgRSASSA uint16 = 0x0014
 	TPMAlgRSAPSS uint16 = 0x0016
+
+	TPMAlgSHA256 uint16 = 0x000B
+	TPMAlgSHA384 uint16 = 0x000C
+	TPMAlgSHA512 uint16 = 0x000D
 )
 
 // TPM constants for TPMS_ATTEST parsing
@@ -164,7 +168,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	signature := tokenData[TokenHeaderSize+int(hdr.attestSize) : TokenHeaderSize+int(hdr.attestSize)+int(hdr.sigSize)]
 
 	// verify RSA signature over attest_data
-	if err := verifyRSASignature(attestData, signature, hdr.sigAlg, aikPub); err != nil {
+	if err := verifyRSASignature(attestData, signature, hdr.sigAlg, hdr.hashAlg, aikPub); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSigFail, err)
 	}
 
@@ -210,6 +214,19 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	return claims, nil
+}
+
+func tpmHashAlgToCryptoHash(hashAlg uint16) (crypto.Hash, error) {
+	switch hashAlg {
+	case TPMAlgSHA256:
+		return crypto.SHA256, nil
+	case TPMAlgSHA384:
+		return crypto.SHA384, nil
+	case TPMAlgSHA512:
+		return crypto.SHA512, nil
+	default:
+		return 0, fmt.Errorf("unsupported hash algorithm: 0x%04X", hashAlg)
+	}
 }
 
 // parses a serialized LOTA token WITHOUT cryptographic verification
@@ -329,19 +346,29 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 }
 
 // verifies the TPM RSA signature over attest_data
-func verifyRSASignature(attestData, signature []byte, sigAlg uint16, aikPub *rsa.PublicKey) error {
-	hash := sha256.Sum256(attestData)
+func verifyRSASignature(attestData, signature []byte, sigAlg uint16, hashAlg uint16, aikPub *rsa.PublicKey) error {
+	h, err := tpmHashAlgToCryptoHash(hashAlg)
+	if err != nil {
+		return err
+	}
+	if !h.Available() {
+		return fmt.Errorf("hash algorithm unavailable: %v", h)
+	}
+
+	digest := h.New()
+	_, _ = digest.Write(attestData)
+	sum := digest.Sum(nil)
 
 	switch sigAlg {
 	case TPMAlgRSAPSS:
 		opts := &rsa.PSSOptions{
 			SaltLength: rsa.PSSSaltLengthEqualsHash,
-			Hash:       crypto.SHA256,
+			Hash:       h,
 		}
-		return rsa.VerifyPSS(aikPub, crypto.SHA256, hash[:], signature, opts)
+		return rsa.VerifyPSS(aikPub, h, sum, signature, opts)
 
 	case TPMAlgRSASSA:
-		return rsa.VerifyPKCS1v15(aikPub, crypto.SHA256, hash[:], signature)
+		return rsa.VerifyPKCS1v15(aikPub, h, sum, signature)
 
 	default:
 		return fmt.Errorf("unsupported signature algorithm: 0x%04X", sigAlg)
