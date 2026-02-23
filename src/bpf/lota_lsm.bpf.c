@@ -49,6 +49,11 @@ volatile u32 lota_agent_pid;
 #endif
 
 /*
+ * Executable page protection bit.
+ */
+#define LOTA_PROT_EXEC 0x4
+
+/*
  * Ring buffer for sending events to user-space.
  * Size is defined in user-space when creating the map.
  */
@@ -661,7 +666,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   /*
    * only care about executable mappings.
    */
-  if (!(prot & 0x4))
+  if (!(prot & LOTA_PROT_EXEC))
     return 0;
 
   /*
@@ -798,7 +803,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
     return ret;
 
   /* only care when resulting mapping is executable */
-  if (!(prot & 0x4))
+  if (!(prot & LOTA_PROT_EXEC))
     return 0;
 
   mode = get_mode();
