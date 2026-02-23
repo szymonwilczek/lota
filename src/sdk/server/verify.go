@@ -37,9 +37,9 @@ import (
 // Token wire format constants
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
-	TokenVersion    uint16 = 0x0001
-	TokenHeaderSize        = 64
-	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1600 bytes
+	TokenVersion    uint16 = 0x0002
+	TokenHeaderSize        = 96
+	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1632 bytes
 
 	MaxAttestSize = 1024
 	MaxSigSize    = 512
@@ -100,6 +100,9 @@ type Claims struct {
 	// indicates which TPM PCRs were included in the quote
 	PCRMask uint32
 
+	// SHA-256 over startup enforcement policy state (includes allowlist)
+	PolicyDigest [32]byte
+
 	// composite hash of the selected PCR values
 	// from the TPMS_ATTEST QuoteInfo (empty if not a Quote)
 	PCRDigest []byte
@@ -125,6 +128,7 @@ type tokenWire struct {
 	sigAlg     uint16
 	hashAlg    uint16
 	pcrMask    uint32
+	policy     [32]byte
 	attestSize uint16
 	sigSize    uint16
 }
@@ -170,8 +174,8 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
 	}
 
-	// verify nonce binding: extraData == SHA256(valid_until||flags||nonce)
-	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.nonce)
+	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
+	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy)
 	if !bytes.Equal(extraData, computedNonce[:]) {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
@@ -184,13 +188,14 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	claims := &Claims{
-		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
-		Flags:     hdr.flags,
-		Nonce:     hdr.nonce,
-		PCRMask:   hdr.pcrMask,
-		PCRDigest: pcrDigest,
-		SigAlg:    hdr.sigAlg,
-		HashAlg:   hdr.hashAlg,
+		ExpiresAt:    time.Unix(int64(hdr.validUntil), 0),
+		Flags:        hdr.flags,
+		Nonce:        hdr.nonce,
+		PCRMask:      hdr.pcrMask,
+		PolicyDigest: hdr.policy,
+		PCRDigest:    pcrDigest,
+		SigAlg:       hdr.sigAlg,
+		HashAlg:      hdr.hashAlg,
 	}
 
 	// check expiry
@@ -216,12 +221,13 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 	}
 
 	claims := &Claims{
-		ExpiresAt: time.Unix(int64(hdr.validUntil), 0),
-		Flags:     hdr.flags,
-		Nonce:     hdr.nonce,
-		PCRMask:   hdr.pcrMask,
-		SigAlg:    hdr.sigAlg,
-		HashAlg:   hdr.hashAlg,
+		ExpiresAt:    time.Unix(int64(hdr.validUntil), 0),
+		Flags:        hdr.flags,
+		Nonce:        hdr.nonce,
+		PCRMask:      hdr.pcrMask,
+		PolicyDigest: hdr.policy,
+		SigAlg:       hdr.sigAlg,
+		HashAlg:      hdr.hashAlg,
 	}
 
 	// try to extract PCR digest from TPMS_ATTEST (best-effort)
@@ -244,7 +250,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 // This is the Go equivalent of lota_token_serialize() from the C gaming SDK.
 // For more information see: include/lota_gaming.h
 func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
-	sigAlg, hashAlg uint16, pcrMask uint32,
+	sigAlg, hashAlg uint16, pcrMask uint32, policyDigest [32]byte,
 	attestData, signature []byte,
 ) ([]byte, error) {
 	if len(attestData) > MaxAttestSize {
@@ -267,8 +273,9 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint16(buf[52:54], sigAlg)
 	binary.LittleEndian.PutUint16(buf[54:56], hashAlg)
 	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
-	binary.LittleEndian.PutUint16(buf[60:62], uint16(len(attestData)))
-	binary.LittleEndian.PutUint16(buf[62:64], uint16(len(signature)))
+	copy(buf[60:92], policyDigest[:])
+	binary.LittleEndian.PutUint16(buf[92:94], uint16(len(attestData)))
+	binary.LittleEndian.PutUint16(buf[94:96], uint16(len(signature)))
 
 	// variable data
 	copy(buf[TokenHeaderSize:], attestData)
@@ -277,7 +284,7 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	return buf, nil
 }
 
-// parses the 72-byte token header
+// parses the wire-format token header
 func parseWireHeader(data []byte) (*tokenWire, error) {
 	if len(data) < TokenHeaderSize {
 		return nil, fmt.Errorf("%w: too short (%d bytes, need %d)", ErrBadToken, len(data), TokenHeaderSize)
@@ -305,8 +312,9 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	hdr.sigAlg = binary.LittleEndian.Uint16(data[52:54])
 	hdr.hashAlg = binary.LittleEndian.Uint16(data[54:56])
 	hdr.pcrMask = binary.LittleEndian.Uint32(data[56:60])
-	hdr.attestSize = binary.LittleEndian.Uint16(data[60:62])
-	hdr.sigSize = binary.LittleEndian.Uint16(data[62:64])
+	copy(hdr.policy[:], data[60:92])
+	hdr.attestSize = binary.LittleEndian.Uint16(data[92:94])
+	hdr.sigSize = binary.LittleEndian.Uint16(data[94:96])
 
 	// validate sizes
 	expected := int(TokenHeaderSize) + int(hdr.attestSize) + int(hdr.sigSize)
@@ -340,24 +348,26 @@ func verifyRSASignature(attestData, signature []byte, sigAlg uint16, aikPub *rsa
 	}
 }
 
-func computeExpectedNonce(validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
-	var buf [44]byte // 8 + 4 + 32
+func computeExpectedNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte) [32]byte {
+	var buf [80]byte // 8 + 4 + 4 + 32 + 32
 	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
 	binary.LittleEndian.PutUint32(buf[8:12], flags)
-	copy(buf[12:44], nonce[:])
+	binary.LittleEndian.PutUint32(buf[12:16], pcrMask)
+	copy(buf[16:48], nonce[:])
+	copy(buf[48:80], policyDigest[:])
 	return sha256.Sum256(buf[:])
 }
 
 // computes the token quote nonce used in the token verification domain:
 //
-//	SHA256(valid_until_LE || flags_LE || client_nonce)
+//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest)
 //
 // This value is expected to match TPMS_ATTEST.extraData in the token format.
 //
 // NOTE: This is intentionally different from the attestation report binding
 // nonce used by the remote attestation verifier/agent report path.
-func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
-	return computeExpectedNonce(validUntil, flags, nonce)
+func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte) [32]byte {
+	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest)
 }
 
 // parses a raw TPMS_ATTEST blob and extracts:

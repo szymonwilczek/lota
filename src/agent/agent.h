@@ -32,6 +32,12 @@ struct agent_globals {
   struct hash_verify_ctx hash_ctx;
   struct dbus_context *dbus_ctx;
   int mode;
+
+  /*
+   * SHA-256 over enforcement-relevant startup policy state (includes allowlist)
+   */
+  uint8_t policy_digest[32];
+  int policy_digest_set;
 };
 
 extern struct agent_globals g_agent;

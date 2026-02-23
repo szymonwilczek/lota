@@ -70,8 +70,10 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 ) []byte {
 	t.Helper()
 
-	// compute expected nonce = SHA256(valid_until||flags||nonce)
-	expectedNonce := computeExpectedNonce(validUntil, flags, nonce)
+	policyDigest := [32]byte{0x11, 0x22, 0x33}
+
+	// compute expected nonce = SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest)
 
 	// build TPMS_ATTEST with the expected nonce as extraData
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
@@ -81,7 +83,7 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 
 	// serialize
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x000B, pcrMask, attestData, signature)
+		TPMAlgRSASSA, 0x000B, pcrMask, policyDigest, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -102,12 +104,13 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	nonce := [32]byte{1, 2, 3, 4, 5}
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 	flags := uint32(0x07) // ATTESTED|TPM_OK|IOMMU_OK
+	policyDigest := [32]byte{0xAA, 0xBB}
 
 	attestData := []byte("fake-attest-data-for-testing")
 	signature := []byte("fake-signature-for-testing")
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSASSA, 0x000B, 0x4001, attestData, signature)
+		TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -135,6 +138,9 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	}
 	if claims.PCRMask != 0x4001 {
 		t.Errorf("PCRMask = 0x%X, want 0x4001", claims.PCRMask)
+	}
+	if claims.PolicyDigest != policyDigest {
+		t.Errorf("PolicyDigest mismatch")
 	}
 	if claims.SigAlg != TPMAlgRSASSA {
 		t.Errorf("SigAlg = 0x%04X, want 0x%04X", claims.SigAlg, TPMAlgRSASSA)
@@ -219,10 +225,10 @@ func TestVerifyToken_TamperedToken(t *testing.T) {
 
 	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0, nil)
 
-	// tamper with flags field (offset 24-28)
+	// tamper with flags field (offset 16-20)
 	tampered := make([]byte, len(tok))
 	copy(tampered, tok)
-	binary.LittleEndian.PutUint32(tampered[24:28], 0xFF) // change flags
+	binary.LittleEndian.PutUint32(tampered[16:20], 0xFF) // change flags
 
 	// signature is still valid over original attest_data, but nonce check fails
 	// because SHA256(...ORIGINAL_flags...) != SHA256(...NEW_flags...)
@@ -314,10 +320,11 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	nonce := [32]byte{0x42}
 	validUntil := uint64(time.Now().Add(time.Hour).Unix())
 	flags := uint32(0x07)
+	policyDigest := [32]byte{0x10, 0x20}
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, nonce)
+	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
 
 	// sign with PSS
@@ -332,7 +339,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	}
 
 	tok, err := SerializeToken(validUntil, flags, nonce,
-		TPMAlgRSAPSS, 0x000B, 0x4001, attestData, signature)
+		TPMAlgRSAPSS, 0x000B, 0x4001, policyDigest, attestData, signature)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -348,17 +355,18 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 
 func TestSerializeToken_Limits(t *testing.T) {
 	nonce := [32]byte{}
+	policyDigest := [32]byte{}
 
 	// attest_data too large
 	bigAttest := make([]byte, MaxAttestSize+1)
-	_, err := SerializeToken(0, 0, nonce, 0, 0, 0, bigAttest, nil)
+	_, err := SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, bigAttest, nil)
 	if err == nil {
 		t.Fatal("expected error for too-large attest_data")
 	}
 
 	// signature too large
 	bigSig := make([]byte, MaxSigSize+1)
-	_, err = SerializeToken(0, 0, nonce, 0, 0, 0, nil, bigSig)
+	_, err = SerializeToken(0, 0, nonce, 0, 0, 0, policyDigest, nil, bigSig)
 	if err == nil {
 		t.Fatal("expected error for too-large signature")
 	}
@@ -366,7 +374,8 @@ func TestSerializeToken_Limits(t *testing.T) {
 
 func TestParseToken_NoAttest(t *testing.T) {
 	nonce := [32]byte{}
-	tok, err := SerializeToken(200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, nil, nil)
+	policyDigest := [32]byte{}
+	tok, err := SerializeToken(200, 0x03, nonce, TPMAlgRSASSA, 0x000B, 0x4001, policyDigest, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeToken: %v", err)
 	}
@@ -382,14 +391,15 @@ func TestParseToken_NoAttest(t *testing.T) {
 
 func TestComputeExpectedNonce_Deterministic(t *testing.T) {
 	nonce := [32]byte{1, 2, 3}
-	n1 := computeExpectedNonce(200, 7, nonce)
-	n2 := computeExpectedNonce(200, 7, nonce)
+	policyDigest := [32]byte{0x01}
+	n1 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest)
+	n2 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest)
 	if n1 != n2 {
 		t.Error("computeExpectedNonce should be deterministic")
 	}
 
 	// different flags -> different result
-	n3 := computeExpectedNonce(200, 8, nonce)
+	n3 := computeExpectedNonce(200, 8, 0x4001, nonce, policyDigest)
 	if n1 == n3 {
 		t.Error("different flags should produce different nonce")
 	}

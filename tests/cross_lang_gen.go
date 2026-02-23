@@ -38,13 +38,15 @@ func main() {
 
 	validUntil := now + 3600
 	flags := uint32(0x07)
+	pcrMask := uint32(0x4001)
+	policyDigest := [32]byte{0x11, 0x22, 0x33, 0x44}
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
 		pcrDigest[i] = byte(i)
 	}
 
 	// compute token quote nonce using the Go server SDK implementation
-	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, nonce)
+	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest)
 
 	// fake TPMS_ATTEST
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
@@ -61,7 +63,7 @@ func main() {
 
 	// serialize token
 	tokBytes, err := server.SerializeToken(validUntil, flags, nonce,
-		0x0014, 0x000B, 0x4001, attestData, sig)
+		0x0014, 0x000B, pcrMask, policyDigest, attestData, sig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "serialize: %v\n", err)
 		os.Exit(1)

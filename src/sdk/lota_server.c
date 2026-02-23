@@ -295,8 +295,9 @@ static int parse_wire_header(const uint8_t *data, size_t len,
   hdr->sig_alg = read_le16(data + 52);
   hdr->hash_alg = read_le16(data + 54);
   hdr->pcr_mask = read_le32(data + 56);
-  hdr->attest_size = read_le16(data + 60);
-  hdr->sig_size = read_le16(data + 62);
+  memcpy(hdr->policy_digest, data + 60, 32);
+  hdr->attest_size = read_le16(data + 92);
+  hdr->sig_size = read_le16(data + 94);
 
   /* validate sizes */
   size_t expected =
@@ -353,9 +354,10 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   }
 
   /* verify nonce binding: extraData ==
-   * SHA256(valid_until||flags||nonce) */
+   * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest) */
   uint8_t computed_nonce[32];
-  if (lota_compute_token_quote_nonce(hdr.valid_until, hdr.flags, hdr.nonce,
+  if (lota_compute_token_quote_nonce(hdr.valid_until, hdr.flags, hdr.pcr_mask,
+                                     hdr.nonce, hdr.policy_digest,
                                      computed_nonce) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
@@ -375,6 +377,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   claims->flags = hdr.flags;
   memcpy(claims->nonce, hdr.nonce, 32);
   claims->pcr_mask = hdr.pcr_mask;
+  memcpy(claims->policy_digest, hdr.policy_digest, 32);
 
   if (!pcr_digest || pcr_digest_len != SHA256_DIGEST_LENGTH)
     return LOTA_SERVER_ERR_ATTEST_PARSE;
@@ -410,6 +413,7 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
   claims->flags = hdr.flags;
   memcpy(claims->nonce, hdr.nonce, 32);
   claims->pcr_mask = hdr.pcr_mask;
+  memcpy(claims->policy_digest, hdr.policy_digest, 32);
 
   /* try to extract PCR digest from TPMS_ATTEST */
   if (hdr.attest_size > 0) {

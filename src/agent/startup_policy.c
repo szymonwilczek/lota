@@ -8,6 +8,9 @@
 #include <stdlib.h>
 
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
+
+#include "../../include/lota_endian.h"
 
 static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
                              size_t out_len) {
@@ -32,6 +35,97 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
 #include "bpf_loader.h"
 #include "journal.h"
 #include "main_utils.h"
+
+static int digest_cmp_32(const void *a, const void *b) {
+  return memcmp(a, b, 32);
+}
+
+static int compute_policy_digest(const struct agent_startup_policy *policy,
+                                 const uint8_t *digests, int digest_count,
+                                 uint8_t out_digest[32]) {
+  EVP_MD_CTX *mdctx = NULL;
+  unsigned int out_len = 0;
+  int ret = 0;
+  uint8_t le[4];
+  uint32_t flags = 0;
+
+  if (!policy || !out_digest)
+    return -EINVAL;
+  if (digest_count < 0)
+    return -EINVAL;
+  if (digest_count > 0 && !digests)
+    return -EINVAL;
+
+  if (policy->strict_mmap)
+    flags |= (1u << 0);
+  if (policy->strict_exec)
+    flags |= (1u << 1);
+  if (policy->block_ptrace)
+    flags |= (1u << 2);
+  if (policy->strict_modules)
+    flags |= (1u << 3);
+  if (policy->block_anon_exec)
+    flags |= (1u << 4);
+
+  /* lock_bpf is always enabled by startup_policy */
+  flags |= (1u << 5);
+
+  mdctx = EVP_MD_CTX_new();
+  if (!mdctx)
+    return -ENOMEM;
+
+  if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  /* domain separator */
+  {
+    static const uint8_t prefix[] = "LOTA_POLICY_V1";
+    if (EVP_DigestUpdate(mdctx, prefix, sizeof(prefix)) != 1) {
+      ret = -EIO;
+      goto out;
+    }
+  }
+
+  lota__write_le32(le, (uint32_t)policy->mode);
+  if (EVP_DigestUpdate(mdctx, le, sizeof(le)) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  lota__write_le32(le, flags);
+  if (EVP_DigestUpdate(mdctx, le, sizeof(le)) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  lota__write_le32(le, (uint32_t)digest_count);
+  if (EVP_DigestUpdate(mdctx, le, sizeof(le)) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  if (digest_count > 0) {
+    size_t total = (size_t)digest_count * 32;
+    if (EVP_DigestUpdate(mdctx, digests, total) != 1) {
+      ret = -EIO;
+      goto out;
+    }
+  }
+
+  if (EVP_DigestFinal_ex(mdctx, out_digest, &out_len) != 1 || out_len != 32) {
+    ret = -EIO;
+    goto out;
+  }
+
+out:
+  EVP_MD_CTX_free(mdctx);
+  if (ret < 0)
+    OPENSSL_cleanse(out_digest, 32);
+  OPENSSL_cleanse(le, sizeof(le));
+  return ret;
+}
 
 int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   int ret;
@@ -83,6 +177,17 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
                  hex);
       }
     }
+
+    /* compute and persist policy digest (order-independent allowlist) */
+    qsort(digests, (size_t)policy->allow_verity_count, 32, digest_cmp_32);
+    ret = compute_policy_digest(policy, digests, policy->allow_verity_count,
+                                g_agent.policy_digest);
+    if (ret < 0) {
+      lota_err("Failed to compute policy digest: %s", strerror(-ret));
+      goto rollback_allowlist;
+    }
+    g_agent.policy_digest_set = 1;
+
     lota_info("fs-verity allowlist applied (%d entries)", applied);
     OPENSSL_cleanse(digests, (size_t)policy->allow_verity_count * 32);
     free(digests);
@@ -115,6 +220,14 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
              "configured");
     return -EINVAL;
   }
+
+  /* no allowlist: still persist policy digest */
+  ret = compute_policy_digest(policy, NULL, 0, g_agent.policy_digest);
+  if (ret < 0) {
+    lota_err("Failed to compute policy digest: %s", strerror(-ret));
+    return ret;
+  }
+  g_agent.policy_digest_set = 1;
 
 allowlist_done:
 

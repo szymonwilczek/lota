@@ -23,6 +23,7 @@
 
 #include "lota_gaming.h"
 #include "lota_server.h"
+#include "lota_token_quote_nonce.h"
 
 #define GREEN "\033[32m"
 #define RED "\033[31m"
@@ -131,24 +132,12 @@ static uint8_t *build_fake_tpms_attest(const uint8_t *extra_data,
   return buf;
 }
 
-/*
- * Compute SHA256(issued_at || valid_until || flags || nonce)
- * with integers in little-endian (matching wire format).
- */
-/*
- * Compute SHA256(valid_until || flags || nonce)
- * with integers in little-endian (matching wire format).
- */
-static void compute_expected_nonce(uint64_t valid_until, uint32_t flags,
-                                   const uint8_t nonce[32], uint8_t out[32]) {
-  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-  EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-  EVP_DigestUpdate(ctx, &valid_until, 8);
-  EVP_DigestUpdate(ctx, &flags, 4);
-  EVP_DigestUpdate(ctx, nonce, 32);
-  unsigned int len = 32;
-  EVP_DigestFinal_ex(ctx, out, &len);
-  EVP_MD_CTX_free(ctx);
+static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
+                                  uint32_t pcr_mask, const uint8_t nonce[32],
+                                  const uint8_t policy_digest[32],
+                                  uint8_t out[32]) {
+  return lota_compute_token_quote_nonce(valid_until, flags, pcr_mask, nonce,
+                                        policy_digest, out);
 }
 
 /*
@@ -213,7 +202,12 @@ static int build_full_token(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
                             size_t tokbuf_size, size_t *tok_written) {
   /* compute expected nonce */
   uint8_t exp_nonce[32];
-  compute_expected_nonce(valid_until, flags, nonce, exp_nonce);
+  uint32_t pcr_mask = 0x4001;
+  uint8_t policy_digest[32] = {0x11, 0x22, 0x33};
+  if (compute_expected_nonce(valid_until, flags, pcr_mask, nonce, policy_digest,
+                             exp_nonce) != 0) {
+    return LOTA_ERR_INVALID_ARG;
+  }
 
   /* build TPMS_ATTEST with expected_nonce as extraData */
   uint8_t pcr_digest[32] = {0xDD};
@@ -230,9 +224,10 @@ static int build_full_token(EVP_PKEY *key, uint64_t valid_until, uint32_t flags,
   token.valid_until = valid_until;
   token.flags = flags;
   memcpy(token.nonce, nonce, 32);
-  token.sig_alg = 0x0014;  /* RSASSA */
-  token.hash_alg = 0x000B; /* SHA-256 */
-  token.pcr_mask = 0x4001; /* PCR 0 + 14 */
+  token.sig_alg = 0x0014;    /* RSASSA */
+  token.hash_alg = 0x000B;   /* SHA-256 */
+  token.pcr_mask = pcr_mask; /* PCR 0 + 14 */
+  memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
   token.attest_data = attest;
   token.attest_size = attest_len;
   token.signature = sig;
@@ -266,9 +261,10 @@ static void test_serialize_basic(void) {
   token.signature_len = sizeof(fake_sig);
 
   size_t expected = lota_token_serialized_size(&token);
-  if (expected != 64 + 64 + 32) {
+  if (expected != LOTA_TOKEN_HEADER_SIZE + 64 + 32) {
     char msg[64];
-    snprintf(msg, sizeof(msg), "size=%zu, expected=%d", expected, 64 + 64 + 32);
+    snprintf(msg, sizeof(msg), "size=%zu, expected=%zu", expected,
+             (size_t)LOTA_TOKEN_HEADER_SIZE + 64 + 32);
     FAIL(msg);
     return;
   }

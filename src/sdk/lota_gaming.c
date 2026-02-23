@@ -659,6 +659,8 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
   token->sig_alg = ipc_token_hdr.sig_alg;
   token->hash_alg = ipc_token_hdr.hash_alg;
   token->pcr_mask = ipc_token_hdr.pcr_mask;
+  memcpy(token->policy_digest, ipc_token_hdr.policy_digest,
+         sizeof(token->policy_digest));
 
   /* validate sizes */
   if (ipc_token_hdr.attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
@@ -749,6 +751,7 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
   wire.sig_alg = htole16(token->sig_alg);
   wire.hash_alg = htole16(token->hash_alg);
   wire.pcr_mask = htole32(token->pcr_mask);
+  memcpy(wire.policy_digest, token->policy_digest, sizeof(wire.policy_digest));
   wire.attest_size = htole16((uint16_t)token->attest_size);
   wire.sig_size = htole16((uint16_t)token->signature_len);
 

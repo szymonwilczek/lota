@@ -12,6 +12,8 @@
 #include "quote.h"
 #include "tpm.h"
 
+#include "agent.h"
+
 #include "../../include/lota_token_quote_nonce.h"
 
 #include <errno.h>
@@ -430,6 +432,16 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   token->valid_until = ctx->valid_until;
   token->flags = ctx->status_flags;
+  token->pcr_mask = ctx->quote_pcr_mask;
+
+  if (!g_agent.policy_digest_set) {
+    lota_err("Refusing GET_TOKEN: policy_digest is not set");
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
+  }
+  memcpy(token->policy_digest, g_agent.policy_digest,
+         sizeof(token->policy_digest));
 
   if (has_req)
     memcpy(token->client_nonce, req_local.nonce, 32);
@@ -444,7 +456,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   }
 
   ret = lota_compute_token_quote_nonce(token->valid_until, token->flags,
-                                       token->client_nonce, binding_nonce);
+                                       token->pcr_mask, token->client_nonce,
+                                       token->policy_digest, binding_nonce);
   if (ret < 0) {
     lota_err("token quote nonce computation failed: %s", strerror(-ret));
     fail = true;
@@ -474,7 +487,13 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   token->sig_size = quote.signature_size;
   token->sig_alg = quote.sig_alg;
   token->hash_alg = quote.hash_alg;
-  token->pcr_mask = quote.pcr_mask;
+  if (quote.pcr_mask != token->pcr_mask) {
+    lota_err("tpm_quote returned unexpected pcr_mask=0x%X (expected 0x%X)",
+             quote.pcr_mask, token->pcr_mask);
+    fail = true;
+    fail_code = LOTA_IPC_ERR_TPM_FAILURE;
+    goto out;
+  }
 
   /* copy attest data and signature */
   data_ptr =

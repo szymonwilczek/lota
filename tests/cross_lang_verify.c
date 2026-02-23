@@ -112,6 +112,10 @@ int main(void) {
     printf(RED "[C] pcr_mask mismatch!\n" RESET);
     ok = 0;
   }
+  if (claims.policy_digest[0] != 0x11 || claims.policy_digest[1] != 0x22) {
+    printf(RED "[C] policy_digest mismatch!\n" RESET);
+    ok = 0;
+  }
   if (memcmp(claims.nonce, nonce, 32) != 0) {
     printf(RED "[C] nonce mismatch!\n" RESET);
     ok = 0;

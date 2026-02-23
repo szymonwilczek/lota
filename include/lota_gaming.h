@@ -121,6 +121,11 @@ struct lota_token {
   uint16_t hash_alg; /* Hash algorithm (TPM2_ALG_SHA256) */
   uint32_t pcr_mask; /* PCRs included in quote */
 
+  /*
+   * SHA-256 over enforcement-relevant startup policy state (includes allowlist)
+   */
+  uint8_t policy_digest[32];
+
   uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
   size_t attest_size;   /* Size of attest_data */
   uint8_t *signature;   /* TPM signature (heap allocated) */

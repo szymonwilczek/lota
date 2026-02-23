@@ -74,13 +74,14 @@ enum lota_server_error {
  * that has been cryptographically validated.
  */
 struct lota_server_claims {
-  uint64_t valid_until;   /* Token expiry time (Unix timestamp) */
-  uint32_t flags;         /* LOTA_FLAG_* bitmask at issue time */
-  uint8_t nonce[32];      /* Client nonce echoed from token */
-  uint32_t pcr_mask;      /* PCRs included in TPM quote */
-  uint8_t pcr_digest[32]; /* PCR composite hash from TPMS_ATTEST */
-  size_t pcr_digest_len;  /* Actual length of pcr_digest (0 if absent) */
-  int expired;            /* 1 if token has expired, 0 otherwise */
+  uint64_t valid_until;      /* Token expiry time (Unix timestamp) */
+  uint32_t flags;            /* LOTA_FLAG_* bitmask at issue time */
+  uint8_t nonce[32];         /* Client nonce echoed from token */
+  uint32_t pcr_mask;         /* PCRs included in TPM quote */
+  uint8_t policy_digest[32]; /* SHA-256 over startup enforcement policy */
+  uint8_t pcr_digest[32];    /* PCR composite hash from TPMS_ATTEST */
+  size_t pcr_digest_len;     /* Actual length of pcr_digest (0 if absent) */
+  int expired;               /* 1 if token has expired, 0 otherwise */
 };
 
 /*

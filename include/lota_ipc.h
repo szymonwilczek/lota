@@ -14,7 +14,7 @@
 
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
-#define LOTA_IPC_VERSION 1
+#define LOTA_IPC_VERSION 3
 #define LOTA_IPC_MAX_PAYLOAD 4096
 
 /*
@@ -116,8 +116,8 @@ struct lota_ipc_token_request {
  *
  * Contains a signed attestation statement using TPM Quote.
  * Verification:
- * - Compute expected_nonce = SHA256(issued_at || valid_until || flags ||
- *                                     client_nonce)
+ * - Compute expected_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE
+ * || client_nonce || policy_digest)
  * - Verify TPM signature over attest_data using AIK public key
  * - Parse attest_data, check extraData == expected_nonce
  * - Check PCR digest in attest_data matches expected policy
@@ -128,11 +128,12 @@ struct lota_ipc_token {
   uint8_t client_nonce[32]; /* Echo of client nonce */
 
   /* TPM Quote data */
-  uint16_t attest_size; /* Size of TPMS_ATTEST blob */
-  uint16_t sig_size;    /* Size of signature */
-  uint16_t sig_alg;     /* TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS */
-  uint16_t hash_alg;    /* TPM2_ALG_SHA256 */
-  uint32_t pcr_mask;    /* PCRs included in quote */
+  uint16_t attest_size;      /* Size of TPMS_ATTEST blob */
+  uint16_t sig_size;         /* Size of signature */
+  uint16_t sig_alg;          /* TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS */
+  uint16_t hash_alg;         /* TPM2_ALG_SHA256 */
+  uint32_t pcr_mask;         /* PCRs included in quote */
+  uint8_t policy_digest[32]; /* SHA-256 over enforcement startup policy */
 
   /*
    * Variable-length data follows:
