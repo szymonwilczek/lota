@@ -218,10 +218,11 @@ func (ns *NonceStore) GenerateChallenge(clientID string, pcrMask uint32) (*types
 		return nil, errors.New("nonce collision with used nonce - entropy failure")
 	}
 
-	// get and increment client counter
+	// get and increment client counters
 	cs := ns.clientChallenges[clientID]
 	cs.attestCounter++
 	cs.pendingCount++
+	cs.windowCount++
 	ns.clientChallenges[clientID] = cs
 
 	ns.pending[key] = nonceEntry{
@@ -317,6 +318,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 // enforces per-client challenge rate limiting
 func (ns *NonceStore) checkRateLimit(clientID string) error {
 	cs, exists := ns.clientChallenges[clientID]
+	now := time.Now()
 
 	if exists {
 		// check outstanding challenge limit
@@ -326,25 +328,20 @@ func (ns *NonceStore) checkRateLimit(clientID string) error {
 		}
 
 		// check rate limit window
-		now := time.Now()
 		if now.Sub(cs.windowStart) > ns.rateLimitWindow {
 			// reset window
 			cs.windowStart = now
 			cs.windowCount = 0
-			ns.clientChallenges[clientID] = cs
 		} else if cs.windowCount >= ns.rateLimitMax {
 			return fmt.Errorf("rate limit exceeded for client %s (%d/%d per %v)",
 				clientID, cs.windowCount, ns.rateLimitMax, ns.rateLimitWindow)
 		}
-
-		// increment window counter
-		cs.windowCount++
 		ns.clientChallenges[clientID] = cs
 	} else {
 		// new client - initialize state
 		ns.clientChallenges[clientID] = clientState{
-			windowStart: time.Now(),
-			windowCount: 1,
+			windowStart: now,
+			windowCount: 0,
 		}
 	}
 

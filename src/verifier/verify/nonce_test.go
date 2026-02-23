@@ -404,6 +404,50 @@ func TestNonceStore_MonotonicCounter(t *testing.T) {
 	t.Log("✓ Monotonic counter increments per challenge generation")
 }
 
+type usedNonceBackendFirstCollision struct {
+	calls int
+}
+
+func (b *usedNonceBackendFirstCollision) Contains(nonceKey string) bool {
+	b.calls++
+	return b.calls == 1
+}
+
+func (b *usedNonceBackendFirstCollision) Record(nonceKey string, usedAt time.Time) error {
+	return nil
+}
+
+func (b *usedNonceBackendFirstCollision) Count() int {
+	return 0
+}
+
+func (b *usedNonceBackendFirstCollision) Cleanup(olderThan time.Time) {
+}
+
+func TestNonceStore_RateLimitNotConsumedOnFailedIssue(t *testing.T) {
+	t.Log("TEST: Rate limit is not consumed by failed challenge issue")
+
+	cfg := DefaultNonceStoreConfig()
+	cfg.Lifetime = 5 * time.Minute
+	cfg.MaxPendingPerClient = 100
+	cfg.RateLimitMax = 1
+	cfg.RateLimitWindow = time.Minute
+	cfg.UsedBackend = &usedNonceBackendFirstCollision{}
+	store := NewNonceStoreFromConfig(cfg)
+
+	// First call fails after rate-limit check due to simulated used nonce collision.
+	_, err := store.GenerateChallenge("client", 0x00004003)
+	if err == nil {
+		t.Fatal("expected GenerateChallenge to fail due to simulated collision")
+	}
+
+	// Second call must still succeed (rate limit should not have been consumed).
+	_, err = store.GenerateChallenge("client", 0x00004003)
+	if err != nil {
+		t.Fatalf("expected second GenerateChallenge to succeed, got: %v", err)
+	}
+}
+
 func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	t.Log("TEST: Per-client pending count tracking")
 
