@@ -24,4 +24,8 @@ struct agent_startup_policy {
 
 int agent_apply_startup_policy(const struct agent_startup_policy *policy);
 
+int agent_compute_policy_digest_for_protect_pids(const uint32_t *protect_pids,
+                                                 int protect_pid_count,
+                                                 uint8_t out_digest[32]);
+
 #endif /* LOTA_STARTUP_POLICY_H */

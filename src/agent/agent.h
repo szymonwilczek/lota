@@ -9,7 +9,9 @@
 #ifndef LOTA_AGENT_H
 #define LOTA_AGENT_H
 
+#include <limits.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "bpf_loader.h"
@@ -38,6 +40,25 @@ struct agent_globals {
    */
   uint8_t policy_digest[32];
   int policy_digest_set;
+
+  /* Canonical snapshot of the current enforcement policy used for digest
+   * recompute */
+  int policy_snapshot_set;
+  int policy_mode;
+  bool policy_strict_mmap;
+  bool policy_strict_exec;
+  bool policy_block_ptrace;
+  bool policy_strict_modules;
+  bool policy_block_anon_exec;
+
+  uint8_t *policy_verity_digests;
+  int policy_verity_digest_count;
+
+  uint32_t *policy_protect_pids; /* sorted unique */
+  int policy_protect_pid_count;
+
+  char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
+  int policy_trust_lib_count;
 };
 
 extern struct agent_globals g_agent;
