@@ -19,6 +19,7 @@
 #include <time.h>
 
 #include "../../include/lota_server.h"
+#include "../../include/lota_token_quote_nonce.h"
 
 #ifndef LOTA_SERVER_SDK_VERSION_STRING
 #define LOTA_SERVER_SDK_VERSION_STRING "unknown"
@@ -192,56 +193,6 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 }
 
 /*
- * Write little-endian uint32 into buffer
- */
-static void write_le32(uint8_t *p, uint32_t v) {
-  p[0] = (uint8_t)(v);
-  p[1] = (uint8_t)(v >> 8);
-  p[2] = (uint8_t)(v >> 16);
-  p[3] = (uint8_t)(v >> 24);
-}
-
-/*
- * Write little-endian uint64 into buffer
- */
-static void write_le64(uint8_t *p, uint64_t v) {
-  write_le32(p, (uint32_t)v);
-  write_le32(p + 4, (uint32_t)(v >> 32));
-}
-
-/*
- * Compute expected nonce: SHA256(valid_until || flags || nonce)
- * All integers encoded in little-endian byte order to match token wire format.
- */
-static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
-                                  const uint8_t nonce[32], uint8_t out[32]) {
-  EVP_MD_CTX *ctx;
-  uint8_t le_buf[12]; /* 8 + 4 */
-
-  write_le64(le_buf, valid_until);
-  write_le32(le_buf + 8, flags);
-
-  ctx = EVP_MD_CTX_new();
-  if (!ctx)
-    return -1;
-
-  if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1 ||
-      EVP_DigestUpdate(ctx, le_buf, 12) != 1 ||
-      EVP_DigestUpdate(ctx, nonce, 32) != 1) {
-    EVP_MD_CTX_free(ctx);
-    return -1;
-  }
-
-  unsigned int len = 32;
-  if (EVP_DigestFinal_ex(ctx, out, &len) != 1) {
-    EVP_MD_CTX_free(ctx);
-    return -1;
-  }
-  EVP_MD_CTX_free(ctx);
-  return 0;
-}
-
-/*
  * Verify RSA signature over SHA-256(attest_data) using AIK public key
  */
 static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
@@ -404,8 +355,8 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   /* verify nonce binding: extraData ==
    * SHA256(valid_until||flags||nonce) */
   uint8_t computed_nonce[32];
-  if (compute_expected_nonce(hdr.valid_until, hdr.flags, hdr.nonce,
-                             computed_nonce) != 0) {
+  if (lota_compute_token_quote_nonce(hdr.valid_until, hdr.flags, hdr.nonce,
+                                     computed_nonce) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
 

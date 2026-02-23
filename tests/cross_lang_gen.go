@@ -43,12 +43,8 @@ func main() {
 		pcrDigest[i] = byte(i)
 	}
 
-	// compute expected nonce = SHA256(valid_until||flags||nonce) in LE
-	var buf [44]byte
-	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
-	binary.LittleEndian.PutUint32(buf[8:12], flags)
-	copy(buf[12:44], nonce[:])
-	expectedNonce := sha256.Sum256(buf[:])
+	// compute token quote nonce using the Go server SDK implementation
+	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, nonce)
 
 	// fake TPMS_ATTEST
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)

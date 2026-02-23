@@ -289,7 +289,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, clientID stri
 		return fmt.Errorf("invalid attestation size: %d > %d", report.TPM.AttestSize, len(report.TPM.AttestData))
 	}
 
-	bindingNonce := ComputeBindingNonce(entry.nonce, report)
+	bindingNonce := ComputeAttestationBindingNonce(entry.nonce, report)
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	if err := VerifyNonceInAttest(attestData, bindingNonce[:]); err != nil {
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)

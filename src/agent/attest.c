@@ -316,10 +316,13 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   memcpy(&report->system.iommu, &iommu_status, sizeof(report->system.iommu));
 
   /*
-   * Compute binding nonce = SHA-256(
+   * Compute remote-attestation binding nonce = SHA-256(
    *   challenge_nonce || hardware_id || signed_flags ||
    *   kernel_hash || agent_hash || iommu_status
    * ).
+   *
+   * NOTE: This is intentionally different from the token quote nonce used by
+   * the local IPC token path and server-side token verification.
    */
   {
     EVP_MD_CTX *md = EVP_MD_CTX_new();

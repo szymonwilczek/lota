@@ -244,9 +244,13 @@ func GetNonceFromAttest(attestData []byte) ([]byte, error) {
 // )
 // to cryptographically bind TPM quote extraData to security-relevant
 // report fields that are otherwise not covered by the quote signature.
+//
+// NOTE: This is the remote attestation report binding nonce.
+// It is intentionally different from the token quote nonce used by the
+// local IPC token path and server-side token verification.
 // signedFlags is report.Header.Flags with FlagTPMQuoteOK masked out because
 // that bit is set only after quote generation.
-func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
+func ComputeAttestationBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
 	var flagsLE [4]byte
 	signedFlags := uint32(0)
 	if report != nil {
@@ -280,4 +284,12 @@ func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, report *types.Att
 	var out [types.NonceSize]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+// kept for backward compatibility
+//
+// @Deprecated: use ComputeAttestationBindingNonce.
+// To be removed in future updates.
+func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
+	return ComputeAttestationBindingNonce(challengeNonce, report)
 }

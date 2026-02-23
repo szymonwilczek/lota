@@ -348,6 +348,18 @@ func computeExpectedNonce(validUntil uint64, flags uint32, nonce [32]byte) [32]b
 	return sha256.Sum256(buf[:])
 }
 
+// computes the token quote nonce used in the token verification domain:
+//
+//	SHA256(valid_until_LE || flags_LE || client_nonce)
+//
+// This value is expected to match TPMS_ATTEST.extraData in the token format.
+//
+// NOTE: This is intentionally different from the attestation report binding
+// nonce used by the remote attestation verifier/agent report path.
+func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, nonce [32]byte) [32]byte {
+	return computeExpectedNonce(validUntil, flags, nonce)
+}
+
 // parses a raw TPMS_ATTEST blob and extracts:
 //   - extraData (the nonce embedded by the TPM)
 //   - pcrDigest (the PCR composite hash, only for Quote type)
