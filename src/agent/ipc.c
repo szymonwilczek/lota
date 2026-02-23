@@ -13,6 +13,7 @@
 #include "tpm.h"
 
 #include "agent.h"
+#include "startup_policy.h"
 
 #include "../../include/lota_token_quote_nonce.h"
 
@@ -556,6 +557,262 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
   client->send_offset = 0;
 }
 
+static int pid_set_contains(const uint32_t *pids, int count, uint32_t pid) {
+  if (!pids || count <= 0)
+    return 0;
+  for (int i = 0; i < count; i++) {
+    if (pids[i] == pid)
+      return 1;
+  }
+  return 0;
+}
+
+static int pid_set_add(const uint32_t *pids, int count, uint32_t pid,
+                       uint32_t **out, int *out_count) {
+  if (!out || !out_count)
+    return -EINVAL;
+  *out = NULL;
+  *out_count = 0;
+  if (count < 0)
+    return -EINVAL;
+  if (pid == 0)
+    return -EINVAL;
+
+  if (pid_set_contains(pids, count, pid)) {
+    uint32_t *copy = NULL;
+    if (count > 0) {
+      copy = calloc((size_t)count, sizeof(uint32_t));
+      if (!copy)
+        return -ENOMEM;
+      memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
+    }
+    *out = copy;
+    *out_count = count;
+    return 0;
+  }
+
+  uint32_t *new_pids = calloc((size_t)count + 1, sizeof(uint32_t));
+  if (!new_pids)
+    return -ENOMEM;
+  if (count > 0)
+    memcpy(new_pids, pids, (size_t)count * sizeof(uint32_t));
+  new_pids[count] = pid;
+
+  /* keep sorted invariant */
+  for (int i = count; i > 0; i--) {
+    if (new_pids[i - 1] <= new_pids[i])
+      break;
+    uint32_t tmp = new_pids[i - 1];
+    new_pids[i - 1] = new_pids[i];
+    new_pids[i] = tmp;
+  }
+
+  *out = new_pids;
+  *out_count = count + 1;
+  return 0;
+}
+
+static int pid_set_remove(const uint32_t *pids, int count, uint32_t pid,
+                          uint32_t **out, int *out_count) {
+  if (!out || !out_count)
+    return -EINVAL;
+  *out = NULL;
+  *out_count = 0;
+  if (count < 0)
+    return -EINVAL;
+  if (pid == 0)
+    return -EINVAL;
+
+  if (!pid_set_contains(pids, count, pid)) {
+    uint32_t *copy = NULL;
+    if (count > 0) {
+      copy = calloc((size_t)count, sizeof(uint32_t));
+      if (!copy)
+        return -ENOMEM;
+      memcpy(copy, pids, (size_t)count * sizeof(uint32_t));
+    }
+    *out = copy;
+    *out_count = count;
+    return 0;
+  }
+
+  uint32_t *new_pids = NULL;
+  if (count - 1 > 0) {
+    new_pids = calloc((size_t)count - 1, sizeof(uint32_t));
+    if (!new_pids)
+      return -ENOMEM;
+  }
+
+  int w = 0;
+  for (int i = 0; i < count; i++) {
+    if (pids[i] == pid)
+      continue;
+    if (new_pids)
+      new_pids[w] = pids[i];
+    w++;
+  }
+
+  *out = new_pids;
+  *out_count = count - 1;
+  return 0;
+}
+
+static void handle_protect_pid_update(struct ipc_context *ctx,
+                                      struct ipc_client *client,
+                                      const uint8_t *payload,
+                                      uint32_t payload_len, bool add) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  struct lota_ipc_pid_request req;
+  struct lota_ipc_policy_update *out;
+  uint32_t pid;
+  uint8_t new_digest[32];
+  uint32_t *new_pids = NULL;
+  int new_count = 0;
+  int ret;
+  int had;
+  bool mutated = false;
+
+  (void)ctx;
+
+  if (payload_len < sizeof(req)) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+  memcpy(&req, payload, sizeof(req));
+  pid = req.pid;
+  if (pid == 0) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+
+  /* root-only: this mutates enforcement policy */
+  if (client->peer_uid != 0) {
+    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+    return;
+  }
+
+  if (!g_agent.policy_snapshot_set || !g_agent.policy_digest_set) {
+    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+    return;
+  }
+
+  had = pid_set_contains(g_agent.policy_protect_pids,
+                         g_agent.policy_protect_pid_count, pid);
+
+  /* idempotent no-op: return current digest */
+  if ((add && had) || (!add && !had)) {
+    resp->magic = LOTA_IPC_MAGIC;
+    resp->version = LOTA_IPC_VERSION;
+    resp->result = LOTA_IPC_OK;
+    resp->payload_len = sizeof(*out);
+    out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+    memcpy(out->policy_digest, g_agent.policy_digest,
+           sizeof(out->policy_digest));
+    out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
+    out->_reserved1 = 0;
+    client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
+    client->send_offset = 0;
+    return;
+  }
+
+  if (add && g_agent.policy_protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
+    lota_warn("Refusing PROTECT_PID %u: protected PID limit reached (%d)", pid,
+              LOTA_MAX_PROTECTED_PIDS);
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+
+  /* attempt BPF update */
+  if (add) {
+    ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+    if (ret < 0) {
+      lota_err("Failed to protect PID %u (IPC): %s", pid, strerror(-ret));
+      build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+      return;
+    }
+    mutated = true;
+  } else {
+    ret = bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+    if (ret < 0) {
+      lota_err("Failed to unprotect PID %u (IPC): %s", pid, strerror(-ret));
+      build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+      return;
+    }
+    mutated = true;
+  }
+
+  /* compute new policy digest for the prospective PID set */
+  if (add) {
+    ret = pid_set_add(g_agent.policy_protect_pids,
+                      g_agent.policy_protect_pid_count, pid, &new_pids,
+                      &new_count);
+  } else {
+    ret = pid_set_remove(g_agent.policy_protect_pids,
+                         g_agent.policy_protect_pid_count, pid, &new_pids,
+                         &new_count);
+  }
+  if (ret < 0) {
+    lota_err("PID set update failed: %s", strerror(-ret));
+    goto rollback_bpf;
+  }
+
+  ret = agent_compute_policy_digest_for_protect_pids(new_pids, new_count,
+                                                     new_digest);
+  if (ret < 0) {
+    lota_err("Failed to recompute policy digest: %s", strerror(-ret));
+    goto rollback_bpf;
+  }
+
+  /* commit PID set + digest atomically from the perspective of GET_TOKEN */
+  {
+    g_agent.policy_digest_set = 0;
+
+    if (g_agent.policy_protect_pids) {
+      OPENSSL_cleanse(g_agent.policy_protect_pids,
+                      (size_t)g_agent.policy_protect_pid_count *
+                          sizeof(uint32_t));
+      free(g_agent.policy_protect_pids);
+    }
+    g_agent.policy_protect_pids = new_pids;
+    g_agent.policy_protect_pid_count = new_count;
+    new_pids = NULL;
+    new_count = 0;
+
+    memcpy(g_agent.policy_digest, new_digest, sizeof(g_agent.policy_digest));
+    g_agent.policy_digest_set = 1;
+  }
+
+  /* success response */
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = sizeof(*out);
+  out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+  memcpy(out->policy_digest, g_agent.policy_digest, sizeof(out->policy_digest));
+  out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
+  out->_reserved1 = 0;
+  client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
+  client->send_offset = 0;
+
+  OPENSSL_cleanse(new_digest, sizeof(new_digest));
+  return;
+
+rollback_bpf:
+  if (mutated) {
+    if (add) {
+      (void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+    } else {
+      (void)bpf_loader_protect_pid(&g_agent.bpf_ctx, pid);
+    }
+  }
+  if (new_pids) {
+    OPENSSL_cleanse(new_pids, (size_t)new_count * sizeof(uint32_t));
+    free(new_pids);
+  }
+  OPENSSL_cleanse(new_digest, sizeof(new_digest));
+  build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+}
+
 /*
  * Process complete request
  */
@@ -594,6 +851,14 @@ static void process_request(struct ipc_context *ctx,
 
   case LOTA_IPC_CMD_SUBSCRIBE:
     handle_subscribe(ctx, client, payload, payload_len);
+    break;
+
+  case LOTA_IPC_CMD_PROTECT_PID:
+    handle_protect_pid_update(ctx, client, payload, payload_len, true);
+    break;
+
+  case LOTA_IPC_CMD_UNPROTECT_PID:
+    handle_protect_pid_update(ctx, client, payload, payload_len, false);
     break;
 
   default:
