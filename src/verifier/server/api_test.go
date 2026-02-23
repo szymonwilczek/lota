@@ -88,6 +88,7 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	aikStore := store.NewMemoryStore()
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
+	cfg.RequireCert = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
@@ -126,6 +127,7 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	aikStore := store.NewMemoryStore()
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
+	cfg.RequireCert = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)

@@ -29,6 +29,7 @@ func TestSecurity_AIKExpiry_TOFUHijackRejected(t *testing.T) {
 
 	aikStore := store.NewMemoryStore()
 	cfg := DefaultConfig()
+	cfg.RequireCert = false
 	cfg.NonceLifetime = 2 * time.Second
 	cfg.AIKMaxAge = 1 * time.Millisecond
 	verifier := NewVerifier(cfg, aikStore)

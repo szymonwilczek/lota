@@ -415,6 +415,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
+	cfg.RequireCert = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -472,6 +473,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// first verifier instance
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg1 := DefaultConfig()
+	cfg1.RequireCert = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -491,6 +493,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := store.NewSQLiteAIKStore(db)
 	cfg2 := DefaultConfig()
+	cfg2.RequireCert = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -526,6 +529,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// establish baseline
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg1 := DefaultConfig()
+	cfg1.RequireCert = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -544,6 +548,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := store.NewSQLiteAIKStore(db)
 	cfg2 := DefaultConfig()
+	cfg2.RequireCert = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -578,6 +583,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
+	cfg.RequireCert = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -649,6 +655,7 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 	// TOFU registers AIK
 	aikStore1 := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
+	cfg.RequireCert = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 

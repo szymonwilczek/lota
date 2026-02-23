@@ -161,6 +161,7 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:    5 * time.Minute,
 		SessionTokenLife: 1 * time.Hour,
 		AIKMaxAge:        30 * 24 * time.Hour, // 30 days
+		RequireCert:      true,
 	}
 }
 
@@ -180,6 +181,15 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		logger = logging.Nop()
 	}
 
+	effectiveAIKMaxAge := cfg.AIKMaxAge
+	if effectiveAIKMaxAge > 0 && !aikStoreSupportsCertVerification(aikStore) {
+		logger.Warn("AIK rotation disabled: configured AIKMaxAge requires a certificate-verifying AIK store",
+			"max_age", cfg.AIKMaxAge,
+			"store_type", fmt.Sprintf("%T", aikStore),
+			"hint", "set AIKMaxAge=0 (disable expiry), or use CertificateStore with trusted CA roots")
+		effectiveAIKMaxAge = 0
+	}
+
 	m := cfg.Metrics
 	if m == nil {
 		m = metrics.New()
@@ -197,7 +207,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		attestationLog:   cfg.AttestationLog,
 		nonceLifetime:    cfg.NonceLifetime,
 		sessionTokenLife: cfg.SessionTokenLife,
-		aikMaxAge:        cfg.AIKMaxAge,
+		aikMaxAge:        effectiveAIKMaxAge,
 		requireEventLog:  cfg.RequireEventLog,
 		requireCert:      cfg.RequireCert,
 		startTime:        time.Now(),
@@ -485,14 +495,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					return result, errors.New("rotation continuity check failed")
 				}
 
-				// strict cert-backed verification for rotation
-				if !v.requireCert {
-					logging.Security(clog, "rotation rejected: require-cert is disabled",
-						"detail", "refusing insecure AIK rotation")
-					v.metrics.Rejections.Inc("sig_fail")
-					result.Result = types.VerifySigFail
-					return result, errors.New("AIK rotation requires certificates")
-				}
+				// rotation is always certificate-backed (regardless of TOFU policy)
 				certVerifier, ok := v.aikStore.(store.AIKCertificateVerifier)
 				if !ok {
 					logging.Security(clog, "rotation rejected: AIK store cannot verify certificates",

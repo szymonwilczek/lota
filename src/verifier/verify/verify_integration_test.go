@@ -244,6 +244,7 @@ func persistentClientID(challengeID string) string {
 // creates a Verifier with default policy for testing
 func createTestVerifier(aikStore store.AIKStore) *Verifier {
 	cfg := DefaultConfig()
+	cfg.RequireCert = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, aikStore)
 
