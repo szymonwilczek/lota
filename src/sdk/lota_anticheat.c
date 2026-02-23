@@ -5,8 +5,10 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,7 +158,26 @@ static uint32_t parse_status_flags(const char *path) {
     return 0;
 
   p += sizeof("LOTA_FLAGS=") - 1;
-  return (uint32_t)strtoul(p, NULL, 0);
+  while (*p == ' ' || *p == '\t')
+    p++;
+
+  errno = 0;
+  char *end = NULL;
+  unsigned long v = strtoul(p, &end, 0);
+  if (errno != 0 || end == p)
+    return 0;
+
+  while (*end == ' ' || *end == '\t')
+    end++;
+
+  /* reject trailing garbage; status files are multi-line */
+  if (*end != '\0' && *end != '\n' && *end != '\r')
+    return 0;
+
+  if (v > (unsigned long)UINT32_MAX)
+    return 0;
+
+  return (uint32_t)v;
 }
 
 /*
