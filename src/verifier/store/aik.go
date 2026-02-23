@@ -106,6 +106,7 @@ type FileStore struct {
 	mu           sync.RWMutex
 	storePath    string
 	cache        map[string]*rsa.PublicKey
+	fpIndex      map[string]string // Fingerprint(pubKey) -> clientID
 	hardwareIDs  map[string][32]byte
 	registeredAt map[string]time.Time
 }
@@ -119,6 +120,7 @@ func NewFileStore(storePath string) (*FileStore, error) {
 	fs := &FileStore{
 		storePath:    storePath,
 		cache:        make(map[string]*rsa.PublicKey),
+		fpIndex:      make(map[string]string),
 		hardwareIDs:  make(map[string][32]byte),
 		registeredAt: make(map[string]time.Time),
 	}
@@ -180,6 +182,18 @@ func (fs *FileStore) loadAll() error {
 				fs.registeredAt[clientID] = info.ModTime()
 			}
 		}
+	}
+
+	// build fingerprint index for fast global uniqueness checks
+	for clientID, pubKey := range fs.cache {
+		fp := Fingerprint(pubKey)
+		if fp == "" {
+			return fmt.Errorf("failed to compute AIK fingerprint for client %q", clientID)
+		}
+		if existingClientID, exists := fs.fpIndex[fp]; exists && existingClientID != clientID {
+			return fmt.Errorf("duplicate AIK fingerprint in file store: client %q conflicts with %q", clientID, existingClientID)
+		}
+		fs.fpIndex[fp] = clientID
 	}
 
 	return nil
@@ -284,18 +298,17 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 		return nil // same key, no-op
 	}
 
-	for existingClientID, existingKey := range fs.cache {
-		if existingClientID == clientID {
-			continue
-		}
-		if publicKeysEqual(existingKey, pubKey) {
-			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-		}
-	}
-
 	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	fp := FingerprintFromDER(keyBytes)
+	if fp == "" {
+		return errors.New("failed to compute public key fingerprint")
+	}
+	if existingClientID, exists := fs.fpIndex[fp]; exists && existingClientID != clientID {
+		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
 	}
 
 	pemBlock := &pem.Block{
@@ -317,6 +330,7 @@ func (fs *FileStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 
 	// add to cache
 	fs.cache[clientID] = pubKey
+	fs.fpIndex[fp] = clientID
 
 	// persist registration timestamp
 	now := time.Now()
@@ -390,18 +404,23 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 		return errors.New("client not registered")
 	}
 
-	for existingClientID, existingKey := range fs.cache {
-		if existingClientID == clientID {
-			continue
-		}
-		if publicKeysEqual(existingKey, newKey) {
-			return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
-		}
+	oldKey := fs.cache[clientID]
+	oldFP := Fingerprint(oldKey)
+	if oldFP == "" {
+		return errors.New("failed to compute fingerprint of existing AIK")
 	}
 
 	keyBytes, err := x509.MarshalPKIXPublicKey(newKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	newFP := FingerprintFromDER(keyBytes)
+	if newFP == "" {
+		return errors.New("failed to compute fingerprint of new AIK")
+	}
+	if existingClientID, exists := fs.fpIndex[newFP]; exists && existingClientID != clientID {
+		return fmt.Errorf("%w: %s", ErrAIKAlreadyRegistered, existingClientID)
 	}
 
 	pemBlock := &pem.Block{
@@ -429,6 +448,10 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 
 	fs.cache[clientID] = newKey
 	fs.registeredAt[clientID] = now
+	if owner, ok := fs.fpIndex[oldFP]; ok && owner == clientID {
+		delete(fs.fpIndex, oldFP)
+	}
+	fs.fpIndex[newFP] = clientID
 
 	return nil
 }
@@ -490,14 +513,22 @@ func publicKeysEqual(a, b *rsa.PublicKey) bool {
 	return a.E == b.E
 }
 
+// returns SHA-256 fingerprint of a DER-encoded SubjectPublicKeyInfo blob
+func FingerprintFromDER(spkiDER []byte) string {
+	if len(spkiDER) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(spkiDER)
+	return hex.EncodeToString(sum[:])
+}
+
 // returns SHA-256 fingerprint of public key (PKIX/SPKI encoding)
 func Fingerprint(pubKey *rsa.PublicKey) string {
 	keyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
 		return ""
 	}
-	hash := sha256.Sum256(keyBytes)
-	return hex.EncodeToString(hash[:])
+	return FingerprintFromDER(keyBytes)
 }
 
 // implements AIKStore in-memory (for testing only right now).
