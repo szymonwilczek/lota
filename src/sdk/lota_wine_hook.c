@@ -252,8 +252,14 @@ static void write_le32(uint8_t *p, uint32_t v) {
   p[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
-static int write_snapshot(uint32_t flags, const uint8_t *token_wire,
-                          size_t token_size) {
+#ifdef LOTA_HOOK_TESTING
+#define LOTA_UNUSED __attribute__((unused))
+#else
+#define LOTA_UNUSED
+#endif
+
+static int LOTA_UNUSED write_snapshot(uint32_t flags, const uint8_t *token_wire,
+                                      size_t token_size) {
   uint8_t buf[sizeof(struct lota_snapshot_wire_hdr) + 2048];
   if (!token_wire || token_size == 0 || token_size > 2048)
     return -EINVAL;
@@ -270,8 +276,9 @@ static int write_snapshot(uint32_t flags, const uint8_t *token_wire,
                       sizeof(struct lota_snapshot_wire_hdr) + token_size);
 }
 
-static int fetch_token_wire(struct lota_client *client, uint8_t *wire,
-                            size_t wire_sz, size_t *written) {
+static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
+                                        uint8_t *wire, size_t wire_sz,
+                                        size_t *written) {
   struct lota_token token;
   int ret;
 
@@ -293,6 +300,8 @@ static int fetch_token_wire(struct lota_client *client, uint8_t *wire,
 
   return LOTA_OK;
 }
+
+#undef LOTA_UNUSED
 
 /* Runtime-only: refresh, thread, fork safety, constructor/destructor */
 #ifndef LOTA_HOOK_TESTING
