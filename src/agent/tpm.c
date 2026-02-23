@@ -203,7 +203,12 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
 
 int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
                         uint8_t values[LOTA_PCR_COUNT][LOTA_HASH_SIZE]) {
-  int ret;
+  TSS2_RC rc;
+  TPML_PCR_SELECTION pcr_selection;
+  TPML_DIGEST *pcr_values = NULL;
+  uint32_t pcr_update_counter;
+  TPML_PCR_SELECTION *pcr_selection_out = NULL;
+  uint32_t digest_idx = 0;
   uint32_t i;
 
   if (!ctx || !values)
@@ -211,19 +216,54 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 
   memset(values, 0, LOTA_PCR_COUNT * LOTA_HASH_SIZE);
 
-  /*
-   * Read PCRs one by one.
-   * TPM2_PCR_Read can read multiple PCRs but the response
-   * structure is complex. For simplicity, we iterate.
-   */
-  for (i = 0; i < LOTA_PCR_COUNT; i++) {
-    if (!(pcr_mask & (1U << i)))
+  if (pcr_mask == 0)
+    return 0;
+
+  memset(&pcr_selection, 0, sizeof(pcr_selection));
+  pcr_selection.count = 1;
+  pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
+  pcr_selection.pcrSelections[0].sizeofSelect = 3; /* 24 PCRs = 3 bytes */
+
+  pcr_selection.pcrSelections[0].pcrSelect[0] = (uint8_t)(pcr_mask & 0xFF);
+  pcr_selection.pcrSelections[0].pcrSelect[1] =
+      (uint8_t)((pcr_mask >> 8) & 0xFF);
+  pcr_selection.pcrSelections[0].pcrSelect[2] =
+      (uint8_t)((pcr_mask >> 16) & 0xFF);
+
+  rc = Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                     &pcr_selection, &pcr_update_counter, &pcr_selection_out,
+                     &pcr_values);
+
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  if (!pcr_values || !pcr_selection_out || pcr_selection_out->count == 0) {
+    Esys_Free(pcr_values);
+    Esys_Free(pcr_selection_out);
+    return -ENODATA;
+  }
+
+  /* map returned digests to PCR indices in increasing order */
+  for (i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
+    uint8_t sel = pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
+    if (!(sel & (1U << (i % 8))))
       continue;
 
-    ret = tpm_read_pcr(ctx, i, TPM_HASH_ALG, values[i]);
-    if (ret < 0)
-      return ret;
+    if (digest_idx >= pcr_values->count) {
+      Esys_Free(pcr_values);
+      Esys_Free(pcr_selection_out);
+      return -EIO;
+    }
+
+    size_t copy_size = pcr_values->digests[digest_idx].size;
+    if (copy_size > LOTA_HASH_SIZE)
+      copy_size = LOTA_HASH_SIZE;
+    memcpy(values[i], pcr_values->digests[digest_idx].buffer, copy_size);
+    digest_idx++;
   }
+
+  Esys_Free(pcr_values);
+  Esys_Free(pcr_selection_out);
 
   return 0;
 }
