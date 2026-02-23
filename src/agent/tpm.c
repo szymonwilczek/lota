@@ -59,20 +59,23 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
 int tpm_init(struct tpm_context *ctx) {
   TSS2_RC rc;
   size_t tcti_size;
-  uint32_t saved_handle;
-  char saved_kernel_path[PATH_MAX];
 
   if (!ctx)
     return -EINVAL;
 
-  /* preserve caller-configured handle across memset */
-  saved_handle = ctx->aik_handle;
-  memcpy(saved_kernel_path, ctx->kernel_path_override,
-         sizeof(saved_kernel_path));
-  memset(ctx, 0, sizeof(*ctx));
-  ctx->aik_handle = saved_handle;
-  memcpy(ctx->kernel_path_override, saved_kernel_path,
-         sizeof(ctx->kernel_path_override));
+  /* allow re-init after cleanup */
+  if (ctx->initialized || ctx->esys_ctx || ctx->tcti_ctx)
+    tpm_cleanup(ctx);
+
+  /* reset runtime state */
+  ctx->esys_ctx = NULL;
+  ctx->tcti_ctx = NULL;
+  ctx->initialized = false;
+  memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+  ctx->aik_meta_loaded = false;
+  memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
+  ctx->prev_aik_public_size = 0;
+  ctx->grace_deadline = 0;
 
   /*
    * Initialize TCTI context for device access.
