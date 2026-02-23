@@ -35,6 +35,9 @@
 
 #define MAX_EVENTS 64
 #define MAX_CONNECTED_CLIENTS 2048
+
+#define IPC_CLIENT_FD_EMPTY (-1)
+#define IPC_CLIENT_FD_TOMB (-2)
 #define SOCKET_DIR "/run/lota"
 #define LOTA_GROUP_NAME "lota"
 
@@ -154,6 +157,88 @@ struct ipc_client {
   struct ipc_client *next;
 };
 
+static uint32_t client_map_hash_fd(int fd) {
+  return (uint32_t)fd * 2654435761u;
+}
+
+static void client_map_init(struct ipc_context *ctx) {
+  for (size_t i = 0; i < IPC_CLIENT_MAP_SIZE; i++) {
+    ctx->client_map[i].fd = IPC_CLIENT_FD_EMPTY;
+    ctx->client_map[i].client = NULL;
+  }
+}
+
+static int client_map_insert(struct ipc_context *ctx, int fd,
+                             struct ipc_client *client) {
+  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+  uint32_t idx = client_map_hash_fd(fd) & mask;
+  int tomb = -1;
+
+  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+    struct ipc_client_map_entry *e = &ctx->client_map[idx];
+
+    if (e->fd == fd) {
+      e->client = client;
+      return 0;
+    }
+
+    if (e->fd == IPC_CLIENT_FD_EMPTY) {
+      if (tomb >= 0)
+        e = &ctx->client_map[tomb];
+      e->fd = fd;
+      e->client = client;
+      return 0;
+    }
+
+    if (e->fd == IPC_CLIENT_FD_TOMB && tomb < 0)
+      tomb = (int)idx;
+
+    idx = (idx + 1) & mask;
+  }
+
+  if (tomb >= 0) {
+    struct ipc_client_map_entry *e = &ctx->client_map[tomb];
+    e->fd = fd;
+    e->client = client;
+    return 0;
+  }
+
+  return -1;
+}
+
+static struct ipc_client *client_map_find(struct ipc_context *ctx, int fd) {
+  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+  uint32_t idx = client_map_hash_fd(fd) & mask;
+
+  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+    struct ipc_client_map_entry *e = &ctx->client_map[idx];
+    if (e->fd == fd)
+      return e->client;
+    if (e->fd == IPC_CLIENT_FD_EMPTY)
+      return NULL;
+    idx = (idx + 1) & mask;
+  }
+
+  return NULL;
+}
+
+static void client_map_remove(struct ipc_context *ctx, int fd) {
+  uint32_t mask = (uint32_t)IPC_CLIENT_MAP_SIZE - 1;
+  uint32_t idx = client_map_hash_fd(fd) & mask;
+
+  for (uint32_t probe = 0; probe < IPC_CLIENT_MAP_SIZE; probe++) {
+    struct ipc_client_map_entry *e = &ctx->client_map[idx];
+    if (e->fd == fd) {
+      e->fd = IPC_CLIENT_FD_TOMB;
+      e->client = NULL;
+      return;
+    }
+    if (e->fd == IPC_CLIENT_FD_EMPTY)
+      return;
+    idx = (idx + 1) & mask;
+  }
+}
+
 _Static_assert(
     LOTA_IPC_MAX_PAYLOAD <= 65536,
     "IPC payload cap must be bounded to prevent excessive memory use");
@@ -217,6 +302,11 @@ static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
   client->peer_gid = gid;
   client->peer_pid = pid;
 
+  if (client_map_insert(ctx, fd, client) < 0) {
+    free(client);
+    return NULL;
+  }
+
   client->next = ctx->client_list;
   ctx->client_list = client;
   ctx->client_count++;
@@ -228,13 +318,7 @@ static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
  * Find client by fd
  */
 static struct ipc_client *client_find(struct ipc_context *ctx, int fd) {
-  struct ipc_client *c = ctx->client_list;
-  while (c) {
-    if (c->fd == fd)
-      return c;
-    c = c->next;
-  }
-  return NULL;
+  return client_map_find(ctx, fd);
 }
 
 /*
@@ -242,6 +326,8 @@ static struct ipc_client *client_find(struct ipc_context *ctx, int fd) {
  */
 static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
   struct ipc_client **pp = &ctx->client_list;
+
+  client_map_remove(ctx, client->fd);
 
   while (*pp) {
     if (*pp == client) {
@@ -1078,6 +1164,8 @@ int ipc_init(struct ipc_context *ctx) {
   ctx->epoll_fd = -1;
   ctx->start_time_sec = monotonic_now_sec();
 
+  client_map_init(ctx);
+
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
     ctx->extra[i].fd = -1;
   ctx->extra_count = 0;
@@ -1187,6 +1275,8 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   ctx->epoll_fd = -1;
   ctx->start_time_sec = monotonic_now_sec();
 
+  client_map_init(ctx);
+
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
     ctx->extra[i].fd = -1;
   ctx->extra_count = 0;
@@ -1239,6 +1329,8 @@ void ipc_cleanup(struct ipc_context *ctx) {
   }
   ctx->client_list = NULL;
   ctx->client_count = 0;
+
+  client_map_init(ctx);
 
   if (ctx->epoll_fd >= 0) {
     close(ctx->epoll_fd);

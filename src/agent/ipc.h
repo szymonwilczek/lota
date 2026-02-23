@@ -16,6 +16,16 @@ struct dbus_context;
 struct ipc_client;
 
 /*
+ * fd -> client lookup table.
+ */
+#define IPC_CLIENT_MAP_SIZE 4096 /* must be a power of two */
+
+struct ipc_client_map_entry {
+  int fd; /* -1 empty, -2 tombstone */
+  struct ipc_client *client;
+};
+
+/*
  * Maximum number of extra listener sockets.
  */
 #define IPC_MAX_EXTRA_LISTENERS 4
@@ -40,6 +50,9 @@ struct ipc_context {
   /* Connected clients (lifetime bound) */
   struct ipc_client *client_list;
   int client_count;
+
+  /* O(1) lookup of client by fd (in addition to the linked list). */
+  struct ipc_client_map_entry client_map[IPC_CLIENT_MAP_SIZE];
 
   /* Extra listener sockets */
   struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
