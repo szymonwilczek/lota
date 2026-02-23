@@ -33,8 +33,43 @@ struct bpf_loader_ctx {
   int bpf_admin_tgid_fd;                     /* 'bpf_admin_tgid' map fd */
   int trusted_libs_fd;                       /* 'trusted_libs' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
+  int allow_verity_digest_fd;                /* 'allow_verity_digest' map fd */
   bool loaded; /* Program is loaded and attached */
 };
+
+/*
+ * bpf_loader_allow_verity_digest - Add an allowed fs-verity digest to the map
+ * @ctx: Loaded context
+ * @digest: 32-byte fs-verity digest
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
+                                   const uint8_t digest[32]);
+
+/*
+ * bpf_loader_disallow_verity_digest - Remove an allowed fs-verity digest
+ * @ctx: Loaded context
+ * @digest: 32-byte fs-verity digest
+ */
+int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
+                                      const uint8_t digest[32]);
+
+/*
+ * bpf_loader_measure_verity_digest - Measure fs-verity digest for a path
+ * @path: Absolute path to a fs-verity-enabled regular file
+ * @out: 32-byte output digest
+ */
+int bpf_loader_measure_verity_digest(const char *path, uint8_t out[32]);
+
+/*
+ * bpf_loader_allow_verity_path - Measure a path's fs-verity digest and allow it
+ * @ctx: Loaded context
+ * @path: Absolute path to a fs-verity-enabled regular file
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path);
 
 /*
  * Callback for ring buffer events

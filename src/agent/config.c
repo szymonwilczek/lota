@@ -8,6 +8,7 @@
 #include "config.h"
 #include "lota.h"
 #include "parse_utils.h"
+#include "path_validate.h"
 #include "tpm.h"
 
 #include <ctype.h>
@@ -73,43 +74,6 @@ static void set_str(char *dst, size_t dst_size, const char *src) {
   dst[len] = '\0';
 }
 
-static bool is_abs_path(const char *p) { return p && p[0] == '/'; }
-
-static bool path_has_dotdot_segment(const char *p) {
-  const char *seg = p;
-
-  if (!p)
-    return false;
-
-  while (*seg) {
-    while (*seg == '/')
-      seg++;
-    if (*seg == '\0')
-      break;
-
-    const char *end = seg;
-    while (*end && *end != '/')
-      end++;
-
-    if ((end - seg) == 2 && seg[0] == '.' && seg[1] == '.')
-      return true;
-
-    seg = end;
-  }
-
-  return false;
-}
-
-static bool str_has_control(const char *s) {
-  if (!s)
-    return false;
-  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-    if (iscntrl(*p))
-      return true;
-  }
-  return false;
-}
-
 static int validate_path_value(const char *key, const char *value,
                                const char *filepath, int lineno) {
   if (!key || !value)
@@ -119,19 +83,19 @@ static int validate_path_value(const char *key, const char *value,
   if (value[0] == '\0')
     return 0;
 
-  if (str_has_control(value)) {
+  if (lota_str_has_control(value)) {
     fprintf(stderr, "%s:%d: invalid %s: contains control characters\n",
             filepath, lineno, key);
     return -1;
   }
 
-  if (!is_abs_path(value)) {
+  if (!lota_path_is_abs(value)) {
     fprintf(stderr, "%s:%d: invalid %s: expected absolute path\n", filepath,
             lineno, key);
     return -1;
   }
 
-  if (path_has_dotdot_segment(value)) {
+  if (lota_path_has_dotdot_segment(value)) {
     fprintf(stderr, "%s:%d: invalid %s: '..' path traversal is not allowed\n",
             filepath, lineno, key);
     return -1;
@@ -188,13 +152,14 @@ void config_init(struct lota_config *cfg) {
   set_str(cfg->server, sizeof(cfg->server), "localhost");
   cfg->port = 8443;
 
+  cfg->allow_verity_count = 0;
   set_str(cfg->bpf_path, sizeof(cfg->bpf_path), "/usr/lib/lota/lota_lsm.bpf.o");
-  set_str(cfg->mode, sizeof(cfg->mode), "monitor");
-  cfg->strict_mmap = false;
-  cfg->strict_exec = false;
-  cfg->block_ptrace = false;
-  cfg->strict_modules = false;
-  cfg->block_anon_exec = false;
+  set_str(cfg->mode, sizeof(cfg->mode), "enforce");
+  cfg->strict_mmap = true;
+  cfg->strict_exec = true;
+  cfg->block_ptrace = true;
+  cfg->strict_modules = true;
+  cfg->block_anon_exec = true;
 
   cfg->attest_interval = 0;
   cfg->aik_ttl = 0;
@@ -251,6 +216,20 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
 
+  if (strcmp(key, "allow_verity") == 0 || strcmp(key, "allow-verity") == 0) {
+    if (cfg->allow_verity_count >= LOTA_CONFIG_MAX_VERITY) {
+      fprintf(stderr, "%s:%d: too many allow_verity entries (max %d)\n",
+              filepath, lineno, LOTA_CONFIG_MAX_VERITY);
+      return -1;
+    }
+
+    if (validate_path_value("allow_verity", value, filepath, lineno) != 0)
+      return -1;
+    set_str(cfg->allow_verity[cfg->allow_verity_count],
+            sizeof(cfg->allow_verity[0]), value);
+    cfg->allow_verity_count++;
+    return 0;
+  }
   /* bpf / enforcement */
   if (strcmp(key, "bpf_path") == 0 || strcmp(key, "bpf-path") == 0 ||
       strcmp(key, "bpf") == 0) {
@@ -578,6 +557,12 @@ void config_dump(const struct lota_config *cfg, FILE *fp) {
     fprintf(fp, "\n# Trusted libraries\n");
     for (int i = 0; i < cfg->trust_lib_count; i++)
       fprintf(fp, "trust_lib = %s\n", cfg->trust_libs[i]);
+  }
+
+  if (cfg->allow_verity_count > 0) {
+    fprintf(fp, "\n# Allowed fs-verity files\n");
+    for (int i = 0; i < cfg->allow_verity_count; i++)
+      fprintf(fp, "allow_verity = %s\n", cfg->allow_verity[i]);
   }
 
   if (cfg->protect_pid_count > 0) {

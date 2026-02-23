@@ -47,6 +47,7 @@
 #include "main_utils.h"
 #include "net.h"
 #include "parse_utils.h"
+#include "path_validate.h"
 #include "policy.h"
 #include "quote.h"
 #include "reload.h"
@@ -76,7 +77,29 @@ static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
+static char g_allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
+static int g_allow_verity_count;
 static int g_no_hash_cache;
+
+static int validate_path_arg(const char *key, const char *p) {
+  if (!key || !p)
+    return -EINVAL;
+  if (p[0] == '\0')
+    return -EINVAL;
+  if (lota_str_has_control(p)) {
+    fprintf(stderr, "Invalid %s: contains control characters\n", key);
+    return -EINVAL;
+  }
+  if (!lota_path_is_abs(p)) {
+    fprintf(stderr, "Invalid %s: expected absolute path\n", key);
+    return -EINVAL;
+  }
+  if (lota_path_has_dotdot_segment(p)) {
+    fprintf(stderr, "Invalid %s: '..' path traversal is not allowed\n", key);
+    return -EINVAL;
+  }
+  return 0;
+}
 
 struct run_daemon_params {
   const char *bpf_path;
@@ -300,6 +323,8 @@ static int run_daemon(const struct run_daemon_params *params) {
       .protect_pid_count = g_protect_pid_count,
       .trust_libs = g_trust_libs,
       .trust_lib_count = g_trust_lib_count,
+      .allow_verity = g_allow_verity,
+      .allow_verity_count = g_allow_verity_count,
   };
 
   ret = agent_apply_startup_policy(&startup_policy);
@@ -460,6 +485,7 @@ int main(int argc, char *argv[]) {
       {"block-anon-exec", no_argument, 0, 'X'},
       {"protect-pid", required_argument, 0, 'R'},
       {"trust-lib", required_argument, 0, 'L'},
+      {"allow-verity", required_argument, 0, 'A'},
       {"daemon", no_argument, 0, 'd'},
       {"pid-file", required_argument, 0, 'D'},
       {"aik-ttl", required_argument, 0, 'T'},
@@ -547,9 +573,15 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < cfg.trust_lib_count; i++)
     snprintf(g_trust_libs[i], sizeof(g_trust_libs[i]), "%s", cfg.trust_libs[i]);
 
-  while ((opt = getopt_long(
-              argc, argv, "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:dD:T:G:g:V:k:Q:Hh",
-              long_options, NULL)) != -1) {
+  g_allow_verity_count = cfg.allow_verity_count;
+  for (int i = 0; i < cfg.allow_verity_count; i++)
+    snprintf(g_allow_verity[i], sizeof(g_allow_verity[i]), "%s",
+             cfg.allow_verity[i]);
+
+  while (
+      (opt = getopt_long(argc, argv,
+                         "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:Hh",
+                         long_options, NULL)) != -1) {
     switch (opt) {
     case 't':
       test_tpm_flag = 1;
@@ -667,6 +699,18 @@ int main(int argc, char *argv[]) {
         return 1;
       }
       break;
+    case 'A':
+      if (g_allow_verity_count >= LOTA_CONFIG_MAX_VERITY) {
+        fprintf(stderr, "Too many --allow-verity entries (max %d)\n",
+                LOTA_CONFIG_MAX_VERITY);
+        return 1;
+      }
+      if (validate_path_arg("allow-verity", optarg) < 0)
+        return 1;
+      snprintf(g_allow_verity[g_allow_verity_count],
+               sizeof(g_allow_verity[g_allow_verity_count]), "%s", optarg);
+      g_allow_verity_count++;
+      break;
     case 'd':
       daemon_flag = 1;
       break;
@@ -775,6 +819,12 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < g_trust_lib_count; i++) {
       snprintf(cfg.trust_libs[i], sizeof(cfg.trust_libs[i]), "%s",
                g_trust_libs[i]);
+    }
+
+    cfg.allow_verity_count = g_allow_verity_count;
+    for (int i = 0; i < g_allow_verity_count; i++) {
+      snprintf(cfg.allow_verity[i], sizeof(cfg.allow_verity[i]), "%s",
+               g_allow_verity[i]);
     }
 
     free(cfg.protect_pids);

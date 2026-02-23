@@ -6,13 +6,19 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#include <sys/ioctl.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+
+#include <linux/fsverity.h>
 
 #include "../../include/lota.h"
 #include "bpf_loader.h"
@@ -145,6 +151,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   ctx->bpf_admin_tgid_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
+  ctx->allow_verity_digest_fd = -1;
 
   libbpf_set_print(libbpf_print_fn);
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -293,6 +300,13 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
     ctx->protected_pids_fd = -1; /* optional map */
   }
 
+  /* Get fs-verity allowlist map fd */
+  ctx->allow_verity_digest_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity_digest");
+  if (ctx->allow_verity_digest_fd < 0) {
+    ctx->allow_verity_digest_fd = -1; /* optional map */
+  }
+
   ctx->loaded = true;
   return 0;
 
@@ -413,6 +427,110 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
+  ctx->allow_verity_digest_fd = -1;
+}
+
+int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
+                                   const uint8_t digest[32]) {
+  uint32_t value = 1;
+
+  if (!ctx || !ctx->loaded || !digest)
+    return -EINVAL;
+
+  if (ctx->allow_verity_digest_fd < 0)
+    return -ENOTSUP;
+
+  if (bpf_map_update_elem(ctx->allow_verity_digest_fd, digest, &value,
+                          BPF_ANY) < 0)
+    return -errno;
+
+  return 0;
+}
+
+static int measure_fsverity_digest(const char *path, uint8_t out[32]) {
+  int fd;
+  struct stat st;
+  int ret = 0;
+
+  if (!path || !out)
+    return -EINVAL;
+
+  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0)
+    return -errno;
+
+  if (fstat(fd, &st) != 0) {
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
+  if (!S_ISREG(st.st_mode)) {
+    close(fd);
+    return -EINVAL;
+  }
+
+  /* fsverity_digest has a flexible array; allocate space for SHA-256 */
+  {
+    struct {
+      struct fsverity_digest hdr;
+      uint8_t digest[64];
+    } d;
+
+    memset(&d, 0, sizeof(d));
+    d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+
+    if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+      ret = -errno;
+      close(fd);
+      return ret;
+    }
+
+    if (d.hdr.digest_size != 32) {
+      close(fd);
+      return -EINVAL;
+    }
+
+    memcpy(out, d.digest, 32);
+  }
+
+  close(fd);
+  return 0;
+}
+
+int bpf_loader_measure_verity_digest(const char *path, uint8_t out[32]) {
+  return measure_fsverity_digest(path, out);
+}
+
+int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path) {
+  uint8_t digest[32];
+  int ret;
+
+  if (!ctx || !ctx->loaded || !path)
+    return -EINVAL;
+
+  if (ctx->allow_verity_digest_fd < 0)
+    return -ENOTSUP;
+
+  ret = measure_fsverity_digest(path, digest);
+  if (ret < 0)
+    return ret;
+
+  return bpf_loader_allow_verity_digest(ctx, digest);
+}
+
+int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
+                                      const uint8_t digest[32]) {
+  if (!ctx || !ctx->loaded || !digest)
+    return -EINVAL;
+
+  if (ctx->allow_verity_digest_fd < 0)
+    return -ENOTSUP;
+
+  if (bpf_map_delete_elem(ctx->allow_verity_digest_fd, digest) < 0)
+    return -errno;
+
+  return 0;
 }
 
 int bpf_loader_set_mode(struct bpf_loader_ctx *ctx, uint32_t mode) {

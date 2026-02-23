@@ -89,16 +89,28 @@ static void test_config_init_defaults(void) {
     FAIL("bpf_path mismatch");
     return;
   }
-  if (strcmp(cfg.mode, "monitor") != 0) {
-    FAIL("mode != monitor");
+  if (strcmp(cfg.mode, "enforce") != 0) {
+    FAIL("mode != enforce");
     return;
   }
-  if (cfg.strict_mmap != false) {
-    FAIL("strict_mmap != false");
+  if (cfg.strict_mmap != true) {
+    FAIL("strict_mmap != true");
     return;
   }
-  if (cfg.block_ptrace != false) {
-    FAIL("block_ptrace != false");
+  if (cfg.strict_exec != true) {
+    FAIL("strict_exec != true");
+    return;
+  }
+  if (cfg.block_ptrace != true) {
+    FAIL("block_ptrace != true");
+    return;
+  }
+  if (cfg.strict_modules != true) {
+    FAIL("strict_modules != true");
+    return;
+  }
+  if (cfg.block_anon_exec != true) {
+    FAIL("block_anon_exec != true");
     return;
   }
   if (cfg.attest_interval != 0) {

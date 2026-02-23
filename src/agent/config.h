@@ -28,6 +28,12 @@
 /* Maximum number of trust-lib / protect-pid entries */
 #define LOTA_CONFIG_MAX_LIBS 64
 
+/*
+ * Maximum number of fs-verity allowlist entries.
+ * Must not exceed the BPF map capacity (allow_verity_digest.max_entries=1024).
+ */
+#define LOTA_CONFIG_MAX_VERITY 256
+
 struct lota_config {
   /* Verifier connection */
   char server[256];
@@ -61,6 +67,10 @@ struct lota_config {
   /* Trusted libraries */
   char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
   int trust_lib_count;
+
+  /* Allowed fs-verity files (paths are measured to digests at startup) */
+  char allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
+  int allow_verity_count;
 
   /* Protected PIDs */
   uint32_t *protect_pids;

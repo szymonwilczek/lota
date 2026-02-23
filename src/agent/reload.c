@@ -293,6 +293,8 @@ static void sync_config_snapshot(
   for (int k = 0; k < trust_lib_count; k++) {
     copy_path(cfg->trust_libs[k], trust_libs[k]);
   }
+
+  /* allow_verity is applied only at startup; keep existing snapshot */
   memcpy(cfg->log_level, new_cfg->log_level, sizeof(cfg->log_level));
 
   free(cfg->protect_pids);
@@ -367,6 +369,19 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 
   reload_trust_libs(&new_cfg, trust_libs, trust_lib_count);
   lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
+
+  if (new_cfg.allow_verity_count != cfg->allow_verity_count) {
+    lota_warn(
+        "allow_verity changes require restart; keeping previous allowlist");
+  } else {
+    for (int i = 0; i < new_cfg.allow_verity_count; i++) {
+      if (strcmp(new_cfg.allow_verity[i], cfg->allow_verity[i]) != 0) {
+        lota_warn(
+            "allow_verity changes require restart; keeping previous allowlist");
+        break;
+      }
+    }
+  }
 
   sync_config_snapshot(cfg, &new_cfg, *mode, *strict_mmap, *strict_exec,
                        *block_ptrace, *strict_modules, *block_anon_exec,

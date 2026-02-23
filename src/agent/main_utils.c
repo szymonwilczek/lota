@@ -89,11 +89,15 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf("  --bpf PATH        Path to BPF object file\n");
   printf("                    (default: %s)\n", default_bpf_path);
   printf("  --mode MODE       Set enforcement mode:\n");
-  printf("                      monitor     - log events only (default)\n");
-  printf("                      enforce     - block unauthorized modules\n");
+  printf("                      enforce     - block unauthorized modules "
+         "(default)\n");
+  printf("                      monitor     - log events only\n");
   printf("                      maintenance - allow all, minimal logging\n");
   printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted libraries\n");
   printf("                    (requires --mode enforce)\n");
+  printf("  --strict-exec     Enforce strict executable policy (fs-verity "
+         "allowlist)\n");
+  printf("                    (requires --mode enforce and --allow-verity)\n");
   printf("  --block-ptrace    Block all ptrace attach attempts\n");
   printf("                    (requires --mode enforce)\n");
   printf("  --strict-modules  Enforce strict module/firmware loading policy\n");
@@ -102,6 +106,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf("                    (requires --mode enforce)\n");
   printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
   printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
+  printf("  --allow-verity PATH\n");
+  printf("                    Allow a fs-verity protected file by digest\n");
   printf("  --daemon          Fork to background (not needed under systemd)\n");
   printf("  --pid-file PATH   PID file location\n");
   printf("                    (default: %s)\n", DAEMON_DEFAULT_PID_FILE);
