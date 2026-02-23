@@ -341,7 +341,6 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
       lota_info("Mode changed: %s -> %s", mode_to_string(*mode),
                 mode_to_string(new_mode));
       *mode = new_mode;
-      g_agent.mode = new_mode;
     } else {
       lota_warn("Failed to apply new mode");
     }

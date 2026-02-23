@@ -98,6 +98,11 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
               event->comm, event->target_pid, event->filename, event->pid,
               event->uid);
     return 0;
+  case LOTA_EVENT_KILL_BLOCKED:
+    lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",
+              (unsigned long long)event->timestamp_ns, event->comm,
+              event->target_pid, event->pid, event->uid);
+    return 0;
   case LOTA_EVENT_SETUID:
     lota_info("[%llu] SETUID %s: uid %u -> %u (pid=%u)",
               (unsigned long long)event->timestamp_ns, event->comm, event->uid,

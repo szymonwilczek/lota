@@ -630,10 +630,10 @@ static void test_sdk_version(void) {
   TEST("lota_server_sdk_version - returns version string");
 
   const char *v = lota_server_sdk_version();
-  if (v && strcmp(v, "1.0.0") == 0) {
+  if (v && v[0] != '\0') {
     PASS();
   } else {
-    FAIL(v ? v : "NULL");
+    FAIL(v ? "empty" : "NULL");
   }
 }
 

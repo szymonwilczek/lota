@@ -20,7 +20,9 @@
 
 #include "../../include/lota_server.h"
 
-#define VERSION_STRING "1.0.0"
+#ifndef LOTA_SERVER_SDK_VERSION_STRING
+#define LOTA_SERVER_SDK_VERSION_STRING "unknown"
+#endif
 
 #define TPM_GENERATED_VALUE 0xff544347
 #define TPM_ST_ATTEST_QUOTE 0x8018
@@ -311,6 +313,7 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 
 out:
   EVP_MD_CTX_free(md_ctx);
+  /* Key material cleanup is delegated to OpenSSL via EVP_PKEY_free(). */
   EVP_PKEY_free(pkey);
   return ret;
 }
@@ -506,4 +509,6 @@ const char *lota_server_strerror(int error) {
   }
 }
 
-const char *lota_server_sdk_version(void) { return VERSION_STRING; }
+const char *lota_server_sdk_version(void) {
+  return LOTA_SERVER_SDK_VERSION_STRING;
+}

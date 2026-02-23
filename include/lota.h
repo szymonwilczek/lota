@@ -54,6 +54,7 @@ enum lota_event_type {
   LOTA_EVENT_MMAP_BLOCKED,      /* Executable mmap blocked by policy */
   LOTA_EVENT_PTRACE,            /* ptrace access attempt */
   LOTA_EVENT_PTRACE_BLOCKED,    /* ptrace access blocked by policy */
+  LOTA_EVENT_KILL_BLOCKED,      /* signal delivery to protected task blocked */
   LOTA_EVENT_SETUID,            /* Privilege escalation (setuid) */
   LOTA_EVENT_ANON_EXEC,         /* Anonymous executable mmap (JIT, shellcode) */
   LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
@@ -88,6 +89,7 @@ enum lota_mode {
  *   MODULE_LOAD:    pid, comm, filename
  *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
  *   PTRACE:         pid, uid, comm, target_pid
+ *   KILL_BLOCKED:   pid, uid, comm, target_pid
  *   SETUID:         pid, uid, comm, target_uid (new uid)
  *   *_BLOCKED:      same as base type
  */

@@ -35,7 +35,7 @@ struct ipc_context {
   int listen_fd; /* Primary listening socket */
   int epoll_fd;  /* epoll instance */
   bool running;
-  time_t start_time; /* For uptime calculation */
+  uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
 
   /* Connected clients (lifetime bound) */
   struct ipc_client *client_list;

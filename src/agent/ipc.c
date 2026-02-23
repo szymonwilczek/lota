@@ -326,7 +326,11 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client) {
   resp->payload_len = sizeof(*ping);
 
   ping = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-  ping->uptime_sec = (uint64_t)(time(NULL) - ctx->start_time);
+  {
+    uint64_t now = monotonic_now_sec();
+    ping->uptime_sec =
+        (now >= ctx->start_time_sec) ? (now - ctx->start_time_sec) : 0;
+  }
   ping->pid = (uint32_t)getpid();
 
   client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*ping);
@@ -829,7 +833,7 @@ int ipc_init(struct ipc_context *ctx) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->listen_fd = -1;
   ctx->epoll_fd = -1;
-  ctx->start_time = time(NULL);
+  ctx->start_time_sec = monotonic_now_sec();
 
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
     ctx->extra[i].fd = -1;
@@ -938,7 +942,7 @@ int ipc_init_activated(struct ipc_context *ctx, int fd) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->listen_fd = -1;
   ctx->epoll_fd = -1;
-  ctx->start_time = time(NULL);
+  ctx->start_time_sec = monotonic_now_sec();
 
   for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++)
     ctx->extra[i].fd = -1;

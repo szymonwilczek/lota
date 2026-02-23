@@ -967,6 +967,7 @@ SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
              int sig, const struct cred *cred) {
   u32 sender_tgid;
+  struct lota_exec_event *event;
 
   (void)info;
   (void)sig;
@@ -978,6 +979,26 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   sender_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
   if (sender_tgid == lota_agent_pid)
     return 0;
+
+  /* audit trail for blocked kill attempts */
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type = LOTA_EVENT_KILL_BLOCKED;
+    event->tgid = sender_tgid;
+    event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+    event->target_pid = BPF_CORE_READ(p, tgid);
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+    __builtin_memcpy(event->filename, "(kill)", 6);
+
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
+  }
 
   return -EPERM;
 }

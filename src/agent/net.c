@@ -491,7 +491,6 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result) {
   uint8_t buf[sizeof(struct verifier_result)];
   int ret;
   int total = 0;
-  /* int retries = 0; - removed */
 
   if (!ctx || !ctx->connected || !result)
     return -EINVAL;

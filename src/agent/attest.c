@@ -263,8 +263,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     /* continue with zero hardware ID - verifier may reject */
     memset(report->tpm.hardware_id, 0, sizeof(report->tpm.hardware_id));
   } else {
-    printf("Hardware ID derived from %s\n",
-           ret == 1 ? "AIK (EK not available)" : "EK");
+    lota_dbg("Hardware ID derived from %s",
+             ret == 1 ? "AIK (EK not available)" : "EK");
   }
 
   /* system info: kernel path metadata + measured-boot digest */
@@ -284,7 +284,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
         &g_agent.tpm_ctx, report->system.kernel_hash, &selected_pcr);
     if (ret == 0) {
       report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
-      printf("Kernel measurement digest captured from PCR %d\n", selected_pcr);
+      lota_dbg("Kernel measurement digest captured from PCR %d", selected_pcr);
     } else {
       fprintf(stderr,
               "Warning: Failed to read kernel-relevant measured boot PCR "
@@ -304,7 +304,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
       agent_path[len] = '\0';
       ret = tpm_hash_file(agent_path, report->system.agent_hash);
       if (ret == 0) {
-        printf("Agent binary hashed: %s\n", agent_path);
+        lota_dbg("Agent binary hashed: %s", agent_path);
       } else {
         fprintf(stderr, "Warning: Failed to hash agent binary\n");
       }
@@ -364,8 +364,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
     goto cleanup;
   }
-  printf("TPM quote generated (sig: %u bytes, attest: %u bytes)\n",
-         quote_resp.signature_size, quote_resp.attest_size);
+  lota_dbg("TPM quote generated (sig: %u bytes, attest: %u bytes)",
+           quote_resp.signature_size, quote_resp.attest_size);
 
   /* copy TPM evidence */
   memcpy(report->tpm.pcr_values, quote_resp.pcr_values,
@@ -407,7 +407,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
                              LOTA_MAX_AIK_PUB_SIZE, &aik_size);
     if (ret == 0) {
       report->tpm.aik_public_size = (uint16_t)aik_size;
-      printf("AIK public key exported (%zu bytes, DER SPKI)\n", aik_size);
+      lota_dbg("AIK public key exported (%zu bytes, DER SPKI)", aik_size);
     } else {
       fprintf(stderr, "Warning: Failed to export AIK public key: %s\n",
               strerror(-ret));
@@ -424,10 +424,10 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
                           LOTA_MAX_EK_CERT_SIZE, &ek_cert_size);
     if (ret == 0) {
       report->tpm.ek_cert_size = (uint16_t)ek_cert_size;
-      printf("EK certificate exported (%zu bytes, DER X.509)\n", ek_cert_size);
+      lota_dbg("EK certificate exported (%zu bytes, DER X.509)", ek_cert_size);
     } else if (ret == -ENOENT) {
-      printf("No EK certificate found (TOFU will require approval if strict "
-             "mode)\n");
+      lota_dbg("No EK certificate found (TOFU will require approval if strict "
+               "mode)");
       report->tpm.ek_cert_size = 0;
     } else {
       fprintf(stderr, "Warning: Failed to read EK certificate: %s\n",
@@ -447,7 +447,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
                                   LOTA_MAX_AIK_PUB_SIZE, &prev_size);
       if (ret == 0) {
         report->tpm.prev_aik_public_size = (uint16_t)prev_size;
-        printf("Previous AIK included (grace period, %zu bytes)\n", prev_size);
+        lota_dbg("Previous AIK included (grace period, %zu bytes)", prev_size);
       }
     }
   }

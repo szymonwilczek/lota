@@ -61,7 +61,7 @@ static struct {
   char socket_path[PATH_MAX];    /* empty -> default */
   char status_path[PATH_MAX];
   char token_path[PATH_MAX];
-  char snapshot_path[PATH_MAX];
+  char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
   pid_t init_pid;
 } g_hook;
 

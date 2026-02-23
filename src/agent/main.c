@@ -99,7 +99,6 @@ static int run_daemon(const struct run_daemon_params *params) {
   uint32_t status_flags = 0;
   uint64_t wd_usec = 0;
   bool wd_enabled;
-  int mode;
   bool strict_mmap;
   bool strict_exec;
   bool block_ptrace;
@@ -115,7 +114,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     return -EINVAL;
 
   bpf_path = params->bpf_path;
-  mode = params->mode;
+  g_agent.mode = params->mode;
   strict_mmap = params->strict_mmap;
   strict_exec = params->strict_exec;
   block_ptrace = params->block_ptrace;
@@ -184,7 +183,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     goto cleanup_epoll;
   }
 
-  ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)mode);
+  ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
   setup_container_listener(&g_agent.ipc_ctx);
   setup_dbus(&g_agent.ipc_ctx);
 
@@ -291,7 +290,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   }
 
   struct agent_startup_policy startup_policy = {
-      .mode = mode,
+      .mode = g_agent.mode,
       .strict_mmap = strict_mmap,
       .strict_exec = strict_exec,
       .block_ptrace = block_ptrace,
@@ -317,7 +316,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
 
   sdnotify_ready();
-  sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
+  sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
   lota_info("Monitoring binary executions (event-driven)");
 
   struct agent_loop_ctx loop_ctx = {
@@ -327,7 +326,7 @@ static int run_daemon(const struct run_daemon_params *params) {
       .wd_usec = wd_usec,
       .config_path = config_path,
       .cfg = cfg,
-      .mode = &mode,
+      .mode = &g_agent.mode,
       .strict_mmap = &strict_mmap,
       .strict_exec = &strict_exec,
       .block_ptrace = &block_ptrace,
@@ -414,7 +413,6 @@ int main(int argc, char *argv[]) {
   const char *policy_pubkey_path = NULL;
   int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
   uint32_t aik_ttl = DEFAULT_AIK_TTL;
-  int mode = LOTA_MODE_MONITOR;
   bool strict_mmap = false;
   bool strict_exec = false;
   bool block_ptrace = false;
@@ -425,6 +423,7 @@ int main(int argc, char *argv[]) {
   int pid_fd = -1;
   const char *bpf_path = DEFAULT_BPF_PATH;
   const char *server_addr = "localhost";
+  bool server_overridden = false;
   int server_port = DEFAULT_VERIFIER_PORT;
   const char *ca_cert_path = NULL;
   int no_verify_tls = 0;
@@ -507,7 +506,7 @@ int main(int argc, char *argv[]) {
   {
     int cfg_mode = parse_mode(cfg.mode);
     if (cfg_mode >= 0)
-      mode = cfg_mode;
+      g_agent.mode = cfg_mode;
   }
   strict_mmap = cfg.strict_mmap;
   strict_exec = cfg.strict_exec;
@@ -589,6 +588,7 @@ int main(int argc, char *argv[]) {
       break;
     case 's':
       server_addr = optarg;
+      server_overridden = true;
       break;
     case 'p': {
       long v;
@@ -614,8 +614,8 @@ int main(int argc, char *argv[]) {
       bpf_path = optarg;
       break;
     case 'm':
-      mode = parse_mode(optarg);
-      if (mode < 0) {
+      g_agent.mode = parse_mode(optarg);
+      if (g_agent.mode < 0) {
         fprintf(stderr, "Invalid mode: %s\n", optarg);
         fprintf(stderr, "Valid modes: monitor, enforce, maintenance\n");
         return 1;
@@ -719,7 +719,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (dump_config_flag) {
-    if (server_addr != cfg.server)
+    if (server_overridden)
       snprintf(cfg.server, sizeof(cfg.server), "%s", server_addr);
     cfg.port = server_port;
     if (ca_cert_path) {
@@ -737,9 +737,9 @@ int main(int argc, char *argv[]) {
 
     if (bpf_path != cfg.bpf_path)
       snprintf(cfg.bpf_path, sizeof(cfg.bpf_path), "%s", bpf_path);
-    if (mode == LOTA_MODE_ENFORCE)
+    if (g_agent.mode == LOTA_MODE_ENFORCE)
       snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
-    else if (mode == LOTA_MODE_MAINTENANCE)
+    else if (g_agent.mode == LOTA_MODE_MAINTENANCE)
       snprintf(cfg.mode, sizeof(cfg.mode), "maintenance");
     else
       snprintf(cfg.mode, sizeof(cfg.mode), "monitor");
@@ -837,7 +837,7 @@ int main(int argc, char *argv[]) {
     return test_iommu();
 
   if (export_policy_flag)
-    return export_policy(mode);
+    return export_policy(g_agent.mode);
 
   if (test_ipc_flag)
     return run_ipc_test_server();
@@ -889,7 +889,7 @@ int main(int argc, char *argv[]) {
   {
     struct run_daemon_params run_params = {
         .bpf_path = bpf_path,
-        .mode = mode,
+        .mode = g_agent.mode,
         .strict_mmap = strict_mmap,
         .strict_exec = strict_exec,
         .block_ptrace = block_ptrace,

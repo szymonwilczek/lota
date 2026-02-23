@@ -49,6 +49,10 @@ CFLAGS += -D_FORTIFY_SOURCE=2
 CFLAGS += -fPIE
 CFLAGS += -Wformat -Wformat-security
 
+# Version string injected into the server-side SDK at build time.
+LOTA_VERSION_STRING ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
+SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
+
 # Linker hardening
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now
 
@@ -163,6 +167,9 @@ $(BUILD_DIR)/agent/%.o: $(AGENT_DIR)/%.c | $(BUILD_DIR)
 $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+
+# server SDK version string (liblotaserver + dependents)
+$(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 
 # build SDK shared library
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
@@ -338,7 +345,7 @@ $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c 
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
@@ -346,7 +353,7 @@ $(TEST_BIN_DIR)/sdk_demo: tests/sdk_demo.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DI
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/lota_ipc_test: tests/lota_ipc_test.c | $(BUILD_DIR)

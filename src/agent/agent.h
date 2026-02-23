@@ -13,14 +13,13 @@
 #include <stdint.h>
 
 #include "bpf_loader.h"
+#include "dbus.h"
 #include "hash_verify.h"
 #include "ipc.h"
 #include "tpm.h"
 
 /* PCR index for LOTA agent self-measurement */
 #define LOTA_PCR_SELF 14
-
-struct dbus_context;
 
 /*
  * Agent global runtime state.
