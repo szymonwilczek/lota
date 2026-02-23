@@ -30,6 +30,23 @@
 #define TPM_ALG_RSASSA 0x0014
 #define TPM_ALG_RSAPSS 0x0016
 
+#define TPM_ALG_SHA256 0x000B
+#define TPM_ALG_SHA384 0x000C
+#define TPM_ALG_SHA512 0x000D
+
+static const EVP_MD *select_hash_md(uint16_t hash_alg) {
+  switch (hash_alg) {
+  case TPM_ALG_SHA256:
+    return EVP_sha256();
+  case TPM_ALG_SHA384:
+    return EVP_sha384();
+  case TPM_ALG_SHA512:
+    return EVP_sha512();
+  default:
+    return NULL;
+  }
+}
+
 /*
  * Upper bound for DER-encoded AIK public key
  */
@@ -197,7 +214,8 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
  */
 static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
                                 const uint8_t *signature, size_t sig_len,
-                                uint16_t sig_alg, const uint8_t *aik_pub_der,
+                                uint16_t sig_alg, uint16_t hash_alg,
+                                const uint8_t *aik_pub_der,
                                 size_t aik_pub_len) {
   EVP_PKEY *pkey = NULL;
   EVP_MD_CTX *md_ctx = NULL;
@@ -236,9 +254,15 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
     goto out;
   }
 
+  const EVP_MD *md = select_hash_md(hash_alg);
+  if (!md) {
+    ret = LOTA_SERVER_ERR_SIG_FAIL;
+    goto out;
+  }
+
   if (sig_alg == TPM_ALG_RSAPSS) {
     /* RSASSA-PSS verification */
-    if (EVP_DigestVerifyInit(md_ctx, &pkey_ctx, EVP_sha256(), NULL, pkey) != 1)
+    if (EVP_DigestVerifyInit(md_ctx, &pkey_ctx, md, NULL, pkey) != 1)
       goto out;
 
     if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) != 1)
@@ -248,7 +272,7 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
       goto out;
   } else if (sig_alg == TPM_ALG_RSASSA) {
     /* RSASSA-PKCS1-v1_5 */
-    if (EVP_DigestVerifyInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) != 1)
+    if (EVP_DigestVerifyInit(md_ctx, NULL, md, NULL, pkey) != 1)
       goto out;
   } else {
     /* reject unknown signature algorithms */
@@ -336,9 +360,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   if (hdr.attest_size == 0 || hdr.sig_size == 0)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
-  ret =
-      verify_rsa_signature(attest_data, hdr.attest_size, signature,
-                           hdr.sig_size, hdr.sig_alg, aik_pub_der, aik_pub_len);
+  ret = verify_rsa_signature(attest_data, hdr.attest_size, signature,
+                             hdr.sig_size, hdr.sig_alg, hdr.hash_alg,
+                             aik_pub_der, aik_pub_len);
   if (ret != LOTA_SERVER_OK)
     return ret;
 
