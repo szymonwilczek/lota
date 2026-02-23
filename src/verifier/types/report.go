@@ -52,6 +52,7 @@ const (
 	VerifyIntegrityMismatch uint32 = 6
 	VerifyRevoked           uint32 = 7 // AIK revoked by administrator
 	VerifyBanned            uint32 = 8 // hardware ID banned
+	VerifyInternalError     uint32 = 9 // verifier internal error / unset failure path
 )
 
 // returns a deterministic string for a result code
@@ -75,6 +76,8 @@ func VerifyResultString(code uint32) string {
 		return "revoked"
 	case VerifyBanned:
 		return "banned"
+	case VerifyInternalError:
+		return "internal_error"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}

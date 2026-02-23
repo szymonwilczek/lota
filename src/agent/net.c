@@ -638,6 +638,8 @@ const char *net_result_str(uint32_t result) {
     return "FAIL - Protocol version mismatch";
   case VERIFY_INTEGRITY_MISMATCH:
     return "FAIL - Integrity mismatch (agent binary changed!)";
+  case VERIFY_INTERNAL_ERROR:
+    return "FAIL - Verifier internal error";
   default:
     return "FAIL - Unknown error";
   }

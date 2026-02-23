@@ -60,6 +60,7 @@ struct verifier_result {
 #define VERIFY_IOMMU_FAIL 4
 #define VERIFY_OLD_VERSION 5
 #define VERIFY_INTEGRITY_MISMATCH 6
+#define VERIFY_INTERNAL_ERROR 9
 
 /*
  * Initialize network subsystem.

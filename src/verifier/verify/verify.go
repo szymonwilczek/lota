@@ -245,6 +245,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	result := &types.VerifyResult{
 		Magic:   types.ReportMagic,
 		Version: types.ReportVersion,
+		Result:  types.VerifyInternalError,
 	}
 
 	defer func() {
@@ -258,10 +259,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			v.metrics.AttestationOK.Inc()
 		}
 		if v.attestationLog != nil {
-			resultStr := "OK"
-			if retErr != nil {
-				resultStr = types.VerifyResultString(result.Result)
-			}
+			resultStr := types.VerifyResultString(result.Result)
 			_ = v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
 				ClientID:   clientID,
