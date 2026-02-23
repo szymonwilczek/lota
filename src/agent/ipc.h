@@ -13,6 +13,7 @@
 
 struct tpm_context;
 struct dbus_context;
+struct ipc_client;
 
 /*
  * Maximum number of extra listener sockets.
@@ -35,6 +36,10 @@ struct ipc_context {
   int epoll_fd;  /* epoll instance */
   bool running;
   time_t start_time; /* For uptime calculation */
+
+  /* Connected clients (lifetime bound) */
+  struct ipc_client *client_list;
+  int client_count;
 
   /* Extra listener sockets */
   struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];

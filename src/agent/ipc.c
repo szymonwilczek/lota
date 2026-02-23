@@ -138,9 +138,6 @@ _Static_assert(
     LOTA_IPC_MAX_PAYLOAD <= 65536,
     "IPC payload cap must be bounded to prevent excessive memory use");
 
-static struct ipc_client *client_list = NULL;
-static int client_count = 0;
-
 /*
  * Set socket to non-blocking mode
  */
@@ -181,11 +178,11 @@ static int ensure_socket_dir(void) {
 /*
  * Find or create client slot
  */
-static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
-                                        pid_t pid) {
+static struct ipc_client *client_create(struct ipc_context *ctx, int fd,
+                                        uid_t uid, gid_t gid, pid_t pid) {
   struct ipc_client *client;
 
-  if (client_count >= MAX_CONNECTED_CLIENTS) {
+  if (ctx->client_count >= MAX_CONNECTED_CLIENTS) {
     lota_warn("Max clients (%d) reached, rejecting connection",
               MAX_CONNECTED_CLIENTS);
     return NULL;
@@ -200,9 +197,9 @@ static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
   client->peer_gid = gid;
   client->peer_pid = pid;
 
-  client->next = client_list;
-  client_list = client;
-  client_count++;
+  client->next = ctx->client_list;
+  ctx->client_list = client;
+  ctx->client_count++;
 
   return client;
 }
@@ -210,8 +207,8 @@ static struct ipc_client *client_create(int fd, uid_t uid, gid_t gid,
 /*
  * Find client by fd
  */
-static struct ipc_client *client_find(int fd) {
-  struct ipc_client *c = client_list;
+static struct ipc_client *client_find(struct ipc_context *ctx, int fd) {
+  struct ipc_client *c = ctx->client_list;
   while (c) {
     if (c->fd == fd)
       return c;
@@ -223,13 +220,13 @@ static struct ipc_client *client_find(int fd) {
 /*
  * Remove and free client
  */
-static void client_destroy(struct ipc_client *client) {
-  struct ipc_client **pp = &client_list;
+static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
+  struct ipc_client **pp = &ctx->client_list;
 
   while (*pp) {
     if (*pp == client) {
       *pp = client->next;
-      client_count--;
+      ctx->client_count--;
       ipc_secure_bzero(client->recv_buf, sizeof(client->recv_buf));
       ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
       close(client->fd);
@@ -308,7 +305,7 @@ static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
  * Notify all subscribers about an event.
  */
 static void notify_subscribers(struct ipc_context *ctx, uint32_t events) {
-  struct ipc_client *c = client_list;
+  struct ipc_client *c = ctx->client_list;
   while (c) {
     if (c->subscribed)
       push_notify(ctx, c, events);
@@ -805,7 +802,7 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
     return ret;
   }
 
-  client = client_create(fd, cred.uid, cred.gid, cred.pid);
+  client = client_create(ctx, fd, cred.uid, cred.gid, cred.pid);
   if (!client) {
     close(fd);
     return -ENOMEM;
@@ -814,7 +811,7 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
   ev.events = EPOLLIN;
   ev.data.fd = fd;
   if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-    client_destroy(client);
+    client_destroy(ctx, client);
     return -errno;
   }
 
@@ -990,11 +987,11 @@ void ipc_cleanup(struct ipc_context *ctx) {
   ctx->running = false;
 
   /* close all clients */
-  /* close all clients */
-  while (client_list) {
-    client_destroy(client_list);
+  while (ctx->client_list) {
+    client_destroy(ctx, ctx->client_list);
   }
-  client_count = 0;
+  ctx->client_list = NULL;
+  ctx->client_count = 0;
 
   if (ctx->epoll_fd >= 0) {
     close(ctx->epoll_fd);
@@ -1058,7 +1055,7 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
       processed++;
     } else {
       /* client event */
-      struct ipc_client *client = client_find(fd);
+      struct ipc_client *client = client_find(ctx, fd);
       if (!client)
         continue;
 
@@ -1075,7 +1072,7 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms) {
 
       if ((events[i].events & (EPOLLERR | EPOLLHUP)) || ret < 0) {
         epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-        client_destroy(client);
+        client_destroy(ctx, client);
       }
 
       processed++;
