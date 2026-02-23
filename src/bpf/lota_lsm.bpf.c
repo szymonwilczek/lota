@@ -655,7 +655,6 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
 SEC("lsm.s/mmap_file")
 int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret) {
-  struct dentry *dentry;
   u32 mode;
   int blocked = 0;
 
@@ -725,20 +724,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   if (mode == LOTA_MODE_MAINTENANCE)
     return 0;
 
-  /* get the file path for policy decision */
-  dentry = BPF_CORE_READ(file, f_path.dentry);
-
   /*
-   * In ENFORCE mode with strict mmap enabled, block libs from
-   * untrusted paths. Allow if:
-   *  - library is in trusted_libs whitelist map (game-specific)
-   *  - library is from standard system paths (/usr/lib, etc)
-   *  - otherwise -> block
-   *
-   * Resolve full path via bpf_d_path into scratch buffer for
-   * map lookups and prefix checks. Falls back to dentry walk.
+   * In ENFORCE mode with strict mmap enabled, block executable mmaps
+   * from untrusted sources.
    */
-  (void)dentry;
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
     if (!is_verity_allowed(file)) {
       blocked = 1;
