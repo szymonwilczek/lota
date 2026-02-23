@@ -29,19 +29,26 @@ port = 8443
 bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 
 # Enforcement mode: monitor, enforce, maintenance
-mode = monitor
+# Default is enforce.
+# mode = enforce
 
-# Block mmap(PROT_EXEC) of untrusted libraries (requires enforce mode)
-strict_mmap = false
+# Strict policy flags (all default to true).
+# strict_mmap = true
+# strict_exec = true
+# block_ptrace = true
+# strict_modules = true
+# block_anon_exec = true
 
-# Block all ptrace attach attempts (requires enforce mode)
-block_ptrace = false
-
-# Enforce strict module/firmware loading checks (requires enforce mode)
-strict_modules = false
-
-# Block anonymous executable mappings (requires enforce mode)
-block_anon_exec = false
+# allow_verity: allow fs-verity protected files by digest.
+# When strict_exec or strict_modules is enabled in enforce mode, the agent
+# requires at least one allow_verity entry and will refuse to start otherwise.
+#
+# Each entry must be an absolute path and must refer to a file with fs-verity
+# enabled. The agent measures the fs-verity digest at startup and provisions it
+# into the BPF allowlist.
+#
+# allow_verity = /usr/bin/my_verified_binary
+# allow_verity = /usr/lib/my_verified_module.ko
 
 # ---- Attestation ---------------------------------------------------------
 
