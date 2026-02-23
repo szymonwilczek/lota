@@ -591,7 +591,8 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	offset += types.MaxAIKPubSize
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
-	offset += 2 // reserved
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
+	offset += 2
 
 	// system measurement (simplified)
 	offset += types.HashSize * 2                // kernel_hash + agent_hash

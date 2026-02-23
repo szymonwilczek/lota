@@ -122,8 +122,8 @@ struct lota_tpm_evidence {
   uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
   uint16_t prev_aik_public_size;
 
-  /* Reserved for alignment */
-  uint8_t _reserved[2];
+  /* TPM quote signature scheme (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS). */
+  uint16_t quote_sig_alg;
 } __attribute__((packed));
 
 /*

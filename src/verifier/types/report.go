@@ -130,7 +130,7 @@ type TPMEvidence struct {
 	AIKGeneration  uint64                   // 8 bytes
 	PrevAIKPublic  [MaxAIKPubSize]byte      // 512 bytes
 	PrevAIKSize    uint16                   // 2 bytes
-	Reserved       [2]byte                  // 2 bytes alignment
+	QuoteSigAlg    uint16                   // 2 bytes (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS)
 }
 
 // struct iommu_status (see: include/iommu_types.h)
@@ -286,7 +286,8 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	if report.TPM.PrevAIKSize > MaxAIKPubSize {
 		return nil, fmt.Errorf("%w: prev_aik_public_size %d exceeds max %d", ErrInvalidSize, report.TPM.PrevAIKSize, MaxAIKPubSize)
 	}
-	offset += 2 // reserved
+	report.TPM.QuoteSigAlg = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
 
 	// system measurement (396 bytes)
 	copy(report.System.KernelHash[:], data[offset:offset+HashSize])

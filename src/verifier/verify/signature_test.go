@@ -198,6 +198,7 @@ func TestVerifyReportSignature_ValidReport(t *testing.T) {
 	copy(report.TPM.AttestData[:], attestData)
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
 
 	err := VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
@@ -252,13 +253,14 @@ func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	copy(report.TPM.AttestData[:], attestData)
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSAPSS
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
 		t.Fatalf("PSS report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with PSS signature correctly verified via fallback")
+	t.Log("✓ Report with PSS signature correctly verified")
 }
 
 func TestVerifyReportSignature_SHA384FromTPMSAttest(t *testing.T) {
@@ -276,6 +278,7 @@ func TestVerifyReportSignature_SHA384FromTPMSAttest(t *testing.T) {
 	copy(report.TPM.AttestData[:], attestData)
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
@@ -300,6 +303,7 @@ func TestVerifyReportSignature_SHA512FromTPMSAttest(t *testing.T) {
 	copy(report.TPM.AttestData[:], attestData)
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {

@@ -87,7 +87,8 @@ func createTestReportBytes() []byte {
 	offset += MaxAIKPubSize
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
-	// reserved
+	// quote_sig_alg (2 bytes)
+	binary.LittleEndian.PutUint16(buf[offset:], 0x0014) // TPM2_ALG_RSASSA
 	offset += 2
 
 	// System Measurement (396 bytes)

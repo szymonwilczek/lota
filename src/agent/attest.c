@@ -383,6 +383,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   memcpy(report->tpm.quote_signature, quote_resp.signature,
          quote_resp.signature_size);
 
+  report->tpm.quote_sig_alg = quote_resp.sig_alg;
+
   /*
    * Copy raw TPMS_ATTEST blob for signature verification.
    * Verifier will: 1) verify signature over this data

@@ -152,14 +152,23 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 		return err
 	}
 
-	rsassaErr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
-	pssErr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg)
+	switch report.TPM.QuoteSigAlg {
+	case 0:
+		return errors.New("TPM quote signature scheme missing (quote_sig_alg=0)")
 
-	if rsassaErr == nil || pssErr == nil {
+	case types.TPMAlgRSASSA:
+		if verr := NewRSASSAVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSASSA hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+		}
+		return nil
+
+	case types.TPMAlgRSAPSS:
+		if verr := NewRSAPSSVerifier().VerifyQuoteSignatureWithHash(attestData, signature, aikPubKey, hashAlg); verr != nil {
+			return fmt.Errorf("TPM quote signature invalid (sig_alg=RSAPSS hash=%s source=%s): %v", hashName(hashAlg), hashSource, verr)
+		}
 		return nil
 	}
-
-	return fmt.Errorf("TPM quote signature invalid (hash=%s source=%s, tried RSASSA: %v, PSS: %v)", hashName(hashAlg), hashSource, rsassaErr, pssErr)
+	return fmt.Errorf("unsupported TPM quote signature scheme: 0x%04X", report.TPM.QuoteSigAlg)
 }
 
 const (
