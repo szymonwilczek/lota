@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -62,6 +63,19 @@ static int read_kernel_measurement_digest(struct tpm_context *ctx,
   if (selected_pcr)
     *selected_pcr = -1;
   return -ENOENT;
+}
+
+static uint32_t rand_u32_best_effort(void) {
+  uint32_t v = 0;
+  ssize_t n = getrandom(&v, sizeof(v), GRND_NONBLOCK);
+  if (n == (ssize_t)sizeof(v))
+    return v;
+
+  /* fallback: not cryptographic, but sufficient to decorrelate retry timing */
+  v = (uint32_t)time(NULL);
+  v ^= (uint32_t)getpid();
+  v ^= (uint32_t)(uintptr_t)&v;
+  return v;
 }
 
 /*
@@ -803,6 +817,16 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
     }
 
     int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
+    if (ret != 0 && backoff_sec > 0) {
+      /* jitter to avoid synchronized retries */
+      int jitter_max = backoff_sec / 2;
+      if (jitter_max < 1)
+        jitter_max = 1;
+      int jitter = (int)(rand_u32_best_effort() % (uint32_t)(jitter_max + 1));
+      sleep_time = backoff_sec + jitter;
+      if (sleep_time > MAX_BACKOFF_SECONDS)
+        sleep_time = MAX_BACKOFF_SECONDS;
+    }
     lota_dbg("Next attestation in %d seconds", sleep_time);
 
     struct timespec now_ts;
