@@ -17,6 +17,7 @@ package verify
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -47,53 +48,65 @@ type UsedNonceBackend interface {
 // implements UsedNonceBackend using an in-memory map
 // bounded by maxSize - evicts oldest entries when capacity is reached
 type memoryUsedNonceBackend struct {
-	nonces  map[string]time.Time
+	index   map[string]*list.Element
+	order   list.List
 	maxSize int
+}
+
+type usedNonceEntry struct {
+	key    string
+	usedAt time.Time
 }
 
 func newMemoryUsedNonceBackend(maxSize int) *memoryUsedNonceBackend {
 	return &memoryUsedNonceBackend{
-		nonces:  make(map[string]time.Time, maxSize),
+		index:   make(map[string]*list.Element, maxSize),
 		maxSize: maxSize,
 	}
 }
 
 func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error {
-	// evict oldest if at capacity
-	if len(m.nonces) >= m.maxSize {
-		var oldestKey string
-		var oldestTime time.Time
+	if m.maxSize <= 0 {
+		return nil
+	}
 
-		for k, t := range m.nonces {
-			if oldestTime.IsZero() || t.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = t
-			}
-		}
+	if elem, exists := m.index[nonceKey]; exists {
+		m.order.Remove(elem)
+		delete(m.index, nonceKey)
+	}
 
-		if oldestKey != "" {
-			delete(m.nonces, oldestKey)
+	if len(m.index) >= m.maxSize {
+		front := m.order.Front()
+		if front != nil {
+			entry := front.Value.(usedNonceEntry)
+			m.order.Remove(front)
+			delete(m.index, entry.key)
 		}
 	}
 
-	m.nonces[nonceKey] = usedAt
+	elem := m.order.PushBack(usedNonceEntry{key: nonceKey, usedAt: usedAt})
+	m.index[nonceKey] = elem
 	return nil
 }
 
 func (m *memoryUsedNonceBackend) Contains(nonceKey string) bool {
-	_, exists := m.nonces[nonceKey]
+	_, exists := m.index[nonceKey]
 	return exists
 }
 
 func (m *memoryUsedNonceBackend) Count() int {
-	return len(m.nonces)
+	return len(m.index)
 }
 
 func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
-	for key, usedAt := range m.nonces {
-		if usedAt.Before(olderThan) {
-			delete(m.nonces, key)
+	for elem := m.order.Front(); elem != nil; {
+		next := elem.Next()
+		entry := elem.Value.(usedNonceEntry)
+		if entry.usedAt.Before(olderThan) {
+			m.order.Remove(elem)
+			delete(m.index, entry.key)
 		}
+		elem = next
 	}
 }
 
