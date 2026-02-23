@@ -143,8 +143,8 @@ func OpenDB(path string) (*sql.DB, error) {
 		}
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(10)
 	db.SetConnMaxLifetime(0)
 
 	if err := runMigrations(db); err != nil {
