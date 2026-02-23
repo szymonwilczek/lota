@@ -12,10 +12,13 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /*
  * Trims leading and trailing whitespace in-place.
@@ -68,6 +71,112 @@ static void set_str(char *dst, size_t dst_size, const char *src) {
 
   memcpy(dst, src, len);
   dst[len] = '\0';
+}
+
+static bool is_abs_path(const char *p) { return p && p[0] == '/'; }
+
+static bool path_has_dotdot_segment(const char *p) {
+  const char *seg = p;
+
+  if (!p)
+    return false;
+
+  while (*seg) {
+    while (*seg == '/')
+      seg++;
+    if (*seg == '\0')
+      break;
+
+    const char *end = seg;
+    while (*end && *end != '/')
+      end++;
+
+    if ((end - seg) == 2 && seg[0] == '.' && seg[1] == '.')
+      return true;
+
+    seg = end;
+  }
+
+  return false;
+}
+
+static bool str_has_control(const char *s) {
+  if (!s)
+    return false;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (iscntrl(*p))
+      return true;
+  }
+  return false;
+}
+
+static int validate_path_value(const char *key, const char *value,
+                               const char *filepath, int lineno) {
+  if (!key || !value)
+    return -1;
+
+  /* allow clearing optional fields by setting empty value */
+  if (value[0] == '\0')
+    return 0;
+
+  if (str_has_control(value)) {
+    fprintf(stderr, "%s:%d: invalid %s: contains control characters\n",
+            filepath, lineno, key);
+    return -1;
+  }
+
+  if (!is_abs_path(value)) {
+    fprintf(stderr, "%s:%d: invalid %s: expected absolute path\n", filepath,
+            lineno, key);
+    return -1;
+  }
+
+  if (path_has_dotdot_segment(value)) {
+    fprintf(stderr, "%s:%d: invalid %s: '..' path traversal is not allowed\n",
+            filepath, lineno, key);
+    return -1;
+  }
+
+  /*
+   * Note: this validates only the path string shape.
+   * It intentionally does not canonicalize (realpath) or resolve symlinks.
+   * Callers that treat these files as security boundaries should open them
+   * safely (e.g. O_NOFOLLOW + fstat) and/or rely on higher-level trust models
+   * (fs-verity / measured boot / remote attestation).
+   */
+
+  return 0;
+}
+
+static int config_validate_file_security(int fd, const char *filepath) {
+  struct stat st;
+
+  if (fd < 0 || !filepath)
+    return -EINVAL;
+  if (fstat(fd, &st) != 0)
+    return -errno;
+
+  if (!S_ISREG(st.st_mode)) {
+    fprintf(stderr, "%s: config must be a regular file\n", filepath);
+    return -EINVAL;
+  }
+
+  /* Agent runs as root in production; config must not be mutable by others. */
+  if (geteuid() == 0) {
+    if (st.st_uid != 0) {
+      fprintf(stderr, "%s: refusing to load config not owned by root\n",
+              filepath);
+      return -EPERM;
+    }
+    if (st.st_mode & (S_IWGRP | S_IWOTH)) {
+      fprintf(stderr,
+              "%s: refusing to load group/world-writable config (mode %o)\n",
+              filepath, (unsigned)(st.st_mode & 0777));
+      return -EPERM;
+    }
+  }
+
+  return 0;
 }
 
 void config_init(struct lota_config *cfg) {
@@ -125,6 +234,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "ca_cert") == 0 || strcmp(key, "ca-cert") == 0) {
+    if (validate_path_value("ca_cert", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->ca_cert, sizeof(cfg->ca_cert), value);
     return 0;
   }
@@ -143,6 +254,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
   /* bpf / enforcement */
   if (strcmp(key, "bpf_path") == 0 || strcmp(key, "bpf-path") == 0 ||
       strcmp(key, "bpf") == 0) {
+    if (validate_path_value("bpf_path", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->bpf_path, sizeof(cfg->bpf_path), value);
     return 0;
   }
@@ -235,6 +348,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "kernel_path") == 0 || strcmp(key, "kernel-path") == 0) {
+    if (validate_path_value("kernel_path", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->kernel_path, sizeof(cfg->kernel_path), value);
     return 0;
   }
@@ -251,16 +366,22 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "pid_file") == 0 || strcmp(key, "pid-file") == 0) {
+    if (validate_path_value("pid_file", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->pid_file, sizeof(cfg->pid_file), value);
     return 0;
   }
 
   /* policy signing */
   if (strcmp(key, "signing_key") == 0 || strcmp(key, "signing-key") == 0) {
+    if (validate_path_value("signing_key", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->signing_key, sizeof(cfg->signing_key), value);
     return 0;
   }
   if (strcmp(key, "policy_pubkey") == 0 || strcmp(key, "policy-pubkey") == 0) {
+    if (validate_path_value("policy_pubkey", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->policy_pubkey, sizeof(cfg->policy_pubkey), value);
     return 0;
   }
@@ -273,6 +394,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
       return -1;
     }
 
+    if (validate_path_value("trust_lib", value, filepath, lineno) != 0)
+      return -1;
     set_str(cfg->trust_libs[cfg->trust_lib_count], sizeof(cfg->trust_libs[0]),
             value);
     cfg->trust_lib_count++;
@@ -316,6 +439,7 @@ static int apply_key(struct lota_config *cfg, const char *key,
 
 int config_load(struct lota_config *cfg, const char *path) {
   FILE *f;
+  int fd;
   char line[LOTA_CONFIG_MAX_LINE];
   int lineno = 0;
   int errors = 0;
@@ -326,9 +450,29 @@ int config_load(struct lota_config *cfg, const char *path) {
 
   filepath = path ? path : LOTA_CONFIG_DEFAULT_PATH;
 
-  f = fopen(filepath, "r");
-  if (!f)
+  int open_flags = O_RDONLY | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+  /* avoid reading config through a symlink when running as root */
+  if (geteuid() == 0)
+    open_flags |= O_NOFOLLOW;
+#endif
+
+  fd = open(filepath, open_flags);
+  if (fd < 0)
     return -errno;
+
+  int sec_ret = config_validate_file_security(fd, filepath);
+  if (sec_ret != 0) {
+    close(fd);
+    return sec_ret;
+  }
+
+  f = fdopen(fd, "r");
+  if (!f) {
+    int err = errno;
+    close(fd);
+    return -err;
+  }
 
   while (fgets(line, sizeof(line), f)) {
     char *trimmed;
