@@ -132,7 +132,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     if (is_exec && is_blocked)
       goto log_no_hash;
 
-    hash_ret = hash_verify_event(&g_hash_ctx, event, content_hash);
+    hash_ret = hash_verify_event(&g_agent.hash_ctx, event, content_hash);
     if (hash_ret == 0) {
       format_sha256(content_hash, hash_hex);
       lota_info("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)",

@@ -46,7 +46,7 @@ int test_tpm(void) {
   printf("=== TPM Test ===\n\n");
 
   printf("Initializing TPM context...\n");
-  ret = tpm_init(&g_tpm_ctx);
+  ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
     return ret;
@@ -54,7 +54,7 @@ int test_tpm(void) {
   printf("TPM initialized successfully\n\n");
 
   printf("Running TPM self-test...\n");
-  ret = tpm_self_test(&g_tpm_ctx);
+  ret = tpm_self_test(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "TPM self-test failed: %s\n", strerror(-ret));
   } else {
@@ -63,7 +63,7 @@ int test_tpm(void) {
   printf("\n");
 
   printf("Reading PCR 0 (SRTM)...\n");
-  ret = tpm_read_pcr(&g_tpm_ctx, 0, TPM2_ALG_SHA256, pcr_value);
+  ret = tpm_read_pcr(&g_agent.tpm_ctx, 0, TPM2_ALG_SHA256, pcr_value);
   if (ret < 0) {
     fprintf(stderr, "Failed to read PCR 0: %s\n", strerror(-ret));
   } else {
@@ -71,7 +71,7 @@ int test_tpm(void) {
   }
 
   printf("\nReading PCR 1 (BIOS config/IOMMU)...\n");
-  ret = tpm_read_pcr(&g_tpm_ctx, 1, TPM2_ALG_SHA256, pcr_value);
+  ret = tpm_read_pcr(&g_agent.tpm_ctx, 1, TPM2_ALG_SHA256, pcr_value);
   if (ret < 0) {
     fprintf(stderr, "Failed to read PCR 1: %s\n", strerror(-ret));
   } else {
@@ -79,7 +79,7 @@ int test_tpm(void) {
   }
 
   printf("\nReading PCR 10 (IMA)...\n");
-  ret = tpm_read_pcr(&g_tpm_ctx, 10, TPM2_ALG_SHA256, pcr_value);
+  ret = tpm_read_pcr(&g_agent.tpm_ctx, 10, TPM2_ALG_SHA256, pcr_value);
   if (ret < 0) {
     fprintf(stderr, "Failed to read PCR 10: %s\n", strerror(-ret));
   } else {
@@ -89,7 +89,7 @@ int test_tpm(void) {
   /* hash kernel image */
   printf("\nFinding current kernel...\n");
   {
-    int k_err = tpm_get_current_kernel_path(&g_tpm_ctx, kernel_path,
+    int k_err = tpm_get_current_kernel_path(&g_agent.tpm_ctx, kernel_path,
                                             sizeof(kernel_path));
     if (k_err < 0) {
       fprintf(stderr, "Failed to find kernel: %s\n", strerror(-k_err));
@@ -125,7 +125,8 @@ int test_tpm(void) {
   }
 
   printf("\nReading PCR %d before extend...\n", LOTA_PCR_SELF);
-  ret = tpm_read_pcr(&g_tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
+  ret =
+      tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
   if (ret < 0) {
     fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
             strerror(-ret));
@@ -134,7 +135,7 @@ int test_tpm(void) {
   }
 
   printf("\nExtending self-hash into PCR %d...\n", LOTA_PCR_SELF);
-  ret = self_measure(&g_tpm_ctx);
+  ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Self-measurement failed: %s\n", strerror(-ret));
   } else {
@@ -142,7 +143,8 @@ int test_tpm(void) {
   }
 
   printf("\nReading PCR %d after extend...\n", LOTA_PCR_SELF);
-  ret = tpm_read_pcr(&g_tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
+  ret =
+      tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256, pcr_value);
   if (ret < 0) {
     fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
             strerror(-ret));
@@ -154,8 +156,8 @@ int test_tpm(void) {
   printf("\n=== AIK Provisioning Test ===\n\n");
 
   printf("Checking/provisioning AIK at handle 0x%08X...\n",
-         g_tpm_ctx.aik_handle);
-  ret = tpm_provision_aik(&g_tpm_ctx);
+         g_agent.tpm_ctx.aik_handle);
+  ret = tpm_provision_aik(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "AIK provisioning failed: %s\n", strerror(-ret));
     fprintf(stderr, "Note: May require owner hierarchy authorization\n");
@@ -175,7 +177,7 @@ int test_tpm(void) {
     printf("Generating test nonce...\n");
     if (getrandom(test_nonce, LOTA_NONCE_SIZE, 0) != LOTA_NONCE_SIZE) {
       fprintf(stderr, "getrandom failed: %s\n", strerror(errno));
-      tpm_cleanup(&g_tpm_ctx);
+      tpm_cleanup(&g_agent.tpm_ctx);
       return -1;
     }
     print_hex("Nonce", test_nonce, LOTA_NONCE_SIZE);
@@ -184,7 +186,7 @@ int test_tpm(void) {
     quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
     printf("\nRequesting quote for PCRs 0, 1, %d...\n", LOTA_PCR_SELF);
 
-    ret = tpm_quote(&g_tpm_ctx, test_nonce, quote_pcr_mask, &quote_resp);
+    ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask, &quote_resp);
     if (ret < 0) {
       fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
     } else {
@@ -201,7 +203,7 @@ int test_tpm(void) {
     }
   }
 
-  tpm_cleanup(&g_tpm_ctx);
+  tpm_cleanup(&g_agent.tpm_ctx);
   printf("\nTPM test complete\n");
   return 0;
 }

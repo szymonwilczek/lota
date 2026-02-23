@@ -77,14 +77,12 @@ static int safe_parse_long(const char *s, long *out) {
 }
 
 /* Global state */
-volatile sig_atomic_t g_running = 1;
+struct agent_globals g_agent = {
+    .running = 1,
+    .dbus_ctx = NULL,
+    .mode = LOTA_MODE_MONITOR,
+};
 static volatile sig_atomic_t g_reload = 0;
-struct tpm_context g_tpm_ctx;
-struct bpf_loader_ctx g_bpf_ctx;
-struct ipc_context g_ipc_ctx;
-struct hash_verify_ctx g_hash_ctx;
-struct dbus_context *g_dbus_ctx;
-int g_mode = LOTA_MODE_MONITOR;
 
 /* Runtime config from CLI */
 static uint32_t *g_protect_pids = NULL;
@@ -179,8 +177,8 @@ static int run_daemon(const struct run_daemon_params *params) {
     return -errno;
   }
 
-  ret =
-      hash_verify_init(&g_hash_ctx, g_no_hash_cache ? HASH_CACHE_DISABLED : 0);
+  ret = hash_verify_init(&g_agent.hash_ctx,
+                         g_no_hash_cache ? HASH_CACHE_DISABLED : 0);
   if (ret < 0) {
     lota_err("Failed to initialize hash cache: %s", strerror(-ret));
     close(sfd);
@@ -193,26 +191,26 @@ static int run_daemon(const struct run_daemon_params *params) {
     lota_info("Hash verification cache ready");
 
   lota_info("Starting IPC server");
-  ret = ipc_init_or_activate(&g_ipc_ctx);
+  ret = ipc_init_or_activate(&g_agent.ipc_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize IPC: %s", strerror(-ret));
     goto cleanup_epoll;
   }
 
-  ipc_set_mode(&g_ipc_ctx, (uint8_t)mode);
-  setup_container_listener(&g_ipc_ctx);
-  setup_dbus(&g_ipc_ctx);
+  ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)mode);
+  setup_container_listener(&g_agent.ipc_ctx);
+  setup_dbus(&g_agent.ipc_ctx);
 
   /* IPC epoll fd to main loop */
-  int ipc_fd = ipc_get_fd(&g_ipc_ctx);
+  int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
   if (ipc_fd >= 0) {
     ev.events = EPOLLIN;
     ev.data.fd = ipc_fd;
     epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ipc_fd, &ev);
   }
 
-  if (g_dbus_ctx) {
-    int dbus_fd = dbus_get_fd(g_dbus_ctx);
+  if (g_agent.dbus_ctx) {
+    int dbus_fd = dbus_get_fd(g_agent.dbus_ctx);
     if (dbus_fd >= 0) {
       ev.events = EPOLLIN;
       ev.data.fd = dbus_fd;
@@ -229,7 +227,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   }
 
   lota_info("Initializing TPM");
-  ret = tpm_init(&g_tpm_ctx);
+  ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize TPM: %s", strerror(-ret));
     goto cleanup_tpm;
@@ -238,28 +236,29 @@ static int run_daemon(const struct run_daemon_params *params) {
     status_flags |= LOTA_STATUS_TPM_OK;
 
     lota_info("Provisioning AIK");
-    ret = tpm_provision_aik(&g_tpm_ctx);
+    ret = tpm_provision_aik(&g_agent.tpm_ctx);
     if (ret < 0) {
       lota_err("AIK provisioning failed: %s", strerror(-ret));
       goto cleanup_tpm;
     } else {
-      ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
+      ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
                   (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
       lota_info("AIK ready, signed tokens enabled");
 
-      ret = tpm_aik_load_metadata(&g_tpm_ctx);
+      ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
       if (ret < 0) {
         lota_err("Failed to load AIK metadata: %s", strerror(-ret));
         goto cleanup_tpm;
       } else {
-        int64_t age = tpm_aik_age(&g_tpm_ctx);
+        int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
         lota_info("AIK generation: %lu, age: %ld seconds",
-                  (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+                  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
+                  (long)age);
       }
     }
 
     lota_info("Performing self-measurement");
-    ret = self_measure(&g_tpm_ctx);
+    ret = self_measure(&g_agent.tpm_ctx);
     if (ret < 0) {
       lota_err("Self-measurement failed: %s", strerror(-ret));
       goto cleanup_tpm;
@@ -269,13 +268,13 @@ static int run_daemon(const struct run_daemon_params *params) {
   }
 
   lota_info("Loading BPF program from: %s", bpf_path);
-  ret = bpf_loader_init(&g_bpf_ctx);
+  ret = bpf_loader_init(&g_agent.bpf_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize BPF loader: %s", strerror(-ret));
     goto cleanup_tpm;
   }
 
-  ret = bpf_loader_load(&g_bpf_ctx, bpf_path);
+  ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path);
   if (ret < 0) {
     lota_err("Failed to load BPF program: %s", strerror(-ret));
     goto cleanup_bpf;
@@ -283,13 +282,13 @@ static int run_daemon(const struct run_daemon_params *params) {
   lota_info("BPF program loaded");
   status_flags |= LOTA_STATUS_BPF_LOADED;
 
-  ret = bpf_loader_set_agent_pid(&g_bpf_ctx, (uint32_t)getpid());
+  ret = bpf_loader_set_agent_pid(&g_agent.bpf_ctx, (uint32_t)getpid());
   if (ret < 0) {
     lota_err("Failed to set lota-agent PID in BPF globals: %s", strerror(-ret));
     goto cleanup_bpf;
   }
 
-  ret = bpf_loader_protect_pid(&g_bpf_ctx, (uint32_t)getpid());
+  ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, (uint32_t)getpid());
   if (ret < 0) {
     lota_err("Failed to self-protect lota-agent PID: %s", strerror(-ret));
     goto cleanup_bpf;
@@ -297,7 +296,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   lota_info("LOTA agent self-protection active (pid=%u)", (unsigned)getpid());
 
   /* BPF event fd to epoll */
-  int bpf_fd = bpf_loader_get_event_fd(&g_bpf_ctx);
+  int bpf_fd = bpf_loader_get_event_fd(&g_agent.bpf_ctx);
   if (bpf_fd >= 0) {
     ev.events = EPOLLIN;
     ev.data.fd = bpf_fd;
@@ -321,14 +320,14 @@ static int run_daemon(const struct run_daemon_params *params) {
   if (ret < 0)
     goto cleanup_bpf;
 
-  ret = bpf_loader_setup_ringbuf(&g_bpf_ctx, handle_exec_event, NULL);
+  ret = bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event, NULL);
   if (ret < 0) {
     lota_err("Failed to setup ring buffer: %s", strerror(-ret));
     goto cleanup_bpf;
   }
   lota_info("Ring buffer ready");
 
-  ipc_update_status(&g_ipc_ctx, status_flags, 0);
+  ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
 
   sdnotify_ready();
   sdnotify_status("Monitoring, mode=%s", mode_to_string(mode));
@@ -351,21 +350,21 @@ static int run_daemon(const struct run_daemon_params *params) {
       .protect_pid_count = &g_protect_pid_count,
       .trust_libs = g_trust_libs,
       .trust_lib_count = &g_trust_lib_count,
-      .ipc_ctx = &g_ipc_ctx,
-      .dbus_ctx = g_dbus_ctx,
-      .bpf_ctx = &g_bpf_ctx,
-      .running = &g_running,
+      .ipc_ctx = &g_agent.ipc_ctx,
+      .dbus_ctx = g_agent.dbus_ctx,
+      .bpf_ctx = &g_agent.bpf_ctx,
+      .running = &g_agent.running,
   };
   ret = agent_run_event_loop(&loop_ctx);
 
   /* clean shutdown via signal - do not propagate EINTR as failure */
-  if (!g_running)
+  if (!g_agent.running)
     ret = 0;
 
   sdnotify_stopping();
 
   struct bpf_extended_stats stats;
-  if (bpf_loader_get_extended_stats(&g_bpf_ctx, &stats) == 0) {
+  if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) == 0) {
     lota_info("Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
               "mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
               "ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu",
@@ -377,14 +376,14 @@ static int run_daemon(const struct run_daemon_params *params) {
 
   {
     uint64_t h_hits, h_misses, h_errors;
-    hash_verify_stats(&g_hash_ctx, &h_hits, &h_misses, &h_errors);
+    hash_verify_stats(&g_agent.hash_ctx, &h_hits, &h_misses, &h_errors);
     lota_info("Hash cache: hits=%lu misses=%lu errors=%lu", h_hits, h_misses,
               h_errors);
   }
 
 cleanup_bpf:
-  if (g_tpm_ctx.initialized && g_bpf_ctx.loaded) {
-    int poison_ret = poison_runtime_pcr(&g_tpm_ctx);
+  if (g_agent.tpm_ctx.initialized && g_agent.bpf_ctx.loaded) {
+    int poison_ret = poison_runtime_pcr(&g_agent.tpm_ctx);
     if (poison_ret < 0) {
       lota_err("Failed to poison runtime PCR before BPF unload: %s",
                strerror(-poison_ret));
@@ -395,13 +394,13 @@ cleanup_bpf:
     }
   }
 
-  bpf_loader_cleanup(&g_bpf_ctx);
+  bpf_loader_cleanup(&g_agent.bpf_ctx);
 cleanup_tpm:
-  tpm_cleanup(&g_tpm_ctx);
-  dbus_cleanup(g_dbus_ctx);
-  ipc_cleanup(&g_ipc_ctx);
+  tpm_cleanup(&g_agent.tpm_ctx);
+  dbus_cleanup(g_agent.dbus_ctx);
+  ipc_cleanup(&g_agent.ipc_ctx);
 cleanup_epoll:
-  hash_verify_cleanup(&g_hash_ctx);
+  hash_verify_cleanup(&g_agent.hash_ctx);
   close(sfd);
   close(epoll_fd);
   return ret;
@@ -414,7 +413,7 @@ int main(int argc, char *argv[]) {
   int test_ipc_flag = 0;
   int test_signed_flag = 0;
 
-  if (daemon_install_signals(&g_running, &g_reload) < 0) {
+  if (daemon_install_signals(&g_agent.running, &g_reload) < 0) {
     fprintf(stderr, "Failed to install signal handlers: %s\n", strerror(errno));
     return 1;
   }
@@ -530,9 +529,9 @@ int main(int argc, char *argv[]) {
   block_anon_exec = cfg.block_anon_exec;
   attest_interval = cfg.attest_interval;
   aik_ttl = cfg.aik_ttl;
-  g_tpm_ctx.aik_handle = cfg.aik_handle;
+  g_agent.tpm_ctx.aik_handle = cfg.aik_handle;
   {
-    int kret = tpm_set_kernel_path(&g_tpm_ctx,
+    int kret = tpm_set_kernel_path(&g_agent.tpm_ctx,
                                    cfg.kernel_path[0] ? cfg.kernel_path : NULL);
     if (kret < 0) {
       fprintf(stderr, "Invalid kernel_path in config: %s\n", strerror(-kret));
@@ -764,7 +763,7 @@ int main(int argc, char *argv[]) {
     cfg.block_anon_exec = block_anon_exec;
     cfg.attest_interval = attest_interval;
     cfg.aik_ttl = aik_ttl;
-    cfg.aik_handle = g_tpm_ctx.aik_handle;
+    cfg.aik_handle = g_agent.tpm_ctx.aik_handle;
     cfg.daemon = daemon_flag ? true : false;
     if (pid_file_path != cfg.pid_file)
       snprintf(cfg.pid_file, sizeof(cfg.pid_file), "%s", pid_file_path);

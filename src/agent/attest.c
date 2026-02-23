@@ -126,14 +126,14 @@ int export_policy(int mode) {
            "Auto-generated policy from %s", snap.hostname);
 
   fprintf(stderr, "Initializing TPM...\n");
-  ret = tpm_init(&g_tpm_ctx);
+  ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
     return ret;
   }
 
   fprintf(stderr, "Performing self-measurement...\n");
-  ret = self_measure(&g_tpm_ctx);
+  ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
     fprintf(stderr, "PCR 14 may not contain agent measurement.\n");
@@ -143,7 +143,7 @@ int export_policy(int mode) {
   snap.pcr_count = (int)(sizeof(pcrs_to_export) / sizeof(pcrs_to_export[0]));
   for (int i = 0; i < snap.pcr_count; i++) {
     snap.pcrs[i].index = pcrs_to_export[i];
-    ret = tpm_read_pcr(&g_tpm_ctx, pcrs_to_export[i], TPM2_ALG_SHA256,
+    ret = tpm_read_pcr(&g_agent.tpm_ctx, pcrs_to_export[i], TPM2_ALG_SHA256,
                        snap.pcrs[i].value);
     if (ret == 0) {
       snap.pcrs[i].valid = true;
@@ -154,7 +154,7 @@ int export_policy(int mode) {
   }
 
   /* Boot-chain measurement digest (kernel-relevant PCR selection) */
-  ret = tpm_get_current_kernel_path(&g_tpm_ctx, snap.kernel_path,
+  ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, snap.kernel_path,
                                     sizeof(snap.kernel_path));
   if (ret < 0) {
     fprintf(stderr, "Warning: Failed to find kernel path metadata: %s\n",
@@ -163,7 +163,7 @@ int export_policy(int mode) {
 
   {
     int selected_pcr = -1;
-    ret = read_kernel_measurement_digest(&g_tpm_ctx, snap.kernel_hash,
+    ret = read_kernel_measurement_digest(&g_agent.tpm_ctx, snap.kernel_hash,
                                          &selected_pcr);
     if (ret == 0) {
       snap.kernel_hash_valid = true;
@@ -204,7 +204,7 @@ int export_policy(int mode) {
     snap.lockdown = false;
   }
 
-  tpm_cleanup(&g_tpm_ctx);
+  tpm_cleanup(&g_agent.tpm_ctx);
 
   ret = policy_emit(&snap, stdout);
   if (ret < 0) {
@@ -242,14 +242,14 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    * report LSM enforcement mode
    * this flag is part of nonce binding (signed by TPM quote extraData)
    */
-  if (g_mode == LOTA_MODE_ENFORCE)
+  if (g_agent.mode == LOTA_MODE_ENFORCE)
     report->header.flags |= LOTA_REPORT_FLAG_ENFORCE;
 
   /*
    * report BPF LSM status
    * this flag is part of nonce binding (signed by TPM quote extraData)
    */
-  if (g_bpf_ctx.loaded)
+  if (g_agent.bpf_ctx.loaded)
     report->header.flags |= LOTA_REPORT_FLAG_BPF_ACTIVE;
 
   /*
@@ -257,7 +257,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    * This provides a unique, immutable identifier for this TPM.
    * Used by verifier to detect unauthorized hardware changes.
    */
-  ret = tpm_get_hardware_id(&g_tpm_ctx, report->tpm.hardware_id);
+  ret = tpm_get_hardware_id(&g_agent.tpm_ctx, report->tpm.hardware_id);
   if (ret < 0) {
     fprintf(stderr, "Warning: Failed to get hardware ID: %s\n", strerror(-ret));
     /* continue with zero hardware ID - verifier may reject */
@@ -268,8 +268,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
 
   /* system info: kernel path metadata + measured-boot digest */
-  ret =
-      tpm_get_current_kernel_path(&g_tpm_ctx, kernel_path, sizeof(kernel_path));
+  ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, kernel_path,
+                                    sizeof(kernel_path));
   if (ret == 0) {
     size_t kpath_len = strlen(kernel_path);
     if (kpath_len >= sizeof(report->system.kernel_path))
@@ -280,8 +280,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 
   {
     int selected_pcr = -1;
-    ret = read_kernel_measurement_digest(&g_tpm_ctx, report->system.kernel_hash,
-                                         &selected_pcr);
+    ret = read_kernel_measurement_digest(
+        &g_agent.tpm_ctx, report->system.kernel_hash, &selected_pcr);
     if (ret == 0) {
       report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
       printf("Kernel measurement digest captured from PCR %d\n", selected_pcr);
@@ -358,7 +358,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     EVP_MD_CTX_free(md);
   }
 
-  ret = tpm_quote(&g_tpm_ctx, binding_nonce, challenge->pcr_mask, &quote_resp);
+  ret = tpm_quote(&g_agent.tpm_ctx, binding_nonce, challenge->pcr_mask,
+                  &quote_resp);
   if (ret < 0) {
     fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
     goto cleanup;
@@ -402,7 +403,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    */
   {
     size_t aik_size = 0;
-    ret = tpm_get_aik_public(&g_tpm_ctx, report->tpm.aik_public,
+    ret = tpm_get_aik_public(&g_agent.tpm_ctx, report->tpm.aik_public,
                              LOTA_MAX_AIK_PUB_SIZE, &aik_size);
     if (ret == 0) {
       report->tpm.aik_public_size = (uint16_t)aik_size;
@@ -419,7 +420,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    */
   {
     size_t ek_cert_size = 0;
-    ret = tpm_get_ek_cert(&g_tpm_ctx, report->tpm.ek_certificate,
+    ret = tpm_get_ek_cert(&g_agent.tpm_ctx, report->tpm.ek_certificate,
                           LOTA_MAX_EK_CERT_SIZE, &ek_cert_size);
     if (ret == 0) {
       report->tpm.ek_cert_size = (uint16_t)ek_cert_size;
@@ -436,13 +437,14 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   }
 
   /* AIK rotation metadata */
-  if (g_tpm_ctx.aik_meta_loaded) {
-    report->tpm.aik_generation = g_tpm_ctx.aik_meta.generation;
+  if (g_agent.tpm_ctx.aik_meta_loaded) {
+    report->tpm.aik_generation = g_agent.tpm_ctx.aik_meta.generation;
 
-    if (tpm_aik_in_grace_period(&g_tpm_ctx)) {
+    if (tpm_aik_in_grace_period(&g_agent.tpm_ctx)) {
       size_t prev_size = 0;
-      ret = tpm_aik_get_prev_public(&g_tpm_ctx, report->tpm.prev_aik_public,
-                                    LOTA_MAX_AIK_PUB_SIZE, &prev_size);
+      ret =
+          tpm_aik_get_prev_public(&g_agent.tpm_ctx, report->tpm.prev_aik_public,
+                                  LOTA_MAX_AIK_PUB_SIZE, &prev_size);
       if (ret == 0) {
         report->tpm.prev_aik_public_size = (uint16_t)prev_size;
         printf("Previous AIK included (grace period, %zu bytes)\n", prev_size);
@@ -622,7 +624,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
   }
 
   printf("Initializing TPM...\n");
-  ret = tpm_init(&g_tpm_ctx);
+  ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
     net_cleanup();
@@ -630,24 +632,24 @@ int do_attest(const char *server, int port, const char *ca_cert,
   }
 
   printf("Performing self-measurement...\n");
-  ret = self_measure(&g_tpm_ctx);
+  ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
   }
 
   printf("Checking AIK...\n");
-  ret = tpm_provision_aik(&g_tpm_ctx);
+  ret = tpm_provision_aik(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
+    tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     return ret;
   }
 
-  ret = tpm_aik_load_metadata(&g_tpm_ctx);
+  ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
   if (ret < 0) {
     fprintf(stderr, "Failed to load AIK metadata: %s\n", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
+    tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     return ret;
   }
@@ -656,7 +658,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
   printf("\n=== Attestation %s ===\n", ret == 0 ? "Successful" : "Failed");
 
-  tpm_cleanup(&g_tpm_ctx);
+  tpm_cleanup(&g_agent.tpm_ctx);
   net_cleanup();
   return ret;
 }
@@ -684,90 +686,90 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 
   lota_info("Starting IPC server");
-  ret = ipc_init_or_activate(&g_ipc_ctx);
+  ret = ipc_init_or_activate(&g_agent.ipc_ctx);
   if (ret < 0) {
     lota_warn("IPC init failed: %s", strerror(-ret));
     lota_warn("Gaming clients will not be able to query status");
   } else {
-    setup_container_listener(&g_ipc_ctx);
-    setup_dbus(&g_ipc_ctx);
+    setup_container_listener(&g_agent.ipc_ctx);
+    setup_dbus(&g_agent.ipc_ctx);
   }
 
   ret = net_init();
   if (ret < 0) {
     lota_err("Failed to initialize network: %s", strerror(-ret));
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
+    dbus_cleanup(g_agent.dbus_ctx);
+    ipc_cleanup(&g_agent.ipc_ctx);
     return ret;
   }
 
   lota_info("Initializing TPM");
-  ret = tpm_init(&g_tpm_ctx);
+  ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
     lota_err("Failed to initialize TPM: %s", strerror(-ret));
     net_cleanup();
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
+    dbus_cleanup(g_agent.dbus_ctx);
+    ipc_cleanup(&g_agent.ipc_ctx);
     return ret;
   }
   status_flags |= LOTA_STATUS_TPM_OK;
 
   lota_info("Performing self-measurement");
-  ret = self_measure(&g_tpm_ctx);
+  ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
     lota_warn("Self-measurement failed: %s", strerror(-ret));
   }
 
   lota_info("Checking AIK");
-  ret = tpm_provision_aik(&g_tpm_ctx);
+  ret = tpm_provision_aik(&g_agent.tpm_ctx);
   if (ret < 0) {
     lota_err("Failed to provision AIK: %s", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
+    tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
+    dbus_cleanup(g_agent.dbus_ctx);
+    ipc_cleanup(&g_agent.ipc_ctx);
     return ret;
   }
 
-  ipc_set_tpm(&g_ipc_ctx, &g_tpm_ctx,
+  ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
               (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
 
-  ret = tpm_aik_load_metadata(&g_tpm_ctx);
+  ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
   if (ret < 0) {
     lota_err("Failed to load AIK metadata: %s", strerror(-ret));
-    tpm_cleanup(&g_tpm_ctx);
+    tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
-    dbus_cleanup(g_dbus_ctx);
-    ipc_cleanup(&g_ipc_ctx);
+    dbus_cleanup(g_agent.dbus_ctx);
+    ipc_cleanup(&g_agent.ipc_ctx);
     return ret;
   } else {
-    int64_t age = tpm_aik_age(&g_tpm_ctx);
+    int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
     lota_info("AIK generation: %lu, age: %ld seconds",
-              (unsigned long)g_tpm_ctx.aik_meta.generation, (long)age);
+              (unsigned long)g_agent.tpm_ctx.aik_meta.generation, (long)age);
   }
 
-  ipc_update_status(&g_ipc_ctx, status_flags, 0);
+  ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
 
   sdnotify_ready();
   sdnotify_status("Attesting to %s:%d", server, port);
   lota_info("Starting attestation loop");
 
-  while (g_running) {
+  while (g_agent.running) {
     now = time(NULL);
 
     /* check if AIK rotation is due */
-    if (g_tpm_ctx.aik_meta_loaded) {
-      int needs = tpm_aik_needs_rotation(&g_tpm_ctx, aik_ttl);
+    if (g_agent.tpm_ctx.aik_meta_loaded) {
+      int needs = tpm_aik_needs_rotation(&g_agent.tpm_ctx, aik_ttl);
       if (needs == 1) {
         lota_info("AIK rotation due (gen %lu, age %ld s)",
-                  (unsigned long)g_tpm_ctx.aik_meta.generation,
-                  (long)tpm_aik_age(&g_tpm_ctx));
-        ret = tpm_rotate_aik(&g_tpm_ctx);
+                  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
+                  (long)tpm_aik_age(&g_agent.tpm_ctx));
+        ret = tpm_rotate_aik(&g_agent.tpm_ctx);
         if (ret < 0) {
           lota_err("AIK rotation failed: %s", strerror(-ret));
         } else {
           lota_info("AIK rotated -> generation %lu",
-                    (unsigned long)g_tpm_ctx.aik_meta.generation);
+                    (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
         }
       }
     }
@@ -784,8 +786,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       /* update ipc: attestation successful */
       status_flags |= LOTA_STATUS_ATTESTED;
       valid_until = (uint64_t)(now + interval_sec + 60); /* buffer */
-      ipc_update_status(&g_ipc_ctx, status_flags, valid_until);
-      ipc_record_attestation(&g_ipc_ctx, true);
+      ipc_update_status(&g_agent.ipc_ctx, status_flags, valid_until);
+      ipc_record_attestation(&g_agent.ipc_ctx, true);
       sdnotify_status("Attested, valid until %lu", (unsigned long)valid_until);
     } else {
       consecutive_failures++;
@@ -809,9 +811,9 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       /* update ipc: clear attested flag after multiple failures */
       if (consecutive_failures >= 3) {
         status_flags &= ~LOTA_STATUS_ATTESTED;
-        ipc_update_status(&g_ipc_ctx, status_flags, 0);
+        ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
       }
-      ipc_record_attestation(&g_ipc_ctx, false);
+      ipc_record_attestation(&g_agent.ipc_ctx, false);
       sdnotify_status("Attestation failed (%d consecutive)",
                       consecutive_failures);
     }
@@ -835,7 +837,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
                          (uint64_t)now_ts.tv_nsec / 1000000 +
                          (uint64_t)sleep_time * 1000;
 
-    while (g_running) {
+    while (g_agent.running) {
       clock_gettime(CLOCK_MONOTONIC, &now_ts);
       uint64_t current_ms =
           (uint64_t)now_ts.tv_sec * 1000 + (uint64_t)now_ts.tv_nsec / 1000000;
@@ -851,7 +853,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
           timeout_ms = wd_timeout_ms;
       }
 
-      ipc_process(&g_ipc_ctx, timeout_ms);
+      ipc_process(&g_agent.ipc_ctx, timeout_ms);
       if (wd_enabled)
         sdnotify_watchdog_ping();
     }
@@ -859,9 +861,9 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
   lota_info("Shutting down continuous attestation");
   sdnotify_stopping();
-  tpm_cleanup(&g_tpm_ctx);
+  tpm_cleanup(&g_agent.tpm_ctx);
   net_cleanup();
-  dbus_cleanup(g_dbus_ctx);
-  ipc_cleanup(&g_ipc_ctx);
+  dbus_cleanup(g_agent.dbus_ctx);
+  ipc_cleanup(&g_agent.ipc_ctx);
   return 0;
 }

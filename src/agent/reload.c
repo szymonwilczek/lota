@@ -7,13 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "agent.h"
 #include "bpf_loader.h"
 #include "journal.h"
 #include "main_utils.h"
 #include "sdnotify.h"
-
-extern struct bpf_loader_ctx g_bpf_ctx;
-extern int g_mode;
 
 static void copy_path(char dst[PATH_MAX], const char *src) {
   size_t len = strnlen(src, PATH_MAX - 1);
@@ -32,7 +30,7 @@ static void apply_runtime_flags_transactional(
   bool runtime_flags_failed = false;
 
   if (new_cfg->strict_mmap != *strict_mmap) {
-    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+    if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP,
                               new_cfg->strict_mmap ? 1 : 0) == 0) {
       *strict_mmap = new_cfg->strict_mmap;
     } else {
@@ -42,7 +40,7 @@ static void apply_runtime_flags_transactional(
   }
 
   if (!runtime_flags_failed && new_cfg->block_ptrace != *block_ptrace) {
-    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+    if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
                               new_cfg->block_ptrace ? 1 : 0) == 0) {
       *block_ptrace = new_cfg->block_ptrace;
     } else {
@@ -52,7 +50,7 @@ static void apply_runtime_flags_transactional(
   }
 
   if (!runtime_flags_failed && new_cfg->strict_exec != *strict_exec) {
-    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_EXEC,
+    if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_EXEC,
                               new_cfg->strict_exec ? 1 : 0) == 0) {
       *strict_exec = new_cfg->strict_exec;
     } else {
@@ -62,7 +60,7 @@ static void apply_runtime_flags_transactional(
   }
 
   if (!runtime_flags_failed && new_cfg->strict_modules != *strict_modules) {
-    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+    if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
                               new_cfg->strict_modules ? 1 : 0) == 0) {
       *strict_modules = new_cfg->strict_modules;
     } else {
@@ -72,7 +70,7 @@ static void apply_runtime_flags_transactional(
   }
 
   if (!runtime_flags_failed && new_cfg->block_anon_exec != *block_anon_exec) {
-    if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+    if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
                               new_cfg->block_anon_exec ? 1 : 0) == 0) {
       *block_anon_exec = new_cfg->block_anon_exec;
     } else {
@@ -83,7 +81,7 @@ static void apply_runtime_flags_transactional(
 
   if (runtime_flags_failed) {
     if (*strict_mmap != old_strict_mmap) {
-      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MMAP,
+      if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP,
                                 old_strict_mmap ? 1 : 0) == 0) {
         *strict_mmap = old_strict_mmap;
       } else {
@@ -91,7 +89,7 @@ static void apply_runtime_flags_transactional(
       }
     }
     if (*block_ptrace != old_block_ptrace) {
-      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+      if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
                                 old_block_ptrace ? 1 : 0) == 0) {
         *block_ptrace = old_block_ptrace;
       } else {
@@ -99,7 +97,7 @@ static void apply_runtime_flags_transactional(
       }
     }
     if (*strict_exec != old_strict_exec) {
-      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_EXEC,
+      if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_EXEC,
                                 old_strict_exec ? 1 : 0) == 0) {
         *strict_exec = old_strict_exec;
       } else {
@@ -107,7 +105,7 @@ static void apply_runtime_flags_transactional(
       }
     }
     if (*strict_modules != old_strict_modules) {
-      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_STRICT_MODULES,
+      if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
                                 old_strict_modules ? 1 : 0) == 0) {
         *strict_modules = old_strict_modules;
       } else {
@@ -115,7 +113,7 @@ static void apply_runtime_flags_transactional(
       }
     }
     if (*block_anon_exec != old_block_anon_exec) {
-      if (bpf_loader_set_config(&g_bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+      if (bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
                                 old_block_anon_exec ? 1 : 0) == 0) {
         *block_anon_exec = old_block_anon_exec;
       } else {
@@ -145,7 +143,7 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
   uint32_t *old_protect_pids = *protect_pids;
 
   for (int k = 0; k < old_protect_pid_count; k++)
-    bpf_loader_unprotect_pid(&g_bpf_ctx, old_protect_pids[k]);
+    bpf_loader_unprotect_pid(&g_agent.bpf_ctx, old_protect_pids[k]);
 
   if (new_cfg->protect_pid_count > 0) {
     uint32_t *new_pids =
@@ -154,7 +152,7 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
       lota_err("Failed to allocate memory for protected PIDs on reload; "
                "restoring previous PID protection set");
       for (int k = 0; k < old_protect_pid_count; k++) {
-        if (bpf_loader_protect_pid(&g_bpf_ctx, old_protect_pids[k]) < 0) {
+        if (bpf_loader_protect_pid(&g_agent.bpf_ctx, old_protect_pids[k]) < 0) {
           lota_warn("Failed to restore protected PID %u after reload "
                     "allocation failure",
                     old_protect_pids[k]);
@@ -167,7 +165,7 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
     bool apply_failed = false;
     for (int k = 0; k < new_cfg->protect_pid_count; k++) {
       uint32_t pid = new_cfg->protect_pids[k];
-      if (bpf_loader_protect_pid(&g_bpf_ctx, pid) < 0) {
+      if (bpf_loader_protect_pid(&g_agent.bpf_ctx, pid) < 0) {
         lota_warn("Failed to protect PID %u on reload", pid);
         apply_failed = true;
         break;
@@ -177,9 +175,9 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
 
     if (apply_failed) {
       for (int k = 0; k < applied_pids; k++)
-        bpf_loader_unprotect_pid(&g_bpf_ctx, new_pids[k]);
+        bpf_loader_unprotect_pid(&g_agent.bpf_ctx, new_pids[k]);
       for (int k = 0; k < old_protect_pid_count; k++) {
-        if (bpf_loader_protect_pid(&g_bpf_ctx, old_protect_pids[k]) < 0) {
+        if (bpf_loader_protect_pid(&g_agent.bpf_ctx, old_protect_pids[k]) < 0) {
           lota_warn("Failed to restore protected PID %u after reload apply "
                     "failure",
                     old_protect_pids[k]);
@@ -214,7 +212,8 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
   }
 
   for (int k = 0; k < old_trust_lib_count; k++) {
-    int untrust_ret = bpf_loader_untrust_lib(&g_bpf_ctx, old_trust_libs[k]);
+    int untrust_ret =
+        bpf_loader_untrust_lib(&g_agent.bpf_ctx, old_trust_libs[k]);
     if (untrust_ret < 0 && untrust_ret != -ENOENT) {
       lota_warn("Failed to remove trusted lib %s on reload: %s",
                 old_trust_libs[k], strerror(-untrust_ret));
@@ -225,7 +224,7 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 
   for (int k = 0; !trust_reload_failed && k < new_cfg->trust_lib_count; k++) {
     const char *lib = new_cfg->trust_libs[k];
-    int trust_ret = bpf_loader_trust_lib(&g_bpf_ctx, lib);
+    int trust_ret = bpf_loader_trust_lib(&g_agent.bpf_ctx, lib);
     if (trust_ret < 0) {
       lota_warn("Failed to trust lib %s on reload: %s", lib,
                 strerror(-trust_ret));
@@ -238,11 +237,12 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 
   if (trust_reload_failed) {
     for (int k = 0; k < applied_libs; k++)
-      bpf_loader_untrust_lib(&g_bpf_ctx, trust_libs[k]);
+      bpf_loader_untrust_lib(&g_agent.bpf_ctx, trust_libs[k]);
 
     int restored_libs = 0;
     for (int k = 0; k < old_trust_lib_count; k++) {
-      int restore_ret = bpf_loader_trust_lib(&g_bpf_ctx, old_trust_libs[k]);
+      int restore_ret =
+          bpf_loader_trust_lib(&g_agent.bpf_ctx, old_trust_libs[k]);
       if (restore_ret < 0) {
         lota_warn("Failed to restore trusted lib %s after reload error: %s",
                   old_trust_libs[k], strerror(-restore_ret));
@@ -337,11 +337,11 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 
   int new_mode = parse_mode(new_cfg.mode);
   if (new_mode >= 0 && new_mode != *mode) {
-    if (bpf_loader_set_mode(&g_bpf_ctx, new_mode) == 0) {
+    if (bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode) == 0) {
       lota_info("Mode changed: %s -> %s", mode_to_string(*mode),
                 mode_to_string(new_mode));
       *mode = new_mode;
-      g_mode = new_mode;
+      g_agent.mode = new_mode;
     } else {
       lota_warn("Failed to apply new mode");
     }

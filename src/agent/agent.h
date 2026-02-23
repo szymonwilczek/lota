@@ -12,22 +12,30 @@
 #include <signal.h>
 #include <stdint.h>
 
+#include "bpf_loader.h"
+#include "hash_verify.h"
+#include "ipc.h"
+#include "tpm.h"
+
 /* PCR index for LOTA agent self-measurement */
 #define LOTA_PCR_SELF 14
 
-struct tpm_context;
-struct bpf_loader_ctx;
-struct ipc_context;
 struct dbus_context;
-struct hash_verify_ctx;
 
-extern volatile sig_atomic_t g_running;
-extern struct tpm_context g_tpm_ctx;
-extern struct bpf_loader_ctx g_bpf_ctx;
-extern struct ipc_context g_ipc_ctx;
-extern struct hash_verify_ctx g_hash_ctx;
-extern struct dbus_context *g_dbus_ctx;
-extern int g_mode;
+/*
+ * Agent global runtime state.
+ */
+struct agent_globals {
+  volatile sig_atomic_t running;
+  struct tpm_context tpm_ctx;
+  struct bpf_loader_ctx bpf_ctx;
+  struct ipc_context ipc_ctx;
+  struct hash_verify_ctx hash_ctx;
+  struct dbus_context *dbus_ctx;
+  int mode;
+};
+
+extern struct agent_globals g_agent;
 
 int self_measure(struct tpm_context *ctx);
 void setup_container_listener(struct ipc_context *ctx);

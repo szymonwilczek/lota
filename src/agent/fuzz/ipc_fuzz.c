@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 // LOTA Agent - IPC Fuzz Harness
 
-#include "../bpf_loader.h"
-#include "../hash_verify.h"
+#include "../agent.h"
 #include <errno.h>
 #include <signal.h>
 #include <stddef.h>
@@ -51,13 +50,11 @@ int fuzz_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
 #define send fuzz_send
 #define epoll_ctl fuzz_epoll_ctl
 
-struct tpm_context g_tpm_ctx;
-struct bpf_loader_ctx g_bpf_ctx;
-struct ipc_context g_ipc_ctx;
-struct hash_verify_ctx g_hash_ctx;
-struct dbus_context *g_dbus_ctx;
-int g_mode = 0;
-volatile sig_atomic_t g_running = 1;
+struct agent_globals g_agent = {
+    .running = 1,
+    .dbus_ctx = NULL,
+    .mode = 0,
+};
 
 int self_measure(struct tpm_context *ctx) {
   (void)ctx;

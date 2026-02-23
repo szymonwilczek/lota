@@ -27,8 +27,6 @@
 #define EAUTH 80
 #endif
 
-extern struct dbus_context *g_dbus_ctx;
-
 const char *mode_to_string(int mode) {
   switch (mode) {
   case LOTA_MODE_MAINTENANCE:
@@ -199,9 +197,9 @@ int handle_policy_ops(const struct policy_ops_args *args) {
 }
 
 void setup_dbus(struct ipc_context *ctx) {
-  g_dbus_ctx = dbus_init(ctx);
-  if (g_dbus_ctx)
-    ipc_set_dbus(ctx, g_dbus_ctx);
+  g_agent.dbus_ctx = dbus_init(ctx);
+  if (g_agent.dbus_ctx)
+    ipc_set_dbus(ctx, g_agent.dbus_ctx);
   else
     lota_warn("D-Bus unavailable, using socket IPC only");
 }
