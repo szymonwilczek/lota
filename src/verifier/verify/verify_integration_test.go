@@ -83,7 +83,7 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 
-	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
+	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
@@ -138,7 +138,8 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 
-	// reserved
+	// quote_sig_alg (was reserved)
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 
 	// System Measurement (396 bytes)
@@ -549,7 +550,7 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
-	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
+	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])

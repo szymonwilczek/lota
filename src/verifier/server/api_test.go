@@ -230,7 +230,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 
-	bindingNonce := verify.ComputeBindingNonce(nonce, bindingReport)
+	bindingNonce := verify.ComputeAttestationBindingNonce(nonce, bindingReport)
 	attestData := buildTPMSAttest(bindingNonce[:], pcrDigest)
 
 	hash := sha256.Sum256(attestData)
@@ -284,7 +284,8 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 
-	// reserved
+	// quote_sig_alg (was reserved)
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 
 	// System Measurement (396 bytes)

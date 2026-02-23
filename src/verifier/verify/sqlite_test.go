@@ -581,6 +581,12 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	}
 	defer db.Close()
 
+	// NOTE: ':memory:' creates a separate database per connection.
+	// This test uses goroutines, so force a single connection to
+	// ensure all operations share the same schema/state.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	aikStore := store.NewSQLiteAIKStore(db)
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
@@ -743,7 +749,7 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	bindingReport.System.IOMMU.Flags = 0x07
 	bindingReport.System.IOMMU.UnitCount = 2
 	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
-	bindingNonce := ComputeBindingNonce(nonce, bindingReport)
+	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
@@ -796,7 +802,8 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 
-	// reserved
+	// quote_sig_alg (was reserved)
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 
 	// System measurement

@@ -17,7 +17,7 @@ import (
 
 // compute binding nonce for tests from current report content
 func testBindingNonce(report *types.AttestationReport, nonce [types.NonceSize]byte) []byte {
-	binding := ComputeBindingNonce(nonce, report)
+	binding := ComputeAttestationBindingNonce(nonce, report)
 	out := make([]byte, len(binding))
 	copy(out, binding[:])
 	return out

@@ -285,11 +285,3 @@ func ComputeAttestationBindingNonce(challengeNonce [types.NonceSize]byte, report
 	copy(out[:], h.Sum(nil))
 	return out
 }
-
-// kept for backward compatibility
-//
-// @Deprecated: use ComputeAttestationBindingNonce.
-// To be removed in future updates.
-func ComputeBindingNonce(challengeNonce [types.NonceSize]byte, report *types.AttestationReport) [types.NonceSize]byte {
-	return ComputeAttestationBindingNonce(challengeNonce, report)
-}
