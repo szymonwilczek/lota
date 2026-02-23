@@ -828,59 +828,84 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
   uint8_t buf[sizeof(struct lota_ipc_notify)];
   int ret;
   int dispatched = 0;
+  int64_t deadline_ms = 0;
 
   if (!client)
     return LOTA_ERR_NOT_CONNECTED;
 
-  for (;;) {
-    ret = wait_for_socket(client->fd, POLLIN, timeout_ms);
-    if (ret == -ETIMEDOUT)
-      break;
-    if (ret < 0)
-      return LOTA_ERR_PROTOCOL;
+  if (timeout_ms < 0)
+    timeout_ms = DEFAULT_TIMEOUT_MS;
 
-    ret =
-        recv_exact_timeout(client->fd, &resp, sizeof(resp),
-                           timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
+  deadline_ms = monotonic_ms() + timeout_ms;
+
+  /* timeout_ms == 0: drain whatever is already queued */
+  if (timeout_ms == 0)
+    deadline_ms = monotonic_ms();
+
+  for (;;) {
+    int64_t now_ms = monotonic_ms();
+    int wait_ms = (int)(deadline_ms - now_ms);
+
+    if (wait_ms <= 0)
+      break;
+
+    ret = wait_for_socket(client->fd, POLLIN, wait_ms);
     if (ret == -ETIMEDOUT)
       break;
     if (ret == -ECONNRESET)
-      return LOTA_ERR_NOT_CONNECTED;
+      return dispatched > 0 ? dispatched : LOTA_ERR_NOT_CONNECTED;
     if (ret < 0)
       return LOTA_ERR_PROTOCOL;
 
-    if (resp.magic != LOTA_IPC_MAGIC)
-      return LOTA_ERR_PROTOCOL;
-
-    if (resp.result != LOTA_IPC_NOTIFY) {
-      /* unexpected non-notification -> drain and skip */
-      if (resp.payload_len > 0)
-        drain_payload(client->fd, resp.payload_len,
-                      timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
-      continue;
-    }
-
-    if (resp.payload_len > 0) {
-      size_t nlen =
-          resp.payload_len < sizeof(buf) ? resp.payload_len : sizeof(buf);
-
-      memset(buf, 0, sizeof(buf));
-
-      ret = recv_exact_timeout(client->fd, buf, nlen,
-                               timeout_ms > 0 ? timeout_ms
-                                              : DRAIN_READ_TIMEOUT_MS);
+    /* drain all currently queued frames without blocking */
+    for (;;) {
+      ret = recv_exact_timeout(client->fd, &resp, sizeof(resp),
+                               DRAIN_READ_TIMEOUT_MS);
+      if (ret == -ETIMEDOUT)
+        break;
+      if (ret == -ECONNRESET)
+        return dispatched > 0 ? dispatched : LOTA_ERR_NOT_CONNECTED;
       if (ret < 0)
         return LOTA_ERR_PROTOCOL;
 
-      if (resp.payload_len > sizeof(buf))
-        drain_payload(client->fd, resp.payload_len - sizeof(buf),
-                      timeout_ms > 0 ? timeout_ms : DRAIN_READ_TIMEOUT_MS);
+      if (resp.magic != LOTA_IPC_MAGIC)
+        return LOTA_ERR_PROTOCOL;
 
-      dispatched += dispatch_notification(client, buf, nlen);
+      if (resp.result != LOTA_IPC_NOTIFY) {
+        /* unexpected non-notification -> drain and skip */
+        if (resp.payload_len > 0)
+          drain_payload(client->fd, resp.payload_len, DRAIN_READ_TIMEOUT_MS);
+        continue;
+      }
+
+      if (resp.payload_len > 0) {
+        size_t nlen =
+            resp.payload_len < sizeof(buf) ? resp.payload_len : sizeof(buf);
+
+        memset(buf, 0, sizeof(buf));
+
+        ret = recv_exact_timeout(client->fd, buf, nlen, DRAIN_READ_TIMEOUT_MS);
+        if (ret == -ECONNRESET)
+          return dispatched > 0 ? dispatched : LOTA_ERR_NOT_CONNECTED;
+        if (ret < 0)
+          return LOTA_ERR_PROTOCOL;
+
+        if (resp.payload_len > sizeof(buf))
+          drain_payload(client->fd, resp.payload_len - sizeof(buf),
+                        DRAIN_READ_TIMEOUT_MS);
+
+        dispatched += dispatch_notification(client, buf, nlen);
+      }
+
+      /* see if more data is queued right now */
+      {
+        int more = wait_for_socket(client->fd, POLLIN, 0);
+        if (more == -ETIMEDOUT)
+          break;
+        if (more == -ECONNRESET)
+          return dispatched > 0 ? dispatched : LOTA_ERR_NOT_CONNECTED;
+      }
     }
-
-    /* switch to non-blocking to drain queue */
-    timeout_ms = 0;
   }
 
   return dispatched;
