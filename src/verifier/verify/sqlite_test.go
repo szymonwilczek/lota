@@ -420,8 +420,12 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	verifier := NewVerifier(cfg, aikStore)
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.SetActivePolicy("default")
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	clientID := "sqlite-client"
 	pcr14 := [32]byte{0x14, 0x14}
@@ -478,8 +482,12 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	v1 := NewVerifier(cfg1, aikStore1)
-	v1.AddPolicy(DefaultPolicy())
-	v1.SetActivePolicy("default")
+	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := v1.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	// successful attestation
 	challenge, _ := v1.GenerateChallenge("restart-client")
@@ -499,8 +507,12 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	v2 := NewVerifier(cfg2, aikStore2)
-	v2.AddPolicy(DefaultPolicy())
-	v2.SetActivePolicy("default")
+	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := v2.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	// same report - MUST fail
 	result2, err := v2.VerifyReport("restart-client", report)
@@ -534,8 +546,12 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	v1 := NewVerifier(cfg1, aikStore1)
-	v1.AddPolicy(DefaultPolicy())
-	v1.SetActivePolicy("default")
+	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := v1.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	ch1, _ := v1.GenerateChallenge("baseline-client")
 	rep1 := createSQLiteTestReport(t, "baseline-client", ch1.Nonce, originalPCR14)
@@ -554,8 +570,12 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	v2 := NewVerifier(cfg2, aikStore2)
-	v2.AddPolicy(DefaultPolicy())
-	v2.SetActivePolicy("default")
+	if err := v2.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := v2.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	// tampered PCR14 should be detected even after restart
 	ch2, _ := v2.GenerateChallenge("baseline-client")
@@ -594,8 +614,12 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	verifier := NewVerifier(cfg, aikStore)
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.SetActivePolicy("default")
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	numClients := 10
 	var wg sync.WaitGroup
@@ -666,8 +690,12 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
 	v1 := NewVerifier(cfg, aikStore1)
-	v1.AddPolicy(DefaultPolicy())
-	v1.SetActivePolicy("default")
+	if err := v1.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := v1.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
 
 	ch, _ := v1.GenerateChallenge("aik-persist-client")
 	rep := createSQLiteTestReport(t, "aik-persist-client", ch.Nonce, pcr14)

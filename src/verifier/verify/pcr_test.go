@@ -138,9 +138,12 @@ func TestPCRVerifier_MultiplePolicies(t *testing.T) {
 	t.Log("TEST: Multiple policy management")
 
 	verifier := NewPCRVerifier()
-
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.AddPolicy(StrictPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	if err := verifier.AddPolicy(StrictPolicy()); err != nil {
+		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
+	}
 
 	policies := verifier.ListPolicies()
 	if len(policies) != 2 {
@@ -168,7 +171,9 @@ func TestPCRVerifier_SetActivePolicy_NotFound(t *testing.T) {
 	t.Log("TEST: Setting non-existent policy fails")
 
 	verifier := NewPCRVerifier()
-	verifier.AddPolicy(DefaultPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 
 	err := verifier.SetActivePolicy("nonexistent")
 	if err == nil {
@@ -204,7 +209,9 @@ func TestPCRVerifier_VerifyReport_PCRMismatch(t *testing.T) {
 			0: "0000000000000000000000000000000000000000000000000000000000000000",
 		},
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	// different PCR 0 value
 	report := &types.AttestationReport{}
@@ -233,7 +240,9 @@ func TestPCRVerifier_VerifyReport_PCRNotInQuote(t *testing.T) {
 			0: "0000000000000000000000000000000000000000000000000000000000000000",
 		},
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	// report WITHOUT PCR 0 in mask
 	report := &types.AttestationReport{}
@@ -256,7 +265,9 @@ func TestPCRVerifier_VerifyReport_RequireIOMMU(t *testing.T) {
 		Name:         "require-iommu",
 		RequireIOMMU: true,
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	// IOMMU flag not set (0x04)
@@ -279,7 +290,9 @@ func TestPCRVerifier_VerifyReport_RequireSecureBoot(t *testing.T) {
 		Name:              "require-secureboot",
 		RequireSecureBoot: true,
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	report.Header.Flags = 0 // no SecureBoot flag
@@ -303,7 +316,9 @@ func TestPCRVerifier_VerifyReport_KernelHashAllowed(t *testing.T) {
 			"6da97dc5886e0da1d3ce0ac1a01c82c642564460d907cfc10db9af1ca8ad97d9",
 		},
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	// wrong kernel hash
@@ -330,7 +345,9 @@ func TestPCRVerifier_VerifyReport_AgentHashAllowed(t *testing.T) {
 			"db457c14130c56c599bc56c2bb888b644e3b504aaeefe6dc6aaf6c665087cf46",
 		},
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	// wrong agent hash
@@ -352,7 +369,9 @@ func TestPCRVerifier_VerifyReport_PassingPolicy(t *testing.T) {
 	verifier := NewPCRVerifier()
 
 	// permissive policy (default requires enforce mode)
-	verifier.AddPolicy(DefaultPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	report.Header.Flags = types.FlagEnforce | types.FlagModuleSig
@@ -414,7 +433,9 @@ func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
 		Name:           "require-enforce",
 		RequireEnforce: true,
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	// report without enforce flag
 	report := &types.AttestationReport{}
@@ -437,7 +458,9 @@ func TestPCRVerifier_VerifyReport_RequireEnforce_Pass(t *testing.T) {
 		Name:           "require-enforce",
 		RequireEnforce: true,
 	}
-	verifier.AddPolicy(policy)
+	if err := verifier.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy(policy) failed: %v", err)
+	}
 
 	report := &types.AttestationReport{}
 	report.Header.Flags = types.FlagEnforce
@@ -454,7 +477,9 @@ func TestPCRVerifier_VerifyReport_DefaultPolicy_RejectsMonitor(t *testing.T) {
 	t.Log("SECURITY TEST: DefaultPolicy rejects agents not in enforce mode")
 
 	verifier := NewPCRVerifier()
-	verifier.AddPolicy(DefaultPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 
 	// agent in monitor mode -> no FlagEnforce
 	report := &types.AttestationReport{}

@@ -257,15 +257,20 @@ func persistentClientID(challengeID string) string {
 }
 
 // creates a Verifier with default policy for testing
-func createTestVerifier(aikStore store.AIKStore) *Verifier {
+func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
+	t.Helper()
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, aikStore)
 
 	// default policy that allows any values
-	verifier.AddPolicy(DefaultPolicy())
-	verifier.SetActivePolicy("default")
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default) failed: %v", err)
+	}
 
 	return verifier
 }
@@ -275,7 +280,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	t.Log("Simulates first-time client attestation")
 
 	aikStore := store.NewMemoryStore()
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "test-client-001"
 
@@ -317,7 +322,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	aikStore := store.NewMemoryStore()
 	aikStore.RegisterAIK(persistentClientID("test-client"), &integrationTestKey.PublicKey)
 
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "test-client"
 
@@ -351,7 +356,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 	aikStore := store.NewMemoryStore()
 	aikStore.RegisterAIK(persistentClientID("compromised-client"), &integrationTestKey.PublicKey)
 
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "compromised-client"
 
@@ -402,7 +407,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	aikStore := store.NewMemoryStore()
 	aikStore.RegisterAIK(persistentClientID("replay-victim"), &integrationTestKey.PublicKey)
 
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 	clientID := "replay-victim"
 	challenge, _ := verifier.GenerateChallenge(clientID)
 	pcr14 := [32]byte{}
@@ -438,7 +443,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	aikStore.RegisterAIK(persistentClientID("wrong-key-client"), &otherKey.PublicKey)
 
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	clientID := "wrong-key-client"
 
@@ -462,7 +467,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent client attestations")
 
 	aikStore := store.NewMemoryStore()
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	// generate keys for multiple clients
 	numClients := 10
@@ -530,7 +535,7 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 	t.Log("INTEGRATION TEST: Concurrent first attestation (same hardware)")
 
 	aikStore := store.NewMemoryStore()
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	// both goroutines represent the same hardware identity
 	hardwareLabel := "same-hardware-client"
@@ -587,7 +592,7 @@ func TestIntegration_AIKExpiry_GetRegisteredAtErrorForcesRotation(t *testing.T) 
 	t.Log("SECURITY TEST: GetRegisteredAt error forces AIK rotation required")
 
 	aikStore := &registeredAtErrorStore{MemoryStore: store.NewMemoryStore()}
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	hardwareLabel := "regtime-error-client"
 	clientID := persistentClientID(hardwareLabel)
@@ -761,7 +766,7 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 	t.Log("TEST: Challenge contains correct PCR mask")
 
 	aikStore := store.NewMemoryStore()
-	verifier := createTestVerifier(aikStore)
+	verifier := createTestVerifier(t, aikStore)
 
 	challenge, err := verifier.GenerateChallenge("pcr-test-client")
 	if err != nil {

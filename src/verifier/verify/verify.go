@@ -710,8 +710,8 @@ func (v *Verifier) LoadPolicy(path string) error {
 }
 
 // adds a policy programmatically
-func (v *Verifier) AddPolicy(policy *PCRPolicy) {
-	v.pcrVerifier.AddPolicy(policy)
+func (v *Verifier) AddPolicy(policy *PCRPolicy) error {
+	return v.pcrVerifier.AddPolicy(policy)
 }
 
 // sets the Ed25519 public key used to verify policy file signatures

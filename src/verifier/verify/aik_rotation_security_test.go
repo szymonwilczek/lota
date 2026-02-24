@@ -33,7 +33,9 @@ func TestSecurity_AIKExpiry_TOFUHijackRejected(t *testing.T) {
 	cfg.NonceLifetime = 2 * time.Second
 	cfg.AIKMaxAge = 1 * time.Millisecond
 	verifier := NewVerifier(cfg, aikStore)
-	verifier.AddPolicy(DefaultPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 	if err := verifier.SetActivePolicy("default"); err != nil {
 		t.Fatalf("SetActivePolicy failed: %v", err)
 	}

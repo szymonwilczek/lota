@@ -94,7 +94,9 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikStore)
-	v.AddPolicy(verify.DefaultPolicy())
+	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 
 	srv := &Server{
 		verifier: v,
@@ -133,7 +135,9 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikStore)
-	v.AddPolicy(verify.DefaultPolicy())
+	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 
 	ln, err := newDummyListener()
 	if err != nil {
@@ -426,8 +430,9 @@ func TestHealthDegraded(t *testing.T) {
 
 func TestStatsEndpoint(t *testing.T) {
 	mux, v := setupTestAPIListening(t)
-
-	v.AddPolicy(verify.StrictPolicy())
+	if err := v.AddPolicy(verify.StrictPolicy()); err != nil {
+		t.Fatalf("AddPolicy(StrictPolicy) failed: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
 	rec := httptest.NewRecorder()

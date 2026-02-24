@@ -66,7 +66,9 @@ func TestRequireCert_NewClientMissingCerts_NoRegistrationSideEffects(t *testing.
 	cfg.RequireCert = true
 
 	verifier := NewVerifier(cfg, tracked)
-	verifier.AddPolicy(DefaultPolicy())
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
 	verifier.SetActivePolicy("default")
 
 	clientID := "test-client-require-cert"

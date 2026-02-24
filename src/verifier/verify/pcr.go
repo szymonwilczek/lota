@@ -176,7 +176,10 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 }
 
 // adds a policy programmatically
-func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) {
+func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
+	if err := validatePolicyPCRIndices(policy); err != nil {
+		return err
+	}
 	for _, w := range ValidatePolicy(policy) {
 		slog.Warn(w)
 	}
@@ -189,6 +192,8 @@ func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) {
 	if v.active == "" {
 		v.active = policy.Name
 	}
+
+	return nil
 }
 
 // sets which policy to use for verification

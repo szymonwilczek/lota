@@ -235,7 +235,10 @@ func main() {
 
 	verifier := verify.NewVerifier(verifierCfg, aikStore)
 
-	verifier.AddPolicy(verify.DefaultPolicy())
+	if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
+		logger.Error("failed to add default PCR policy", "error", err)
+		os.Exit(1)
+	}
 	logger.Info("loaded default PCR policy")
 
 	// policy signature verification key
