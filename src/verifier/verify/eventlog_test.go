@@ -491,3 +491,34 @@ func TestParseReport_WithEventLog(t *testing.T) {
 
 	t.Log("ParseReport correctly extracts event log from variable sections")
 }
+
+func TestParseEventLog_RejectsOversizeHeaderData(t *testing.T) {
+	// oversized headerDataSize must be rejected before any int cast / slice
+	over := maxTCGHeaderDataSize + 1
+	data := make([]byte, 32)
+	binary.LittleEndian.PutUint32(data[0:4], 0)
+	binary.LittleEndian.PutUint32(data[4:8], EvNoAction)
+	// sha1_digest is zeros (20 bytes)
+	binary.LittleEndian.PutUint32(data[28:32], over)
+
+	if _, err := ParseEventLog(data); err == nil {
+		t.Fatal("expected oversize header data to be rejected")
+	}
+}
+
+func TestParsePCREvent2_RejectsOversizeEventData(t *testing.T) {
+	over := maxTCGEventDataSize + 1
+	data := make([]byte, 4+4+4+4)
+	off := 0
+	binary.LittleEndian.PutUint32(data[off:], 0) // PCRIndex
+	off += 4
+	binary.LittleEndian.PutUint32(data[off:], 0) // EventType
+	off += 4
+	binary.LittleEndian.PutUint32(data[off:], 0) // digestCount
+	off += 4
+	binary.LittleEndian.PutUint32(data[off:], over) // eventDataSize
+
+	if _, _, err := parsePCREvent2(data, nil); err == nil {
+		t.Fatal("expected oversize event data to be rejected")
+	}
+}

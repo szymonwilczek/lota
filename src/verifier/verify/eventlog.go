@@ -43,6 +43,12 @@ const (
 	AlgSHA512 uint16 = 0x000D
 )
 
+// untrusted size caps
+const (
+	maxTCGHeaderDataSize uint32 = 1 << 20 // 1MB
+	maxTCGEventDataSize  uint32 = 1 << 20 // 1MB
+)
+
 // single measurement entry from the event log
 type EventLogEntry struct {
 	PCRIndex  uint32
@@ -96,18 +102,23 @@ func ParseEventLog(data []byte) (*ParsedEventLog, error) {
 		return nil, fmt.Errorf("invalid event log header: pcr=%d type=0x%x", headerPCR, headerType)
 	}
 
-	if len(data) < offset+int(headerDataSize) {
+	if headerDataSize > maxTCGHeaderDataSize {
+		return nil, fmt.Errorf("event log header data too large: %d", headerDataSize)
+	}
+	remaining := len(data) - offset
+	if remaining < 0 || uint64(headerDataSize) > uint64(remaining) {
 		return nil, errors.New("event log truncated at header data")
 	}
+	headerSize := int(headerDataSize) // safe after cap
 
 	// parse Spec ID Event to get algorithm list
-	specData := data[offset : offset+int(headerDataSize)]
+	specData := data[offset : offset+headerSize]
 	algList, err := parseSpecIDEvent(specData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Spec ID Event: %w", err)
 	}
 	result.AlgorithmList = algList
-	offset += int(headerDataSize)
+	offset += headerSize
 
 	// parse remaining entries as TCG_PCR_EVENT2
 	for offset < len(data) {
@@ -216,13 +227,17 @@ func parsePCREvent2(data []byte, algList []uint16) (*EventLogEntry, int, error) 
 	}
 	eventDataSize := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
-
-	if len(data) < offset+int(eventDataSize) {
+	if eventDataSize > maxTCGEventDataSize {
+		return nil, 0, fmt.Errorf("event data too large: %d", eventDataSize)
+	}
+	remaining := len(data) - offset
+	if remaining < 0 || uint64(eventDataSize) > uint64(remaining) {
 		return nil, 0, io.ErrUnexpectedEOF
 	}
-	entry.EventData = make([]byte, eventDataSize)
-	copy(entry.EventData, data[offset:offset+int(eventDataSize)])
-	offset += int(eventDataSize)
+	eventSize := int(eventDataSize) // safe after cap
+	entry.EventData = make([]byte, eventSize)
+	copy(entry.EventData, data[offset:offset+eventSize])
+	offset += eventSize
 
 	return entry, offset, nil
 }
