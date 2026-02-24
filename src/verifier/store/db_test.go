@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -206,4 +207,72 @@ func TestOpenDB_WALMode(t *testing.T) {
 	}
 
 	t.Logf("✓ WAL mode active: %s", journalMode)
+}
+
+func TestOpenDB_PragmasAppliedPerConnection(t *testing.T) {
+	t.Log("SECURITY TEST: SQLite PRAGMAs applied per-connection")
+	t.Log("Ensures pooled connections do not silently fall back to SQLite defaults")
+
+	tmpDir, err := os.MkdirTemp("", "lota-pragmas-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "pragmas.db")
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	// force pool behavior: hold one connection and request another
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
+
+	ctx := context.Background()
+
+	conn1, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn(1): %v", err)
+	}
+	defer conn1.Close()
+
+	conn2, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn(2): %v", err)
+	}
+	defer conn2.Close()
+
+	check := func(t *testing.T, c *sql.Conn, label string) {
+		t.Helper()
+
+		var foreignKeys int
+		if err := c.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+			t.Fatalf("%s: PRAGMA foreign_keys: %v", label, err)
+		}
+		if foreignKeys != 1 {
+			t.Fatalf("%s: foreign_keys=%d, want 1", label, foreignKeys)
+		}
+
+		var busyTimeout int
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+			t.Fatalf("%s: PRAGMA busy_timeout: %v", label, err)
+		}
+		if busyTimeout != 5000 {
+			t.Fatalf("%s: busy_timeout=%d, want 5000", label, busyTimeout)
+		}
+
+		var synchronous int
+		if err := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+			t.Fatalf("%s: PRAGMA synchronous: %v", label, err)
+		}
+		// SQLite reports NORMAL as 1
+		if synchronous != 1 {
+			t.Fatalf("%s: synchronous=%d, want 1 (NORMAL)", label, synchronous)
+		}
+	}
+
+	check(t, conn1, "conn1")
+	check(t, conn2, "conn2")
 }

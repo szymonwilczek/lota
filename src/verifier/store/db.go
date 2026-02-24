@@ -13,13 +13,28 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
+
+type sqliteConnector struct {
+	driver *sqlite.Driver
+	dsn    string
+}
+
+func (c *sqliteConnector) Connect(_ context.Context) (driver.Conn, error) {
+	return c.driver.Open(c.dsn)
+}
+
+func (c *sqliteConnector) Driver() driver.Driver {
+	return c.driver
+}
 
 // represents a single schema version upgrade
 type migration struct {
@@ -115,18 +130,6 @@ var migrations = []migration{
 // opens or creates a SQLite database at the given path
 // Applies pending schema migrations automatically.
 func OpenDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// verify connectivity
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("database ping failed: %w", err)
-	}
-
-	// performance tuning for attestation workload
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",   // write-ahead logging for concurrent reads
 		"PRAGMA busy_timeout=5000",  // wait up to 5s on lock contention
@@ -136,11 +139,23 @@ func OpenDB(path string) (*sql.DB, error) {
 		"PRAGMA temp_store=MEMORY",  // temp tables in memory
 	}
 
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("failed to set pragma %q: %w", pragma, err)
+	sqliteDriver := &sqlite.Driver{}
+	sqliteDriver.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
+		ctx := context.Background()
+		for _, pragma := range pragmas {
+			if _, err := conn.ExecContext(ctx, pragma, nil); err != nil {
+				return fmt.Errorf("failed to set pragma %q: %w", pragma, err)
+			}
 		}
+		return nil
+	})
+
+	db := sql.OpenDB(&sqliteConnector{driver: sqliteDriver, dsn: path})
+
+	// verify connectivity
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("database ping failed: %w", err)
 	}
 
 	db.SetMaxOpenConns(10)
