@@ -48,6 +48,22 @@ volatile u32 lota_agent_pid;
 #define EPERM 1
 #endif
 
+/* signal numbers */
+#ifndef SIGTERM
+#define SIGTERM 15
+#endif
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
+#ifndef SIGSTOP
+#define SIGSTOP 19
+#endif
+
+/* siginfo.si_code value for kernel-generated signals */
+#ifndef SI_KERNEL
+#define SI_KERNEL 0x80
+#endif
+
 /*
  * Executable page protection bit.
  */
@@ -969,7 +985,10 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 /* ======================================================================
  * LSM hook: task_kill
  *
- * Blocks signal delivery to lota-agent from foreign tasks.
+ * Blocks selected signal delivery to lota-agent from foreign tasks.
+ *
+ * SECURITY: Only block signals that would terminate/stop the daemon.
+ * Allow signals from PID 1 (systemd/init) and kernel-generated signals.
  * ====================================================================== */
 SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
@@ -977,8 +996,6 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   u32 sender_tgid;
   struct lota_exec_event *event;
 
-  (void)info;
-  (void)sig;
   (void)cred;
 
   if (!is_lota_agent_task(p))
@@ -987,6 +1004,23 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   sender_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
   if (sender_tgid == lota_agent_pid)
     return 0;
+
+  /* allow init/systemd to manage the daemon */
+  if (sender_tgid == 1)
+    return 0;
+
+  /* allow benign signals; only block termination/stop signals */
+  if (sig != SIGKILL && sig != SIGSTOP && sig != SIGTERM)
+    return 0;
+
+  /* allow kernel-generated signals */
+  if (!info)
+    return 0;
+  {
+    int si_code = BPF_CORE_READ(info, si_code);
+    if (si_code == SI_KERNEL)
+      return 0;
+  }
 
   /* audit trail for blocked kill attempts */
   event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
