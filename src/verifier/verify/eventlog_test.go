@@ -196,6 +196,36 @@ func TestParseEventLog_EmptyLog(t *testing.T) {
 	t.Log("Empty event log correctly rejected")
 }
 
+func TestParseEventLog_DigestCountTooLarge(t *testing.T) {
+	t.Log("SECURITY TEST: Reject oversized digestCount in PCR_EVENT2")
+
+	digest := sha256.Sum256([]byte("test"))
+	entries := []EventLogEntry{
+		{
+			PCRIndex:  0,
+			EventType: 0x00000001,
+			Digests:   map[uint16][]byte{AlgSHA256: digest[:]},
+			EventData: []byte("X"),
+		},
+	}
+
+	logData := buildTestEventLog(entries)
+
+	// overwrite digestCount in the first PCR_EVENT2 entry
+	// layout: legacy header (32) + Spec ID Event + entry header (8) + digestCount (4)
+	specLen := len(buildSpecIDEvent([]uint16{AlgSHA256}))
+	digestCountOff := 32 + specLen + 8
+	if len(logData) < digestCountOff+4 {
+		t.Fatalf("unexpected test log size: %d", len(logData))
+	}
+	binary.LittleEndian.PutUint32(logData[digestCountOff:digestCountOff+4], 0xFFFFFFFF)
+
+	_, err := ParseEventLog(logData)
+	if err == nil {
+		t.Fatal("expected error for oversized digestCount")
+	}
+}
+
 func TestReplayEventLog_SingleExtend(t *testing.T) {
 	t.Log("TEST: Replay single PCR extend operation")
 

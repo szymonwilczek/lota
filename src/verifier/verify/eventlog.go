@@ -47,6 +47,7 @@ const (
 const (
 	maxTCGHeaderDataSize uint32 = 1 << 20 // 1MB
 	maxTCGEventDataSize  uint32 = 1 << 20 // 1MB
+	maxTCGDigestCount    uint32 = 16      // sane upper bound for digest algorithms
 )
 
 // single measurement entry from the event log
@@ -198,6 +199,9 @@ func parsePCREvent2(data []byte, algList []uint16) (*EventLogEntry, int, error) 
 	}
 	digestCount := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
+	if digestCount > maxTCGDigestCount {
+		return nil, 0, fmt.Errorf("digest count too large: %d", digestCount)
+	}
 
 	for i := uint32(0); i < digestCount; i++ {
 		if len(data) < offset+2 {
