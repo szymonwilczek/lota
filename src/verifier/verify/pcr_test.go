@@ -112,6 +112,28 @@ require_lockdown: false
 	t.Log("Policy loaded and activated correctly from YAML")
 }
 
+func TestPCRVerifier_LoadPolicy_InvalidPCRIndexRejected(t *testing.T) {
+	t.Log("SECURITY TEST: Policy load rejects invalid PCR indices")
+
+	tmpDir := t.TempDir()
+	policyPath := filepath.Join(tmpDir, "bad-pcr.yaml")
+
+	policyContent := `
+name: bad-pcr
+description: "invalid PCR index"
+pcrs:
+  -1: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61"
+`
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0644); err != nil {
+		t.Fatalf("Failed to create test policy file: %v", err)
+	}
+
+	verifier := NewPCRVerifier()
+	if err := verifier.LoadPolicy(policyPath); err == nil {
+		t.Fatal("expected LoadPolicy to reject invalid PCR index")
+	}
+}
+
 func TestPCRVerifier_MultiplePolicies(t *testing.T) {
 	t.Log("TEST: Multiple policy management")
 

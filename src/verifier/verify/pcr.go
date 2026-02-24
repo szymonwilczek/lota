@@ -118,6 +118,19 @@ func IsMeasurementEmptyPolicy(policy *PCRPolicy) bool {
 	return len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 && len(policy.AgentHashes) == 0
 }
 
+func validatePolicyPCRIndices(policy *PCRPolicy) error {
+	if policy == nil {
+		return errors.New("nil policy")
+	}
+	for pcrIdx := range policy.PCRs {
+		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
+			return fmt.Errorf("invalid PCR index in policy '%s': %d (valid range: 0..%d)",
+				policy.Name, pcrIdx, types.PCRCount-1)
+		}
+	}
+	return nil
+}
+
 // loads a policy from YAML file
 // if a policy public key has been set via SetPolicyPublicKey,
 // the file must have a valid detached Ed25519 signature at path+".sig"!
@@ -140,6 +153,9 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	var policy PCRPolicy
 	if err := yaml.Unmarshal(data, &policy); err != nil {
 		return fmt.Errorf("failed to parse policy: %w", err)
+	}
+	if err := validatePolicyPCRIndices(&policy); err != nil {
+		return err
 	}
 
 	for _, w := range ValidatePolicy(&policy) {
@@ -205,7 +221,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
-			continue
+			return fmt.Errorf("invalid PCR index in policy '%s': %d", policy.Name, pcrIdx)
 		}
 
 		// check if this pcr was included in quote
