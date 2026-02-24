@@ -153,15 +153,21 @@ type VerifierConfig struct {
 	// if true, reject new AIK registrations that do not provide
 	// AIK or EK certificates (disables pure TOFU)
 	RequireCert bool
+
+	// if true, allow policies that define no measurement allowlists
+	// (no PCR values and no kernel/agent hash allowlists)
+	// This is insecure and should be enabled only explicitly!
+	AllowPermissivePolicy bool
 }
 
 // returns sensible defaults for verifier
 func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
-		NonceLifetime:    5 * time.Minute,
-		SessionTokenLife: 1 * time.Hour,
-		AIKMaxAge:        30 * 24 * time.Hour, // 30 days
-		RequireCert:      true,
+		NonceLifetime:         5 * time.Minute,
+		SessionTokenLife:      1 * time.Hour,
+		AIKMaxAge:             30 * 24 * time.Hour, // 30 days
+		RequireCert:           true,
+		AllowPermissivePolicy: false,
 	}
 }
 
@@ -195,9 +201,12 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		m = metrics.New()
 	}
 
+	pcrVerifier := NewPCRVerifier()
+	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
+
 	return &Verifier{
 		nonceStore:       NewNonceStoreFromConfig(nonceCfg),
-		pcrVerifier:      NewPCRVerifier(),
+		pcrVerifier:      pcrVerifier,
 		aikStore:         aikStore,
 		baselineStore:    baselineStore,
 		revocationStore:  cfg.RevocationStore,

@@ -60,13 +60,26 @@ type PCRVerifier struct {
 	policies     map[string]*PCRPolicy
 	active       string            // name of active policy
 	policyPubKey ed25519.PublicKey // if set, policy files require valid Ed25519 signature
+
+	// if false, LoadPolicy rejects policies that define no measurement allowlists
+	// (no PCR values and no kernel/agent hash allowlists)
+	allowPermissivePolicy bool
 }
 
 // creates a new PCR verifier
 func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
-		policies: make(map[string]*PCRPolicy),
+		policies:              make(map[string]*PCRPolicy),
+		allowPermissivePolicy: false,
 	}
+}
+
+// controls whether LoadPolicy accepts measurement-empty policies
+// This is intentionally false by default to avoid silent misconfiguration.
+func (v *PCRVerifier) SetAllowPermissivePolicy(allow bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.allowPermissivePolicy = allow
 }
 
 // sets the Ed25519 public key used to verify policy file signatures
@@ -156,6 +169,13 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 	}
 	if err := validatePolicyPCRIndices(&policy); err != nil {
 		return err
+	}
+
+	v.mu.RLock()
+	allowPermissive := v.allowPermissivePolicy
+	v.mu.RUnlock()
+	if IsMeasurementEmptyPolicy(&policy) && !allowPermissive {
+		return fmt.Errorf("refusing to load measurement-empty PCR policy '%s' (no pcrs and no kernel_hashes/agent_hashes)", policy.Name)
 	}
 
 	for _, w := range ValidatePolicy(&policy) {

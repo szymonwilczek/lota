@@ -424,6 +424,35 @@ pcrs:
 	t.Logf("Invalid YAML correctly rejected: %v", err)
 }
 
+func TestPCRVerifier_LoadPolicy_MeasurementEmptyRejectedUnlessAllowed(t *testing.T) {
+	t.Log("SECURITY TEST: LoadPolicy rejects measurement-empty policy unless explicitly allowed")
+
+	tmpDir := t.TempDir()
+	policyPath := filepath.Join(tmpDir, "permissive.yaml")
+
+	// no PCR allowlist, no kernel/agent hash allowlists
+	content := `
+name: permissive
+description: "measurement-empty policy"
+require_enforce: true
+require_module_sig: true
+require_iommu: true
+`
+	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	verifier := NewPCRVerifier()
+	if err := verifier.LoadPolicy(policyPath); err == nil {
+		t.Fatal("expected LoadPolicy to reject measurement-empty policy")
+	}
+
+	verifier.SetAllowPermissivePolicy(true)
+	if err := verifier.LoadPolicy(policyPath); err != nil {
+		t.Fatalf("expected LoadPolicy to succeed when permissive policies are allowed: %v", err)
+	}
+}
+
 func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
 	t.Log("SECURITY TEST: LSM enforce mode requirement")
 

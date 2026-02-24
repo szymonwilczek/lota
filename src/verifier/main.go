@@ -132,6 +132,7 @@ func main() {
 	verifierCfg.AIKMaxAge = *aikMaxAge
 	verifierCfg.RequireEventLog = *requireEventLog
 	verifierCfg.RequireCert = *requireCert
+	verifierCfg.AllowPermissivePolicy = *allowPermissive
 
 	if *aikMaxAge == 0 {
 		logger.Warn("AIK expiry disabled (--aik-max-age=0): registered keys will never expire")
