@@ -361,7 +361,17 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	storedAIK, err := v.aikStore.GetAIK(clientID)
-	newClient := err != nil
+	newClient := false
+	if err != nil {
+		if errors.Is(err, store.ErrAIKNotFound) {
+			newClient = true
+		} else {
+			clog.Error("failed to query AIK store", "error", err)
+			v.metrics.Rejections.Inc("sig_fail")
+			result.Result = types.VerifySigFail
+			return result, fmt.Errorf("AIK store query failed: %w", err)
+		}
+	}
 
 	// extract the AIK from the report (untrusted input)
 	var reportAIK *rsa.PublicKey
@@ -433,10 +443,23 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 
 		if err := v.aikStore.RegisterAIKWithCert(clientID, reportAIK, aikCert, ekCert); err != nil {
-			clog.Error("failed to register AIK", "error", err)
-			v.metrics.Rejections.Inc("sig_fail")
-			result.Result = types.VerifySigFail
-			return result, fmt.Errorf("AIK registration failed: %w", err)
+			if existing, gerr := v.aikStore.GetAIK(clientID); gerr == nil {
+				fpExisting := store.Fingerprint(existing)
+				fpReport := store.Fingerprint(reportAIK)
+				if fpExisting != "" && fpExisting == fpReport {
+					clog.Warn("TOFU registration raced; identical AIK already present")
+				} else {
+					clog.Error("failed to register AIK", "error", err)
+					v.metrics.Rejections.Inc("sig_fail")
+					result.Result = types.VerifySigFail
+					return result, fmt.Errorf("AIK registration failed: %w", err)
+				}
+			} else {
+				clog.Error("failed to register AIK", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, fmt.Errorf("AIK registration failed: %w", err)
+			}
 		}
 
 		fingerprint := AIKFingerprint(reportAIK)

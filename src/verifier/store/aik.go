@@ -24,6 +24,8 @@ import (
 	"time"
 )
 
+var ErrAIKNotFound = errors.New("AIK not found")
+
 type AIKStore interface {
 	// retrieves AIK public key for client
 	GetAIK(clientID string) (*rsa.PublicKey, error)
@@ -267,7 +269,7 @@ func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 
 	pubKey, exists := fs.cache[clientID]
 	if !exists {
-		return nil, errors.New("AIK not found")
+		return nil, ErrAIKNotFound
 	}
 
 	return pubKey, nil
@@ -543,7 +545,7 @@ func (ms *MemoryStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 
 	pubKey, exists := ms.keys[clientID]
 	if !exists {
-		return nil, errors.New("AIK not found")
+		return nil, ErrAIKNotFound
 	}
 	return pubKey, nil
 }

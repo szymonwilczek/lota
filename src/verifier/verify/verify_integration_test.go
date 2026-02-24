@@ -512,6 +512,63 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 	t.Logf("✓ All %d concurrent attestations completed successfully", numClients)
 }
 
+func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
+	t.Log("INTEGRATION TEST: Concurrent first attestation (same hardware)")
+
+	aikStore := store.NewMemoryStore()
+	verifier := createTestVerifier(aikStore)
+
+	// both goroutines represent the same hardware identity
+	hardwareLabel := "same-hardware-client"
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	num := 2
+	done := make(chan bool, num)
+	errs := make(chan error, num)
+
+	for i := 0; i < num; i++ {
+		go func(n int) {
+			challengeID := fmt.Sprintf("conn-%d", n)
+			challenge, err := verifier.GenerateChallenge(challengeID)
+			if err != nil {
+				errs <- fmt.Errorf("challenge failed: %w", err)
+				done <- false
+				return
+			}
+
+			pcr14 := [32]byte{}
+			for j := range pcr14 {
+				pcr14[j] = byte(0xA5 ^ j)
+			}
+
+			reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, key)
+			result, err := verifier.VerifyReport(challengeID, reportData)
+			if err != nil || result.Result != types.VerifyOK {
+				errs <- fmt.Errorf("verify failed: %v (result=%d)", err, result.Result)
+				done <- false
+				return
+			}
+			done <- true
+		}(i)
+	}
+
+	success := 0
+	for i := 0; i < num; i++ {
+		if <-done {
+			success++
+		}
+	}
+
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent error: %v", err)
+	}
+
+	if success != num {
+		t.Fatalf("only %d/%d succeeded", success, num)
+	}
+}
+
 // helper for concurrent test
 func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))

@@ -35,7 +35,7 @@ func (s *SQLiteAIKStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 	).Scan(&aikDER)
 
 	if err == sql.ErrNoRows {
-		return nil, errors.New("AIK not found")
+		return nil, ErrAIKNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query AIK: %w", err)
@@ -124,7 +124,7 @@ func (s *SQLiteAIKStore) RegisterHardwareID(clientID string, hardwareID [32]byte
 	).Scan(&existing)
 
 	if err == sql.ErrNoRows {
-		return errors.New("AIK not found")
+		return ErrAIKNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("failed to query hardware ID: %w", err)
