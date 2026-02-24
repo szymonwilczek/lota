@@ -344,22 +344,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 	clog.Debug("nonce verified", "method", "challenge-response+TPMS_ATTEST")
 
-	// check if registered AIK has exceeded its maximum age.
-	// IMPORTANT: expiry is a policy hint; rotation MUST NOT be performed via TOFU
-	// on an existing identity, otherwise an attacker can hijack the client
-	aikExpired := false
-	if v.aikMaxAge > 0 {
-		if regTime, err := v.aikStore.GetRegisteredAt(clientID); err == nil && !regTime.IsZero() {
-			if time.Since(regTime) > v.aikMaxAge {
-				aikExpired = true
-				clog.Warn("AIK registration expired, key rotation required",
-					"registered_at", regTime.UTC().Format(time.RFC3339),
-					"max_age", v.aikMaxAge,
-					"age", time.Since(regTime).Truncate(time.Second))
-			}
-		}
-	}
-
 	storedAIK, err := v.aikStore.GetAIK(clientID)
 	newClient := false
 	if err != nil {
@@ -370,6 +354,26 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			v.metrics.Rejections.Inc("sig_fail")
 			result.Result = types.VerifySigFail
 			return result, fmt.Errorf("AIK store query failed: %w", err)
+		}
+	}
+
+	// check if registered AIK has exceeded its maximum age.
+	// IMPORTANT: expiry is a policy hint; rotation MUST NOT be performed via TOFU
+	// on an existing identity, otherwise an attacker can hijack the client
+	aikExpired := false
+	if !newClient && v.aikMaxAge > 0 {
+		regTime, rerr := v.aikStore.GetRegisteredAt(clientID)
+		if rerr != nil || regTime.IsZero() {
+			aikExpired = true
+			clog.Warn("AIK registration time unavailable; key rotation required",
+				"error", rerr,
+				"max_age", v.aikMaxAge)
+		} else if time.Since(regTime) > v.aikMaxAge {
+			aikExpired = true
+			clog.Warn("AIK registration expired, key rotation required",
+				"registered_at", regTime.UTC().Format(time.RFC3339),
+				"max_age", v.aikMaxAge,
+				"age", time.Since(regTime).Truncate(time.Second))
 		}
 	}
 

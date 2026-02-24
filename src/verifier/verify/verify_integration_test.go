@@ -14,13 +14,27 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+type registeredAtErrorStore struct {
+	*store.MemoryStore
+}
+
+func (s *registeredAtErrorStore) GetRegisteredAt(clientID string) (time.Time, error) {
+	return time.Time{}, errors.New("simulated GetRegisteredAt failure")
+}
+
+func (s *registeredAtErrorStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
+	return nil
+}
 
 // simulates TPMs Attestation Identity Key
 var integrationTestKey *rsa.PrivateKey
@@ -566,6 +580,53 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 
 	if success != num {
 		t.Fatalf("only %d/%d succeeded", success, num)
+	}
+}
+
+func TestIntegration_AIKExpiry_GetRegisteredAtErrorForcesRotation(t *testing.T) {
+	t.Log("SECURITY TEST: GetRegisteredAt error forces AIK rotation required")
+
+	aikStore := &registeredAtErrorStore{MemoryStore: store.NewMemoryStore()}
+	verifier := createTestVerifier(aikStore)
+
+	hardwareLabel := "regtime-error-client"
+	clientID := persistentClientID(hardwareLabel)
+
+	registeredKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	if err := aikStore.RegisterAIK(clientID, &registeredKey.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
+
+	challengeID := "conn-regtime-err"
+	challenge, err := verifier.GenerateChallenge(challengeID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	attackerKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x5A ^ i)
+	}
+
+	reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, attackerKey)
+
+	// remove AIKPublic from the report to make rotation fail with a deterministic error
+	aikPublicSizeOff := 16 + types.PCRCount*types.HashSize + 4 + types.MaxSigSize + 2 + types.MaxAttestSize + 2 + types.MaxAIKPubSize
+	if len(reportData) < aikPublicSizeOff+2 {
+		t.Fatalf("unexpected report size: %d", len(reportData))
+	}
+	binary.LittleEndian.PutUint16(reportData[aikPublicSizeOff:aikPublicSizeOff+2], 0)
+
+	res, verr := verifier.VerifyReport(challengeID, reportData)
+	if verr == nil {
+		t.Fatal("expected verification to fail")
+	}
+	if res == nil || res.Result != types.VerifySigFail {
+		t.Fatalf("expected VerifySigFail, got %+v (err=%v)", res, verr)
+	}
+	if !strings.Contains(verr.Error(), "rotation attempt missing new AIK public key") {
+		t.Fatalf("expected rotation-required error, got: %v", verr)
 	}
 }
 
