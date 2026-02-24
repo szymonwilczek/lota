@@ -772,7 +772,21 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
+    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
+    const unsigned char *name = NULL;
+    int ret_path = -1;
+
+    if (dentry) {
+      name = BPF_CORE_READ(dentry, d_name.name);
+      if (name) {
+        ret_path = bpf_probe_read_kernel_str(event->filename,
+                                             sizeof(event->filename), name);
+      }
+    }
+
+    if (ret_path < 0) {
+      __builtin_memcpy(event->filename, "(path_resolution_disabled)", 27);
+    }
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
@@ -879,8 +893,23 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
     event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
-    __builtin_memcpy(event->filename, "(mprotect-path_resolution_disabled)",
-                     35);
+
+    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
+    const unsigned char *name = NULL;
+    int ret_path = -1;
+
+    if (dentry) {
+      name = BPF_CORE_READ(dentry, d_name.name);
+      if (name) {
+        ret_path = bpf_probe_read_kernel_str(event->filename,
+                                             sizeof(event->filename), name);
+      }
+    }
+
+    if (ret_path < 0) {
+      __builtin_memcpy(event->filename, "(mprotect-path_resolution_disabled)",
+                       35);
+    }
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
