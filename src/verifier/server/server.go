@@ -12,8 +12,10 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +30,14 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
+
+func newChallengeID() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
 
 type Server struct {
 	verifier   *verify.Verifier
@@ -299,17 +309,22 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	clientAddr := conn.RemoteAddr().String()
-	clog := s.log.With("remote_addr", clientAddr)
 
-	// IP without port serves as challenge binding for nonce anti-replay.
-	// verifier derives persistent client identity from the TPM
-	// HardwareID inside the attestation report, so clients behind NAT
-	// are correctly distinguished
+	// best-effort parse of client IP for logs only
 	clientIP, _, err := net.SplitHostPort(clientAddr)
 	if err != nil {
 		clientIP = clientAddr // fallback if no port
 	}
-	challengeID := clientIP
+
+	// IMPORTANT: challengeID must be unique per connection!
+	challengeID, err := newChallengeID()
+	if err != nil {
+		s.log.Error("failed to generate challenge id", "error", err)
+		s.metrics.ConnectionErrors.Inc()
+		return
+	}
+
+	clog := s.log.With("remote_addr", clientAddr, "client_ip", clientIP, "challenge_id", challengeID)
 
 	challenge, err := s.verifier.GenerateChallenge(challengeID)
 	if err != nil {
