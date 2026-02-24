@@ -29,7 +29,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 
 	store := NewNonceStore(5 * time.Minute)
 
-	challenge, err := store.GenerateChallenge("client1", 0x00004003)
+	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
 	if err != nil {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-	err = store.VerifyNonce(report, "client1")
+	err = store.VerifyNonce(report, "binding-1")
 	if err != nil {
 		t.Fatalf("Nonce verification failed for valid report: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 
 	store := NewNonceStore(5 * time.Minute)
 
-	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
+	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
@@ -80,14 +80,14 @@ func TestNonceStore_OneTimeUse(t *testing.T) {
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
 	// should succeed
-	err := store.VerifyNonce(report, "client1")
+	err := store.VerifyNonce(report, "binding-1")
 	if err != nil {
 		t.Fatalf("First verification failed: %v", err)
 	}
 	t.Log("✓ First verification succeeded")
 
 	// MUST FAIL
-	err = store.VerifyNonce(report, "client1")
+	err = store.VerifyNonce(report, "binding-1")
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Second verification succeeded - replay attack possible!")
 	}
@@ -100,7 +100,7 @@ func TestNonceStore_Expiration(t *testing.T) {
 	t.Log("Prevents use of stale challenges")
 
 	store := NewNonceStore(100 * time.Millisecond)
-	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
+	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 
 	report := &types.AttestationReport{}
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
@@ -110,7 +110,7 @@ func TestNonceStore_Expiration(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// should fail
-	err := store.VerifyNonce(report, "client1")
+	err := store.VerifyNonce(report, "binding-1")
 	if err == nil {
 		t.Fatal("SECURITY: Expired nonce was accepted!")
 	}
@@ -131,7 +131,7 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, report.TPM.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, report.TPM.Nonce)))
 
-	err := store.VerifyNonce(report, "client1")
+	err := store.VerifyNonce(report, "binding-1")
 	if err == nil {
 		t.Fatal("SECURITY: Unknown nonce was accepted!")
 	}
@@ -140,24 +140,24 @@ func TestNonceStore_UnknownNonce(t *testing.T) {
 }
 
 func TestNonceStore_ClientBinding(t *testing.T) {
-	t.Log("SECURITY TEST: Nonce client binding")
-	t.Log("Prevents using challenge from one client for another")
+	t.Log("SECURITY TEST: Nonce binding ID enforcement")
+	t.Log("Prevents using challenge from one transport binding for another")
 
 	store := NewNonceStore(5 * time.Minute)
 
-	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
+	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 	report := &types.AttestationReport{}
 
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-	err := store.VerifyNonce(report, "client2") // wrong client
+	err := store.VerifyNonce(report, "binding-2") // wrong binding ID
 	if err == nil {
-		t.Fatal("SECURITY: Nonce accepted for wrong client!")
+		t.Fatal("SECURITY: Nonce accepted for wrong binding ID!")
 	}
 
-	t.Logf("✓ Correctly rejected nonce for wrong client: %v", err)
+	t.Logf("✓ Correctly rejected nonce for wrong binding ID: %v", err)
 }
 
 func TestNonceStore_UniqueNonces(t *testing.T) {
@@ -215,7 +215,7 @@ func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
 
 	store := NewNonceStore(5 * time.Minute)
 
-	challenge, _ := store.GenerateChallenge("client1", 0x00004003)
+	challenge, _ := store.GenerateChallenge("binding-1", 0x00004003)
 	report := &types.AttestationReport{}
 
 	copy(report.TPM.Nonce[:], challenge.Nonce[:])
@@ -226,7 +226,7 @@ func TestNonceStore_NonceMismatchInAttest(t *testing.T) {
 	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(wrongNonce)))
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(wrongNonce))
 
-	err := store.VerifyNonce(report, "client1")
+	err := store.VerifyNonce(report, "binding-1")
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Accepted report with mismatched nonces!")
 	}
@@ -258,7 +258,7 @@ func TestNonceStore_UsedNonceHistory(t *testing.T) {
 	}
 
 	// same report should mention "already used"
-	err = store.VerifyNonce(report, "client1")
+	err = store.VerifyNonce(report, "binding-1")
 	if err == nil {
 		t.Fatal("SECURITY VIOLATION: Used nonce was accepted on replay!")
 	}
@@ -278,7 +278,7 @@ func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
 
 	// generate and use 10(!) nonces
 	for i := 0; i < 10; i++ {
-		challenge, err := store.GenerateChallenge("client1", 0x00004003)
+		challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
 		if err != nil {
 			t.Fatalf("Failed to generate challenge %d: %v", i, err)
 		}
@@ -288,7 +288,7 @@ func TestNonceStore_UsedNonceHistoryMax(t *testing.T) {
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
-		err = store.VerifyNonce(report, "client1")
+		err = store.VerifyNonce(report, "binding-1")
 		if err != nil {
 			t.Fatalf("Verification %d failed: %v", i, err)
 		}
@@ -315,14 +315,14 @@ func TestNonceStore_RateLimitPending(t *testing.T) {
 
 	// generate up to max
 	for i := 0; i < 3; i++ {
-		_, err := store.GenerateChallenge("flood-client", 0x00004003)
+		_, err := store.GenerateChallenge("binding-flood", 0x00004003)
 		if err != nil {
 			t.Fatalf("Challenge %d should have succeeded: %v", i, err)
 		}
 	}
 
 	// should start rejecting
-	_, err := store.GenerateChallenge("flood-client", 0x00004003)
+	_, err := store.GenerateChallenge("binding-flood", 0x00004003)
 	if err == nil {
 		t.Fatal("SECURITY: Should have rejected challenge exceeding pending limit!")
 	}
@@ -330,7 +330,7 @@ func TestNonceStore_RateLimitPending(t *testing.T) {
 	t.Logf("✓ Correctly rejected challenge exceeding pending limit: %v", err)
 
 	// other client should not be affected
-	_, err = store.GenerateChallenge("other-client", 0x00004003)
+	_, err = store.GenerateChallenge("binding-other", 0x00004003)
 	if err != nil {
 		t.Fatalf("Other client should not be rate limited: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 
 	// exhaust rate limit (3 per window)
 	for i := 0; i < 3; i++ {
-		challenge, err := store.GenerateChallenge("rate-client", 0x00004003)
+		challenge, err := store.GenerateChallenge("binding-rate", 0x00004003)
 		if err != nil {
 			t.Fatalf("Challenge %d should have succeeded: %v", i, err)
 		}
@@ -361,11 +361,11 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-		store.VerifyNonce(report, "rate-client")
+		store.VerifyNonce(report, "binding-rate")
 	}
 
 	// 4th should fail
-	_, err := store.GenerateChallenge("rate-client", 0x00004003)
+	_, err := store.GenerateChallenge("binding-rate", 0x00004003)
 	if err == nil {
 		t.Fatal("SECURITY: Should have rejected challenge exceeding rate limit!")
 	}
@@ -374,7 +374,7 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 	// wait for window to reset
 	time.Sleep(250 * time.Millisecond)
 
-	_, err = store.GenerateChallenge("rate-client", 0x00004003)
+	_, err = store.GenerateChallenge("binding-rate", 0x00004003)
 	if err != nil {
 		t.Fatalf("Should succeed after rate limit window reset: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestNonceStore_MonotonicCounter(t *testing.T) {
 	t.Log("Tracks attestation sequence for audit trail")
 
 	store := NewNonceStore(5 * time.Minute)
-	clientID := "counter-client"
+	clientID := "binding-counter"
 
 	if store.ClientCounter(clientID) != 0 {
 		t.Errorf("Initial counter: got %d, want 0", store.ClientCounter(clientID))
@@ -436,13 +436,13 @@ func TestNonceStore_RateLimitNotConsumedOnFailedIssue(t *testing.T) {
 	store := NewNonceStoreFromConfig(cfg)
 
 	// First call fails after rate-limit check due to simulated used nonce collision.
-	_, err := store.GenerateChallenge("client", 0x00004003)
+	_, err := store.GenerateChallenge("binding", 0x00004003)
 	if err == nil {
 		t.Fatal("expected GenerateChallenge to fail due to simulated collision")
 	}
 
 	// Second call must still succeed (rate limit should not have been consumed).
-	_, err = store.GenerateChallenge("client", 0x00004003)
+	_, err = store.GenerateChallenge("binding", 0x00004003)
 	if err != nil {
 		t.Fatalf("expected second GenerateChallenge to succeed, got: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestNonceStore_ClientPendingTracking(t *testing.T) {
 	t.Log("TEST: Per-client pending count tracking")
 
 	store := NewNonceStore(5 * time.Minute)
-	clientID := "pending-client"
+	clientID := "binding-pending"
 
 	if store.ClientPendingCount(clientID) != 0 {
 		t.Errorf("Initial pending: got %d, want 0", store.ClientPendingCount(clientID))
@@ -497,7 +497,7 @@ func TestNonceStore_ConcurrentSafety(t *testing.T) {
 		wg.Add(1)
 		go func(clientNum int) {
 			defer wg.Done()
-			clientID := fmt.Sprintf("concurrent-%d", clientNum)
+			clientID := fmt.Sprintf("binding-%d", clientNum)
 
 			for j := 0; j < 10; j++ {
 				challenge, err := store.GenerateChallenge(clientID, 0x00004003)
