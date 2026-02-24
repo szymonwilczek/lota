@@ -1172,6 +1172,10 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
     return 0;
 
   switch (cmd) {
+  case BPF_PROG_LOAD:
+  case BPF_LINK_CREATE:
+  case BPF_LINK_UPDATE:
+  case BPF_MAP_CREATE:
   case BPF_PROG_DETACH:
   case BPF_LINK_DETACH:
   case BPF_MAP_UPDATE_ELEM:
