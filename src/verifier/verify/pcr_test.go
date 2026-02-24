@@ -27,6 +27,12 @@ func TestDefaultPolicy(t *testing.T) {
 	if !policy.RequireEnforce {
 		t.Error("Default policy should require LSM enforce mode")
 	}
+	if !policy.RequireModuleSig {
+		t.Error("Default policy should require kernel module signature enforcement")
+	}
+	if !policy.RequireIOMMU {
+		t.Error("Default policy should require IOMMU DMA remapping")
+	}
 
 	t.Log("DefaultPolicy creates valid baseline policy")
 }
@@ -327,7 +333,8 @@ func TestPCRVerifier_VerifyReport_PassingPolicy(t *testing.T) {
 	verifier.AddPolicy(DefaultPolicy())
 
 	report := &types.AttestationReport{}
-	report.Header.Flags = types.FlagEnforce // required by default policy
+	report.Header.Flags = types.FlagEnforce | types.FlagModuleSig
+	report.System.IOMMU.Flags = 0x04
 
 	err := verifier.VerifyReport(report)
 	if err != nil {

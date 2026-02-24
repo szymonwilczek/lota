@@ -550,6 +550,14 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
+	for i := 0; i < types.HashSize; i++ {
+		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
+		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
+	}
+	bindingReport.System.IOMMU.Vendor = 0x8086
+	bindingReport.System.IOMMU.Flags = 0x07
+	bindingReport.System.IOMMU.UnitCount = 2
+	copy(bindingReport.System.IOMMU.CmdlineParam[:], []byte("intel_iommu=on"))
 	bindingNonce := ComputeAttestationBindingNonce(nonce, bindingReport)
 	attestData := createTPMSAttestWithNonce(bindingNonce[:], pcrDigest)
 	hash := sha256.Sum256(attestData)
@@ -595,10 +603,28 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
 
-	// system measurement (simplified)
-	offset += types.HashSize * 2                // kernel_hash + agent_hash
-	offset += types.MaxKernelPath               // kernel_path
-	offset += 4 + 4 + 4 + types.CmdlineParamMax // IOMMU
+	// system measurement
+	for i := 0; i < types.HashSize; i++ {
+		buf[offset+i] = byte(0xAA ^ i)
+	}
+	offset += types.HashSize
+	for i := 0; i < types.HashSize; i++ {
+		buf[offset+i] = byte(0xBB ^ i)
+	}
+	offset += types.HashSize
+
+	// kernel_path (leave empty)
+	offset += types.MaxKernelPath
+
+	// IOMMU
+	binary.LittleEndian.PutUint32(buf[offset:], 0x8086)
+	offset += 4
+	binary.LittleEndian.PutUint32(buf[offset:], 0x07)
+	offset += 4
+	binary.LittleEndian.PutUint32(buf[offset:], 2)
+	offset += 4
+	copy(buf[offset:offset+types.CmdlineParamMax], []byte("intel_iommu=on"))
+	offset += types.CmdlineParamMax
 
 	// BPF
 	binary.LittleEndian.PutUint32(buf[offset:], 1)

@@ -334,9 +334,9 @@ func DefaultPolicy() *PCRPolicy {
 		PCRs:              map[int]string{},
 		KernelHashes:      []string{}, // defined in site-specific policy
 		AgentHashes:       []string{}, // defined in site-specific policy
-		RequireIOMMU:      false,      // not all systems have IOMMU
+		RequireIOMMU:      true,       // baseline: DMA remapping should be enabled
 		RequireEnforce:    true,       // LSM must be in enforce mode
-		RequireModuleSig:  false,      // distribution-dependent
+		RequireModuleSig:  true,       // baseline: module signature enforcement should be enabled
 		RequireSecureBoot: false,      // optional hardware feature
 		RequireLockdown:   false,      // optional kernel feature
 	}
