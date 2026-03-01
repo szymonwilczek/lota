@@ -1050,17 +1050,15 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
     blocked = 1;
   }
 
-  /*
-   * additional ptrace blocking is ENFORCE-only:
-   * - protected tasks managed by user-space
-   * - global ptrace blocking via LOTA_CFG_BLOCK_PTRACE
-   */
-  if (!blocked && lota_mode == LOTA_MODE_ENFORCE) {
-    if (is_protected_task(child)) {
-      blocked = 1;
-    } else if (get_config(LOTA_CFG_BLOCK_PTRACE)) {
-      blocked = 1;
-    }
+  if (!blocked && lota_mode != LOTA_MODE_MAINTENANCE &&
+      is_protected_task(child)) {
+    blocked = 1;
+  }
+
+  /* global ptrace blocking remains ENFORCE-only */
+  if (!blocked && lota_mode == LOTA_MODE_ENFORCE &&
+      get_config(LOTA_CFG_BLOCK_PTRACE)) {
+    blocked = 1;
   }
 
   /* for logging */
