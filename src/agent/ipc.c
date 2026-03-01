@@ -400,6 +400,22 @@ static int ipc_client_is_privileged(const struct ipc_client *client) {
 }
 
 /*
+ * SUBSCRIBE is restricted to the exact agent process identity.
+ *
+ * Same-UID authorization is too broad when the agent runs as root because it
+ * allows any root peer to passively monitor enforcement transitions.
+ */
+static int ipc_client_is_agent_self(const struct ipc_client *client) {
+  if (!client)
+    return 0;
+
+  if (client->peer_uid != geteuid())
+    return 0;
+
+  return client->peer_pid == getpid();
+}
+
+/*
  * Build a notification frame in the client's send buffer.
  */
 static void build_notification(struct ipc_context *ctx,
@@ -656,7 +672,7 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
   struct lota_ipc_subscribe_request sub;
   (void)ctx;
 
-  if (!ipc_client_is_privileged(client)) {
+  if (!ipc_client_is_agent_self(client)) {
     lota_warn("SUBSCRIBE denied for uid=%d pid=%d", client->peer_uid,
               client->peer_pid);
     build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
