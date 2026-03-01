@@ -11,12 +11,52 @@
 #include "bpf_loader.h"
 #include "journal.h"
 #include "main_utils.h"
+#include "policy_sign.h"
 #include "sdnotify.h"
+
+#ifndef EAUTH
+#define EAUTH 80
+#endif
 
 static void copy_path(char dst[PATH_MAX], const char *src) {
   size_t len = strnlen(src, PATH_MAX - 1);
   memcpy(dst, src, len);
   dst[len] = '\0';
+}
+
+static int
+verify_reload_downgrade_authorization(const char *config_path,
+                                      const struct lota_config *cfg) {
+  const char *cfg_path =
+      (config_path && config_path[0]) ? config_path : LOTA_CONFIG_DEFAULT_PATH;
+  char *sig_path;
+  size_t sig_path_len;
+  int ret;
+
+  if (!cfg || cfg->policy_pubkey[0] == '\0') {
+    lota_err("Refusing ENFORCE mode downgrade on reload: policy_pubkey is not "
+             "configured");
+    return -EAUTH;
+  }
+
+  sig_path_len = strlen(cfg_path) + 5; /* .sig + NUL */
+  sig_path = malloc(sig_path_len);
+  if (!sig_path)
+    return -ENOMEM;
+
+  snprintf(sig_path, sig_path_len, "%s.sig", cfg_path);
+
+  ret = policy_verify_file(cfg_path, cfg->policy_pubkey, sig_path);
+  free(sig_path);
+
+  if (ret < 0) {
+    lota_err("Refusing ENFORCE mode downgrade on reload: config signature "
+             "verification failed (%s)",
+             strerror(-ret));
+    return ret;
+  }
+
+  return 0;
 }
 
 static void apply_runtime_flags_transactional(
@@ -338,6 +378,17 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
   }
 
   int new_mode = parse_mode(new_cfg.mode);
+  if (*mode == LOTA_MODE_ENFORCE &&
+      (new_mode == LOTA_MODE_MONITOR || new_mode == LOTA_MODE_MAINTENANCE)) {
+    int auth_ret = verify_reload_downgrade_authorization(config_path, cfg);
+    if (auth_ret < 0) {
+      lota_warn("Unauthorized ENFORCE mode downgrade request ignored");
+      free(new_cfg.protect_pids);
+      sdnotify_ready();
+      return auth_ret;
+    }
+  }
+
   if (new_mode >= 0 && new_mode != *mode) {
     if (bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode) == 0) {
       lota_info("Mode changed: %s -> %s", mode_to_string(*mode),
