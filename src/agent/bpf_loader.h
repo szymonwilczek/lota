@@ -188,6 +188,17 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
                           uint32_t value);
 
 /*
+ * bpf_loader_verify_integrity_config - Verify integrity_config map contents
+ * @ctx: Loaded context
+ *
+ * Re-resolves kernel symbol addresses and checks they match current
+ * integrity_config map values.
+ *
+ * Returns: 0 on success, negative errno on mismatch/failure
+ */
+int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
+
+/*
  * bpf_loader_set_agent_pid - Set runtime lota-agent identity in BPF map
  * @ctx: Loaded context
  * @pid: Agent TGID (process id)

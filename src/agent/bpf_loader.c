@@ -158,6 +158,29 @@ unsigned long resolve_kernel_symbol(const char *name) {
   return addr;
 }
 
+static unsigned long resolve_lockdown_symbol(void) {
+  unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
+
+  if (!lockdown) {
+    lockdown = resolve_kernel_symbol("kernel_locked_down");
+  }
+
+  if (!lockdown) {
+    lockdown = resolve_kernel_symbol("security_lockdown_enabled");
+  }
+
+  return lockdown;
+}
+
+static void build_expected_integrity_config(struct integrity_data *cfg) {
+  if (!cfg)
+    return;
+
+  memset(cfg, 0, sizeof(*cfg));
+  cfg->sig_enforce_addr = resolve_kernel_symbol("sig_enforce");
+  cfg->lockdown_addr = resolve_lockdown_symbol();
+}
+
 int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   if (!ctx)
     return -EINVAL;
@@ -392,31 +415,15 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
   ctx->integrity_fd =
       bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
   if (ctx->integrity_fd >= 0) {
-    unsigned long sig_enforce = resolve_kernel_symbol("sig_enforce");
-    unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
+    struct integrity_data cfg = {0};
 
-    if (!lockdown) {
-      /* fallback for kernels exposing internal lockdown state symbol */
-      lockdown = resolve_kernel_symbol("kernel_locked_down");
-    }
-
-    if (!lockdown) {
-      /* fallback for older kernels */
-      lockdown = resolve_kernel_symbol("security_lockdown_enabled");
-    }
+    build_expected_integrity_config(&cfg);
 
     lota_info("Resolved kernel symbols: sig_enforce=0x%lx, lockdown=0x%lx",
-              sig_enforce, lockdown);
+              (unsigned long)cfg.sig_enforce_addr,
+              (unsigned long)cfg.lockdown_addr);
 
     uint32_t key = 0;
-    struct {
-      uint64_t sig_enforce_addr;
-      uint64_t lockdown_addr;
-    } cfg = {
-        .sig_enforce_addr = sig_enforce,
-        .lockdown_addr = lockdown,
-    };
-
     if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg, BPF_ANY) < 0) {
       lota_err("Failed to update integrity_config map: %s", strerror(errno));
     }
@@ -706,6 +713,37 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
     return -EINVAL;
 
   return bpf_map_update_elem(ctx->config_fd, &key, &value, BPF_ANY);
+}
+
+int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx) {
+  uint32_t key = 0;
+  struct integrity_data current = {0};
+  struct integrity_data expected = {0};
+
+  if (!ctx || !ctx->loaded)
+    return -EINVAL;
+
+  if (ctx->integrity_fd < 0)
+    return -ENOTSUP;
+
+  if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
+    return -errno;
+
+  build_expected_integrity_config(&expected);
+
+  if (current.sig_enforce_addr != expected.sig_enforce_addr ||
+      current.lockdown_addr != expected.lockdown_addr) {
+    lota_err(
+        "integrity_config mismatch: map(sig_enforce=0x%llx lockdown=0x%llx) "
+        "expected(sig_enforce=0x%llx lockdown=0x%llx)",
+        (unsigned long long)current.sig_enforce_addr,
+        (unsigned long long)current.lockdown_addr,
+        (unsigned long long)expected.sig_enforce_addr,
+        (unsigned long long)expected.lockdown_addr);
+    return -EPERM;
+  }
+
+  return 0;
 }
 
 int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {

@@ -585,6 +585,13 @@ allowlist_done:
   cfg_lock_bpf_applied = 1;
   lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
 
+  ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
+  if (ret < 0) {
+    lota_err("Failed integrity_config verification after LOCK_BPF: %s",
+             strerror(-ret));
+    goto out_fail;
+  }
+
   ret = bpf_loader_set_mode(&g_agent.bpf_ctx, mode);
   if (ret < 0) {
     lota_err("Failed to set mode: %s", strerror(-ret));
