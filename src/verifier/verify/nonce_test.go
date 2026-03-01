@@ -7,6 +7,7 @@ package verify
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"testing"
@@ -339,8 +340,8 @@ func TestNonceStore_RateLimitPending(t *testing.T) {
 }
 
 func TestNonceStore_RateLimitWindow(t *testing.T) {
-	t.Log("SECURITY TEST: Per-client rate limit window")
-	t.Log("Prevents rapid challenge-response cycling attacks")
+	t.Log("SECURITY TEST: Per-hardware rate limit window")
+	t.Log("Prevents bypass via many per-connection binding IDs")
 
 	cfg := DefaultNonceStoreConfig()
 	cfg.Lifetime = 5 * time.Minute
@@ -349,9 +350,12 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 	cfg.RateLimitWindow = 200 * time.Millisecond
 	store := NewNonceStoreFromConfig(cfg)
 
-	// exhaust rate limit (3 per window)
+	var hwID [types.HardwareIDSize]byte
+	copy(hwID[:], []byte("hw-rate-limit-window"))
+
+	// exhaust rate limit (3 per window) using different binding IDs
 	for i := 0; i < 3; i++ {
-		challenge, err := store.GenerateChallenge("binding-rate", 0x00004003)
+		challenge, err := store.GenerateChallenge(fmt.Sprintf("binding-rate-%d", i), 0x00004003)
 		if err != nil {
 			t.Fatalf("Challenge %d should have succeeded: %v", i, err)
 		}
@@ -359,49 +363,85 @@ func TestNonceStore_RateLimitWindow(t *testing.T) {
 		// consume to free pending slot
 		report := &types.AttestationReport{}
 		copy(report.TPM.Nonce[:], challenge.Nonce[:])
+		copy(report.TPM.HardwareID[:], hwID[:])
 		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
 		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-		store.VerifyNonce(report, "binding-rate")
+		if err := store.VerifyNonce(report, fmt.Sprintf("binding-rate-%d", i)); err != nil {
+			t.Fatalf("Verify %d should have succeeded: %v", i, err)
+		}
 	}
 
-	// 4th should fail
-	_, err := store.GenerateChallenge("binding-rate", 0x00004003)
+	// 4th verify should fail even on a fresh binding ID because identity is same
+	challenge, err := store.GenerateChallenge("binding-rate-3", 0x00004003)
+	if err != nil {
+		t.Fatalf("4th challenge issue should still succeed: %v", err)
+	}
+	report := &types.AttestationReport{}
+	copy(report.TPM.Nonce[:], challenge.Nonce[:])
+	copy(report.TPM.HardwareID[:], hwID[:])
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
+	err = store.VerifyNonce(report, "binding-rate-3")
 	if err == nil {
-		t.Fatal("SECURITY: Should have rejected challenge exceeding rate limit!")
+		t.Fatal("SECURITY: Should have rejected verify exceeding identity rate limit!")
 	}
 	t.Logf("✓ Rate limit enforced: %v", err)
 
 	// wait for window to reset
 	time.Sleep(250 * time.Millisecond)
 
-	_, err = store.GenerateChallenge("binding-rate", 0x00004003)
+	challenge, err = store.GenerateChallenge("binding-rate-4", 0x00004003)
 	if err != nil {
-		t.Fatalf("Should succeed after rate limit window reset: %v", err)
+		t.Fatalf("Challenge issue after window reset should succeed: %v", err)
+	}
+	report = &types.AttestationReport{}
+	copy(report.TPM.Nonce[:], challenge.Nonce[:])
+	copy(report.TPM.HardwareID[:], hwID[:])
+	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
+	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
+	if err := store.VerifyNonce(report, "binding-rate-4"); err != nil {
+		t.Fatalf("Verify after window reset should succeed: %v", err)
 	}
 
 	t.Log("✓ Rate limit window correctly resets")
 }
 
 func TestNonceStore_MonotonicCounter(t *testing.T) {
-	t.Log("TEST: Per-client monotonic attestation counter")
-	t.Log("Tracks attestation sequence for audit trail")
+	t.Log("TEST: Per-hardware monotonic attestation counter")
+	t.Log("Tracks successful attestations for durable client identity")
 
 	store := NewNonceStore(5 * time.Minute)
-	clientID := "binding-counter"
+	var hwID [types.HardwareIDSize]byte
+	copy(hwID[:], []byte("hw-counter-identity"))
+	clientID := hex.EncodeToString(hwID[:])
 
 	if store.ClientCounter(clientID) != 0 {
 		t.Errorf("Initial counter: got %d, want 0", store.ClientCounter(clientID))
 	}
 
 	for i := 1; i <= 5; i++ {
-		store.GenerateChallenge(clientID, 0x00004003)
+		bindingID := fmt.Sprintf("binding-counter-%d", i)
+		challenge, err := store.GenerateChallenge(bindingID, 0x00004003)
+		if err != nil {
+			t.Fatalf("GenerateChallenge(%d) failed: %v", i, err)
+		}
+
+		report := &types.AttestationReport{}
+		copy(report.TPM.Nonce[:], challenge.Nonce[:])
+		copy(report.TPM.HardwareID[:], hwID[:])
+		report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
+		copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
+		if err := store.VerifyNonce(report, bindingID); err != nil {
+			t.Fatalf("VerifyNonce(%d) failed: %v", i, err)
+		}
+
 		if store.ClientCounter(clientID) != uint64(i) {
-			t.Errorf("Counter after challenge %d: got %d, want %d",
+			t.Errorf("Counter after verify %d: got %d, want %d",
 				i, store.ClientCounter(clientID), i)
 		}
 	}
 
-	t.Log("✓ Monotonic counter increments per challenge generation")
+	t.Log("✓ Monotonic counter increments per successful verification")
 }
 
 type usedNonceBackendFirstCollision struct {

@@ -520,8 +520,8 @@ func TestListClientsWithChallenges(t *testing.T) {
 	var resp clientListResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.Count != 3 {
-		t.Errorf("Expected 3 clients, got %d", resp.Count)
+	if resp.Count != 0 {
+		t.Errorf("Expected 0 clients (challenge-only IDs are not listed), got %d", resp.Count)
 	}
 }
 
@@ -554,24 +554,8 @@ func TestClientInfoWithChallenge(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Expected 200, got %d", rec.Code)
-	}
-
-	var resp clientInfoResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
-
-	if resp.ClientID != "10.0.0.42" {
-		t.Errorf("Expected client ID '10.0.0.42', got '%s'", resp.ClientID)
-	}
-	if resp.MonotonicCounter != 2 {
-		t.Errorf("Expected monotonic counter 2, got %d", resp.MonotonicCounter)
-	}
-	if resp.PendingChallenges != 2 {
-		t.Errorf("Expected 2 pending challenges, got %d", resp.PendingChallenges)
-	}
-	if resp.HasAIK {
-		t.Error("Expected HasAIK=false for challenge-only client")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("Expected 404 for challenge-only ID, got %d", rec.Code)
 	}
 }
 
@@ -903,8 +887,8 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if resp.AttestCount != 1 {
 		t.Errorf("attestation_count: got %d, want 1", resp.AttestCount)
 	}
-	if resp.MonotonicCounter != 0 {
-		t.Errorf("monotonic_counter: got %d, want 0 for persistent ID", resp.MonotonicCounter)
+	if resp.MonotonicCounter != 1 {
+		t.Errorf("monotonic_counter: got %d, want 1 for persistent ID", resp.MonotonicCounter)
 	}
 	if resp.PCR14Baseline == "" {
 		t.Error("Expected non-empty pcr14_baseline after attestation")
@@ -950,11 +934,11 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 	if resp.AttestCount != 5 {
 		t.Errorf("attestation_count: got %d, want 5", resp.AttestCount)
 	}
-	if resp.MonotonicCounter != 0 {
-		t.Errorf("monotonic_counter: got %d, want 0 for persistent ID", resp.MonotonicCounter)
+	if resp.MonotonicCounter != 5 {
+		t.Errorf("monotonic_counter: got %d, want 5 for persistent ID", resp.MonotonicCounter)
 	}
-	if resp.LastAttestation != "" {
-		t.Errorf("Expected empty last_attestation for persistent ID, got %q", resp.LastAttestation)
+	if resp.LastAttestation == "" {
+		t.Errorf("Expected non-empty last_attestation for persistent ID")
 	}
 	if resp.PendingChallenges != 0 {
 		t.Errorf("pending_challenges: got %d, want 0 (all consumed)", resp.PendingChallenges)
@@ -996,8 +980,8 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 	var resp clientListResponse
 	json.NewDecoder(rec.Body).Decode(&resp)
 
-	if resp.Count != 6 {
-		t.Errorf("client count: got %d, want 6 (challenge IDs + persistent IDs)", resp.Count)
+	if resp.Count != 3 {
+		t.Errorf("client count: got %d, want 3 (persistent IDs only)", resp.Count)
 	}
 
 	// verify all clients present
@@ -1216,8 +1200,8 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 	var list clientListResponse
 	json.NewDecoder(rec.Body).Decode(&list)
 
-	if list.Count != numClients*2 {
-		t.Errorf("client list: %d, want %d", list.Count, numClients*2)
+	if list.Count != numClients {
+		t.Errorf("client list: %d, want %d", list.Count, numClients)
 	}
 
 	t.Logf("✓ %d concurrent attestations tracked: %d registered, %d attested",

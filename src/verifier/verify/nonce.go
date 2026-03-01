@@ -119,13 +119,17 @@ type NonceStore struct {
 	// anti-replay: pluggable backend for used nonce history
 	usedBackend UsedNonceBackend
 
-	// per-binding rate limiting (bindingID is the transport-level identifier
-	// used for nonce issuance; in the TLS server this is a per-connection
-	// random challengeID, not a durable hardware identity)
+	// per-binding state for pending challenge tracking and binding checks.
+	// bindingID is transport-level (challengeID in TLS server).
 	bindingChallenges map[string]clientState
-	maxPending        int           // max outstanding challenges per bindingID
-	rateLimitWindow   time.Duration // rate limit window duration
-	rateLimitMax      int           // max challenges per window
+
+	// per-hardware identity state used for durable rate limiting and counters.
+	// key: hex(HardwareID).
+	identityChallenges map[string]clientState
+
+	maxPending      int           // max outstanding challenges per bindingID
+	rateLimitWindow time.Duration // rate limit window duration
+	rateLimitMax    int           // max attestations per identity per window
 
 	// stop channel for cleanupLoop goroutine
 	stopCh chan struct{}
@@ -188,14 +192,15 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	}
 
 	ns := &NonceStore{
-		pending:           make(map[string]nonceEntry),
-		lifetime:          cfg.Lifetime,
-		usedBackend:       backend,
-		bindingChallenges: make(map[string]clientState),
-		maxPending:        cfg.MaxPendingPerClient,
-		rateLimitWindow:   cfg.RateLimitWindow,
-		rateLimitMax:      cfg.RateLimitMax,
-		stopCh:            make(chan struct{}),
+		pending:            make(map[string]nonceEntry),
+		lifetime:           cfg.Lifetime,
+		usedBackend:        backend,
+		bindingChallenges:  make(map[string]clientState),
+		identityChallenges: make(map[string]clientState),
+		maxPending:         cfg.MaxPendingPerClient,
+		rateLimitWindow:    cfg.RateLimitWindow,
+		rateLimitMax:       cfg.RateLimitMax,
+		stopCh:             make(chan struct{}),
 	}
 
 	go ns.cleanupLoop()
@@ -219,8 +224,8 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 
-	// enforce per-binding rate limiting
-	if err := ns.checkRateLimit(bindingID); err != nil {
+	// enforce per-binding pending bound (bindingID is challenge-scoped)
+	if err := ns.checkPendingLimit(bindingID); err != nil {
 		return nil, err
 	}
 
@@ -240,7 +245,6 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 	cs := ns.bindingChallenges[bindingID]
 	cs.attestCounter++
 	cs.pendingCount++
-	cs.windowCount++
 	ns.bindingChallenges[bindingID] = cs
 
 	ns.pending[key] = nonceEntry{
@@ -297,6 +301,20 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 		return errors.New("nonce mismatch in report header")
 	}
 
+	identityID := hex.EncodeToString(report.TPM.HardwareID[:])
+	if err := ns.checkIdentityRateLimit(identityID); err != nil {
+		delete(ns.pending, key)
+		_ = ns.usedBackend.Record(key, time.Now())
+		if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
+			cs.pendingCount--
+			if cs.pendingCount < 0 {
+				cs.pendingCount = 0
+			}
+			ns.bindingChallenges[entry.bindingID] = cs
+		}
+		return err
+	}
+
 	// verify nonce inside tpms_attest (signed by tpm)
 	// compute binding nonce = SHA-256(challenge_nonce || hardware_id)
 	// to verify that the TPM quote is bound to the reported hardware identity
@@ -326,17 +344,20 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 		if cs.pendingCount < 0 {
 			cs.pendingCount = 0
 		}
-		cs.lastAttestation = time.Now()
 		ns.bindingChallenges[entry.bindingID] = cs
 	}
+
+	ics := ns.identityChallenges[identityID]
+	ics.attestCounter++
+	ics.lastAttestation = time.Now()
+	ns.identityChallenges[identityID] = ics
 
 	return nil
 }
 
-// enforces per-bindingID challenge rate limiting
-func (ns *NonceStore) checkRateLimit(bindingID string) error {
+// enforces per-binding pending challenge bound.
+func (ns *NonceStore) checkPendingLimit(bindingID string) error {
 	cs, exists := ns.bindingChallenges[bindingID]
-	now := time.Now()
 
 	if exists {
 		// check outstanding challenge limit
@@ -344,25 +365,33 @@ func (ns *NonceStore) checkRateLimit(bindingID string) error {
 			return fmt.Errorf("too many outstanding challenges for client %s (%d/%d)",
 				bindingID, cs.pendingCount, ns.maxPending)
 		}
-
-		// check rate limit window
-		if now.Sub(cs.windowStart) > ns.rateLimitWindow {
-			// reset window
-			cs.windowStart = now
-			cs.windowCount = 0
-		} else if cs.windowCount >= ns.rateLimitMax {
-			return fmt.Errorf("rate limit exceeded for client %s (%d/%d per %v)",
-				bindingID, cs.windowCount, ns.rateLimitMax, ns.rateLimitWindow)
-		}
 		ns.bindingChallenges[bindingID] = cs
 	} else {
 		// new bindingID - initialize state
 		ns.bindingChallenges[bindingID] = clientState{
-			windowStart: now,
+			windowStart: time.Now(),
 			windowCount: 0,
 		}
 	}
 
+	return nil
+}
+
+// enforces durable per-hardware challenge/attest rate limiting.
+func (ns *NonceStore) checkIdentityRateLimit(identityID string) error {
+	cs := ns.identityChallenges[identityID]
+	now := time.Now()
+
+	if cs.windowStart.IsZero() || now.Sub(cs.windowStart) > ns.rateLimitWindow {
+		cs.windowStart = now
+		cs.windowCount = 0
+	} else if cs.windowCount >= ns.rateLimitMax {
+		return fmt.Errorf("rate limit exceeded for hardware identity %s (%d/%d per %v)",
+			identityID, cs.windowCount, ns.rateLimitMax, ns.rateLimitWindow)
+	}
+
+	cs.windowCount++
+	ns.identityChallenges[identityID] = cs
 	return nil
 }
 
@@ -418,6 +447,12 @@ func (ns *NonceStore) cleanup() {
 			delete(ns.bindingChallenges, id)
 		}
 	}
+	for id, cs := range ns.identityChallenges {
+		if cs.lastAttestation.Before(clientCutoff) &&
+			(cs.windowStart.IsZero() || cs.windowStart.Before(clientCutoff)) {
+			delete(ns.identityChallenges, id)
+		}
+	}
 }
 
 // returns number of outstanding challenges (for monitoring)
@@ -434,16 +469,12 @@ func (ns *NonceStore) UsedCount() int {
 	return ns.usedBackend.Count()
 }
 
-// returns per-binding attestation counter (for monitoring).
-//
-// clientID is a historical name: the key is the bindingID used in
-// GenerateChallenge/VerifyNonce (challengeID in the TLS server), not a
-// hardware-derived durable client identity.
+// returns per-hardware-identity attestation counter (for monitoring).
 func (ns *NonceStore) ClientCounter(clientID string) uint64 {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
-	if cs, ok := ns.bindingChallenges[clientID]; ok {
+	if cs, ok := ns.identityChallenges[clientID]; ok {
 		return cs.attestCounter
 	}
 	return 0
@@ -465,19 +496,19 @@ func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
-	if cs, ok := ns.bindingChallenges[clientID]; ok {
+	if cs, ok := ns.identityChallenges[clientID]; ok {
 		return cs.lastAttestation
 	}
 	return time.Time{}
 }
 
-// returns all binding IDs with active challenge state
+// returns all hardware identities with active attestation state
 func (ns *NonceStore) ListActiveClients() []string {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
 
-	clients := make([]string, 0, len(ns.bindingChallenges))
-	for id := range ns.bindingChallenges {
+	clients := make([]string, 0, len(ns.identityChallenges))
+	for id := range ns.identityChallenges {
 		clients = append(clients, id)
 	}
 	return clients
