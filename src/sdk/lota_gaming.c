@@ -718,12 +718,20 @@ void lota_token_free(struct lota_token *token) {
  * Serialization using shared definitions
  */
 size_t lota_token_serialized_size(const struct lota_token *token) {
+  size_t total;
+
   if (!token)
     return 0;
   if (token->attest_size > 1024 || token->signature_len > 512)
     return 0;
 
-  return LOTA_TOKEN_HEADER_SIZE + token->attest_size + token->signature_len;
+  total = LOTA_TOKEN_HEADER_SIZE + token->attest_size + token->signature_len;
+
+  /* wire.total_size is uint16_t on wire; reject impossible encodings */
+  if (total > 0xFFFFu)
+    return 0;
+
+  return total;
 }
 
 int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
@@ -733,6 +741,8 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 
   size_t total = lota_token_serialized_size(token);
   if (total == 0)
+    return LOTA_ERR_INVALID_ARG;
+  if (total > 0xFFFFu)
     return LOTA_ERR_INVALID_ARG;
   if (buflen < total)
     return LOTA_ERR_BUFFER_TOO_SMALL;

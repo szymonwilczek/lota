@@ -313,6 +313,49 @@ static void test_serialize_buffer_too_small(void) {
   }
 }
 
+static void test_serialize_total_size_within_u16(void) {
+  TEST("lota_token_serialize - total_size stays within uint16 wire field");
+
+  struct lota_token token;
+  memset(&token, 0, sizeof(token));
+  token.valid_until = 1700003600;
+  token.flags = 0x07;
+  token.sig_alg = 0x0014;
+  token.hash_alg = 0x000B;
+  token.pcr_mask = 0x4001;
+
+  uint8_t max_attest[1024] = {0};
+  uint8_t max_sig[512] = {0};
+  token.attest_data = max_attest;
+  token.attest_size = sizeof(max_attest);
+  token.signature = max_sig;
+  token.signature_len = sizeof(max_sig);
+
+  size_t expected = lota_token_serialized_size(&token);
+  if (expected == 0 || expected > 0xFFFFu) {
+    FAIL("serialized size exceeds uint16 wire capacity");
+    return;
+  }
+
+  uint8_t buf[2048];
+  size_t written = 0;
+  int ret = lota_token_serialize(&token, buf, sizeof(buf), &written);
+  if (ret != LOTA_OK || written != expected) {
+    FAIL("serialize failed at max supported sizes");
+    return;
+  }
+
+  {
+    uint16_t wire_total = (uint16_t)buf[6] | ((uint16_t)buf[7] << 8);
+    if ((size_t)wire_total != expected) {
+      FAIL("wire total_size mismatch");
+      return;
+    }
+  }
+
+  PASS();
+}
+
 static void test_parse_untrusted(void) {
   TEST("lota_server_parse_token - untrusted parse");
 
@@ -693,6 +736,7 @@ int main(void) {
   printf(BOLD "Serialization (Gaming SDK):\n" RESET);
   test_serialize_basic();
   test_serialize_buffer_too_small();
+  test_serialize_total_size_within_u16();
 
   printf(BOLD "\nParsing (Server SDK - untrusted):\n" RESET);
   test_parse_untrusted();
