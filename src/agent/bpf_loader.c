@@ -399,6 +399,26 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       err = -errno;
       goto err_close;
     }
+
+    /*
+     * Close startup race early: lock bpf() as soon as admin identity is set.
+     * Admin identity keeps current agent process authorized for required map
+     * updates during the rest of startup
+     */
+    if (ctx->config_fd >= 0) {
+      uint32_t lock_key = LOTA_CFG_LOCK_BPF;
+      uint32_t lock_val = 1;
+
+      if (bpf_map_update_elem(ctx->config_fd, &lock_key, &lock_val, BPF_ANY) <
+          0) {
+        lota_err("Failed to enable early LOCK_BPF: %s", strerror(errno));
+        err = -errno;
+        goto err_close;
+      }
+      lota_info("Early BPF syscall lock enabled during loader init");
+    } else {
+      lota_warn("lota_config map unavailable, early LOCK_BPF not applied");
+    }
   } else {
     lota_warn("bpf_admin_tgid map not found in BPF object");
   }

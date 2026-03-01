@@ -456,6 +456,21 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   if (bpf_loader_get_mode(&g_agent.bpf_ctx, &prev_mode) == 0)
     have_prev_mode = 1;
 
+  ret = bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_LOCK_BPF, 1);
+  if (ret < 0) {
+    lota_err("Failed to enable bpf syscall lock: %s", strerror(-ret));
+    goto out_fail;
+  }
+  cfg_lock_bpf_applied = 1;
+  lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
+
+  ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
+  if (ret < 0) {
+    lota_err("Failed integrity_config verification after LOCK_BPF: %s",
+             strerror(-ret));
+    goto out_fail;
+  }
+
   mode = policy->mode;
 
   if (policy->strict_mmap) {
@@ -575,21 +590,6 @@ allowlist_done:
     }
     cfg_block_anon_exec_applied = 1;
     lota_info("Anonymous executable mappings: BLOCKED");
-  }
-
-  ret = bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_LOCK_BPF, 1);
-  if (ret < 0) {
-    lota_err("Failed to enable bpf syscall lock: %s", strerror(-ret));
-    goto out_fail;
-  }
-  cfg_lock_bpf_applied = 1;
-  lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
-
-  ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
-  if (ret < 0) {
-    lota_err("Failed integrity_config verification after LOCK_BPF: %s",
-             strerror(-ret));
-    goto out_fail;
   }
 
   ret = bpf_loader_set_mode(&g_agent.bpf_ctx, mode);
