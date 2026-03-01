@@ -967,6 +967,43 @@ static void test_verify_size_mismatch(void) {
   PASS();
 }
 
+static void test_verify_header_flags_tamper_rejected(void) {
+  TEST("verify: tampered heartbeat lota_flags -> BAD_TOKEN");
+  write_mock_snapshot(test_dir, 0x07);
+
+  struct lota_ac_config cfg = {
+      .provider = LOTA_AC_PROVIDER_EAC,
+      .game_id = "test-flags-tamper",
+      .token_dir = test_dir,
+  };
+  struct lota_ac_session *s = lota_ac_init(&cfg);
+  if (!s) {
+    FAIL("init failed");
+    return;
+  }
+
+  uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+  size_t written = 0;
+  if (lota_ac_heartbeat(s, buf, sizeof(buf), &written) != 0) {
+    lota_ac_shutdown(s);
+    FAIL("heartbeat failed");
+    return;
+  }
+  lota_ac_shutdown(s);
+
+  /* tamper plaintext header flag mirror, keep embedded token unchanged */
+  write_le32(buf + 28, 0xdeadbeefU);
+
+  struct lota_ac_info info;
+  if (lota_ac_verify_heartbeat(buf, written, NULL, 0, &info) !=
+      LOTA_SERVER_ERR_BAD_TOKEN) {
+    FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_direct_mode_no_agent(void) {
   TEST("direct mode: no agent -> ERROR state (graceful)");
   struct lota_ac_config cfg = {
@@ -1122,6 +1159,7 @@ int main(void) {
   test_verify_bad_version();
   test_verify_bad_provider();
   test_verify_size_mismatch();
+  test_verify_header_flags_tamper_rejected();
 
   printf("\nDirect Mode:\n");
   test_direct_mode_no_agent();

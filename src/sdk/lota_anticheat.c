@@ -410,7 +410,7 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   uint8_t provider = data[5];
   uint16_t total_size = read_le16_u(data + 6);
   uint32_t sequence = read_le32_u(data + 24);
-  uint32_t lota_flags = read_le32_u(data + 28);
+  uint32_t heartbeat_lota_flags = read_le32_u(data + 28);
   uint64_t timestamp = read_le64_u(data + 32);
   uint16_t token_size = read_le16_u(data + 72);
 
@@ -441,12 +441,20 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (ret != LOTA_SERVER_OK)
     return ret;
 
+  /*
+   * lota_flags in heartbeat header are plaintext transport metadata only.
+   * Trust token claims (nonce-bound and signature-verified when AIK is set)
+   * and fail closed if header/token disagree
+   */
+  if (heartbeat_lota_flags != claims.flags)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+
   info->provider = (enum lota_ac_provider)provider;
   memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);
   info->session_start = 0; /* not available from a single heartbeat */
   info->last_heartbeat = timestamp;
   info->heartbeat_seq = sequence;
-  info->lota_flags = lota_flags;
+  info->lota_flags = claims.flags;
   info->trusted = !claims.expired && (claims.flags != 0);
   info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 

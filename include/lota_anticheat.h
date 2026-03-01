@@ -110,7 +110,8 @@ struct lota_ac_config {
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
  *   24      4      sequence        monotonic counter
- *   28      4      lota_flags      attestation flags at generation time
+ *   28      4      lota_flags      mirror of token flags (integrity-checked
+ *                                  against embedded token during verify)
  *   32      8      timestamp       Unix epoch (seconds)
  *   40      32     game_id_hash    SHA-256(game_id)
  *   72      2      token_size      embedded LOTA token length
