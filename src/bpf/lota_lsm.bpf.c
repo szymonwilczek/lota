@@ -711,8 +711,8 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     if (id == LOADING_FIRMWARE)
       blocked = 1;
 
-    if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS ||
-        id == LOADING_POLICY) {
+    /* align with kernel_read_file: strict-modules must not block policy load */
+    if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS) {
       if (get_config(LOTA_CFG_STRICT_MODULES))
         blocked = 1;
     }
