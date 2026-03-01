@@ -599,7 +599,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
       }
     }
 
-    if (get_config(LOTA_CFG_STRICT_MODULES)) {
+    if (id == READING_MODULE && get_config(LOTA_CFG_STRICT_MODULES)) {
       if (!is_verity_allowed(file)) {
         bpf_printk("LOTA: BLOCKING module load: no allowed fs-verity digest");
         blocked = 1;
