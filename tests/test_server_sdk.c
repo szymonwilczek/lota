@@ -56,6 +56,19 @@ static int tests_fail = 0;
 #define TPM_GENERATED_VALUE 0xff544347
 #define TPM_ST_ATTEST_QUOTE 0x8018
 
+static size_t tpm_hash_digest_len(uint16_t hash_alg) {
+  switch (hash_alg) {
+  case 0x000B:
+    return 32;
+  case 0x000C:
+    return 48;
+  case 0x000D:
+    return 64;
+  default:
+    return 0;
+  }
+}
+
 static void write_be16(uint8_t *p, uint16_t v) {
   p[0] = (uint8_t)(v >> 8);
   p[1] = (uint8_t)(v);
@@ -208,10 +221,14 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
   }
 
   /* build TPMS_ATTEST with expected_nonce as extraData */
-  uint8_t pcr_digest[32] = {0xDD};
+  uint8_t pcr_digest[64] = {0};
+  size_t pcr_digest_len = tpm_hash_digest_len(hash_alg);
+  if (pcr_digest_len == 0)
+    return LOTA_ERR_INVALID_ARG;
+  memset(pcr_digest, 0xDD, pcr_digest_len);
   size_t attest_len = 0;
-  uint8_t *attest =
-      build_fake_tpms_attest(exp_nonce, 32, pcr_digest, 32, &attest_len);
+  uint8_t *attest = build_fake_tpms_attest(exp_nonce, 32, pcr_digest,
+                                           pcr_digest_len, &attest_len);
 
   /* sign attest_data */
   size_t sig_len = 0;
@@ -477,6 +494,53 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
     return;
   }
 
+  if (claims.pcr_digest_len != 48) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "pcr_digest_len=%zu, want 48",
+             claims.pcr_digest_len);
+    FAIL(msg);
+    return;
+  }
+
+  PASS();
+}
+
+static void test_verify_full_success_sha512(EVP_PKEY *key,
+                                            const uint8_t *aik_der,
+                                            size_t aik_len) {
+  TEST("lota_server_verify_token - SHA-512 hash_alg");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0xDE, 0xAD, 0xBE, 0xEF};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  int ret = build_full_token(key, 0x000D, EVP_sha512(), now + 3600, 0x07, nonce,
+                             tokbuf, sizeof(tokbuf), &tok_written);
+  if (ret != LOTA_OK) {
+    FAIL("build_full_token(SHA-512) failed");
+    return;
+  }
+
+  struct lota_server_claims claims;
+  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, NULL,
+                                 &claims);
+  if (ret != LOTA_SERVER_OK) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "verify returned %d: %s", ret,
+             lota_server_strerror(ret));
+    FAIL(msg);
+    return;
+  }
+
+  if (claims.pcr_digest_len != 64) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "pcr_digest_len=%zu, want 64",
+             claims.pcr_digest_len);
+    FAIL(msg);
+    return;
+  }
+
   PASS();
 }
 
@@ -669,6 +733,50 @@ static void test_malformed_inputs(void) {
   }
 }
 
+static void test_unknown_hash_alg_rejected(EVP_PKEY *key,
+                                           const uint8_t *aik_der,
+                                           size_t aik_len) {
+  TEST("lota_server_verify_token - unknown hash_alg rejected");
+
+  uint8_t nonce[32] = {0};
+  uint8_t tokbuf[2048];
+  size_t tok_written = 0;
+  struct lota_server_claims claims;
+
+  if (build_full_token_sha256(key, (uint64_t)time(NULL) + 3600, 0, nonce,
+                              tokbuf, sizeof(tokbuf),
+                              &tok_written) != LOTA_OK) {
+    FAIL("build_full_token_sha256 failed");
+    return;
+  }
+
+  /* token header hash_alg field at offset 54 (little-endian) */
+  tokbuf[54] = 0x34;
+  tokbuf[55] = 0x12;
+
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
+    PASS();
+  } else {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected BAD_TOKEN, got %d", ret);
+    FAIL(msg);
+  }
+
+  TEST("lota_server_parse_token - unknown hash_alg rejected");
+
+  struct lota_server_claims parsed;
+  ret = lota_server_parse_token(tokbuf, tok_written, &parsed);
+  if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
+    PASS();
+  } else {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected BAD_TOKEN, got %d", ret);
+    FAIL(msg);
+  }
+}
+
 static void test_strerror(void) {
   TEST("lota_server_strerror - all error codes");
 
@@ -745,6 +853,7 @@ int main(void) {
          "\nFull Verification (Server SDK - RSA + nonce binding):\n" RESET);
   test_verify_full_success(key, aik_der, aik_len);
   test_verify_full_success_sha384(key, aik_der, aik_len);
+  test_verify_full_success_sha512(key, aik_der, aik_len);
   test_verify_with_expected_nonce(key, aik_der, aik_len);
 
   printf(BOLD "\nRejection Scenarios:\n" RESET);
@@ -755,6 +864,7 @@ int main(void) {
 
   printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
   test_malformed_inputs();
+  test_unknown_hash_alg_rejected(key, aik_der, aik_len);
   test_strerror();
   test_strerror_new_codes();
   test_sdk_version();
