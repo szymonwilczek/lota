@@ -588,9 +588,17 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     struct integrity_data *integrity;
     integrity = bpf_map_lookup_elem(&integrity_config, &key);
 
-    if (id == READING_MODULE) {
+    if (id == READING_MODULE || id == READING_FIRMWARE) {
       if (!integrity_baseline_ok(integrity))
         blocked = 1;
+    }
+
+    /* firmware is always strict in ENFORCE: require fs-verity allowlist */
+    if (id == READING_FIRMWARE) {
+      if (!is_verity_allowed(file)) {
+        bpf_printk("LOTA: BLOCKING firmware load: no allowed fs-verity digest");
+        blocked = 1;
+      }
     }
 
     if (get_config(LOTA_CFG_STRICT_MODULES)) {
@@ -694,13 +702,17 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     struct integrity_data *integrity;
 
     integrity = bpf_map_lookup_elem(&integrity_config, &key);
-    if (id == LOADING_MODULE) {
+    if (id == LOADING_MODULE || id == LOADING_FIRMWARE) {
       if (!integrity_baseline_ok(integrity))
         blocked = 1;
     }
 
-    if (id == LOADING_FIRMWARE || id == LOADING_KEXEC_IMAGE ||
-        id == LOADING_KEXEC_INITRAMFS || id == LOADING_POLICY) {
+    /* memory-only firmware loads cannot be fs-verity validated -> deny */
+    if (id == LOADING_FIRMWARE)
+      blocked = 1;
+
+    if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS ||
+        id == LOADING_POLICY) {
       if (get_config(LOTA_CFG_STRICT_MODULES))
         blocked = 1;
     }
