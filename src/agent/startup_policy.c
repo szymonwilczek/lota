@@ -433,14 +433,28 @@ out:
 int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   int ret;
   int mode;
+  uint32_t prev_mode = (uint32_t)g_agent.mode;
+  int have_prev_mode = 0;
   uint8_t computed_policy_digest[32];
   int have_policy_digest = 0;
   uint8_t *digests = NULL;
   int digest_count = 0;
   int allowlist_applied = 0;
+  int applied_pids = 0;
+  int applied_libs = 0;
+  int mode_applied = 0;
+  int cfg_strict_mmap_applied = 0;
+  int cfg_strict_exec_applied = 0;
+  int cfg_block_ptrace_applied = 0;
+  int cfg_strict_modules_applied = 0;
+  int cfg_block_anon_exec_applied = 0;
+  int cfg_lock_bpf_applied = 0;
 
   if (!policy)
     return -EINVAL;
+
+  if (bpf_loader_get_mode(&g_agent.bpf_ctx, &prev_mode) == 0)
+    have_prev_mode = 1;
 
   mode = policy->mode;
 
@@ -448,15 +462,18 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
     ret = bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP, 1);
     if (ret < 0) {
       lota_err("Failed to enable strict mmap: %s", strerror(-ret));
-      return ret;
+      goto out_fail;
     }
+    cfg_strict_mmap_applied = 1;
     lota_info("Strict mmap enforcement: ON");
   }
 
   if (policy->allow_verity_count > 0) {
     digests = calloc((size_t)policy->allow_verity_count, 32);
-    if (!digests)
-      return -ENOMEM;
+    if (!digests) {
+      ret = -ENOMEM;
+      goto out_fail;
+    }
     digest_count = policy->allow_verity_count;
 
     for (int i = 0; i < policy->allow_verity_count; i++) {
@@ -466,14 +483,14 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
       if (ret < 0) {
         lota_err("Failed to measure fs-verity path %s: %s",
                  policy->allow_verity[i], strerror(-ret));
-        goto rollback_allowlist;
+        goto out_fail;
       }
 
       ret = bpf_loader_allow_verity_digest(&g_agent.bpf_ctx, d);
       if (ret < 0) {
         lota_err("Failed to allow fs-verity digest for %s: %s",
                  policy->allow_verity[i], strerror(-ret));
-        goto rollback_allowlist;
+        goto out_fail;
       }
       allowlist_applied++;
 
@@ -491,44 +508,24 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
                                 computed_policy_digest);
     if (ret < 0) {
       lota_err("Failed to compute policy digest: %s", strerror(-ret));
-      goto rollback_allowlist;
+      goto out_fail;
     }
     have_policy_digest = 1;
 
     lota_info("fs-verity allowlist applied (%d entries)", allowlist_applied);
     goto allowlist_done;
-
-  rollback_allowlist:
-    for (int k = 0; k < allowlist_applied; k++) {
-      uint8_t *d = digests + (size_t)k * 32;
-      bool all_zero = true;
-      for (int j = 0; j < 32; j++) {
-        if (d[j] != 0) {
-          all_zero = false;
-          break;
-        }
-      }
-      if (all_zero)
-        continue;
-
-      (void)bpf_loader_disallow_verity_digest(&g_agent.bpf_ctx, d);
-    }
-
-    OPENSSL_cleanse(digests, (size_t)digest_count * 32);
-    free(digests);
-    digests = NULL;
-    return ret;
   } else if (policy->strict_exec || policy->strict_modules) {
     lota_err("Strict exec/modules requested but no allow_verity entries are "
              "configured");
-    return -EINVAL;
+    ret = -EINVAL;
+    goto out_fail;
   }
 
   /* no allowlist: still compute policy digest */
   ret = compute_policy_digest(policy, NULL, 0, computed_policy_digest);
   if (ret < 0) {
     lota_err("Failed to compute policy digest: %s", strerror(-ret));
-    return ret;
+    goto out_fail;
   }
   have_policy_digest = 1;
 
@@ -546,6 +543,7 @@ allowlist_done:
       lota_err("Failed to enable strict exec: %s", strerror(-ret));
       goto out_fail;
     }
+    cfg_strict_exec_applied = 1;
     lota_info("Strict exec enforcement: ON");
   }
 
@@ -555,6 +553,7 @@ allowlist_done:
       lota_err("Failed to enable ptrace blocking: %s", strerror(-ret));
       goto out_fail;
     }
+    cfg_block_ptrace_applied = 1;
     lota_info("Global ptrace blocking: ON");
   }
 
@@ -564,6 +563,7 @@ allowlist_done:
       lota_err("Failed to enable strict modules: %s", strerror(-ret));
       goto out_fail;
     }
+    cfg_strict_modules_applied = 1;
     lota_info("Strict modules enforcement: ON");
   }
 
@@ -573,6 +573,7 @@ allowlist_done:
       lota_err("Failed to enable anonymous exec blocking: %s", strerror(-ret));
       goto out_fail;
     }
+    cfg_block_anon_exec_applied = 1;
     lota_info("Anonymous executable mappings: BLOCKED");
   }
 
@@ -581,6 +582,7 @@ allowlist_done:
     lota_err("Failed to enable bpf syscall lock: %s", strerror(-ret));
     goto out_fail;
   }
+  cfg_lock_bpf_applied = 1;
   lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
 
   ret = bpf_loader_set_mode(&g_agent.bpf_ctx, mode);
@@ -588,57 +590,36 @@ allowlist_done:
     lota_err("Failed to set mode: %s", strerror(-ret));
     goto out_fail;
   }
+  mode_applied = 1;
   lota_info("Mode: %s", mode_to_string(mode));
 
   g_agent.mode = mode;
   if (mode == LOTA_MODE_ENFORCE)
     lota_notice("ENFORCE mode active");
 
-  {
-    int applied_pids = 0;
-    for (int i = 0; i < policy->protect_pid_count; i++) {
-      ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, policy->protect_pids[i]);
-      if (ret < 0) {
-        lota_err("Failed to protect PID %u at startup: %s",
-                 policy->protect_pids[i], strerror(-ret));
-        for (int k = 0; k < applied_pids; k++) {
-          int rollback_ret = bpf_loader_unprotect_pid(&g_agent.bpf_ctx,
-                                                      policy->protect_pids[k]);
-          if (rollback_ret < 0) {
-            lota_warn("Failed to rollback protected PID %u: %s",
-                      policy->protect_pids[k], strerror(-rollback_ret));
-          }
-        }
-        goto out_fail;
-      }
-      applied_pids++;
-      lota_dbg("Protected PID: %u", policy->protect_pids[i]);
+  for (int i = 0; i < policy->protect_pid_count; i++) {
+    ret = bpf_loader_protect_pid(&g_agent.bpf_ctx, policy->protect_pids[i]);
+    if (ret < 0) {
+      lota_err("Failed to protect PID %u at startup: %s",
+               policy->protect_pids[i], strerror(-ret));
+      goto out_fail;
     }
-    lota_info("Protected PIDs applied (%d entries)", applied_pids);
+    applied_pids++;
+    lota_dbg("Protected PID: %u", policy->protect_pids[i]);
   }
+  lota_info("Protected PIDs applied (%d entries)", applied_pids);
 
-  {
-    int applied_libs = 0;
-    for (int i = 0; i < policy->trust_lib_count; i++) {
-      ret = bpf_loader_trust_lib(&g_agent.bpf_ctx, policy->trust_libs[i]);
-      if (ret < 0) {
-        lota_err("Failed to trust lib %s at startup: %s", policy->trust_libs[i],
-                 strerror(-ret));
-        for (int k = 0; k < applied_libs; k++) {
-          int rollback_ret =
-              bpf_loader_untrust_lib(&g_agent.bpf_ctx, policy->trust_libs[k]);
-          if (rollback_ret < 0) {
-            lota_warn("Failed to rollback trusted lib %s: %s",
-                      policy->trust_libs[k], strerror(-rollback_ret));
-          }
-        }
-        goto out_fail;
-      }
-      applied_libs++;
-      lota_dbg("Trusted lib: %s", policy->trust_libs[i]);
+  for (int i = 0; i < policy->trust_lib_count; i++) {
+    ret = bpf_loader_trust_lib(&g_agent.bpf_ctx, policy->trust_libs[i]);
+    if (ret < 0) {
+      lota_err("Failed to trust lib %s at startup: %s", policy->trust_libs[i],
+               strerror(-ret));
+      goto out_fail;
     }
-    lota_info("Trusted libs applied (%d entries)", applied_libs);
+    applied_libs++;
+    lota_dbg("Trusted lib: %s", policy->trust_libs[i]);
   }
+  lota_info("Trusted libs applied (%d entries)", applied_libs);
 
   /* persist canonical policy snapshot for runtime recompute */
   {
@@ -710,6 +691,24 @@ allowlist_done:
   return 0;
 
 out_fail:
+  for (int k = applied_libs - 1; k >= 0; k--) {
+    int rollback_ret =
+        bpf_loader_untrust_lib(&g_agent.bpf_ctx, policy->trust_libs[k]);
+    if (rollback_ret < 0) {
+      lota_warn("Failed to rollback trusted lib %s: %s", policy->trust_libs[k],
+                strerror(-rollback_ret));
+    }
+  }
+
+  for (int k = applied_pids - 1; k >= 0; k--) {
+    int rollback_ret =
+        bpf_loader_unprotect_pid(&g_agent.bpf_ctx, policy->protect_pids[k]);
+    if (rollback_ret < 0) {
+      lota_warn("Failed to rollback protected PID %u: %s",
+                policy->protect_pids[k], strerror(-rollback_ret));
+    }
+  }
+
   if (digests) {
     for (int k = 0; k < allowlist_applied; k++) {
       uint8_t *d = digests + (size_t)k * 32;
@@ -719,6 +718,31 @@ out_fail:
     free(digests);
     digests = NULL;
   }
+
+  if (mode_applied) {
+    uint32_t rollback_mode =
+        have_prev_mode ? prev_mode : (uint32_t)g_agent.mode;
+    int rollback_ret = bpf_loader_set_mode(&g_agent.bpf_ctx, rollback_mode);
+    if (rollback_ret < 0)
+      lota_warn("Failed to rollback mode to %u: %s", rollback_mode,
+                strerror(-rollback_ret));
+    else
+      g_agent.mode = (int)rollback_mode;
+  }
+
+  if (cfg_lock_bpf_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_LOCK_BPF, 0);
+  if (cfg_block_anon_exec_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC, 0);
+  if (cfg_strict_modules_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES, 0);
+  if (cfg_block_ptrace_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_BLOCK_PTRACE, 0);
+  if (cfg_strict_exec_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_EXEC, 0);
+  if (cfg_strict_mmap_applied)
+    (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP, 0);
+
   OPENSSL_cleanse(computed_policy_digest, sizeof(computed_policy_digest));
   return ret;
 }
