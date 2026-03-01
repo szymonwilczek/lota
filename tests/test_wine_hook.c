@@ -271,6 +271,70 @@ static void test_ensure_token_dir_not_a_dir(void) {
   PASS();
 }
 
+static void test_ensure_token_dir_rejects_symlink(void) {
+  char target[sizeof(g_hook.token_dir)];
+  char linkpath[sizeof(g_hook.token_dir)];
+
+  TEST("ensure_token_dir rejects symlink target path");
+
+  snprintf(target, sizeof(target), "%s/real_dir", tmpdir);
+  if (mkdir(target, 0700) != 0) {
+    FAIL("mkdir target failed");
+    return;
+  }
+
+  snprintf(linkpath, sizeof(linkpath), "%s/link_dir", tmpdir);
+  if (symlink(target, linkpath) != 0) {
+    FAIL("symlink create failed");
+    return;
+  }
+
+  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", linkpath);
+
+  g_hook.log_level = HOOK_LOG_SILENT;
+  int ret = ensure_token_dir();
+  g_hook.log_level = HOOK_LOG_WARN;
+
+  if (ret != -ELOOP && ret != -ENOTDIR) {
+    FAIL("expected -ELOOP or -ENOTDIR");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_ensure_token_dir_existing_mode_tightened(void) {
+  struct stat st;
+  char path[sizeof(g_hook.token_dir)];
+
+  TEST("ensure_token_dir tightens existing dir mode to 0700");
+
+  snprintf(path, sizeof(path), "%s/perms_dir", tmpdir);
+  if (mkdir(path, 0755) != 0) {
+    FAIL("mkdir perms_dir failed");
+    return;
+  }
+
+  snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
+
+  if (ensure_token_dir() != 0) {
+    FAIL("ensure_token_dir failed");
+    return;
+  }
+
+  if (stat(path, &st) != 0) {
+    FAIL("stat failed");
+    return;
+  }
+
+  if ((st.st_mode & 0777) != 0700) {
+    FAIL("mode was not tightened to 0700");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_atomic_write_creates_file(void) {
   char path[PATH_MAX];
   char buf[128];
@@ -562,6 +626,8 @@ int main(void) {
   test_ensure_token_dir_creates();
   test_ensure_token_dir_exists();
   test_ensure_token_dir_not_a_dir();
+  test_ensure_token_dir_rejects_symlink();
+  test_ensure_token_dir_existing_mode_tightened();
 
   /* atomic_write */
   test_atomic_write_creates_file();

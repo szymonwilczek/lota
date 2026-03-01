@@ -128,17 +128,18 @@ static void resolve_token_dir(void) {
 }
 
 /*
- * Create the token directory if it does not exist.
- * Mode 0700: only the owning user can read attestation data.
+ * Create and validate the token directory.
  *
- * Attempts mkdir first, then validates the result with lstat.
- * This avoids the TOCTOU race of check-then-create in shared
- * directories like /tmp.
+ * Security requirements:
+ *  - path must resolve to a real directory (no symlink traversal)
+ *  - owned by current uid
+ *  - mode forced to 0700 (private attestation artifacts)
  *
  * Returns 0 on success, negative errno on failure.
  */
 static int ensure_token_dir(void) {
   struct stat st;
+  int dirfd;
 
   /* try to create; EEXIST is fine */
   if (mkdir(g_hook.token_dir, 0700) < 0 && errno != EEXIST) {
@@ -146,24 +147,43 @@ static int ensure_token_dir(void) {
     return -errno;
   }
 
-  /* validate what actually sits at the path */
-  if (lstat(g_hook.token_dir, &st) != 0) {
-    LOG_ERR("lstat %s: %s", g_hook.token_dir, strerror(errno));
+  dirfd =
+      open(g_hook.token_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (dirfd < 0) {
+    LOG_ERR("open token dir %s: %s", g_hook.token_dir, strerror(errno));
     return -errno;
   }
-  if (S_ISLNK(st.st_mode)) {
-    LOG_ERR("token dir is a symlink (possible attack): %s", g_hook.token_dir);
-    return -ELOOP;
+
+  if (fstat(dirfd, &st) != 0) {
+    int err = errno;
+    close(dirfd);
+    LOG_ERR("fstat %s: %s", g_hook.token_dir, strerror(err));
+    return -err;
   }
+
   if (!S_ISDIR(st.st_mode)) {
+    close(dirfd);
     LOG_ERR("token dir exists but is not a directory: %s", g_hook.token_dir);
     return -ENOTDIR;
   }
+
   if (st.st_uid != getuid()) {
+    close(dirfd);
     LOG_ERR("token dir owned by uid %u, expected %u: %s", (unsigned)st.st_uid,
             (unsigned)getuid(), g_hook.token_dir);
     return -EACCES;
   }
+
+  if ((st.st_mode & 0777) != 0700) {
+    if (fchmod(dirfd, 0700) < 0) {
+      int err = errno;
+      close(dirfd);
+      LOG_ERR("fchmod 0700 %s: %s", g_hook.token_dir, strerror(err));
+      return -err;
+    }
+  }
+
+  close(dirfd);
 
   return 0;
 }
