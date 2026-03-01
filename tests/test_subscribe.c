@@ -312,6 +312,34 @@ static void server_unsubscribe(int client_fd) {
 }
 
 /*
+ * subscribe and emit one notification after >5s.
+ * Used to verify that lota_poll_events(timeout_ms=-1) truly blocks
+ * indefinitely instead of falling back to DEFAULT_TIMEOUT_MS.
+ */
+static void server_delayed_notify(int client_fd) {
+  struct lota_ipc_request req;
+  struct lota_ipc_subscribe_request sub;
+
+  if (recv_request(client_fd, &req, &sub, sizeof(sub)) < 0)
+    _exit(1);
+  if (req.cmd != LOTA_IPC_CMD_SUBSCRIBE)
+    _exit(2);
+
+  if (send_response(client_fd, LOTA_IPC_OK, NULL, 0) < 0)
+    _exit(3);
+
+  /* longer than DEFAULT_TIMEOUT_MS (=5000 ms) */
+  usleep(5200000);
+
+  if (send_notify(client_fd, LOTA_IPC_EVENT_STATUS,
+                  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK, 1000, 2000, 7, 1,
+                  1) < 0)
+    _exit(4);
+
+  usleep(100000);
+}
+
+/*
  * Run a mock server for a given scenario.
  * Listens on test_socket, accepts one client, runs the scenario.
  */
@@ -712,6 +740,51 @@ static void test_poll_no_data(void) {
   PASS();
 }
 
+static void test_poll_infinite_wait(void) {
+  pid_t server;
+  struct lota_client *client;
+  struct lota_connect_opts opts;
+  int ret;
+
+  TEST("poll_events(-1) blocks until delayed notification");
+
+  reset_cb();
+  server = start_mock_server(server_delayed_notify);
+  if (server < 0) {
+    FAIL("failed to start mock server");
+    return;
+  }
+
+  opts.socket_path = test_socket;
+  opts.timeout_ms = 5000;
+  client = lota_connect_opts(&opts);
+  if (!client) {
+    FAIL("connect failed");
+    wait_server(server);
+    return;
+  }
+
+  ret = lota_subscribe(client, LOTA_EVENT_ALL, test_callback, NULL);
+  if (ret != LOTA_OK) {
+    FAIL("subscribe failed");
+    lota_disconnect(client);
+    wait_server(server);
+    return;
+  }
+
+  ret = lota_poll_events(client, -1);
+  if (ret < 1 || cb_count < 1) {
+    FAIL("expected at least one notification with infinite wait");
+    lota_disconnect(client);
+    wait_server(server);
+    return;
+  }
+
+  lota_disconnect(client);
+  wait_server(server);
+  PASS();
+}
+
 static void test_raw_subscribe_protocol(void) {
   int sv[2]; /* socketpair: [0]=client, [1]=server */
   struct lota_ipc_request req;
@@ -912,6 +985,7 @@ int main(void) {
   test_interleaved_notification();
   test_unsubscribe();
   test_poll_no_data();
+  test_poll_infinite_wait();
 
   printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
   return (tests_passed == tests_run) ? 0 : 1;

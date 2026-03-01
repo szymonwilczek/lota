@@ -832,25 +832,33 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
   int ret;
   int dispatched = 0;
   int64_t deadline_ms = 0;
+  int infinite_wait;
+  int nonblocking;
 
   if (!client)
     return LOTA_ERR_NOT_CONNECTED;
 
-  if (timeout_ms < 0)
-    timeout_ms = DEFAULT_TIMEOUT_MS;
+  infinite_wait = (timeout_ms < 0);
+  nonblocking = (timeout_ms == 0);
 
-  deadline_ms = monotonic_ms() + timeout_ms;
+  if (!infinite_wait && !nonblocking)
+    deadline_ms = monotonic_ms() + timeout_ms;
 
-  /* timeout_ms == 0: drain whatever is already queued */
-  if (timeout_ms == 0)
-    deadline_ms = monotonic_ms();
+  /* timeout_ms == 0: non-blocking one-shot drain of queued events */
 
   for (;;) {
-    int64_t now_ms = monotonic_ms();
-    int wait_ms = (int)(deadline_ms - now_ms);
+    int wait_ms;
 
-    if (wait_ms <= 0)
-      break;
+    if (infinite_wait) {
+      wait_ms = -1;
+    } else if (nonblocking) {
+      wait_ms = 0;
+    } else {
+      int64_t now_ms = monotonic_ms();
+      wait_ms = (int)(deadline_ms - now_ms);
+      if (wait_ms <= 0)
+        break;
+    }
 
     ret = wait_for_socket(client->fd, POLLIN, wait_ms);
     if (ret == -ETIMEDOUT)
@@ -909,6 +917,16 @@ int lota_poll_events(struct lota_client *client, int timeout_ms) {
           return dispatched > 0 ? dispatched : LOTA_ERR_NOT_CONNECTED;
       }
     }
+
+    /*
+     * For infinite wait, return once at least one notification has been
+     * delivered and the currently queued frames were drained.
+     */
+    if (infinite_wait && dispatched > 0)
+      break;
+
+    if (nonblocking)
+      break;
   }
 
   return dispatched;
