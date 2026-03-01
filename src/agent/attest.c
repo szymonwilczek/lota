@@ -7,6 +7,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -181,16 +182,25 @@ int export_policy(int mode) {
   /* Agent binary hash */
   len =
       readlink("/proc/self/exe", snap.agent_path, sizeof(snap.agent_path) - 1);
-  if (len > 0) {
+  if (len > 0)
     snap.agent_path[len] = '\0';
-    ret = tpm_hash_file(snap.agent_path, snap.agent_hash);
-    if (ret == 0) {
-      snap.agent_hash_valid = true;
-    } else {
-      fprintf(stderr, "Warning: Failed to hash agent: %s\n", strerror(-ret));
-    }
-  } else {
+  else
     fprintf(stderr, "Warning: Failed to read agent path.\n");
+
+  {
+    int self_fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    if (self_fd < 0) {
+      fprintf(stderr, "Warning: Failed to open /proc/self/exe: %s\n",
+              strerror(errno));
+    } else {
+      ret = tpm_hash_fd(self_fd, snap.agent_hash);
+      close(self_fd);
+      if (ret == 0) {
+        snap.agent_hash_valid = true;
+      } else {
+        fprintf(stderr, "Warning: Failed to hash agent: %s\n", strerror(-ret));
+      }
+    }
   }
 
   /* Security feature detection */
@@ -298,13 +308,21 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    */
   {
     char agent_path[PATH_MAX];
+    int self_fd;
     ssize_t len =
         readlink("/proc/self/exe", agent_path, sizeof(agent_path) - 1);
-    if (len > 0) {
-      agent_path[len] = '\0';
-      ret = tpm_hash_file(agent_path, report->system.agent_hash);
+
+    self_fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    if (self_fd < 0) {
+      fprintf(stderr, "Warning: Failed to open /proc/self/exe for self-hash\n");
+    } else {
+      ret = tpm_hash_fd(self_fd, report->system.agent_hash);
+      close(self_fd);
       if (ret == 0) {
-        lota_dbg("Agent binary hashed: %s", agent_path);
+        if (len > 0) {
+          agent_path[len] = '\0';
+          lota_dbg("Agent binary hashed: %s", agent_path);
+        }
       } else {
         fprintf(stderr, "Warning: Failed to hash agent binary\n");
       }
