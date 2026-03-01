@@ -89,12 +89,20 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx);
  * bpf_loader_load - Load and attach BPF program
  * @ctx: Initialized context
  * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
+ * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to
+ *   verify detached signature at <bpf_obj_path>.sig.
+ *
+ * NOTE: Current agent wiring intentionally reuses the same
+ * --policy-pubkey / policy_pubkey for both policy YAML signature
+ * verification and BPF object signature verification. This is intended for now
+ * and will be changed!
  *
  * Loads the BPF object, verifies it, and attaches LSM hooks.
  *
  * Returns: 0 on success, negative errno on failure
  */
-int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path);
+int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
+                    const char *bpf_pubkey_pem_path);
 
 /*
  * bpf_loader_setup_ringbuf - Set up ring buffer for events

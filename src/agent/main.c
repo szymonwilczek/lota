@@ -103,6 +103,7 @@ static int validate_path_arg(const char *key, const char *p) {
 
 struct run_daemon_params {
   const char *bpf_path;
+  const char *bpf_pubkey_path;
   int mode;
   bool strict_mmap;
   bool strict_exec;
@@ -128,6 +129,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   bool strict_modules;
   bool block_anon_exec;
   const char *bpf_path;
+  const char *bpf_pubkey_path;
   const char *config_path;
   struct lota_config *cfg;
   sigset_t mask;
@@ -137,6 +139,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     return -EINVAL;
 
   bpf_path = params->bpf_path;
+  bpf_pubkey_path = params->bpf_pubkey_path;
   g_agent.mode = params->mode;
   strict_mmap = params->strict_mmap;
   strict_exec = params->strict_exec;
@@ -283,7 +286,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     goto cleanup_tpm;
   }
 
-  ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path);
+  ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path);
   if (ret < 0) {
     lota_err("Failed to load BPF program: %s", strerror(-ret));
     goto cleanup_bpf;
@@ -938,8 +941,18 @@ int main(int argc, char *argv[]) {
   }
 
   {
+    if (!policy_pubkey_path || policy_pubkey_path[0] == '\0') {
+      fprintf(
+          stderr,
+          "ERROR: BPF object signature verification requires --policy-pubkey\n"
+          "Set policy_pubkey in config or pass --policy-pubkey PATH.\n");
+      pidfile_remove(pid_file_path, pid_fd);
+      return 1;
+    }
+
     struct run_daemon_params run_params = {
         .bpf_path = bpf_path,
+        .bpf_pubkey_path = policy_pubkey_path,
         .mode = g_agent.mode,
         .strict_mmap = strict_mmap,
         .strict_exec = strict_exec,

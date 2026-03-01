@@ -368,8 +368,8 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(CURDIR)/$(BUILD_DIR)
 	@echo "Built: $@"
 
-$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd
+$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 	@echo "Built: $@"
 
 # Full test suite (unit + integration + hardware)

@@ -23,6 +23,13 @@
 #include "../../include/lota.h"
 #include "bpf_loader.h"
 #include "journal.h"
+#include "policy_sign.h"
+
+#define BPF_OBJECT_MAX_FILE_SIZE (4 * 1024 * 1024)
+
+#ifndef EAUTH
+#define EAUTH 80
+#endif
 
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
@@ -166,7 +173,95 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   return 0;
 }
 
-int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
+static int verify_bpf_object_signature(const char *bpf_obj_path,
+                                       const char *bpf_pubkey_pem_path) {
+  char *sig_path = NULL;
+  size_t sig_path_len;
+  uint8_t *obj_data = NULL;
+  size_t obj_len = 0;
+  uint8_t sig[POLICY_SIG_SIZE];
+  FILE *f = NULL;
+  long fsize;
+  size_t nread;
+  int ret;
+
+  if (!bpf_obj_path || !bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0')
+    return -EINVAL;
+
+  f = fopen(bpf_obj_path, "rb");
+  if (!f)
+    return -errno;
+
+  if (fseek(f, 0, SEEK_END) != 0) {
+    ret = -errno;
+    goto out;
+  }
+
+  fsize = ftell(f);
+  if (fsize < 0) {
+    ret = -EIO;
+    goto out;
+  }
+
+  if ((size_t)fsize > BPF_OBJECT_MAX_FILE_SIZE) {
+    ret = -EFBIG;
+    goto out;
+  }
+
+  if (fseek(f, 0, SEEK_SET) != 0) {
+    ret = -errno;
+    goto out;
+  }
+
+  obj_data = malloc((size_t)fsize);
+  if (!obj_data) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  nread = fread(obj_data, 1, (size_t)fsize, f);
+  if (nread != (size_t)fsize) {
+    ret = -EIO;
+    goto out;
+  }
+  obj_len = (size_t)fsize;
+
+  fclose(f);
+  f = NULL;
+
+  sig_path_len = strlen(bpf_obj_path) + 5; /* ".sig" + NUL */
+  sig_path = calloc(sig_path_len, 1);
+  if (!sig_path) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  snprintf(sig_path, sig_path_len, "%s.sig", bpf_obj_path);
+
+  f = fopen(sig_path, "rb");
+  if (!f) {
+    ret = -errno ? -errno : -ENOENT;
+    goto out;
+  }
+
+  nread = fread(sig, 1, POLICY_SIG_SIZE, f);
+  if (nread != POLICY_SIG_SIZE) {
+    ret = -EAUTH;
+    goto out;
+  }
+
+  ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
+
+out:
+  if (f)
+    fclose(f);
+  free(sig_path);
+  free(obj_data);
+  return ret;
+}
+
+int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
+                    const char *bpf_pubkey_pem_path) {
   struct bpf_program *prog;
   struct bpf_link *link;
   int err;
@@ -175,8 +270,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   if (!ctx || !bpf_obj_path)
     return -EINVAL;
 
+  if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
+    lota_err("BPF public key is required to verify %s signature", bpf_obj_path);
+    return -EINVAL;
+  }
+
   if (ctx->loaded)
     return -EALREADY;
+
+  ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
+  if (ret < 0) {
+    lota_err("BPF object signature verification failed for %s: %s",
+             bpf_obj_path, strerror(-ret));
+    return ret;
+  }
 
   struct bpf_object_open_opts opts = {
       .sz = sizeof(struct bpf_object_open_opts),

@@ -123,6 +123,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf("                    Verify detached Ed25519 signature on FILE\n");
   printf("  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
   printf("  --policy-pubkey PATH Ed25519 public key (PEM) for verification\n");
+  printf("                    Reused for BOTH policy YAML signatures and\n");
+  printf("                    BPF object signatures (.bpf.o.sig).\n");
+  printf("                    Use a separate option/config if you want\n");
+  printf("                    distinct keypairs for policy vs BPF.\n");
   printf("\n");
   printf("  --help            Show this help\n");
 }
