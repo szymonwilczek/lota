@@ -7,6 +7,11 @@
 
 #include <stdint.h>
 
+static inline void lota__write_le16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)v;
+  p[1] = (uint8_t)(v >> 8);
+}
+
 static inline void lota__write_le32(uint8_t *p, uint32_t v) {
   p[0] = (uint8_t)(v);
   p[1] = (uint8_t)(v >> 8);

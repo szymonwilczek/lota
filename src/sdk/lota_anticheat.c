@@ -20,6 +20,7 @@
 #include <openssl/evp.h>
 
 #include "lota_anticheat.h"
+#include "lota_endian.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
 #include "lota_snapshot.h"
@@ -71,23 +72,6 @@ static uint32_t read_le32_u(const uint8_t *p) {
 
 static uint64_t read_le64_u(const uint8_t *p) {
   return (uint64_t)read_le32_u(p) | ((uint64_t)read_le32_u(p + 4) << 32);
-}
-
-static void write_le16(uint8_t *p, uint16_t v) {
-  p[0] = (uint8_t)(v & 0xFF);
-  p[1] = (uint8_t)((v >> 8) & 0xFF);
-}
-
-static void write_le32(uint8_t *p, uint32_t v) {
-  p[0] = (uint8_t)(v & 0xFF);
-  p[1] = (uint8_t)((v >> 8) & 0xFF);
-  p[2] = (uint8_t)((v >> 16) & 0xFF);
-  p[3] = (uint8_t)((v >> 24) & 0xFF);
-}
-
-static void write_le64(uint8_t *p, uint64_t v) {
-  write_le32(p + 0, (uint32_t)v);
-  write_le32(p + 4, (uint32_t)(v >> 32));
 }
 
 static int read_snapshot(struct lota_ac_session *session) {
@@ -376,16 +360,16 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 
   uint64_t timestamp = (uint64_t)time(NULL);
 
-  write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
+  lota__write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
   buf[4] = (uint8_t)LOTA_AC_VERSION;
   buf[5] = (uint8_t)session->provider;
-  write_le16(buf + 6, (uint16_t)total);
+  lota__write_le16(buf + 6, (uint16_t)total);
   memcpy(buf + 8, session->session_id, LOTA_AC_SESSION_ID_SIZE);
-  write_le32(buf + 24, session->heartbeat_seq);
-  write_le32(buf + 28, session->lota_flags);
-  write_le64(buf + 32, timestamp);
+  lota__write_le32(buf + 24, session->heartbeat_seq);
+  lota__write_le32(buf + 28, session->lota_flags);
+  lota__write_le64(buf + 32, timestamp);
   memcpy(buf + 40, session->game_id_hash, LOTA_AC_GAME_HASH_SIZE);
-  write_le16(buf + 72, (uint16_t)session->token_len);
+  lota__write_le16(buf + 72, (uint16_t)session->token_len);
 
   memcpy(buf + LOTA_AC_HEADER_SIZE, session->token_buf, session->token_len);
 

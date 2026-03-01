@@ -36,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../../include/lota_endian.h"
 #include "../../include/lota_gaming.h"
 #include "../../include/lota_snapshot.h"
 #include "../../include/lota_wine_hook.h"
@@ -260,18 +261,6 @@ static int write_status(const struct lota_status *status) {
   return atomic_write(g_hook.status_path, buf, (size_t)len);
 }
 
-static void write_le16(uint8_t *p, uint16_t v) {
-  p[0] = (uint8_t)(v & 0xFF);
-  p[1] = (uint8_t)((v >> 8) & 0xFF);
-}
-
-static void write_le32(uint8_t *p, uint32_t v) {
-  p[0] = (uint8_t)(v & 0xFF);
-  p[1] = (uint8_t)((v >> 8) & 0xFF);
-  p[2] = (uint8_t)((v >> 16) & 0xFF);
-  p[3] = (uint8_t)((v >> 24) & 0xFF);
-}
-
 #ifdef LOTA_HOOK_TESTING
 #define LOTA_UNUSED __attribute__((unused))
 #else
@@ -285,11 +274,11 @@ static int LOTA_UNUSED write_snapshot(uint32_t flags, const uint8_t *token_wire,
     return -EINVAL;
 
   uint8_t *p = buf;
-  write_le32(p + 0, LOTA_SNAPSHOT_MAGIC);
-  write_le16(p + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
-  write_le16(p + 6, 0);
-  write_le32(p + 8, flags);
-  write_le32(p + 12, (uint32_t)token_size);
+  lota__write_le32(p + 0, LOTA_SNAPSHOT_MAGIC);
+  lota__write_le16(p + 4, (uint16_t)LOTA_SNAPSHOT_VERSION);
+  lota__write_le16(p + 6, 0);
+  lota__write_le32(p + 8, flags);
+  lota__write_le32(p + 12, (uint32_t)token_size);
   memcpy(p + sizeof(struct lota_snapshot_wire_hdr), token_wire, token_size);
 
   return atomic_write(g_hook.snapshot_path, buf,
