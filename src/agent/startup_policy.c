@@ -324,8 +324,7 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 
   if (digest_count > 0) {
     for (int i = 0; i < digest_count; i++) {
-      if (digests[i].len != LOTA_VERITY_DIGEST_SHA256_SIZE &&
-          digests[i].len != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+      if (digests[i].len != LOTA_VERITY_DIGEST_SHA512_SIZE) {
         ret = -EINVAL;
         goto out;
       }

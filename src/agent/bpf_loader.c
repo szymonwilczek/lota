@@ -609,8 +609,7 @@ int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
   if (!ctx || !ctx->loaded || !key)
     return -EINVAL;
 
-  if (key->len != LOTA_VERITY_DIGEST_SHA256_SIZE &&
-      key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+  if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
     return -EINVAL;
 
   if (ctx->allow_verity_digest_fd < 0)
@@ -663,8 +662,7 @@ static int measure_fsverity_digest(const char *path,
       return ret;
     }
 
-    if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA256_SIZE &&
-        d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+    if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
       close(fd);
       return -EINVAL;
     }
@@ -705,8 +703,7 @@ int bpf_loader_disallow_verity_digest(
   if (!ctx || !ctx->loaded || !key)
     return -EINVAL;
 
-  if (key->len != LOTA_VERITY_DIGEST_SHA256_SIZE &&
-      key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+  if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
     return -EINVAL;
 
   if (ctx->allow_verity_digest_fd < 0)

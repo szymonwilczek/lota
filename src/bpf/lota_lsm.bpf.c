@@ -190,7 +190,7 @@ struct {
 
 /*
  * fs-verity digest allowlist.
- * Key: digest length + digest bytes (SHA-256 or SHA-512)
+ * Key: digest length + digest bytes (SHA-512 only)
  * Value: 1 = allowed
  *
  * Only files with a verified fs-verity merkle root matching an entry here are
@@ -415,8 +415,7 @@ static __noinline int is_verity_allowed(struct file *file) {
     return 0;
 
   ret = bpf_get_fsverity_digest(file, &digest_ptr);
-  if (ret != LOTA_VERITY_DIGEST_SHA256_SIZE &&
-      ret != LOTA_VERITY_DIGEST_SHA512_SIZE)
+  if (ret != LOTA_VERITY_DIGEST_SHA512_SIZE)
     return 0;
   key.len = (u32)ret;
 
@@ -488,8 +487,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
        *   enabled for this file.
        */
       ret = bpf_get_fsverity_digest(file, &digest_ptr);
-      if (ret == LOTA_VERITY_DIGEST_SHA256_SIZE ||
-          ret == LOTA_VERITY_DIGEST_SHA512_SIZE) {
+      if (ret == LOTA_VERITY_DIGEST_SHA512_SIZE) {
         verity_key.len = (u32)ret;
         have_digest = 1;
       }
