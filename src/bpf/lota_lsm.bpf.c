@@ -1264,12 +1264,12 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 /* ======================================================================
  * LSM hook: bpf
  *
- * Called on bpf() syscall. In ENFORCE mode with LOTA_CFG_LOCK_BPF enabled,
- * deny destructive bpf() operations from processes other than the authorized
- * agent.
+ * Called on bpf() syscall. With LOTA_CFG_LOCK_BPF enabled, deny sensitive
+ * bpf() operations from processes other than the authorized agent.
  *
- * This prevents root-level attackers from detaching/overwriting LOTA links
- * via bpftool while runtime protection is active.
+ * This prevents root-level attackers from detaching/overwriting/freezing LOTA
+ * BPF objects or acquiring control fds via bpftool while runtime protection is
+ * active.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
@@ -1307,10 +1307,15 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
   case BPF_LINK_CREATE:
   case BPF_LINK_UPDATE:
   case BPF_MAP_CREATE:
+  case BPF_OBJ_GET:
+  case BPF_OBJ_PIN:
   case BPF_PROG_DETACH:
   case BPF_LINK_DETACH:
+  case BPF_PROG_GET_FD_BY_ID:
+  case BPF_MAP_LOOKUP_ELEM:
   case BPF_MAP_UPDATE_ELEM:
   case BPF_MAP_DELETE_ELEM:
+  case BPF_MAP_FREEZE:
     deny = 1;
     break;
   default:
