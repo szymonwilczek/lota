@@ -125,6 +125,7 @@ static int validate_path_value(const char *key, const char *value,
 
 static int config_validate_file_security(int fd, const char *filepath) {
   struct stat st;
+  uid_t euid;
 
   if (fd < 0 || !filepath)
     return -EINVAL;
@@ -136,17 +137,31 @@ static int config_validate_file_security(int fd, const char *filepath) {
     return -EINVAL;
   }
 
-  /* Agent runs as root in production; config must not be mutable by others. */
-  if (geteuid() == 0) {
+  euid = geteuid();
+
+  if (st.st_mode & (S_IWGRP | S_IWOTH)) {
+    fprintf(stderr,
+            "%s: refusing to load group/world-writable config (mode %o)\n",
+            filepath, (unsigned)(st.st_mode & 0777));
+    return -EPERM;
+  }
+
+  /*
+   * Ownership policy:
+   * - root agent: config must be root-owned
+   * - non-root agent: config must be owned by current euid or by root
+   */
+  if (euid == 0) {
     if (st.st_uid != 0) {
       fprintf(stderr, "%s: refusing to load config not owned by root\n",
               filepath);
       return -EPERM;
     }
-    if (st.st_mode & (S_IWGRP | S_IWOTH)) {
+  } else {
+    if (st.st_uid != euid && st.st_uid != 0) {
       fprintf(stderr,
-              "%s: refusing to load group/world-writable config (mode %o)\n",
-              filepath, (unsigned)(st.st_mode & 0777));
+              "%s: refusing to load config not owned by current user/root\n",
+              filepath);
       return -EPERM;
     }
   }
@@ -448,9 +463,8 @@ int config_load(struct lota_config *cfg, const char *path) {
 
   int open_flags = O_RDONLY | O_CLOEXEC;
 #ifdef O_NOFOLLOW
-  /* avoid reading config through a symlink when running as root */
-  if (geteuid() == 0)
-    open_flags |= O_NOFOLLOW;
+  /* avoid reading config through symlink indirection */
+  open_flags |= O_NOFOLLOW;
 #endif
 
   fd = open(filepath, open_flags);

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../src/agent/config.h"
@@ -763,6 +764,61 @@ static void test_config_load_port_bounds(void) {
   PASS();
 }
 
+static void test_config_load_rejects_group_writable(void) {
+  struct lota_config cfg;
+  char path[PATH_MAX];
+  int ret;
+
+  TEST("config_load rejects group/world writable config");
+  write_config("group_writable.conf", "mode = enforce\n");
+  config_path("group_writable.conf", path, sizeof(path));
+
+  if (chmod(path, 0664) != 0) {
+    FAIL("chmod failed");
+    return;
+  }
+
+  config_init(&cfg);
+  ret = config_load(&cfg, path);
+  if (ret != -EPERM) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EPERM, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+
+  PASS();
+}
+
+static void test_config_load_rejects_symlink(void) {
+  struct lota_config cfg;
+  char real_path[PATH_MAX];
+  char link_path[PATH_MAX];
+  int ret;
+
+  TEST("config_load rejects symlink config path");
+  write_config("real_secure.conf", "mode = enforce\n");
+  config_path("real_secure.conf", real_path, sizeof(real_path));
+  config_path("symlink.conf", link_path, sizeof(link_path));
+
+  unlink(link_path);
+  if (symlink(real_path, link_path) != 0) {
+    FAIL("symlink creation failed");
+    return;
+  }
+
+  config_init(&cfg);
+  ret = config_load(&cfg, link_path);
+  if (ret != -ELOOP) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -ELOOP, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+
+  PASS();
+}
+
 static void test_config_dump_roundtrip(void) {
   struct lota_config cfg1, cfg2;
   char dump_path[PATH_MAX];
@@ -1056,6 +1112,8 @@ int main(void) {
   test_config_load_empty_key();
   test_config_load_empty_value();
   test_config_load_port_bounds();
+  test_config_load_rejects_group_writable();
+  test_config_load_rejects_symlink();
   test_config_dump_roundtrip();
   test_config_dump_null();
   test_config_load_all_known_keys();
