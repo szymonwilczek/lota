@@ -103,6 +103,18 @@ void config_init(struct lota_config *cfg);
 int config_load(struct lota_config *cfg, const char *path);
 
 /*
+ * config_load_from_fd - Parse configuration from an already-open fd.
+ *
+ * @cfg:      Pointer to an already-initialized config struct.
+ * @fd:       Open read-only file descriptor for config file.
+ * @filepath: Optional label for diagnostics (NULL -> "(fd)").
+ *
+ * This validates file security constraints and then parses from offset 0.
+ * The caller keeps ownership of @fd.
+ */
+int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
+
+/*
  * config_dump - Print current configuration to FILE.
  *
  * Writes all effective values in the same key = value format that

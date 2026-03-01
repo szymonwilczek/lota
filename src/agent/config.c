@@ -448,41 +448,14 @@ static int apply_key(struct lota_config *cfg, const char *key,
   return 1; /* unknown key */
 }
 
-int config_load(struct lota_config *cfg, const char *path) {
-  FILE *f;
-  int fd;
+static int config_load_stream(struct lota_config *cfg, FILE *f,
+                              const char *filepath) {
   char line[LOTA_CONFIG_MAX_LINE];
   int lineno = 0;
   int errors = 0;
-  const char *filepath;
 
-  if (!cfg)
+  if (!cfg || !f || !filepath)
     return -EINVAL;
-
-  filepath = path ? path : LOTA_CONFIG_DEFAULT_PATH;
-
-  int open_flags = O_RDONLY | O_CLOEXEC;
-#ifdef O_NOFOLLOW
-  /* avoid reading config through symlink indirection */
-  open_flags |= O_NOFOLLOW;
-#endif
-
-  fd = open(filepath, open_flags);
-  if (fd < 0)
-    return -errno;
-
-  int sec_ret = config_validate_file_security(fd, filepath);
-  if (sec_ret != 0) {
-    close(fd);
-    return sec_ret;
-  }
-
-  f = fdopen(fd, "r");
-  if (!f) {
-    int err = errno;
-    close(fd);
-    return -err;
-  }
 
   while (fgets(line, sizeof(line), f)) {
     char *trimmed;
@@ -536,9 +509,83 @@ int config_load(struct lota_config *cfg, const char *path) {
     }
   }
 
-  fclose(f);
+  if (ferror(f))
+    return -EIO;
 
   return errors > 0 ? -EINVAL : 0;
+}
+
+int config_load_from_fd(struct lota_config *cfg, int fd, const char *path) {
+  FILE *f;
+  int dup_fd;
+  int sec_ret;
+  const char *filepath = (path && path[0]) ? path : "(fd)";
+
+  if (!cfg || fd < 0)
+    return -EINVAL;
+
+  sec_ret = config_validate_file_security(fd, filepath);
+  if (sec_ret != 0)
+    return sec_ret;
+
+  dup_fd = dup(fd);
+  if (dup_fd < 0)
+    return -errno;
+
+  if (lseek(dup_fd, 0, SEEK_SET) < 0) {
+    int err = -errno;
+    close(dup_fd);
+    return err;
+  }
+
+  f = fdopen(dup_fd, "r");
+  if (!f) {
+    int err = errno;
+    close(dup_fd);
+    return -err;
+  }
+
+  int ret = config_load_stream(cfg, f, filepath);
+  fclose(f);
+  return ret;
+}
+
+int config_load(struct lota_config *cfg, const char *path) {
+  FILE *f;
+  int fd;
+  const char *filepath;
+
+  if (!cfg)
+    return -EINVAL;
+
+  filepath = path ? path : LOTA_CONFIG_DEFAULT_PATH;
+
+  int open_flags = O_RDONLY | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+  /* avoid reading config through symlink indirection */
+  open_flags |= O_NOFOLLOW;
+#endif
+
+  fd = open(filepath, open_flags);
+  if (fd < 0)
+    return -errno;
+
+  int sec_ret = config_validate_file_security(fd, filepath);
+  if (sec_ret != 0) {
+    close(fd);
+    return sec_ret;
+  }
+
+  f = fdopen(fd, "r");
+  if (!f) {
+    int err = errno;
+    close(fd);
+    return -err;
+  }
+
+  int ret = config_load_stream(cfg, f, filepath);
+  fclose(f);
+  return ret;
 }
 
 void config_dump(const struct lota_config *cfg, FILE *fp) {

@@ -3,9 +3,11 @@
 #include "reload.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "agent.h"
 #include "bpf_loader.h"
@@ -24,13 +26,77 @@ static void copy_path(char dst[PATH_MAX], const char *src) {
   dst[len] = '\0';
 }
 
+static int read_fd_all_bytes(int fd, uint8_t **out_buf, size_t *out_len) {
+  int dup_fd;
+  uint8_t *buf = NULL;
+  size_t used = 0;
+  size_t cap = 0;
+
+  if (fd < 0 || !out_buf || !out_len)
+    return -EINVAL;
+
+  *out_buf = NULL;
+  *out_len = 0;
+
+  dup_fd = dup(fd);
+  if (dup_fd < 0)
+    return -errno;
+
+  if (lseek(dup_fd, 0, SEEK_SET) < 0) {
+    int err = -errno;
+    close(dup_fd);
+    return err;
+  }
+
+  for (;;) {
+    uint8_t tmp[4096];
+    ssize_t n = read(dup_fd, tmp, sizeof(tmp));
+
+    if (n == 0)
+      break;
+    if (n < 0) {
+      int err = -errno;
+      close(dup_fd);
+      free(buf);
+      return err;
+    }
+
+    if (used + (size_t)n > cap) {
+      size_t new_cap = cap ? cap * 2 : 4096;
+      while (new_cap < used + (size_t)n)
+        new_cap *= 2;
+
+      uint8_t *new_buf = realloc(buf, new_cap);
+      if (!new_buf) {
+        close(dup_fd);
+        free(buf);
+        return -ENOMEM;
+      }
+      buf = new_buf;
+      cap = new_cap;
+    }
+
+    memcpy(buf + used, tmp, (size_t)n);
+    used += (size_t)n;
+  }
+
+  close(dup_fd);
+  *out_buf = buf;
+  *out_len = used;
+  return 0;
+}
+
 static int
-verify_reload_downgrade_authorization(const char *config_path,
-                                      const struct lota_config *cfg) {
+verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
+                                         const struct lota_config *cfg) {
   const char *cfg_path =
       (config_path && config_path[0]) ? config_path : LOTA_CONFIG_DEFAULT_PATH;
   char *sig_path;
   size_t sig_path_len;
+  uint8_t *cfg_data = NULL;
+  size_t cfg_len = 0;
+  uint8_t sig[POLICY_SIG_SIZE];
+  int sig_fd = -1;
   int ret;
 
   if (!cfg || cfg->policy_pubkey[0] == '\0') {
@@ -46,7 +112,50 @@ verify_reload_downgrade_authorization(const char *config_path,
 
   snprintf(sig_path, sig_path_len, "%s.sig", cfg_path);
 
-  ret = policy_verify_file(cfg_path, cfg->policy_pubkey, sig_path);
+  ret = read_fd_all_bytes(config_fd, &cfg_data, &cfg_len);
+  if (ret < 0) {
+    free(sig_path);
+    return ret;
+  }
+
+  {
+    int open_flags = O_RDONLY | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+    open_flags |= O_NOFOLLOW;
+#endif
+    sig_fd = open(sig_path, open_flags);
+  }
+  if (sig_fd < 0) {
+    ret = -errno ? -errno : -ENOENT;
+    free(cfg_data);
+    free(sig_path);
+    return ret;
+  }
+
+  {
+    ssize_t n = read(sig_fd, sig, sizeof(sig));
+    if (n != (ssize_t)sizeof(sig)) {
+      close(sig_fd);
+      free(cfg_data);
+      free(sig_path);
+      return -EAUTH;
+    }
+
+    {
+      uint8_t extra;
+      if (read(sig_fd, &extra, 1) != 0) {
+        close(sig_fd);
+        free(cfg_data);
+        free(sig_path);
+        return -EAUTH;
+      }
+    }
+  }
+  close(sig_fd);
+  sig_fd = -1;
+
+  ret = policy_verify_buffer(cfg_data, cfg_len, cfg->policy_pubkey, sig);
+  free(cfg_data);
   free(sig_path);
 
   if (ret < 0) {
@@ -360,18 +469,36 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
                         char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
                         int *trust_lib_count) {
   struct lota_config new_cfg;
+  const char *cfg_path =
+      (config_path && config_path[0]) ? config_path : LOTA_CONFIG_DEFAULT_PATH;
+  int cfg_fd;
+
+  {
+    int open_flags = O_RDONLY | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+    open_flags |= O_NOFOLLOW;
+#endif
+    cfg_fd = open(cfg_path, open_flags);
+  }
+  if (cfg_fd < 0) {
+    int open_err = -errno;
+    if (open_err == -ENOENT) {
+      lota_warn("Config file not found on reload, keeping current state");
+      sdnotify_ready();
+      return 0;
+    }
+
+    lota_err("Failed to open config on reload: %s", strerror(-open_err));
+    sdnotify_ready();
+    return open_err;
+  }
 
   config_init(&new_cfg);
-  int reload_ret = config_load(&new_cfg, config_path);
-  if (reload_ret == -ENOENT) {
-    lota_warn("Config file not found on reload, keeping current state");
-    free(new_cfg.protect_pids);
-    sdnotify_ready();
-    return 0;
-  }
+  int reload_ret = config_load_from_fd(&new_cfg, cfg_fd, cfg_path);
 
   if (reload_ret < 0) {
     lota_err("Failed to reload config: %s", strerror(-reload_ret));
+    close(cfg_fd);
     free(new_cfg.protect_pids);
     sdnotify_ready();
     return reload_ret;
@@ -380,14 +507,18 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
   int new_mode = parse_mode(new_cfg.mode);
   if (*mode == LOTA_MODE_ENFORCE &&
       (new_mode == LOTA_MODE_MONITOR || new_mode == LOTA_MODE_MAINTENANCE)) {
-    int auth_ret = verify_reload_downgrade_authorization(config_path, cfg);
+    int auth_ret =
+        verify_reload_downgrade_authorization_fd(cfg_fd, cfg_path, cfg);
     if (auth_ret < 0) {
       lota_warn("Unauthorized ENFORCE mode downgrade request ignored");
+      close(cfg_fd);
       free(new_cfg.protect_pids);
       sdnotify_ready();
       return auth_ret;
     }
   }
+
+  close(cfg_fd);
 
   if (new_mode >= 0 && new_mode != *mode) {
     if (bpf_loader_set_mode(&g_agent.bpf_ctx, new_mode) == 0) {

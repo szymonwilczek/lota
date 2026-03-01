@@ -9,6 +9,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1087,6 +1088,41 @@ static void test_config_load_mixed_comments(void) {
   PASS();
 }
 
+static void test_config_load_from_fd(void) {
+  struct lota_config cfg;
+  char path[PATH_MAX];
+  int fd;
+  int ret;
+
+  TEST("config_load_from_fd parses from opened descriptor");
+  write_config("fdload.conf", "server = fdhost\nport = 12345\n");
+  config_path("fdload.conf", path, sizeof(path));
+
+  fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    FAIL("open failed");
+    return;
+  }
+
+  config_init(&cfg);
+  ret = config_load_from_fd(&cfg, fd, path);
+  close(fd);
+
+  if (ret != 0) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+
+  if (strcmp(cfg.server, "fdhost") != 0 || cfg.port != 12345) {
+    FAIL("parsed values mismatch");
+    return;
+  }
+
+  PASS();
+}
+
 int main(void) {
   printf("=== LOTA Config Parser Tests ===\n\n");
 
@@ -1119,6 +1155,7 @@ int main(void) {
   test_config_load_all_known_keys();
   test_config_load_override_order();
   test_config_load_mixed_comments();
+  test_config_load_from_fd();
 
   cleanup_tmpdir();
 
