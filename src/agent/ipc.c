@@ -361,6 +361,16 @@ static void build_error_response(struct ipc_client *client, uint32_t result) {
 }
 
 /*
+ * Privileged IPC commands are allowed only for the same local account that
+ * runs the agent process (peer UID authenticated via SO_PEERCRED).
+ */
+static int ipc_client_is_privileged(const struct ipc_client *client) {
+  if (!client)
+    return 0;
+  return client->peer_uid == geteuid();
+}
+
+/*
  * Build a notification frame in the client's send buffer.
  */
 static void build_notification(struct ipc_context *ctx,
@@ -617,6 +627,13 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
   struct lota_ipc_subscribe_request sub;
   (void)ctx;
 
+  if (!ipc_client_is_privileged(client)) {
+    lota_warn("SUBSCRIBE denied for uid=%d pid=%d", client->peer_uid,
+              client->peer_pid);
+    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+    return;
+  }
+
   if (payload_len < sizeof(sub)) {
     build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
     return;
@@ -771,8 +788,11 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     return;
   }
 
-  /* root-only: this mutates enforcement policy */
-  if (client->peer_uid != 0) {
+  /* privileged-only: this mutates enforcement policy */
+  if (!ipc_client_is_privileged(client)) {
+    lota_warn("%s denied for uid=%d pid=%d",
+              add ? "PROTECT_PID" : "UNPROTECT_PID", client->peer_uid,
+              client->peer_pid);
     build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
     return;
   }

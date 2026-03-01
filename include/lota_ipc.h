@@ -21,13 +21,15 @@
  * IPC Commands
  */
 enum lota_ipc_cmd {
-  LOTA_IPC_CMD_PING = 0x01,        /* Whether agent is alive */
-  LOTA_IPC_CMD_GET_STATUS = 0x02,  /* Attestation status */
-  LOTA_IPC_CMD_GET_TOKEN = 0x03,   /* Signed attestation token */
-  LOTA_IPC_CMD_SUBSCRIBE = 0x04,   /* Subscribe to status changes */
-  LOTA_IPC_CMD_PROTECT_PID = 0x05, /* Hot-add protected PID (requires root) */
+  LOTA_IPC_CMD_PING = 0x01,       /* Whether agent is alive */
+  LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
+  LOTA_IPC_CMD_GET_TOKEN = 0x03,  /* Signed attestation token */
+  LOTA_IPC_CMD_SUBSCRIBE =
+      0x04, /* Subscribe to status changes (requires privileged peer) */
+  LOTA_IPC_CMD_PROTECT_PID =
+      0x05, /* Hot-add protected PID (requires privileged peer) */
   LOTA_IPC_CMD_UNPROTECT_PID =
-      0x06, /* Hot-remove protected PID (requires root) */
+      0x06, /* Hot-remove protected PID (requires privileged peer) */
 };
 
 /*
@@ -170,6 +172,9 @@ struct lota_ipc_token {
  * Registers or cancels per-connection push notifications.
  * event_mask selects which events trigger notifications.
  * Sending event_mask = 0 cancels the subscription.
+ *
+ * Access control: agent may require the peer UID to match the local account
+ * running the agent process.
  *
  * Server responds with LOTA_IPC_OK on success.
  */
