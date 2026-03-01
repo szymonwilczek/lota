@@ -1174,7 +1174,7 @@ int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
 /* ======================================================================
  * LSM hook: task_kill
  *
- * Blocks selected signal delivery to lota-agent from foreign tasks.
+ * Blocks selected signal delivery to protected tasks from foreign tasks.
  *
  * SECURITY: Only block signals that would terminate/stop the daemon.
  * Allow signals from PID 1 (systemd/init) and kernel-generated signals.
@@ -1183,14 +1183,32 @@ SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
              int sig, const struct cred *cred) {
   u32 sender_tgid;
+  u32 target_tgid;
+  u32 lota_mode;
+  int target_is_agent;
+  int target_is_protected = 0;
   struct lota_exec_event *event;
 
   (void)cred;
 
-  if (!is_lota_agent_task(p))
+  if (!p)
+    return 0;
+
+  lota_mode = get_mode();
+  target_is_agent = is_lota_agent_task(p);
+  if (!target_is_agent && lota_mode != LOTA_MODE_MAINTENANCE)
+    target_is_protected = is_protected_task(p);
+
+  if (!target_is_agent && !target_is_protected)
     return 0;
 
   sender_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
+  target_tgid = BPF_CORE_READ(p, tgid);
+
+  /* allow self-signals */
+  if (sender_tgid == target_tgid)
+    return 0;
+
   {
     struct task_struct *current =
         (struct task_struct *)bpf_get_current_task_btf();
@@ -1199,18 +1217,20 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   }
 
   /* allow init/systemd to manage the daemon */
-  if (sender_tgid == 1)
+  if (target_is_agent && sender_tgid == 1)
     return 0;
 
   /*
-   * Allow only explicit runtime-control signals from foreign tasks:
+   * Allow only safe signals from foreign tasks:
    * - sig=0: existence/permission probe
-   * - SIGHUP: configuration reload trigger
+   * - SIGHUP: configuration reload trigger (agent only)
    *
-   * All other signals are blocked for the agent to prevent forced
+   * All other signals are blocked for protected targets to prevent forced
    * termination or crash-signaling from local privileged attackers.
    */
-  if (sig == 0 || sig == SIGHUP)
+  if (sig == 0)
+    return 0;
+  if (target_is_agent && sig == SIGHUP)
     return 0;
 
   /* allow kernel-generated signals */
@@ -1231,7 +1251,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
     event->tgid = sender_tgid;
     event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
     event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-    event->target_pid = BPF_CORE_READ(p, tgid);
+    event->target_pid = target_tgid;
 
     bpf_get_current_comm(event->comm, sizeof(event->comm));
     __builtin_memcpy(event->filename, "(kill)", 6);
