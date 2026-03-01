@@ -836,6 +836,36 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
   return bpf_map_delete_elem(ctx->protected_pids_fd, &pid);
 }
 
+static int stat_regular_file_nofollow(const char *path, struct stat *st) {
+  int fd;
+
+  if (!path || !st)
+    return -EINVAL;
+
+  if (path[0] == '\0')
+    return -EINVAL;
+
+#ifndef O_NOFOLLOW
+  return -ENOTSUP;
+#else
+  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0)
+    return -errno;
+
+  if (fstat(fd, st) != 0) {
+    int err = -errno;
+    close(fd);
+    return err;
+  }
+
+  close(fd);
+  if (!S_ISREG(st->st_mode))
+    return -EINVAL;
+
+  return 0;
+#endif
+}
+
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   struct trusted_lib_key key = {0};
   struct stat st;
@@ -847,14 +877,9 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (ctx->trusted_libs_fd < 0)
     return -ENOTSUP;
 
-  if (path[0] == '\0')
-    return -EINVAL;
-
-  if (stat(path, &st) != 0)
-    return -errno;
-
-  if (!S_ISREG(st.st_mode))
-    return -EINVAL;
+  int ret = stat_regular_file_nofollow(path, &st);
+  if (ret < 0)
+    return ret;
 
   key.dev = (uint64_t)st.st_dev;
   key.ino = (uint64_t)st.st_ino;
@@ -874,14 +899,9 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (ctx->trusted_libs_fd < 0)
     return -ENOTSUP;
 
-  if (path[0] == '\0')
-    return -EINVAL;
-
-  if (stat(path, &st) != 0)
-    return -errno;
-
-  if (!S_ISREG(st.st_mode))
-    return -EINVAL;
+  int ret = stat_regular_file_nofollow(path, &st);
+  if (ret < 0)
+    return ret;
 
   key.dev = (uint64_t)st.st_dev;
   key.ino = (uint64_t)st.st_ino;
