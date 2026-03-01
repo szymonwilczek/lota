@@ -335,10 +335,16 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
   }
 
   /*
-   * Attach all LSM programs.
+   * Attach all supported runtime enforcement programs.
+   *
+   * LOTA currently uses LSM hooks and a tracing fallback (fmod_ret) for
+   * __ptrace_may_access to cover process_vm_* access paths. This will be
+   * properly done in the future.
    */
   bpf_object__for_each_program(prog, ctx->obj) {
-    if (bpf_program__type(prog) != BPF_PROG_TYPE_LSM)
+    enum bpf_prog_type prog_type = bpf_program__type(prog);
+
+    if (prog_type != BPF_PROG_TYPE_LSM && prog_type != BPF_PROG_TYPE_TRACING)
       continue;
 
     link = bpf_program__attach(prog);
@@ -351,13 +357,13 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     if (ctx->link_count < BPF_MAX_LSM_LINKS) {
       ctx->links[ctx->link_count++] = link;
     } else {
-      lota_err("Too many LSM programs, increase BPF_MAX_LSM_LINKS");
+      lota_err("Too many attached BPF programs, increase BPF_MAX_LSM_LINKS");
       bpf_link__destroy(link);
       err = -E2BIG;
       goto err_close;
     }
 
-    lota_info("Attached LSM program: %s", bpf_program__name(prog));
+    lota_info("Attached BPF program: %s", bpf_program__name(prog));
   }
 
   /* Get ring buffer map fd */

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * LOTA - BPF Program Loader
- * Loads and manages eBPF LSM programs using libbpf
+ * Loads and manages eBPF enforcement programs using libbpf
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -24,7 +24,7 @@ struct bpf_link;
 struct bpf_loader_ctx {
   struct bpf_object *obj;                    /* libbpf object */
   struct ring_buffer *ringbuf;               /* Ring buffer for events */
-  struct bpf_link *links[BPF_MAX_LSM_LINKS]; /* attached LSM program links */
+  struct bpf_link *links[BPF_MAX_LSM_LINKS]; /* attached BPF program links */
   int link_count;                            /* number of attached links */
   int ringbuf_fd;                            /* Ring buffer map fd */
   int stats_fd;                              /* Stats map fd */
@@ -97,7 +97,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx);
  * verification and BPF object signature verification. This is intended for now
  * and will be changed!
  *
- * Loads the BPF object, verifies it, and attaches LSM hooks.
+ * Loads the BPF object, verifies it, and attaches enforcement hooks.
  *
  * Returns: 0 on success, negative errno on failure
  */

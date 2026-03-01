@@ -13,6 +13,7 @@
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
  *   - Debugger attachment (security_ptrace_access_check)
+ *   - Cross-process memory access fallback (__ptrace_may_access)
  *   - Privilege escalation (task_fix_setuid)
  *
  * In ENFORCE mode, unauthorized operations are blocked:
@@ -1092,6 +1093,81 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
   }
 
   return 0;
+}
+
+/* ======================================================================
+ * Tracing fallback: __ptrace_may_access
+ *
+ * process_vm_readv()/process_vm_writev() call mm_access() which relies on
+ * __ptrace_may_access(). Most kernels invoke ptrace_access_check LSM from
+ * this path, but this fallback enforces the same policy directly at the
+ * permission return point to avoid configuration-dependent gaps.
+ *
+ * Return: original ret when allowed, -EPERM to deny
+ * ====================================================================== */
+SEC("fmod_ret/__ptrace_may_access")
+int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
+             unsigned int mode, int ret) {
+  struct lota_exec_event *event;
+  u32 child_pid;
+  u32 lota_mode;
+  int blocked = 0;
+
+  (void)mode;
+
+  if (ret != 0)
+    return ret;
+
+  lota_mode = get_mode();
+  child_pid = BPF_CORE_READ(child, pid);
+
+  if (is_lota_agent_task(child)) {
+    blocked = 1;
+  }
+
+  if (!blocked && lota_mode != LOTA_MODE_MAINTENANCE &&
+      is_protected_task(child)) {
+    blocked = 1;
+  }
+
+  if (!blocked && lota_mode == LOTA_MODE_ENFORCE &&
+      get_config(LOTA_CFG_BLOCK_PTRACE)) {
+    blocked = 1;
+  }
+
+  if (!blocked)
+    return ret;
+
+  inc_stat(STAT_PTRACE_ATTEMPTS);
+  inc_stat(STAT_PTRACE_BLOCKED);
+
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (event) {
+    __builtin_memset(event, 0, sizeof(*event));
+    event->timestamp_ns = bpf_ktime_get_ns();
+    event->event_type = LOTA_EVENT_PTRACE_BLOCKED;
+    event->tgid = bpf_get_current_pid_tgid() >> 32;
+    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+    event->target_pid = child_pid;
+
+    bpf_get_current_comm(event->comm, sizeof(event->comm));
+
+    {
+      const char *child_comm = BPF_CORE_READ(child, comm);
+      if (child_comm) {
+        bpf_probe_read_kernel_str(event->filename, LOTA_MAX_COMM_LEN,
+                                  child_comm);
+      }
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    inc_stat(STAT_EVENTS_SENT);
+  } else {
+    inc_stat(STAT_RINGBUF_DROPS);
+  }
+
+  return -EPERM;
 }
 
 /* ======================================================================
