@@ -39,11 +39,6 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-/*
- * Runtime TGID of lota-agent process (set from user-space via .bss map).
- */
-volatile u32 lota_agent_pid;
-
 #ifndef EPERM
 #define EPERM 1
 #endif
@@ -127,17 +122,29 @@ struct {
  *
  * Key 0 -> (TGID + start_time_ticks).
  */
-struct bpf_admin_entry {
+struct lota_identity_entry {
   u32 tgid;
   u32 pad;
   u64 start_time_ticks;
 };
 
+/*
+ * Runtime lota-agent identity configured from user-space.
+ *
+ * Key 0 -> (TGID + start_time_ticks).
+ */
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
   __uint(max_entries, 1);
   __type(key, u32);
-  __type(value, struct bpf_admin_entry);
+  __type(value, struct lota_identity_entry);
+} lota_agent_identity SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct lota_identity_entry);
 } bpf_admin_tgid SEC(".maps");
 
 /*
@@ -291,7 +298,8 @@ static __always_inline int is_bpf_admin_task(void) {
   struct task_struct *leader;
   u32 key = 0;
   u32 current_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
-  struct bpf_admin_entry *admin = bpf_map_lookup_elem(&bpf_admin_tgid, &key);
+  struct lota_identity_entry *admin =
+      bpf_map_lookup_elem(&bpf_admin_tgid, &key);
   u64 current_start_ticks;
 
   if (!admin || admin->tgid == 0 || admin->start_time_ticks == 0)
@@ -314,18 +322,30 @@ static __always_inline int is_bpf_admin_task(void) {
 }
 
 static __always_inline int is_lota_agent_task(struct task_struct *task) {
-  u32 agent_tgid;
+  u32 key = 0;
   u32 task_tgid;
+  struct task_struct *leader;
+  u64 task_start_ticks;
+  struct lota_identity_entry *agent;
 
   if (!task)
     return 0;
 
-  agent_tgid = lota_agent_pid;
-  if (agent_tgid == 0)
+  agent = bpf_map_lookup_elem(&lota_agent_identity, &key);
+  if (!agent || agent->tgid == 0 || agent->start_time_ticks == 0)
     return 0;
 
   task_tgid = BPF_CORE_READ(task, tgid);
-  return task_tgid == agent_tgid;
+  if (task_tgid != agent->tgid)
+    return 0;
+
+  leader = BPF_CORE_READ(task, group_leader);
+  if (leader)
+    task_start_ticks = get_task_start_ticks(leader);
+  else
+    task_start_ticks = get_task_start_ticks(task);
+
+  return task_start_ticks && task_start_ticks == agent->start_time_ticks;
 }
 
 /*
@@ -1054,8 +1074,12 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
     return 0;
 
   sender_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
-  if (sender_tgid == lota_agent_pid)
-    return 0;
+  {
+    struct task_struct *current =
+        (struct task_struct *)bpf_get_current_task_btf();
+    if (is_lota_agent_task(current))
+      return 0;
+  }
 
   /* allow init/systemd to manage the daemon */
   if (sender_tgid == 1)

@@ -293,7 +293,8 @@ static int run_daemon(const struct run_daemon_params *params) {
 
   ret = bpf_loader_set_agent_pid(&g_agent.bpf_ctx, (uint32_t)getpid());
   if (ret < 0) {
-    lota_err("Failed to set lota-agent PID in BPF globals: %s", strerror(-ret));
+    lota_err("Failed to set lota-agent identity in BPF map: %s",
+             strerror(-ret));
     goto cleanup_bpf;
   }
 

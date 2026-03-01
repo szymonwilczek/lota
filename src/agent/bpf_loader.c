@@ -41,7 +41,7 @@ struct protected_pid_entry {
   uint64_t start_time_ticks;
 };
 
-struct bpf_admin_entry {
+struct lota_identity_entry {
   uint32_t tgid;
   uint32_t pad;
   uint64_t start_time_ticks;
@@ -155,6 +155,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
   ctx->bpf_admin_tgid_fd = -1;
+  ctx->agent_identity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
   ctx->allow_verity_digest_fd = -1;
@@ -247,7 +248,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
       bpf_object__find_map_fd_by_name(ctx->obj, "bpf_admin_tgid");
   if (ctx->bpf_admin_tgid_fd >= 0) {
     uint32_t key = 0;
-    struct bpf_admin_entry admin = {0};
+    struct lota_identity_entry admin = {0};
 
     admin.tgid = (uint32_t)getpid();
     ret = read_pid_start_time_ticks(admin.tgid, &admin.start_time_ticks);
@@ -265,6 +266,14 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
     }
   } else {
     lota_warn("bpf_admin_tgid map not found in BPF object");
+  }
+
+  ctx->agent_identity_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "lota_agent_identity");
+  if (ctx->agent_identity_fd < 0) {
+    err = ctx->agent_identity_fd;
+    lota_err("Failed to find lota_agent_identity map");
+    goto err_close;
   }
 
   /* Integrity config map */
@@ -441,6 +450,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
   ctx->bpf_admin_tgid_fd = -1;
+  ctx->agent_identity_fd = -1;
   ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->protected_pids_fd = -1;
@@ -587,22 +597,24 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 }
 
 int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
-  struct bpf_map *bss_map;
-  int bss_fd;
   uint32_t key = 0;
+  struct lota_identity_entry agent = {0};
+  int ret;
 
   if (!ctx || !ctx->loaded || pid == 0)
     return -EINVAL;
 
-  bss_map = bpf_object__find_map_by_name(ctx->obj, ".bss");
-  if (!bss_map)
-    return -ENOENT;
+  if (ctx->agent_identity_fd < 0)
+    return -ENOTSUP;
 
-  bss_fd = bpf_map__fd(bss_map);
-  if (bss_fd < 0)
-    return bss_fd;
+  agent.tgid = pid;
+  ret = read_pid_start_time_ticks(pid, &agent.start_time_ticks);
+  if (ret < 0)
+    return ret;
+  if (agent.start_time_ticks == 0)
+    return -EINVAL;
 
-  if (bpf_map_update_elem(bss_fd, &key, &pid, BPF_ANY) < 0)
+  if (bpf_map_update_elem(ctx->agent_identity_fd, &key, &agent, BPF_ANY) < 0)
     return -errno;
 
   return 0;
