@@ -53,6 +53,9 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef SIGSTOP
 #define SIGSTOP 19
 #endif
+#ifndef SIGHUP
+#define SIGHUP 1
+#endif
 
 /* siginfo.si_code value for kernel-generated signals */
 #ifndef SI_KERNEL
@@ -1124,8 +1127,15 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   if (sender_tgid == 1)
     return 0;
 
-  /* allow benign signals; only block termination/stop signals */
-  if (sig != SIGKILL && sig != SIGSTOP && sig != SIGTERM)
+  /*
+   * Allow only explicit runtime-control signals from foreign tasks:
+   * - sig=0: existence/permission probe
+   * - SIGHUP: configuration reload trigger
+   *
+   * All other signals are blocked for the agent to prevent forced
+   * termination or crash-signaling from local privileged attackers.
+   */
+  if (sig == 0 || sig == SIGHUP)
     return 0;
 
   /* allow kernel-generated signals */
