@@ -1274,7 +1274,6 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
              int ret) {
-  u32 mode;
   int deny = 0;
 
   (void)size;
@@ -1293,9 +1292,9 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
   if (!attr)
     return 0;
 
-  mode = get_mode();
-  if (mode != LOTA_MODE_ENFORCE)
-    return 0;
+  /*
+   * SECURITY: LOCK_BPF must be effective regardless of LOTA mode.
+   */
 
   if (!get_config(LOTA_CFG_LOCK_BPF))
     return 0;

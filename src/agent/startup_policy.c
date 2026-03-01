@@ -581,7 +581,7 @@ allowlist_done:
     lota_err("Failed to enable bpf syscall lock: %s", strerror(-ret));
     goto out_fail;
   }
-  lota_info("BPF syscall lock: ON (non-agent bpf() denied in ENFORCE)");
+  lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
 
   ret = bpf_loader_set_mode(&g_agent.bpf_ctx, mode);
   if (ret < 0) {
