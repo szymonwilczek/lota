@@ -45,6 +45,10 @@
 #define TOKEN_RATE_LIMIT 10      /* requests */
 #define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
 
+/* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
+#define PROTECT_PID_RATE_LIMIT 60      /* requests */
+#define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
+
 /*
  * Per-UID rate limiter
  */
@@ -55,8 +59,13 @@ struct uid_rate {
 };
 
 #define MAX_RATE_ENTRIES 256
-static struct uid_rate rate_table[MAX_RATE_ENTRIES];
-static int rate_count = 0;
+static struct uid_rate token_rate_table[MAX_RATE_ENTRIES];
+static int token_rate_count = 0;
+static uint64_t token_last_table_full_warn_sec = 0;
+
+static struct uid_rate protect_pid_rate_table[MAX_RATE_ENTRIES];
+static int protect_pid_rate_count = 0;
+static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static void ipc_secure_bzero(void *ptr, size_t len) {
   if (ptr && len)
@@ -73,37 +82,43 @@ static uint64_t monotonic_now_sec(void) {
 }
 
 /*
- * Check and update rate limit for a UID.
+ * Check and update a per-UID fixed-window rate limiter.
  * Returns 0 if allowed, -1 if rate limited.
  */
-static int check_rate_limit(uid_t uid) {
+static int check_rate_limit(struct uid_rate *table, int *entry_count,
+                            int request_limit, int window_sec,
+                            uint64_t *last_table_full_warn_sec, uid_t uid,
+                            const char *name) {
   uint64_t now = monotonic_now_sec();
-  static uint64_t last_table_full_warn_sec = 0;
+
+  if (!table || !entry_count || request_limit <= 0 || window_sec <= 0 ||
+      !last_table_full_warn_sec || !name)
+    return -1;
 
   /* existing entry */
-  for (int i = 0; i < rate_count; i++) {
-    if (rate_table[i].uid == uid) {
+  for (int i = 0; i < *entry_count; i++) {
+    if (table[i].uid == uid) {
       /* reset window if expired */
-      if (now < rate_table[i].window_start_sec ||
-          now - rate_table[i].window_start_sec >= TOKEN_RATE_WINDOW_SEC) {
-        rate_table[i].count = 1;
-        rate_table[i].window_start_sec = now;
+      if (now < table[i].window_start_sec ||
+          now - table[i].window_start_sec >= (uint64_t)window_sec) {
+        table[i].count = 1;
+        table[i].window_start_sec = now;
         return 0;
       }
       /* within window: check limit */
-      if (rate_table[i].count >= TOKEN_RATE_LIMIT)
+      if (table[i].count >= request_limit)
         return -1;
-      rate_table[i].count++;
+      table[i].count++;
       return 0;
     }
   }
 
   /* new entry */
-  if (rate_count < MAX_RATE_ENTRIES) {
-    rate_table[rate_count].uid = uid;
-    rate_table[rate_count].count = 1;
-    rate_table[rate_count].window_start_sec = now;
-    rate_count++;
+  if (*entry_count < MAX_RATE_ENTRIES) {
+    table[*entry_count].uid = uid;
+    table[*entry_count].count = 1;
+    table[*entry_count].window_start_sec = now;
+    (*entry_count)++;
     return 0;
   }
 
@@ -113,24 +128,38 @@ static int check_rate_limit(uid_t uid) {
    * refuse the request to prevent trivial UID-exhaustion bypass
    * (an attacker filling the table to evict legitimate rate state).
    */
-  for (int i = 0; i < rate_count; i++) {
-    if (now < rate_table[i].window_start_sec ||
-        now - rate_table[i].window_start_sec >= TOKEN_RATE_WINDOW_SEC) {
-      rate_table[i].uid = uid;
-      rate_table[i].count = 1;
-      rate_table[i].window_start_sec = now;
+  for (int i = 0; i < *entry_count; i++) {
+    if (now < table[i].window_start_sec ||
+        now - table[i].window_start_sec >= (uint64_t)window_sec) {
+      table[i].uid = uid;
+      table[i].count = 1;
+      table[i].window_start_sec = now;
       return 0;
     }
   }
 
-  if (now >= last_table_full_warn_sec + 60) {
-    last_table_full_warn_sec = now;
+  if (now >= *last_table_full_warn_sec + 60) {
+    *last_table_full_warn_sec = now;
     lota_warn(
-        "IPC rate limiter table exhausted (%d entries); refusing new UID %u",
-        rate_count, (unsigned)uid);
+        "%s rate limiter table exhausted (%d entries); refusing new UID %u",
+        name, *entry_count, (unsigned)uid);
   }
 
   return -1;
+}
+
+static int check_get_token_rate_limit(uid_t uid) {
+  return check_rate_limit(token_rate_table, &token_rate_count, TOKEN_RATE_LIMIT,
+                          TOKEN_RATE_WINDOW_SEC,
+                          &token_last_table_full_warn_sec, uid,
+                          "IPC GET_TOKEN");
+}
+
+static int check_protect_pid_rate_limit(uid_t uid) {
+  return check_rate_limit(protect_pid_rate_table, &protect_pid_rate_count,
+                          PROTECT_PID_RATE_LIMIT, PROTECT_PID_RATE_WINDOW_SEC,
+                          &protect_pid_last_table_full_warn_sec, uid,
+                          "IPC PROTECT_PID");
 }
 
 /*
@@ -511,7 +540,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   }
 
   /* rate limit GET_TOKEN per peer UID */
-  if (check_rate_limit(client->peer_uid) < 0) {
+  if (check_get_token_rate_limit(client->peer_uid) < 0) {
     lota_warn("rate limited GET_TOKEN for uid=%d pid=%d", client->peer_uid,
               client->peer_pid);
     fail = true;
@@ -794,6 +823,13 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
               add ? "PROTECT_PID" : "UNPROTECT_PID", client->peer_uid,
               client->peer_pid);
     build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+    return;
+  }
+
+  if (add && check_protect_pid_rate_limit(client->peer_uid) < 0) {
+    lota_warn("rate limited PROTECT_PID for uid=%d pid=%d target=%u",
+              client->peer_uid, client->peer_pid, pid);
+    build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
     return;
   }
 
