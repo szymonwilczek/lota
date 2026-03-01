@@ -1376,7 +1376,13 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
   case BPF_OBJ_PIN:
   case BPF_PROG_DETACH:
   case BPF_LINK_DETACH:
+  case BPF_PROG_GET_NEXT_ID:
+  case BPF_MAP_GET_NEXT_ID:
   case BPF_PROG_GET_FD_BY_ID:
+  case BPF_MAP_GET_FD_BY_ID:
+  case BPF_BTF_GET_FD_BY_ID:
+  case BPF_LINK_GET_FD_BY_ID:
+  case BPF_LINK_GET_NEXT_ID:
   case BPF_MAP_LOOKUP_ELEM:
   case BPF_MAP_UPDATE_ELEM:
   case BPF_MAP_DELETE_ELEM:
