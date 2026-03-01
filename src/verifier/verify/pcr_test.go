@@ -453,6 +453,42 @@ require_iommu: true
 	}
 }
 
+func TestPCRVerifier_LoadPolicy_CustomPolicyCanBeActivatedAfterDefault(t *testing.T) {
+	t.Log("SECURITY TEST: Custom policy must be selectable after default policy is present")
+
+	tmpDir := t.TempDir()
+	policyPath := filepath.Join(tmpDir, "strict.yaml")
+
+	content := `
+name: custom-strict
+description: "custom policy with explicit measurements"
+pcrs:
+  14: "0000000000000000000000000000000000000000000000000000000000000000"
+require_enforce: true
+`
+	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	verifier := NewPCRVerifier()
+	verifier.SetAllowPermissivePolicy(true)
+
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := verifier.LoadPolicy(policyPath); err != nil {
+		t.Fatalf("LoadPolicy(custom): %v", err)
+	}
+
+	if err := verifier.SetActivePolicy("custom-strict"); err != nil {
+		t.Fatalf("SetActivePolicy(custom-strict): %v", err)
+	}
+
+	if verifier.GetActivePolicy() != "custom-strict" {
+		t.Fatalf("expected active policy custom-strict, got %s", verifier.GetActivePolicy())
+	}
+}
+
 func TestPCRVerifier_VerifyReport_RequireEnforce(t *testing.T) {
 	t.Log("SECURITY TEST: LSM enforce mode requirement")
 

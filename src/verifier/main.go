@@ -236,12 +236,6 @@ func main() {
 
 	verifier := verify.NewVerifier(verifierCfg, aikStore)
 
-	if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
-		logger.Error("failed to add default PCR policy", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("loaded default PCR policy")
-
 	// policy signature verification key
 	if *policyPubKey != "" {
 		pubKey, err := verify.LoadPolicyPublicKey(*policyPubKey)
@@ -260,6 +254,17 @@ func main() {
 			os.Exit(1)
 		}
 		logger.Info("loaded custom policy", "path", *policyFile)
+	} else if *allowPermissive {
+		if err := verifier.AddPolicy(verify.DefaultPolicy()); err != nil {
+			logger.Error("failed to add permissive default PCR policy", "error", err)
+			os.Exit(1)
+		}
+		logger.Warn("INSECURE: loaded permissive built-in PCR policy",
+			"hint", "configure --policy with explicit pcrs and/or kernel_hashes/agent_hashes for production")
+	} else {
+		logger.Error("no PCR policy configured",
+			"hint", "provide --policy with explicit measurements, or pass --allow-permissive-policy (INSECURE)")
+		os.Exit(1)
 	}
 
 	// fail closed on a policy with no measurement allowlists unless explicitly allowed

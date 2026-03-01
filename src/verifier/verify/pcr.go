@@ -362,10 +362,10 @@ func (v *PCRVerifier) ListPolicies() []string {
 	return names
 }
 
-// creates the built-in default policy with baseline security requirements.
-// IMPORTANT NOTE: For production deployments, use a custom YAML policy with explicit PCR values.
-// This policy enforces fundamental security requirements without PCR value checks,
-// suitable for initial deployment before collecting site-specific baselines.
+// creates the built-in permissive policy used only for explicit insecure fallback.
+// IMPORTANT: this policy has no measurement allowlists and MUST NOT be used by default
+// in production deployments. Provide a custom YAML policy with explicit PCR values
+// and/or kernel/agent hash allowlists.
 func DefaultPolicy() *PCRPolicy {
 	return &PCRPolicy{
 		Name:        "default",
