@@ -564,6 +564,32 @@ static void test_config_load_invalid_boolean(void) {
   PASS();
 }
 
+static void test_config_load_invalid_mode(void) {
+  struct lota_config cfg;
+  char path[PATH_MAX];
+  int ret;
+
+  TEST("config_load rejects invalid mode strings");
+  write_config("mode_invalid.conf", "mode = enfroce\n");
+  config_path("mode_invalid.conf", path, sizeof(path));
+  config_init(&cfg);
+  ret = config_load(&cfg, path);
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+
+  /* should remain default on parse failure */
+  if (strcmp(cfg.mode, "enforce") != 0) {
+    FAIL("mode changed on invalid input");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_config_load_whitespace_trimming(void) {
   struct lota_config cfg;
   char path[PATH_MAX];
@@ -1023,6 +1049,7 @@ int main(void) {
   test_config_load_protect_pids_multiple();
   test_config_load_boolean_variants();
   test_config_load_invalid_boolean();
+  test_config_load_invalid_mode();
   test_config_load_whitespace_trimming();
   test_config_load_unknown_keys();
   test_config_load_malformed_lines();

@@ -60,6 +60,17 @@ static int parse_bool_strict(const char *val, bool *out) {
   return -1;
 }
 
+static int parse_mode_strict(const char *value) {
+  if (!value)
+    return -1;
+
+  if (strcmp(value, "monitor") == 0 || strcmp(value, "enforce") == 0 ||
+      strcmp(value, "maintenance") == 0)
+    return 0;
+
+  return -1;
+}
+
 /*
  * Safe string copy into fixed-size buffer.
  * Always NUL-terminates.
@@ -239,6 +250,12 @@ static int apply_key(struct lota_config *cfg, const char *key,
     return 0;
   }
   if (strcmp(key, "mode") == 0) {
+    if (parse_mode_strict(value) != 0) {
+      fprintf(stderr,
+              "%s:%d: invalid mode '%s' (valid: monitor/enforce/maintenance)\n",
+              filepath, lineno, value);
+      return -1;
+    }
     set_str(cfg->mode, sizeof(cfg->mode), value);
     return 0;
   }
