@@ -41,6 +41,12 @@ struct protected_pid_entry {
   uint64_t start_time_ticks;
 };
 
+struct bpf_admin_entry {
+  uint32_t tgid;
+  uint32_t pad;
+  uint64_t start_time_ticks;
+};
+
 /*
  * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
  */
@@ -163,6 +169,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
   struct bpf_program *prog;
   struct bpf_link *link;
   int err;
+  int ret;
 
   if (!ctx || !bpf_obj_path)
     return -EINVAL;
@@ -240,9 +247,19 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path) {
       bpf_object__find_map_fd_by_name(ctx->obj, "bpf_admin_tgid");
   if (ctx->bpf_admin_tgid_fd >= 0) {
     uint32_t key = 0;
-    uint32_t tgid = (uint32_t)getpid();
-    if (bpf_map_update_elem(ctx->bpf_admin_tgid_fd, &key, &tgid, BPF_ANY) < 0) {
-      lota_err("Failed to set bpf admin tgid: %s", strerror(errno));
+    struct bpf_admin_entry admin = {0};
+
+    admin.tgid = (uint32_t)getpid();
+    ret = read_pid_start_time_ticks(admin.tgid, &admin.start_time_ticks);
+    if (ret < 0 || admin.start_time_ticks == 0) {
+      lota_err("Failed to read bpf admin start time for pid %u", admin.tgid);
+      err = ret < 0 ? ret : -EINVAL;
+      goto err_close;
+    }
+
+    if (bpf_map_update_elem(ctx->bpf_admin_tgid_fd, &key, &admin, BPF_ANY) <
+        0) {
+      lota_err("Failed to set bpf admin identity: %s", strerror(errno));
       err = -errno;
       goto err_close;
     }

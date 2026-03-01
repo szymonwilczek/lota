@@ -122,15 +122,22 @@ struct {
 #define STAT_BPF_SYSCALL_BLOCKED 13
 
 /*
- * Authorized LOTA agent TGID (process ID) allowed to perform bpf() syscalls
+ * Authorized LOTA agent identity allowed to perform bpf() syscalls
  * while BPF lock is enabled.
- * Key 0 -> TGID.
+ *
+ * Key 0 -> (TGID + start_time_ticks).
  */
+struct bpf_admin_entry {
+  u32 tgid;
+  u32 pad;
+  u64 start_time_ticks;
+};
+
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
   __uint(max_entries, 1);
   __type(key, u32);
-  __type(value, u32);
+  __type(value, struct bpf_admin_entry);
 } bpf_admin_tgid SEC(".maps");
 
 /*
@@ -280,14 +287,30 @@ static __always_inline int is_protected_task(struct task_struct *task) {
 }
 
 static __always_inline int is_bpf_admin_task(void) {
+  struct task_struct *task;
+  struct task_struct *leader;
   u32 key = 0;
   u32 current_tgid = (u32)(bpf_get_current_pid_tgid() >> 32);
-  u32 *admin_tgid = bpf_map_lookup_elem(&bpf_admin_tgid, &key);
+  struct bpf_admin_entry *admin = bpf_map_lookup_elem(&bpf_admin_tgid, &key);
+  u64 current_start_ticks;
 
-  if (!admin_tgid || *admin_tgid == 0)
+  if (!admin || admin->tgid == 0 || admin->start_time_ticks == 0)
     return 0;
 
-  return *admin_tgid == current_tgid;
+  if (admin->tgid != current_tgid)
+    return 0;
+
+  task = (struct task_struct *)bpf_get_current_task_btf();
+  if (!task)
+    return 0;
+
+  leader = BPF_CORE_READ(task, group_leader);
+  if (leader)
+    current_start_ticks = get_task_start_ticks(leader);
+  else
+    current_start_ticks = get_task_start_ticks(task);
+
+  return current_start_ticks && current_start_ticks == admin->start_time_ticks;
 }
 
 static __always_inline int is_lota_agent_task(struct task_struct *task) {
