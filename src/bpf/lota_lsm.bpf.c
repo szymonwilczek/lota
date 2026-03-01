@@ -466,8 +466,6 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
   inc_stat(STAT_TOTAL_EXECS);
 
   mode = get_mode();
-  if (mode == LOTA_MODE_MAINTENANCE)
-    return 0;
 
   file = BPF_CORE_READ(bprm, file);
 
@@ -688,9 +686,6 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
 
   mode = get_mode();
 
-  if (mode == LOTA_MODE_MAINTENANCE)
-    return 0;
-
   if (mode == LOTA_MODE_ENFORCE) {
     if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS)
       blocked = 1;
@@ -804,9 +799,6 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     mode = get_mode();
 
-    if (mode == LOTA_MODE_MAINTENANCE)
-      return 0;
-
     struct lota_exec_event *event;
 
     if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC)) {
@@ -843,9 +835,6 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
   inc_stat(STAT_MMAP_EXECS);
 
   mode = get_mode();
-
-  if (mode == LOTA_MODE_MAINTENANCE)
-    return 0;
 
   /*
    * In ENFORCE mode with strict mmap enabled, block executable mmaps
@@ -933,8 +922,6 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
     return 0;
 
   mode = get_mode();
-  if (mode == LOTA_MODE_MAINTENANCE)
-    return 0;
 
   file = BPF_CORE_READ(vma, vm_file);
 
@@ -1054,9 +1041,6 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
   lota_mode = get_mode();
 
-  if (lota_mode == LOTA_MODE_MAINTENANCE)
-    return 0;
-
   child_pid = BPF_CORE_READ(child, pid);
 
   if (is_lota_agent_task(child)) {
@@ -1064,10 +1048,9 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
   }
 
   /*
-   * In ENFORCE mode, block ptrace on protected PIDs.
-   * Protected PIDs are managed by user-space.
-   *
-   * Also block if LOTA_CFG_BLOCK_PTRACE is set.
+   * additional ptrace blocking is ENFORCE-only:
+   * - protected tasks managed by user-space
+   * - global ptrace blocking via LOTA_CFG_BLOCK_PTRACE
    */
   if (!blocked && lota_mode == LOTA_MODE_ENFORCE) {
     if (is_protected_task(child)) {
@@ -1235,9 +1218,6 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
     return 0;
 
   inc_stat(STAT_SETUID_EVENTS);
-
-  if (get_mode() == LOTA_MODE_MAINTENANCE)
-    return 0;
 
   event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
   if (event) {
