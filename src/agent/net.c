@@ -45,6 +45,34 @@ _Static_assert(sizeof(struct verifier_result) == 56,
 static int ssl_initialized = 0;
 
 /*
+ * Ensure runtime sockets do not alias standard descriptors (0/1/2).
+ * Avoids fd confusion if stdio was closed earlier and socket()
+ * reused one of those descriptor numbers.
+ */
+static int normalize_socket_fd(int fd) {
+  if (fd < 0)
+    return -EINVAL;
+
+  if (fd <= STDERR_FILENO) {
+    int dupfd = fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (dupfd < 0)
+      return -errno;
+    close(fd);
+    fd = dupfd;
+  }
+
+  {
+    int fd_flags = fcntl(fd, F_GETFD, 0);
+    if (fd_flags < 0)
+      return -errno;
+    if (fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC) < 0)
+      return -errno;
+  }
+
+  return fd;
+}
+
+/*
  * Wait for SSL socket to become ready using poll().
  * Prevents busy-waiting on SSL_ERROR_WANT_READ/WRITE.
  */
@@ -201,7 +229,22 @@ int net_connect(struct net_context *ctx) {
     if (sock < 0)
       continue;
 
+    {
+      int normalized = normalize_socket_fd(sock);
+      if (normalized < 0) {
+        close(sock);
+        sock = -1;
+        continue;
+      }
+      sock = normalized;
+    }
+
     int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0) {
+      close(sock);
+      sock = -1;
+      continue;
+    }
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 
     ret = connect(sock, rp->ai_addr, rp->ai_addrlen);
