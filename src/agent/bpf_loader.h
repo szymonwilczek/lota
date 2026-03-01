@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../../include/lota.h"
+
 struct bpf_object;
 struct ring_buffer;
 struct bpf_link;
@@ -41,27 +43,28 @@ struct bpf_loader_ctx {
 /*
  * bpf_loader_allow_verity_digest - Add an allowed fs-verity digest to the map
  * @ctx: Loaded context
- * @digest: 32-byte fs-verity digest
+ * @key: Digest length + bytes key
  *
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
-                                   const uint8_t digest[32]);
+                                   const struct lota_verity_digest_key *key);
 
 /*
  * bpf_loader_disallow_verity_digest - Remove an allowed fs-verity digest
  * @ctx: Loaded context
- * @digest: 32-byte fs-verity digest
+ * @key: Digest length + bytes key
  */
 int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
-                                      const uint8_t digest[32]);
+                                      const struct lota_verity_digest_key *key);
 
 /*
  * bpf_loader_measure_verity_digest - Measure fs-verity digest for a path
  * @path: Absolute path to a fs-verity-enabled regular file
- * @out: 32-byte output digest
+ * @out: Digest length + bytes key
  */
-int bpf_loader_measure_verity_digest(const char *path, uint8_t out[32]);
+int bpf_loader_measure_verity_digest(const char *path,
+                                     struct lota_verity_digest_key *out);
 
 /*
  * bpf_loader_allow_verity_path - Measure a path's fs-verity digest and allow it

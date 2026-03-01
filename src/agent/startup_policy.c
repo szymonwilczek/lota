@@ -10,6 +10,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
+#include "../../include/lota.h"
 #include "../../include/lota_endian.h"
 
 static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
@@ -30,7 +31,6 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
   out[in_len * 2] = '\0';
 }
 
-#include "../../include/lota.h"
 #include "agent.h"
 #include "bpf_loader.h"
 #include "journal.h"
@@ -39,13 +39,14 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
 static int u32_cmp(const void *a, const void *b);
 static int cstr_ptr_cmp(const void *a, const void *b);
 static int compute_policy_digest(const struct agent_startup_policy *policy,
-                                 const uint8_t *digests, int digest_count,
-                                 uint8_t out_digest[32]);
+                                 const struct lota_verity_digest_key *digests,
+                                 int digest_count, uint8_t out_digest[32]);
 
 static void agent_policy_snapshot_clear(void) {
   if (g_agent.policy_verity_digests) {
     OPENSSL_cleanse(g_agent.policy_verity_digests,
-                    (size_t)g_agent.policy_verity_digest_count * 32);
+                    (size_t)g_agent.policy_verity_digest_count *
+                        sizeof(struct lota_verity_digest_key));
     free(g_agent.policy_verity_digests);
     g_agent.policy_verity_digests = NULL;
   }
@@ -206,8 +207,17 @@ int agent_compute_policy_digest_for_protect_pids(const uint32_t *protect_pids,
                                g_agent.policy_verity_digest_count, out_digest);
 }
 
-static int digest_cmp_32(const void *a, const void *b) {
-  return memcmp(a, b, 32);
+static int verity_digest_key_cmp(const void *a, const void *b) {
+  const struct lota_verity_digest_key *ka =
+      (const struct lota_verity_digest_key *)a;
+  const struct lota_verity_digest_key *kb =
+      (const struct lota_verity_digest_key *)b;
+
+  if (ka->len < kb->len)
+    return -1;
+  if (ka->len > kb->len)
+    return 1;
+  return memcmp(ka->digest, kb->digest, (size_t)ka->len);
 }
 
 static int u32_cmp(const void *a, const void *b) {
@@ -233,8 +243,8 @@ static int cstr_ptr_cmp(const void *a, const void *b) {
 }
 
 static int compute_policy_digest(const struct agent_startup_policy *policy,
-                                 const uint8_t *digests, int digest_count,
-                                 uint8_t out_digest[32]) {
+                                 const struct lota_verity_digest_key *digests,
+                                 int digest_count, uint8_t out_digest[32]) {
   EVP_MD_CTX *mdctx = NULL;
   unsigned int out_len = 0;
   int ret = 0;
@@ -313,10 +323,20 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
   }
 
   if (digest_count > 0) {
-    size_t total = (size_t)digest_count * 32;
-    if (EVP_DigestUpdate(mdctx, digests, total) != 1) {
-      ret = -EIO;
-      goto out;
+    for (int i = 0; i < digest_count; i++) {
+      if (digests[i].len != LOTA_VERITY_DIGEST_SHA256_SIZE &&
+          digests[i].len != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+        ret = -EINVAL;
+        goto out;
+      }
+
+      lota__write_le32(le, digests[i].len);
+      if (EVP_DigestUpdate(mdctx, le, sizeof(le)) != 1 ||
+          EVP_DigestUpdate(mdctx, digests[i].digest, (size_t)digests[i].len) !=
+              1) {
+        ret = -EIO;
+        goto out;
+      }
     }
   }
 
@@ -437,7 +457,7 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   int have_prev_mode = 0;
   uint8_t computed_policy_digest[32];
   int have_policy_digest = 0;
-  uint8_t *digests = NULL;
+  struct lota_verity_digest_key *digests = NULL;
   int digest_count = 0;
   int allowlist_applied = 0;
   int applied_pids = 0;
@@ -484,7 +504,8 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   }
 
   if (policy->allow_verity_count > 0) {
-    digests = calloc((size_t)policy->allow_verity_count, 32);
+    digests = calloc((size_t)policy->allow_verity_count,
+                     sizeof(struct lota_verity_digest_key));
     if (!digests) {
       ret = -ENOMEM;
       goto out_fail;
@@ -492,7 +513,7 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
     digest_count = policy->allow_verity_count;
 
     for (int i = 0; i < policy->allow_verity_count; i++) {
-      uint8_t *d = digests + (size_t)i * 32;
+      struct lota_verity_digest_key *d = &digests[i];
 
       ret = bpf_loader_measure_verity_digest(policy->allow_verity[i], d);
       if (ret < 0) {
@@ -510,15 +531,16 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
       allowlist_applied++;
 
       {
-        char hex[65];
-        hex_encode_upper(d, 32, hex, sizeof(hex));
+        char hex[(LOTA_VERITY_DIGEST_MAX_SIZE * 2) + 1];
+        hex_encode_upper(d->digest, d->len, hex, sizeof(hex));
         lota_dbg("Allowed fs-verity: %s digest=%s", policy->allow_verity[i],
                  hex);
       }
     }
 
     /* canonicalize allowlist digest order */
-    qsort(digests, (size_t)digest_count, 32, digest_cmp_32);
+    qsort(digests, (size_t)digest_count, sizeof(*digests),
+          verity_digest_key_cmp);
     ret = compute_policy_digest(policy, digests, digest_count,
                                 computed_policy_digest);
     if (ret < 0) {
@@ -634,22 +656,26 @@ allowlist_done:
     int canon_pid_count = 0;
     char (*canon_libs)[PATH_MAX] = NULL;
     int canon_lib_count = 0;
-    uint8_t *canon_digests = NULL;
+    struct lota_verity_digest_key *canon_digests = NULL;
 
     if (digest_count > 0) {
-      canon_digests = malloc((size_t)digest_count * 32);
+      canon_digests =
+          malloc((size_t)digest_count * sizeof(struct lota_verity_digest_key));
       if (!canon_digests) {
         ret = -ENOMEM;
         goto out_fail;
       }
-      memcpy(canon_digests, digests, (size_t)digest_count * 32);
+      memcpy(canon_digests, digests,
+             (size_t)digest_count * sizeof(struct lota_verity_digest_key));
     }
 
     ret = canonicalize_u32_set(policy->protect_pids, policy->protect_pid_count,
                                &canon_pids, &canon_pid_count);
     if (ret < 0) {
       if (canon_digests) {
-        OPENSSL_cleanse(canon_digests, (size_t)digest_count * 32);
+        OPENSSL_cleanse(canon_digests,
+                        (size_t)digest_count *
+                            sizeof(struct lota_verity_digest_key));
         free(canon_digests);
       }
       goto out_fail;
@@ -659,7 +685,9 @@ allowlist_done:
                                   &canon_libs, &canon_lib_count);
     if (ret < 0) {
       if (canon_digests) {
-        OPENSSL_cleanse(canon_digests, (size_t)digest_count * 32);
+        OPENSSL_cleanse(canon_digests,
+                        (size_t)digest_count *
+                            sizeof(struct lota_verity_digest_key));
         free(canon_digests);
       }
       if (canon_pids) {
@@ -690,7 +718,7 @@ allowlist_done:
   g_agent.policy_digest_set = 1;
 
   if (digests) {
-    OPENSSL_cleanse(digests, (size_t)digest_count * 32);
+    OPENSSL_cleanse(digests, (size_t)digest_count * sizeof(*digests));
     free(digests);
     digests = NULL;
   }
@@ -718,10 +746,10 @@ out_fail:
 
   if (digests) {
     for (int k = 0; k < allowlist_applied; k++) {
-      uint8_t *d = digests + (size_t)k * 32;
+      struct lota_verity_digest_key *d = &digests[k];
       (void)bpf_loader_disallow_verity_digest(&g_agent.bpf_ctx, d);
     }
-    OPENSSL_cleanse(digests, (size_t)digest_count * 32);
+    OPENSSL_cleanse(digests, (size_t)digest_count * sizeof(*digests));
     free(digests);
     digests = NULL;
   }

@@ -190,17 +190,16 @@ struct {
 
 /*
  * fs-verity digest allowlist.
- * Key: fs-verity digest (SHA-256 usually, 32 bytes)
+ * Key: digest length + digest bytes (SHA-256 or SHA-512)
  * Value: 1 = allowed
  *
  * Only files with a verified fs-verity merkle root matching an entry here are
  * allowed to execute in STRICT_EXEC mode.
  */
-#define PE_DIGEST_SIZE 32
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, 1024);
-  __type(key, u8[PE_DIGEST_SIZE]);
+  __type(key, struct lota_verity_digest_key);
   __type(value, u32);
 } allow_verity_digest SEC(".maps");
 
@@ -405,22 +404,23 @@ static __noinline int is_verity_allowed(struct file *file) {
   if (!file)
     return 0;
 
-  u8 digest[PE_DIGEST_SIZE];
-  __builtin_memset(digest, 0, sizeof(digest));
+  struct lota_verity_digest_key key = {};
 
   struct bpf_dynptr digest_ptr;
   int ret;
   u32 *allowed;
 
-  ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
+  ret = bpf_dynptr_from_mem(key.digest, sizeof(key.digest), 0, &digest_ptr);
   if (ret < 0)
     return 0;
 
   ret = bpf_get_fsverity_digest(file, &digest_ptr);
-  if (ret != PE_DIGEST_SIZE)
+  if (ret != LOTA_VERITY_DIGEST_SHA256_SIZE &&
+      ret != LOTA_VERITY_DIGEST_SHA512_SIZE)
     return 0;
+  key.len = (u32)ret;
 
-  allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
+  allowed = bpf_map_lookup_elem(&allow_verity_digest, &key);
   return (allowed && *allowed) ? 1 : 0;
 }
 
@@ -462,9 +462,9 @@ SEC("lsm/bprm_check_security")
 int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
   struct file *file;
   struct lota_exec_event *event;
+  struct lota_verity_digest_key verity_key = {};
   u32 mode;
   int blocked = 0;
-  u8 digest[PE_DIGEST_SIZE];
   int have_digest = 0;
 
   inc_stat(STAT_TOTAL_EXECS);
@@ -475,9 +475,9 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
 
   /* fetch fs-verity digest once (if supported) and reuse it below */
   if (bpf_get_fsverity_digest && file) {
-    __builtin_memset(digest, 0, sizeof(digest));
     struct bpf_dynptr digest_ptr;
-    int ret = bpf_dynptr_from_mem(digest, sizeof(digest), 0, &digest_ptr);
+    int ret = bpf_dynptr_from_mem(verity_key.digest, sizeof(verity_key.digest),
+                                  0, &digest_ptr);
     if (ret == 0) {
       /*
        * Note on TOCTOU:
@@ -488,8 +488,11 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
        *   enabled for this file.
        */
       ret = bpf_get_fsverity_digest(file, &digest_ptr);
-      if (ret == PE_DIGEST_SIZE)
+      if (ret == LOTA_VERITY_DIGEST_SHA256_SIZE ||
+          ret == LOTA_VERITY_DIGEST_SHA512_SIZE) {
+        verity_key.len = (u32)ret;
         have_digest = 1;
+      }
     }
   }
 
@@ -497,7 +500,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
     if (!have_digest) {
       blocked = 1;
     } else {
-      u8 *allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
+      u8 *allowed = bpf_map_lookup_elem(&allow_verity_digest, &verity_key);
       if (!(allowed && *allowed))
         blocked = 1;
     }
@@ -522,9 +525,9 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
         bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), fn);
     }
 
-    /* if fs-verity digest is present, include it as event->hash (32 bytes) */
+    /* if fs-verity digest is present, include first 32 bytes in event hash */
     if (have_digest)
-      __builtin_memcpy(event->hash, digest, PE_DIGEST_SIZE);
+      __builtin_memcpy(event->hash, verity_key.digest, LOTA_HASH_SIZE);
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../../include/lota.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "hash_verify.h"
@@ -51,7 +52,7 @@ struct agent_globals {
   bool policy_strict_modules;
   bool policy_block_anon_exec;
 
-  uint8_t *policy_verity_digests;
+  struct lota_verity_digest_key *policy_verity_digests;
   int policy_verity_digest_count;
 
   uint32_t *policy_protect_pids; /* sorted unique */

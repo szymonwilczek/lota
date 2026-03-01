@@ -80,6 +80,21 @@ enum lota_mode {
 #define LOTA_CFG_LOCK_BPF 6        /* 1 = block bpf() syscalls from non-agent */
 #define LOTA_CFG_MAX_ENTRIES 9
 
+/* fs-verity digest formats currently supported by LOTA policy enforcement */
+#define LOTA_VERITY_DIGEST_SHA256_SIZE 32
+#define LOTA_VERITY_DIGEST_SHA512_SIZE 64
+#define LOTA_VERITY_DIGEST_MAX_SIZE LOTA_VERITY_DIGEST_SHA512_SIZE
+
+/*
+ * fs-verity allowlist key used by BPF map and user-space loader.
+ *
+ * len stores the digest byte-length to disambiguate SHA-256 vs SHA-512.
+ */
+struct lota_verity_digest_key {
+  __u32 len;
+  __u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+};
+
 /*
  * Execution event - sent from eBPF to user-space via ring buffer.
  * Packed to ensure consistent layout across architectures.
