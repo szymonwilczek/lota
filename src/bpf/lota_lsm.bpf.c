@@ -167,6 +167,24 @@ struct {
 } protected_pids SEC(".maps");
 
 /*
+ * Trusted shared libraries allowlist.
+ *
+ * Keys are inode identities (device + inode) so enforcement does not rely on
+ * reconstructing full paths in BPF context.
+ */
+struct trusted_lib_key {
+  u64 dev;
+  u64 ino;
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, LOTA_MAX_TRUSTED_LIBS);
+  __type(key, struct trusted_lib_key);
+  __type(value, u32);
+} trusted_libs SEC(".maps");
+
+/*
  * fs-verity digest allowlist.
  * Key: fs-verity digest (SHA-256 usually, 32 bytes)
  * Value: 1 = allowed
@@ -399,6 +417,32 @@ static __noinline int is_verity_allowed(struct file *file) {
     return 0;
 
   allowed = bpf_map_lookup_elem(&allow_verity_digest, digest);
+  return (allowed && *allowed) ? 1 : 0;
+}
+
+static __always_inline int is_trusted_lib(struct file *file) {
+  struct inode *inode;
+  struct super_block *sb;
+  struct trusted_lib_key key = {};
+  u32 *allowed;
+
+  if (!file)
+    return 0;
+
+  inode = BPF_CORE_READ(file, f_inode);
+  if (!inode)
+    return 0;
+
+  sb = BPF_CORE_READ(inode, i_sb);
+  if (!sb)
+    return 0;
+
+  key.dev = (u64)BPF_CORE_READ(sb, s_dev);
+  key.ino = (u64)BPF_CORE_READ(inode, i_ino);
+  if (key.dev == 0 || key.ino == 0)
+    return 0;
+
+  allowed = bpf_map_lookup_elem(&trusted_libs, &key);
   return (allowed && *allowed) ? 1 : 0;
 }
 
@@ -796,7 +840,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    * from untrusted sources.
    */
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    if (!is_verity_allowed(file)) {
+    if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
       blocked = 1;
     }
   }
@@ -920,7 +964,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
   inc_stat(STAT_MMAP_EXECS);
 
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    if (!is_verity_allowed(file)) {
+    if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
       blocked = 1;
     }
   }

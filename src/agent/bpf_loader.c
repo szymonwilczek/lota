@@ -54,6 +54,11 @@ struct lota_identity_entry {
   uint64_t start_time_ticks;
 };
 
+struct trusted_lib_key {
+  uint64_t dev;
+  uint64_t ino;
+};
+
 /*
  * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
  */
@@ -758,9 +763,9 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
 }
 
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
-  char key[LOTA_MAX_PATH_LEN];
+  struct trusted_lib_key key = {0};
+  struct stat st;
   uint32_t value = 1;
-  size_t len;
 
   if (!ctx || !ctx->loaded || !path)
     return -EINVAL;
@@ -768,19 +773,26 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (ctx->trusted_libs_fd < 0)
     return -ENOTSUP;
 
-  len = strlen(path);
-  if (len == 0 || len >= LOTA_MAX_PATH_LEN)
+  if (path[0] == '\0')
     return -EINVAL;
 
-  memset(key, 0, sizeof(key));
-  memcpy(key, path, len);
+  if (stat(path, &st) != 0)
+    return -errno;
 
-  return bpf_map_update_elem(ctx->trusted_libs_fd, key, &value, BPF_ANY);
+  if (!S_ISREG(st.st_mode))
+    return -EINVAL;
+
+  key.dev = (uint64_t)st.st_dev;
+  key.ino = (uint64_t)st.st_ino;
+  if (key.dev == 0 || key.ino == 0)
+    return -EINVAL;
+
+  return bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY);
 }
 
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
-  char key[LOTA_MAX_PATH_LEN];
-  size_t len;
+  struct trusted_lib_key key = {0};
+  struct stat st;
 
   if (!ctx || !ctx->loaded || !path)
     return -EINVAL;
@@ -788,14 +800,21 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (ctx->trusted_libs_fd < 0)
     return -ENOTSUP;
 
-  len = strlen(path);
-  if (len == 0 || len >= LOTA_MAX_PATH_LEN)
+  if (path[0] == '\0')
     return -EINVAL;
 
-  memset(key, 0, sizeof(key));
-  memcpy(key, path, len);
+  if (stat(path, &st) != 0)
+    return -errno;
 
-  return bpf_map_delete_elem(ctx->trusted_libs_fd, key);
+  if (!S_ISREG(st.st_mode))
+    return -EINVAL;
+
+  key.dev = (uint64_t)st.st_dev;
+  key.ino = (uint64_t)st.st_ino;
+  if (key.dev == 0 || key.ino == 0)
+    return -EINVAL;
+
+  return bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
 }
 
 /*

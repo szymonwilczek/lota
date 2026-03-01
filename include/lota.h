@@ -111,17 +111,6 @@ struct lota_exec_event {
 } __attribute__((packed));
 
 /*
- * Trusted library path prefixes.
- * Libraries loaded via mmap(PROT_EXEC) from these paths are allowed
- * in ENFORCE mode. All other executable mmaps are blocked.
- * Paths are checked with string prefix matching in BPF.
- */
-#define LOTA_TRUSTED_LIB_PREFIX_1 "/usr/lib/"
-#define LOTA_TRUSTED_LIB_PREFIX_2 "/usr/lib64/"
-#define LOTA_TRUSTED_LIB_PREFIX_3 "/lib/"
-#define LOTA_TRUSTED_LIB_PREFIX_4 "/lib64/"
-
-/*
  * Protected PID map maximum entries.
  * Processes can be added to this map to receive extra protection:
  *   - ptrace on these PIDs is blocked in ENFORCE mode
