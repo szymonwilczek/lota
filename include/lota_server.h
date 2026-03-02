@@ -101,7 +101,8 @@ struct lota_server_claims {
  * @token_len:      Length of token_data
  * @aik_pub_der:    AIK public key in DER (PKIX/SPKI) format
  * @aik_pub_len:    Length of aik_pub_der
- * @expected_nonce: Optional 32-byte nonce to verify (NULL = skip nonce check)
+ * @expected_nonce: Required 32-byte nonce expected by the server for this
+ *                  verification attempt
  * @max_age_sec:    Maximum acceptable token age in seconds.
  *                  0 -> use LOTA_TOKEN_DEFAULT_MAX_AGE (300s).
  * @claims:         Output claims structure (always populated when the
@@ -113,7 +114,7 @@ struct lota_server_claims {
  *  2. Verify RSA signature over attest_data using AIK public key
  *  3. Parse TPMS_ATTEST and extract extraData
  *  4. extraData == SHA256(issued_at || valid_until || flags || nonce)
- *  5. Optionally verify client nonce matches expected_nonce
+ *  5. Verify client nonce matches expected_nonce
  *  6. Check token expiry against current time
  *  7. Hard freshness check: reject if age > max_age_sec
  *  8. Hard future check: reject if issued_at > now + MAX_CLOCK_SKEW

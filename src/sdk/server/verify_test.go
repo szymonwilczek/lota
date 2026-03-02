@@ -163,7 +163,7 @@ func TestVerifyToken_Success(t *testing.T) {
 
 	tok := buildTestToken(t, key, validUntil, flags, nonce, 0x4001, pcrDigest)
 
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err != nil {
 		t.Fatalf("VerifyToken: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestVerifyToken_BadSignature(t *testing.T) {
 	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
 	// verify with wrong key
-	_, err := VerifyToken(tok, &otherKey.PublicKey, nil)
+	_, err := VerifyToken(tok, &otherKey.PublicKey, nonce[:])
 	if err == nil {
 		t.Fatal("expected signature verification failure")
 	}
@@ -235,7 +235,7 @@ func TestVerifyToken_TamperedToken(t *testing.T) {
 
 	// signature is still valid over original attest_data, but nonce check fails
 	// because SHA256(...ORIGINAL_flags...) != SHA256(...NEW_flags...)
-	_, err := VerifyToken(tampered, &key.PublicKey, nil)
+	_, err := VerifyToken(tampered, &key.PublicKey, nonce[:])
 	if err == nil {
 		t.Fatal("expected failure for tampered token")
 	}
@@ -270,7 +270,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	_, err = VerifyToken(tok, &key.PublicKey, nil)
+	_, err = VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err == nil {
 		t.Fatal("expected VerifyToken to fail for truncated attest")
 	}
@@ -287,7 +287,7 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 
 	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
 	if !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected ErrExpired, got: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestVerifyToken_FreshToken(t *testing.T) {
 
 	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0x4001, nil)
 
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err != nil {
 		t.Fatalf("VerifyToken: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestVerifyToken_NilAIK(t *testing.T) {
 
 func TestVerifyToken_TooShort(t *testing.T) {
 	key := generateTestKey(t)
-	_, err := VerifyToken([]byte("short"), &key.PublicKey, nil)
+	_, err := VerifyToken([]byte("short"), &key.PublicKey, make([]byte, 32))
 	if err == nil {
 		t.Fatal("expected error for short token")
 	}
@@ -337,7 +337,7 @@ func TestVerifyToken_BadMagic(t *testing.T) {
 	tok := make([]byte, TokenHeaderSize+10)
 	binary.LittleEndian.PutUint32(tok[0:4], 0xDEADBEEF)
 
-	_, err := VerifyToken(tok, &key.PublicKey, nil)
+	_, err := VerifyToken(tok, &key.PublicKey, make([]byte, 32))
 	if err == nil {
 		t.Fatal("expected error for bad magic")
 	}
@@ -349,7 +349,7 @@ func TestVerifyToken_BadVersion(t *testing.T) {
 	binary.LittleEndian.PutUint32(tok[0:4], TokenMagic)
 	binary.LittleEndian.PutUint16(tok[4:6], 0x9999)
 
-	_, err := VerifyToken(tok, &key.PublicKey, nil)
+	_, err := VerifyToken(tok, &key.PublicKey, make([]byte, 32))
 	if err == nil {
 		t.Fatal("expected error for bad version")
 	}
@@ -366,7 +366,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest, runtimeDigest)
+	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest, runtimeDigest, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], 0x4001, pcrDigest)
 
 	// sign with PSS
@@ -386,7 +386,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err != nil {
 		t.Fatalf("VerifyToken (PSS): %v", err)
 	}
@@ -408,7 +408,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	digest := sha512.Sum384(attestData)
@@ -423,7 +423,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	claims, err := VerifyToken(tok, &key.PublicKey, nil)
+	claims, err := VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err != nil {
 		t.Fatalf("VerifyToken (SHA-384): %v", err)
 	}
@@ -445,7 +445,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
 
-	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
+	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	hash := sha256.Sum256(attestData)
@@ -460,7 +460,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 		t.Fatalf("SerializeToken: %v", err)
 	}
 
-	_, err = VerifyToken(tok, &key.PublicKey, nil)
+	_, err = VerifyToken(tok, &key.PublicKey, nonce[:])
 	if err == nil {
 		t.Fatal("expected verification error for unsupported hash_alg")
 	}
@@ -508,14 +508,14 @@ func TestComputeExpectedNonce_Deterministic(t *testing.T) {
 	nonce := [32]byte{1, 2, 3}
 	policyDigest := [32]byte{0x01}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
-	n1 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest)
-	n2 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest)
+	n1 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0)
+	n2 := computeExpectedNonce(200, 7, 0x4001, nonce, policyDigest, runtimeDigest, 0)
 	if n1 != n2 {
 		t.Error("computeExpectedNonce should be deterministic")
 	}
 
 	// different flags -> different result
-	n3 := computeExpectedNonce(200, 8, 0x4001, nonce, policyDigest, runtimeDigest)
+	n3 := computeExpectedNonce(200, 8, 0x4001, nonce, policyDigest, runtimeDigest, 0)
 	if n1 == n3 {
 		t.Error("different flags should produce different nonce")
 	}

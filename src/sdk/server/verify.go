@@ -7,7 +7,7 @@
 //
 // Usage:
 //
-//	claims, err := server.VerifyToken(tokenBytes, aikPub, nil)
+//	claims, err := server.VerifyToken(tokenBytes, aikPub, expectedNonce)
 //	if err != nil {
 //	    log.Printf("attestation failed: %v", err)
 //	    rejectClient()
@@ -158,12 +158,12 @@ type tokenWire struct {
 // Parameters:
 //   - tokenData: serialized token bytes (from lota_token_serialize on client)
 //   - aikPub: AIK RSA public key (from trusted source, NOT from client)
-//   - expectedNonce: optional 32-byte nonce to verify (nil = skip nonce check)
+//   - expectedNonce: required 32-byte nonce to verify challenge freshness
 //
 // Returns verified Claims on success. Returns error if cryptographic
 // verification fails or the token is expired/too old/issued in future.
 func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) (*Claims, error) {
-	if aikPub == nil {
+	if aikPub == nil || len(expectedNonce) != 32 {
 		return nil, ErrInvalidArg
 	}
 
@@ -213,11 +213,9 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
 
-	// verify client nonce if expected
-	if expectedNonce != nil {
-		if len(expectedNonce) != 32 || !bytes.Equal(hdr.nonce[:], expectedNonce) {
-			return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
-		}
+	// verify caller-provided challenge nonce
+	if !bytes.Equal(hdr.nonce[:], expectedNonce) {
+		return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
 	}
 
 	claims := &Claims{

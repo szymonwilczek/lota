@@ -449,7 +449,7 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
   }
 
   struct lota_server_claims claims;
-  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, NULL,
+  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, nonce,
                                  &claims);
   if (ret != LOTA_SERVER_OK) {
     char msg[128];
@@ -496,7 +496,7 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
   }
 
   struct lota_server_claims claims;
-  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, NULL,
+  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, nonce,
                                  &claims);
   if (ret != LOTA_SERVER_OK) {
     char msg[128];
@@ -535,7 +535,7 @@ static void test_verify_full_success_sha512(EVP_PKEY *key,
   }
 
   struct lota_server_claims claims;
-  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, NULL,
+  ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len, nonce,
                                  &claims);
   if (ret != LOTA_SERVER_OK) {
     char msg[128];
@@ -624,7 +624,7 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 
   struct lota_server_claims claims;
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   EVP_PKEY_free(wrong_key);
 
   if (ret == LOTA_SERVER_ERR_SIG_FAIL) {
@@ -653,7 +653,7 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 
   struct lota_server_claims claims;
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
     PASS();
   } else {
@@ -683,7 +683,7 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 
   struct lota_server_claims claims;
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
     PASS();
   } else {
@@ -708,7 +708,7 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
 
   struct lota_server_claims claims;
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   if (ret != LOTA_SERVER_ERR_EXPIRED) {
     char msg[64];
     snprintf(msg, sizeof(msg), "expected ERR_EXPIRED, got %d", ret);
@@ -739,7 +739,7 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 
   struct lota_server_claims claims;
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   if (ret != LOTA_SERVER_ERR_FUTURE) {
     char msg[64];
     snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);
@@ -783,8 +783,9 @@ static void test_malformed_inputs(void) {
   TEST("lota_server_verify_token - too short token");
   uint8_t tiny[10] = {0};
   uint8_t fake_key[16] = {0};
+  uint8_t expected_nonce[32] = {0};
   ret = lota_server_verify_token(tiny, sizeof(tiny), fake_key, sizeof(fake_key),
-                                 NULL, &claims);
+                                 expected_nonce, &claims);
   if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
     PASS();
   } else {
@@ -798,7 +799,7 @@ static void test_malformed_inputs(void) {
   bad_magic[0] = 0xDE;
   bad_magic[1] = 0xAD;
   ret = lota_server_verify_token(bad_magic, sizeof(bad_magic), fake_key,
-                                 sizeof(fake_key), NULL, &claims);
+                                 sizeof(fake_key), expected_nonce, &claims);
   if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
     PASS();
   } else {
@@ -828,7 +829,7 @@ static void test_unknown_hash_alg_rejected(EVP_PKEY *key,
   tokbuf[55] = 0x12;
 
   int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
-                                     NULL, &claims);
+                                     nonce, &claims);
   if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
     PASS();
   } else {

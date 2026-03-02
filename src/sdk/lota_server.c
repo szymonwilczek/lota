@@ -388,7 +388,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   struct lota_token_wire hdr;
   int ret;
 
-  if (!token_data || !aik_pub_der || !claims)
+  if (!token_data || !aik_pub_der || !expected_nonce || !claims)
     return LOTA_SERVER_ERR_INVALID_ARG;
   if (token_len == 0 || aik_pub_len == 0)
     return LOTA_SERVER_ERR_INVALID_ARG;
@@ -484,11 +484,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
 
-  /* verify client nonce if expected_nonce is provided */
-  if (expected_nonce) {
-    if (memcmp(hdr.nonce, expected_nonce, 32) != 0)
-      return LOTA_SERVER_ERR_NONCE_FAIL;
-  }
+  /* verify caller-provided challenge nonce */
+  if (memcmp(hdr.nonce, expected_nonce, 32) != 0)
+    return LOTA_SERVER_ERR_NONCE_FAIL;
 
   if (expected_pcr_digest_len == 0)
     return LOTA_SERVER_ERR_SIG_FAIL;
