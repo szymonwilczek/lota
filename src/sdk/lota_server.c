@@ -433,6 +433,19 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
   /* check expiry */
   uint64_t now = (uint64_t)time(NULL);
+
+  {
+    uint64_t future_cutoff = now;
+    if (future_cutoff <=
+        UINT64_MAX - (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
+      future_cutoff += (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
+    else
+      future_cutoff = UINT64_MAX;
+
+    if (hdr.valid_until > future_cutoff)
+      return LOTA_SERVER_ERR_FUTURE;
+  }
+
   claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
 
   if (claims->expired)
@@ -506,6 +519,8 @@ const char *lota_server_strerror(int error) {
     return "Cryptographic error";
   case LOTA_SERVER_ERR_BUFFER:
     return "Buffer too small";
+  case LOTA_SERVER_ERR_FUTURE:
+    return "Token valid_until too far in the future";
 
   default:
     return "Unknown error";

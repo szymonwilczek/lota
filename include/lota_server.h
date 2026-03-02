@@ -54,6 +54,9 @@ extern "C" {
 /* TPM2 PCR composite digest can be SHA-256, SHA-384, or SHA-512. */
 #define LOTA_SERVER_MAX_PCR_DIGEST_SIZE 64
 
+/* Reject tokens whose valid_until is unreasonably far in the future. */
+#define LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC (2 * 3600U)
+
 /*
  * Server-side error codes
  */
@@ -68,6 +71,7 @@ enum lota_server_error {
   LOTA_SERVER_ERR_ATTEST_PARSE = -7, /* Failed to parse TPMS_ATTEST */
   LOTA_SERVER_ERR_CRYPTO = -8,       /* OpenSSL internal error */
   LOTA_SERVER_ERR_BUFFER = -9,       /* Buffer too small */
+  LOTA_SERVER_ERR_FUTURE = -10,      /* valid_until too far in the future */
 };
 
 /*

@@ -710,6 +710,33 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
   PASS();
 }
 
+static void test_verify_far_future_valid_until(EVP_PKEY *key,
+                                               const uint8_t *aik_der,
+                                               size_t aik_len) {
+  TEST("lota_server_verify_token - far-future valid_until -> ERR_FUTURE");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  build_full_token_sha256(
+      key,
+      now + (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC + 24ULL * 3600ULL,
+      0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
+
+  struct lota_server_claims claims;
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret != LOTA_SERVER_ERR_FUTURE) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
 static void test_strerror_new_codes(void) {
   TEST("lota_server_strerror - TOO_OLD and FUTURE codes");
 
@@ -717,6 +744,10 @@ static void test_strerror_new_codes(void) {
   int all_ok = 1;
 
   s = lota_server_strerror(LOTA_SERVER_ERR_EXPIRED);
+  if (!s || strlen(s) == 0)
+    all_ok = 0;
+
+  s = lota_server_strerror(LOTA_SERVER_ERR_FUTURE);
   if (!s || strlen(s) == 0)
     all_ok = 0;
 
@@ -892,6 +923,7 @@ int main(void) {
   test_verify_tampered_flags(key, aik_der, aik_len);
   test_verify_tampered_pcr_mask(key, aik_der, aik_len);
   test_verify_expired(key, aik_der, aik_len);
+  test_verify_far_future_valid_until(key, aik_der, aik_len);
 
   printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
   test_malformed_inputs();
