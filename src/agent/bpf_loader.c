@@ -823,7 +823,10 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
   if (value.start_time_ticks == 0)
     return -EINVAL;
 
-  return bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY);
+  if (bpf_map_update_elem(ctx->protected_pids_fd, &pid, &value, BPF_ANY) < 0)
+    return -errno;
+
+  return 0;
 }
 
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
@@ -833,7 +836,10 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
   if (ctx->protected_pids_fd < 0)
     return -ENOTSUP;
 
-  return bpf_map_delete_elem(ctx->protected_pids_fd, &pid);
+  if (bpf_map_delete_elem(ctx->protected_pids_fd, &pid) < 0)
+    return -errno;
+
+  return 0;
 }
 
 static int stat_regular_file_nofollow(const char *path, struct stat *st) {

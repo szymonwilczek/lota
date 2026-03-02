@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -41,6 +42,8 @@ static int cstr_ptr_cmp(const void *a, const void *b);
 static int compute_policy_digest(const struct agent_startup_policy *policy,
                                  const struct lota_verity_digest_key *digests,
                                  int digest_count, uint8_t out_digest[32]);
+static int
+validate_protected_pid_capacity(const struct agent_startup_policy *policy);
 
 static void agent_policy_snapshot_clear(void) {
   if (g_agent.policy_verity_digests) {
@@ -472,6 +475,10 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   if (!policy)
     return -EINVAL;
 
+  ret = validate_protected_pid_capacity(policy);
+  if (ret < 0)
+    return ret;
+
   if (bpf_loader_get_mode(&g_agent.bpf_ctx, &prev_mode) == 0)
     have_prev_mode = 1;
 
@@ -778,5 +785,49 @@ out_fail:
     (void)bpf_loader_set_config(&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP, 0);
 
   OPENSSL_cleanse(computed_policy_digest, sizeof(computed_policy_digest));
+  return ret;
+}
+
+static int
+validate_protected_pid_capacity(const struct agent_startup_policy *policy) {
+  uint32_t *canon = NULL;
+  int canon_count = 0;
+  int ret;
+  int self_present = 0;
+  uint32_t self_pid;
+
+  if (!policy)
+    return -EINVAL;
+
+  ret = canonicalize_u32_set(policy->protect_pids, policy->protect_pid_count,
+                             &canon, &canon_count);
+  if (ret < 0)
+    return ret;
+
+  self_pid = (uint32_t)getpid();
+  for (int i = 0; i < canon_count; i++) {
+    if (canon[i] == self_pid) {
+      self_present = 1;
+      break;
+    }
+  }
+
+  /* one protected_pids slot is already occupied by lota-agent self-protection
+   */
+  if (canon_count + (self_present ? 0 : 1) > LOTA_MAX_PROTECTED_PIDS)
+    ret = -ENOSPC;
+  else
+    ret = 0;
+
+  if (canon) {
+    OPENSSL_cleanse(canon, (size_t)canon_count * sizeof(uint32_t));
+    free(canon);
+  }
+
+  if (ret < 0) {
+    lota_err("protect_pid set exceeds protected_pids map capacity (%d)",
+             LOTA_MAX_PROTECTED_PIDS);
+  }
+
   return ret;
 }

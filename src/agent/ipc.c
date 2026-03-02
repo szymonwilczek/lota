@@ -874,11 +874,23 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     return;
   }
 
-  if (add && g_agent.policy_protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
-    lota_warn("Refusing PROTECT_PID %u: protected PID limit reached (%d)", pid,
-              LOTA_MAX_PROTECTED_PIDS);
-    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
-    return;
+  if (add) {
+    int self_in_policy =
+        pid_set_contains(g_agent.policy_protect_pids,
+                         g_agent.policy_protect_pid_count, (uint32_t)getpid());
+    uint32_t required_slots =
+        (uint32_t)g_agent.policy_protect_pid_count + (had ? 0u : 1u);
+
+    if (!self_in_policy)
+      required_slots += 1u;
+
+    if (required_slots > LOTA_MAX_PROTECTED_PIDS) {
+      lota_warn("Refusing PROTECT_PID %u: protected PID map capacity reached "
+                "(%d)",
+                pid, LOTA_MAX_PROTECTED_PIDS);
+      build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+      return;
+    }
   }
 
   /* attempt BPF update */
