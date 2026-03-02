@@ -162,6 +162,22 @@ struct {
 #define STAT_ANON_EXEC_BLOCKED 11
 #define STAT_EXEC_BLOCKED 12
 #define STAT_BPF_SYSCALL_BLOCKED 13
+#define STAT_ALLOW_EVENTS_SUPPRESSED 14
+
+#define ALLOW_EVENT_BUDGET_PER_SEC 256U
+
+struct event_budget_state {
+  u64 window_start_ns;
+  u32 emitted;
+  u32 pad;
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct event_budget_state);
+} event_budget SEC(".maps");
 
 /*
  * Authorized LOTA agent identity allowed to perform bpf() syscalls
@@ -314,6 +330,44 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
 static __always_inline u32 get_config(u32 key) {
   u32 *val = bpf_map_lookup_elem(&lota_config, &key);
   return val ? *val : 0;
+}
+
+/*
+ * Event emission policy under ring buffer pressure:
+ * - blocked events are always emitted when possible
+ * - in ENFORCE mode, allowed events are budgeted per second to prevent
+ *   attacker-generated benign floods from starving security-relevant logs
+ */
+static __always_inline int should_emit_event(u32 mode, int blocked) {
+  struct event_budget_state *state;
+  u64 now_ns;
+  u32 key = 0;
+
+  if (blocked)
+    return 1;
+
+  if (mode != LOTA_MODE_ENFORCE)
+    return 1;
+
+  state = bpf_map_lookup_elem(&event_budget, &key);
+  if (!state)
+    return 0;
+
+  now_ns = bpf_ktime_get_ns();
+  if (now_ns < state->window_start_ns ||
+      now_ns - state->window_start_ns >= 1000000000ULL) {
+    state->window_start_ns = now_ns;
+    state->emitted = 1;
+    return 1;
+  }
+
+  if (state->emitted >= ALLOW_EVENT_BUDGET_PER_SEC) {
+    inc_stat(STAT_ALLOW_EVENTS_SUPPRESSED);
+    return 0;
+  }
+
+  state->emitted++;
+  return 1;
 }
 
 /*
@@ -735,7 +789,7 @@ int BPF_PROG(lota_file_open, struct file *file, int ret) {
 SEC("lsm/bprm_check_security")
 int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
   struct file *file;
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   struct lota_verity_digest_key verity_key = {};
   u32 mode;
   int blocked = 0;
@@ -782,33 +836,36 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
     }
   }
 
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (event) {
-    __builtin_memset(event, 0, sizeof(*event));
-    event->timestamp_ns = bpf_ktime_get_ns();
-    event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
-    event->tgid = bpf_get_current_pid_tgid() >> 32;
-    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
-    event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+  if (should_emit_event(mode, blocked)) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (event) {
+      __builtin_memset(event, 0, sizeof(*event));
+      event->timestamp_ns = bpf_ktime_get_ns();
+      event->event_type = blocked ? LOTA_EVENT_EXEC_BLOCKED : LOTA_EVENT_EXEC;
+      event->tgid = bpf_get_current_pid_tgid() >> 32;
+      event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+      event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+      event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
 
-    bpf_get_current_comm(event->comm, sizeof(event->comm));
+      bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    /* best-effort filename from binprm; may be relative */
-    {
-      const char *fn = BPF_CORE_READ(bprm, filename);
-      if (fn)
-        bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), fn);
+      /* best-effort filename from binprm; may be relative */
+      {
+        const char *fn = BPF_CORE_READ(bprm, filename);
+        if (fn)
+          bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
+                                    fn);
+      }
+
+      /* if fs-verity digest is present, include first 32 bytes in event hash */
+      if (have_digest)
+        __builtin_memcpy(event->hash, verity_key.digest, LOTA_HASH_SIZE);
+
+      bpf_ringbuf_submit(event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else {
+      inc_stat(STAT_RINGBUF_DROPS);
     }
-
-    /* if fs-verity digest is present, include first 32 bytes in event hash */
-    if (have_digest)
-      __builtin_memcpy(event->hash, verity_key.digest, LOTA_HASH_SIZE);
-
-    bpf_ringbuf_submit(event, 0);
-    inc_stat(STAT_EVENTS_SENT);
-  } else {
-    inc_stat(STAT_RINGBUF_DROPS);
   }
 
   if (blocked) {
@@ -833,8 +890,9 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
 SEC("lsm/kernel_read_file")
 int BPF_PROG(lota_kernel_read_file, struct file *file,
              enum kernel_read_file_id id) {
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   int blocked = 0;
+  int emit_event = 0;
   uint32_t key = 0;
   uint32_t mode = get_mode();
 
@@ -892,7 +950,10 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     }
   }
 
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  emit_event = should_emit_event(mode, blocked);
+  if (emit_event) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  }
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -932,7 +993,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
-  } else {
+  } else if (emit_event) {
     inc_stat(STAT_RINGBUF_DROPS);
   }
 
@@ -958,9 +1019,10 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
  */
 SEC("lsm/kernel_load_data")
 int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   u32 mode;
   int blocked = 0;
+  int emit_event = 0;
 
   lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
 
@@ -1003,7 +1065,10 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     }
   }
 
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  emit_event = should_emit_event(mode, blocked);
+  if (emit_event) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  }
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -1028,7 +1093,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
-  } else {
+  } else if (emit_event) {
     inc_stat(STAT_RINGBUF_DROPS);
   }
 
@@ -1084,6 +1149,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    */
   if (!file) {
     int anon_blocked = 0;
+    int emit_event = 0;
 
     inc_stat(STAT_ANON_EXEC);
 
@@ -1095,7 +1161,10 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
       anon_blocked = 1;
     }
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    emit_event = should_emit_event(mode, anon_blocked);
+    if (emit_event) {
+      event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    }
     if (event) {
       __builtin_memset(event, 0, sizeof(*event));
       event->timestamp_ns = bpf_ktime_get_ns();
@@ -1110,7 +1179,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
       bpf_ringbuf_submit(event, 0);
       inc_stat(STAT_EVENTS_SENT);
-    } else {
+    } else if (emit_event) {
       inc_stat(STAT_RINGBUF_DROPS);
     }
 
@@ -1138,7 +1207,12 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
   /* for logging */
   struct lota_exec_event *event;
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  int emit_event = should_emit_event(mode, blocked);
+  if (emit_event) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  } else {
+    event = NULL;
+  }
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -1168,7 +1242,7 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
-  } else {
+  } else if (emit_event) {
     inc_stat(STAT_RINGBUF_DROPS);
   }
 
@@ -1198,7 +1272,7 @@ SEC("lsm/file_mprotect")
 int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
              unsigned long reqprot, unsigned long prot, int ret) {
   struct file *file;
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   u32 mode;
   int blocked = 0;
 
@@ -1217,13 +1291,17 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
   if (!file) {
     int anon_blocked = 0;
+    int emit_event = 0;
 
     inc_stat(STAT_ANON_EXEC);
 
     if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_BLOCK_ANON_EXEC))
       anon_blocked = 1;
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    emit_event = should_emit_event(mode, anon_blocked);
+    if (emit_event) {
+      event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    }
     if (event) {
       __builtin_memset(event, 0, sizeof(*event));
       event->timestamp_ns = bpf_ktime_get_ns();
@@ -1238,7 +1316,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
       bpf_ringbuf_submit(event, 0);
       inc_stat(STAT_EVENTS_SENT);
-    } else {
+    } else if (emit_event) {
       inc_stat(STAT_RINGBUF_DROPS);
     }
 
@@ -1258,39 +1336,44 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
     }
   }
 
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (event) {
-    __builtin_memset(event, 0, sizeof(*event));
-    event->timestamp_ns = bpf_ktime_get_ns();
-    event->event_type =
-        blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
-    event->tgid = bpf_get_current_pid_tgid() >> 32;
-    event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
-    event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+  {
+    int emit_event = should_emit_event(mode, blocked);
+    if (emit_event) {
+      event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    }
+    if (event) {
+      __builtin_memset(event, 0, sizeof(*event));
+      event->timestamp_ns = bpf_ktime_get_ns();
+      event->event_type =
+          blocked ? LOTA_EVENT_MMAP_BLOCKED : LOTA_EVENT_MMAP_EXEC;
+      event->tgid = bpf_get_current_pid_tgid() >> 32;
+      event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+      event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
 
-    bpf_get_current_comm(event->comm, sizeof(event->comm));
+      bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-    struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
-    const unsigned char *name = NULL;
-    int ret_path = -1;
+      struct dentry *dentry = BPF_CORE_READ(file, f_path.dentry);
+      const unsigned char *name = NULL;
+      int ret_path = -1;
 
-    if (dentry) {
-      name = BPF_CORE_READ(dentry, d_name.name);
-      if (name) {
-        ret_path = bpf_probe_read_kernel_str(event->filename,
-                                             sizeof(event->filename), name);
+      if (dentry) {
+        name = BPF_CORE_READ(dentry, d_name.name);
+        if (name) {
+          ret_path = bpf_probe_read_kernel_str(event->filename,
+                                               sizeof(event->filename), name);
+        }
       }
-    }
 
-    if (ret_path < 0) {
-      __builtin_memcpy(event->filename, "(mprotect-path_resolution_disabled)",
-                       35);
-    }
+      if (ret_path < 0) {
+        __builtin_memcpy(event->filename, "(mprotect-path_resolution_disabled)",
+                         35);
+      }
 
-    bpf_ringbuf_submit(event, 0);
-    inc_stat(STAT_EVENTS_SENT);
-  } else {
-    inc_stat(STAT_RINGBUF_DROPS);
+      bpf_ringbuf_submit(event, 0);
+      inc_stat(STAT_EVENTS_SENT);
+    } else if (emit_event) {
+      inc_stat(STAT_RINGBUF_DROPS);
+    }
   }
 
   if (blocked) {
@@ -1317,11 +1400,12 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
              unsigned int mode, int ret) {
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   u32 key = 0;
   u32 lota_mode;
   u32 child_pid;
   int blocked = 0;
+  int emit_event = 0;
 
   /* dont interfere with previous hook denial */
   if (ret != 0)
@@ -1349,7 +1433,10 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
   }
 
   /* for logging */
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  emit_event = should_emit_event(lota_mode, blocked);
+  if (emit_event) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  }
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
@@ -1369,7 +1456,7 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
-  } else {
+  } else if (emit_event) {
     inc_stat(STAT_RINGBUF_DROPS);
   }
 
