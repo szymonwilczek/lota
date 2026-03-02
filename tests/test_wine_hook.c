@@ -22,6 +22,7 @@
 #include "../src/sdk/lota_wine_hook.c"
 
 #include <assert.h>
+#include <dirent.h>
 #include <sys/stat.h>
 
 static int tests_run;
@@ -81,10 +82,22 @@ static ssize_t read_file_contents(const char *path, char *buf, size_t buflen) {
   return n;
 }
 
-/* check if file exists */
-static int file_exists(const char *path) {
-  struct stat st;
-  return stat(path, &st) == 0;
+static int count_tmp_entries_with_prefix(const char *dir, const char *prefix) {
+  DIR *d;
+  struct dirent *ent;
+  int count = 0;
+
+  d = opendir(dir);
+  if (!d)
+    return -1;
+
+  while ((ent = readdir(d)) != NULL) {
+    if (strncmp(ent->d_name, prefix, strlen(prefix)) == 0)
+      count++;
+  }
+
+  closedir(d);
+  return count;
 }
 
 static void test_parse_log_level_debug(void) {
@@ -380,19 +393,100 @@ static void test_atomic_write_overwrites(void) {
 
 static void test_atomic_write_no_tmp_leftover(void) {
   char path[256];
-  char tmp_pattern[300];
+  int tmp_count;
 
   TEST("atomic_write leaves no .tmp files on success");
 
   snprintf(path, sizeof(path), "%s/test_notmp", tmpdir);
-  snprintf(tmp_pattern, sizeof(tmp_pattern), "%s.tmp.%d", path, (int)getpid());
 
-  atomic_write(path, "data", 4);
-
-  if (file_exists(tmp_pattern)) {
-    FAIL(".tmp file left behind");
+  if (atomic_write(path, "data", 4) != 0) {
+    FAIL("atomic_write failed");
     return;
   }
+
+  tmp_count = count_tmp_entries_with_prefix(tmpdir, "test_notmp.tmp.");
+  if (tmp_count < 0) {
+    FAIL("opendir failed");
+    return;
+  }
+  if (tmp_count != 0) {
+    FAIL(".tmp files left behind");
+    return;
+  }
+  PASS();
+}
+
+static void test_atomic_write_ignores_predictable_symlink_tmp(void) {
+  char path[PATH_MAX];
+  char victim[PATH_MAX];
+  char planted_tmp[PATH_MAX];
+  char buf[64];
+  ssize_t n;
+  int fd;
+  size_t base_len;
+  size_t suffix_len;
+  int pid_len;
+
+  TEST("atomic_write resists planted symlink at legacy temp name");
+
+  snprintf(path, sizeof(path), "%s/test_symlink_guard", tmpdir);
+  snprintf(victim, sizeof(victim), "%s/victim_file", tmpdir);
+
+  base_len = strlen(path);
+  suffix_len = strlen(".tmp.");
+  if (base_len + suffix_len + 16 >= sizeof(planted_tmp)) {
+    FAIL("temp path too long");
+    return;
+  }
+  memcpy(planted_tmp, path, base_len);
+  memcpy(planted_tmp + base_len, ".tmp.", suffix_len);
+  pid_len = snprintf(planted_tmp + base_len + suffix_len,
+                     sizeof(planted_tmp) - base_len - suffix_len, "%d",
+                     (int)getpid());
+  if (pid_len < 0 ||
+      (size_t)pid_len >= sizeof(planted_tmp) - base_len - suffix_len) {
+    FAIL("temp path build failed");
+    return;
+  }
+
+  fd = open(victim, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (fd < 0) {
+    FAIL("open victim failed");
+    return;
+  }
+  if (write(fd, "victim", 6) != 6) {
+    close(fd);
+    FAIL("write victim failed");
+    return;
+  }
+  close(fd);
+
+  if (symlink(victim, planted_tmp) != 0) {
+    FAIL("symlink setup failed");
+    return;
+  }
+
+  if (atomic_write(path, "safe", 4) != 0) {
+    FAIL("atomic_write failed");
+    unlink(planted_tmp);
+    return;
+  }
+
+  n = read_file_contents(path, buf, sizeof(buf));
+  if (n != 4 || memcmp(buf, "safe", 4) != 0) {
+    FAIL("target content mismatch");
+    unlink(planted_tmp);
+    return;
+  }
+
+  n = read_file_contents(victim, buf, sizeof(buf));
+  if (n != 6 || memcmp(buf, "victim", 6) != 0) {
+    FAIL("planted symlink redirected write");
+    unlink(planted_tmp);
+    return;
+  }
+
+  unlink(planted_tmp);
   PASS();
 }
 
@@ -633,6 +727,7 @@ int main(void) {
   test_atomic_write_creates_file();
   test_atomic_write_overwrites();
   test_atomic_write_no_tmp_leftover();
+  test_atomic_write_ignores_predictable_symlink_tmp();
   test_atomic_write_file_mode();
 
   /* write_status */

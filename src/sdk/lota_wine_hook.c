@@ -201,9 +201,9 @@ static int atomic_write(const char *path, const void *data, size_t len) {
   int fd, err;
   ssize_t n;
 
-  snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
+  snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path);
 
-  fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  fd = mkostemp(tmp, O_CLOEXEC);
   if (fd < 0)
     return -errno;
 
