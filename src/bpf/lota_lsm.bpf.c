@@ -14,6 +14,7 @@
  *   - Library loading / executable mmap (security_mmap_file)
  *   - Bind-mount overwrite on trusted library inodes (security_sb_mount)
  *   - In-place write/truncate on trusted library inodes (security_file_open)
+ *   - Direct kernel memory device access (/dev/mem, /dev/kmem, /dev/port)
  *   - Debugger attachment (security_ptrace_access_check)
  *   - Cross-process memory access fallback (__ptrace_may_access)
  *   - Privilege escalation (task_fix_setuid)
@@ -88,6 +89,13 @@ char LICENSE[] SEC("license") = "GPL";
 #endif
 #ifndef LOTA_O_TRUNC
 #define LOTA_O_TRUNC 00001000
+#endif
+
+#ifndef S_IFMT
+#define S_IFMT 00170000
+#endif
+#ifndef S_IFCHR
+#define S_IFCHR 0020000
 #endif
 
 #ifdef LOTA_BPF_DEBUG_PRINTK
@@ -574,6 +582,42 @@ static __always_inline int is_write_open_flags(int flags) {
   return 0;
 }
 
+static __always_inline unsigned int lota_dev_major(dev_t dev) {
+  return (unsigned int)(((unsigned long long)dev >> 8) & 0xFFFULL);
+}
+
+static __always_inline unsigned int lota_dev_minor(dev_t dev) {
+  return (unsigned int)(((unsigned long long)dev & 0xFFULL) |
+                        (((unsigned long long)dev >> 12) & 0xFFFFF00ULL));
+}
+
+static __always_inline int is_kernel_mem_device(struct file *file) {
+  struct inode *inode;
+  dev_t rdev;
+  unsigned int major;
+  unsigned int minor;
+
+  if (!file)
+    return 0;
+
+  inode = BPF_CORE_READ(file, f_inode);
+  if (!inode)
+    return 0;
+
+  if ((BPF_CORE_READ(inode, i_mode) & S_IFMT) != S_IFCHR)
+    return 0;
+
+  rdev = BPF_CORE_READ(inode, i_rdev);
+  major = lota_dev_major(rdev);
+  minor = lota_dev_minor(rdev);
+
+  /* char major 1: mem=1, kmem=2, port=4 */
+  if (major != 1)
+    return 0;
+
+  return minor == 1 || minor == 2 || minor == 4;
+}
+
 static __always_inline int is_shebang_binprm(struct linux_binprm *bprm) {
   char c0;
   char c1;
@@ -660,6 +704,9 @@ int BPF_PROG(lota_file_open, struct file *file, int ret) {
   mode = get_mode();
   if (mode != LOTA_MODE_ENFORCE)
     return 0;
+
+  if (is_kernel_mem_device(file))
+    return -EPERM;
 
   if (!get_config(LOTA_CFG_STRICT_MMAP))
     return 0;
