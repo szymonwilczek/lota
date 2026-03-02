@@ -13,6 +13,7 @@
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
  *   - Bind-mount overwrite on trusted library inodes (security_sb_mount)
+ *   - In-place write/truncate on trusted library inodes (security_file_open)
  *   - Debugger attachment (security_ptrace_access_check)
  *   - Cross-process memory access fallback (__ptrace_may_access)
  *   - Privilege escalation (task_fix_setuid)
@@ -66,6 +67,19 @@ char LICENSE[] SEC("license") = "GPL";
 
 #ifndef MS_BIND
 #define MS_BIND 4096
+#endif
+
+#ifndef LOTA_O_ACCMODE
+#define LOTA_O_ACCMODE 00000003
+#endif
+#ifndef LOTA_O_WRONLY
+#define LOTA_O_WRONLY 00000001
+#endif
+#ifndef LOTA_O_RDWR
+#define LOTA_O_RDWR 00000002
+#endif
+#ifndef LOTA_O_TRUNC
+#define LOTA_O_TRUNC 00001000
 #endif
 
 #ifdef LOTA_BPF_DEBUG_PRINTK
@@ -483,6 +497,18 @@ static __always_inline int is_trusted_inode(struct inode *inode) {
   return (allowed && *allowed) ? 1 : 0;
 }
 
+static __always_inline int is_write_open_flags(int flags) {
+  int acc_mode = flags & LOTA_O_ACCMODE;
+
+  if (acc_mode == LOTA_O_WRONLY || acc_mode == LOTA_O_RDWR)
+    return 1;
+
+  if (flags & LOTA_O_TRUNC)
+    return 1;
+
+  return 0;
+}
+
 /*
  * Block bind mounts over trusted-library mountpoints.
  */
@@ -522,6 +548,37 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
     return 0;
 
   if (!is_trusted_inode(inode))
+    return 0;
+
+  return -EPERM;
+}
+
+/*
+ * Block in-place writes/truncation on trusted-library inodes.
+ */
+SEC("lsm.s/file_open")
+int BPF_PROG(lota_file_open, struct file *file, int ret) {
+  u32 mode;
+  int flags;
+
+  if (ret != 0)
+    return ret;
+
+  mode = get_mode();
+  if (mode != LOTA_MODE_ENFORCE)
+    return 0;
+
+  if (!get_config(LOTA_CFG_STRICT_MMAP))
+    return 0;
+
+  if (!file)
+    return 0;
+
+  if (!is_trusted_lib(file))
+    return 0;
+
+  flags = BPF_CORE_READ(file, f_flags);
+  if (!is_write_open_flags(flags))
     return 0;
 
   return -EPERM;
