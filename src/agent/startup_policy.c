@@ -793,8 +793,6 @@ validate_protected_pid_capacity(const struct agent_startup_policy *policy) {
   uint32_t *canon = NULL;
   int canon_count = 0;
   int ret;
-  int self_present = 0;
-  uint32_t self_pid;
 
   if (!policy)
     return -EINVAL;
@@ -804,17 +802,7 @@ validate_protected_pid_capacity(const struct agent_startup_policy *policy) {
   if (ret < 0)
     return ret;
 
-  self_pid = (uint32_t)getpid();
-  for (int i = 0; i < canon_count; i++) {
-    if (canon[i] == self_pid) {
-      self_present = 1;
-      break;
-    }
-  }
-
-  /* one protected_pids slot is already occupied by lota-agent self-protection
-   */
-  if (canon_count + (self_present ? 0 : 1) > LOTA_MAX_PROTECTED_PIDS)
+  if (canon_count > LOTA_MAX_PROTECTED_PIDS)
     ret = -ENOSPC;
   else
     ret = 0;
