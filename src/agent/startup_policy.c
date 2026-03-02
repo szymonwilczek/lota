@@ -488,7 +488,7 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
     goto out_fail;
   }
   cfg_lock_bpf_applied = 1;
-  lota_info("BPF syscall lock: ON (non-agent bpf() denied while locked)");
+  lota_info("BPF map lock: ON (non-agent writes to LOTA maps denied)");
 
   ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
   if (ret < 0) {

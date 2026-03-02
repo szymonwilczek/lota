@@ -77,7 +77,7 @@ enum lota_mode {
 #define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
 #define LOTA_CFG_STRICT_EXEC 4     /* 1 = block exec from untrusted paths */
 #define LOTA_CFG_STRICT_MODULES 5  /* 1 = enforce verified modules/firmware */
-#define LOTA_CFG_LOCK_BPF 6        /* 1 = block bpf() syscalls from non-agent */
+#define LOTA_CFG_LOCK_BPF 6 /* 1 = block non-agent writes to LOTA BPF maps */
 #define LOTA_CFG_MAX_ENTRIES 9
 
 /* fs-verity digest format required by LOTA policy enforcement */

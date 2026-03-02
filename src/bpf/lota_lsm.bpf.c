@@ -53,6 +53,10 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef SIGKILL
 #define SIGKILL 9
 #endif
+
+#ifndef FMODE_WRITE
+#define FMODE_WRITE ((fmode_t)(1U << 1))
+#endif
 #ifndef SIGSTOP
 #define SIGSTOP 19
 #endif
@@ -394,6 +398,37 @@ static __always_inline int is_lota_agent_task(struct task_struct *task) {
     task_start_ticks = get_task_start_ticks(task);
 
   return task_start_ticks && task_start_ticks == agent->start_time_ticks;
+}
+
+static __always_inline int is_lota_managed_map(struct bpf_map *map) {
+  char name[16] = {};
+
+  if (!map)
+    return 0;
+
+  bpf_core_read(&name, sizeof(name), &map->name);
+
+  if (__builtin_memcmp(name, "lota_config", sizeof("lota_config")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "bpf_admin_tgid", sizeof("bpf_admin_tgid")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "lota_agent_identity",
+                       sizeof("lota_agent_identity")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "protected_pids", sizeof("protected_pids")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "trusted_libs", sizeof("trusted_libs")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "trusted_inodes", sizeof("trusted_inodes")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "integrity_config", sizeof("integrity_config")) ==
+      0)
+    return 1;
+  if (__builtin_memcmp(name, "allow_verity_digest",
+                       sizeof("allow_verity_digest")) == 0)
+    return 1;
+
+  return 0;
 }
 
 /*
@@ -1489,19 +1524,49 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 }
 
 /* ======================================================================
+ * LSM hook: bpf_map
+ *
+ * Per-map policy hook invoked when creating a userspace FD for a BPF map.
+ * Under LOCK_BPF, deny write-capable FDs for LOTA-owned maps unless caller
+ * matches the authorized LOTA BPF admin identity.
+ *
+ * This keeps non-LOTA eBPF userspace intact while preventing runtime tampering
+ * of LOTA map state.
+ * ====================================================================== */
+SEC("lsm/bpf_map")
+int BPF_PROG(lota_bpf_map, struct bpf_map *map, fmode_t fmode, int ret) {
+  if (ret != 0)
+    return ret;
+
+  if (!map)
+    return 0;
+
+  if (!get_config(LOTA_CFG_LOCK_BPF))
+    return 0;
+
+  if (is_bpf_admin_task())
+    return 0;
+
+  if (!(fmode & FMODE_WRITE))
+    return 0;
+
+  if (!is_lota_managed_map(map))
+    return 0;
+
+  inc_stat(STAT_BPF_SYSCALL_BLOCKED);
+  return -EPERM;
+}
+
+/* ======================================================================
  * LSM hook: bpf
  *
- * Called on bpf() syscall. With LOTA_CFG_LOCK_BPF enabled, deny sensitive
- * bpf() operations from processes other than the authorized agent.
- *
- * This prevents root-level attackers from detaching/overwriting/freezing LOTA
- * BPF objects or acquiring control fds via bpftool while runtime protection is
- * active.
+ * Keep global bpf() hook non-invasive. Object-specific access control is
+ * enforced in lota_bpf_map where map identity is available.
  * ====================================================================== */
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
              int ret) {
-  int deny = 0;
+  (void)cmd;
 
   (void)size;
 
@@ -1516,48 +1581,6 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
   if (ret != 0)
     return ret;
 
-  if (!attr)
-    return 0;
-
-  /*
-   * SECURITY: LOCK_BPF must be effective regardless of LOTA mode.
-   */
-
-  if (!get_config(LOTA_CFG_LOCK_BPF))
-    return 0;
-
-  if (is_bpf_admin_task())
-    return 0;
-
-  switch (cmd) {
-  case BPF_PROG_LOAD:
-  case BPF_LINK_CREATE:
-  case BPF_LINK_UPDATE:
-  case BPF_MAP_CREATE:
-  case BPF_OBJ_GET:
-  case BPF_OBJ_PIN:
-  case BPF_PROG_DETACH:
-  case BPF_LINK_DETACH:
-  case BPF_PROG_GET_NEXT_ID:
-  case BPF_MAP_GET_NEXT_ID:
-  case BPF_PROG_GET_FD_BY_ID:
-  case BPF_MAP_GET_FD_BY_ID:
-  case BPF_BTF_GET_FD_BY_ID:
-  case BPF_LINK_GET_FD_BY_ID:
-  case BPF_LINK_GET_NEXT_ID:
-  case BPF_MAP_LOOKUP_ELEM:
-  case BPF_MAP_UPDATE_ELEM:
-  case BPF_MAP_DELETE_ELEM:
-  case BPF_MAP_FREEZE:
-    deny = 1;
-    break;
-  default:
-    break;
-  }
-
-  if (!deny)
-    return 0;
-
-  inc_stat(STAT_BPF_SYSCALL_BLOCKED);
-  return -EPERM;
+  (void)attr;
+  return 0;
 }
