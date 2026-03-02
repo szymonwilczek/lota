@@ -60,9 +60,55 @@ struct trusted_lib_key {
 };
 
 /*
+ * Returns 1 in initial PID namespace, 0 in nested PID namespace, <0 on error.
+ */
+static int running_in_initial_pidns(void) {
+  FILE *fp;
+  char line[512];
+  int nspid_count = 0;
+
+  fp = fopen("/proc/self/status", "r");
+  if (!fp)
+    return -errno;
+
+  while (fgets(line, sizeof(line), fp)) {
+    if (strncmp(line, "NSpid:\t", 7) != 0)
+      continue;
+
+    char *p = line + 7;
+    while (*p != '\0') {
+      char *end = NULL;
+      unsigned long v;
+
+      while (*p == ' ' || *p == '\t')
+        p++;
+      if (*p == '\0' || *p == '\n')
+        break;
+
+      errno = 0;
+      v = strtoul(p, &end, 10);
+      if (errno != 0 || end == p)
+        break;
+      (void)v;
+      nspid_count++;
+      p = end;
+    }
+    break;
+  }
+
+  fclose(fp);
+
+  if (nspid_count <= 0)
+    return -EINVAL;
+
+  return (nspid_count == 1) ? 1 : 0;
+}
+
+/*
  * Read /proc/<pid>/stat field 22 (starttime in clock ticks since boot).
  */
 static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks) {
+  static int pidns_state = -1;
   char path[64];
   FILE *fp;
   char line[4096];
@@ -73,6 +119,11 @@ static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks) {
 
   if (!start_time_ticks)
     return -EINVAL;
+
+  if (pidns_state < 0)
+    pidns_state = running_in_initial_pidns();
+  if (pidns_state <= 0)
+    return (pidns_state < 0) ? pidns_state : -EOPNOTSUPP;
 
   snprintf(path, sizeof(path), "/proc/%u/stat", pid);
   fp = fopen(path, "r");

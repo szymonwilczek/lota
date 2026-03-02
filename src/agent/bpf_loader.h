@@ -219,7 +219,8 @@ int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
  *   - ptrace on these PIDs is blocked
  *
  * Identity is bound to PID start time from /proc/<pid>/stat
- * to prevent trust leakage on PID reuse.
+ * to prevent trust leakage on PID reuse. This path is accepted only
+ * in initial PID namespace.
  *
  * Returns: 0 on success, negative errno on failure
  */
