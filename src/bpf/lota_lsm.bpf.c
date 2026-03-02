@@ -1270,16 +1270,13 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
  * ====================================================================== */
 SEC("lsm/file_mprotect")
 int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
-             unsigned long reqprot, unsigned long prot, int ret) {
+             unsigned long reqprot, unsigned long prot) {
   struct file *file;
   struct lota_exec_event *event = NULL;
   u32 mode;
   int blocked = 0;
 
   (void)reqprot;
-
-  if (ret != 0)
-    return ret;
 
   /* only care when resulting mapping is executable */
   if (!(prot & LOTA_PROT_EXEC))
