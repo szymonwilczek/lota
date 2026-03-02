@@ -57,6 +57,10 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
+
+#ifndef BINPRM_FLAGS_PATH_INACCESSIBLE
+#define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
+#endif
 #ifndef SIGSTOP
 #define SIGSTOP 19
 #endif
@@ -582,6 +586,22 @@ static __always_inline int is_shebang_binprm(struct linux_binprm *bprm) {
   return c0 == '#' && c1 == '!';
 }
 
+static __always_inline int
+is_inaccessible_exec_path(struct linux_binprm *bprm) {
+  unsigned int interp_flags;
+  const char *fdpath;
+
+  if (!bprm)
+    return 0;
+
+  interp_flags = BPF_CORE_READ(bprm, interp_flags);
+  if (interp_flags & BINPRM_FLAGS_PATH_INACCESSIBLE)
+    return 1;
+
+  fdpath = BPF_CORE_READ(bprm, fdpath);
+  return fdpath ? 1 : 0;
+}
+
 /*
  * Block bind mounts over trusted-library mountpoints.
  */
@@ -703,7 +723,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
   }
 
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
-    if (is_shebang_binprm(bprm) || BPF_CORE_READ(bprm, interpreter)) {
+    if (is_shebang_binprm(bprm) || BPF_CORE_READ(bprm, interpreter) ||
+        is_inaccessible_exec_path(bprm)) {
       blocked = 1;
     } else if (!have_digest) {
       blocked = 1;
