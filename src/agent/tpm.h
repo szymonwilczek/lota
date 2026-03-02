@@ -196,9 +196,12 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 int tpm_provision_aik(struct tpm_context *ctx);
 
 /*
- * tpm_hash_fd - Calculate SHA-256 hash from an open file descriptor
- * @fd: Open file descriptor (read position should be at start)
+ * tpm_hash_fd - Calculate SHA-256 hash from an open regular file descriptor
+ * @fd: Open regular file descriptor (read position should be at start)
  * @hash: Output buffer (LOTA_HASH_SIZE bytes)
+ *
+ * Non-regular files are rejected to avoid unbounded reads on character/block
+ * devices and pipes. File size is snapshotted and verified during hashing.
  *
  * Returns: 0 on success, negative errno on failure
  */

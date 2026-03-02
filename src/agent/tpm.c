@@ -617,9 +617,22 @@ int tpm_hash_fd(int fd, uint8_t *hash) {
   uint8_t *buf;
   unsigned int hash_len;
   int ret = 0;
+  struct stat st;
+  uint64_t remaining;
 
   if (fd < 0 || !hash)
     return -EINVAL;
+
+  if (fstat(fd, &st) != 0)
+    return -errno;
+
+  if (!S_ISREG(st.st_mode))
+    return -EINVAL;
+
+  if (st.st_size < 0)
+    return -EIO;
+
+  remaining = (uint64_t)st.st_size;
 
   buf = malloc(HASH_READ_BUF_SIZE);
   if (!buf)
@@ -636,24 +649,46 @@ int tpm_hash_fd(int fd, uint8_t *hash) {
     goto cleanup;
   }
 
-  for (;;) {
-    n = read(fd, buf, HASH_READ_BUF_SIZE);
+  while (remaining > 0) {
+    size_t to_read = HASH_READ_BUF_SIZE;
+    if (remaining < to_read)
+      to_read = (size_t)remaining;
+
+    n = read(fd, buf, to_read);
     if (n > 0) {
       if (EVP_DigestUpdate(md_ctx, buf, (size_t)n) != 1) {
         ret = -EIO;
         goto cleanup;
       }
+      remaining -= (uint64_t)n;
       continue;
     }
 
-    if (n == 0)
-      break;
+    if (n == 0) {
+      /* file shrank mid-read (or unexpected short read) */
+      ret = -EIO;
+      goto cleanup;
+    }
 
     if (errno == EINTR)
       continue;
 
     ret = -errno;
     goto cleanup;
+  }
+
+  {
+    uint8_t probe;
+    n = read(fd, &probe, 1);
+    if (n > 0) {
+      /* file grew after initial stat snapshot */
+      ret = -EIO;
+      goto cleanup;
+    }
+    if (n < 0 && errno != EINTR) {
+      ret = -errno;
+      goto cleanup;
+    }
   }
 
   if (EVP_DigestFinal_ex(md_ctx, hash, &hash_len) != 1) {
