@@ -7,10 +7,12 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
@@ -19,6 +21,7 @@
 #include <bpf/libbpf.h>
 
 #include <linux/fsverity.h>
+#include <linux/openat2.h>
 
 #include "../../include/lota.h"
 #include "bpf_loader.h"
@@ -894,7 +897,8 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
 }
 
 static int stat_regular_file_nofollow(const char *path, struct stat *st) {
-  int fd;
+  int fd = -1;
+  int ret = 0;
 
   if (!path || !st)
     return -EINVAL;
@@ -905,14 +909,78 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st) {
 #ifndef O_NOFOLLOW
   return -ENOTSUP;
 #else
-  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0)
-    return -errno;
+  if (path[0] != '/')
+    return -EINVAL;
+
+  {
+    struct open_how how = {
+        .flags = O_RDONLY | O_CLOEXEC,
+        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    };
+
+    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
+      return -errno;
+  }
+
+  if (fd < 0) {
+    int dirfd = -1;
+    const char *p = path;
+
+    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0)
+      return -errno;
+
+    while (*p == '/')
+      p++;
+
+    while (*p != '\0') {
+      char name[NAME_MAX + 1];
+      const char *slash = strchr(p, '/');
+      size_t n = slash ? (size_t)(slash - p) : strlen(p);
+      int nextfd;
+
+      if (n == 0) {
+        p++;
+        continue;
+      }
+      if (n > NAME_MAX) {
+        close(dirfd);
+        return -ENAMETOOLONG;
+      }
+
+      memcpy(name, p, n);
+      name[n] = '\0';
+
+      if (slash) {
+        nextfd =
+            openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(dirfd);
+        if (nextfd < 0)
+          return -errno;
+        dirfd = nextfd;
+
+        p = slash + 1;
+        while (*p == '/')
+          p++;
+        continue;
+      }
+
+      fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+      close(dirfd);
+      if (fd < 0)
+        return -errno;
+      break;
+    }
+
+    if (fd < 0)
+      return -EINVAL;
+  }
 
   if (fstat(fd, st) != 0) {
-    int err = -errno;
+    ret = -errno;
     close(fd);
-    return err;
+    return ret;
   }
 
   close(fd);
