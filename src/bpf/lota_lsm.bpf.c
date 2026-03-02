@@ -570,6 +570,18 @@ static __always_inline int is_write_open_flags(int flags) {
   return 0;
 }
 
+static __always_inline int is_shebang_binprm(struct linux_binprm *bprm) {
+  char c0;
+  char c1;
+
+  if (!bprm)
+    return 0;
+
+  c0 = BPF_CORE_READ(bprm, buf[0]);
+  c1 = BPF_CORE_READ(bprm, buf[1]);
+  return c0 == '#' && c1 == '!';
+}
+
 /*
  * Block bind mounts over trusted-library mountpoints.
  */
@@ -691,7 +703,9 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm) {
   }
 
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_EXEC)) {
-    if (!have_digest) {
+    if (is_shebang_binprm(bprm) || BPF_CORE_READ(bprm, interpreter)) {
+      blocked = 1;
+    } else if (!have_digest) {
       blocked = 1;
     } else {
       u8 *allowed = bpf_map_lookup_elem(&allow_verity_digest, &verity_key);
