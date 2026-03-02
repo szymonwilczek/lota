@@ -12,6 +12,7 @@
  *   - Kernel module loading (kernel_module_request, kernel_read_file,
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
+ *   - Bind-mount overwrite on trusted library inodes (security_sb_mount)
  *   - Debugger attachment (security_ptrace_access_check)
  *   - Cross-process memory access fallback (__ptrace_may_access)
  *   - Privilege escalation (task_fix_setuid)
@@ -61,6 +62,10 @@ char LICENSE[] SEC("license") = "GPL";
 /* siginfo.si_code value for kernel-generated signals */
 #ifndef SI_KERNEL
 #define SI_KERNEL 0x80
+#endif
+
+#ifndef MS_BIND
+#define MS_BIND 4096
 #endif
 
 /*
@@ -447,6 +452,71 @@ static __always_inline int is_trusted_lib(struct file *file) {
 
   allowed = bpf_map_lookup_elem(&trusted_libs, &key);
   return (allowed && *allowed) ? 1 : 0;
+}
+
+static __always_inline int is_trusted_inode(struct inode *inode) {
+  struct super_block *sb;
+  struct trusted_lib_key key = {};
+  u32 *allowed;
+
+  if (!inode)
+    return 0;
+
+  sb = BPF_CORE_READ(inode, i_sb);
+  if (!sb)
+    return 0;
+
+  key.dev = (u64)BPF_CORE_READ(sb, s_dev);
+  key.ino = (u64)BPF_CORE_READ(inode, i_ino);
+  if (key.dev == 0 || key.ino == 0)
+    return 0;
+
+  allowed = bpf_map_lookup_elem(&trusted_libs, &key);
+  return (allowed && *allowed) ? 1 : 0;
+}
+
+/*
+ * Block bind mounts over trusted-library mountpoints.
+ */
+SEC("lsm/sb_mount")
+int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
+             const char *type, unsigned long flags, void *data, int ret) {
+  struct dentry *dentry;
+  struct inode *inode;
+  u32 mode;
+
+  (void)dev_name;
+  (void)type;
+  (void)data;
+
+  if (ret != 0)
+    return ret;
+
+  if (!(flags & MS_BIND))
+    return 0;
+
+  mode = get_mode();
+  if (mode != LOTA_MODE_ENFORCE)
+    return 0;
+
+  if (!get_config(LOTA_CFG_STRICT_MMAP))
+    return 0;
+
+  if (!path)
+    return 0;
+
+  dentry = BPF_CORE_READ(path, dentry);
+  if (!dentry)
+    return 0;
+
+  inode = BPF_CORE_READ(dentry, d_inode);
+  if (!inode)
+    return 0;
+
+  if (!is_trusted_inode(inode))
+    return 0;
+
+  return -EPERM;
 }
 
 /* =====================================================================
