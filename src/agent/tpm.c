@@ -597,13 +597,25 @@ cleanup:
 int tpm_hash_file(const char *path, uint8_t *hash) {
   int fd;
   int ret;
+  struct stat st;
 
   if (!path || !hash)
     return -EINVAL;
 
-  fd = open(path, O_RDONLY);
+  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0)
     return -errno;
+
+  if (fstat(fd, &st) != 0) {
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
+  if (!S_ISREG(st.st_mode)) {
+    close(fd);
+    return -EINVAL;
+  }
 
   ret = tpm_hash_fd(fd, hash);
   close(fd);
