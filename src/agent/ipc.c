@@ -667,6 +667,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   memcpy(token->runtime_protect_digest, runtime_protect_digest,
          sizeof(token->runtime_protect_digest));
+  token->runtime_protect_epoch = g_agent.policy_protect_epoch;
   token->protect_pid_count = runtime_pid_count;
   token->pid_list_size = pid_list_size;
   token->_reserved1 = 0;
@@ -685,7 +686,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   ret = lota_compute_token_quote_nonce(
       token->valid_until, token->flags, token->pcr_mask, token->client_nonce,
-      token->policy_digest, token->runtime_protect_digest, binding_nonce);
+      token->policy_digest, token->runtime_protect_digest,
+      token->runtime_protect_epoch, binding_nonce);
   if (ret < 0) {
     lota_err("token quote nonce computation failed: %s", strerror(-ret));
     fail = true;
@@ -1018,6 +1020,12 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     return;
   }
 
+  if (g_agent.policy_protect_epoch == UINT64_MAX) {
+    lota_err("Refusing runtime PID policy mutation: protect epoch exhausted");
+    build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+    return;
+  }
+
   if (add) {
     uint32_t required_slots =
         (uint32_t)g_agent.policy_protect_pid_count + (had ? 0u : 1u);
@@ -1075,6 +1083,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     }
     g_agent.policy_protect_pids = new_pids;
     g_agent.policy_protect_pid_count = new_count;
+    g_agent.policy_protect_epoch += 1;
     new_pids = NULL;
     new_count = 0;
   }

@@ -57,6 +57,7 @@ struct agent_globals {
 
   uint32_t *policy_protect_pids; /* sorted unique */
   int policy_protect_pid_count;
+  uint64_t policy_protect_epoch; /* monotonic runtime PID set mutation id */
 
   char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
   int policy_trust_lib_count;

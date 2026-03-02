@@ -63,6 +63,7 @@ static void agent_policy_snapshot_clear(void) {
     g_agent.policy_protect_pids = NULL;
   }
   g_agent.policy_protect_pid_count = 0;
+  g_agent.policy_protect_epoch = 0;
 
   if (g_agent.policy_trust_libs) {
     OPENSSL_cleanse(g_agent.policy_trust_libs,
@@ -715,6 +716,7 @@ allowlist_done:
     g_agent.policy_verity_digest_count = digest_count;
     g_agent.policy_protect_pids = canon_pids;
     g_agent.policy_protect_pid_count = canon_pid_count;
+    g_agent.policy_protect_epoch = 0;
     g_agent.policy_trust_libs = canon_libs;
     g_agent.policy_trust_lib_count = canon_lib_count;
     g_agent.policy_snapshot_set = 1;
