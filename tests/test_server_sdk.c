@@ -651,6 +651,36 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
   }
 }
 
+static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
+                                          size_t aik_len) {
+  TEST("lota_server_verify_token - tampered pcr_mask → NONCE_FAIL");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t nonce[32] = {0};
+
+  uint8_t tokbuf[2048];
+  size_t tok_written;
+  build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf, sizeof(tokbuf),
+                          &tok_written);
+
+  /* tamper: change pcr_mask from 0x4001 to 0x0001 in wire (offset 56 LE) */
+  tokbuf[56] = 0x01;
+  tokbuf[57] = 0x00;
+  tokbuf[58] = 0x00;
+  tokbuf[59] = 0x00;
+
+  struct lota_server_claims claims;
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     NULL, &claims);
+  if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
+    PASS();
+  } else {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected NONCE_FAIL, got %d", ret);
+    FAIL(msg);
+  }
+}
+
 static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
                                 size_t aik_len) {
   TEST("lota_server_verify_token - expired token -> ERR_EXPIRED");
@@ -860,6 +890,7 @@ int main(void) {
   test_verify_wrong_nonce(key, aik_der, aik_len);
   test_verify_bad_signature(key, aik_der, aik_len);
   test_verify_tampered_flags(key, aik_der, aik_len);
+  test_verify_tampered_pcr_mask(key, aik_der, aik_len);
   test_verify_expired(key, aik_der, aik_len);
 
   printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);

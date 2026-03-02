@@ -530,7 +530,8 @@ static void handle_get_status(struct ipc_context *ctx,
  *
  * Generates a signed attestation token using TPM Quote.
  * The TPM signs over the token quote nonce:
- *   SHA256(valid_until_LE || flags_LE || client_nonce)
+ *   SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce ||
+ *          policy_digest)
  * binding the signature to both the token metadata and the client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
