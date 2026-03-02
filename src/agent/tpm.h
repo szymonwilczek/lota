@@ -400,4 +400,12 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
  */
 int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
 
+#ifdef LOTA_TPM_TESTING
+typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
+                                       uint32_t *out_val);
+
+void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
+void tpm_test_reset_prop_reader(void);
+#endif
+
 #endif /* LOTA_TPM_H */

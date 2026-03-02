@@ -22,6 +22,42 @@
 
 #include "../src/agent/tpm.h"
 
+static uint32_t tpm_ascii4(char a, char b, char c, char d) {
+  return ((uint32_t)(uint8_t)a << 24) | ((uint32_t)(uint8_t)b << 16) |
+         ((uint32_t)(uint8_t)c << 8) | (uint32_t)(uint8_t)d;
+}
+
+static int mock_prop_reader_swtpm(struct tpm_context *ctx, TPM2_PT prop,
+                                  uint32_t *out_val) {
+  (void)ctx;
+  if (!out_val)
+    return -EINVAL;
+
+  switch (prop) {
+  case TPM2_PT_MANUFACTURER:
+    *out_val = tpm_ascii4('I', 'F', 'X', '\0');
+    return 0;
+  case TPM2_PT_FIRMWARE_VERSION_1:
+    *out_val = 0x00010000;
+    return 0;
+  case TPM2_PT_FIRMWARE_VERSION_2:
+    *out_val = 0x00000001;
+    return 0;
+  case TPM2_PT_VENDOR_STRING_1:
+    *out_val = tpm_ascii4('S', 'W', 'T', 'P');
+    return 0;
+  case TPM2_PT_VENDOR_STRING_2:
+    *out_val = tpm_ascii4('M', ' ', ' ', ' ');
+    return 0;
+  case TPM2_PT_VENDOR_STRING_3:
+  case TPM2_PT_VENDOR_STRING_4:
+    *out_val = 0;
+    return 0;
+  default:
+    return -EINVAL;
+  }
+}
+
 static int tests_run;
 static int tests_passed;
 
@@ -52,7 +88,8 @@ static void setup_tmp_dir(void) {
 static void cleanup_tmp_dir(void) {
   char cmd[256];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
-  int ret = system(cmd); (void)ret;
+  int ret = system(cmd);
+  (void)ret;
 }
 
 /*
@@ -184,7 +221,10 @@ static void test_metadata_bad_magic(void) {
     FAIL("cannot create test file");
     return;
   }
-  { ssize_t wr_ = write(fd, &bad, sizeof(bad)); (void)wr_; }
+  {
+    ssize_t wr_ = write(fd, &bad, sizeof(bad));
+    (void)wr_;
+  }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);
@@ -220,7 +260,10 @@ static void test_metadata_bad_version(void) {
     FAIL("cannot create test file");
     return;
   }
-  { ssize_t wr_ = write(fd, &bad, sizeof(bad)); (void)wr_; }
+  {
+    ssize_t wr_ = write(fd, &bad, sizeof(bad));
+    (void)wr_;
+  }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);
@@ -538,7 +581,10 @@ static void test_metadata_truncated(void) {
     return;
   }
   /* write only 8 bytes, far less than sizeof(aik_metadata) */
-  { ssize_t wr_ = write(fd, "AIKM\x01\x00\x00\x00", 8); (void)wr_; }
+  {
+    ssize_t wr_ = write(fd, "AIKM\x01\x00\x00\x00", 8);
+    (void)wr_;
+  }
   close(fd);
 
   ret = tpm_aik_load_metadata(&ctx);
@@ -608,6 +654,27 @@ static void test_get_prev_public_small_buf(void) {
   PASS();
 }
 
+static void test_provision_rejects_swtpm_vendor(void) {
+  struct tpm_context ctx;
+  int ret;
+
+  TEST("provision rejects software TPM vendor strings");
+  make_ctx(&ctx);
+
+  tpm_test_set_prop_reader(mock_prop_reader_swtpm);
+  ret = tpm_provision_aik(&ctx);
+  tpm_test_reset_prop_reader();
+
+  if (ret != -EACCES) {
+    char ebuf[64];
+    snprintf(ebuf, sizeof(ebuf), "expected -EACCES, got %d", ret);
+    FAIL(ebuf);
+    return;
+  }
+
+  PASS();
+}
+
 int main(void) {
   printf("\n=== AIK Rotation Tests ===\n\n");
 
@@ -631,6 +698,7 @@ int main(void) {
   test_metadata_truncated();
   test_needs_rotation_boundary();
   test_get_prev_public_small_buf();
+  test_provision_rejects_swtpm_vendor();
 
   cleanup_tmp_dir();
 

@@ -36,6 +36,18 @@
 /* Read buffer size for file hashing */
 #define HASH_READ_BUF_SIZE (64 * 1024)
 
+static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
+                        uint32_t *out_val);
+
+typedef int (*tpm_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
+                                  uint32_t *out_val);
+static tpm_prop_reader_fn g_tpm_prop_reader = tpm_get_prop;
+
+static int tpm_read_prop(struct tpm_context *ctx, TPM2_PT prop,
+                         uint32_t *out_val) {
+  return g_tpm_prop_reader(ctx, prop, out_val);
+}
+
 /*
  * Helper: Convert TSS2 return code to errno
  */
@@ -374,6 +386,76 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle) {
   return 0;
 }
 
+static void tpm_prop_u32_to_ascii(uint32_t prop, char out[4]) {
+  out[0] = (char)((prop >> 24) & 0xFF);
+  out[1] = (char)((prop >> 16) & 0xFF);
+  out[2] = (char)((prop >> 8) & 0xFF);
+  out[3] = (char)(prop & 0xFF);
+}
+
+static int tpm_verify_device_identity(struct tpm_context *ctx) {
+  uint32_t manufacturer = 0;
+  uint32_t fw1 = 0;
+  uint32_t fw2 = 0;
+  uint32_t vendor_parts[4] = {0};
+  char vendor[17] = {0};
+  char vendor_upper[17] = {0};
+  int ret;
+
+  ret = tpm_read_prop(ctx, TPM2_PT_MANUFACTURER, &manufacturer);
+  if (ret < 0)
+    return ret;
+
+  ret = tpm_read_prop(ctx, TPM2_PT_FIRMWARE_VERSION_1, &fw1);
+  if (ret < 0)
+    return ret;
+
+  ret = tpm_read_prop(ctx, TPM2_PT_FIRMWARE_VERSION_2, &fw2);
+  if (ret < 0)
+    return ret;
+
+  if (manufacturer == 0 || (fw1 == 0 && fw2 == 0))
+    return -EACCES;
+
+  ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_1, &vendor_parts[0]);
+  if (ret < 0)
+    return ret;
+  ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_2, &vendor_parts[1]);
+  if (ret < 0)
+    return ret;
+  ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_3, &vendor_parts[2]);
+  if (ret < 0)
+    return ret;
+  ret = tpm_read_prop(ctx, TPM2_PT_VENDOR_STRING_4, &vendor_parts[3]);
+  if (ret < 0)
+    return ret;
+
+  for (int i = 0; i < 4; i++)
+    tpm_prop_u32_to_ascii(vendor_parts[i], vendor + (i * 4));
+
+  for (int i = 0; i < 16; i++) {
+    char c = vendor[i];
+    if (c >= 'a' && c <= 'z')
+      c = (char)(c - ('a' - 'A'));
+    vendor_upper[i] = c;
+  }
+
+  if (strstr(vendor_upper, "SWTPM") || strstr(vendor_upper, "SW TPM") ||
+      strstr(vendor_upper, "SIMULATOR") || strstr(vendor_upper, "QEMU")) {
+    return -EACCES;
+  }
+
+  return 0;
+}
+
+#ifdef LOTA_TPM_TESTING
+void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader) {
+  g_tpm_prop_reader = reader ? reader : tpm_get_prop;
+}
+
+void tpm_test_reset_prop_reader(void) { g_tpm_prop_reader = tpm_get_prop; }
+#endif
+
 int tpm_provision_aik(struct tpm_context *ctx) {
   TSS2_RC rc;
   int ret;
@@ -382,6 +464,10 @@ int tpm_provision_aik(struct tpm_context *ctx) {
 
   if (!ctx || !ctx->initialized)
     return -EINVAL;
+
+  ret = tpm_verify_device_identity(ctx);
+  if (ret < 0)
+    return ret;
 
   ret = aik_exists(ctx, NULL);
   if (ret < 0)

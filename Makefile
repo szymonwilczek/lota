@@ -341,7 +341,7 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
+	$(CC) $(CFLAGS) -DLOTA_TPM_TESTING -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
