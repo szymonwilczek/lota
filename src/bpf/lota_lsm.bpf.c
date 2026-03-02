@@ -68,6 +68,14 @@ char LICENSE[] SEC("license") = "GPL";
 #define MS_BIND 4096
 #endif
 
+#ifdef LOTA_BPF_DEBUG_PRINTK
+#define lota_bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
+#else
+#define lota_bpf_debug(fmt, ...)                                               \
+  do {                                                                         \
+  } while (0)
+#endif
+
 /*
  * Executable page protection bit.
  */
@@ -249,12 +257,12 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
     return 0;
 
   if (sig_enforce != 1) {
-    bpf_printk("LOTA: BLOCKING module load: sig_enforce=%d", sig_enforce);
+    lota_bpf_debug("LOTA: BLOCKING module load: sig_enforce=%d", sig_enforce);
     return 0;
   }
 
   if (!cfg->lockdown_addr) {
-    bpf_printk("LOTA: BLOCKING module load: lockdown symbol unavailable");
+    lota_bpf_debug("LOTA: BLOCKING module load: lockdown symbol unavailable");
     return 0;
   }
 
@@ -263,7 +271,7 @@ static __always_inline int integrity_baseline_ok(struct integrity_data *cfg) {
     return 0;
 
   if (lockdown <= 0) {
-    bpf_printk("LOTA: BLOCKING module load: lockdown=%d", lockdown);
+    lota_bpf_debug("LOTA: BLOCKING module load: lockdown=%d", lockdown);
     return 0;
   }
 
@@ -630,7 +638,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
   uint32_t key = 0;
   uint32_t mode = get_mode();
 
-  bpf_printk("LOTA: kernel_read_file id=%d mode=%d", id, mode);
+  lota_bpf_debug("LOTA: kernel_read_file id=%d mode=%d", id, mode);
 
   /*
    * Filter relevant IDs.
@@ -669,14 +677,16 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
     /* firmware is always strict in ENFORCE: require fs-verity allowlist */
     if (id == READING_FIRMWARE) {
       if (!is_verity_allowed(file)) {
-        bpf_printk("LOTA: BLOCKING firmware load: no allowed fs-verity digest");
+        lota_bpf_debug(
+            "LOTA: BLOCKING firmware load: no allowed fs-verity digest");
         blocked = 1;
       }
     }
 
     if (id == READING_MODULE && get_config(LOTA_CFG_STRICT_MODULES)) {
       if (!is_verity_allowed(file)) {
-        bpf_printk("LOTA: BLOCKING module load: no allowed fs-verity digest");
+        lota_bpf_debug(
+            "LOTA: BLOCKING module load: no allowed fs-verity digest");
         blocked = 1;
       }
     }
@@ -752,7 +762,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
   u32 mode;
   int blocked = 0;
 
-  bpf_printk("LOTA: kernel_load_data id=%d", id);
+  lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
 
   if (id != LOADING_FIRMWARE && id != LOADING_MODULE &&
       id != LOADING_KEXEC_IMAGE && id != LOADING_KEXEC_INITRAMFS &&
