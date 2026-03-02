@@ -781,6 +781,10 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     if (id == LOADING_FIRMWARE)
       blocked = 1;
 
+    /* memory-only module loads bypass file fs-verity checks -> deny in strict */
+    if (id == LOADING_MODULE && get_config(LOTA_CFG_STRICT_MODULES))
+      blocked = 1;
+
     /* align with kernel_read_file: strict-modules must not block policy load */
     if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS) {
       if (get_config(LOTA_CFG_STRICT_MODULES))
