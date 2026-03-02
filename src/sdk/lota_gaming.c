@@ -420,20 +420,12 @@ static int try_connect_path(const char *path, int timeout_ms) {
  * Build the list of candidate socket paths for autodiscovery.
  *
  * Discovery order:
- *   1. LOTA_IPC_SOCKET env var (explicit override)
- *   2. /run/lota/lota.sock (primary agent socket)
- *   3. $XDG_RUNTIME_DIR/lota/lota.sock (container-accessible)
+ *   1. /run/lota/lota.sock (primary agent socket)
+ *   2. $XDG_RUNTIME_DIR/lota/lota.sock (container-accessible)
  */
 static int build_discovery_paths(char paths[][PATH_MAX], int max) {
   const char *env;
   int n = 0;
-
-  /* explicit override via environment */
-  env = getenv("LOTA_IPC_SOCKET");
-  if (env && env[0] && n < max) {
-    snprintf(paths[n], PATH_MAX, "%s", env);
-    n++;
-  }
 
   /* primary path */
   if (n < max) {
