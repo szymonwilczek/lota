@@ -400,6 +400,32 @@ static __always_inline int is_lota_agent_task(struct task_struct *task) {
   return task_start_ticks && task_start_ticks == agent->start_time_ticks;
 }
 
+static __always_inline int
+identity_matches_task(const struct lota_identity_entry *id,
+                      struct task_struct *task) {
+  struct task_struct *leader;
+  u32 task_tgid;
+  u64 task_start_ticks;
+
+  if (!id || !task)
+    return 0;
+
+  if (id->tgid == 0 || id->start_time_ticks == 0)
+    return 0;
+
+  task_tgid = BPF_CORE_READ(task, tgid);
+  if (task_tgid != id->tgid)
+    return 0;
+
+  leader = BPF_CORE_READ(task, group_leader);
+  if (leader)
+    task_start_ticks = get_task_start_ticks(leader);
+  else
+    task_start_ticks = get_task_start_ticks(task);
+
+  return task_start_ticks && task_start_ticks == id->start_time_ticks;
+}
+
 static __always_inline int is_lota_managed_map(struct bpf_map *map) {
   char name[16] = {};
 
@@ -1451,6 +1477,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
  * ====================================================================== */
 SEC("lsm/task_free")
 int BPF_PROG(lota_task_free, struct task_struct *task) {
+  u32 key = 0;
+  struct lota_identity_entry *admin;
+  struct lota_identity_entry *agent;
   u32 pid;
   u32 tgid;
 
@@ -1462,6 +1491,16 @@ int BPF_PROG(lota_task_free, struct task_struct *task) {
 
   if (pid != tgid)
     return 0;
+
+  admin = bpf_map_lookup_elem(&bpf_admin_tgid, &key);
+  if (identity_matches_task(admin, task))
+    bpf_map_update_elem(&bpf_admin_tgid, &key, &(struct lota_identity_entry){0},
+                        BPF_ANY);
+
+  agent = bpf_map_lookup_elem(&lota_agent_identity, &key);
+  if (identity_matches_task(agent, task))
+    bpf_map_update_elem(&lota_agent_identity, &key,
+                        &(struct lota_identity_entry){0}, BPF_ANY);
 
   bpf_map_delete_elem(&protected_pids, &tgid);
   return 0;
