@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/types.h>
 #include <time.h>
 
 struct tpm_context;

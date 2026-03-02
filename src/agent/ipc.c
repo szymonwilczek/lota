@@ -176,9 +176,10 @@ static int check_protect_pid_rate_limit(uid_t uid) {
  */
 struct ipc_client {
   int fd;
-  uid_t peer_uid; /* authenticated peer UID via SO_PEERCRED */
-  gid_t peer_gid; /* authenticated peer GID */
-  pid_t peer_pid; /* authenticated peer PID */
+  uid_t peer_uid;                 /* authenticated peer UID via SO_PEERCRED */
+  gid_t peer_gid;                 /* authenticated peer GID */
+  pid_t peer_pid;                 /* authenticated peer PID */
+  uint64_t peer_start_time_ticks; /* /proc/<pid>/stat field 22 */
   uint8_t recv_buf[LOTA_IPC_REQUEST_SIZE + LOTA_IPC_MAX_PAYLOAD];
   size_t recv_len;
   uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
@@ -190,6 +191,122 @@ struct ipc_client {
   uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
   struct ipc_client *next;
 };
+
+static int read_pid_start_time_ticks(pid_t pid, uint64_t *start_time_ticks) {
+  char path[64];
+  FILE *fp;
+  char line[4096];
+  char *rparen;
+  char *field;
+  char *saveptr = NULL;
+  int field_index = 3;
+
+  if (!start_time_ticks || pid <= 0)
+    return -EINVAL;
+
+  snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+  fp = fopen(path, "r");
+  if (!fp)
+    return -errno;
+
+  if (!fgets(line, sizeof(line), fp)) {
+    int err = ferror(fp) ? -errno : -EIO;
+    fclose(fp);
+    return err;
+  }
+  fclose(fp);
+
+  rparen = strrchr(line, ')');
+  if (!rparen)
+    return -EINVAL;
+
+  field = rparen + 2;
+  if (*field == '\0')
+    return -EINVAL;
+
+  for (char *tok = strtok_r(field, " ", &saveptr); tok;
+       tok = strtok_r(NULL, " ", &saveptr), field_index++) {
+    if (field_index == 22) {
+      char *end = NULL;
+      unsigned long long val;
+
+      errno = 0;
+      val = strtoull(tok, &end, 10);
+      if (errno != 0 || end == tok || (end && *end != '\0'))
+        return -EINVAL;
+
+      *start_time_ticks = (uint64_t)val;
+      return 0;
+    }
+  }
+
+  return -EINVAL;
+}
+
+static int read_pid_exe_path(pid_t pid, char *out, size_t out_len) {
+  char proc_path[64];
+  ssize_t n;
+
+  if (!out || out_len < 2 || pid <= 0)
+    return -EINVAL;
+
+  snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", (int)pid);
+  n = readlink(proc_path, out, out_len - 1);
+  if (n < 0)
+    return -errno;
+  if (n == 0)
+    return -EINVAL;
+
+  out[n] = '\0';
+
+  /* refuse inaccessible/deleted executable targets */
+  if (strstr(out, " (deleted)") != NULL)
+    return -ENOENT;
+
+  if (out[0] != '/')
+    return -EINVAL;
+
+  return 0;
+}
+
+static int is_allowed_verity_digest(const struct lota_verity_digest_key *key) {
+  if (!key || key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+    return 0;
+
+  if (!g_agent.policy_verity_digests || g_agent.policy_verity_digest_count <= 0)
+    return 0;
+
+  for (int i = 0; i < g_agent.policy_verity_digest_count; i++) {
+    const struct lota_verity_digest_key *allowed =
+        &g_agent.policy_verity_digests[i];
+    if (!allowed || allowed->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+      continue;
+    if (CRYPTO_memcmp(allowed->digest, key->digest,
+                      LOTA_VERITY_DIGEST_SHA512_SIZE) == 0)
+      return 1;
+  }
+
+  return 0;
+}
+
+static int ipc_client_has_trusted_executable(const struct ipc_client *client) {
+  char exe_path[PATH_MAX];
+  struct lota_verity_digest_key digest = {0};
+  int ret;
+
+  if (!client)
+    return 0;
+
+  ret = read_pid_exe_path(client->peer_pid, exe_path, sizeof(exe_path));
+  if (ret < 0)
+    return 0;
+
+  ret = bpf_loader_measure_verity_digest(exe_path, &digest);
+  if (ret < 0)
+    return 0;
+
+  return is_allowed_verity_digest(&digest);
+}
 
 static uint32_t client_map_hash_fd(int fd) {
   return (uint32_t)fd * 2654435761u;
@@ -430,13 +547,34 @@ static void build_error_response(struct ipc_client *client, uint32_t result) {
 }
 
 /*
- * Privileged IPC commands are allowed only for the same local account that
- * runs the agent process (peer UID authenticated via SO_PEERCRED).
+ * Privileged IPC commands require all of the following:
+ * - same UID as the agent process (SO_PEERCRED authenticated),
+ * - stable PID identity (pid + start_time_ticks still matches),
+ * - executable fs-verity digest present in current policy allowlist.
  */
-static int ipc_client_is_privileged(const struct ipc_client *client) {
-  if (!client)
+static int ipc_client_is_privileged(struct ipc_context *ctx,
+                                    const struct ipc_client *client) {
+  uint64_t current_ticks = 0;
+
+  if (!ctx || !client)
     return 0;
-  return client->peer_uid == geteuid();
+
+  if (client->peer_uid != geteuid())
+    return 0;
+
+  if (client->peer_start_time_ticks == 0)
+    return 0;
+
+  if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
+    return 0;
+
+  if (current_ticks != client->peer_start_time_ticks)
+    return 0;
+
+  if (!ipc_client_has_trusted_executable(client))
+    return 0;
+
+  return 1;
 }
 
 /*
@@ -981,7 +1119,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
   }
 
   /* privileged-only: this mutates enforcement policy */
-  if (!ipc_client_is_privileged(client)) {
+  if (!ipc_client_is_privileged(ctx, client)) {
     lota_warn("%s denied for uid=%d pid=%d",
               add ? "PROTECT_PID" : "UNPROTECT_PID", client->peer_uid,
               client->peer_pid);
@@ -1357,6 +1495,13 @@ static int accept_client(struct ipc_context *ctx, int listen_fd) {
   if (!client) {
     close(fd);
     return -ENOMEM;
+  }
+
+  ret = read_pid_start_time_ticks(cred.pid, &client->peer_start_time_ticks);
+  if (ret < 0) {
+    lota_warn("failed to read peer start_time_ticks for pid=%d: %s", cred.pid,
+              strerror(-ret));
+    client->peer_start_time_ticks = 0;
   }
 
   ev.events = EPOLLIN;
