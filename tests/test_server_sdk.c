@@ -87,7 +87,7 @@ static void write_be32(uint8_t *p, uint32_t v) {
  * Returns allocated buffer, caller must free.
  */
 static uint8_t *build_fake_tpms_attest(const uint8_t *extra_data,
-                                       size_t extra_len,
+                                       size_t extra_len, uint32_t pcr_mask,
                                        const uint8_t *pcr_digest,
                                        size_t pcr_digest_len, size_t *out_len) {
   /* generous buffer */
@@ -126,13 +126,13 @@ static uint8_t *build_fake_tpms_attest(const uint8_t *extra_data,
   /* TPML_PCR_SELECTION: count=1 */
   write_be32(buf + off, 1);
   off += 4;
-  /* TPMS_PCR_SELECTION: hash=SHA-256(0x000B), sizeOfSelect=3, select=PCR0+14 */
+  /* TPMS_PCR_SELECTION: hash=SHA-256(0x000B), sizeOfSelect=3 */
   write_be16(buf + off, 0x000B);
   off += 2;
   buf[off++] = 3;
-  buf[off++] = 0x01; /* PCR 0 */
-  buf[off++] = 0x00;
-  buf[off++] = 0x40; /* PCR 14 */
+  buf[off++] = (uint8_t)(pcr_mask & 0xFF);
+  buf[off++] = (uint8_t)((pcr_mask >> 8) & 0xFF);
+  buf[off++] = (uint8_t)((pcr_mask >> 16) & 0xFF);
 
   /* pcrDigest: TPM2B_DIGEST */
   write_be16(buf + off, (uint16_t)pcr_digest_len);
@@ -233,7 +233,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
     return LOTA_ERR_INVALID_ARG;
   memset(pcr_digest, 0xDD, pcr_digest_len);
   size_t attest_len = 0;
-  uint8_t *attest = build_fake_tpms_attest(exp_nonce, 32, pcr_digest,
+  uint8_t *attest = build_fake_tpms_attest(exp_nonce, 32, pcr_mask, pcr_digest,
                                            pcr_digest_len, &attest_len);
 
   /* sign attest_data */

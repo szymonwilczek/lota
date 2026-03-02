@@ -52,7 +52,7 @@ func main() {
 	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
 
 	// fake TPMS_ATTEST
-	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 	fmt.Printf("[Go] TPMS_ATTEST: %d bytes\n", len(attestData))
 
 	// sign with RSASSA-PKCS1v15
@@ -110,7 +110,7 @@ func main() {
 	fmt.Println("[Go] Done - run C verifier next")
 }
 
-func buildFakeTPMSAttest(extraData []byte, pcrDigest []byte) []byte {
+func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []byte {
 	var b []byte
 
 	// magic (4 bytes, big-endian): TPM_GENERATED_VALUE
@@ -137,7 +137,7 @@ func buildFakeTPMSAttest(extraData []byte, pcrDigest []byte) []byte {
 	b = binary.BigEndian.AppendUint32(b, 1)
 	b = binary.BigEndian.AppendUint16(b, 0x000B)
 	b = append(b, 3)
-	b = append(b, 0x01, 0x00, 0x40) // PCR 0, PCR 14
+	b = append(b, byte(pcrMask), byte(pcrMask>>8), byte(pcrMask>>16))
 
 	// pcrDigest: TPM2B_DIGEST
 	b = binary.BigEndian.AppendUint16(b, uint16(len(pcrDigest)))

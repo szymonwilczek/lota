@@ -16,7 +16,7 @@ import (
 )
 
 // creates a minimal valid TPMS_ATTEST blob with the given extraData (nonce) and PCR digest
-func buildFakeTPMSAttest(extraData []byte, pcrDigest []byte) []byte {
+func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []byte {
 	var buf bytes.Buffer
 
 	// magic (4 bytes, big-endian): TPM_GENERATED_VALUE
@@ -42,10 +42,10 @@ func buildFakeTPMSAttest(extraData []byte, pcrDigest []byte) []byte {
 	// TPMS_QUOTE_INFO:
 	// TPML_PCR_SELECTION: count=1
 	binary.Write(&buf, binary.BigEndian, uint32(1))
-	// TPMS_PCR_SELECTION: hash=SHA-256(0x000B), sizeOfSelect=3, select=PCR0+14
+	// TPMS_PCR_SELECTION: hash=SHA-256(0x000B), sizeOfSelect=3, select from pcrMask
 	binary.Write(&buf, binary.BigEndian, uint16(0x000B))
-	buf.WriteByte(3)                    // sizeOfSelect
-	buf.Write([]byte{0x01, 0x00, 0x40}) // PCR 0 and PCR 14
+	buf.WriteByte(3) // sizeOfSelect
+	buf.Write([]byte{byte(pcrMask), byte(pcrMask >> 8), byte(pcrMask >> 16)})
 
 	// pcrDigest (TPM2B_DIGEST)
 	binary.Write(&buf, binary.BigEndian, uint16(len(pcrDigest)))
@@ -78,7 +78,7 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
 
 	// build TPMS_ATTEST with the expected nonce as extraData
-	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	// sign
 	signature := signAttest(t, priv, attestData)
@@ -255,7 +255,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 
 	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
 
-	fullAttest := buildFakeTPMSAttest(expectedNonce[:], bytes.Repeat([]byte{0x42}, 32))
+	fullAttest := buildFakeTPMSAttest(expectedNonce[:], pcrMask, bytes.Repeat([]byte{0x42}, 32))
 	if len(fullAttest) < 2 {
 		t.Fatalf("unexpected fake attest size: %d", len(fullAttest))
 	}
@@ -367,7 +367,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	rand.Read(pcrDigest)
 
 	expectedNonce := computeExpectedNonce(validUntil, flags, 0x4001, nonce, policyDigest, runtimeDigest)
-	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], 0x4001, pcrDigest)
 
 	// sign with PSS
 	hash := sha256.Sum256(attestData)
@@ -409,7 +409,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 	rand.Read(pcrDigest)
 
 	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
-	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	digest := sha512.Sum384(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA384, digest[:])
@@ -446,7 +446,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 	rand.Read(pcrDigest)
 
 	expectedNonce := computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
-	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrDigest)
+	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
 
 	hash := sha256.Sum256(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
@@ -524,14 +524,14 @@ func TestComputeExpectedNonce_Deterministic(t *testing.T) {
 func TestParseTPMSAttest_InvalidMagic(t *testing.T) {
 	data := make([]byte, 64)
 	binary.BigEndian.PutUint32(data[0:4], 0xDEADBEEF)
-	_, _, err := parseTPMSAttest(data)
+	_, _, _, err := parseTPMSAttest(data)
 	if err == nil {
 		t.Fatal("expected error for invalid TPM magic")
 	}
 }
 
 func TestParseTPMSAttest_TooShort(t *testing.T) {
-	_, _, err := parseTPMSAttest([]byte{0x01, 0x02})
+	_, _, _, err := parseTPMSAttest([]byte{0x01, 0x02})
 	if err == nil {
 		t.Fatal("expected error for too-short data")
 	}

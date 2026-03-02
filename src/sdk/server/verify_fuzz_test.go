@@ -105,11 +105,11 @@ func FuzzParseTPMSAttestSDK(f *testing.F) {
 	for i := range extraData {
 		extraData[i] = byte(i + 0x80)
 	}
-	validBlob := buildFakeTPMSAttest(extraData, pcrDigest)
+	validBlob := buildFakeTPMSAttest(extraData, 0x4001, pcrDigest)
 	f.Add(validBlob)
 
 	// seed 2: minimal (empty extraData, empty digest)
-	minBlob := buildFakeTPMSAttest(nil, nil)
+	minBlob := buildFakeTPMSAttest(nil, 0, nil)
 	f.Add(minBlob)
 
 	// seed 3: truncated
@@ -119,7 +119,7 @@ func FuzzParseTPMSAttestSDK(f *testing.F) {
 	f.Add([]byte{0xFF, 0x54, 0x43, 0x47, 0x80, 0x18})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		extra, digest, err := parseTPMSAttest(data)
+		extra, _, digest, err := parseTPMSAttest(data)
 		if err != nil {
 			// on full error, both should be nil
 			if extra != nil || digest != nil {

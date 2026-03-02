@@ -194,10 +194,13 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: %v", ErrSigFail, err)
 	}
 
-	// parse TPMS_ATTEST - extract extraData and PCR digest
-	extraData, pcrDigest, err := parseTPMSAttest(attestData)
+	// parse TPMS_ATTEST - extract extraData, signed PCR selection and PCR digest
+	extraData, quotedPCRMask, pcrDigest, err := parseTPMSAttest(attestData)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAttestParse, err)
+	}
+	if quotedPCRMask != hdr.pcrMask {
+		return nil, fmt.Errorf("%w: pcr_mask header does not match signed quote", ErrNonceFail)
 	}
 
 	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
@@ -275,8 +278,8 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 
 	// try to extract PCR digest from TPMS_ATTEST (best-effort)
 	if hdr.attestSize > 0 {
-		attestData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.attestSize)]
-		_, pcrDigest, err := parseTPMSAttest(attestData)
+		attestData := tokenData[TokenHeaderSize+int(hdr.pidListSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)]
+		_, _, pcrDigest, err := parseTPMSAttest(attestData)
 		if err == nil {
 			claims.PCRDigest = pcrDigest
 		}
@@ -498,10 +501,11 @@ func computeRuntimeProtectDigest(pids []uint32) [32]byte {
 
 // parses a raw TPMS_ATTEST blob and extracts:
 //   - extraData (the nonce embedded by the TPM)
+//   - pcrMask from signed TPML_PCR_SELECTION (only lower 24 PCR bits supported)
 //   - pcrDigest (the PCR composite hash, only for Quote type)
-func parseTPMSAttest(data []byte) (extraData []byte, pcrDigest []byte, err error) {
+func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest []byte, err error) {
 	if len(data) < 10 {
-		return nil, nil, fmt.Errorf("attest data too short: %d bytes", len(data))
+		return nil, 0, nil, fmt.Errorf("attest data too short: %d bytes", len(data))
 	}
 
 	r := bytes.NewReader(data)
@@ -509,100 +513,108 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrDigest []byte, err error
 	// magic (4 bytes, big-endian)
 	var magic uint32
 	if err := binary.Read(r, binary.BigEndian, &magic); err != nil {
-		return nil, nil, fmt.Errorf("read magic: %w", err)
+		return nil, 0, nil, fmt.Errorf("read magic: %w", err)
 	}
 	if magic != tpmGeneratedValue {
-		return nil, nil, fmt.Errorf("%w: got 0x%08X", ErrBadMagic, magic)
+		return nil, 0, nil, fmt.Errorf("%w: got 0x%08X", ErrBadMagic, magic)
 	}
 
 	// type (2 bytes, big-endian)
 	var attestType uint16
 	if err := binary.Read(r, binary.BigEndian, &attestType); err != nil {
-		return nil, nil, fmt.Errorf("read type: %w", err)
+		return nil, 0, nil, fmt.Errorf("read type: %w", err)
 	}
 
 	// qualifiedSigner (TPM2B_NAME: 2-byte size + data)
 	var signerSize uint16
 	if err := binary.Read(r, binary.BigEndian, &signerSize); err != nil {
-		return nil, nil, fmt.Errorf("read signer size: %w", err)
+		return nil, 0, nil, fmt.Errorf("read signer size: %w", err)
 	}
 	if int(signerSize) > r.Len() {
-		return nil, nil, fmt.Errorf("qualifiedSigner truncated: need %d bytes, have %d", signerSize, r.Len())
+		return nil, 0, nil, fmt.Errorf("qualifiedSigner truncated: need %d bytes, have %d", signerSize, r.Len())
 	}
 	signerBuf := make([]byte, signerSize)
 	if _, err := io.ReadFull(r, signerBuf); err != nil {
-		return nil, nil, fmt.Errorf("read signer: %w", err)
+		return nil, 0, nil, fmt.Errorf("read signer: %w", err)
 	}
 
 	// extraData (TPM2B_DATA: 2-byte size + data)
 	var extraSize uint16
 	if err := binary.Read(r, binary.BigEndian, &extraSize); err != nil {
-		return nil, nil, fmt.Errorf("read extraData size: %w", err)
+		return nil, 0, nil, fmt.Errorf("read extraData size: %w", err)
 	}
 	if int(extraSize) > r.Len() {
-		return nil, nil, fmt.Errorf("extraData truncated: need %d bytes, have %d", extraSize, r.Len())
+		return nil, 0, nil, fmt.Errorf("extraData truncated: need %d bytes, have %d", extraSize, r.Len())
 	}
 	extraData = make([]byte, extraSize)
 	if _, err := io.ReadFull(r, extraData); err != nil {
-		return nil, nil, fmt.Errorf("read extraData: %w", err)
+		return nil, 0, nil, fmt.Errorf("read extraData: %w", err)
 	}
 
 	// clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 bytes
 	clockBuf := make([]byte, 17)
 	if _, err := io.ReadFull(r, clockBuf); err != nil {
-		return nil, nil, fmt.Errorf("read clockInfo: %w", err)
+		return nil, 0, nil, fmt.Errorf("read clockInfo: %w", err)
 	}
 
 	// firmwareVersion (8 bytes)
 	fwBuf := make([]byte, 8)
 	if _, err := io.ReadFull(r, fwBuf); err != nil {
-		return nil, nil, fmt.Errorf("read firmwareVersion: %w", err)
+		return nil, 0, nil, fmt.Errorf("read firmwareVersion: %w", err)
 	}
 
 	if attestType == tpmSTAttestQuote {
 		// TPML_PCR_SELECTION: count(4) + array
 		var pcrSelCount uint32
 		if err := binary.Read(r, binary.BigEndian, &pcrSelCount); err != nil {
-			return extraData, nil, fmt.Errorf("read pcr selection count: %w", err)
+			return extraData, 0, nil, fmt.Errorf("read pcr selection count: %w", err)
 		}
 
 		if pcrSelCount > 16 {
-			return extraData, nil, fmt.Errorf("pcr selection count too large: %d", pcrSelCount)
+			return extraData, 0, nil, fmt.Errorf("pcr selection count too large: %d", pcrSelCount)
 		}
 
 		for i := uint32(0); i < pcrSelCount; i++ {
 			var hashAlg uint16
 			var selectSize uint8
 			if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
-				return extraData, nil, fmt.Errorf("read pcr selection hash alg: %w", err)
+				return extraData, 0, nil, fmt.Errorf("read pcr selection hash alg: %w", err)
 			}
 			if err := binary.Read(r, binary.BigEndian, &selectSize); err != nil {
-				return extraData, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
+				return extraData, 0, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
 			}
 			if int(selectSize) > r.Len() {
-				return extraData, nil, fmt.Errorf("pcr selection truncated: need %d bytes, have %d", selectSize, r.Len())
+				return extraData, 0, nil, fmt.Errorf("pcr selection truncated: need %d bytes, have %d", selectSize, r.Len())
 			}
 			selectBuf := make([]byte, selectSize)
 			if _, err := io.ReadFull(r, selectBuf); err != nil {
-				return extraData, nil, fmt.Errorf("read pcr selection: %w", err)
+				return extraData, 0, nil, fmt.Errorf("read pcr selection: %w", err)
+			}
+
+			for j, sel := range selectBuf {
+				if j < 3 {
+					pcrMask |= uint32(sel) << (8 * j)
+				} else if sel != 0 {
+					return extraData, 0, nil, fmt.Errorf("pcr selection contains unsupported PCR index >= 24")
+				}
 			}
 		}
 
 		// pcrDigest (TPM2B_DIGEST: 2-byte size + data)
 		var digestSize uint16
 		if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
-			return extraData, nil, fmt.Errorf("read pcrDigest size: %w", err)
+			return extraData, 0, nil, fmt.Errorf("read pcrDigest size: %w", err)
 		}
 		if int(digestSize) > r.Len() {
-			return extraData, nil, fmt.Errorf("pcrDigest truncated: need %d bytes, have %d", digestSize, r.Len())
+			return extraData, 0, nil, fmt.Errorf("pcrDigest truncated: need %d bytes, have %d", digestSize, r.Len())
 		}
 		pcrDigest = make([]byte, digestSize)
 		if _, err := io.ReadFull(r, pcrDigest); err != nil {
-			return extraData, nil, fmt.Errorf("read pcrDigest: %w", err)
+			return extraData, 0, nil, fmt.Errorf("read pcrDigest: %w", err)
 		}
 	}
 
-	return extraData, pcrDigest, nil
+	return extraData, pcrMask, pcrDigest, nil
 }
 
 // parses a DER-encoded RSA public key in PKIX/SPKI format (SubjectPublicKeyInfo)

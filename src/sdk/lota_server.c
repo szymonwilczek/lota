@@ -123,8 +123,8 @@ static uint64_t read_le64(const uint8_t *p) {
  */
 static int parse_tpms_attest(const uint8_t *data, size_t len,
                              const uint8_t **extra_data, size_t *extra_data_len,
-                             const uint8_t **pcr_digest,
-                             size_t *pcr_digest_len) {
+                             const uint8_t **pcr_digest, size_t *pcr_digest_len,
+                             uint32_t *pcr_mask_out) {
   size_t off = 0;
 
   /* minimum: magic(4) + type(2) + signer_size(2) + extra_size(2) */
@@ -175,6 +175,7 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
   off += 8;
 
   if (type == TPM_ST_ATTEST_QUOTE) {
+    uint32_t parsed_pcr_mask = 0;
     /* TPML_PCR_SELECTION: count(4) + array */
     if (off + 4 > len)
       return -1;
@@ -194,6 +195,17 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
       off += 1;
       if (off + select_size > len)
         return -1;
+
+      for (uint8_t j = 0; j < select_size; j++) {
+        uint8_t sel = data[off + j];
+
+        if (j < 3) {
+          parsed_pcr_mask |= ((uint32_t)sel) << (8U * j);
+        } else if (sel != 0) {
+          /* Cannot represent PCR >= 24 in current wire format. */
+          return -1;
+        }
+      }
       off += select_size;
     }
 
@@ -212,12 +224,16 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
       *pcr_digest = data + off;
     if (pcr_digest_len)
       *pcr_digest_len = digest_size;
+    if (pcr_mask_out)
+      *pcr_mask_out = parsed_pcr_mask;
   } else {
     /* Not a quote - no PCR digest */
     if (pcr_digest)
       *pcr_digest = NULL;
     if (pcr_digest_len)
       *pcr_digest_len = 0;
+    if (pcr_mask_out)
+      *pcr_mask_out = 0;
   }
 
   return 0;
@@ -440,12 +456,17 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   size_t extra_data_len = 0;
   const uint8_t *pcr_digest = NULL;
   size_t pcr_digest_len = 0;
+  uint32_t quoted_pcr_mask = 0;
   size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);
 
   if (parse_tpms_attest(attest_data, hdr.attest_size, &extra_data,
-                        &extra_data_len, &pcr_digest, &pcr_digest_len) != 0) {
+                        &extra_data_len, &pcr_digest, &pcr_digest_len,
+                        &quoted_pcr_mask) != 0) {
     return LOTA_SERVER_ERR_ATTEST_PARSE;
   }
+
+  if (quoted_pcr_mask != hdr.pcr_mask)
+    return LOTA_SERVER_ERR_NONCE_FAIL;
 
   /* verify nonce binding: extraData ==
    * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
@@ -542,7 +563,7 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
     size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);
 
     if (parse_tpms_attest(attest_data, hdr.attest_size, NULL, NULL, &pcr_digest,
-                          &pcr_digest_len) == 0) {
+                          &pcr_digest_len, NULL) == 0) {
       if (pcr_digest && pcr_digest_len <= sizeof(claims->pcr_digest) &&
           pcr_digest_len == expected_pcr_digest_len) {
         memcpy(claims->pcr_digest, pcr_digest, pcr_digest_len);
