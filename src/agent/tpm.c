@@ -213,10 +213,12 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
     return -ENODATA;
   }
 
-  size_t copy_size = pcr_values->digests[0].size;
-  if (copy_size > LOTA_HASH_SIZE)
-    copy_size = LOTA_HASH_SIZE;
-  memcpy(value, pcr_values->digests[0].buffer, copy_size);
+  if (pcr_values->digests[0].size != LOTA_HASH_SIZE) {
+    Esys_Free(pcr_values);
+    Esys_Free(pcr_selection_out);
+    return -EIO;
+  }
+  memcpy(value, pcr_values->digests[0].buffer, LOTA_HASH_SIZE);
 
   /* TPM-allocated memory */
   Esys_Free(pcr_values);
@@ -279,10 +281,12 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
       return -EIO;
     }
 
-    size_t copy_size = pcr_values->digests[digest_idx].size;
-    if (copy_size > LOTA_HASH_SIZE)
-      copy_size = LOTA_HASH_SIZE;
-    memcpy(values[i], pcr_values->digests[digest_idx].buffer, copy_size);
+    if (pcr_values->digests[digest_idx].size != LOTA_HASH_SIZE) {
+      Esys_Free(pcr_values);
+      Esys_Free(pcr_selection_out);
+      return -EIO;
+    }
+    memcpy(values[i], pcr_values->digests[digest_idx].buffer, LOTA_HASH_SIZE);
     digest_idx++;
   }
 
