@@ -22,6 +22,7 @@
 #include <openssl/encoder.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
+#include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
@@ -38,6 +39,12 @@
 
 static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
                         uint32_t *out_val);
+static int tpm_aik_load_auth(struct tpm_context *ctx);
+static int tpm_aik_save_auth(struct tpm_context *ctx,
+                             const uint8_t auth[TPM_AIK_AUTH_SIZE]);
+static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
+static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
+                                         int had_existing_aik);
 
 typedef int (*tpm_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
                                   uint32_t *out_val);
@@ -85,6 +92,8 @@ int tpm_init(struct tpm_context *ctx) {
   ctx->initialized = false;
   memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
   ctx->aik_meta_loaded = false;
+  memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
+  ctx->aik_auth_loaded = false;
   memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
   ctx->prev_aik_public_size = 0;
   ctx->grace_deadline = 0;
@@ -143,6 +152,9 @@ void tpm_cleanup(struct tpm_context *ctx) {
     free(ctx->tcti_ctx);
     ctx->tcti_ctx = NULL;
   }
+
+  memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
+  ctx->aik_auth_loaded = false;
 
   ctx->initialized = false;
 }
@@ -314,7 +326,8 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
  *
  * Returns: 0 on success, negative errno on failure
  */
-static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle) {
+static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
+                              const uint8_t aik_auth[TPM_AIK_AUTH_SIZE]) {
   TSS2_RC rc;
   TPM2B_PUBLIC *out_public = NULL;
   TPM2B_CREATION_DATA *creation_data = NULL;
@@ -362,10 +375,14 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle) {
       .size = 0,
       .sensitive =
           {
-              .userAuth = {.size = 0}, /* empty auth */
+              .userAuth = {.size = TPM_AIK_AUTH_SIZE},
               .data = {.size = 0},
           },
   };
+  if (!aik_auth)
+    return -EINVAL;
+
+  memcpy(in_sensitive.sensitive.userAuth.buffer, aik_auth, TPM_AIK_AUTH_SIZE);
 
   TPM2B_DATA outside_info = {.size = 0};
   TPML_PCR_SELECTION creation_pcr = {.count = 0};
@@ -457,10 +474,7 @@ void tpm_test_reset_prop_reader(void) { g_tpm_prop_reader = tpm_get_prop; }
 #endif
 
 int tpm_provision_aik(struct tpm_context *ctx) {
-  TSS2_RC rc;
   int ret;
-  ESYS_TR primary_handle = ESYS_TR_NONE;
-  ESYS_TR persistent_handle = ESYS_TR_NONE;
 
   if (!ctx || !ctx->initialized)
     return -EINVAL;
@@ -472,32 +486,18 @@ int tpm_provision_aik(struct tpm_context *ctx) {
   ret = aik_exists(ctx, NULL);
   if (ret < 0)
     return ret;
+
   if (ret == 1) {
-    return 0;
+    /* existing key is accepted only when its non-empty auth is present */
+    ret = tpm_aik_load_auth(ctx);
+    if (ret == 0)
+      return 0;
+
+    /* missing/corrupt auth means the key is not safely usable */
+    return tpm_aik_reprovision_with_auth(ctx, 1);
   }
 
-  /*
-   * Create primary key under Owner Hierarchy.
-   * Owner hierarchy allows unrestricted use of signing keys.
-   */
-  ret = create_aik_primary(ctx, &primary_handle);
-  if (ret < 0)
-    return ret;
-
-  /*
-   * Make key persistent at ctx->aik_handle.
-   * Persistent keys survive TPM reset and power cycles.
-   */
-  rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, primary_handle,
-                         ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                         ctx->aik_handle, &persistent_handle);
-
-  Esys_FlushContext(ctx->esys_ctx, primary_handle);
-
-  if (rc != TSS2_RC_SUCCESS)
-    return tss2_rc_to_errno(rc);
-
-  return 0;
+  return tpm_aik_reprovision_with_auth(ctx, 0);
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
@@ -523,12 +523,15 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   if (ret == 0)
     return -ENOKEY;
 
-  /*
-   * Set empty auth value for the AIK.
-   * LOTA AIK was created with empty userAuth.
-   */
+  if (!ctx->aik_auth_loaded) {
+    ret = tpm_aik_load_auth(ctx);
+    if (ret < 0)
+      return ret;
+  }
+
   {
-    TPM2B_AUTH auth_value = {.size = 0};
+    TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
+    memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
     rc = Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value);
     if (rc != TSS2_RC_SUCCESS)
       return tss2_rc_to_errno(rc);
@@ -538,48 +541,31 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   response->pcr_mask = pcr_mask;
   response->hash_alg = TPM_HASH_ALG;
 
-  /* current PCR values */
   ret = tpm_read_pcrs_batch(ctx, pcr_mask, response->pcr_values);
   if (ret < 0)
     return ret;
 
-  /* qualifying data (nonce) */
   qualifying_data.size = LOTA_NONCE_SIZE;
   memcpy(qualifying_data.buffer, nonce, LOTA_NONCE_SIZE);
 
-  /* TPM choose signing scheme based on key */
   in_scheme.scheme = TPM2_ALG_NULL;
 
-  /* PCR selection from mask */
   memset(&pcr_selection, 0, sizeof(pcr_selection));
   pcr_selection.count = 1;
   pcr_selection.pcrSelections[0].hash = TPM_HASH_ALG;
   pcr_selection.pcrSelections[0].sizeofSelect = 3;
 
   for (i = 0; i < LOTA_PCR_COUNT && i < 24; i++) {
-    if (pcr_mask & (1U << i)) {
+    if (pcr_mask & (1U << i))
       pcr_selection.pcrSelections[0].pcrSelect[i / 8] |= (1 << (i % 8));
-    }
   }
 
-  /*
-   * Generate Quote.
-   * TPM signs: TPMS_ATTEST containing:
-   *   - magic (TPM_GENERATED)
-   *   - type (TPM_ST_ATTEST_QUOTE)
-   *   - qualifiedSigner (AIK name)
-   *   - extraData (nonce)
-   *   - clockInfo
-   *   - firmwareVersion
-   *   - quote (PCR selection + digest)
-   */
   rc = Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
                   ESYS_TR_NONE, &qualifying_data, &in_scheme, &pcr_selection,
                   &quoted, &signature);
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
 
-  /* raw attestation data */
   if (quoted->size > LOTA_MAX_ATTEST_SIZE) {
     Esys_Free(quoted);
     Esys_Free(signature);
@@ -587,7 +573,6 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   }
   memcpy(response->attest_data, quoted->attestationData, quoted->size);
   response->attest_size = quoted->size;
-
   response->sig_alg = signature->sigAlg;
 
   if (signature->sigAlg == TPM2_ALG_RSASSA) {
@@ -611,7 +596,6 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
            sig_size);
     response->signature_size = (uint16_t)sig_size;
   } else {
-    /* unknown signature algorithm - reject */
     Esys_Free(quoted);
     Esys_Free(signature);
     return -ENOTSUP;
@@ -1130,6 +1114,230 @@ static int fsync_parent_dir(const char *path) {
   return 0;
 }
 
+static int tpm_aik_auth_path_for_ctx(struct tpm_context *ctx, char *buf,
+                                     size_t buf_len) {
+  const char *meta_path;
+  const char *slash;
+  size_t dir_len;
+
+  if (!ctx || !buf || buf_len == 0)
+    return -EINVAL;
+
+  meta_path = ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+  slash = strrchr(meta_path, '/');
+  if (!slash)
+    return -EINVAL;
+
+  if (slash == meta_path)
+    dir_len = 1;
+  else
+    dir_len = (size_t)(slash - meta_path);
+
+  if (dir_len + 1 + strlen("aik_auth.dat") + 1 > buf_len)
+    return -ENAMETOOLONG;
+
+  memcpy(buf, meta_path, dir_len);
+  buf[dir_len] = '\0';
+
+  if (dir_len > 1)
+    snprintf(buf + dir_len, buf_len - dir_len, "/aik_auth.dat");
+  else
+    snprintf(buf + dir_len, buf_len - dir_len, "aik_auth.dat");
+
+  return 0;
+}
+
+static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]) {
+  int attempt;
+
+  if (!auth)
+    return -EINVAL;
+
+  for (attempt = 0; attempt < 4; attempt++) {
+    if (RAND_bytes(auth, TPM_AIK_AUTH_SIZE) != 1)
+      return -EIO;
+
+    for (size_t i = 0; i < TPM_AIK_AUTH_SIZE; i++) {
+      if (auth[i] != 0)
+        return 0;
+    }
+  }
+
+  return -EIO;
+}
+
+static int tpm_aik_save_auth(struct tpm_context *ctx,
+                             const uint8_t auth[TPM_AIK_AUTH_SIZE]) {
+  char path[PATH_MAX];
+  char tmp[PATH_MAX];
+  int fd;
+  int ret;
+  ssize_t n;
+  struct aik_auth_record rec;
+
+  if (!ctx || !auth)
+    return -EINVAL;
+
+  ret = tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path));
+  if (ret < 0)
+    return ret;
+
+  ret = mkdirs(path, 0755);
+  if (ret < 0)
+    return ret;
+
+  ret = snprintf(tmp, sizeof(tmp), "%s.tmp.XXXXXX", path);
+  if (ret < 0 || (size_t)ret >= sizeof(tmp))
+    return -ENAMETOOLONG;
+
+  fd = mkstemp(tmp);
+  if (fd < 0)
+    return -errno;
+
+  if (fchmod(fd, 0600) != 0) {
+    ret = -errno;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
+
+  memset(&rec, 0, sizeof(rec));
+  rec.magic = htole32(TPM_AIK_AUTH_MAGIC);
+  rec.version = htole32(TPM_AIK_AUTH_VERSION);
+  rec.size = htole16(TPM_AIK_AUTH_SIZE);
+  memcpy(rec.auth, auth, TPM_AIK_AUTH_SIZE);
+
+  n = write(fd, &rec, sizeof(rec));
+  if (n != (ssize_t)sizeof(rec)) {
+    ret = -EIO;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
+
+  if (fsync(fd) != 0) {
+    ret = -errno;
+    close(fd);
+    unlink(tmp);
+    return ret;
+  }
+
+  close(fd);
+
+  if (rename(tmp, path) != 0) {
+    ret = -errno;
+    unlink(tmp);
+    return ret;
+  }
+
+  ret = fsync_parent_dir(path);
+  if (ret < 0)
+    return ret;
+
+  return 0;
+}
+
+static int tpm_aik_load_auth(struct tpm_context *ctx) {
+  char path[PATH_MAX];
+  int fd;
+  ssize_t n;
+  struct aik_auth_record rec;
+  uint16_t sz;
+  int nonzero = 0;
+  int ret;
+
+  if (!ctx)
+    return -EINVAL;
+
+  ret = tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path));
+  if (ret < 0)
+    return ret;
+
+  fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return -errno;
+
+  n = read(fd, &rec, sizeof(rec));
+  close(fd);
+  if (n != (ssize_t)sizeof(rec))
+    return -EIO;
+
+  if (le32toh(rec.magic) != TPM_AIK_AUTH_MAGIC)
+    return -EINVAL;
+  if (le32toh(rec.version) != TPM_AIK_AUTH_VERSION)
+    return -ENOTSUP;
+
+  sz = le16toh(rec.size);
+  if (sz != TPM_AIK_AUTH_SIZE)
+    return -EINVAL;
+
+  for (size_t i = 0; i < TPM_AIK_AUTH_SIZE; i++) {
+    if (rec.auth[i] != 0) {
+      nonzero = 1;
+      break;
+    }
+  }
+  if (!nonzero)
+    return -EKEYREVOKED;
+
+  memcpy(ctx->aik_auth, rec.auth, TPM_AIK_AUTH_SIZE);
+  ctx->aik_auth_loaded = true;
+  return 0;
+}
+
+static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
+                                         int had_existing_aik) {
+  TSS2_RC rc;
+  ESYS_TR old_handle = ESYS_TR_NONE;
+  ESYS_TR primary_handle = ESYS_TR_NONE;
+  ESYS_TR persistent_handle = ESYS_TR_NONE;
+  uint8_t new_auth[TPM_AIK_AUTH_SIZE];
+  int ret;
+
+  if (!ctx || !ctx->initialized)
+    return -EINVAL;
+
+  ret = tpm_aik_generate_auth(new_auth);
+  if (ret < 0)
+    return ret;
+
+  if (had_existing_aik) {
+    ret = aik_exists(ctx, &old_handle);
+    if (ret < 0)
+      return ret;
+
+    if (ret == 1) {
+      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
+                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                             ctx->aik_handle, &persistent_handle);
+      if (rc != TSS2_RC_SUCCESS)
+        return tss2_rc_to_errno(rc);
+      Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
+    }
+  }
+
+  ret = create_aik_primary(ctx, &primary_handle, new_auth);
+  if (ret < 0)
+    return ret;
+
+  rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, primary_handle,
+                         ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                         ctx->aik_handle, &persistent_handle);
+  Esys_FlushContext(ctx->esys_ctx, primary_handle);
+  if (rc != TSS2_RC_SUCCESS)
+    return tss2_rc_to_errno(rc);
+
+  Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
+
+  ret = tpm_aik_save_auth(ctx, new_auth);
+  if (ret < 0)
+    return ret;
+
+  memcpy(ctx->aik_auth, new_auth, TPM_AIK_AUTH_SIZE);
+  ctx->aik_auth_loaded = true;
+  return 0;
+}
+
 int tpm_aik_load_metadata(struct tpm_context *ctx) {
   const char *path;
   int fd;
@@ -1292,20 +1500,17 @@ int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec) {
 
 int tpm_rotate_aik(struct tpm_context *ctx) {
   int ret;
-  ESYS_TR old_handle = ESYS_TR_NONE;
   size_t prev_size = 0;
 
   if (!ctx || !ctx->initialized || !ctx->aik_meta_loaded)
     return -EINVAL;
 
   /* export current AIK public key for grace period */
-  ret = aik_exists(ctx, &old_handle);
+  ret = aik_exists(ctx, NULL);
   if (ret < 0)
     return ret;
 
   if (ret == 1) {
-    ESYS_TR new_transient = ESYS_TR_NONE;
-
     ret = tpm_get_aik_public(ctx, ctx->prev_aik_public,
                              sizeof(ctx->prev_aik_public), &prev_size);
     if (ret < 0) {
@@ -1317,37 +1522,10 @@ int tpm_rotate_aik(struct tpm_context *ctx) {
     }
     ctx->prev_aik_public_size = prev_size;
 
-    /*
-     * create new AIK as transient BEFORE evicting old key
-     */
-    ret = create_aik_primary(ctx, &new_transient);
+    /* reprovision rotates both AIK key material and its userAuth secret */
+    ret = tpm_aik_reprovision_with_auth(ctx, 1);
     if (ret < 0)
       return ret;
-
-    /* evict old persistent handle */
-    {
-      TSS2_RC rc;
-      ESYS_TR out_handle;
-      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
-                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                             ctx->aik_handle, &out_handle);
-      if (rc != TSS2_RC_SUCCESS) {
-        Esys_FlushContext(ctx->esys_ctx, new_transient);
-        return tss2_rc_to_errno(rc);
-      }
-    }
-
-    /* persist new transient key at the same handle */
-    {
-      TSS2_RC rc;
-      ESYS_TR persistent;
-      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, new_transient,
-                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                             ctx->aik_handle, &persistent);
-      Esys_FlushContext(ctx->esys_ctx, new_transient);
-      if (rc != TSS2_RC_SUCCESS)
-        return tss2_rc_to_errno(rc);
-    }
   } else {
     ctx->prev_aik_public_size = 0;
 

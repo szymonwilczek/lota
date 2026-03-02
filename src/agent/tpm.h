@@ -52,6 +52,19 @@ struct tpm_quote_response;
 
 /* Default metadata path (install target creates /var/lib/lota/aiks/) */
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
+#define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
+
+#define TPM_AIK_AUTH_MAGIC 0x41545541 /* "AUTA" */
+#define TPM_AIK_AUTH_VERSION 1
+#define TPM_AIK_AUTH_SIZE 32
+
+struct aik_auth_record {
+  uint32_t magic;
+  uint32_t version;
+  uint16_t size;
+  uint8_t auth[TPM_AIK_AUTH_SIZE];
+  uint8_t _reserved[22];
+} __attribute__((packed));
 
 /*
  * AIK metadata - persisted to disk for tracking rotation state.
@@ -91,6 +104,10 @@ struct tpm_context {
   struct aik_metadata aik_meta;
   bool aik_meta_loaded;
   char aik_meta_path[256];
+
+  /* AIK userAuth loaded from root-only sidecar file */
+  uint8_t aik_auth[TPM_AIK_AUTH_SIZE];
+  bool aik_auth_loaded;
 
   /* Grace period: previous AIK public key kept after rotation */
   uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
