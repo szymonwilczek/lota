@@ -51,11 +51,18 @@ void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus) {
 static struct ipc_context test_ipc;
 
 static void setup_ipc(void) {
+  struct timespec ts;
+  uint64_t now_sec = 0;
+
   memset(&test_ipc, 0, sizeof(test_ipc));
   test_ipc.listen_fd = -1;
   test_ipc.epoll_fd = -1;
-  test_ipc.start_time = time(NULL) - 42; /* 42s uptime */
-  test_ipc.status_flags = 0x0F;          /* attested+tpm+iommu+bpf */
+
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+    now_sec = (uint64_t)ts.tv_sec;
+
+  test_ipc.start_time_sec = (now_sec >= 42) ? (now_sec - 42) : 0;
+  test_ipc.status_flags = 0x0F; /* attested+tpm+iommu+bpf */
   test_ipc.last_attest_time = (uint64_t)time(NULL);
   test_ipc.valid_until = (uint64_t)(time(NULL) + 3600);
   test_ipc.attest_count = 5;

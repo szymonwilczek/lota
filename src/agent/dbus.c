@@ -134,10 +134,17 @@ static int prop_get_version(sd_bus *bus, const char *path,
 static int method_ping(sd_bus_message *msg, void *userdata,
                        sd_bus_error *error) {
   struct dbus_context *ctx = userdata;
+  struct timespec ts;
+  uint64_t now_sec = 0;
   uint64_t uptime;
   (void)error;
 
-  uptime = (uint64_t)(time(NULL) - ctx->ipc->start_time);
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+    now_sec = (uint64_t)ts.tv_sec;
+
+  uptime = (now_sec >= ctx->ipc->start_time_sec)
+               ? (now_sec - ctx->ipc->start_time_sec)
+               : 0;
   return sd_bus_reply_method_return(msg, "tu", uptime, (uint32_t)getpid());
 }
 
