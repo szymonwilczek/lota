@@ -36,20 +36,21 @@ extern "C" {
  *   92      32    runtime_protect_digest
  *                         (SHA-256 over canonical protected PID runtime set)
  *   124     4     protect_pid_count
- *   128     2     pid_list_size  (bytes, must be protect_pid_count * 4)
- *   130     2     attest_size    (TPMS_ATTEST blob size)
- *   132     2     sig_size       (TPM signature size)
- *   134     2     reserved       (must be zero)
+ *   128     8     runtime_protect_epoch (monotonic PID-set mutation id)
+ *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
+ *   138     2     attest_size    (TPMS_ATTEST blob size)
+ *   140     2     sig_size       (TPM signature size)
+ *   142     2     reserved       (must be zero)
  *   ---     ---   --------------------------------
- *   136     var   protected_pids[protect_pid_count] (little-endian uint32)
- *   136+P   var   attest_data[attest_size]
- *   136+P+A var   signature[sig_size]
+ *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
+ *   144+P   var   attest_data[attest_size]
+ *   144+P+A var   signature[sig_size]
  *
- * Maximum token size: 136 + (1024 * 4) + 1024 + 512 = 5768 bytes
+ * Maximum token size: 144 + (1024 * 4) + 1024 + 512 = 5776 bytes
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
-#define LOTA_TOKEN_VERSION 0x0002
-#define LOTA_TOKEN_HEADER_SIZE 136
+#define LOTA_TOKEN_VERSION 0x0003
+#define LOTA_TOKEN_HEADER_SIZE 144
 #define LOTA_TOKEN_MAX_PROTECT_PIDS 1024
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_TOKEN_MAX_SIZE                                                    \
@@ -69,12 +70,13 @@ struct lota_token_wire {
   /* 60    32  policy_digest (SHA-256 over startup enforcement policy) */
   /* 92    32  runtime_protect_digest (canonical runtime protected PID set) */
   /* 124   4   protect_pid_count */
-  /* 128   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
-  /* 130   2   attest_size  (TPMS_ATTEST blob size) */
-  /* 132   2   sig_size     (TPM signature size) */
-  /* 134   2   reserved     (must be zero) */
+  /* 128   8   runtime_protect_epoch */
+  /* 136   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
+  /* 138   2   attest_size  (TPMS_ATTEST blob size) */
+  /* 140   2   sig_size     (TPM signature size) */
+  /* 142   2   reserved     (must be zero) */
   /* ---   --- ----------------------------------- */
-  /* 136   var protected_pids[protect_pid_count] */
+  /* 144   var protected_pids[protect_pid_count] */
   /* 136+P var attest_data[attest_size] */
   /* ...   var signature[sig_size] */
 
@@ -90,6 +92,7 @@ struct lota_token_wire {
   uint8_t policy_digest[32];
   uint8_t runtime_protect_digest[32];
   uint32_t protect_pid_count;
+  uint64_t runtime_protect_epoch;
   uint16_t pid_list_size;
   uint16_t attest_size;
   uint16_t sig_size;

@@ -87,6 +87,7 @@ struct lota_server_claims {
   uint32_t pcr_mask;         /* PCRs included in TPM quote */
   uint8_t policy_digest[32]; /* SHA-256 over startup enforcement policy */
   uint8_t runtime_protect_digest[32];
+  uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
   uint32_t protect_pid_count;
   uint8_t pcr_digest[LOTA_SERVER_MAX_PCR_DIGEST_SIZE];
   size_t pcr_digest_len; /* Actual length of pcr_digest (0 if absent) */

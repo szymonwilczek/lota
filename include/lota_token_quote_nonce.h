@@ -8,7 +8,8 @@
 // Scheme:
 //   token_quote_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE ||
 //                              client_nonce || policy_digest ||
-//                              runtime_protect_digest)
+//                              runtime_protect_digest ||
+//                              runtime_protect_epoch_LE)
 //
 // This binds TPMS_ATTEST.extraData (quote nonce) to the token's wire-format
 // metadata and the client's challenge nonce.
@@ -48,18 +49,20 @@ static inline int lota_compute_token_quote_nonce(
     const uint8_t client_nonce[LOTA_TOKEN_NONCE_SIZE],
     const uint8_t policy_digest[LOTA_TOKEN_NONCE_SIZE],
     const uint8_t runtime_protect_digest[LOTA_TOKEN_NONCE_SIZE],
-    uint8_t out_nonce[LOTA_TOKEN_NONCE_SIZE]) {
+    uint64_t runtime_protect_epoch, uint8_t out_nonce[LOTA_TOKEN_NONCE_SIZE]) {
   EVP_MD_CTX *mdctx = NULL;
   unsigned int len = 0;
-  uint8_t le_buf[16];
+  uint8_t prefix_le[16];
+  uint8_t epoch_le[8];
   int ret = 0;
 
   if (!client_nonce || !policy_digest || !runtime_protect_digest || !out_nonce)
     return -EINVAL;
 
-  lota__write_le64(le_buf, valid_until);
-  lota__write_le32(le_buf + 8, flags);
-  lota__write_le32(le_buf + 12, pcr_mask);
+  lota__write_le64(prefix_le, valid_until);
+  lota__write_le32(prefix_le + 8, flags);
+  lota__write_le32(prefix_le + 12, pcr_mask);
+  lota__write_le64(epoch_le, runtime_protect_epoch);
 
   mdctx = EVP_MD_CTX_new();
   if (!mdctx) {
@@ -68,11 +71,12 @@ static inline int lota_compute_token_quote_nonce(
   }
 
   if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1 ||
-      EVP_DigestUpdate(mdctx, le_buf, sizeof(le_buf)) != 1 ||
+      EVP_DigestUpdate(mdctx, prefix_le, sizeof(prefix_le)) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, LOTA_TOKEN_NONCE_SIZE) != 1 ||
       EVP_DigestUpdate(mdctx, policy_digest, LOTA_TOKEN_NONCE_SIZE) != 1 ||
       EVP_DigestUpdate(mdctx, runtime_protect_digest, LOTA_TOKEN_NONCE_SIZE) !=
           1 ||
+      EVP_DigestUpdate(mdctx, epoch_le, sizeof(epoch_le)) != 1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1 ||
       len != LOTA_TOKEN_NONCE_SIZE) {
     ret = -EIO;
@@ -83,7 +87,8 @@ out:
   EVP_MD_CTX_free(mdctx);
   if (ret < 0)
     lota__secure_bzero(out_nonce, LOTA_TOKEN_NONCE_SIZE);
-  lota__secure_bzero(le_buf, sizeof(le_buf));
+  lota__secure_bzero(prefix_le, sizeof(prefix_le));
+  lota__secure_bzero(epoch_le, sizeof(epoch_le));
   return ret;
 }
 

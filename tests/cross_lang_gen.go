@@ -49,7 +49,7 @@ func main() {
 	runtimeDigest = computeRuntimeProtectDigest(nil)
 
 	// compute token quote nonce using the Go server SDK implementation
-	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
+	expectedNonce := server.ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
 
 	// fake TPMS_ATTEST
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)

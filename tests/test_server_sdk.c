@@ -150,10 +150,11 @@ static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
                                   uint32_t pcr_mask, const uint8_t nonce[32],
                                   const uint8_t policy_digest[32],
                                   const uint8_t runtime_protect_digest[32],
+                                  uint64_t runtime_protect_epoch,
                                   uint8_t out[32]) {
   return lota_compute_token_quote_nonce(valid_until, flags, pcr_mask, nonce,
                                         policy_digest, runtime_protect_digest,
-                                        out);
+                                        runtime_protect_epoch, out);
 }
 
 /*
@@ -222,7 +223,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
   if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0)
     return LOTA_ERR_INVALID_ARG;
   if (compute_expected_nonce(valid_until, flags, pcr_mask, nonce, policy_digest,
-                             runtime_digest, exp_nonce) != 0) {
+                             runtime_digest, 0, exp_nonce) != 0) {
     return LOTA_ERR_INVALID_ARG;
   }
 
@@ -251,6 +252,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
   memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
   memcpy(token.runtime_protect_digest, runtime_digest,
          sizeof(token.runtime_protect_digest));
+  token.runtime_protect_epoch = 0;
   token.protect_pid_count = 0;
   token.protected_pids = NULL;
   token.attest_data = attest;

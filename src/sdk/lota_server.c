@@ -352,10 +352,11 @@ static int parse_wire_header(const uint8_t *data, size_t len,
   memcpy(hdr->policy_digest, data + 60, 32);
   memcpy(hdr->runtime_protect_digest, data + 92, 32);
   hdr->protect_pid_count = read_le32(data + 124);
-  hdr->pid_list_size = read_le16(data + 128);
-  hdr->attest_size = read_le16(data + 130);
-  hdr->sig_size = read_le16(data + 132);
-  hdr->reserved = read_le16(data + 134);
+  hdr->runtime_protect_epoch = read_le64(data + 128);
+  hdr->pid_list_size = read_le16(data + 136);
+  hdr->attest_size = read_le16(data + 138);
+  hdr->sig_size = read_le16(data + 140);
+  hdr->reserved = read_le16(data + 142);
 
   if (hash_alg_digest_len(hdr->hash_alg) == 0)
     return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -470,11 +471,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
   /* verify nonce binding: extraData ==
    * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
-   * runtime_protect_digest) */
+   * runtime_protect_digest||runtime_protect_epoch) */
   uint8_t computed_nonce[32];
   if (lota_compute_token_quote_nonce(
           hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
-          hdr.policy_digest, hdr.runtime_protect_digest, computed_nonce) != 0) {
+          hdr.policy_digest, hdr.runtime_protect_digest,
+          hdr.runtime_protect_epoch, computed_nonce) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
 
@@ -498,6 +500,7 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   claims->pcr_mask = hdr.pcr_mask;
   memcpy(claims->policy_digest, hdr.policy_digest, 32);
   memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+  claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
   claims->protect_pid_count = hdr.protect_pid_count;
 
   if (!pcr_digest || pcr_digest_len != expected_pcr_digest_len)
@@ -552,6 +555,7 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
   claims->pcr_mask = hdr.pcr_mask;
   memcpy(claims->policy_digest, hdr.policy_digest, 32);
   memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+  claims->runtime_protect_epoch = hdr.runtime_protect_epoch;
   claims->protect_pid_count = hdr.protect_pid_count;
 
   /* try to extract PCR digest from TPMS_ATTEST */

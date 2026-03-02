@@ -75,7 +75,7 @@ func buildTestToken(t *testing.T, priv *rsa.PrivateKey, validUntil uint64,
 	runtimeDigest := computeRuntimeProtectDigest(nil)
 
 	// compute expected nonce = SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
 
 	// build TPMS_ATTEST with the expected nonce as extraData
 	attestData := buildFakeTPMSAttest(expectedNonce[:], pcrMask, pcrDigest)
@@ -253,7 +253,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 	policyDigest := [32]byte{0x11, 0x22, 0x33}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
 
-	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest)
+	expectedNonce := ComputeTokenQuoteNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeDigest, 0)
 
 	fullAttest := buildFakeTPMSAttest(expectedNonce[:], pcrMask, bytes.Repeat([]byte{0x42}, 32))
 	if len(fullAttest) < 2 {
