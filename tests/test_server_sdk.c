@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "lota_gaming.h"
+#include "lota_runtime_protect_digest.h"
 #include "lota_server.h"
 #include "lota_token_quote_nonce.h"
 
@@ -148,9 +149,11 @@ static uint8_t *build_fake_tpms_attest(const uint8_t *extra_data,
 static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
                                   uint32_t pcr_mask, const uint8_t nonce[32],
                                   const uint8_t policy_digest[32],
+                                  const uint8_t runtime_protect_digest[32],
                                   uint8_t out[32]) {
   return lota_compute_token_quote_nonce(valid_until, flags, pcr_mask, nonce,
-                                        policy_digest, out);
+                                        policy_digest, runtime_protect_digest,
+                                        out);
 }
 
 /*
@@ -213,10 +216,13 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
                             size_t tokbuf_size, size_t *tok_written) {
   /* compute expected nonce */
   uint8_t exp_nonce[32];
+  uint8_t runtime_digest[32];
   uint32_t pcr_mask = 0x4001;
   uint8_t policy_digest[32] = {0x11, 0x22, 0x33};
+  if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0)
+    return LOTA_ERR_INVALID_ARG;
   if (compute_expected_nonce(valid_until, flags, pcr_mask, nonce, policy_digest,
-                             exp_nonce) != 0) {
+                             runtime_digest, exp_nonce) != 0) {
     return LOTA_ERR_INVALID_ARG;
   }
 
@@ -243,6 +249,10 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
   token.hash_alg = hash_alg;
   token.pcr_mask = pcr_mask; /* PCR 0 + 14 */
   memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
+  memcpy(token.runtime_protect_digest, runtime_digest,
+         sizeof(token.runtime_protect_digest));
+  token.protect_pid_count = 0;
+  token.protected_pids = NULL;
   token.attest_data = attest;
   token.attest_size = attest_len;
   token.signature = sig;

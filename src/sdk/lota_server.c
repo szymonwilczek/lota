@@ -9,6 +9,7 @@
  */
 
 #include <limits.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
@@ -18,6 +19,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_server.h"
 #include "../../include/lota_token_quote_nonce.h"
 
@@ -332,15 +334,28 @@ static int parse_wire_header(const uint8_t *data, size_t len,
   hdr->hash_alg = read_le16(data + 54);
   hdr->pcr_mask = read_le32(data + 56);
   memcpy(hdr->policy_digest, data + 60, 32);
-  hdr->attest_size = read_le16(data + 92);
-  hdr->sig_size = read_le16(data + 94);
+  memcpy(hdr->runtime_protect_digest, data + 92, 32);
+  hdr->protect_pid_count = read_le32(data + 124);
+  hdr->pid_list_size = read_le16(data + 128);
+  hdr->attest_size = read_le16(data + 130);
+  hdr->sig_size = read_le16(data + 132);
+  hdr->reserved = read_le16(data + 134);
 
   if (hash_alg_digest_len(hdr->hash_alg) == 0)
     return LOTA_SERVER_ERR_BAD_TOKEN;
+  if (hdr->reserved != 0)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+  if (hdr->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+  if (hdr->pid_list_size > LOTA_TOKEN_MAX_PID_LIST_SIZE)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+  if (hdr->pid_list_size !=
+      (uint16_t)(hdr->protect_pid_count * sizeof(uint32_t)))
+    return LOTA_SERVER_ERR_BAD_TOKEN;
 
   /* validate sizes */
-  size_t expected =
-      (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->attest_size + hdr->sig_size;
+  size_t expected = (size_t)LOTA_TOKEN_HEADER_SIZE + hdr->pid_list_size +
+                    hdr->attest_size + hdr->sig_size;
   if (expected > (size_t)hdr->total_size)
     return LOTA_SERVER_ERR_BAD_TOKEN;
   if (hdr->attest_size > 1024 || hdr->sig_size > 512)
@@ -368,12 +383,51 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   if (ret != LOTA_SERVER_OK)
     return ret;
 
-  const uint8_t *attest_data = token_data + LOTA_TOKEN_HEADER_SIZE;
+  const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
+  const uint8_t *attest_data = pid_list_bytes + hdr.pid_list_size;
   const uint8_t *signature = attest_data + hdr.attest_size;
+  uint8_t runtime_protect_digest[32];
+  uint32_t *pid_list = NULL;
 
   /* verify RSA signature over attest_data */
   if (hdr.attest_size == 0 || hdr.sig_size == 0)
     return LOTA_SERVER_ERR_BAD_TOKEN;
+
+  if (hdr.protect_pid_count > 0) {
+    pid_list = calloc(hdr.protect_pid_count, sizeof(uint32_t));
+    if (!pid_list)
+      return LOTA_SERVER_ERR_CRYPTO;
+
+    for (uint32_t i = 0; i < hdr.protect_pid_count; i++)
+      pid_list[i] = read_le32(pid_list_bytes + ((size_t)i * sizeof(uint32_t)));
+
+    if (lota_validate_canonical_protect_pid_list(pid_list,
+                                                 hdr.protect_pid_count) != 0) {
+      OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
+      free(pid_list);
+      return LOTA_SERVER_ERR_BAD_TOKEN;
+    }
+  }
+
+  if (lota_compute_runtime_protect_digest(pid_list, hdr.protect_pid_count,
+                                          runtime_protect_digest) != 0) {
+    if (pid_list) {
+      OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
+      free(pid_list);
+    }
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+  }
+  if (memcmp(runtime_protect_digest, hdr.runtime_protect_digest, 32) != 0)
+    ret = LOTA_SERVER_ERR_NONCE_FAIL;
+  else
+    ret = LOTA_SERVER_OK;
+
+  if (pid_list) {
+    OPENSSL_cleanse(pid_list, hdr.protect_pid_count * sizeof(uint32_t));
+    free(pid_list);
+  }
+  if (ret != LOTA_SERVER_OK)
+    return ret;
 
   ret = verify_rsa_signature(attest_data, hdr.attest_size, signature,
                              hdr.sig_size, hdr.sig_alg, hdr.hash_alg,
@@ -394,11 +448,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   }
 
   /* verify nonce binding: extraData ==
-   * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest) */
+   * SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||
+   * runtime_protect_digest) */
   uint8_t computed_nonce[32];
-  if (lota_compute_token_quote_nonce(hdr.valid_until, hdr.flags, hdr.pcr_mask,
-                                     hdr.nonce, hdr.policy_digest,
-                                     computed_nonce) != 0) {
+  if (lota_compute_token_quote_nonce(
+          hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
+          hdr.policy_digest, hdr.runtime_protect_digest, computed_nonce) != 0) {
     return LOTA_SERVER_ERR_NONCE_FAIL;
   }
 
@@ -421,6 +476,8 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
   memcpy(claims->nonce, hdr.nonce, 32);
   claims->pcr_mask = hdr.pcr_mask;
   memcpy(claims->policy_digest, hdr.policy_digest, 32);
+  memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+  claims->protect_pid_count = hdr.protect_pid_count;
 
   if (!pcr_digest || pcr_digest_len != expected_pcr_digest_len)
     return LOTA_SERVER_ERR_ATTEST_PARSE;
@@ -473,10 +530,13 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
   memcpy(claims->nonce, hdr.nonce, 32);
   claims->pcr_mask = hdr.pcr_mask;
   memcpy(claims->policy_digest, hdr.policy_digest, 32);
+  memcpy(claims->runtime_protect_digest, hdr.runtime_protect_digest, 32);
+  claims->protect_pid_count = hdr.protect_pid_count;
 
   /* try to extract PCR digest from TPMS_ATTEST */
   if (hdr.attest_size > 0) {
-    const uint8_t *attest_data = token_data + LOTA_TOKEN_HEADER_SIZE;
+    const uint8_t *attest_data =
+        token_data + LOTA_TOKEN_HEADER_SIZE + hdr.pid_list_size;
     const uint8_t *pcr_digest = NULL;
     size_t pcr_digest_len = 0;
     size_t expected_pcr_digest_len = hash_alg_digest_len(hdr.hash_alg);

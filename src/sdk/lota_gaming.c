@@ -19,6 +19,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../../include/lota_endian.h"
 #include "../../include/lota_gaming.h"
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_token.h"
@@ -653,24 +654,50 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
   token->pcr_mask = ipc_token_hdr.pcr_mask;
   memcpy(token->policy_digest, ipc_token_hdr.policy_digest,
          sizeof(token->policy_digest));
+  memcpy(token->runtime_protect_digest, ipc_token_hdr.runtime_protect_digest,
+         sizeof(token->runtime_protect_digest));
+  token->protect_pid_count = ipc_token_hdr.protect_pid_count;
+
+  if (ipc_token_hdr.pid_list_size !=
+      (uint16_t)(token->protect_pid_count * sizeof(uint32_t)))
+    return LOTA_ERR_PROTOCOL;
+  if (ipc_token_hdr.pid_list_size > LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE)
+    return LOTA_ERR_PROTOCOL;
+  if (token->protect_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS)
+    return LOTA_ERR_PROTOCOL;
 
   /* validate sizes */
   if (ipc_token_hdr.attest_size > LOTA_IPC_TOKEN_MAX_ATTEST ||
       ipc_token_hdr.sig_size > LOTA_IPC_TOKEN_MAX_SIG)
     return LOTA_ERR_PROTOCOL;
 
-  size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE + ipc_token_hdr.attest_size +
-                        ipc_token_hdr.sig_size;
+  size_t expected_len = LOTA_IPC_TOKEN_HEADER_SIZE +
+                        ipc_token_hdr.pid_list_size +
+                        ipc_token_hdr.attest_size + ipc_token_hdr.sig_size;
   if (payload_len < expected_len)
     return LOTA_ERR_PROTOCOL;
 
   data_ptr = buf + LOTA_IPC_TOKEN_HEADER_SIZE;
 
+  if (ipc_token_hdr.pid_list_size > 0) {
+    token->protected_pids =
+        calloc(token->protect_pid_count, sizeof(*token->protected_pids));
+    if (!token->protected_pids)
+      return LOTA_ERR_NO_MEMORY;
+
+    for (uint32_t i = 0; i < token->protect_pid_count; i++) {
+      token->protected_pids[i] =
+          (uint32_t)data_ptr[0] | ((uint32_t)data_ptr[1] << 8) |
+          ((uint32_t)data_ptr[2] << 16) | ((uint32_t)data_ptr[3] << 24);
+      data_ptr += sizeof(uint32_t);
+    }
+  }
+
   /* copy attest_data if present */
   if (ipc_token_hdr.attest_size > 0) {
     token->attest_data = malloc(ipc_token_hdr.attest_size);
     if (!token->attest_data)
-      return LOTA_ERR_NO_MEMORY;
+      goto oom;
 
     memcpy(token->attest_data, data_ptr, ipc_token_hdr.attest_size);
     token->attest_size = ipc_token_hdr.attest_size;
@@ -681,9 +708,7 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
   if (ipc_token_hdr.sig_size > 0) {
     token->signature = malloc(ipc_token_hdr.sig_size);
     if (!token->signature) {
-      free(token->attest_data);
-      token->attest_data = NULL;
-      return LOTA_ERR_NO_MEMORY;
+      goto oom;
     }
 
     memcpy(token->signature, data_ptr, ipc_token_hdr.sig_size);
@@ -691,6 +716,10 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
   }
 
   return LOTA_OK;
+
+oom:
+  lota_token_free(token);
+  return LOTA_ERR_NO_MEMORY;
 }
 
 void lota_token_free(struct lota_token *token) {
@@ -704,6 +733,10 @@ void lota_token_free(struct lota_token *token) {
   free(token->signature);
   token->signature = NULL;
   token->signature_len = 0;
+
+  free(token->protected_pids);
+  token->protected_pids = NULL;
+  token->protect_pid_count = 0;
 }
 
 /*
@@ -716,8 +749,15 @@ size_t lota_token_serialized_size(const struct lota_token *token) {
     return 0;
   if (token->attest_size > 1024 || token->signature_len > 512)
     return 0;
+  if (token->protect_pid_count > 0 && !token->protected_pids)
+    return 0;
 
-  total = LOTA_TOKEN_HEADER_SIZE + token->attest_size + token->signature_len;
+  if (token->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
+    return 0;
+
+  total = LOTA_TOKEN_HEADER_SIZE +
+          (size_t)token->protect_pid_count * sizeof(uint32_t) +
+          token->attest_size + token->signature_len;
 
   /* wire.total_size is uint16_t on wire; reject impossible encodings */
   if (total > 0xFFFFu)
@@ -754,12 +794,27 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
   wire.hash_alg = htole16(token->hash_alg);
   wire.pcr_mask = htole32(token->pcr_mask);
   memcpy(wire.policy_digest, token->policy_digest, sizeof(wire.policy_digest));
+  memcpy(wire.runtime_protect_digest, token->runtime_protect_digest,
+         sizeof(wire.runtime_protect_digest));
+  wire.protect_pid_count = htole32(token->protect_pid_count);
+  wire.pid_list_size =
+      htole16((uint16_t)(token->protect_pid_count * sizeof(uint32_t)));
   wire.attest_size = htole16((uint16_t)token->attest_size);
   wire.sig_size = htole16((uint16_t)token->signature_len);
+  wire.reserved = 0;
 
   /* write header */
   memcpy(buf, &wire, sizeof(wire));
   size_t off = sizeof(wire);
+
+  if (token->protect_pid_count > 0 && token->protected_pids) {
+    for (uint32_t i = 0; i < token->protect_pid_count; i++) {
+      uint8_t pid_le[4];
+      lota__write_le32(pid_le, token->protected_pids[i]);
+      memcpy(buf + off, pid_le, sizeof(pid_le));
+      off += sizeof(pid_le);
+    }
+  }
 
   /* write attest_data */
   if (token->attest_size > 0 && token->attest_data) {

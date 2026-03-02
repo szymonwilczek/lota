@@ -86,6 +86,8 @@ struct lota_server_claims {
   uint8_t nonce[32];         /* Client nonce echoed from token */
   uint32_t pcr_mask;         /* PCRs included in TPM quote */
   uint8_t policy_digest[32]; /* SHA-256 over startup enforcement policy */
+  uint8_t runtime_protect_digest[32];
+  uint32_t protect_pid_count;
   uint8_t pcr_digest[LOTA_SERVER_MAX_PCR_DIGEST_SIZE];
   size_t pcr_digest_len; /* Actual length of pcr_digest (0 if absent) */
   int expired;           /* 1 if token has expired, 0 otherwise */

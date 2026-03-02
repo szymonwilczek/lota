@@ -15,6 +15,7 @@
 #include "agent.h"
 #include "startup_policy.h"
 
+#include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_token_quote_nonce.h"
 
 #include <errno.h>
@@ -66,6 +67,10 @@ static uint64_t token_last_table_full_warn_sec = 0;
 static struct uid_rate protect_pid_rate_table[MAX_RATE_ENTRIES];
 static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
+
+static int u32_cmp(const void *a, const void *b);
+static int build_canonical_runtime_pid_list(uint32_t **out_pids,
+                                            uint32_t *out_count);
 
 static void ipc_secure_bzero(void *ptr, size_t len) {
   if (ptr && len)
@@ -566,7 +571,7 @@ static void handle_get_status(struct ipc_context *ctx,
  * Generates a signed attestation token using TPM Quote.
  * The TPM signs over the token quote nonce:
  *   SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce ||
- *          policy_digest)
+ *          policy_digest || runtime_protect_digest)
  * binding the signature to both the token metadata and the client's challenge.
  */
 static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
@@ -576,8 +581,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   struct lota_ipc_token_request req_local;
   bool has_req = false;
   uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
+  uint8_t runtime_protect_digest[32] = {0};
   struct tpm_quote_response quote;
   uint8_t *data_ptr;
+  uint32_t *runtime_pids = NULL;
+  uint32_t runtime_pid_count = 0;
+  uint16_t pid_list_size = 0;
   size_t total_size;
   int ret;
   bool fail = false;
@@ -621,6 +630,47 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   memcpy(token->policy_digest, g_agent.policy_digest,
          sizeof(token->policy_digest));
 
+  ret = build_canonical_runtime_pid_list(&runtime_pids, &runtime_pid_count);
+  if (ret < 0) {
+    lota_err("failed to canonicalize protected PID set: %s", strerror(-ret));
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
+  }
+
+  if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
+    lota_err("runtime protected PID count too large: %u", runtime_pid_count);
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
+  }
+
+  {
+    size_t pid_bytes = (size_t)runtime_pid_count * sizeof(uint32_t);
+    if (pid_bytes > UINT16_MAX) {
+      fail = true;
+      fail_code = LOTA_IPC_ERR_INTERNAL;
+      goto out;
+    }
+    pid_list_size = (uint16_t)pid_bytes;
+  }
+
+  ret = lota_compute_runtime_protect_digest(runtime_pids, runtime_pid_count,
+                                            runtime_protect_digest);
+  if (ret < 0) {
+    lota_err("runtime protected PID digest computation failed: %s",
+             strerror(-ret));
+    fail = true;
+    fail_code = LOTA_IPC_ERR_INTERNAL;
+    goto out;
+  }
+
+  memcpy(token->runtime_protect_digest, runtime_protect_digest,
+         sizeof(token->runtime_protect_digest));
+  token->protect_pid_count = runtime_pid_count;
+  token->pid_list_size = pid_list_size;
+  token->_reserved1 = 0;
+
   if (has_req)
     memcpy(token->client_nonce, req_local.nonce, 32);
   else
@@ -633,9 +683,9 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
     goto out;
   }
 
-  ret = lota_compute_token_quote_nonce(token->valid_until, token->flags,
-                                       token->pcr_mask, token->client_nonce,
-                                       token->policy_digest, binding_nonce);
+  ret = lota_compute_token_quote_nonce(
+      token->valid_until, token->flags, token->pcr_mask, token->client_nonce,
+      token->policy_digest, token->runtime_protect_digest, binding_nonce);
   if (ret < 0) {
     lota_err("token quote nonce computation failed: %s", strerror(-ret));
     fail = true;
@@ -652,8 +702,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   }
 
   /* check buffer space */
-  total_size =
-      LOTA_IPC_TOKEN_HEADER_SIZE + quote.attest_size + quote.signature_size;
+  total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size + quote.attest_size +
+               quote.signature_size;
   if (total_size > LOTA_IPC_MAX_PAYLOAD) {
     lota_err("token too large (%zu bytes)", total_size);
     fail = true;
@@ -676,6 +726,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
   /* copy attest data and signature */
   data_ptr =
       client->send_buf + LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_TOKEN_HEADER_SIZE;
+  for (uint32_t i = 0; i < runtime_pid_count; i++) {
+    uint8_t pid_le[4];
+    lota__write_le32(pid_le, runtime_pids[i]);
+    memcpy(data_ptr, pid_le, sizeof(pid_le));
+    data_ptr += sizeof(pid_le);
+  }
   memcpy(data_ptr, quote.attest_data, quote.attest_size);
   data_ptr += quote.attest_size;
   memcpy(data_ptr, quote.signature, quote.signature_size);
@@ -691,6 +747,11 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 out:
   ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
+  ipc_secure_bzero(runtime_protect_digest, sizeof(runtime_protect_digest));
+  if (runtime_pids) {
+    OPENSSL_cleanse(runtime_pids, (size_t)runtime_pid_count * sizeof(uint32_t));
+    free(runtime_pids);
+  }
   ipc_secure_bzero(&quote, sizeof(quote));
   if (fail)
     build_error_response(client, fail_code);
@@ -748,6 +809,55 @@ static int pid_set_contains(const uint32_t *pids, int count, uint32_t pid) {
     if (pids[i] == pid)
       return 1;
   }
+  return 0;
+}
+
+static int u32_cmp(const void *a, const void *b) {
+  uint32_t av = *(const uint32_t *)a;
+  uint32_t bv = *(const uint32_t *)b;
+  if (av < bv)
+    return -1;
+  if (av > bv)
+    return 1;
+  return 0;
+}
+
+static int build_canonical_runtime_pid_list(uint32_t **out_pids,
+                                            uint32_t *out_count) {
+  uint32_t *canon = NULL;
+  uint32_t count = 0;
+
+  if (!out_pids || !out_count)
+    return -EINVAL;
+  *out_pids = NULL;
+  *out_count = 0;
+
+  if (g_agent.policy_protect_pid_count < 0)
+    return -EINVAL;
+
+  count = (uint32_t)g_agent.policy_protect_pid_count;
+  if (count == 0)
+    return 0;
+  if (!g_agent.policy_protect_pids)
+    return -EINVAL;
+
+  canon = calloc(count, sizeof(uint32_t));
+  if (!canon)
+    return -ENOMEM;
+
+  memcpy(canon, g_agent.policy_protect_pids, count * sizeof(uint32_t));
+  qsort(canon, count, sizeof(uint32_t), u32_cmp);
+
+  for (uint32_t i = 1; i < count; i++) {
+    if (canon[i - 1] == canon[i]) {
+      OPENSSL_cleanse(canon, count * sizeof(uint32_t));
+      free(canon);
+      return -EINVAL;
+    }
+  }
+
+  *out_pids = canon;
+  *out_count = count;
   return 0;
 }
 
@@ -849,7 +959,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
   struct lota_ipc_pid_request req;
   struct lota_ipc_policy_update *out;
   uint32_t pid;
-  uint8_t new_digest[32];
   uint32_t *new_pids = NULL;
   int new_count = 0;
   int ret;
@@ -947,7 +1056,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     mutated = true;
   }
 
-  /* compute new policy digest for the prospective PID set */
+  /* update runtime PID set (does not affect startup policy digest) */
   if (add) {
     ret = pid_set_add(g_agent.policy_protect_pids,
                       g_agent.policy_protect_pid_count, pid, &new_pids,
@@ -962,17 +1071,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     goto rollback_bpf;
   }
 
-  ret = agent_compute_policy_digest_for_protect_pids(new_pids, new_count,
-                                                     new_digest);
-  if (ret < 0) {
-    lota_err("Failed to recompute policy digest: %s", strerror(-ret));
-    goto rollback_bpf;
-  }
-
-  /* commit PID set + digest atomically from the perspective of GET_TOKEN */
+  /* commit runtime PID set while preserving startup-only policy_digest */
   {
-    g_agent.policy_digest_set = 0;
-
     if (g_agent.policy_protect_pids) {
       OPENSSL_cleanse(g_agent.policy_protect_pids,
                       (size_t)g_agent.policy_protect_pid_count *
@@ -983,9 +1083,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
     g_agent.policy_protect_pid_count = new_count;
     new_pids = NULL;
     new_count = 0;
-
-    memcpy(g_agent.policy_digest, new_digest, sizeof(g_agent.policy_digest));
-    g_agent.policy_digest_set = 1;
   }
 
   /* success response */
@@ -1000,7 +1097,6 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
   client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
   client->send_offset = 0;
 
-  OPENSSL_cleanse(new_digest, sizeof(new_digest));
   return;
 
 rollback_bpf:
@@ -1015,7 +1111,6 @@ rollback_bpf:
     OPENSSL_cleanse(new_pids, (size_t)new_count * sizeof(uint32_t));
     free(new_pids);
   }
-  OPENSSL_cleanse(new_digest, sizeof(new_digest));
   build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 }
 

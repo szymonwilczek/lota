@@ -38,12 +38,13 @@ import (
 // Token wire format constants
 const (
 	TokenMagic      uint32 = 0x4B544F4C // "LOTK" in memory (little-endian)
-	TokenVersion    uint16 = 0x0001
-	TokenHeaderSize        = 96
-	TokenMaxSize           = TokenHeaderSize + 1024 + 512 // 1632 bytes
+	TokenVersion    uint16 = 0x0002
+	TokenHeaderSize        = 136
+	TokenMaxSize           = TokenHeaderSize + (1024 * 4) + 1024 + 512 // 5768 bytes
 
-	MaxAttestSize = 1024
-	MaxSigSize    = 512
+	MaxAttestSize  = 1024
+	MaxSigSize     = 512
+	MaxProtectPIDs = 1024
 )
 
 // Token freshness policy defaults (see: include/lota_server.h)
@@ -108,6 +109,12 @@ type Claims struct {
 	// SHA-256 over startup enforcement policy state (includes allowlist)
 	PolicyDigest [32]byte
 
+	// SHA-256 over canonical runtime protected PID set
+	RuntimeProtectDigest [32]byte
+
+	// number of protected runtime PIDs covered by RuntimeProtectDigest
+	ProtectPIDCount uint32
+
 	// composite hash of the selected PCR values
 	// from the TPMS_ATTEST QuoteInfo (empty if not a Quote)
 	PCRDigest []byte
@@ -124,18 +131,22 @@ type Claims struct {
 
 // represents the parsed wire-format header
 type tokenWire struct {
-	magic      uint32
-	version    uint16
-	totalSize  uint16
-	validUntil uint64
-	flags      uint32
-	nonce      [32]byte
-	sigAlg     uint16
-	hashAlg    uint16
-	pcrMask    uint32
-	policy     [32]byte
-	attestSize uint16
-	sigSize    uint16
+	magic                uint32
+	version              uint16
+	totalSize            uint16
+	validUntil           uint64
+	flags                uint32
+	nonce                [32]byte
+	sigAlg               uint16
+	hashAlg              uint16
+	pcrMask              uint32
+	policy               [32]byte
+	runtimeProtectDigest [32]byte
+	protectPIDCount      uint32
+	pidListSize          uint16
+	attestSize           uint16
+	sigSize              uint16
+	reserved             uint16
 }
 
 // Verifies a serialized LOTA token against an AIK public key
@@ -165,8 +176,18 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, ErrNoSignature
 	}
 
-	attestData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.attestSize)]
-	signature := tokenData[TokenHeaderSize+int(hdr.attestSize) : TokenHeaderSize+int(hdr.attestSize)+int(hdr.sigSize)]
+	pidListData := tokenData[TokenHeaderSize : TokenHeaderSize+int(hdr.pidListSize)]
+	attestData := tokenData[TokenHeaderSize+int(hdr.pidListSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)]
+	signature := tokenData[TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize) : TokenHeaderSize+int(hdr.pidListSize)+int(hdr.attestSize)+int(hdr.sigSize)]
+
+	protectedPIDs, err := parseProtectedPIDs(pidListData, hdr.protectPIDCount)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrBadToken, err)
+	}
+	runtimeDigest := computeRuntimeProtectDigest(protectedPIDs)
+	if !bytes.Equal(runtimeDigest[:], hdr.runtimeProtectDigest[:]) {
+		return nil, fmt.Errorf("%w: runtime protected PID digest mismatch", ErrNonceFail)
+	}
 
 	// verify RSA signature over attest_data
 	if err := verifyRSASignature(attestData, signature, hdr.sigAlg, hdr.hashAlg, aikPub); err != nil {
@@ -180,7 +201,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest)
-	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy)
+	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy, hdr.runtimeProtectDigest)
 	if !bytes.Equal(extraData, computedNonce[:]) {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
@@ -193,14 +214,16 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	}
 
 	claims := &Claims{
-		ExpiresAt:    time.Unix(int64(hdr.validUntil), 0),
-		Flags:        hdr.flags,
-		Nonce:        hdr.nonce,
-		PCRMask:      hdr.pcrMask,
-		PolicyDigest: hdr.policy,
-		PCRDigest:    pcrDigest,
-		SigAlg:       hdr.sigAlg,
-		HashAlg:      hdr.hashAlg,
+		ExpiresAt:            time.Unix(int64(hdr.validUntil), 0),
+		Flags:                hdr.flags,
+		Nonce:                hdr.nonce,
+		PCRMask:              hdr.pcrMask,
+		PolicyDigest:         hdr.policy,
+		RuntimeProtectDigest: hdr.runtimeProtectDigest,
+		ProtectPIDCount:      hdr.protectPIDCount,
+		PCRDigest:            pcrDigest,
+		SigAlg:               hdr.sigAlg,
+		HashAlg:              hdr.hashAlg,
 	}
 
 	// check expiry
@@ -239,13 +262,15 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 	}
 
 	claims := &Claims{
-		ExpiresAt:    time.Unix(int64(hdr.validUntil), 0),
-		Flags:        hdr.flags,
-		Nonce:        hdr.nonce,
-		PCRMask:      hdr.pcrMask,
-		PolicyDigest: hdr.policy,
-		SigAlg:       hdr.sigAlg,
-		HashAlg:      hdr.hashAlg,
+		ExpiresAt:            time.Unix(int64(hdr.validUntil), 0),
+		Flags:                hdr.flags,
+		Nonce:                hdr.nonce,
+		PCRMask:              hdr.pcrMask,
+		PolicyDigest:         hdr.policy,
+		RuntimeProtectDigest: hdr.runtimeProtectDigest,
+		ProtectPIDCount:      hdr.protectPIDCount,
+		SigAlg:               hdr.sigAlg,
+		HashAlg:              hdr.hashAlg,
 	}
 
 	// try to extract PCR digest from TPMS_ATTEST (best-effort)
@@ -269,6 +294,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 // For more information see: include/lota_gaming.h
 func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	sigAlg, hashAlg uint16, pcrMask uint32, policyDigest [32]byte,
+	runtimeProtectDigest [32]byte, protectedPIDs []uint32,
 	attestData, signature []byte,
 ) ([]byte, error) {
 	if len(attestData) > MaxAttestSize {
@@ -278,7 +304,16 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 		return nil, fmt.Errorf("signature too large: %d > %d", len(signature), MaxSigSize)
 	}
 
+	if len(protectedPIDs) > MaxProtectPIDs {
+		return nil, fmt.Errorf("protected_pids too large: %d > %d", len(protectedPIDs), MaxProtectPIDs)
+	}
+	if err := validateCanonicalPIDList(protectedPIDs); err != nil {
+		return nil, fmt.Errorf("invalid protected_pids: %w", err)
+	}
+
+	pidListSize := len(protectedPIDs) * 4
 	totalSize := TokenHeaderSize + len(attestData) + len(signature)
+	totalSize += pidListSize
 	buf := make([]byte, totalSize)
 
 	// header
@@ -292,12 +327,22 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint16(buf[54:56], hashAlg)
 	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
 	copy(buf[60:92], policyDigest[:])
-	binary.LittleEndian.PutUint16(buf[92:94], uint16(len(attestData)))
-	binary.LittleEndian.PutUint16(buf[94:96], uint16(len(signature)))
+	copy(buf[92:124], runtimeProtectDigest[:])
+	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs)))
+	binary.LittleEndian.PutUint16(buf[128:130], uint16(pidListSize))
+	binary.LittleEndian.PutUint16(buf[130:132], uint16(len(attestData)))
+	binary.LittleEndian.PutUint16(buf[132:134], uint16(len(signature)))
+	binary.LittleEndian.PutUint16(buf[134:136], 0)
 
 	// variable data
-	copy(buf[TokenHeaderSize:], attestData)
-	copy(buf[TokenHeaderSize+len(attestData):], signature)
+	off := TokenHeaderSize
+	for _, pid := range protectedPIDs {
+		binary.LittleEndian.PutUint32(buf[off:off+4], pid)
+		off += 4
+	}
+	copy(buf[off:], attestData)
+	off += len(attestData)
+	copy(buf[off:], signature)
 
 	return buf, nil
 }
@@ -331,11 +376,24 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	hdr.hashAlg = binary.LittleEndian.Uint16(data[54:56])
 	hdr.pcrMask = binary.LittleEndian.Uint32(data[56:60])
 	copy(hdr.policy[:], data[60:92])
-	hdr.attestSize = binary.LittleEndian.Uint16(data[92:94])
-	hdr.sigSize = binary.LittleEndian.Uint16(data[94:96])
+	copy(hdr.runtimeProtectDigest[:], data[92:124])
+	hdr.protectPIDCount = binary.LittleEndian.Uint32(data[124:128])
+	hdr.pidListSize = binary.LittleEndian.Uint16(data[128:130])
+	hdr.attestSize = binary.LittleEndian.Uint16(data[130:132])
+	hdr.sigSize = binary.LittleEndian.Uint16(data[132:134])
+	hdr.reserved = binary.LittleEndian.Uint16(data[134:136])
+	if hdr.reserved != 0 {
+		return nil, fmt.Errorf("%w: reserved field must be zero", ErrBadToken)
+	}
+	if hdr.protectPIDCount > MaxProtectPIDs {
+		return nil, fmt.Errorf("%w: protect_pid_count too large", ErrBadToken)
+	}
+	if hdr.pidListSize != uint16(hdr.protectPIDCount*4) {
+		return nil, fmt.Errorf("%w: pid list size mismatch", ErrBadToken)
+	}
 
 	// validate sizes
-	expected := int(TokenHeaderSize) + int(hdr.attestSize) + int(hdr.sigSize)
+	expected := int(TokenHeaderSize) + int(hdr.pidListSize) + int(hdr.attestSize) + int(hdr.sigSize)
 	if expected > int(hdr.totalSize) {
 		return nil, fmt.Errorf("%w: data sizes exceed total_size", ErrBadToken)
 	}
@@ -376,26 +434,66 @@ func verifyRSASignature(attestData, signature []byte, sigAlg uint16, hashAlg uin
 	}
 }
 
-func computeExpectedNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte) [32]byte {
-	var buf [80]byte // 8 + 4 + 4 + 32 + 32
+func computeExpectedNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte, runtimeProtectDigest [32]byte) [32]byte {
+	var buf [112]byte // 8 + 4 + 4 + 32 + 32 + 32
 	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
 	binary.LittleEndian.PutUint32(buf[8:12], flags)
 	binary.LittleEndian.PutUint32(buf[12:16], pcrMask)
 	copy(buf[16:48], nonce[:])
 	copy(buf[48:80], policyDigest[:])
+	copy(buf[80:112], runtimeProtectDigest[:])
 	return sha256.Sum256(buf[:])
 }
 
 // computes the token quote nonce used in the token verification domain:
 //
-//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest)
+//	SHA256(valid_until_LE || flags_LE || pcr_mask_LE || client_nonce || policy_digest || runtime_protect_digest)
 //
 // This value is expected to match TPMS_ATTEST.extraData in the token format.
 //
 // NOTE: This is intentionally different from the attestation report binding
 // nonce used by the remote attestation verifier/agent report path.
-func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte) [32]byte {
-	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest)
+func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte, runtimeProtectDigest [32]byte) [32]byte {
+	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeProtectDigest)
+}
+
+func validateCanonicalPIDList(pids []uint32) error {
+	for i := 1; i < len(pids); i++ {
+		if pids[i-1] >= pids[i] {
+			return fmt.Errorf("pid list must be strictly increasing")
+		}
+	}
+	return nil
+}
+
+func parseProtectedPIDs(data []byte, count uint32) ([]uint32, error) {
+	if len(data) != int(count)*4 {
+		return nil, fmt.Errorf("pid list byte size mismatch")
+	}
+	pids := make([]uint32, count)
+	for i := 0; i < int(count); i++ {
+		off := i * 4
+		pids[i] = binary.LittleEndian.Uint32(data[off : off+4])
+	}
+	if err := validateCanonicalPIDList(pids); err != nil {
+		return nil, err
+	}
+	return pids, nil
+}
+
+func computeRuntimeProtectDigest(pids []uint32) [32]byte {
+	var countLE [4]byte
+	h := sha256.New()
+	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
+	binary.LittleEndian.PutUint32(countLE[:], uint32(len(pids)))
+	_, _ = h.Write(countLE[:])
+	for _, pid := range pids {
+		binary.LittleEndian.PutUint32(countLE[:], pid)
+		_, _ = h.Write(countLE[:])
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 // parses a raw TPMS_ATTEST blob and extracts:

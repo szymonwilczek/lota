@@ -15,7 +15,7 @@
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
 #define LOTA_IPC_VERSION 1
-#define LOTA_IPC_MAX_PAYLOAD 4096
+#define LOTA_IPC_MAX_PAYLOAD 8192
 
 /*
  * IPC Commands
@@ -121,8 +121,9 @@ struct lota_ipc_token_request {
  *
  * Contains a signed attestation statement using TPM Quote.
  * Verification:
+ * - Recompute runtime_protect_digest from protected_pids[]
  * - Compute expected_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE
- * || client_nonce || policy_digest)
+ * || client_nonce || policy_digest || runtime_protect_digest)
  * - Verify TPM signature over attest_data using AIK public key
  * - Parse attest_data, check extraData == expected_nonce
  * - Check PCR digest in attest_data matches expected policy
@@ -139,9 +140,14 @@ struct lota_ipc_token {
   uint16_t hash_alg;         /* TPM2_ALG_SHA256 */
   uint32_t pcr_mask;         /* PCRs included in quote */
   uint8_t policy_digest[32]; /* SHA-256 over enforcement startup policy */
+  uint8_t runtime_protect_digest[32]; /* SHA-256 over canonical runtime set */
+  uint32_t protect_pid_count;         /* Number of protected PIDs in payload */
+  uint16_t pid_list_size;             /* Bytes for protected_pids[] */
+  uint16_t _reserved1;
 
   /*
    * Variable-length data follows:
+   *   - protected_pids[protect_pid_count] (little-endian uint32)
    *   - attest_data[attest_size]  (TPMS_ATTEST)
    *   - signature[sig_size]       (RSA signature)
    */
@@ -150,9 +156,11 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_HEADER_SIZE sizeof(struct lota_ipc_token)
 #define LOTA_IPC_TOKEN_MAX_ATTEST 1024
 #define LOTA_IPC_TOKEN_MAX_SIG 512
+#define LOTA_IPC_TOKEN_MAX_PROTECT_PIDS 1024
+#define LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE (LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_IPC_TOKEN_MAX_SIZE                                                \
-  (LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST +                    \
-   LOTA_IPC_TOKEN_MAX_SIG)
+  (LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +             \
+   LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG)
 
 /*
  * Subscription event types (bitmask for SUBSCRIBE request)

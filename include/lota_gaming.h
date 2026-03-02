@@ -126,6 +126,11 @@ struct lota_token {
    */
   uint8_t policy_digest[32];
 
+  /* SHA-256 over canonical runtime protected PID set. */
+  uint8_t runtime_protect_digest[32];
+  uint32_t protect_pid_count;
+  uint32_t *protected_pids; /* heap-allocated canonical list */
+
   uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
   size_t attest_size;   /* Size of attest_data */
   uint8_t *signature;   /* TPM signature (heap allocated) */

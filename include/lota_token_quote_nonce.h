@@ -7,7 +7,8 @@
 //
 // Scheme:
 //   token_quote_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE ||
-//                              client_nonce || policy_digest)
+//                              client_nonce || policy_digest ||
+//                              runtime_protect_digest)
 //
 // This binds TPMS_ATTEST.extraData (quote nonce) to the token's wire-format
 // metadata and the client's challenge nonce.
@@ -46,13 +47,14 @@ static inline int lota_compute_token_quote_nonce(
     uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
     const uint8_t client_nonce[LOTA_TOKEN_NONCE_SIZE],
     const uint8_t policy_digest[LOTA_TOKEN_NONCE_SIZE],
+    const uint8_t runtime_protect_digest[LOTA_TOKEN_NONCE_SIZE],
     uint8_t out_nonce[LOTA_TOKEN_NONCE_SIZE]) {
   EVP_MD_CTX *mdctx = NULL;
   unsigned int len = 0;
   uint8_t le_buf[16];
   int ret = 0;
 
-  if (!client_nonce || !policy_digest || !out_nonce)
+  if (!client_nonce || !policy_digest || !runtime_protect_digest || !out_nonce)
     return -EINVAL;
 
   lota__write_le64(le_buf, valid_until);
@@ -69,6 +71,8 @@ static inline int lota_compute_token_quote_nonce(
       EVP_DigestUpdate(mdctx, le_buf, sizeof(le_buf)) != 1 ||
       EVP_DigestUpdate(mdctx, client_nonce, LOTA_TOKEN_NONCE_SIZE) != 1 ||
       EVP_DigestUpdate(mdctx, policy_digest, LOTA_TOKEN_NONCE_SIZE) != 1 ||
+      EVP_DigestUpdate(mdctx, runtime_protect_digest, LOTA_TOKEN_NONCE_SIZE) !=
+          1 ||
       EVP_DigestFinal_ex(mdctx, out_nonce, &len) != 1 ||
       len != LOTA_TOKEN_NONCE_SIZE) {
     ret = -EIO;
