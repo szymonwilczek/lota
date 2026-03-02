@@ -4611,6 +4611,7 @@ enum {
 
 enum {
 	IO_WQ_BIT_EXIT = 0,
+	IO_WQ_BIT_EXIT_ON_IDLE = 1,
 };
 
 enum {
@@ -21956,6 +21957,7 @@ enum mapping_flags {
 	AS_INACCESSIBLE = 8,
 	AS_WRITEBACK_MAY_DEADLOCK_ON_RECLAIM = 9,
 	AS_KERNEL_FILE = 10,
+	AS_NO_DATA_INTEGRITY = 11,
 	AS_FOLIO_ORDER_BITS = 5,
 	AS_FOLIO_ORDER_MIN = 16,
 	AS_FOLIO_ORDER_MAX = 21,
@@ -61833,6 +61835,7 @@ struct dir_context {
 	filldir_t actor;
 	loff_t pos;
 	int count;
+	unsigned int dt_flags_mask;
 };
 
 struct compat_linux_dirent;
@@ -70884,8 +70887,9 @@ struct dmem_cgroup_pool_state {
 	struct list_head region_node;
 	struct callback_head rcu;
 	struct page_counter cnt;
+	struct dmem_cgroup_pool_state *parent;
+	refcount_t ref;
 	bool inited;
-	long: 64;
 	long: 64;
 	long: 64;
 	long: 64;
@@ -106394,6 +106398,8 @@ struct mmu_gather {
 	unsigned int vma_exec: 1;
 	unsigned int vma_huge: 1;
 	unsigned int vma_pfn: 1;
+	unsigned int unshared_tables: 1;
+	unsigned int fully_unshared_tables: 1;
 	unsigned int batch_count;
 	struct mmu_gather_batch *active;
 	struct mmu_gather_batch local;
@@ -121991,6 +121997,11 @@ struct pts_fs_info {
 	struct pts_mount_opts mount_opts;
 	struct super_block *sb;
 	struct dentry *ptmx_dentry;
+};
+
+struct ptype_iter_state {
+	struct seq_net_private p;
+	struct net_device *dev;
 };
 
 struct pubkey_hdr {
@@ -144032,6 +144043,9 @@ struct trace_event_raw_dma_map {
 struct trace_event_raw_dma_map_sg {
 	struct trace_entry ent;
 	u32 __data_loc_device;
+	int full_nents;
+	int full_ents;
+	bool truncated;
 	u32 __data_loc_phys_addrs;
 	u32 __data_loc_dma_addrs;
 	u32 __data_loc_lengths;
@@ -155742,6 +155756,7 @@ struct vma_merge_struct {
 	struct vm_userfaultfd_ctx uffd_ctx;
 	struct anon_vma_name *anon_name;
 	enum vma_merge_state state;
+	struct vm_area_struct *copied_from;
 	bool just_expand: 1;
 	bool give_up_on_oom: 1;
 	bool skip_vma_uprobe: 1;
@@ -164009,6 +164024,7 @@ extern void cubictcp_state(struct sock *sk, u8 new_state) __weak __ksym;
 extern struct hid_bpf_ctx *hid_bpf_allocate_context(unsigned int hid_id) __weak __ksym;
 extern __u8 *hid_bpf_get_data(struct hid_bpf_ctx *ctx, unsigned int offset, const size_t rdwr_buf_size) __weak __ksym;
 extern int hid_bpf_hw_output_report(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz) __weak __ksym;
+extern int hid_bpf_hw_request(struct hid_bpf_ctx *ctx, __u8 *buf, size_t buf__sz, enum hid_report_type rtype, enum hid_class_request reqtype) __weak __ksym;
 extern int hid_bpf_input_report(struct hid_bpf_ctx *ctx, enum hid_report_type type, u8 *buf, const size_t buf__sz) __weak __ksym;
 extern void hid_bpf_release_context(struct hid_bpf_ctx *ctx) __weak __ksym;
 extern int hid_bpf_try_input_report(struct hid_bpf_ctx *ctx, enum hid_report_type type, u8 *buf, const size_t buf__sz) __weak __ksym;
