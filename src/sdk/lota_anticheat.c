@@ -28,6 +28,8 @@
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
                "heartbeat wire header must be exactly 74 bytes");
 
+#define LOTA_AC_GAME_ID_HASH_DOMAIN "lota-ac-game-id:v1"
+
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
 struct lota_ac_session {
@@ -102,15 +104,25 @@ static int read_snapshot(struct lota_ac_session *session) {
   return 0;
 }
 
-static int sha256_hash(const void *data, size_t len, uint8_t out[32]) {
-  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+static int compute_game_id_hash(const char *game_id,
+                                uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
+  static const uint8_t domain[] = LOTA_AC_GAME_ID_HASH_DOMAIN;
+  EVP_MD_CTX *ctx;
+  unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
+  int ok;
+
+  if (!game_id || !out)
+    return -EINVAL;
+
+  ctx = EVP_MD_CTX_new();
   if (!ctx)
     return -ENOMEM;
 
-  unsigned int out_len = 32;
-  int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
-           EVP_DigestUpdate(ctx, data, len) &&
-           EVP_DigestFinal_ex(ctx, out, &out_len);
+  /* domain separation prevents cross-protocol/cross-field hash reuse */
+  ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
+       EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+       EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
+       EVP_DigestFinal_ex(ctx, out, &out_len);
 
   EVP_MD_CTX_free(ctx);
   return ok ? 0 : -EIO;
@@ -209,7 +221,7 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg) {
     free(s);
     return NULL;
   }
-  if (sha256_hash(s->game_id, strlen(s->game_id), s->game_id_hash) < 0) {
+  if (compute_game_id_hash(s->game_id, s->game_id_hash) < 0) {
     free(s);
     return NULL;
   }

@@ -14,6 +14,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <openssl/evp.h>
+
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
@@ -664,6 +666,61 @@ static void test_heartbeat_game_id_hash(void) {
     FAIL("same hash for different games");
 }
 
+static int test_sha256(const void *data, size_t len, uint8_t out[32]) {
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  if (!ctx)
+    return -ENOMEM;
+
+  unsigned int out_len = 32;
+  int ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
+           EVP_DigestUpdate(ctx, data, len) &&
+           EVP_DigestFinal_ex(ctx, out, &out_len);
+
+  EVP_MD_CTX_free(ctx);
+  return ok ? 0 : -EIO;
+}
+
+static void test_heartbeat_game_id_hash_domain_separated(void) {
+  TEST("heartbeat: game_id_hash is domain-separated");
+  write_mock_snapshot(test_dir, 0x07);
+
+  struct lota_ac_config cfg = {
+      .provider = LOTA_AC_PROVIDER_EAC,
+      .game_id = "game-alpha",
+      .token_dir = test_dir,
+  };
+  struct lota_ac_session *s = lota_ac_init(&cfg);
+  if (!s) {
+    FAIL("init failed");
+    return;
+  }
+
+  uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+  size_t written = 0;
+  if (lota_ac_heartbeat(s, buf, sizeof(buf), &written) != 0) {
+    lota_ac_shutdown(s);
+    FAIL("heartbeat failed");
+    return;
+  }
+  lota_ac_shutdown(s);
+
+  const struct lota_ac_heartbeat_wire *hdr =
+      (const struct lota_ac_heartbeat_wire *)buf;
+
+  uint8_t legacy_hash[LOTA_AC_GAME_HASH_SIZE];
+  if (test_sha256(cfg.game_id, strlen(cfg.game_id), legacy_hash) != 0) {
+    FAIL("legacy hash compute failed");
+    return;
+  }
+
+  if (memcmp(hdr->game_id_hash, legacy_hash, LOTA_AC_GAME_HASH_SIZE) == 0) {
+    FAIL("hash matches legacy SHA-256(game_id)");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_heartbeat_buf_too_small(void) {
   TEST("heartbeat: buffer too small -> -ENOSPC");
   write_mock_snapshot(test_dir, 0x07);
@@ -1144,6 +1201,7 @@ int main(void) {
   test_heartbeat_sequence_increments();
   test_heartbeat_session_id_stable();
   test_heartbeat_game_id_hash();
+  test_heartbeat_game_id_hash_domain_separated();
   test_heartbeat_buf_too_small();
   test_heartbeat_no_token();
   test_heartbeat_null_args();

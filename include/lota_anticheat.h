@@ -113,7 +113,7 @@ struct lota_ac_config {
  *   28      4      lota_flags      mirror of token flags (integrity-checked
  *                                  against embedded token during verify)
  *   32      8      timestamp       Unix epoch (seconds)
- *   40      32     game_id_hash    SHA-256(game_id)
+ *   40      32     game_id_hash    SHA-256("lota-ac-game-id:v1\\0" || game_id)
  *   72      2      token_size      embedded LOTA token length
  *   74      var    lota_token[]    full LOTA token (wire format)
  */
