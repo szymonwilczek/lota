@@ -227,7 +227,7 @@ static __always_inline void inc_stat(u32 idx) {
 static __always_inline u32 get_mode(void) {
   u32 key = LOTA_CFG_MODE;
   u32 *mode = bpf_map_lookup_elem(&lota_config, &key);
-  return mode ? *mode : LOTA_MODE_MONITOR;
+  return mode ? *mode : LOTA_MODE_ENFORCE;
 }
 
 /*
@@ -781,7 +781,8 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
     if (id == LOADING_FIRMWARE)
       blocked = 1;
 
-    /* memory-only module loads bypass file fs-verity checks -> deny in strict */
+    /* memory-only module loads bypass file fs-verity checks -> deny in strict
+     */
     if (id == LOADING_MODULE && get_config(LOTA_CFG_STRICT_MODULES))
       blocked = 1;
 
