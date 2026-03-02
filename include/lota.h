@@ -94,6 +94,12 @@ struct lota_verity_digest_key {
   __u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 };
 
+_Static_assert(LOTA_VERITY_DIGEST_MAX_SIZE == LOTA_VERITY_DIGEST_SHA512_SIZE,
+               "fs-verity key width must remain SHA-512 sized");
+_Static_assert(sizeof(((struct lota_verity_digest_key *)0)->digest) ==
+                   LOTA_VERITY_DIGEST_SHA512_SIZE,
+               "fs-verity map key digest must support 64-byte SHA-512");
+
 /*
  * Execution event - sent from eBPF to user-space via ring buffer.
  * Packed to ensure consistent layout across architectures.
