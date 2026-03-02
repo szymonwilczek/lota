@@ -1501,8 +1501,7 @@ int BPF_PROG(lota_task_fix_setuid, struct cred *new, const struct cred *old,
 SEC("lsm/bpf")
 int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
              int ret) {
-  int deny = 0;
-
+  (void)cmd;
   (void)size;
 
   /*
@@ -1529,34 +1528,10 @@ int BPF_PROG(lota_bpf, int cmd, union bpf_attr *attr, unsigned int size,
   if (is_bpf_admin_task())
     return 0;
 
-  switch (cmd) {
-  case BPF_PROG_LOAD:
-  case BPF_LINK_CREATE:
-  case BPF_LINK_UPDATE:
-  case BPF_MAP_CREATE:
-  case BPF_OBJ_GET:
-  case BPF_OBJ_PIN:
-  case BPF_PROG_DETACH:
-  case BPF_LINK_DETACH:
-  case BPF_PROG_GET_NEXT_ID:
-  case BPF_MAP_GET_NEXT_ID:
-  case BPF_PROG_GET_FD_BY_ID:
-  case BPF_MAP_GET_FD_BY_ID:
-  case BPF_BTF_GET_FD_BY_ID:
-  case BPF_LINK_GET_FD_BY_ID:
-  case BPF_LINK_GET_NEXT_ID:
-  case BPF_MAP_LOOKUP_ELEM:
-  case BPF_MAP_UPDATE_ELEM:
-  case BPF_MAP_DELETE_ELEM:
-  case BPF_MAP_FREEZE:
-    deny = 1;
-    break;
-  default:
-    break;
-  }
-
-  if (!deny)
-    return 0;
+  /*
+   * Fail-closed lockdown: when lock_bpf is enabled, only the authorized
+   * lota-agent identity may execute bpf() commands.
+   */
 
   inc_stat(STAT_BPF_SYSCALL_BLOCKED);
   return -EPERM;
