@@ -37,9 +37,13 @@
 static uint8_t *read_file_contents(const char *path, size_t *out_len,
                                    int *err_out) {
   FILE *f;
-  long fsize;
+  int fd;
+  struct stat st;
+  size_t expected_size;
+  size_t alloc_size;
+  size_t total_read = 0;
   uint8_t *buf;
-  size_t nread;
+  int extra;
 
   f = fopen(path, "rb");
   if (!f) {
@@ -47,43 +51,75 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len,
     return NULL;
   }
 
-  if (fseek(f, 0, SEEK_END) != 0) {
+  fd = fileno(f);
+  if (fd < 0) {
+    *err_out = -EIO;
+    fclose(f);
+    return NULL;
+  }
+
+  if (fstat(fd, &st) != 0) {
     *err_out = -errno;
     fclose(f);
     return NULL;
   }
 
-  fsize = ftell(f);
-  if (fsize < 0) {
+  if (st.st_size < 0) {
     *err_out = -EIO;
     fclose(f);
     return NULL;
   }
-  if ((size_t)fsize > POLICY_MAX_FILE_SIZE) {
+
+  expected_size = (size_t)st.st_size;
+  if (expected_size > POLICY_MAX_FILE_SIZE) {
     *err_out = -EFBIG;
     fclose(f);
     return NULL;
   }
 
-  rewind(f);
+  alloc_size = expected_size ? expected_size : 1;
 
-  buf = malloc((size_t)fsize);
+  buf = malloc(alloc_size);
   if (!buf) {
     *err_out = -ENOMEM;
     fclose(f);
     return NULL;
   }
 
-  nread = fread(buf, 1, (size_t)fsize, f);
-  fclose(f);
+  while (total_read < expected_size) {
+    size_t nread = fread(buf + total_read, 1, expected_size - total_read, f);
+    if (nread == 0)
+      break;
+    total_read += nread;
+  }
 
-  if (nread != (size_t)fsize) {
-    *err_out = -EIO;
+  if (total_read != expected_size) {
+    *err_out = ferror(f) ? -EIO : -EAGAIN;
+    fclose(f);
     free(buf);
     return NULL;
   }
 
-  *out_len = (size_t)fsize;
+  /* detect concurrent file growth after initial size snapshot */
+  extra = fgetc(f);
+  if (extra != EOF) {
+    *err_out = -EAGAIN;
+    fclose(f);
+    free(buf);
+    return NULL;
+  }
+
+  if (ferror(f)) {
+    *err_out = -EIO;
+    fclose(f);
+    free(buf);
+    return NULL;
+  }
+
+  fclose(f);
+
+  *out_len = expected_size;
+
   return buf;
 }
 
