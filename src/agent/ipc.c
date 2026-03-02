@@ -288,23 +288,58 @@ static int set_nonblocking(int fd) {
  * Create socket directory if needed
  */
 static int ensure_socket_dir(void) {
+  int dirfd;
   struct stat st;
+  struct group *grp;
+  gid_t lota_gid = (gid_t)-1;
+  int err;
 
-  if (stat(SOCKET_DIR, &st) == 0) {
-    if (!S_ISDIR(st.st_mode))
-      return -ENOTDIR;
-    return 0;
-  }
+  grp = getgrnam(LOTA_GROUP_NAME);
+  if (grp)
+    lota_gid = grp->gr_gid;
 
-  if (mkdir(SOCKET_DIR, 0750) < 0)
+  if (mkdir(SOCKET_DIR, 0750) < 0 && errno != EEXIST)
     return -errno;
 
-  /* set socket directory group to 'lota' if the group exists */
-  struct group *grp = getgrnam(LOTA_GROUP_NAME);
-  if (grp) {
-    if (chown(SOCKET_DIR, 0, grp->gr_gid) < 0)
-      lota_warn("chown(%s) failed: %s", SOCKET_DIR, strerror(errno));
+  dirfd = open(SOCKET_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (dirfd < 0)
+    return -errno;
+
+  if (fstat(dirfd, &st) < 0) {
+    err = errno;
+    close(dirfd);
+    return -err;
   }
+
+  if (!S_ISDIR(st.st_mode)) {
+    close(dirfd);
+    return -ENOTDIR;
+  }
+
+  if (st.st_uid != 0) {
+    close(dirfd);
+    return -EACCES;
+  }
+
+  if ((st.st_mode & 0777) != 0750) {
+    if (fchmod(dirfd, 0750) < 0) {
+      err = errno;
+      close(dirfd);
+      return -err;
+    }
+  }
+
+  if (lota_gid != (gid_t)-1 && st.st_gid != lota_gid) {
+    if (fchown(dirfd, (uid_t)-1, lota_gid) < 0) {
+      err = errno;
+      close(dirfd);
+      lota_warn("fchown(%s, -1, %u) failed: %s", SOCKET_DIR, (unsigned)lota_gid,
+                strerror(err));
+      return -err;
+    }
+  }
+
+  close(dirfd);
 
   return 0;
 }
