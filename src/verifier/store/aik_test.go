@@ -287,24 +287,44 @@ func TestCertificateStore_TOFUMode(t *testing.T) {
 	}
 }
 
-func TestCertificateStore_RequireCerts(t *testing.T) {
+func TestCertificateStore_RequireCertsNeedsTrustedCAs(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "lota-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// create store requiring certs
+	// create store requiring certs without trust roots -> fail-closed
 	store, err := NewCertificateStore(tempDir, nil, true)
+	if !errors.Is(err, ErrNoTrustedCAs) {
+		t.Fatalf("Expected ErrNoTrustedCAs, got store=%v err=%v", store, err)
+	}
+}
+
+func TestCertificateStore_RequireCerts_MissingRequiredPairFails(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// create CA
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+
+	caCertPath := filepath.Join(tempDir, "ca.pem")
+	caCertDER, _ := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	store, err := NewCertificateStore(tempDir, []string{caCertPath}, true)
 	if err != nil {
 		t.Fatalf("NewCertificateStore failed: %v", err)
 	}
 
 	key := generateTestKey(t)
 
-	// should fail without certificates
-	if err := store.RegisterAIK("client1", &key.PublicKey); err == nil {
-		t.Error("Registration without cert should fail when certs required")
+	if err := store.RegisterAIKWithCert("client1", &key.PublicKey, nil, nil); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("expected ErrNoCertificate for missing cert pair, got: %v", err)
 	}
 }
 

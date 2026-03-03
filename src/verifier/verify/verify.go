@@ -63,6 +63,20 @@ func deriveHardwareIDFromEKCert(ekCertDER []byte) ([types.HardwareIDSize]byte, e
 	}
 }
 
+func verifyHardwareIDMatchesEKCert(report *types.AttestationReport, ekCertDER []byte) error {
+	if report == nil {
+		return errors.New("nil attestation report")
+	}
+	derivedHWID, err := deriveHardwareIDFromEKCert(ekCertDER)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(derivedHWID[:], report.TPM.HardwareID[:]) {
+		return errors.New("hardware_id/EK mismatch")
+	}
+	return nil
+}
+
 // main verification engine
 type Verifier struct {
 	nonceStore    *NonceStore
@@ -624,6 +638,15 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			}
 		}
 
+		if len(ekCert) > 0 {
+			if err := verifyHardwareIDMatchesEKCert(report, ekCert); err != nil {
+				logging.Security(clog, "TOFU rejected: hardware_id does not match EK certificate", "error", err)
+				v.metrics.Rejections.Inc("sig_fail")
+				result.Result = types.VerifySigFail
+				return result, err
+			}
+		}
+
 		if err := v.aikStore.RegisterAIKWithCert(clientID, reportAIK, aikCert, ekCert); err != nil {
 			if existing, gerr := v.aikStore.GetAIK(clientID); gerr == nil {
 				fpExisting := store.Fingerprint(existing)
@@ -719,17 +742,11 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				ekCert := report.TPM.EKCertificate[:report.TPM.EKCertSize]
 
 				// reported hardware_id must be consistent with EK certificate
-				derivedHWID, derr := deriveHardwareIDFromEKCert(ekCert)
-				if derr != nil {
+				if err := verifyHardwareIDMatchesEKCert(report, ekCert); err != nil {
 					v.metrics.Rejections.Inc("sig_fail")
 					result.Result = types.VerifySigFail
-					return result, derr
-				}
-				if !bytes.Equal(derivedHWID[:], report.TPM.HardwareID[:]) {
-					logging.Security(clog, "rotation rejected: hardware_id does not match EK certificate")
-					v.metrics.Rejections.Inc("sig_fail")
-					result.Result = types.VerifySigFail
-					return result, errors.New("hardware_id/EK mismatch")
+					logging.Security(clog, "rotation rejected: hardware_id does not match EK certificate", "error", err)
+					return result, err
 				}
 
 				// verify cert chain and key match

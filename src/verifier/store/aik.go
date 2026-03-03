@@ -723,6 +723,10 @@ func validateClientID(id string) error {
 // caCertPaths: paths to trusted CA certificates (TPM manufacturers, Privacy CAs)
 // requireCerts: if true, reject registrations without valid certificates
 func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bool) (*CertificateStore, error) {
+	if requireCerts && len(caCertPaths) == 0 {
+		return nil, ErrNoTrustedCAs
+	}
+
 	fs, err := NewFileStore(storePath)
 	if err != nil {
 		return nil, err
@@ -776,6 +780,12 @@ func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) 
 
 // verifies AIK certificate chain before registering
 func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error {
+	if cs.requireCerts {
+		if len(aikCertDER) == 0 || len(ekCertDER) == 0 {
+			return ErrNoCertificate
+		}
+	}
+
 	// if no certificates provided, fall back to TOFU (if allowed)
 	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
 		return cs.RegisterAIK(clientID, pubKey)
@@ -802,6 +812,12 @@ func (cs *CertificateStore) VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikC
 	if pubKey == nil {
 		return errors.New("nil AIK public key")
 	}
+	if cs.requireCerts {
+		if len(aikCertDER) == 0 || len(ekCertDER) == 0 {
+			return ErrNoCertificate
+		}
+	}
+
 	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
 		return ErrNoCertificate
 	}
@@ -889,6 +905,8 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 		if _, err := cert.Verify(opts); err != nil {
 			return fmt.Errorf("%w: %v", ErrCertificateChain, err)
 		}
+	} else if cs.requireCerts {
+		return ErrNoTrustedCAs
 	}
 
 	// EK certificate must contain the TCG EK Credential Profile OID
