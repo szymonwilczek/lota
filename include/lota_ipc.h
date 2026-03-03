@@ -30,6 +30,8 @@ enum lota_ipc_cmd {
       0x05, /* Hot-add protected PID (requires privileged peer) */
   LOTA_IPC_CMD_UNPROTECT_PID =
       0x06, /* Hot-remove protected PID (requires privileged peer) */
+  LOTA_IPC_CMD_SHUTDOWN =
+      0x07, /* Graceful agent self-shutdown (requires privileged peer) */
 };
 
 /*

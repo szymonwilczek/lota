@@ -25,6 +25,7 @@ Requires=lota-agent.socket
 Type=notify
 NotifyAccess=main
 ExecStart=/usr/bin/lota-agent --mode monitor
+ExecStop=/usr/bin/lota-agent --shutdown
 ExecReload=/bin/kill -HUP $MAINPID
 WatchdogSec=60s
 Restart=on-failure

@@ -65,6 +65,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
   printf("  --test-signed     Run IPC server with TPM-signed tokens\n");
   printf(
       "                    (requires TPM, for token verification testing)\n");
+  printf(
+      "  --shutdown        Request graceful shutdown via authenticated IPC\n");
   printf("  --export-policy   Export complete YAML policy from live system\n");
   printf("                    (verifier-ready, pipe to file)\n");
   printf("  --attest          Perform remote attestation and exit\n");

@@ -1544,12 +1544,14 @@ int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
  *
  * Blocks selected signal delivery to protected tasks from foreign tasks.
  *
- * SECURITY: Only block signals that would terminate/stop the daemon.
- * Allow signals from PID 1 (systemd/init) and kernel-generated signals.
+ * SECURITY: Never trust sender PID/namespace for privileged signal paths.
+ * Only authenticated LOTA task identities and kernel-generated signals can
+ * bypass protected-target signal restrictions.
  * ====================================================================== */
 SEC("lsm/task_kill")
 int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
              int sig, const struct cred *cred) {
+  struct task_struct *current;
   u32 sender_tgid;
   u32 target_tgid;
   u32 lota_mode;
@@ -1577,15 +1579,11 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
   if (sender_tgid == target_tgid)
     return 0;
 
-  {
-    struct task_struct *current =
-        (struct task_struct *)bpf_get_current_task_btf();
-    if (is_lota_agent_task(current))
-      return 0;
-  }
+  current = (struct task_struct *)bpf_get_current_task_btf();
+  if (!current)
+    return 0;
 
-  /* allow init/systemd to manage the daemon */
-  if (target_is_agent && sender_tgid == 1)
+  if (is_lota_agent_task(current) || is_bpf_admin_task())
     return 0;
 
   /*

@@ -189,6 +189,7 @@ struct ipc_client {
   uint32_t event_mask;     /* LOTA_IPC_EVENT_* subscription mask */
   bool notify_pending;     /* notification queued behind current send */
   uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
+  bool shutdown_on_flush;  /* trigger graceful daemon stop after reply */
   struct ipc_client *next;
 };
 
@@ -519,6 +520,8 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client) {
     if (*pp == client) {
       *pp = client->next;
       ctx->client_count--;
+      if (client->shutdown_on_flush)
+        g_agent.running = 0;
       ipc_secure_bzero(client->recv_buf, sizeof(client->recv_buf));
       ipc_secure_bzero(client->send_buf, sizeof(client->send_buf));
       close(client->fd);
@@ -1255,6 +1258,35 @@ rollback_bpf:
   build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 }
 
+static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
+                            const uint8_t *payload, uint32_t payload_len) {
+  struct lota_ipc_response *resp = (void *)client->send_buf;
+  (void)payload;
+
+  if (payload_len != 0) {
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+    return;
+  }
+
+  if (!ipc_client_is_privileged(ctx, client)) {
+    lota_warn("SHUTDOWN denied for uid=%d pid=%d", client->peer_uid,
+              client->peer_pid);
+    build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+    return;
+  }
+
+  resp->magic = LOTA_IPC_MAGIC;
+  resp->version = LOTA_IPC_VERSION;
+  resp->result = LOTA_IPC_OK;
+  resp->payload_len = 0;
+  client->send_len = LOTA_IPC_RESPONSE_SIZE;
+  client->send_offset = 0;
+  client->shutdown_on_flush = true;
+
+  lota_notice("Privileged shutdown requested via IPC by uid=%d pid=%d",
+              client->peer_uid, client->peer_pid);
+}
+
 /*
  * Process complete request
  */
@@ -1301,6 +1333,10 @@ static void process_request(struct ipc_context *ctx,
 
   case LOTA_IPC_CMD_UNPROTECT_PID:
     handle_protect_pid_update(ctx, client, payload, payload_len, false);
+    break;
+
+  case LOTA_IPC_CMD_SHUTDOWN:
+    handle_shutdown(ctx, client, payload, payload_len);
     break;
 
   default:
@@ -1449,6 +1485,12 @@ static int handle_client_write(struct ipc_context *ctx,
       ev.events = EPOLLIN;
       ev.data.fd = client->fd;
       epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+    }
+
+    if (client->shutdown_on_flush) {
+      client->shutdown_on_flush = false;
+      g_agent.running = 0;
+      lota_info("Graceful shutdown initiated via IPC command");
     }
   }
 

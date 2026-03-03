@@ -26,6 +26,8 @@
 #include <sys/epoll.h>
 #include <sys/random.h>
 #include <sys/signalfd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -98,6 +100,93 @@ static int validate_path_arg(const char *key, const char *p) {
     fprintf(stderr, "Invalid %s: '..' path traversal is not allowed\n", key);
     return -EINVAL;
   }
+  return 0;
+}
+
+static int write_full(int fd, const void *buf, size_t len) {
+  const uint8_t *p = buf;
+
+  while (len > 0) {
+    ssize_t n = write(fd, p, len);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -errno;
+    }
+    if (n == 0)
+      return -EIO;
+    p += (size_t)n;
+    len -= (size_t)n;
+  }
+
+  return 0;
+}
+
+static int read_full(int fd, void *buf, size_t len) {
+  uint8_t *p = buf;
+
+  while (len > 0) {
+    ssize_t n = read(fd, p, len);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      return -errno;
+    }
+    if (n == 0)
+      return -ECONNRESET;
+    p += (size_t)n;
+    len -= (size_t)n;
+  }
+
+  return 0;
+}
+
+static int ipc_request_shutdown(void) {
+  struct sockaddr_un addr;
+  struct lota_ipc_request req = {
+      .magic = LOTA_IPC_MAGIC,
+      .version = LOTA_IPC_VERSION,
+      .cmd = LOTA_IPC_CMD_SHUTDOWN,
+      .payload_len = 0,
+  };
+  struct lota_ipc_response resp;
+  int fd;
+  int ret;
+
+  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (fd < 0)
+    return -errno;
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
+  ret = write_full(fd, &req, sizeof(req));
+  if (ret < 0) {
+    close(fd);
+    return ret;
+  }
+
+  ret = read_full(fd, &resp, sizeof(resp));
+  close(fd);
+  if (ret < 0)
+    return ret;
+
+  if (resp.magic != LOTA_IPC_MAGIC || resp.version != LOTA_IPC_VERSION)
+    return -EPROTO;
+
+  if (resp.result != LOTA_IPC_OK)
+    return -EACCES;
+
+  if (resp.payload_len != 0)
+    return -EPROTO;
+
   return 0;
 }
 
@@ -413,6 +502,7 @@ int main(int argc, char *argv[]) {
   int test_iommu_flag = 0;
   int test_ipc_flag = 0;
   int test_signed_flag = 0;
+  int shutdown_flag = 0;
 
   if (daemon_install_signals(&g_agent.running, &g_reload) < 0) {
     fprintf(stderr, "Failed to install signal handlers: %s\n", strerror(errno));
@@ -457,6 +547,7 @@ int main(int argc, char *argv[]) {
       {"test-iommu", no_argument, 0, 'i'},
       {"test-ipc", no_argument, 0, 'c'},
       {"test-signed", no_argument, 0, 'S'},
+      {"shutdown", no_argument, 0, 1001},
       {"export-policy", no_argument, 0, 'E'},
       {"attest", no_argument, 0, 'a'},
       {"attest-interval", required_argument, 0, 'I'},
@@ -584,6 +675,9 @@ int main(int argc, char *argv[]) {
       break;
     case 'S':
       test_signed_flag = 1;
+      break;
+    case 1001:
+      shutdown_flag = 1;
       break;
     case 'E':
       export_policy_flag = 1;
@@ -750,6 +844,15 @@ int main(int argc, char *argv[]) {
       print_usage(argv[0], DEFAULT_BPF_PATH, DEFAULT_VERIFIER_PORT);
       return (opt == 'h') ? 0 : 1;
     }
+  }
+
+  if (shutdown_flag) {
+    int sret = ipc_request_shutdown();
+    if (sret < 0) {
+      fprintf(stderr, "Shutdown request failed: %s\n", strerror(-sret));
+      return 1;
+    }
+    return 0;
   }
 
   if (dump_config_flag) {
