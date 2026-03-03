@@ -131,7 +131,7 @@ static int ensure_parent_dir(const char *path) {
     goto out;
   }
 
-  if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
+  if (mkdir(dir, 0700) < 0 && errno != EEXIST) {
     ret = -errno;
     goto out;
   }
@@ -146,6 +146,8 @@ int pidfile_create(const char *path) {
   int ret;
   char pidbuf[DAEMON_PID_STR_MAX];
   ssize_t len;
+  int flags;
+  struct stat st;
 
   if (!path)
     path = DAEMON_DEFAULT_PID_FILE;
@@ -154,9 +156,32 @@ int pidfile_create(const char *path) {
   if (ret < 0)
     return ret;
 
-  fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+  flags = O_RDWR | O_CREAT | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+
+  fd = open(path, flags, 0600);
   if (fd < 0)
     return -errno;
+
+  if (fstat(fd, &st) < 0) {
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
+  if (!S_ISREG(st.st_mode) || st.st_nlink != 1) {
+    close(fd);
+    return -EINVAL;
+  }
+
+  if (fchmod(fd, 0600) < 0) {
+    ret = -errno;
+    close(fd);
+    unlink(path);
+    return ret;
+  }
 
   if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
     int err = errno;

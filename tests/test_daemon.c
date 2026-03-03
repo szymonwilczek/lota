@@ -52,7 +52,8 @@ static void setup_tmp_dir(void) {
 static void cleanup_tmp_dir(void) {
   char cmd[512];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
-  int ret = system(cmd); (void)ret;
+  int ret = system(cmd);
+  (void)ret;
 }
 
 static void test_pidfile_create_remove(void) {
@@ -60,6 +61,7 @@ static void test_pidfile_create_remove(void) {
   int fd;
   char buf[32];
   ssize_t n;
+  struct stat st;
 
   TEST("pidfile_create + pidfile_remove");
 
@@ -68,6 +70,18 @@ static void test_pidfile_create_remove(void) {
   fd = pidfile_create(path);
   if (fd < 0) {
     FAIL("pidfile_create returned error");
+    return;
+  }
+
+  if (stat(path, &st) < 0) {
+    FAIL("stat on PID file failed");
+    pidfile_remove(path, fd);
+    return;
+  }
+
+  if ((st.st_mode & 077) != 0) {
+    FAIL("PID file permissions are too permissive (expected 0600)");
+    pidfile_remove(path, fd);
     return;
   }
 
@@ -219,6 +233,11 @@ static void test_pidfile_creates_parent_dir(void) {
     snprintf(dir, sizeof(dir), "%s/subdir", tmp_dir);
     if (stat(dir, &st) < 0 || !S_ISDIR(st.st_mode)) {
       FAIL("parent directory not created");
+      pidfile_remove(path, fd);
+      return;
+    }
+    if ((st.st_mode & 022) != 0) {
+      FAIL("parent directory is group/world writable");
       pidfile_remove(path, fd);
       return;
     }
