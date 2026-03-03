@@ -98,6 +98,13 @@ char LICENSE[] SEC("license") = "GPL";
 #define S_IFCHR 0020000
 #endif
 
+#ifndef VM_WRITE
+#define VM_WRITE 0x00000002
+#endif
+#ifndef VM_MAYWRITE
+#define VM_MAYWRITE 0x00000020
+#endif
+
 #ifdef LOTA_BPF_DEBUG_PRINTK
 #define lota_bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -110,6 +117,7 @@ char LICENSE[] SEC("license") = "GPL";
  * Executable page protection bit.
  */
 #define LOTA_PROT_EXEC 0x4
+#define LOTA_PROT_WRITE 0x2
 
 /*
  * Ring buffer for sending events to user-space.
@@ -1152,7 +1160,7 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id) {
  * This defeats:
  *   - LD_PRELOAD injection (cheat libraries)
  *   - dlopen() of unauthorized .so files
- *   - Manual mmap of shellcode from files
+ *   - Manual mmap of shellcode from files (including RWX/COW abuse)
  *
  * @file: The file being mapped (NULL for anonymous mappings)
  * @reqprot: Requested protection flags
@@ -1236,7 +1244,9 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
    * from untrusted sources.
    */
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
+    if ((prot & LOTA_PROT_WRITE) || (reqprot & LOTA_PROT_WRITE)) {
+      blocked = 1;
+    } else if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
       blocked = 1;
     }
   }
@@ -1309,6 +1319,7 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
              unsigned long reqprot, unsigned long prot) {
   struct file *file;
   struct lota_exec_event *event = NULL;
+  unsigned long vm_flags;
   u32 mode;
   int blocked = 0;
 
@@ -1362,9 +1373,12 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
   }
 
   inc_stat(STAT_MMAP_EXECS);
+  vm_flags = BPF_CORE_READ(vma, vm_flags);
 
   if (mode == LOTA_MODE_ENFORCE && get_config(LOTA_CFG_STRICT_MMAP)) {
-    if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
+    if (vm_flags & (VM_WRITE | VM_MAYWRITE)) {
+      blocked = 1;
+    } else if (!is_verity_allowed(file) && !is_trusted_lib(file)) {
       blocked = 1;
     }
   }
