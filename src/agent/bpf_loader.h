@@ -32,8 +32,7 @@ struct bpf_loader_ctx {
   int stats_fd;                              /* Stats map fd */
   int config_fd;                             /* 'lota_config' map fd */
   int integrity_fd;                          /* 'integrity_config' map fd */
-  int bpf_admin_tgid_fd;                     /* 'bpf_admin_tgid' map fd */
-  int agent_identity_fd;                     /* 'lota_agent_identity' map fd */
+  int task_auth_fd;                          /* 'lota_task_auth' map fd */
   int trusted_libs_fd;                       /* 'trusted_libs' map fd */
   int trusted_lib_mnt_fd;                    /* 'trusted_lib_mnt' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
@@ -212,15 +211,6 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_verify_kernel_runtime_hardening(void);
-
-/*
- * bpf_loader_set_agent_pid - Set runtime lota-agent identity in BPF map
- * @ctx: Loaded context
- * @pid: Agent TGID (process id)
- *
- * Returns: 0 on success, negative errno on failure
- */
-int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
  * bpf_loader_protect_pid - Add a PID to the protected set

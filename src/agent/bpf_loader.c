@@ -51,11 +51,13 @@ struct protected_pid_entry {
   uint64_t start_time_ticks;
 };
 
-struct lota_identity_entry {
-  uint32_t tgid;
+struct lota_task_auth_entry {
+  uint32_t flags;
   uint32_t pad;
-  uint64_t start_time_ticks;
 };
+
+#define LOTA_TASK_AUTH_ADMIN (1U << 0)
+#define LOTA_TASK_AUTH_AGENT (1U << 1)
 
 struct trusted_lib_key {
   uint64_t dev;
@@ -165,6 +167,32 @@ static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks) {
   }
 
   return -EINVAL;
+}
+
+static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags) {
+  int pidfd;
+  struct lota_task_auth_entry value = {0};
+
+  if (task_auth_fd < 0 || pid <= 0 || flags == 0)
+    return -EINVAL;
+
+#ifndef SYS_pidfd_open
+  return -ENOTSUP;
+#else
+  pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
+  if (pidfd < 0)
+    return -errno;
+
+  value.flags = flags;
+  if (bpf_map_update_elem(task_auth_fd, &pidfd, &value, BPF_ANY) < 0) {
+    int err = -errno;
+    close(pidfd);
+    return err;
+  }
+
+  close(pidfd);
+  return 0;
+#endif
 }
 
 /*
@@ -328,8 +356,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
-  ctx->bpf_admin_tgid_fd = -1;
-  ctx->agent_identity_fd = -1;
+  ctx->task_auth_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->trusted_lib_mnt_fd = -1;
   ctx->protected_pids_fd = -1;
@@ -525,56 +552,35 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     ctx->config_fd = -1;
   }
 
-  ctx->bpf_admin_tgid_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "bpf_admin_tgid");
-  if (ctx->bpf_admin_tgid_fd >= 0) {
-    uint32_t key = 0;
-    struct lota_identity_entry admin = {0};
+  ctx->task_auth_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "lota_task_auth");
+  if (ctx->task_auth_fd < 0) {
+    err = ctx->task_auth_fd;
+    lota_err("Failed to find lota_task_auth map");
+    goto err_close;
+  }
 
-    admin.tgid = (uint32_t)getpid();
-    ret = read_pid_start_time_ticks(admin.tgid, &admin.start_time_ticks);
-    if (ret < 0 || admin.start_time_ticks == 0) {
-      lota_err("Failed to read bpf admin start time for pid %u", admin.tgid);
-      err = ret < 0 ? ret : -EINVAL;
-      goto err_close;
-    }
+  ret = set_task_auth_flags(ctx->task_auth_fd, getpid(),
+                            LOTA_TASK_AUTH_ADMIN | LOTA_TASK_AUTH_AGENT);
+  if (ret < 0) {
+    lota_err("Failed to register task auth flags: %s", strerror(-ret));
+    err = ret;
+    goto err_close;
+  }
 
-    if (bpf_map_update_elem(ctx->bpf_admin_tgid_fd, &key, &admin, BPF_ANY) <
+  if (ctx->config_fd >= 0) {
+    uint32_t lock_key = LOTA_CFG_LOCK_BPF;
+    uint32_t lock_val = 1;
+
+    if (bpf_map_update_elem(ctx->config_fd, &lock_key, &lock_val, BPF_ANY) <
         0) {
-      lota_err("Failed to set bpf admin identity: %s", strerror(errno));
+      lota_err("Failed to enable early LOCK_BPF: %s", strerror(errno));
       err = -errno;
       goto err_close;
     }
-
-    /*
-     * Close startup race early: lock bpf() as soon as admin identity is set.
-     * Admin identity keeps current agent process authorized for required map
-     * updates during the rest of startup
-     */
-    if (ctx->config_fd >= 0) {
-      uint32_t lock_key = LOTA_CFG_LOCK_BPF;
-      uint32_t lock_val = 1;
-
-      if (bpf_map_update_elem(ctx->config_fd, &lock_key, &lock_val, BPF_ANY) <
-          0) {
-        lota_err("Failed to enable early LOCK_BPF: %s", strerror(errno));
-        err = -errno;
-        goto err_close;
-      }
-      lota_info("Early BPF syscall lock enabled during loader init");
-    } else {
-      lota_warn("lota_config map unavailable, early LOCK_BPF not applied");
-    }
+    lota_info("Early BPF map lock enabled during loader init");
   } else {
-    lota_warn("bpf_admin_tgid map not found in BPF object");
-  }
-
-  ctx->agent_identity_fd =
-      bpf_object__find_map_fd_by_name(ctx->obj, "lota_agent_identity");
-  if (ctx->agent_identity_fd < 0) {
-    err = ctx->agent_identity_fd;
-    lota_err("Failed to find lota_agent_identity map");
-    goto err_close;
+    lota_warn("lota_config map unavailable, early LOCK_BPF not applied");
   }
 
   /* Integrity config map */
@@ -741,8 +747,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
-  ctx->bpf_admin_tgid_fd = -1;
-  ctx->agent_identity_fd = -1;
+  ctx->task_auth_fd = -1;
   ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
   ctx->trusted_lib_mnt_fd = -1;
@@ -1010,30 +1015,6 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx) {
         (unsigned long long)expected.lockdown_addr);
     return -EPERM;
   }
-
-  return 0;
-}
-
-int bpf_loader_set_agent_pid(struct bpf_loader_ctx *ctx, uint32_t pid) {
-  uint32_t key = 0;
-  struct lota_identity_entry agent = {0};
-  int ret;
-
-  if (!ctx || !ctx->loaded || pid == 0)
-    return -EINVAL;
-
-  if (ctx->agent_identity_fd < 0)
-    return -ENOTSUP;
-
-  agent.tgid = pid;
-  ret = read_pid_start_time_ticks(pid, &agent.start_time_ticks);
-  if (ret < 0)
-    return ret;
-  if (agent.start_time_ticks == 0)
-    return -EINVAL;
-
-  if (bpf_map_update_elem(ctx->agent_identity_fd, &key, &agent, BPF_ANY) < 0)
-    return -errno;
 
   return 0;
 }
