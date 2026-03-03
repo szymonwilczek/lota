@@ -43,6 +43,7 @@
 #include "dbus.h"
 #include "event.h"
 #include "hash_verify.h"
+#include "io_utils.h"
 #include "iommu.h"
 #include "ipc.h"
 #include "journal.h"
@@ -103,44 +104,6 @@ static int validate_path_arg(const char *key, const char *p) {
   return 0;
 }
 
-static int write_full(int fd, const void *buf, size_t len) {
-  const uint8_t *p = buf;
-
-  while (len > 0) {
-    ssize_t n = write(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      return -errno;
-    }
-    if (n == 0)
-      return -EIO;
-    p += (size_t)n;
-    len -= (size_t)n;
-  }
-
-  return 0;
-}
-
-static int read_full(int fd, void *buf, size_t len) {
-  uint8_t *p = buf;
-
-  while (len > 0) {
-    ssize_t n = read(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-      return -errno;
-    }
-    if (n == 0)
-      return -ECONNRESET;
-    p += (size_t)n;
-    len -= (size_t)n;
-  }
-
-  return 0;
-}
-
 static int ipc_request_shutdown(void) {
   struct sockaddr_un addr;
   struct lota_ipc_request req = {
@@ -167,13 +130,13 @@ static int ipc_request_shutdown(void) {
     return ret;
   }
 
-  ret = write_full(fd, &req, sizeof(req));
+  ret = lota_write_full(fd, &req, sizeof(req));
   if (ret < 0) {
     close(fd);
     return ret;
   }
 
-  ret = read_full(fd, &resp, sizeof(resp));
+  ret = lota_read_full(fd, &resp, sizeof(resp));
   close(fd);
   if (ret < 0)
     return ret;

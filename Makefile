@@ -102,6 +102,7 @@ AGTEST_SRCS = tests/test_main.c \
 AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/daemon_loop.c \
 			  $(AGENT_DIR)/main_utils.c \
+			  $(AGENT_DIR)/io_utils.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
