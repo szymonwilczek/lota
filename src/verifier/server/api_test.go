@@ -45,6 +45,82 @@ func init() {
 	}
 }
 
+func TestSessionValidateEndpoint_SuccessAndConsume(t *testing.T) {
+	mux, v := setupTestAPI(t)
+
+	challengeID := "api-session-validate"
+	challenge, err := v.GenerateChallenge(challengeID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge failed: %v", err)
+	}
+
+	var pcr14 [32]byte
+	for i := range pcr14 {
+		pcr14[i] = byte(0x21 ^ i)
+	}
+
+	clientID := persistentClientID(challengeID)
+	key := getClientTestAIK(clientID)
+	report := buildSignedReport(t, challengeID, challenge.Nonce, pcr14, key)
+	result, err := v.VerifyReport(challengeID, report)
+	if err != nil {
+		t.Fatalf("VerifyReport failed: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"session_token":"%x","consume":true}`, result.SessionToken)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if valid, _ := resp["valid"].(bool); !valid {
+		t.Fatalf("expected valid=true, got %v", resp["valid"])
+	}
+	if consumed, _ := resp["consumed"].(bool); !consumed {
+		t.Fatalf("expected consumed=true, got %v", resp["consumed"])
+	}
+
+	// token remains known but marked as consumed
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
+		strings.NewReader(fmt.Sprintf(`{"session_token":"%x"}`, result.SessionToken)))
+	req2.Header.Set("Content-Type", "application/json")
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr2.Code, rr2.Body.String())
+	}
+
+	resp = map[string]any{}
+	if err := json.Unmarshal(rr2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if consumed, _ := resp["consumed"].(bool); !consumed {
+		t.Fatalf("expected consumed=true on second check, got %v", resp["consumed"])
+	}
+}
+
+func TestSessionValidateEndpoint_BadToken(t *testing.T) {
+	mux, _ := setupTestAPI(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
+		strings.NewReader(`{"session_token":"xyz"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func persistentClientID(challengeID string) string {
 	hwID := sha256.Sum256([]byte(challengeID))
 	return hex.EncodeToString(hwID[:])

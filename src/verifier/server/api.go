@@ -88,6 +88,7 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	// sensitive read-only endpoints (reader or admin auth required)
 	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
 	mux.HandleFunc("GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
+	mux.HandleFunc("POST /api/v1/session/validate", h.requireReader(h.handleValidateSessionToken))
 	mux.HandleFunc("GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
 	mux.HandleFunc("GET /api/v1/bans", h.requireReader(h.handleListBans))
 	mux.HandleFunc("GET /api/v1/audit", h.requireReader(h.handleAuditLog))
@@ -239,6 +240,22 @@ type clientInfoResponse struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+}
+
+type validateSessionTokenRequest struct {
+	SessionToken string `json:"session_token"`
+	Consume      bool   `json:"consume"`
+}
+
+type validateSessionTokenResponse struct {
+	Valid      bool   `json:"valid"`
+	Consumed   bool   `json:"consumed"`
+	ClientID   string `json:"client_id,omitempty"`
+	HardwareID string `json:"hardware_id,omitempty"`
+	ResultCode uint32 `json:"result_code,omitempty"`
+	Flags      uint32 `json:"flags,omitempty"`
+	PCRMask    uint32 `json:"pcr_mask,omitempty"`
+	ValidUntil uint64 `json:"valid_until,omitempty"`
 }
 
 // health check for load balancers
@@ -454,6 +471,82 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, resp)
+}
+
+// POST /api/v1/session/validate - verify issued session token
+func (h *APIHandler) handleValidateSessionToken(w http.ResponseWriter, r *http.Request) {
+	var req validateSessionTokenRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+		return
+	}
+
+	req.SessionToken = strings.TrimSpace(req.SessionToken)
+	if len(req.SessionToken) != 64 {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "session_token must be 64 hex characters"})
+		return
+	}
+
+	tokBytes, err := hexDecodeFixed32(req.SessionToken)
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid session_token hex"})
+		return
+	}
+
+	status := h.verifier.ValidateSessionToken(tokBytes, req.Consume)
+	if !status.Exists {
+		writeJSON(w, validateSessionTokenResponse{Valid: false})
+		return
+	}
+
+	writeJSON(w, validateSessionTokenResponse{
+		Valid:      !status.Expired,
+		Consumed:   status.Consumed,
+		ClientID:   status.ClientID,
+		HardwareID: fmt.Sprintf("%x", status.HardwareID[:]),
+		ResultCode: status.ResultCode,
+		Flags:      status.Flags,
+		PCRMask:    status.PCRMask,
+		ValidUntil: status.ValidUntil,
+	})
+}
+
+func hexDecodeFixed32(s string) ([32]byte, error) {
+	var out [32]byte
+	for i := 0; i < 32; i++ {
+		v, ok := fromHexByte(s[i*2], s[i*2+1])
+		if !ok {
+			return out, fmt.Errorf("invalid hex")
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+func fromHexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func fromHexByte(hi, lo byte) (byte, bool) {
+	h, ok := fromHexNibble(hi)
+	if !ok {
+		return 0, false
+	}
+	l, ok := fromHexNibble(lo)
+	if !ok {
+		return 0, false
+	}
+	return (h << 4) | l, true
 }
 
 // GET /metrics - Prometheus text exposition format

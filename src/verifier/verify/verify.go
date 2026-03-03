@@ -13,14 +13,17 @@ package verify
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +32,8 @@ import (
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+const sessionTokenDomain = "lota-session-token:v1"
 
 func sameRSAPublicKey(a, b *rsa.PublicKey) bool {
 	if a == nil || b == nil {
@@ -79,6 +84,14 @@ type Verifier struct {
 	sessionTokenLife time.Duration
 	aikMaxAge        time.Duration
 
+	// stateless session-token signer key (process-local secret)
+	sessionTokenKey      [32]byte
+	sessionTokenKeyReady bool
+
+	// issued session tokens (ephemeral in-memory index for validation API)
+	tokenMu    sync.Mutex
+	tokenIndex map[[32]byte]sessionTokenRecord
+
 	// monitoring
 	startTime      time.Time
 	totalAttests   atomic.Int64
@@ -90,6 +103,28 @@ type Verifier struct {
 	// policy enforcement
 	requireEventLog bool
 	requireCert     bool
+}
+
+type sessionTokenRecord struct {
+	ClientID   string
+	HardwareID [types.HardwareIDSize]byte
+	ValidUntil uint64
+	ResultCode uint32
+	Flags      uint32
+	PCRMask    uint32
+	Consumed   bool
+}
+
+type SessionTokenStatus struct {
+	ClientID   string
+	HardwareID [types.HardwareIDSize]byte
+	ValidUntil uint64
+	ResultCode uint32
+	Flags      uint32
+	PCRMask    uint32
+	Consumed   bool
+	Exists     bool
+	Expired    bool
 }
 
 func validateTPMFieldSizes(report *types.AttestationReport) error {
@@ -204,7 +239,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	pcrVerifier := NewPCRVerifier()
 	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
 
-	return &Verifier{
+	v := &Verifier{
 		nonceStore:       NewNonceStoreFromConfig(nonceCfg),
 		pcrVerifier:      pcrVerifier,
 		aikStore:         aikStore,
@@ -220,7 +255,141 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireEventLog:  cfg.RequireEventLog,
 		requireCert:      cfg.RequireCert,
 		startTime:        time.Now(),
+		tokenIndex:       make(map[[32]byte]sessionTokenRecord),
 	}
+
+	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
+		logger.Error("failed to initialize session token signing key", "error", err)
+		v.sessionTokenKeyReady = false
+	} else {
+		v.sessionTokenKeyReady = true
+	}
+
+	return v
+}
+
+func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID string,
+	validUntil uint64, resultCode uint32,
+) {
+	if v == nil || report == nil {
+		return
+	}
+
+	now := uint64(time.Now().Unix())
+	v.tokenMu.Lock()
+	defer v.tokenMu.Unlock()
+
+	for k, rec := range v.tokenIndex {
+		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
+			delete(v.tokenIndex, k)
+		}
+	}
+
+	v.tokenIndex[token] = sessionTokenRecord{
+		ClientID:   clientID,
+		HardwareID: report.TPM.HardwareID,
+		ValidUntil: validUntil,
+		ResultCode: resultCode,
+		Flags:      report.Header.Flags,
+		PCRMask:    report.TPM.PCRMask,
+		Consumed:   false,
+	}
+}
+
+func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTokenStatus {
+	st := SessionTokenStatus{}
+	if v == nil {
+		return st
+	}
+
+	now := uint64(time.Now().Unix())
+
+	v.tokenMu.Lock()
+	defer v.tokenMu.Unlock()
+
+	for k, rec := range v.tokenIndex {
+		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
+			delete(v.tokenIndex, k)
+		}
+	}
+
+	rec, ok := v.tokenIndex[token]
+	if !ok {
+		return st
+	}
+
+	st.Exists = true
+	st.ClientID = rec.ClientID
+	st.HardwareID = rec.HardwareID
+	st.ValidUntil = rec.ValidUntil
+	st.ResultCode = rec.ResultCode
+	st.Flags = rec.Flags
+	st.PCRMask = rec.PCRMask
+	st.Consumed = rec.Consumed
+	st.Expired = rec.ValidUntil > 0 && rec.ValidUntil <= now
+
+	if st.Expired {
+		delete(v.tokenIndex, token)
+		st.Exists = false
+		return st
+	}
+
+	if consume && !rec.Consumed {
+		rec.Consumed = true
+		v.tokenIndex[token] = rec
+		st.Consumed = true
+	}
+
+	return st
+}
+
+func (v *Verifier) deriveSessionToken(report *types.AttestationReport, clientID string,
+	validUntil uint64, resultCode uint32,
+) ([32]byte, error) {
+	var out [32]byte
+	if v == nil || report == nil {
+		return out, errors.New("nil verifier/report")
+	}
+	if !v.sessionTokenKeyReady {
+		return out, errors.New("session token signing key unavailable")
+	}
+
+	mac := hmac.New(sha256.New, v.sessionTokenKey[:])
+	writeU32 := func(x uint32) {
+		var b [4]byte
+		binary.LittleEndian.PutUint32(b[:], x)
+		_, _ = mac.Write(b[:])
+	}
+	writeU64 := func(x uint64) {
+		var b [8]byte
+		binary.LittleEndian.PutUint64(b[:], x)
+		_, _ = mac.Write(b[:])
+	}
+
+	_, _ = mac.Write([]byte(sessionTokenDomain))
+	_, _ = mac.Write(report.TPM.HardwareID[:])
+	_, _ = mac.Write(report.TPM.Nonce[:])
+	_, _ = mac.Write([]byte(clientID))
+
+	writeU64(validUntil)
+	writeU32(resultCode)
+	writeU32(report.Header.Flags)
+	writeU32(report.TPM.PCRMask)
+	writeU16 := func(x uint16) {
+		var b [2]byte
+		binary.LittleEndian.PutUint16(b[:], x)
+		_, _ = mac.Write(b[:])
+	}
+	writeU16(report.TPM.AttestSize)
+
+	if report.TPM.AttestSize > 0 {
+		att := report.TPM.AttestData[:report.TPM.AttestSize]
+		sum := sha256.Sum256(att)
+		_, _ = mac.Write(sum[:])
+	}
+
+	copy(out[:], mac.Sum(nil))
+	return out, nil
 }
 
 func aikStoreSupportsCertVerification(aikStore store.AIKStore) bool {
@@ -701,14 +870,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	result.Result = types.VerifyOK
 	result.ValidUntil = uint64(time.Now().Add(v.sessionTokenLife).Unix())
-
-	// Session token is a random challenge returned to the client
-	// for optional application-level use. Verifier is stateless
-	// by design -> the TPM quote is the trust anchor, not this token.
-	// No server-side storage or validation endpoint is needed.
-	if _, err := rand.Read(result.SessionToken[:]); err != nil {
-		return nil, fmt.Errorf("failed to generate session token: %w", err)
+	sessionToken, err := v.deriveSessionToken(report, clientID, result.ValidUntil, result.Result)
+	if err != nil {
+		result.Result = types.VerifyInternalError
+		return result, fmt.Errorf("failed to derive session token: %w", err)
 	}
+	result.SessionToken = sessionToken
+	v.rememberSessionToken(sessionToken, report, clientID, result.ValidUntil, result.Result)
 
 	return result, nil
 }
