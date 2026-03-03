@@ -685,6 +685,90 @@ int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
   return 0;
 }
 
+static int open_regular_file_nofollow(const char *path) {
+  int fd = -1;
+
+  if (!path)
+    return -EINVAL;
+
+  if (path[0] == '\0')
+    return -EINVAL;
+
+#ifndef O_NOFOLLOW
+  return -ENOTSUP;
+#else
+  if (path[0] != '/')
+    return -EINVAL;
+
+  {
+    struct open_how how = {
+        .flags = O_RDONLY | O_CLOEXEC,
+        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    };
+
+    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
+      return -errno;
+  }
+
+  if (fd < 0) {
+    int dirfd = -1;
+    const char *p = path;
+
+    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0)
+      return -errno;
+
+    while (*p == '/')
+      p++;
+
+    while (*p != '\0') {
+      char name[NAME_MAX + 1];
+      const char *slash = strchr(p, '/');
+      size_t n = slash ? (size_t)(slash - p) : strlen(p);
+      int nextfd;
+
+      if (n == 0) {
+        p++;
+        continue;
+      }
+      if (n > NAME_MAX) {
+        close(dirfd);
+        return -ENAMETOOLONG;
+      }
+
+      memcpy(name, p, n);
+      name[n] = '\0';
+
+      if (slash) {
+        nextfd =
+            openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(dirfd);
+        if (nextfd < 0)
+          return -errno;
+        dirfd = nextfd;
+
+        p = slash + 1;
+        while (*p == '/')
+          p++;
+        continue;
+      }
+
+      fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+      close(dirfd);
+      if (fd < 0)
+        return -errno;
+      break;
+    }
+
+    if (fd < 0)
+      return -EINVAL;
+  }
+
+  return fd;
+#endif
+}
+
 static int measure_fsverity_digest(const char *path,
                                    struct lota_verity_digest_key *out) {
   int fd;
@@ -694,9 +778,9 @@ static int measure_fsverity_digest(const char *path,
   if (!path || !out)
     return -EINVAL;
 
-  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  fd = open_regular_file_nofollow(path);
   if (fd < 0)
-    return -errno;
+    return fd;
 
   if (fstat(fd, &st) != 0) {
     ret = -errno;
@@ -915,76 +999,9 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st) {
   if (path[0] == '\0')
     return -EINVAL;
 
-#ifndef O_NOFOLLOW
-  return -ENOTSUP;
-#else
-  if (path[0] != '/')
-    return -EINVAL;
-
-  {
-    struct open_how how = {
-        .flags = O_RDONLY | O_CLOEXEC,
-        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-    };
-
-    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
-    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
-      return -errno;
-  }
-
-  if (fd < 0) {
-    int dirfd = -1;
-    const char *p = path;
-
-    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd < 0)
-      return -errno;
-
-    while (*p == '/')
-      p++;
-
-    while (*p != '\0') {
-      char name[NAME_MAX + 1];
-      const char *slash = strchr(p, '/');
-      size_t n = slash ? (size_t)(slash - p) : strlen(p);
-      int nextfd;
-
-      if (n == 0) {
-        p++;
-        continue;
-      }
-      if (n > NAME_MAX) {
-        close(dirfd);
-        return -ENAMETOOLONG;
-      }
-
-      memcpy(name, p, n);
-      name[n] = '\0';
-
-      if (slash) {
-        nextfd =
-            openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        close(dirfd);
-        if (nextfd < 0)
-          return -errno;
-        dirfd = nextfd;
-
-        p = slash + 1;
-        while (*p == '/')
-          p++;
-        continue;
-      }
-
-      fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-      close(dirfd);
-      if (fd < 0)
-        return -errno;
-      break;
-    }
-
-    if (fd < 0)
-      return -EINVAL;
-  }
+  fd = open_regular_file_nofollow(path);
+  if (fd < 0)
+    return fd;
 
   if (fstat(fd, st) != 0) {
     ret = -errno;
@@ -997,7 +1014,6 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st) {
     return -EINVAL;
 
   return 0;
-#endif
 }
 
 static int stat_dir_nofollow(const char *path, struct stat *st) {
