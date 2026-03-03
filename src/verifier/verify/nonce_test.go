@@ -8,13 +8,42 @@ package verify
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+type fixedChunkReader struct {
+	chunks [][]byte
+	idx    int
+}
+
+func (r *fixedChunkReader) Read(p []byte) (int, error) {
+	if r.idx >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[r.idx]
+	r.idx++
+	if len(chunk) < len(p) {
+		copy(p, chunk)
+		return len(chunk), nil
+	}
+	copy(p, chunk[:len(p)])
+	return len(p), nil
+}
+
+type errReader struct {
+	err error
+}
+
+func (r errReader) Read(p []byte) (int, error) {
+	return 0, r.err
+}
 
 // compute binding nonce for tests from current report content
 func testBindingNonce(report *types.AttestationReport, nonce [types.NonceSize]byte) []byte {
@@ -188,6 +217,95 @@ func TestNonceStore_UniqueNonces(t *testing.T) {
 	}
 
 	t.Log("✓ All 100 generated nonces are unique")
+}
+
+func TestNonceStore_GenerateChallenge_RetriesOnPendingCollision(t *testing.T) {
+	cfg := DefaultNonceStoreConfig()
+	cfg.RateLimitMax = 10
+	cfg.MaxPendingPerClient = 10
+
+	var colliding [types.NonceSize]byte
+	for i := range colliding {
+		colliding[i] = 0xAA
+	}
+	var unique [types.NonceSize]byte
+	for i := range unique {
+		unique[i] = 0xBB
+	}
+
+	cfg.RandReader = &fixedChunkReader{chunks: [][]byte{colliding[:], unique[:]}}
+	store := NewNonceStoreFromConfig(cfg)
+	defer store.Close()
+
+	collisionKey := hex.EncodeToString(colliding[:])
+	store.mu.Lock()
+	store.pending[collisionKey] = nonceEntry{
+		nonce:     colliding,
+		createdAt: time.Now(),
+		bindingID: "existing-binding",
+		counter:   1,
+	}
+	store.mu.Unlock()
+
+	ch, err := store.GenerateChallenge("test-binding", 0x00004003)
+	if err != nil {
+		t.Fatalf("GenerateChallenge failed: %v", err)
+	}
+	if !bytes.Equal(ch.Nonce[:], unique[:]) {
+		t.Fatalf("expected retry to produce unique nonce %x, got %x", unique, ch.Nonce)
+	}
+}
+
+func TestNonceStore_GenerateChallenge_FailsAfterRepeatedCollisions(t *testing.T) {
+	cfg := DefaultNonceStoreConfig()
+	cfg.RateLimitMax = 10
+	cfg.MaxPendingPerClient = 10
+
+	var colliding [types.NonceSize]byte
+	for i := range colliding {
+		colliding[i] = 0xCC
+	}
+
+	chunks := make([][]byte, 0, maxNonceGenerationAttempts)
+	for i := 0; i < maxNonceGenerationAttempts; i++ {
+		chunks = append(chunks, colliding[:])
+	}
+	cfg.RandReader = &fixedChunkReader{chunks: chunks}
+
+	store := NewNonceStoreFromConfig(cfg)
+	defer store.Close()
+
+	collisionKey := hex.EncodeToString(colliding[:])
+	store.mu.Lock()
+	store.pending[collisionKey] = nonceEntry{nonce: colliding, createdAt: time.Now(), bindingID: "x"}
+	store.mu.Unlock()
+
+	_, err := store.GenerateChallenge("test-binding", 0x00004003)
+	if err == nil {
+		t.Fatal("expected GenerateChallenge to fail after repeated collisions")
+	}
+	if err.Error() != "nonce generation failed: repeated collisions" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNonceStore_GenerateChallenge_EntropySourceFailure(t *testing.T) {
+	cfg := DefaultNonceStoreConfig()
+	cfg.RateLimitMax = 10
+	cfg.MaxPendingPerClient = 10
+	wantErr := errors.New("entropy unavailable")
+	cfg.RandReader = errReader{err: wantErr}
+
+	store := NewNonceStoreFromConfig(cfg)
+	defer store.Close()
+
+	_, err := store.GenerateChallenge("test-binding", 0x00004003)
+	if err == nil {
+		t.Fatal("expected GenerateChallenge to fail on entropy source error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected wrapped entropy error, got: %v", err)
+	}
 }
 
 func TestNonceStore_PendingCount(t *testing.T) {
@@ -450,7 +568,9 @@ type usedNonceBackendFirstCollision struct {
 
 func (b *usedNonceBackendFirstCollision) Contains(nonceKey string) bool {
 	b.calls++
-	return b.calls == 1
+	// force collisions for the full first generation attempt budget,
+	// then allow success on subsequent GenerateChallenge calls
+	return b.calls <= maxNonceGenerationAttempts
 }
 
 func (b *usedNonceBackendFirstCollision) Record(nonceKey string, usedAt time.Time) error {

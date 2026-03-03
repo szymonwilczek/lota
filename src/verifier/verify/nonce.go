@@ -22,11 +22,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+const maxNonceGenerationAttempts = 8
 
 // abstracts used nonce storage for anti-replay protection
 // memory backend is used by default; SQLite backend provides persistence
@@ -112,9 +115,10 @@ func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
 
 // manages outstanding challenges and prevents replay attacks
 type NonceStore struct {
-	mu       sync.RWMutex
-	pending  map[string]nonceEntry
-	lifetime time.Duration
+	mu         sync.RWMutex
+	pending    map[string]nonceEntry
+	lifetime   time.Duration
+	randReader io.Reader
 
 	// anti-replay: pluggable backend for used nonce history
 	usedBackend UsedNonceBackend
@@ -170,6 +174,10 @@ type NonceStoreConfig struct {
 
 	// pluggable used nonce backend (nil = in-memory with UsedNonceHistory cap)
 	UsedBackend UsedNonceBackend
+
+	// cryptographically secure randomness source for nonce generation
+	// nil defaults to crypto/rand.Reader
+	RandReader io.Reader
 }
 
 // returns sensible defaults
@@ -194,6 +202,7 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 	ns := &NonceStore{
 		pending:            make(map[string]nonceEntry),
 		lifetime:           cfg.Lifetime,
+		randReader:         cfg.RandReader,
 		usedBackend:        backend,
 		bindingChallenges:  make(map[string]clientState),
 		identityChallenges: make(map[string]clientState),
@@ -201,6 +210,10 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 		rateLimitWindow:    cfg.RateLimitWindow,
 		rateLimitMax:       cfg.RateLimitMax,
 		stopCh:             make(chan struct{}),
+	}
+
+	if ns.randReader == nil {
+		ns.randReader = rand.Reader
 	}
 
 	go ns.cleanupLoop()
@@ -229,17 +242,12 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		return nil, err
 	}
 
-	var nonce [types.NonceSize]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
+	nonce, err := ns.generateUniqueNonceLocked()
+	if err != nil {
 		return nil, err
 	}
 
 	key := hex.EncodeToString(nonce[:])
-
-	// paranoid check: ensure nonce was never used before
-	if ns.usedBackend.Contains(key) {
-		return nil, errors.New("nonce collision with used nonce - entropy failure")
-	}
 
 	// get and increment binding counters
 	cs := ns.bindingChallenges[bindingID]
@@ -261,6 +269,28 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		PCRMask: pcrMask,
 		Flags:   0,
 	}, nil
+}
+
+func (ns *NonceStore) generateUniqueNonceLocked() ([types.NonceSize]byte, error) {
+	var nonce [types.NonceSize]byte
+
+	for attempt := 0; attempt < maxNonceGenerationAttempts; attempt++ {
+		if _, err := io.ReadFull(ns.randReader, nonce[:]); err != nil {
+			return nonce, fmt.Errorf("nonce generation failed: %w", err)
+		}
+
+		key := hex.EncodeToString(nonce[:])
+		if _, exists := ns.pending[key]; exists {
+			continue
+		}
+		if ns.usedBackend.Contains(key) {
+			continue
+		}
+
+		return nonce, nil
+	}
+
+	return nonce, errors.New("nonce generation failed: repeated collisions")
 }
 
 // checks if the nonce in report matches an outstanding challenge
