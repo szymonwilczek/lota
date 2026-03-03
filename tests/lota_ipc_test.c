@@ -2,7 +2,7 @@
 /*
  * LOTA IPC Test Client
  *
- * Usage: ./lota-ipc-test [ping|status|token]
+ * Usage: ./lota-ipc-test [ping|status|token|badlen]
  */
 
 #include <errno.h>
@@ -192,12 +192,40 @@ static int do_token(int fd) {
   return resp.result == LOTA_IPC_OK ? 0 : 1;
 }
 
+static int do_badlen(int fd) {
+  struct lota_ipc_response resp;
+  uint8_t junk = 0x41;
+
+  printf("Sending malformed PING with unexpected payload...\n");
+  if (send_request(fd, LOTA_IPC_CMD_PING, &junk, sizeof(junk)) < 0)
+    return 1;
+
+  if (recv_response(fd, &resp, NULL, 0) < 0)
+    return 1;
+
+  printf("Response: %s\n", result_str(resp.result));
+  if (resp.result != LOTA_IPC_ERR_BAD_REQUEST)
+    return 1;
+
+  printf("Sending malformed GET_TOKEN with invalid payload length...\n");
+  if (send_request(fd, LOTA_IPC_CMD_GET_TOKEN, &junk, sizeof(junk)) < 0)
+    return 1;
+
+  if (recv_response(fd, &resp, NULL, 0) < 0)
+    return 1;
+
+  printf("Response: %s\n", result_str(resp.result));
+  return resp.result == LOTA_IPC_ERR_BAD_REQUEST ? 0 : 1;
+}
+
 static void usage(const char *prog) {
-  fprintf(stderr, "Usage: %s [ping|status|token]\n", prog);
+  fprintf(stderr, "Usage: %s [ping|status|token|badlen]\n", prog);
   fprintf(stderr, "\nCommands:\n");
   fprintf(stderr, "  ping   - Check if agent is alive\n");
   fprintf(stderr, "  status - Get attestation status\n");
   fprintf(stderr, "  token  - Get attestation token\n");
+  fprintf(stderr,
+          "  badlen - Send malformed payload lengths (expect BAD_REQUEST)\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -228,6 +256,8 @@ int main(int argc, char *argv[]) {
     ret = do_status(fd);
   } else if (strcmp(cmd, "token") == 0) {
     ret = do_token(fd);
+  } else if (strcmp(cmd, "badlen") == 0) {
+    ret = do_badlen(fd);
   } else {
     fprintf(stderr, "Unknown command: %s\n", cmd);
     usage(argv[0]);

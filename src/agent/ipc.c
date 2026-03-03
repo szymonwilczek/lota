@@ -1288,6 +1288,32 @@ static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
 }
 
 /*
+ * Validate request payload length before command dispatch.
+ */
+static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len) {
+  switch (cmd) {
+  case LOTA_IPC_CMD_PING:
+  case LOTA_IPC_CMD_GET_STATUS:
+  case LOTA_IPC_CMD_SHUTDOWN:
+    return payload_len == 0;
+
+  case LOTA_IPC_CMD_GET_TOKEN:
+    return payload_len == 0 ||
+           payload_len == sizeof(struct lota_ipc_token_request);
+
+  case LOTA_IPC_CMD_SUBSCRIBE:
+    return payload_len == sizeof(struct lota_ipc_subscribe_request);
+
+  case LOTA_IPC_CMD_PROTECT_PID:
+  case LOTA_IPC_CMD_UNPROTECT_PID:
+    return payload_len == sizeof(struct lota_ipc_pid_request);
+
+  default:
+    return 1;
+  }
+}
+
+/*
  * Process complete request
  */
 static void process_request(struct ipc_context *ctx,
@@ -1306,6 +1332,13 @@ static void process_request(struct ipc_context *ctx,
 
   if (req.version != LOTA_IPC_VERSION) {
     build_error_response(client, LOTA_IPC_ERR_BAD_VERSION);
+    return;
+  }
+
+  if (!validate_request_payload_len(req.cmd, payload_len)) {
+    lota_warn("invalid payload length for cmd=0x%X from pid=%d uid=%d (len=%u)",
+              req.cmd, client->peer_pid, client->peer_uid, payload_len);
+    build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
     return;
   }
 
