@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fsverity.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,12 +53,6 @@ static int tests_passed;
     }                                                                          \
   } while (0)
 
-/* format 32-byte hash to hex string */
-static void hex_str(const uint8_t h[32], char *out) {
-  for (int i = 0; i < 32; i++)
-    snprintf(out + i * 2, 3, "%02x", h[i]);
-}
-
 /* create a temporary file with given content */
 static char *create_tmp_file(const char *content, size_t len) {
   char *path = strdup("/tmp/lota_test_hash_XXXXXX");
@@ -74,80 +69,24 @@ static char *create_tmp_file(const char *content, size_t len) {
   return path;
 }
 
-/* compute expected SHA-256 using sha256sum CLI and return hex string */
-static int sha256sum_file(const char *path, char *hex_out) {
-  char cmd[512];
-  FILE *f;
-  int n;
-
-  snprintf(cmd, sizeof(cmd), "sha256sum '%s'", path);
-  f = popen(cmd, "r");
-  if (!f)
-    return -1;
-  n = fscanf(f, "%64s", hex_out);
-  pclose(f);
-  return (n == 1) ? 0 : -1;
-}
-
-/* parse hex string to bytes */
-static void hex_to_bytes(const char *hex, uint8_t *out, int len)
-    __attribute__((unused));
-static void hex_to_bytes(const char *hex, uint8_t *out, int len) {
-  for (int i = 0; i < len; i++) {
-    unsigned int b;
-    sscanf(hex + i * 2, "%2x", &b);
-    out[i] = (uint8_t)b;
-  }
-}
-
-static void test_hash_known_content(void) {
+static void test_hash_file_requires_verity(void) {
   const char *data = "Hello, LOTA hash verification!\n";
   char *path;
   uint8_t hash[LOTA_HASH_SIZE];
-  char our_hex[65];
-  char expected_hex[65];
+  int ret;
 
-  TEST("hash_verify_file on known content");
+  TEST("hash_verify_file fail-closed without fs-verity");
 
   path = create_tmp_file(data, strlen(data));
   ASSERT(path != NULL, "failed to create temp file");
 
-  int ret = hash_verify_file(path, hash);
-  ASSERT(ret == 0, "hash_verify_file failed");
-
-  hex_str(hash, our_hex);
-
-  /* verify against sha256sum */
-  ret = sha256sum_file(path, expected_hex);
+  ret = hash_verify_file(path, hash);
   unlink(path);
   free(path);
-  ASSERT(ret == 0, "sha256sum failed");
-  ASSERT(strcmp(our_hex, expected_hex) == 0, "hash mismatch with sha256sum");
 
-  PASS();
-}
-
-static void test_hash_empty_file(void) {
-  char *path;
-  uint8_t hash[LOTA_HASH_SIZE];
-  char our_hex[65];
-  char expected_hex[65];
-
-  TEST("hash_verify_file on empty file");
-
-  path = create_tmp_file("", 0);
-  ASSERT(path != NULL, "failed to create temp file");
-
-  int ret = hash_verify_file(path, hash);
-  ASSERT(ret == 0, "hash_verify_file failed on empty file");
-
-  hex_str(hash, our_hex);
-
-  ret = sha256sum_file(path, expected_hex);
-  unlink(path);
-  free(path);
-  ASSERT(ret == 0, "sha256sum failed");
-  ASSERT(strcmp(our_hex, expected_hex) == 0, "empty file hash mismatch");
+  ASSERT(ret < 0, "expected failure for non-verity file");
+  ASSERT(ret == -ENODATA || ret == -EOPNOTSUPP || ret == -ENOTTY,
+         "expected fs-verity unavailable/not-enabled error");
 
   PASS();
 }
@@ -196,7 +135,7 @@ static void test_event_no_caching(void) {
   char *path;
   int ret;
 
-  TEST("hash_verify_event no caching (always re-hashes)");
+  TEST("hash_verify_event fail-closed without fs-verity");
 
   ret = hash_verify_init(&ctx, 64);
   ASSERT(ret == 0, "init failed");
@@ -212,22 +151,21 @@ static void test_event_no_caching(void) {
 
   /* first call */
   ret = hash_verify_event(&ctx, &event, hash1);
-  ASSERT(ret == 0, "first hash_verify_event failed");
+  ASSERT(ret < 0, "expected first hash_verify_event failure without verity");
 
   hash_verify_stats(&ctx, &hits, &misses, &errors);
-  ASSERT(misses == 1, "expected 1 miss (actual hash)");
+  ASSERT(misses == 0, "expected 0 misses");
   ASSERT(hits == 0, "expected 0 hits");
+  ASSERT(errors == 1, "expected 1 error");
 
   /* second call */
   ret = hash_verify_event(&ctx, &event, hash2);
-  ASSERT(ret == 0, "second hash_verify_event failed");
+  ASSERT(ret < 0, "expected second hash_verify_event failure without verity");
 
   hash_verify_stats(&ctx, &hits, &misses, &errors);
   ASSERT(hits == 0, "expected 0 hits (caching disabled)");
-  ASSERT(misses == 2, "expected 2 misses (re-hashed)");
-
-  /* hashes must be identical */
-  ASSERT(memcmp(hash1, hash2, LOTA_HASH_SIZE) == 0, "hashes differ");
+  ASSERT(misses == 0, "expected 0 misses");
+  ASSERT(errors == 2, "expected 2 errors");
 
   hash_verify_cleanup(&ctx);
   unlink(path);
@@ -272,11 +210,9 @@ static void test_stats(void) {
 static void test_hash_large_file(void) {
   char *path;
   uint8_t hash[LOTA_HASH_SIZE];
-  char our_hex[65];
-  char expected_hex[65];
   int ret;
 
-  TEST("hash_verify_file on 1 MB file (multi-chunk)");
+  TEST("hash_verify_file on 1 MB file fails without fs-verity");
 
   /* 1 MB file */
   path = strdup("/tmp/lota_test_hash_large_XXXXXX");
@@ -295,16 +231,9 @@ static void test_hash_large_file(void) {
   }
 
   ret = hash_verify_file(path, hash);
-  ASSERT(ret == 0, "hash_verify_file failed on large file");
-
-  hex_str(hash, our_hex);
-
-  ret = sha256sum_file(path, expected_hex);
   unlink(path);
   free(path);
-  ASSERT(ret == 0, "sha256sum failed");
-  ASSERT(strcmp(our_hex, expected_hex) == 0,
-         "large file hash mismatch with sha256sum");
+  ASSERT(ret < 0, "expected failure for non-verity large file");
 
   PASS();
 }
@@ -344,8 +273,7 @@ static void test_null_args(void) {
 int main(void) {
   printf("\n=== LOTA Hash Verification Tests ===\n\n");
 
-  test_hash_known_content();
-  test_hash_empty_file();
+  test_hash_file_requires_verity();
   test_hash_relative_path();
   test_hash_nonexistent();
   test_hash_directory();

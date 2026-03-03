@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - File hash verification
+ * LOTA Agent - File integrity fingerprint helper
  *
- * Computes SHA-256 content hashes for files reported by BPF ring buffer
- * events. Maintains an LRU cache keyed by (device, inode, metadata
- * fingerprint) to avoid re-hashing unchanged files.
+ * Exposes a 32-byte fingerprint derived from fs-verity measurement.
+ * This avoids userspace read-and-hash TOCTOU races for security paths.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -66,28 +65,23 @@ int hash_verify_init(struct hash_verify_ctx *ctx, size_t cache_size);
 void hash_verify_cleanup(struct hash_verify_ctx *ctx);
 
 /*
- * Compute SHA-256 of a file.
+ * Resolve file integrity fingerprint from fs-verity measurement.
  *
  * @path: Absolute path to the file
  * @sha256_out: Output buffer (LOTA_HASH_SIZE bytes)
  *
- * Reads the file in 64KB chunks and computes SHA-256 incrementally.
- * Safe for large files (does not mmap the entire file).
- *
- * Returns: 0 on success, negative errno on failure
+ * On success, fills sha256_out with the first 32 bytes of the measured
+ * fs-verity digest and returns 0. If fs-verity is unavailable or not enabled
+ * for the file, returns negative errno (typically -ENODATA).
  */
 int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]);
 
 /*
- * Process a BPF ring buffer event: resolve content hash.
- *
- * Looks up the file's content SHA-256 in the cache. On cache miss
- * or fingerprint change, computes the hash from disk and updates
- * the cache entry.
+ * Process a BPF ring buffer event and resolve fs-verity fingerprint.
  *
  * @ctx: Hash verification context
  * @event: BPF exec event (must have filename set to full path)
- * @sha256_out: Output buffer for SHA-256 (LOTA_HASH_SIZE bytes)
+ * @sha256_out: Output buffer for 32-byte integrity fingerprint
  *
  * Returns:  0 on success (sha256_out filled)
  *          -ENOENT if file not found or path is relative/empty

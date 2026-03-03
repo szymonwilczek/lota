@@ -127,7 +127,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
   if (has_file && event->filename[0] == '/') {
     if (is_exec && hash_is_nonzero(event->hash)) {
       format_sha256(event->hash, hash_hex);
-      lota_info("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)",
+      lota_info("[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
                 (unsigned long long)event->timestamp_ns, event_type_str,
                 event->comm, event->filename, hash_hex, event->pid, event->uid);
       return 0;
@@ -140,7 +140,7 @@ int handle_exec_event(void *ctx, void *data, size_t len) {
     hash_ret = hash_verify_event(&g_agent.hash_ctx, event, content_hash);
     if (hash_ret == 0) {
       format_sha256(content_hash, hash_hex);
-      lota_info("[%llu] %s %s: %s sha256=%s (pid=%u, uid=%u)",
+      lota_info("[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
                 (unsigned long long)event->timestamp_ns, event_type_str,
                 event->comm, event->filename, hash_hex, event->pid, event->uid);
       return 0;

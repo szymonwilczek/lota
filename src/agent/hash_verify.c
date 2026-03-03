@@ -1,18 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * LOTA Agent - File hash verification
+ * LOTA Agent - File integrity fingerprint helper
  *
- * Computes SHA-256 content hashes for files reported by BPF ring buffer
- * events. An LRU cache keyed by (device, inode, metadata fingerprint)
- * avoids re-hashing unchanged files.
+ * IMPORTANT SECURITY NOTE:
+ * This module intentionally does NOT compute userspace content hashes for
+ * security decisions. Userspace read-and-hash is vulnerable to TOCTOU races.
  *
- * The BPF side sends a metadata fingerprint (splitmix64 mix of inode
- * attributes such as size, mtime, ctime) in event->hash[]. When the
- * fingerprint changes for a given (dev, ino) pair, the cached content
- * hash is invalidated and recomputed from disk.
- *
- * SHA-256 is computed incrementally in 64 KB chunks via OpenSSL EVP,
- * so arbitrarily large files are handled without excessive memory use.
+ * Instead, it derives a stable 32-byte fingerprint from kernel-measured
+ * fs-verity digest for already-open file descriptors. If fs-verity is not
+ * enabled/available for the file, verification fails closed.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -21,17 +17,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fsverity.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <openssl/evp.h>
-
-/* Read buffer for incremental hashing (64 KB) */
-#define HASH_READ_BUF_SIZE (64 * 1024)
 
 /* Sentinel value: pass as cache_size to disable caching entirely */
 #define HASH_CACHE_DISABLED SIZE_MAX
@@ -66,52 +59,31 @@ void hash_verify_cleanup(struct hash_verify_ctx *ctx) {
  * The caller is responsible for opening and closing the fd.
  */
 static int hash_fd(int fd, uint8_t sha256_out[LOTA_HASH_SIZE]) {
-  uint8_t *buf = NULL;
-  EVP_MD_CTX *md_ctx = NULL;
-  unsigned int hash_len = 0;
-  ssize_t n;
-  int ret = 0;
+  struct {
+    struct fsverity_digest hdr;
+    uint8_t digest[LOTA_VERITY_DIGEST_MAX_SIZE];
+  } d;
 
-  buf = malloc(HASH_READ_BUF_SIZE);
-  if (!buf)
-    return -ENOMEM;
+  if (fd < 0 || !sha256_out)
+    return -EINVAL;
 
-  md_ctx = EVP_MD_CTX_new();
-  if (!md_ctx) {
-    ret = -ENOMEM;
-    goto out;
+  memset(&d, 0, sizeof(d));
+  d.hdr.digest_size = (uint16_t)sizeof(d.digest);
+
+  if (ioctl(fd, FS_IOC_MEASURE_VERITY, &d) != 0) {
+    int err = errno;
+
+    if (err == ENODATA || err == ENOTTY || err == EOPNOTSUPP)
+      return -ENODATA;
+    return -err;
   }
 
-  if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1) {
-    ret = -EIO;
-    goto out;
-  }
+  if (d.hdr.digest_size < LOTA_HASH_SIZE ||
+      d.hdr.digest_size > LOTA_VERITY_DIGEST_MAX_SIZE)
+    return -EPROTO;
 
-  while ((n = read(fd, buf, HASH_READ_BUF_SIZE)) > 0) {
-    if (EVP_DigestUpdate(md_ctx, buf, (size_t)n) != 1) {
-      ret = -EIO;
-      goto out;
-    }
-  }
-
-  if (n < 0) {
-    ret = -errno;
-    goto out;
-  }
-
-  if (EVP_DigestFinal_ex(md_ctx, sha256_out, &hash_len) != 1) {
-    ret = -EIO;
-    goto out;
-  }
-
-  /* sanity: EVP_sha256 always produces 32 bytes */
-  if (hash_len != LOTA_HASH_SIZE)
-    ret = -EIO;
-
-out:
-  EVP_MD_CTX_free(md_ctx);
-  free(buf);
-  return ret;
+  memcpy(sha256_out, d.digest, LOTA_HASH_SIZE);
+  return 0;
 }
 
 int hash_verify_file(const char *path, uint8_t sha256_out[LOTA_HASH_SIZE]) {
@@ -147,35 +119,42 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
                       const struct lota_exec_event *event,
                       uint8_t sha256_out[LOTA_HASH_SIZE]) {
   struct stat st;
-  struct hash_cache_entry *entry;
-  uint64_t dev, ino;
+  int is_exec;
   int fd;
   int ret;
 
   if (!ctx || !event || !sha256_out)
     return -EINVAL;
 
-  if (event->filename[0] != '/')
-    return -ENOENT;
+  is_exec = (event->event_type == LOTA_EVENT_EXEC ||
+             event->event_type == LOTA_EVENT_EXEC_BLOCKED);
 
   /*
-   * prefer /proc/PID/exe which references the exact inode the kernel
-   * executed, immune to path-based TOCTOU races.
-   * fallback to the filename if the process already exited.
+   * For EXEC events, prefer /proc/PID/exe. It references the already-open
+   * executable inode that the kernel used for this process image.
+   *
+   * For non-EXEC file events, use event filename directly (absolute paths
+   * only), but still require fs-verity for a stable fingerprint.
    */
-  {
+  if (is_exec) {
     char proc_path[32];
+
+    if (event->event_type == LOTA_EVENT_EXEC_BLOCKED) {
+      ctx->errors++;
+      return -EPERM;
+    }
+
     snprintf(proc_path, sizeof(proc_path), "/proc/%u/exe", event->pid);
     fd = open(proc_path, O_RDONLY | O_NOCTTY);
+  } else {
+    if (event->filename[0] != '/')
+      return -ENOENT;
+    fd = open(event->filename, O_RDONLY | O_NOFOLLOW | O_NOCTTY);
   }
 
   if (fd < 0) {
-    /*
-     * It is safer to fail closed (or report unknown) than to lie and attest
-     * content that might not match what was actually executed.
-     */
     ctx->errors++;
-    return -ESRCH;
+    return -errno;
   }
 
   if (fstat(fd, &st) < 0) {
@@ -191,17 +170,6 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
     return -EINVAL;
   }
 
-  dev = (uint64_t)st.st_dev;
-  ino = (uint64_t)st.st_ino;
-
-  /*
-   * cache disabled: always compute SHA-256 from the already-open fd.
-   */
-  (void)event; /* unused */
-  (void)dev;
-  (void)ino;
-  (void)entry;
-
   ret = hash_fd(fd, sha256_out);
 
   close(fd);
@@ -210,7 +178,7 @@ int hash_verify_event(struct hash_verify_ctx *ctx,
     return ret;
   }
 
-  /* count as a 'miss' in stats for now, effectively 'hashed from disk' */
+  /* count successful integrity fingerprint resolutions */
   ctx->misses++;
 
   return 0;
