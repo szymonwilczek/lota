@@ -109,10 +109,10 @@ struct lota_ac_config {
  *   5       1      provider        EAC=1, BE=2
  *   6       2      total_size      full packet size
  *   8       16     session_id      random per-session
- *   24      4      sequence        monotonic counter
+ *   24      4      sequence        monotonic counter (nonce-bound)
  *   28      4      lota_flags      mirror of token flags (integrity-checked
  *                                  against embedded token during verify)
- *   32      8      timestamp       Unix epoch (seconds)
+ *   32      8      timestamp       Unix epoch (seconds, nonce-bound)
  *   40      32     game_id_hash    SHA-256("lota-ac-game-id:v1\\0" || game_id)
  *   72      2      token_size      embedded LOTA token length
  *   74      var    lota_token[]    full LOTA token (wire format)
@@ -187,8 +187,15 @@ int lota_ac_tick(struct lota_ac_session *session);
  * the heartbeat into buf[0..buflen). On success, *written is set to
  * the actual packet size.
  *
+ * Security model:
+ * - The heartbeat binds sequence/timestamp/session/game context into
+ *   token nonce, which is TPM-signature-authenticated by the inner token.
+ * - This requires live token issuance with caller-supplied nonce.
+ * - Therefore heartbeat generation is supported only in direct mode.
+ *
  * Returns 0 on success, -EINVAL for bad arguments, -ENODATA if no
- * token is available, -ENOSPC if buf is too small.
+ * token is available, -ENOSPC if buf is too small, -EOPNOTSUPP if
+ * replay-safe nonce binding is unavailable (file mode).
  */
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
                       size_t buflen, size_t *written);

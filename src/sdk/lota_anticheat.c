@@ -19,6 +19,7 @@
 
 #include <openssl/evp.h>
 
+#include "lota.h"
 #include "lota_anticheat.h"
 #include "lota_endian.h"
 #include "lota_gaming.h"
@@ -29,6 +30,15 @@ _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
                "heartbeat wire header must be exactly 74 bytes");
 
 #define LOTA_AC_GAME_ID_HASH_DOMAIN "lota-ac-game-id:v1"
+#define LOTA_AC_HEARTBEAT_NONCE_DOMAIN "lota-ac-heartbeat:v1"
+#define LOTA_AC_MAX_HEARTBEAT_AGE_SEC 120ULL
+
+static int
+compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
+                        const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
+                        uint8_t provider, uint32_t sequence,
+                        uint32_t lota_flags, uint64_t timestamp,
+                        const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]);
 
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
 
@@ -123,6 +133,45 @@ static int compute_game_id_hash(const char *game_id,
        EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
        EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
        EVP_DigestFinal_ex(ctx, out, &out_len);
+
+  EVP_MD_CTX_free(ctx);
+  return ok ? 0 : -EIO;
+}
+
+static int
+compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
+                        const uint8_t session_id[LOTA_AC_SESSION_ID_SIZE],
+                        uint8_t provider, uint32_t sequence,
+                        uint32_t lota_flags, uint64_t timestamp,
+                        const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]) {
+  static const uint8_t domain[] = LOTA_AC_HEARTBEAT_NONCE_DOMAIN;
+  uint8_t le32[4];
+  uint8_t flags_le[4];
+  uint8_t le64[8];
+  EVP_MD_CTX *ctx;
+  unsigned int out_len = LOTA_NONCE_SIZE;
+  int ok;
+
+  if (!out_nonce || !session_id || !game_id_hash)
+    return -EINVAL;
+
+  ctx = EVP_MD_CTX_new();
+  if (!ctx)
+    return -ENOMEM;
+
+  lota__write_le32(le32, sequence);
+  lota__write_le32(flags_le, lota_flags);
+  lota__write_le64(le64, timestamp);
+
+  ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
+       EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
+       EVP_DigestUpdate(ctx, session_id, LOTA_AC_SESSION_ID_SIZE) &&
+       EVP_DigestUpdate(ctx, &provider, sizeof(provider)) &&
+       EVP_DigestUpdate(ctx, le32, sizeof(le32)) &&
+       EVP_DigestUpdate(ctx, flags_le, sizeof(flags_le)) &&
+       EVP_DigestUpdate(ctx, le64, sizeof(le64)) &&
+       EVP_DigestUpdate(ctx, game_id_hash, LOTA_AC_GAME_HASH_SIZE) &&
+       EVP_DigestFinal_ex(ctx, out_nonce, &out_len);
 
   EVP_MD_CTX_free(ctx);
   return ok ? 0 : -EIO;
@@ -356,12 +405,67 @@ int lota_ac_tick(struct lota_ac_session *session) {
 
 int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
                       size_t buflen, size_t *written) {
+  uint64_t timestamp;
+  uint32_t sequence;
+  uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
+
   if (!session || !buf || !written)
     return -EINVAL;
+
+  /*
+   * Replay-safe heartbeat requires nonce-bound token acquisition.
+   * File mode uses pre-generated snapshot tokens and cannot safely bind
+   * current sequence/timestamp challenge into TPM-signed nonce.
+   */
+  if (!session->direct)
+    return -EOPNOTSUPP;
 
   int ret = lota_ac_tick(session);
   if (ret < 0 && session->token_len == 0)
     return -ENODATA;
+
+  timestamp = (uint64_t)time(NULL);
+  sequence = session->heartbeat_seq;
+
+  ret = compute_heartbeat_nonce(
+      heartbeat_nonce, session->session_id, (uint8_t)session->provider,
+      sequence, session->lota_flags, timestamp, session->game_id_hash);
+  if (ret < 0)
+    return ret;
+
+  {
+    struct lota_token token;
+    size_t tok_written = 0;
+
+    if (!session->client)
+      return -ENOTCONN;
+
+    memset(&token, 0, sizeof(token));
+    ret = lota_get_token(session->client, heartbeat_nonce, &token);
+    if (ret != LOTA_OK) {
+      if (ret == LOTA_ERR_NOT_ATTESTED)
+        return -ENODATA;
+      return -EIO;
+    }
+
+    if (memcmp(token.nonce, heartbeat_nonce, LOTA_NONCE_SIZE) != 0) {
+      lota_token_free(&token);
+      return -EPROTO;
+    }
+
+    session->lota_flags = token.flags;
+    session->state = is_trusted(session->lota_flags, session->required_flags)
+                         ? LOTA_AC_STATE_TRUSTED
+                         : LOTA_AC_STATE_UNTRUSTED;
+
+    ret = lota_token_serialize(&token, session->token_buf, LOTA_AC_MAX_TOKEN,
+                               &tok_written);
+    lota_token_free(&token);
+    if (ret != LOTA_OK)
+      return -EIO;
+
+    session->token_len = tok_written;
+  }
 
   if (session->token_len == 0)
     return -ENODATA;
@@ -369,8 +473,6 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
   size_t total = LOTA_AC_HEADER_SIZE + session->token_len;
   if (buflen < total)
     return -ENOSPC;
-
-  uint64_t timestamp = (uint64_t)time(NULL);
 
   lota__write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
   buf[4] = (uint8_t)LOTA_AC_VERSION;
@@ -409,6 +511,9 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   uint32_t heartbeat_lota_flags = read_le32_u(data + 28);
   uint64_t timestamp = read_le64_u(data + 32);
   uint16_t token_size = read_le16_u(data + 72);
+  uint64_t now = (uint64_t)time(NULL);
+  uint8_t expected_nonce[LOTA_NONCE_SIZE];
+  int ret = LOTA_SERVER_OK;
 
   if (magic != LOTA_AC_MAGIC)
     return LOTA_SERVER_ERR_BAD_TOKEN;
@@ -423,19 +528,31 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (provider != LOTA_AC_PROVIDER_EAC && provider != LOTA_AC_PROVIDER_BATTLEYE)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
+  if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+  if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+
+  ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider, sequence,
+                                heartbeat_lota_flags, timestamp, data + 40);
+  if (ret < 0)
+    return LOTA_SERVER_ERR_CRYPTO;
+
   const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
 
   struct lota_server_claims claims;
-  int ret;
 
   if (aik_pub_der)
     ret = lota_server_verify_token(token, token_size, aik_pub_der, aik_pub_len,
-                                   NULL, &claims);
+                                   expected_nonce, &claims);
   else
     ret = lota_server_parse_token(token, token_size, &claims);
 
   if (ret != LOTA_SERVER_OK)
     return ret;
+
+  if (memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
+    return LOTA_SERVER_ERR_NONCE_FAIL;
 
   /*
    * lota_flags in heartbeat header are plaintext transport metadata only.
