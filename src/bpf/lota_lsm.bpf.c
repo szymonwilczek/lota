@@ -536,6 +536,12 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map) {
     return 1;
   if (__builtin_memcmp(name, "trusted_inodes", sizeof("trusted_inodes")) == 0)
     return 1;
+  if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
+    return 1;
+  if (__builtin_memcmp(name, "event_budget", sizeof("event_budget")) == 0)
+    return 1;
   if (__builtin_memcmp(name, "integrity_config", sizeof("integrity_config")) ==
       0)
     return 1;
