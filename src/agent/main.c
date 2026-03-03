@@ -104,6 +104,26 @@ static int validate_path_arg(const char *key, const char *p) {
   return 0;
 }
 
+static int copy_string_checked(const char *field, char *dst, size_t dst_sz,
+                               const char *src) {
+  int n;
+
+  if (!field || !dst || !src || dst_sz == 0)
+    return -EINVAL;
+
+  n = snprintf(dst, dst_sz, "%s", src);
+  if (n < 0)
+    return -EIO;
+
+  if ((size_t)n >= dst_sz) {
+    fprintf(stderr, "Value for %s is too long (%d bytes), max allowed is %zu\n",
+            field, n, dst_sz - 1);
+    return -EOVERFLOW;
+  }
+
+  return 0;
+}
+
 static int ipc_request_shutdown(void) {
   struct sockaddr_un addr;
   struct lota_ipc_request req = {
@@ -614,13 +634,21 @@ int main(int argc, char *argv[]) {
     g_protect_pid_count = cfg.protect_pid_count;
   }
   g_trust_lib_count = cfg.trust_lib_count;
-  for (int i = 0; i < cfg.trust_lib_count; i++)
-    snprintf(g_trust_libs[i], sizeof(g_trust_libs[i]), "%s", cfg.trust_libs[i]);
+  for (int i = 0; i < cfg.trust_lib_count; i++) {
+    if (copy_string_checked("trust_libs", g_trust_libs[i],
+                            sizeof(g_trust_libs[i]), cfg.trust_libs[i]) < 0) {
+      return 1;
+    }
+  }
 
   g_allow_verity_count = cfg.allow_verity_count;
-  for (int i = 0; i < cfg.allow_verity_count; i++)
-    snprintf(g_allow_verity[i], sizeof(g_allow_verity[i]), "%s",
-             cfg.allow_verity[i]);
+  for (int i = 0; i < cfg.allow_verity_count; i++) {
+    if (copy_string_checked("allow_verity", g_allow_verity[i],
+                            sizeof(g_allow_verity[i]),
+                            cfg.allow_verity[i]) < 0) {
+      return 1;
+    }
+  }
 
   while (
       (opt = getopt_long(argc, argv,
@@ -737,8 +765,11 @@ int main(int argc, char *argv[]) {
     } break;
     case 'L':
       if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
-        snprintf(g_trust_libs[g_trust_lib_count],
-                 sizeof(g_trust_libs[g_trust_lib_count]), "%s", optarg);
+        if (copy_string_checked("trust-lib", g_trust_libs[g_trust_lib_count],
+                                sizeof(g_trust_libs[g_trust_lib_count]),
+                                optarg) < 0) {
+          return 1;
+        }
         g_trust_lib_count++;
       } else {
         fprintf(stderr, "Too many --trust-lib entries (max %d)\n",
@@ -754,8 +785,11 @@ int main(int argc, char *argv[]) {
       }
       if (validate_path_arg("allow-verity", optarg) < 0)
         return 1;
-      snprintf(g_allow_verity[g_allow_verity_count],
-               sizeof(g_allow_verity[g_allow_verity_count]), "%s", optarg);
+      if (copy_string_checked(
+              "allow-verity", g_allow_verity[g_allow_verity_count],
+              sizeof(g_allow_verity[g_allow_verity_count]), optarg) < 0) {
+        return 1;
+      }
       g_allow_verity_count++;
       break;
     case 'd':
@@ -819,24 +853,40 @@ int main(int argc, char *argv[]) {
   }
 
   if (dump_config_flag) {
-    if (server_overridden)
-      snprintf(cfg.server, sizeof(cfg.server), "%s", server_addr);
+    if (server_overridden) {
+      if (copy_string_checked("server", cfg.server, sizeof(cfg.server),
+                              server_addr) < 0) {
+        return 1;
+      }
+    }
     cfg.port = server_port;
     if (ca_cert_path) {
-      if (ca_cert_path != cfg.ca_cert)
-        snprintf(cfg.ca_cert, sizeof(cfg.ca_cert), "%s", ca_cert_path);
+      if (ca_cert_path != cfg.ca_cert) {
+        if (copy_string_checked("ca_cert", cfg.ca_cert, sizeof(cfg.ca_cert),
+                                ca_cert_path) < 0) {
+          return 1;
+        }
+      }
     } else {
       cfg.ca_cert[0] = '\0';
     }
     if (pin_sha256_hex) {
-      if (pin_sha256_hex != cfg.pin_sha256)
-        snprintf(cfg.pin_sha256, sizeof(cfg.pin_sha256), "%s", pin_sha256_hex);
+      if (pin_sha256_hex != cfg.pin_sha256) {
+        if (copy_string_checked("pin_sha256", cfg.pin_sha256,
+                                sizeof(cfg.pin_sha256), pin_sha256_hex) < 0) {
+          return 1;
+        }
+      }
     } else {
       cfg.pin_sha256[0] = '\0';
     }
 
-    if (bpf_path != cfg.bpf_path)
-      snprintf(cfg.bpf_path, sizeof(cfg.bpf_path), "%s", bpf_path);
+    if (bpf_path != cfg.bpf_path) {
+      if (copy_string_checked("bpf_path", cfg.bpf_path, sizeof(cfg.bpf_path),
+                              bpf_path) < 0) {
+        return 1;
+      }
+    }
     if (g_agent.mode == LOTA_MODE_ENFORCE)
       snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
     else if (g_agent.mode == LOTA_MODE_MAINTENANCE)
@@ -852,35 +902,52 @@ int main(int argc, char *argv[]) {
     cfg.aik_ttl = aik_ttl;
     cfg.aik_handle = g_agent.tpm_ctx.aik_handle;
     cfg.daemon = daemon_flag ? true : false;
-    if (pid_file_path != cfg.pid_file)
-      snprintf(cfg.pid_file, sizeof(cfg.pid_file), "%s", pid_file_path);
+    if (pid_file_path != cfg.pid_file) {
+      if (copy_string_checked("pid_file", cfg.pid_file, sizeof(cfg.pid_file),
+                              pid_file_path) < 0) {
+        return 1;
+      }
+    }
 
     if (signing_key_path) {
-      if (signing_key_path != cfg.signing_key)
-        snprintf(cfg.signing_key, sizeof(cfg.signing_key), "%s",
-                 signing_key_path);
+      if (signing_key_path != cfg.signing_key) {
+        if (copy_string_checked("signing_key", cfg.signing_key,
+                                sizeof(cfg.signing_key),
+                                signing_key_path) < 0) {
+          return 1;
+        }
+      }
     } else {
       cfg.signing_key[0] = '\0';
     }
 
     if (policy_pubkey_path) {
-      if (policy_pubkey_path != cfg.policy_pubkey)
-        snprintf(cfg.policy_pubkey, sizeof(cfg.policy_pubkey), "%s",
-                 policy_pubkey_path);
+      if (policy_pubkey_path != cfg.policy_pubkey) {
+        if (copy_string_checked("policy_pubkey", cfg.policy_pubkey,
+                                sizeof(cfg.policy_pubkey),
+                                policy_pubkey_path) < 0) {
+          return 1;
+        }
+      }
     } else {
       cfg.policy_pubkey[0] = '\0';
     }
 
     cfg.trust_lib_count = g_trust_lib_count;
     for (int i = 0; i < g_trust_lib_count; i++) {
-      snprintf(cfg.trust_libs[i], sizeof(cfg.trust_libs[i]), "%s",
-               g_trust_libs[i]);
+      if (copy_string_checked("trust_libs", cfg.trust_libs[i],
+                              sizeof(cfg.trust_libs[i]), g_trust_libs[i]) < 0) {
+        return 1;
+      }
     }
 
     cfg.allow_verity_count = g_allow_verity_count;
     for (int i = 0; i < g_allow_verity_count; i++) {
-      snprintf(cfg.allow_verity[i], sizeof(cfg.allow_verity[i]), "%s",
-               g_allow_verity[i]);
+      if (copy_string_checked("allow_verity", cfg.allow_verity[i],
+                              sizeof(cfg.allow_verity[i]),
+                              g_allow_verity[i]) < 0) {
+        return 1;
+      }
     }
 
     free(cfg.protect_pids);
