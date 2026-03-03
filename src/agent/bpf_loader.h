@@ -35,6 +35,7 @@ struct bpf_loader_ctx {
   int bpf_admin_tgid_fd;                     /* 'bpf_admin_tgid' map fd */
   int agent_identity_fd;                     /* 'lota_agent_identity' map fd */
   int trusted_libs_fd;                       /* 'trusted_libs' map fd */
+  int trusted_lib_mnt_fd;                    /* 'trusted_lib_mnt' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
   int allow_verity_digest_fd;                /* 'allow_verity_digest' map fd */
   bool loaded; /* Program is loaded and attached */

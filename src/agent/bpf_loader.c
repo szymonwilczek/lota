@@ -246,6 +246,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   ctx->bpf_admin_tgid_fd = -1;
   ctx->agent_identity_fd = -1;
   ctx->trusted_libs_fd = -1;
+  ctx->trusted_lib_mnt_fd = -1;
   ctx->protected_pids_fd = -1;
   ctx->allow_verity_digest_fd = -1;
 
@@ -518,6 +519,13 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     ctx->trusted_libs_fd = -1; /* optional map */
   }
 
+  /* Get trusted parent mountpoint map fd */
+  ctx->trusted_lib_mnt_fd =
+      bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
+  if (ctx->trusted_lib_mnt_fd < 0) {
+    ctx->trusted_lib_mnt_fd = -1; /* optional map */
+  }
+
   /* Get protected PIDs map fd */
   ctx->protected_pids_fd =
       bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
@@ -652,6 +660,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   ctx->agent_identity_fd = -1;
   ctx->integrity_fd = -1;
   ctx->trusted_libs_fd = -1;
+  ctx->trusted_lib_mnt_fd = -1;
   ctx->protected_pids_fd = -1;
   ctx->allow_verity_digest_fd = -1;
 }
@@ -991,18 +1000,113 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st) {
 #endif
 }
 
-int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
-  struct trusted_lib_key key = {0};
-  struct stat st;
-  uint32_t value = 1;
+static int stat_dir_nofollow(const char *path, struct stat *st) {
+  int fd = -1;
+  int ret = 0;
 
-  if (!ctx || !ctx->loaded || !path)
+  if (!path || !st)
     return -EINVAL;
 
-  if (ctx->trusted_libs_fd < 0)
-    return -ENOTSUP;
+  if (path[0] != '/')
+    return -EINVAL;
 
-  int ret = stat_regular_file_nofollow(path, &st);
+  {
+    struct open_how how = {
+        .flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    };
+
+    fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+    if (fd < 0 && errno != ENOSYS && errno != EINVAL)
+      return -errno;
+  }
+
+  if (fd < 0) {
+    int dirfd = -1;
+    const char *p = path;
+
+    dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0)
+      return -errno;
+
+    while (*p == '/')
+      p++;
+
+    if (*p == '\0') {
+      fd = dirfd;
+      dirfd = -1;
+    }
+
+    while (fd < 0 && *p != '\0') {
+      char name[NAME_MAX + 1];
+      const char *slash = strchr(p, '/');
+      size_t n = slash ? (size_t)(slash - p) : strlen(p);
+      int nextfd;
+
+      if (n == 0) {
+        p++;
+        continue;
+      }
+      if (n > NAME_MAX) {
+        close(dirfd);
+        return -ENAMETOOLONG;
+      }
+
+      memcpy(name, p, n);
+      name[n] = '\0';
+
+      nextfd =
+          openat(dirfd, name, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      close(dirfd);
+      if (nextfd < 0)
+        return -errno;
+      dirfd = nextfd;
+
+      if (!slash) {
+        fd = dirfd;
+        dirfd = -1;
+        break;
+      }
+
+      p = slash + 1;
+      while (*p == '/')
+        p++;
+    }
+
+    if (dirfd >= 0)
+      close(dirfd);
+
+    if (fd < 0)
+      return -EINVAL;
+  }
+
+  if (fstat(fd, st) != 0) {
+    ret = -errno;
+    close(fd);
+    return ret;
+  }
+
+  close(fd);
+  if (!S_ISDIR(st->st_mode))
+    return -EINVAL;
+
+  return 0;
+}
+
+static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
+                                         const char *dir_path, int add) {
+  struct trusted_lib_key key = {0};
+  struct stat st;
+  uint32_t refcnt = 0;
+  int ret;
+
+  if (!ctx || !dir_path)
+    return -EINVAL;
+
+  if (ctx->trusted_lib_mnt_fd < 0)
+    return 0;
+
+  ret = stat_dir_nofollow(dir_path, &st);
   if (ret < 0)
     return ret;
 
@@ -1011,12 +1115,185 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (key.dev == 0 || key.ino == 0)
     return -EINVAL;
 
-  return bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY);
+  if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
+    if (errno != ENOENT)
+      return -errno;
+    refcnt = 0;
+  }
+
+  if (add) {
+    if (refcnt == UINT32_MAX)
+      return -EOVERFLOW;
+    refcnt++;
+    if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt, BPF_ANY) <
+        0)
+      return -errno;
+    return 0;
+  }
+
+  if (refcnt == 0)
+    return 0;
+
+  if (refcnt == 1) {
+    if (bpf_map_delete_elem(ctx->trusted_lib_mnt_fd, &key) < 0 &&
+        errno != ENOENT)
+      return -errno;
+    return 0;
+  }
+
+  refcnt--;
+  if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt, BPF_ANY) < 0)
+    return -errno;
+
+  return 0;
+}
+
+static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
+                                             const char *lib_path, int add) {
+  char dir_path[PATH_MAX];
+  char prefix[PATH_MAX];
+  size_t len;
+  size_t prefix_len = 0;
+  char *slash;
+  char *p;
+  uint32_t applied = 0;
+
+  if (!ctx || !lib_path)
+    return -EINVAL;
+
+  if (ctx->trusted_lib_mnt_fd < 0)
+    return 0;
+
+  len = strnlen(lib_path, sizeof(dir_path));
+  if (len == 0 || len >= sizeof(dir_path))
+    return -EINVAL;
+
+  memcpy(dir_path, lib_path, len + 1);
+
+  while (len > 1 && dir_path[len - 1] == '/') {
+    dir_path[len - 1] = '\0';
+    len--;
+  }
+
+  slash = strrchr(dir_path, '/');
+  if (!slash)
+    return -EINVAL;
+  if (slash == dir_path)
+    return 0; /* parent is /, skip global mountpoint lock */
+  *slash = '\0';
+
+  p = dir_path + 1; /* skip leading slash */
+  while (*p != '\0') {
+    const char *next = strchr(p, '/');
+    size_t comp_len = next ? (size_t)(next - p) : strlen(p);
+
+    if (comp_len == 0) {
+      p++;
+      continue;
+    }
+
+    if (prefix_len == 0) {
+      if (1 + comp_len >= sizeof(prefix))
+        return -ENAMETOOLONG;
+      prefix[0] = '/';
+      memcpy(prefix + 1, p, comp_len);
+      prefix_len = 1 + comp_len;
+    } else {
+      if (prefix_len + 1 + comp_len >= sizeof(prefix))
+        return -ENAMETOOLONG;
+      prefix[prefix_len] = '/';
+      memcpy(prefix + prefix_len + 1, p, comp_len);
+      prefix_len += 1 + comp_len;
+    }
+
+    prefix[prefix_len] = '\0';
+
+    int ret = update_trusted_mountpoint_ref(ctx, prefix, add);
+    if (ret < 0) {
+      if (add && applied > 0) {
+        size_t rollback_prefix_len = 0;
+        char rollback_prefix[PATH_MAX];
+        char *rp = dir_path + 1;
+        uint32_t remaining = applied;
+
+        while (remaining > 0 && *rp != '\0') {
+          const char *rnext = strchr(rp, '/');
+          size_t rlen = rnext ? (size_t)(rnext - rp) : strlen(rp);
+
+          if (rlen == 0) {
+            rp++;
+            continue;
+          }
+
+          if (rollback_prefix_len == 0) {
+            rollback_prefix[0] = '/';
+            memcpy(rollback_prefix + 1, rp, rlen);
+            rollback_prefix_len = 1 + rlen;
+          } else {
+            rollback_prefix[rollback_prefix_len] = '/';
+            memcpy(rollback_prefix + rollback_prefix_len + 1, rp, rlen);
+            rollback_prefix_len += 1 + rlen;
+          }
+
+          rollback_prefix[rollback_prefix_len] = '\0';
+          (void)update_trusted_mountpoint_ref(ctx, rollback_prefix, 0);
+          remaining--;
+
+          if (!rnext)
+            break;
+          rp = (char *)rnext + 1;
+        }
+      }
+      return ret;
+    }
+
+    applied++;
+
+    if (!next)
+      break;
+    p = (char *)next + 1;
+  }
+
+  return 0;
+}
+
+int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path) {
+  struct trusted_lib_key key = {0};
+  struct stat st;
+  uint32_t value = 1;
+  int ret;
+
+  if (!ctx || !ctx->loaded || !path)
+    return -EINVAL;
+
+  if (ctx->trusted_libs_fd < 0)
+    return -ENOTSUP;
+
+  ret = stat_regular_file_nofollow(path, &st);
+  if (ret < 0)
+    return ret;
+
+  key.dev = (uint64_t)st.st_dev;
+  key.ino = (uint64_t)st.st_ino;
+  if (key.dev == 0 || key.ino == 0)
+    return -EINVAL;
+
+  if (bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY) < 0)
+    return -errno;
+
+  ret = update_trusted_parent_mountpoints(ctx, path, 1);
+  if (ret < 0) {
+    (void)bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
+    return ret;
+  }
+
+  return 0;
 }
 
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   struct trusted_lib_key key = {0};
   struct stat st;
+  int ret;
 
   if (!ctx || !ctx->loaded || !path)
     return -EINVAL;
@@ -1024,7 +1301,7 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (ctx->trusted_libs_fd < 0)
     return -ENOTSUP;
 
-  int ret = stat_regular_file_nofollow(path, &st);
+  ret = stat_regular_file_nofollow(path, &st);
   if (ret < 0)
     return ret;
 
@@ -1033,7 +1310,14 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path) {
   if (key.dev == 0 || key.ino == 0)
     return -EINVAL;
 
-  return bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
+  if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 && errno != ENOENT)
+    return -errno;
+
+  ret = update_trusted_parent_mountpoints(ctx, path, 0);
+  if (ret < 0)
+    return ret;
+
+  return 0;
 }
 
 /*
