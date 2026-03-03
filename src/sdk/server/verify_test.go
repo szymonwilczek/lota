@@ -537,6 +537,44 @@ func TestParseTPMSAttest_TooShort(t *testing.T) {
 	}
 }
 
+func TestParseTPMSAttest_MixedPCRBanksRejected(t *testing.T) {
+	var buf bytes.Buffer
+
+	binary.Write(&buf, binary.BigEndian, uint32(0xff544347))
+	binary.Write(&buf, binary.BigEndian, uint16(0x8018))
+
+	binary.Write(&buf, binary.BigEndian, uint16(4))
+	buf.Write([]byte{0x00, 0x0B, 0xAA, 0xBB})
+
+	extra := make([]byte, 32)
+	binary.Write(&buf, binary.BigEndian, uint16(len(extra)))
+	buf.Write(extra)
+
+	buf.Write(make([]byte, 17))
+	buf.Write(make([]byte, 8))
+
+	// TPML_PCR_SELECTION count=2 with mixed hash banks
+	binary.Write(&buf, binary.BigEndian, uint32(2))
+
+	// SHA-1 selection: PCR0
+	binary.Write(&buf, binary.BigEndian, uint16(0x0004))
+	buf.WriteByte(3)
+	buf.Write([]byte{0x01, 0x00, 0x00})
+
+	// SHA-256 selection: PCR1|PCR2
+	binary.Write(&buf, binary.BigEndian, uint16(0x000B))
+	buf.WriteByte(3)
+	buf.Write([]byte{0x06, 0x00, 0x00})
+
+	binary.Write(&buf, binary.BigEndian, uint16(32))
+	buf.Write(bytes.Repeat([]byte{0xDD}, 32))
+
+	_, _, _, err := parseTPMSAttest(buf.Bytes())
+	if err == nil {
+		t.Fatal("expected error for mixed PCR banks")
+	}
+}
+
 func TestParseRSAPublicKey(t *testing.T) {
 	key := generateTestKey(t)
 

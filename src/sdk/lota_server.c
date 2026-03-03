@@ -176,6 +176,7 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 
   if (type == TPM_ST_ATTEST_QUOTE) {
     uint32_t parsed_pcr_mask = 0;
+    uint16_t pcr_bank_alg = 0;
     /* TPML_PCR_SELECTION: count(4) + array */
     if (off + 4 > len)
       return -1;
@@ -188,9 +189,24 @@ static int parse_tpms_attest(const uint8_t *data, size_t len,
 
     /* each TPMS_PCR_SELECTION: hash(2) + sizeOfSelect(1) + select[] */
     for (uint32_t i = 0; i < pcr_sel_count; i++) {
+      uint16_t hash_alg;
       if (off + 3 > len)
         return -1;
-      off += 2; /* hash alg */
+      hash_alg = read_be16(data + off);
+      off += 2;
+
+      if (i == 0) {
+        pcr_bank_alg = hash_alg;
+      } else if (hash_alg != pcr_bank_alg) {
+        /* mixed-bank selections are not representable in single-bank wire */
+        return -1;
+      }
+
+      if (hash_alg != TPM_ALG_SHA256) {
+        /* LOTA token wire carries a single SHA-256 PCR mask domain */
+        return -1;
+      }
+
       uint8_t select_size = data[off];
       off += 1;
       if (off + select_size > len)

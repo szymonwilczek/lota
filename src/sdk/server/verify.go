@@ -586,6 +586,9 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 			if err := binary.Read(r, binary.BigEndian, &hashAlg); err != nil {
 				return extraData, 0, nil, fmt.Errorf("read pcr selection hash alg: %w", err)
 			}
+			if hashAlg != TPMAlgSHA256 {
+				return extraData, 0, nil, fmt.Errorf("unsupported/mixed PCR bank hash alg: 0x%04X", hashAlg)
+			}
 			if err := binary.Read(r, binary.BigEndian, &selectSize); err != nil {
 				return extraData, 0, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
 			}

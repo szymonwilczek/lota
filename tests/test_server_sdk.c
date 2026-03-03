@@ -146,6 +146,64 @@ static uint8_t *build_fake_tpms_attest(const uint8_t *extra_data,
   return buf;
 }
 
+static uint8_t *
+build_fake_tpms_attest_mixed_banks(const uint8_t *extra_data, size_t extra_len,
+                                   uint32_t sha1_mask, uint32_t sha256_mask,
+                                   const uint8_t *pcr_digest,
+                                   size_t pcr_digest_len, size_t *out_len) {
+  uint8_t *buf = calloc(1, 512);
+  size_t off = 0;
+
+  write_be32(buf + off, TPM_GENERATED_VALUE);
+  off += 4;
+  write_be16(buf + off, TPM_ST_ATTEST_QUOTE);
+  off += 2;
+
+  write_be16(buf + off, 4);
+  off += 2;
+  buf[off++] = 0x00;
+  buf[off++] = 0x0B;
+  buf[off++] = 0xAA;
+  buf[off++] = 0xBB;
+
+  write_be16(buf + off, (uint16_t)extra_len);
+  off += 2;
+  memcpy(buf + off, extra_data, extra_len);
+  off += extra_len;
+
+  off += 17; /* clockInfo */
+  off += 8;  /* firmwareVersion */
+
+  write_be32(buf + off, 2); /* two PCR selections */
+  off += 4;
+
+  /* selection 0: SHA-1 bank */
+  write_be16(buf + off, 0x0004);
+  off += 2;
+  buf[off++] = 3;
+  buf[off++] = (uint8_t)(sha1_mask & 0xFF);
+  buf[off++] = (uint8_t)((sha1_mask >> 8) & 0xFF);
+  buf[off++] = (uint8_t)((sha1_mask >> 16) & 0xFF);
+
+  /* selection 1: SHA-256 bank */
+  write_be16(buf + off, 0x000B);
+  off += 2;
+  buf[off++] = 3;
+  buf[off++] = (uint8_t)(sha256_mask & 0xFF);
+  buf[off++] = (uint8_t)((sha256_mask >> 8) & 0xFF);
+  buf[off++] = (uint8_t)((sha256_mask >> 16) & 0xFF);
+
+  write_be16(buf + off, (uint16_t)pcr_digest_len);
+  off += 2;
+  if (pcr_digest_len > 0) {
+    memcpy(buf + off, pcr_digest, pcr_digest_len);
+    off += pcr_digest_len;
+  }
+
+  *out_len = off;
+  return buf;
+}
+
 static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
                                   uint32_t pcr_mask, const uint8_t nonce[32],
                                   const uint8_t policy_digest[32],
@@ -693,6 +751,98 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
   }
 }
 
+static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
+                                                 const uint8_t *aik_der,
+                                                 size_t aik_len) {
+  TEST("lota_server_verify_token - mixed PCR banks -> ERR_ATTEST_PARSE");
+
+  uint64_t now = (uint64_t)time(NULL);
+  uint64_t valid_until = now + 3600;
+  uint32_t flags = 0x07;
+  uint32_t pcr_mask_union = 0x0007; /* SHA-1: PCR0, SHA-256: PCR1|PCR2 */
+  uint8_t nonce[32] = {0};
+  uint8_t policy_digest[32] = {0x11, 0x22, 0x33};
+  uint8_t runtime_digest[32];
+  uint8_t expected_nonce[32];
+  uint8_t pcr_digest[32];
+  uint8_t tokbuf[2048];
+  size_t tok_written = 0;
+  size_t attest_len = 0;
+  size_t sig_len = 0;
+  uint8_t *attest = NULL;
+  uint8_t *sig = NULL;
+  struct lota_server_claims claims;
+
+  memset(pcr_digest, 0xDD, sizeof(pcr_digest));
+
+  if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0) {
+    FAIL("runtime digest compute failed");
+    return;
+  }
+
+  if (compute_expected_nonce(valid_until, flags, pcr_mask_union, nonce,
+                             policy_digest, runtime_digest, 0,
+                             expected_nonce) != 0) {
+    FAIL("expected nonce compute failed");
+    return;
+  }
+
+  attest = build_fake_tpms_attest_mixed_banks(expected_nonce, 32, 0x0001,
+                                              0x0006, pcr_digest,
+                                              sizeof(pcr_digest), &attest_len);
+  if (!attest) {
+    FAIL("attest build failed");
+    return;
+  }
+
+  sig = rsa_sign(key, EVP_sha256(), attest, attest_len, &sig_len);
+  if (!sig) {
+    free(attest);
+    FAIL("attest sign failed");
+    return;
+  }
+
+  struct lota_token token;
+  memset(&token, 0, sizeof(token));
+  token.valid_until = valid_until;
+  token.flags = flags;
+  memcpy(token.nonce, nonce, sizeof(token.nonce));
+  token.sig_alg = 0x0014;  /* RSASSA */
+  token.hash_alg = 0x000B; /* SHA-256 */
+  token.pcr_mask = pcr_mask_union;
+  memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
+  memcpy(token.runtime_protect_digest, runtime_digest,
+         sizeof(token.runtime_protect_digest));
+  token.runtime_protect_epoch = 0;
+  token.protect_pid_count = 0;
+  token.protected_pids = NULL;
+  token.attest_data = attest;
+  token.attest_size = attest_len;
+  token.signature = sig;
+  token.signature_len = sig_len;
+
+  if (lota_token_serialize(&token, tokbuf, sizeof(tokbuf), &tok_written) !=
+      LOTA_OK) {
+    free(attest);
+    free(sig);
+    FAIL("token serialize failed");
+    return;
+  }
+
+  int ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+                                     nonce, &claims);
+  free(attest);
+  free(sig);
+
+  if (ret == LOTA_SERVER_ERR_ATTEST_PARSE) {
+    PASS();
+  } else {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "expected ERR_ATTEST_PARSE, got %d", ret);
+    FAIL(msg);
+  }
+}
+
 static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
                                 size_t aik_len) {
   TEST("lota_server_verify_token - expired token -> ERR_EXPIRED");
@@ -935,6 +1085,7 @@ int main(void) {
   test_verify_bad_signature(key, aik_der, aik_len);
   test_verify_tampered_flags(key, aik_der, aik_len);
   test_verify_tampered_pcr_mask(key, aik_der, aik_len);
+  test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
   test_verify_expired(key, aik_der, aik_len);
   test_verify_far_future_valid_until(key, aik_der, aik_len);
 
