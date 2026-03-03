@@ -39,7 +39,7 @@ struct tpm_quote_response {
   /* Signature algorithm (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS) */
   uint16_t sig_alg;
 
-  /* Hash algorithm used (TPM2_ALG_SHA256) */
+  /* Signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
   uint16_t hash_alg;
 
   /* Server-provided nonce (echoed in TPMS_ATTEST.extraData) */

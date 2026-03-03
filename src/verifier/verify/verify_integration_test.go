@@ -156,6 +156,9 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	// quote_sig_alg (was reserved)
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
+	// quote_sig_hash_alg
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)
+	offset += 2
 
 	// System Measurement (396 bytes)
 	// kernel_hash
@@ -806,6 +809,8 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
+	offset += 2
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)
 	offset += 2
 
 	// system measurement

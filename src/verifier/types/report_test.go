@@ -90,6 +90,9 @@ func createTestReportBytes() []byte {
 	// quote_sig_alg (2 bytes)
 	binary.LittleEndian.PutUint16(buf[offset:], 0x0014) // TPM2_ALG_RSASSA
 	offset += 2
+	// quote_sig_hash_alg (2 bytes)
+	binary.LittleEndian.PutUint16(buf[offset:], TPMAlgSHA256)
+	offset += 2
 
 	// System Measurement (396 bytes)
 	// kernel_hash (32 bytes)
@@ -307,11 +310,11 @@ func TestParseReport_Alignment(t *testing.T) {
 		"TPM.AIKGeneration":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32,
 		"TPM.PrevAIKPublic":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8,
 		"TPM.PrevAIKSize":    16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8 + 512,
-		"System.KernelHash":  16 + 7514,
-		"System.AgentHash":   16 + 7514 + 32,
-		"System.KernelPath":  16 + 7514 + 64,
-		"System.IOMMU":       16 + 7514 + 64 + 256,
-		"BPF.TotalExec":      16 + 7514 + 396,
+		"System.KernelHash":  16 + 7516,
+		"System.AgentHash":   16 + 7516 + 32,
+		"System.KernelPath":  16 + 7516 + 64,
+		"System.IOMMU":       16 + 7516 + 64 + 256,
+		"BPF.TotalExec":      16 + 7516 + 396,
 	}
 
 	data := createTestReportBytes()
@@ -327,11 +330,11 @@ func TestParseReport_Alignment(t *testing.T) {
 	}
 
 	// final check: fixed size matches C struct, min size includes variable sections header
-	if FixedReportSize != 7950 {
-		t.Errorf("FixedReportSize: got %d, want 7950", FixedReportSize)
+	if FixedReportSize != 7952 {
+		t.Errorf("FixedReportSize: got %d, want 7952", FixedReportSize)
 	}
-	if MinReportSize != 7958 {
-		t.Errorf("MinReportSize: got %d, want 7958", MinReportSize)
+	if MinReportSize != 7960 {
+		t.Errorf("MinReportSize: got %d, want 7960", MinReportSize)
 	}
 	t.Logf("✓ Fixed report size: %d bytes, minimum wire size: %d bytes", FixedReportSize, MinReportSize)
 }

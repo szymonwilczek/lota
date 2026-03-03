@@ -402,6 +402,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
          quote_resp.signature_size);
 
   report->tpm.quote_sig_alg = quote_resp.sig_alg;
+  report->tpm.quote_sig_hash_alg = quote_resp.hash_alg;
 
   /*
    * Copy raw TPMS_ATTEST blob for signature verification.

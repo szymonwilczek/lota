@@ -124,6 +124,9 @@ struct lota_tpm_evidence {
 
   /* TPM quote signature scheme (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS). */
   uint16_t quote_sig_alg;
+
+  /* TPM quote signature hash algorithm (TPM2_ALG_SHA256/SHA384/SHA512). */
+  uint16_t quote_sig_hash_alg;
 } __attribute__((packed));
 
 /*

@@ -147,7 +147,7 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	// extract actual data
 	attestData := report.TPM.AttestData[:report.TPM.AttestSize]
 	signature := report.TPM.QuoteSignature[:report.TPM.QuoteSigSize]
-	hashAlg, hashSource, err := selectQuoteHashAlgorithm(attestData)
+	hashAlg, hashSource, err := selectQuoteHashAlgorithm(report)
 	if err != nil {
 		return err
 	}
@@ -171,45 +171,37 @@ func VerifyReportSignature(report *types.AttestationReport, aikPubKey *rsa.Publi
 	return fmt.Errorf("unsupported TPM quote signature scheme: 0x%04X", report.TPM.QuoteSigAlg)
 }
 
-const (
-	tpmAlgSHA1   = 0x0004
-	tpmAlgSHA256 = 0x000B
-	tpmAlgSHA384 = 0x000C
-	tpmAlgSHA512 = 0x000D
-)
-
 func tpmAlgToCryptoHash(tpmAlg uint16) (crypto.Hash, error) {
 	switch tpmAlg {
-	case tpmAlgSHA256:
+	case types.TPMAlgSHA256:
 		return crypto.SHA256, nil
-	case tpmAlgSHA384:
+	case types.TPMAlgSHA384:
 		return crypto.SHA384, nil
-	case tpmAlgSHA512:
+	case types.TPMAlgSHA512:
 		return crypto.SHA512, nil
-	case tpmAlgSHA1:
+	case types.TPMAlgSHA1:
 		return 0, fmt.Errorf("TPM hash algorithm SHA-1 (0x%04X) is not allowed", tpmAlg)
 	default:
 		return 0, fmt.Errorf("unsupported TPM hash algorithm: 0x%04X", tpmAlg)
 	}
 }
 
-func selectQuoteHashAlgorithm(attestData []byte) (crypto.Hash, string, error) {
-	attest, err := ParseTPMSAttest(attestData)
-	if err != nil {
-		return 0, "tpms_attest.pcr_hash_alg", fmt.Errorf("failed to parse TPMS_ATTEST for hash selection: %w", err)
+func selectQuoteHashAlgorithm(report *types.AttestationReport) (crypto.Hash, string, error) {
+	if report == nil {
+		return 0, "report.tpm.quote_sig_hash_alg", errors.New("report is nil")
 	}
-	if attest == nil || attest.QuoteInfo == nil || attest.QuoteInfo.PCRHashAlg == 0 {
-		return 0, "tpms_attest.pcr_hash_alg", errors.New("TPMS_ATTEST missing PCR hash algorithm metadata")
+	if report.TPM.QuoteSigHashAlg == 0 {
+		return 0, "report.tpm.quote_sig_hash_alg", errors.New("TPM quote signature hash algorithm missing")
 	}
 
-	h, mapErr := tpmAlgToCryptoHash(attest.QuoteInfo.PCRHashAlg)
+	h, mapErr := tpmAlgToCryptoHash(report.TPM.QuoteSigHashAlg)
 	if mapErr != nil {
-		return 0, "tpms_attest.pcr_hash_alg", mapErr
+		return 0, "report.tpm.quote_sig_hash_alg", mapErr
 	}
 	if !h.Available() {
-		return 0, "tpms_attest.pcr_hash_alg", fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
+		return 0, "report.tpm.quote_sig_hash_alg", fmt.Errorf("hash algorithm unavailable: %s", hashName(h))
 	}
-	return h, "tpms_attest.pcr_hash_alg", nil
+	return h, "report.tpm.quote_sig_hash_alg", nil
 }
 
 func hashName(h crypto.Hash) string {

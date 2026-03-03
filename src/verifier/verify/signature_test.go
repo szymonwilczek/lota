@@ -188,7 +188,7 @@ func TestVerifyReportSignature_ValidReport(t *testing.T) {
 	t.Log("SECURITY TEST: Full report signature verification")
 	t.Log("End-to-end test of signature verification pipeline")
 
-	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA256, sha256.Size)
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA256, sha256.Size)
 	hash := sha256.Sum256(attestData)
 	signature, _ := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, hash[:])
 
@@ -199,6 +199,7 @@ func TestVerifyReportSignature_ValidReport(t *testing.T) {
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
 	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
+	report.TPM.QuoteSigHashAlg = types.TPMAlgSHA256
 
 	err := VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
@@ -240,7 +241,7 @@ func TestVerifyReportSignature_NoAttestData(t *testing.T) {
 func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	t.Log("SECURITY TEST: Report signature verification with RSA-PSS")
 
-	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA256, sha256.Size)
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA256, sha256.Size)
 	hash := sha256.Sum256(attestData)
 	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
 	signature, err := rsa.SignPSS(rand.Reader, testKeyPair, crypto.SHA256, hash[:], opts)
@@ -254,6 +255,7 @@ func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
 	report.TPM.QuoteSigAlg = types.TPMAlgRSAPSS
+	report.TPM.QuoteSigHashAlg = types.TPMAlgSHA256
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
@@ -263,10 +265,10 @@ func TestVerifyReportSignature_PSSSignature(t *testing.T) {
 	t.Log("✓ Report with PSS signature correctly verified")
 }
 
-func TestVerifyReportSignature_SHA384FromTPMSAttest(t *testing.T) {
-	t.Log("SECURITY TEST: Signature verification uses TPM-provided SHA-384 hash algorithm")
+func TestVerifyReportSignature_SHA384FromQuoteSigMetadata(t *testing.T) {
+	t.Log("SECURITY TEST: Signature verification uses quote signature SHA-384 metadata")
 
-	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA384, sha512.Size384)
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA256, sha512.Size384)
 	h := sha512.Sum384(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA384, h[:])
 	if err != nil {
@@ -279,19 +281,20 @@ func TestVerifyReportSignature_SHA384FromTPMSAttest(t *testing.T) {
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
 	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
+	report.TPM.QuoteSigHashAlg = types.TPMAlgSHA384
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
 		t.Fatalf("SHA-384 report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with SHA-384 TPM hash metadata correctly verified")
+	t.Log("✓ Report with SHA-384 quote-signature metadata correctly verified")
 }
 
-func TestVerifyReportSignature_SHA512FromTPMSAttest(t *testing.T) {
-	t.Log("SECURITY TEST: Signature verification uses TPM-provided SHA-512 hash algorithm")
+func TestVerifyReportSignature_SHA512FromQuoteSigMetadata(t *testing.T) {
+	t.Log("SECURITY TEST: Signature verification uses quote signature SHA-512 metadata")
 
-	attestData := buildQuoteAttestForSignatureTest(tpmAlgSHA512, sha512.Size)
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA256, sha512.Size)
 	h := sha512.Sum512(attestData)
 	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA512, h[:])
 	if err != nil {
@@ -304,13 +307,62 @@ func TestVerifyReportSignature_SHA512FromTPMSAttest(t *testing.T) {
 	report.TPM.QuoteSigSize = uint16(len(signature))
 	copy(report.TPM.QuoteSignature[:], signature)
 	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
+	report.TPM.QuoteSigHashAlg = types.TPMAlgSHA512
 
 	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
 	if err != nil {
 		t.Fatalf("SHA-512 report signature verification failed: %v", err)
 	}
 
-	t.Log("✓ Report with SHA-512 TPM hash metadata correctly verified")
+	t.Log("✓ Report with SHA-512 quote-signature metadata correctly verified")
+}
+
+func TestVerifyReportSignature_PCRHashAlgMismatchStillVerifies(t *testing.T) {
+	t.Log("SECURITY TEST: Signature verification is independent from PCR hash bank algorithm")
+
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA384, sha256.Size)
+	h := sha256.Sum256(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, h[:])
+	if err != nil {
+		t.Fatalf("Failed to create SHA-256 signature: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.AttestSize = uint16(len(attestData))
+	copy(report.TPM.AttestData[:], attestData)
+	report.TPM.QuoteSigSize = uint16(len(signature))
+	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
+	report.TPM.QuoteSigHashAlg = types.TPMAlgSHA256
+
+	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
+	if err != nil {
+		t.Fatalf("Signature verification failed due to PCR hash mismatch coupling: %v", err)
+	}
+}
+
+func TestVerifyReportSignature_MissingQuoteSigHashAlg(t *testing.T) {
+	t.Log("SECURITY TEST: Missing quote signature hash metadata is rejected")
+
+	attestData := buildQuoteAttestForSignatureTest(types.TPMAlgSHA256, sha256.Size)
+	h := sha256.Sum256(attestData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, h[:])
+	if err != nil {
+		t.Fatalf("Failed to create signature: %v", err)
+	}
+
+	report := &types.AttestationReport{}
+	report.TPM.AttestSize = uint16(len(attestData))
+	copy(report.TPM.AttestData[:], attestData)
+	report.TPM.QuoteSigSize = uint16(len(signature))
+	copy(report.TPM.QuoteSignature[:], signature)
+	report.TPM.QuoteSigAlg = types.TPMAlgRSASSA
+	report.TPM.QuoteSigHashAlg = 0
+
+	err = VerifyReportSignature(report, &testKeyPair.PublicKey)
+	if err == nil {
+		t.Fatal("SECURITY VIOLATION: Report missing quote signature hash metadata was accepted")
+	}
 }
 
 func buildQuoteAttestForSignatureTest(hashAlg uint16, digestSize int) []byte {

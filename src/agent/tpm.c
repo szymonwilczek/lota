@@ -543,7 +543,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 
   memcpy(response->nonce, nonce, LOTA_NONCE_SIZE);
   response->pcr_mask = pcr_mask;
-  response->hash_alg = TPM_HASH_ALG;
+  response->hash_alg = TPM2_ALG_NULL;
 
   ret = tpm_read_pcrs_batch(ctx, pcr_mask, response->pcr_values);
   if (ret < 0)
@@ -581,6 +581,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 
   if (signature->sigAlg == TPM2_ALG_RSASSA) {
     size_t sig_size = signature->signature.rsassa.sig.size;
+    response->hash_alg = signature->signature.rsassa.hash;
     if (sig_size > LOTA_MAX_SIG_SIZE) {
       Esys_Free(quoted);
       Esys_Free(signature);
@@ -591,6 +592,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     response->signature_size = (uint16_t)sig_size;
   } else if (signature->sigAlg == TPM2_ALG_RSAPSS) {
     size_t sig_size = signature->signature.rsapss.sig.size;
+    response->hash_alg = signature->signature.rsapss.hash;
     if (sig_size > LOTA_MAX_SIG_SIZE) {
       Esys_Free(quoted);
       Esys_Free(signature);

@@ -110,27 +110,29 @@ type ReportHeader struct {
 //	aik_generation           8 bytes
 //	prev_aik_public[512]   512 bytes
 //	prev_aik_public_size     2 bytes
-//	reserved[2]              2 bytes
-//	TOTAL:                7514 bytes
+//	quote_sig_alg            2 bytes
+//	quote_sig_hash_alg       2 bytes
+//	TOTAL:                7516 bytes
 type TPMEvidence struct {
-	PCRValues      [PCRCount][HashSize]byte // 768 bytes
-	PCRMask        uint32                   // 4 bytes
-	QuoteSignature [MaxSigSize]byte         // 512 bytes
-	QuoteSigSize   uint16                   // 2 bytes
-	AttestData     [MaxAttestSize]byte      // 1024 bytes
-	AttestSize     uint16                   // 2 bytes
-	AIKPublic      [MaxAIKPubSize]byte      // 512 bytes
-	AIKPublicSize  uint16                   // 2 bytes
-	AIKCertificate [MaxAIKCertSize]byte     // 2048 bytes
-	AIKCertSize    uint16                   // 2 bytes
-	EKCertificate  [MaxEKCertSize]byte      // 2048 bytes
-	EKCertSize     uint16                   // 2 bytes
-	Nonce          [NonceSize]byte          // 32 bytes
-	HardwareID     [HardwareIDSize]byte     // 32 bytes
-	AIKGeneration  uint64                   // 8 bytes
-	PrevAIKPublic  [MaxAIKPubSize]byte      // 512 bytes
-	PrevAIKSize    uint16                   // 2 bytes
-	QuoteSigAlg    uint16                   // 2 bytes (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS)
+	PCRValues       [PCRCount][HashSize]byte // 768 bytes
+	PCRMask         uint32                   // 4 bytes
+	QuoteSignature  [MaxSigSize]byte         // 512 bytes
+	QuoteSigSize    uint16                   // 2 bytes
+	AttestData      [MaxAttestSize]byte      // 1024 bytes
+	AttestSize      uint16                   // 2 bytes
+	AIKPublic       [MaxAIKPubSize]byte      // 512 bytes
+	AIKPublicSize   uint16                   // 2 bytes
+	AIKCertificate  [MaxAIKCertSize]byte     // 2048 bytes
+	AIKCertSize     uint16                   // 2 bytes
+	EKCertificate   [MaxEKCertSize]byte      // 2048 bytes
+	EKCertSize      uint16                   // 2 bytes
+	Nonce           [NonceSize]byte          // 32 bytes
+	HardwareID      [HardwareIDSize]byte     // 32 bytes
+	AIKGeneration   uint64                   // 8 bytes
+	PrevAIKPublic   [MaxAIKPubSize]byte      // 512 bytes
+	PrevAIKSize     uint16                   // 2 bytes
+	QuoteSigAlg     uint16                   // 2 bytes (TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS)
+	QuoteSigHashAlg uint16                   // 2 bytes (TPM2_ALG_SHA256/SHA384/SHA512)
 }
 
 // struct iommu_status (see: include/iommu_types.h)
@@ -195,12 +197,12 @@ var (
 )
 
 // minimum binary size of serialized report on wire
-// Header(16) + TPM(7514) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7958
-const MinReportSize = 7958
+// Header(16) + TPM(7516) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7960
+const MinReportSize = 7960
 
 // fixed struct portion (without variable-length sections)
-// Header(16) + TPM(7514) + System(396) + BPF(24) = 7950
-const FixedReportSize = 7950
+// Header(16) + TPM(7516) + System(396) + BPF(24) = 7952
+const FixedReportSize = 7952
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -287,6 +289,8 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 		return nil, fmt.Errorf("%w: prev_aik_public_size %d exceeds max %d", ErrInvalidSize, report.TPM.PrevAIKSize, MaxAIKPubSize)
 	}
 	report.TPM.QuoteSigAlg = binary.LittleEndian.Uint16(data[offset:])
+	offset += 2
+	report.TPM.QuoteSigHashAlg = binary.LittleEndian.Uint16(data[offset:])
 	offset += 2
 
 	// system measurement (396 bytes)

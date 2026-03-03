@@ -367,6 +367,9 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	// quote_sig_alg (was reserved)
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
+	// quote_sig_hash_alg
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)
+	offset += 2
 
 	// System Measurement (396 bytes)
 	for i := 0; i < types.HashSize; i++ {

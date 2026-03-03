@@ -833,6 +833,9 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	// quote_sig_alg (was reserved)
 	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgRSASSA)
 	offset += 2
+	// quote_sig_hash_alg
+	binary.LittleEndian.PutUint16(buf[offset:], types.TPMAlgSHA256)
+	offset += 2
 
 	// System measurement
 	offset += types.HashSize * 2
