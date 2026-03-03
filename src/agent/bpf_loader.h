@@ -203,6 +203,17 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 
 /*
+ * bpf_loader_verify_kernel_runtime_hardening - Verify kernel anti-tamper base
+ *
+ * Ensures runtime prerequisites expected by LOTA self-protection are active:
+ *   - Linux lockdown mode is restrictive (integrity or confidentiality)
+ *   - IMA policy is present and contains appraisal rules
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_verify_kernel_runtime_hardening(void);
+
+/*
  * bpf_loader_set_agent_pid - Set runtime lota-agent identity in BPF map
  * @ctx: Loaded context
  * @pid: Agent TGID (process id)

@@ -235,6 +235,91 @@ static void build_expected_integrity_config(struct integrity_data *cfg) {
   cfg->lockdown_addr = resolve_lockdown_symbol();
 }
 
+static int read_text_file(const char *path, char *buf, size_t buf_size,
+                          size_t *out_len) {
+  int fd;
+  ssize_t n;
+
+  if (!path || !buf || buf_size < 2)
+    return -EINVAL;
+
+  fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return -errno;
+
+  n = read(fd, buf, buf_size - 1);
+  if (n < 0) {
+    int err = -errno;
+    close(fd);
+    return err;
+  }
+
+  close(fd);
+  buf[n] = '\0';
+  if (out_len)
+    *out_len = (size_t)n;
+  return 0;
+}
+
+static int kernel_lockdown_restrictive(void) {
+  char buf[256];
+  size_t len = 0;
+  char *lb;
+  char *rb;
+
+  int ret =
+      read_text_file("/sys/kernel/security/lockdown", buf, sizeof(buf), &len);
+  if (ret < 0)
+    return ret;
+
+  if (len == 0)
+    return -EIO;
+
+  lb = strchr(buf, '[');
+  rb = lb ? strchr(lb + 1, ']') : NULL;
+  if (!lb || !rb || rb <= lb + 1)
+    return -EPERM;
+
+  *rb = '\0';
+  if (strcmp(lb + 1, "integrity") == 0 ||
+      strcmp(lb + 1, "confidentiality") == 0)
+    return 0;
+
+  return -EPERM;
+}
+
+static int kernel_ima_appraisal_enabled(void) {
+  char buf[8192];
+  int ret =
+      read_text_file("/sys/kernel/security/ima/policy", buf, sizeof(buf), NULL);
+  if (ret < 0)
+    return ret;
+
+  if (!strstr(buf, "appraise"))
+    return -EPERM;
+
+  return 0;
+}
+
+int bpf_loader_verify_kernel_runtime_hardening(void) {
+  int ret;
+
+  ret = kernel_lockdown_restrictive();
+  if (ret < 0) {
+    lota_err("Kernel lockdown is not in restrictive mode "
+             "(integrity/confidentiality required)");
+    return ret;
+  }
+
+  ret = kernel_ima_appraisal_enabled();
+  if (ret < 0) {
+    lota_err("IMA appraisal policy is required for anti-tamper startup");
+    return ret;
+  }
+
+  return 0;
+}
+
 int bpf_loader_init(struct bpf_loader_ctx *ctx) {
   if (!ctx)
     return -EINVAL;

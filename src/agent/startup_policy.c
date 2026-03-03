@@ -480,6 +480,13 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy) {
   if (ret < 0)
     return ret;
 
+  ret = bpf_loader_verify_kernel_runtime_hardening();
+  if (ret < 0) {
+    lota_err("Kernel anti-tamper prerequisites are not satisfied: %s",
+             strerror(-ret));
+    return ret;
+  }
+
   if (bpf_loader_get_mode(&g_agent.bpf_ctx, &prev_mode) == 0)
     have_prev_mode = 1;
 
