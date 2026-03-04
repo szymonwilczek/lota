@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 /*
@@ -59,6 +60,26 @@ static inline int safe_parse_ulong_base(const char *s, int base,
     return -1;
 
   *out = v;
+  return 0;
+}
+
+/*
+ * Safe uint32 decimal parser independent from host long width.
+ * Returns 0 on success, -1 on error.
+ */
+static inline int safe_parse_u32_dec(const char *s, uint32_t *out) {
+  unsigned long v;
+
+  if (!s || !out)
+    return -1;
+
+  if (safe_parse_ulong_base(s, 10, &v) < 0)
+    return -1;
+
+  if (v > UINT32_MAX)
+    return -1;
+
+  *out = (uint32_t)v;
   return 0;
 }
 

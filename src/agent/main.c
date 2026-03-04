@@ -744,8 +744,8 @@ int main(int argc, char *argv[]) {
       block_anon_exec = true;
       break;
     case 'R': {
-      long v;
-      if (safe_parse_long(optarg, &v) < 0 || v <= 0 || v > UINT32_MAX) {
+      uint32_t v;
+      if (safe_parse_u32_dec(optarg, &v) < 0 || v == 0) {
         fprintf(stderr, "Invalid PID: %s\n", optarg);
         return 1;
       }
@@ -761,7 +761,7 @@ int main(int argc, char *argv[]) {
         return 1;
       }
       g_protect_pids = new_pids;
-      g_protect_pids[g_protect_pid_count++] = (uint32_t)v;
+      g_protect_pids[g_protect_pid_count++] = v;
     } break;
     case 'L':
       if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
@@ -799,12 +799,12 @@ int main(int argc, char *argv[]) {
       pid_file_path = optarg;
       break;
     case 'T': {
-      long v;
-      if (safe_parse_long(optarg, &v) < 0 || v < 0 || v > UINT32_MAX) {
+      uint32_t v;
+      if (safe_parse_u32_dec(optarg, &v) < 0) {
         fprintf(stderr, "Invalid AIK TTL: %s\n", optarg);
         return 1;
       }
-      aik_ttl = (uint32_t)v;
+      aik_ttl = v;
     }
       if (aik_ttl > 0 && aik_ttl < 3600) {
         fprintf(stderr, "Warning: AIK TTL %u too low, using 3600s (1 hour)\n",
