@@ -24,6 +24,61 @@
 
 #include <systemd/sd-daemon.h>
 
+static int validate_filesystem_notify_socket(const char *path, uid_t owner) {
+  struct stat st;
+
+  if (!path)
+    return -EINVAL;
+
+  if (stat(path, &st) < 0)
+    return -EPERM;
+
+  if (!S_ISSOCK(st.st_mode))
+    return -EPERM;
+
+  if (st.st_uid != owner)
+    return -EPERM;
+
+  if ((st.st_mode & S_IWOTH) != 0)
+    return -EPERM;
+
+  return 0;
+}
+
+static int validate_notify_socket_env(void) {
+  const char *notify_socket = getenv("NOTIFY_SOCKET");
+  char expected[64];
+
+  if (!notify_socket || notify_socket[0] == '\0')
+    return 0;
+
+  if (strcmp(notify_socket, "/run/systemd/notify") == 0)
+    return validate_filesystem_notify_socket(notify_socket, 0);
+
+  snprintf(expected, sizeof(expected), "/run/user/%u/systemd/notify",
+           (unsigned)geteuid());
+  if (strcmp(notify_socket, expected) == 0)
+    return validate_filesystem_notify_socket(notify_socket, geteuid());
+
+  if (strcmp(notify_socket, "@org/freedesktop/systemd1/notify") == 0)
+    return 0;
+
+  return -EPERM;
+}
+
+static int sdnotify_send_checked(const char *message) {
+  int ret;
+
+  ret = validate_notify_socket_env();
+  if (ret < 0) {
+    unsetenv("NOTIFY_SOCKET");
+    return ret;
+  }
+
+  ret = sd_notify(0, message);
+  return (ret < 0) ? ret : 0;
+}
+
 bool sdnotify_under_systemd(void) {
   /*
    * NOTIFY_SOCKET is set for Type=notify services.
@@ -33,26 +88,16 @@ bool sdnotify_under_systemd(void) {
   return getenv("NOTIFY_SOCKET") != NULL || getenv("INVOCATION_ID") != NULL;
 }
 
-int sdnotify_ready(void) {
-  int ret = sd_notify(0, "READY=1");
-  return (ret < 0) ? ret : 0;
-}
+int sdnotify_ready(void) { return sdnotify_send_checked("READY=1"); }
 
-int sdnotify_reloading(void) {
-  int ret = sd_notify(0, "RELOADING=1");
-  return (ret < 0) ? ret : 0;
-}
+int sdnotify_reloading(void) { return sdnotify_send_checked("RELOADING=1"); }
 
-int sdnotify_stopping(void) {
-  int ret = sd_notify(0, "STOPPING=1");
-  return (ret < 0) ? ret : 0;
-}
+int sdnotify_stopping(void) { return sdnotify_send_checked("STOPPING=1"); }
 
 int sdnotify_status(const char *fmt, ...) {
   char buf[256];
   char msg[280]; /* STATUS= prefix + buf */
   va_list ap;
-  int ret;
 
   if (!fmt)
     return -EINVAL;
@@ -62,8 +107,7 @@ int sdnotify_status(const char *fmt, ...) {
   va_end(ap);
 
   snprintf(msg, sizeof(msg), "STATUS=%s", buf);
-  ret = sd_notify(0, msg);
-  return (ret < 0) ? ret : 0;
+  return sdnotify_send_checked(msg);
 }
 
 bool sdnotify_watchdog_enabled(uint64_t *interval_usec) {
@@ -79,10 +123,7 @@ bool sdnotify_watchdog_enabled(uint64_t *interval_usec) {
   return true;
 }
 
-int sdnotify_watchdog_ping(void) {
-  int ret = sd_notify(0, "WATCHDOG=1");
-  return (ret < 0) ? ret : 0;
-}
+int sdnotify_watchdog_ping(void) { return sdnotify_send_checked("WATCHDOG=1"); }
 
 int sdnotify_listen_fds(void) {
   /*

@@ -114,6 +114,27 @@ static void test_ready_no_socket(void) {
   PASS();
 }
 
+static void test_ready_rejects_spoofed_notify_socket(void) {
+  TEST("sdnotify: ready() rejects spoofed NOTIFY_SOCKET");
+
+  setenv("NOTIFY_SOCKET", "/tmp/lota-fake-notify.sock", 1);
+
+  int ret = sdnotify_ready();
+  if (ret != -EPERM) {
+    unsetenv("NOTIFY_SOCKET");
+    FAIL("expected -EPERM");
+    return;
+  }
+
+  if (getenv("NOTIFY_SOCKET") != NULL) {
+    unsetenv("NOTIFY_SOCKET");
+    FAIL("expected NOTIFY_SOCKET to be cleared after rejection");
+    return;
+  }
+
+  PASS();
+}
+
 static void test_stopping_no_socket(void) {
   TEST("sdnotify: stopping() without socket -> 0");
 
@@ -363,6 +384,7 @@ int main(void) {
   test_detect_invocation_id();
   test_detect_notify_socket();
   test_ready_no_socket();
+  test_ready_rejects_spoofed_notify_socket();
   test_stopping_no_socket();
   test_reloading_no_socket();
   test_status_no_socket();
