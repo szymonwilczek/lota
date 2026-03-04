@@ -11,10 +11,13 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -26,6 +29,12 @@ import (
 	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
+)
+
+const (
+	maxJSONBodyBytes = 1 << 20
+	maxJSONDepth     = 64
+	maxJSONTokens    = 32768
 )
 
 // serves the monitoring REST API
@@ -476,8 +485,7 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/session/validate - verify issued session token
 func (h *APIHandler) handleValidateSessionToken(w http.ResponseWriter, r *http.Request) {
 	var req validateSessionTokenRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONRequest(w, r, &req); err != nil {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
@@ -620,8 +628,7 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var req revokeRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONRequest(w, r, &req); err != nil {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
@@ -759,8 +766,7 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req banRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONRequest(w, r, &req); err != nil {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
@@ -1040,4 +1046,89 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := enc.Encode(v); err != nil {
 		slog.Error("JSON encode error", "error", err)
 	}
+}
+
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
+	if r == nil || r.Body == nil {
+		return errors.New("empty request body")
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return fmt.Errorf("request body too large (max %d bytes)", maxJSONBodyBytes)
+		}
+		return err
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return errors.New("empty request body")
+	}
+
+	if err := validateJSONComplexity(body); err != nil {
+		return err
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values in request body")
+		}
+		return err
+	}
+
+	return nil
+}
+
+func validateJSONComplexity(body []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	depth := 0
+	tokens := 0
+
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		tokens++
+		if tokens > maxJSONTokens {
+			return fmt.Errorf("JSON token count exceeds limit (%d)", maxJSONTokens)
+		}
+
+		delim, ok := tok.(json.Delim)
+		if !ok {
+			continue
+		}
+
+		switch delim {
+		case '{', '[':
+			depth++
+			if depth > maxJSONDepth {
+				return fmt.Errorf("JSON nesting exceeds limit (%d)", maxJSONDepth)
+			}
+		case '}', ']':
+			depth--
+			if depth < 0 {
+				return errors.New("malformed JSON nesting")
+			}
+		}
+	}
+
+	if depth != 0 {
+		return errors.New("malformed JSON nesting")
+	}
+
+	return nil
 }

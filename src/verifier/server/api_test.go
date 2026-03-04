@@ -121,6 +121,23 @@ func TestSessionValidateEndpoint_BadToken(t *testing.T) {
 	}
 }
 
+func TestSessionValidateEndpoint_RejectsDeepJSONNesting(t *testing.T) {
+	mux, _ := setupTestAPI(t)
+
+	deep := strings.Repeat("[", 80) + strings.Repeat("]", 80)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(deep))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "nesting exceeds limit") {
+		t.Fatalf("expected nesting-limit error, got body=%q", rr.Body.String())
+	}
+}
+
 func persistentClientID(challengeID string) string {
 	hwID := sha256.Sum256([]byte(challengeID))
 	return hex.EncodeToString(hwID[:])
