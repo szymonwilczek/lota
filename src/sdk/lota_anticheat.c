@@ -17,6 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 
 #include "lota.h"
@@ -29,7 +30,7 @@
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
                "heartbeat wire header must be exactly 74 bytes");
 
-#define LOTA_AC_GAME_ID_HASH_DOMAIN "lota-ac-game-id:v1"
+#define LOTA_AC_GAME_BINDING_HASH_DOMAIN "lota-ac-game-binding:v2"
 #define LOTA_AC_HEARTBEAT_NONCE_DOMAIN "lota-ac-heartbeat:v1"
 #define LOTA_AC_MAX_HEARTBEAT_AGE_SEC 120ULL
 
@@ -41,6 +42,9 @@ compute_heartbeat_nonce(uint8_t out_nonce[LOTA_NONCE_SIZE],
                         const uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]);
 
 static ssize_t read_file_buf(const char *path, void *buf, size_t buflen);
+
+static int hash_file_sha256(const char *path,
+                            uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
 
 struct lota_ac_session {
   enum lota_ac_provider provider;
@@ -114,28 +118,39 @@ static int read_snapshot(struct lota_ac_session *session) {
   return 0;
 }
 
-static int compute_game_id_hash(const char *game_id,
-                                uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
-  static const uint8_t domain[] = LOTA_AC_GAME_ID_HASH_DOMAIN;
+int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
+                                      uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
+  static const uint8_t domain[] = LOTA_AC_GAME_BINDING_HASH_DOMAIN;
+  uint8_t exe_digest[LOTA_AC_GAME_HASH_SIZE];
   EVP_MD_CTX *ctx;
   unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
   int ok;
 
-  if (!game_id || !out)
+  if (!game_id || !exe_path || !out)
     return -EINVAL;
+  if (game_id[0] == '\0')
+    return -EINVAL;
+
+  if (hash_file_sha256(exe_path, exe_digest) < 0)
+    return -EIO;
 
   ctx = EVP_MD_CTX_new();
   if (!ctx)
     return -ENOMEM;
 
-  /* domain separation prevents cross-protocol/cross-field hash reuse */
   ok = EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) &&
        EVP_DigestUpdate(ctx, domain, sizeof(domain)) &&
        EVP_DigestUpdate(ctx, game_id, strlen(game_id)) &&
+       EVP_DigestUpdate(ctx, exe_digest, sizeof(exe_digest)) &&
        EVP_DigestFinal_ex(ctx, out, &out_len);
 
   EVP_MD_CTX_free(ctx);
   return ok ? 0 : -EIO;
+}
+
+static int compute_game_id_hash(const char *game_id,
+                                uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
+  return lota_ac_compute_game_binding_hash(game_id, "/proc/self/exe", out);
 }
 
 static int
@@ -206,6 +221,63 @@ static ssize_t read_file_buf(const char *path, void *buf, size_t buflen) {
 
   close(fd);
   return total;
+}
+
+static int hash_file_sha256(const char *path,
+                            uint8_t out[LOTA_AC_GAME_HASH_SIZE]) {
+  uint8_t buf[4096];
+  EVP_MD_CTX *ctx = NULL;
+  unsigned int out_len = LOTA_AC_GAME_HASH_SIZE;
+  int fd = -1;
+  int ret = -EIO;
+
+  if (!path || !out)
+    return -EINVAL;
+
+  fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return -errno;
+
+  ctx = EVP_MD_CTX_new();
+  if (!ctx) {
+    ret = -ENOMEM;
+    goto out;
+  }
+
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  for (;;) {
+    ssize_t n = read(fd, buf, sizeof(buf));
+    if (n == 0)
+      break;
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      ret = -errno;
+      goto out;
+    }
+    if (EVP_DigestUpdate(ctx, buf, (size_t)n) != 1) {
+      ret = -EIO;
+      goto out;
+    }
+  }
+
+  if (EVP_DigestFinal_ex(ctx, out, &out_len) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  ret = 0;
+
+out:
+  if (ctx)
+    EVP_MD_CTX_free(ctx);
+  if (fd >= 0)
+    close(fd);
+  return ret;
 }
 
 /*
@@ -495,10 +567,12 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
   return 0;
 }
 
-int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
-                             const uint8_t *aik_pub_der, size_t aik_pub_len,
-                             struct lota_ac_info *info) {
-  if (!data || !info)
+int lota_ac_verify_heartbeat(
+    const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
+    size_t aik_pub_len,
+    const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    struct lota_ac_info *info) {
+  if (!data || !expected_game_id_hash || !info)
     return LOTA_SERVER_ERR_INVALID_ARG;
 
   if (len < LOTA_AC_HEADER_SIZE)
@@ -527,6 +601,10 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
     return LOTA_SERVER_ERR_BAD_TOKEN;
   if (provider != LOTA_AC_PROVIDER_EAC && provider != LOTA_AC_PROVIDER_BATTLEYE)
+    return LOTA_SERVER_ERR_BAD_TOKEN;
+
+  if (CRYPTO_memcmp(data + 40, expected_game_id_hash, LOTA_AC_GAME_HASH_SIZE) !=
+      0)
     return LOTA_SERVER_ERR_BAD_TOKEN;
 
   if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
@@ -569,6 +647,7 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   info->last_heartbeat = timestamp;
   info->heartbeat_seq = sequence;
   info->lota_flags = claims.flags;
+  memcpy(info->game_id_hash, data + 40, LOTA_AC_GAME_HASH_SIZE);
   info->trusted = (claims.flags != 0);
   info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 

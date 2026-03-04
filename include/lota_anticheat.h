@@ -113,7 +113,8 @@ struct lota_ac_config {
  *   28      4      lota_flags      mirror of token flags (integrity-checked
  *                                  against embedded token during verify)
  *   32      8      timestamp       Unix epoch (seconds, nonce-bound)
- *   40      32     game_id_hash    SHA-256("lota-ac-game-id:v1\\0" || game_id)
+ *   40      32     game_id_hash    SHA-256("lota-ac-game-binding:v2\\0" ||
+ *                                  game_id || SHA-256(executable-bytes))
  *   72      2      token_size      embedded LOTA token length
  *   74      var    lota_token[]    full LOTA token (wire format)
  */
@@ -138,6 +139,8 @@ struct lota_ac_info {
   uint64_t last_heartbeat; /* epoch */
   uint32_t heartbeat_seq;  /* current counter */
   uint32_t lota_flags;     /* last known attestation flags */
+  uint8_t
+      game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity binding */
   int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from get_info
                 */
 };
@@ -208,10 +211,24 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
                       size_t buflen, size_t *written);
 
 /*
+ * Compute canonical game-binding hash for a game ID and executable image.
+ *
+ * Hash format:
+ *   SHA-256("lota-ac-game-binding:v2\\0" || game_id ||
+ * SHA-256(executable-bytes))
+ *
+ * Use this to precompute expected_game_id_hash for server-side checks.
+ */
+int lota_ac_compute_game_binding_hash(const char *game_id, const char *exe_path,
+                                      uint8_t out[LOTA_AC_GAME_HASH_SIZE]);
+
+/*
  * Verify a heartbeat packet.
  *
  * Parses the heartbeat header, extracts the embedded LOTA token,
  * and performs full TPM signature verification using aik_pub_der.
+ * Also requires expected_game_id_hash and rejects heartbeats that do not match
+ * the expected game identity binding.
  * Fills info with session/attestation details.
  *
  * SECURITY: aik_pub_der is mandatory. Parse-only operation is rejected
@@ -222,9 +239,11 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  *
  * Returns 0 on success, negative error code on failure.
  */
-int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
-                             const uint8_t *aik_pub_der, size_t aik_pub_len,
-                             struct lota_ac_info *info);
+int lota_ac_verify_heartbeat(
+    const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
+    size_t aik_pub_len,
+    const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+    struct lota_ac_info *info);
 
 const char *lota_ac_state_str(enum lota_ac_state state);
 const char *lota_ac_provider_str(enum lota_ac_provider provider);
