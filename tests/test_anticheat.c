@@ -833,7 +833,7 @@ static void test_heartbeat_null_args(void) {
 }
 
 static void test_verify_roundtrip(void) {
-  TEST("verify: nonce-bound heartbeat parse roundtrip");
+  TEST("verify: nonce-bound heartbeat requires AIK key");
   uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
   size_t written = 0;
   int ret = build_bound_heartbeat_packet(
@@ -843,42 +843,19 @@ static void test_verify_roundtrip(void) {
     return;
   }
 
-  /* verify (parse-only, no AIK) */
+  /* fail closed: cryptographic verification key is mandatory */
   struct lota_ac_info verified;
   ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, &verified);
-  if (ret != 0) {
-    char reason[64];
-    snprintf(reason, sizeof(reason), "verify failed: %d", ret);
-    FAIL(reason);
+  if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
     return;
   }
 
-  int ok = 1;
-  if (verified.provider != LOTA_AC_PROVIDER_EAC) {
-    ok = 0;
-    printf("(prov) ");
-  }
-  if (verified.heartbeat_seq != 0) {
-    ok = 0;
-    printf("(seq) ");
-  }
-  if (verified.lota_flags != 0x07) {
-    ok = 0;
-    printf("(flags=%u) ", verified.lota_flags);
-  }
-  if (!verified.trusted) {
-    ok = 0;
-    printf("(trusted) ");
-  }
-
-  if (ok)
-    PASS();
-  else
-    FAIL("mismatch");
+  PASS();
 }
 
 static void test_verify_battleye_roundtrip(void) {
-  TEST("verify: BattlEye nonce-bound roundtrip");
+  TEST("verify: BattlEye heartbeat requires AIK key");
   uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
   size_t written = 0;
   if (build_bound_heartbeat_packet(buf, sizeof(buf), &written,
@@ -890,12 +867,8 @@ static void test_verify_battleye_roundtrip(void) {
 
   struct lota_ac_info info;
   int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, &info);
-  if (ret != 0) {
-    FAIL("verify failed");
-    return;
-  }
-  if (info.provider != LOTA_AC_PROVIDER_BATTLEYE) {
-    FAIL("wrong provider");
+  if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
     return;
   }
   PASS();
@@ -1020,7 +993,7 @@ static void test_verify_size_mismatch(void) {
 }
 
 static void test_verify_header_flags_tamper_rejected(void) {
-  TEST("verify: tampered heartbeat lota_flags -> NONCE_FAIL");
+  TEST("verify: tampered heartbeat without AIK -> INVALID_ARG");
   uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
   size_t written = 0;
   if (build_bound_heartbeat_packet(buf, sizeof(buf), &written,
@@ -1035,8 +1008,8 @@ static void test_verify_header_flags_tamper_rejected(void) {
 
   struct lota_ac_info info;
   if (lota_ac_verify_heartbeat(buf, written, NULL, 0, &info) !=
-      LOTA_SERVER_ERR_NONCE_FAIL) {
-    FAIL("expected LOTA_SERVER_ERR_NONCE_FAIL");
+      LOTA_SERVER_ERR_INVALID_ARG) {
+    FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
     return;
   }
 

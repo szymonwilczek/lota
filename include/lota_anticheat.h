@@ -138,7 +138,7 @@ struct lota_ac_info {
   uint64_t last_heartbeat; /* epoch */
   uint32_t heartbeat_seq;  /* current counter */
   uint32_t lota_flags;     /* last known attestation flags */
-  int trusted;             /* 1 if meets required_flags */
+  int trusted; /* 1 only for cryptographically verified heartbeat claims */
 };
 
 struct lota_ac_session;
@@ -204,11 +204,12 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
  * Verify a heartbeat packet.
  *
  * Parses the heartbeat header, extracts the embedded LOTA token,
- * and (if aik_pub_der is non-NULL) performs full TPM signature
- * verification. Fills info with session/attestation details.
+ * and performs full TPM signature verification using aik_pub_der.
+ * Fills info with session/attestation details.
  *
- * If aik_pub_der is NULL, performs parse-only (no cryptographic
- * verification of the inner token).
+ * SECURITY: aik_pub_der is mandatory. Parse-only operation is rejected
+ * because unverified claims are attacker-controlled and must not drive
+ * trust decisions.
  *
  * max_age_sec: maximum acceptable token age (0 -> 300 s default).
  *

@@ -542,11 +542,11 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
 
   struct lota_server_claims claims;
 
-  if (aik_pub_der)
-    ret = lota_server_verify_token(token, token_size, aik_pub_der, aik_pub_len,
-                                   expected_nonce, &claims);
-  else
-    ret = lota_server_parse_token(token, token_size, &claims);
+  if (!aik_pub_der || aik_pub_len == 0)
+    return LOTA_SERVER_ERR_INVALID_ARG;
+
+  ret = lota_server_verify_token(token, token_size, aik_pub_der, aik_pub_len,
+                                 expected_nonce, &claims);
 
   if (ret != LOTA_SERVER_OK)
     return ret;
@@ -568,7 +568,7 @@ int lota_ac_verify_heartbeat(const uint8_t *data, size_t len,
   info->last_heartbeat = timestamp;
   info->heartbeat_seq = sequence;
   info->lota_flags = claims.flags;
-  info->trusted = !claims.expired && (claims.flags != 0);
+  info->trusted = (claims.flags != 0);
   info->state = info->trusted ? LOTA_AC_STATE_TRUSTED : LOTA_AC_STATE_UNTRUSTED;
 
   return 0;
