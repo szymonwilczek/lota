@@ -336,13 +336,14 @@ int lota_ac_get_info(const struct lota_ac_session *session,
     return -EINVAL;
 
   info->provider = session->provider;
-  info->state = session->state;
+  info->state = (session->state == LOTA_AC_STATE_ERROR) ? LOTA_AC_STATE_ERROR
+                                                        : LOTA_AC_STATE_RUNNING;
   memcpy(info->session_id, session->session_id, LOTA_AC_SESSION_ID_SIZE);
   info->session_start = session->session_start;
   info->last_heartbeat = session->last_heartbeat;
   info->heartbeat_seq = session->heartbeat_seq;
   info->lota_flags = session->lota_flags;
-  info->trusted = is_trusted(session->lota_flags, session->required_flags);
+  info->trusted = 0;
 
   return 0;
 }

@@ -132,13 +132,14 @@ struct lota_ac_heartbeat_wire {
 
 struct lota_ac_info {
   enum lota_ac_provider provider;
-  enum lota_ac_state state;
+  enum lota_ac_state state; /* authoritative only for verify_heartbeat output */
   uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
   uint64_t session_start;  /* epoch */
   uint64_t last_heartbeat; /* epoch */
   uint32_t heartbeat_seq;  /* current counter */
   uint32_t lota_flags;     /* last known attestation flags */
-  int trusted; /* 1 only for cryptographically verified heartbeat claims */
+  int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from get_info
+                */
 };
 
 struct lota_ac_session;
@@ -166,7 +167,13 @@ void lota_ac_shutdown(struct lota_ac_session *session);
 enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
 
 /*
- * Get detailed session info.
+ * Get local session telemetry for heartbeat production.
+ *
+ * Output from this function is NOT authoritative for anti-cheat decisions.
+ * Treat it as local diagnostics only. Client-side memory can be hooked; server
+ * trust must come from lota_ac_verify_heartbeat() over received heartbeat
+ * packets.
+ *
  * Returns 0 on success, -EINVAL if session or info is NULL.
  */
 int lota_ac_get_info(const struct lota_ac_session *session,
