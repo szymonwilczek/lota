@@ -860,5 +860,15 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
 	offset += 8
 
+	// bpf event_count = 0
+	binary.LittleEndian.PutUint32(buf[offset:], 0)
+	offset += 4
+
+	eventLog := buildTestEventLog(nil)
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
+	offset += 4
+	buf = append(buf, eventLog...)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
+
 	return buf
 }

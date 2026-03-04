@@ -215,6 +215,7 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		AIKMaxAge:             30 * 24 * time.Hour, // 30 days
+		RequireEventLog:       true,
 		RequireCert:           true,
 		AllowPermissivePolicy: false,
 	}
@@ -831,13 +832,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 		clog.Debug("event log verified", "size", len(report.EventLog))
 	} else {
-		if v.requireEventLog {
-			clog.Error("event log required by policy but not provided")
-			v.metrics.Rejections.Inc("pcr_fail")
-			result.Result = types.VerifyPCRFail
-			return result, errors.New("event log required by policy but not provided")
-		}
-		clog.Debug("event log not provided")
+		clog.Error("event log required but not provided")
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("event log required but not provided")
 	}
 
 	// check agent self-measurement against baseline

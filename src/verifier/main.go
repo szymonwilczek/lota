@@ -78,7 +78,7 @@ var (
 	aikMaxAge       = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
 	logFormat       = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel        = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
-	requireEventLog = flag.Bool("require-event-log", false, "Reject attestation reports without an event log")
+	requireEventLog = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
 	requireCert     = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	allowPermissive = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts      stringSliceFlag
@@ -130,6 +130,11 @@ func main() {
 	verifierCfg.Logger = logger
 	verifierCfg.Metrics = m
 	verifierCfg.AIKMaxAge = *aikMaxAge
+	if !*requireEventLog {
+		logger.Error("event log verification is mandatory and cannot be disabled",
+			"hint", "remove --require-event-log=false and provide event logs from agents")
+		os.Exit(1)
+	}
 	verifierCfg.RequireEventLog = *requireEventLog
 	verifierCfg.RequireCert = *requireCert
 	verifierCfg.AllowPermissivePolicy = *allowPermissive

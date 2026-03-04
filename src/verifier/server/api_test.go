@@ -399,6 +399,46 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Add(-time.Hour).Unix()))
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().Unix()))
+	offset += 8
+
+	// no serialized BPF exec events in API fixtures
+	binary.LittleEndian.PutUint32(buf[offset:], 0)
+	offset += 4
+
+	eventLog := buildMinimalEventLog()
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
+	offset += 4
+	buf = append(buf, eventLog...)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
+
+	return buf
+}
+
+// minimal valid TCG event log: legacy Spec ID Event header, zero PCR_EVENT2 entries.
+func buildMinimalEventLog() []byte {
+	buf := make([]byte, 0, 64)
+
+	// TCG_PCR_EVENT legacy header (32 bytes)
+	hdr := make([]byte, 32)
+	binary.LittleEndian.PutUint32(hdr[0:4], 0) // pcr_index
+	binary.LittleEndian.PutUint32(hdr[4:8], 0x00000003)
+
+	// Spec ID Event03\0 payload with one algorithm (SHA-256, digest size 32)
+	spec := make([]byte, 0, 32)
+	spec = append(spec, []byte("Spec ID Event03\x00")...) // 16 bytes
+	spec = append(spec, make([]byte, 8)...)               // platform/meta fields
+	algCount := make([]byte, 4)
+	binary.LittleEndian.PutUint32(algCount, 1)
+	spec = append(spec, algCount...)
+	alg := make([]byte, 4)
+	binary.LittleEndian.PutUint16(alg[0:2], 0x000B) // TPM2_ALG_SHA256
+	binary.LittleEndian.PutUint16(alg[2:4], 32)
+	spec = append(spec, alg...)
+	spec = append(spec, 0x00) // vendorInfoSize = 0
+
+	binary.LittleEndian.PutUint32(hdr[28:32], uint32(len(spec)))
+	buf = append(buf, hdr...)
+	buf = append(buf, spec...)
 
 	return buf
 }
