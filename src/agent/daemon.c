@@ -118,6 +118,7 @@ static int ensure_parent_dir(const char *path) {
   char *dir;
   struct stat st;
   int ret = 0;
+  uid_t euid = geteuid();
 
   pathcopy = strdup(path);
   if (!pathcopy)
@@ -128,6 +129,10 @@ static int ensure_parent_dir(const char *path) {
   if (stat(dir, &st) == 0) {
     if (!S_ISDIR(st.st_mode))
       ret = -ENOTDIR;
+    else if ((st.st_mode & S_IWOTH) && !(st.st_mode & S_ISVTX))
+      ret = -EPERM;
+    else if (st.st_uid != euid && !(st.st_mode & S_ISVTX))
+      ret = -EPERM;
     goto out;
   }
 
@@ -148,6 +153,7 @@ int pidfile_create(const char *path) {
   ssize_t len;
   int flags;
   struct stat st;
+  uid_t euid = geteuid();
 
   if (!path)
     path = DAEMON_DEFAULT_PID_FILE;
@@ -174,6 +180,11 @@ int pidfile_create(const char *path) {
   if (!S_ISREG(st.st_mode) || st.st_nlink != 1) {
     close(fd);
     return -EINVAL;
+  }
+
+  if (st.st_uid != euid) {
+    close(fd);
+    return -EPERM;
   }
 
   if (fchmod(fd, 0600) < 0) {

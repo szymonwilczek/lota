@@ -247,6 +247,66 @@ static void test_pidfile_creates_parent_dir(void) {
   PASS();
 }
 
+static void test_pidfile_rejects_symlink_path(void) {
+  char target[256];
+  char linkpath[256];
+  int tfd;
+  int fd;
+  char before[32] = {0};
+  char after[32] = {0};
+  ssize_t n;
+
+  TEST("pidfile_create rejects symlink path");
+
+  snprintf(target, sizeof(target), "%s/target.txt", tmp_dir);
+  snprintf(linkpath, sizeof(linkpath), "%s/link.pid", tmp_dir);
+
+  tfd = open(target, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (tfd < 0) {
+    FAIL("failed to create target file");
+    return;
+  }
+  if (write(tfd, "SAFE", 4) != 4) {
+    close(tfd);
+    FAIL("failed to seed target file");
+    return;
+  }
+  close(tfd);
+
+  if (symlink(target, linkpath) < 0) {
+    FAIL("failed to create symlink");
+    return;
+  }
+
+  fd = pidfile_create(linkpath);
+  if (fd >= 0) {
+    pidfile_remove(linkpath, fd);
+    FAIL("expected pidfile_create to reject symlink path");
+    return;
+  }
+
+  tfd = open(target, O_RDONLY | O_CLOEXEC);
+  if (tfd < 0) {
+    FAIL("failed to reopen target file");
+    return;
+  }
+  n = read(tfd, before, sizeof(before) - 1);
+  close(tfd);
+  if (n < 0) {
+    FAIL("failed to read target file");
+    return;
+  }
+  before[n] = '\0';
+
+  if (strcmp(before, "SAFE") != 0) {
+    snprintf(after, sizeof(after), "target modified: '%s'", before);
+    FAIL(after);
+    return;
+  }
+
+  PASS();
+}
+
 static void test_signal_install(void) {
   volatile sig_atomic_t running = 1;
   volatile sig_atomic_t reload = 0;
@@ -515,6 +575,7 @@ int main(void) {
   test_pidfile_lock_release_on_close();
   test_pidfile_default_path();
   test_pidfile_creates_parent_dir();
+  test_pidfile_rejects_symlink_path();
 
   /* signal tests */
   test_signal_install();
