@@ -138,6 +138,21 @@ func TestSessionValidateEndpoint_RejectsDeepJSONNesting(t *testing.T) {
 	}
 }
 
+func TestListClients_RejectsExcessiveOffset(t *testing.T) {
+	mux, _ := setupTestAPI(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clients?offset=999999999", nil)
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "offset exceeds maximum") {
+		t.Fatalf("expected offset-limit error, got body=%q", rr.Body.String())
+	}
+}
+
 func persistentClientID(challengeID string) string {
 	hwID := sha256.Sum256([]byte(challengeID))
 	return hex.EncodeToString(hwID[:])

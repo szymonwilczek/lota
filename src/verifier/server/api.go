@@ -35,6 +35,7 @@ const (
 	maxJSONBodyBytes = 1 << 20
 	maxJSONDepth     = 64
 	maxJSONTokens    = 32768
+	maxClientOffset  = 10000
 )
 
 // serves the monitoring REST API
@@ -324,7 +325,11 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		maxLimit     = 1000
 	)
 
-	limit, offset := parsePagination(r, defaultLimit, maxLimit)
+	limit, offset, err := parsePagination(r, defaultLimit, maxLimit)
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
 
 	var clients []string
 	total := 0
@@ -332,7 +337,6 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 	aikStore := h.verifier.AIKStore()
 	if lister, ok := aikStore.(store.PaginatedClientLister); ok {
 		if listerE, ok := aikStore.(store.PaginatedClientListerWithError); ok {
-			var err error
 			clients, err = listerE.ListClientsPageE(limit, offset)
 			if err != nil {
 				h.log.Error("failed to list clients page", "error", err)
@@ -734,7 +738,15 @@ type banResponse struct {
 	Note       string `json:"note"`
 }
 
-func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int) {
+type banListResponse struct {
+	Bans   []banResponse `json:"bans"`
+	Count  int           `json:"count"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	NextID string        `json:"next_id,omitempty"`
+}
+
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int, error) {
 	limit := defaultLimit
 	offset := 0
 
@@ -754,7 +766,11 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int) {
 		limit = maxLimit
 	}
 
-	return limit, offset
+	if offset > maxClientOffset {
+		return 0, 0, fmt.Errorf("offset exceeds maximum (%d)", maxClientOffset)
+	}
+
+	return limit, offset, nil
 }
 
 // POST /api/v1/bans - ban a hardware identity
@@ -849,11 +865,16 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// GET /api/v1/bans?limit=N&offset=M - list active hardware bans (paged)
+// GET /api/v1/bans?limit=N&next_id=<cursor> - list active hardware bans (keyset-paged)
 func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	banStr := h.verifier.BanStore()
 	if banStr == nil {
 		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "hardware bans not configured"})
+		return
+	}
+
+	if r.URL.Query().Get("offset") != "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "offset pagination is not supported for bans; use next_id cursor"})
 		return
 	}
 
@@ -862,22 +883,57 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		maxLimit     = 1000
 	)
 
-	limit, offset := parsePagination(r, defaultLimit, maxLimit)
+	limit := defaultLimit
+	if l := r.URL.Query().Get("limit"); l != "" {
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed <= 0 {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	nextID := strings.TrimSpace(r.URL.Query().Get("next_id"))
 
 	var entries []store.BanEntry
 	total := 0
 
-	if lister, ok := banStr.(store.PaginatedBanLister); ok {
+	if lister, ok := banStr.(store.CursorBanLister); ok {
+		var err error
+		entries, err = lister.ListBansAfter(limit+1, nextID)
+		if err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+
+		if counterE, ok := banStr.(store.BanCounterWithError); ok {
+			total, err = counterE.CountBansE()
+			if err != nil {
+				h.log.Error("failed to count bans", "error", err)
+				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+				return
+			}
+		} else if counter, ok := banStr.(store.BanCounter); ok {
+			total = counter.CountBans()
+		}
+	} else if lister, ok := banStr.(store.PaginatedBanLister); ok {
+		if nextID != "" {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "next_id pagination is not supported by configured ban store"})
+			return
+		}
 		if listerE, ok := banStr.(store.PaginatedBanListerWithError); ok {
 			var err error
-			entries, err = listerE.ListBansPageE(limit, offset)
+			entries, err = listerE.ListBansPageE(limit+1, 0)
 			if err != nil {
 				h.log.Error("failed to list bans page", "error", err)
 				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
 				return
 			}
 		} else {
-			entries = lister.ListBansPage(limit, offset)
+			entries = lister.ListBansPage(limit+1, 0)
 		}
 
 		if counterE, ok := banStr.(store.BanCounterWithError); ok {
@@ -892,19 +948,30 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 			total = counter.CountBans()
 		}
 	} else {
+		if nextID != "" {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "next_id pagination is not supported by configured ban store"})
+			return
+		}
 		all := banStr.ListBans()
 		total = len(all)
-		if offset < len(all) {
-			end := offset + limit
+		if len(all) > 0 {
+			end := limit + 1
 			if end > len(all) {
 				end = len(all)
 			}
-			entries = all[offset:end]
+			entries = all[:end]
 		}
 	}
 
 	if entries == nil {
 		entries = []store.BanEntry{}
+	}
+
+	respNextID := ""
+	if len(entries) > limit {
+		last := entries[limit-1]
+		respNextID = store.EncodeBanCursor(last)
+		entries = entries[:limit]
 	}
 
 	resp := make([]banResponse, len(entries))
@@ -918,12 +985,12 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, map[string]any{
-		"bans":   resp,
-		"count":  len(resp),
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
+	writeJSON(w, banListResponse{
+		Bans:   resp,
+		Count:  len(resp),
+		Total:  total,
+		Limit:  limit,
+		NextID: respNextID,
 	})
 }
 

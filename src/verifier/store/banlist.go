@@ -21,6 +21,7 @@ package store
 import (
 	"encoding/hex"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -77,6 +78,12 @@ type PaginatedBanLister interface {
 // optional interface for stores that can return pagination errors.
 type PaginatedBanListerWithError interface {
 	ListBansPageE(limit, offset int) ([]BanEntry, error)
+}
+
+// cursor-based ban pagination to avoid OFFSET scans on large datasets.
+// nextID is an opaque token returned by the API.
+type CursorBanLister interface {
+	ListBansAfter(limit int, nextID string) ([]BanEntry, error)
 }
 
 // optional interface for retrieving total ban count efficiently.
@@ -197,6 +204,7 @@ func (s *MemoryBanStore) ListBans() []BanEntry {
 	for _, entry := range s.bans {
 		entries = append(entries, *entry)
 	}
+	sortBanEntriesDesc(entries)
 	return entries
 }
 
@@ -216,6 +224,62 @@ func (s *MemoryBanStore) ListBansPage(limit, offset int) []BanEntry {
 		end = len(entries)
 	}
 	return entries[offset:end]
+}
+
+func (s *MemoryBanStore) ListBansAfter(limit int, nextID string) ([]BanEntry, error) {
+	entries := s.ListBans()
+	if limit <= 0 || len(entries) == 0 {
+		return []BanEntry{}, nil
+	}
+
+	start := 0
+	if nextID != "" {
+		cursor, err := DecodeBanCursor(nextID)
+		if err != nil {
+			return nil, err
+		}
+
+		start = len(entries)
+		for i, e := range entries {
+			if e.BannedAt.Before(cursor.BannedAt) ||
+				(e.BannedAt.Equal(cursor.BannedAt) && compareHardwareID(e.HardwareID, cursor.HardwareID) < 0) {
+				start = i
+				break
+			}
+		}
+	}
+
+	if start >= len(entries) {
+		return []BanEntry{}, nil
+	}
+
+	end := start + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	return entries[start:end], nil
+}
+
+func sortBanEntriesDesc(entries []BanEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].BannedAt.Equal(entries[j].BannedAt) {
+			return compareHardwareID(entries[i].HardwareID, entries[j].HardwareID) > 0
+		}
+		return entries[i].BannedAt.After(entries[j].BannedAt)
+	})
+}
+
+func compareHardwareID(a, b [32]byte) int {
+	for i := 0; i < len(a); i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 func (s *MemoryBanStore) CountBans() int {

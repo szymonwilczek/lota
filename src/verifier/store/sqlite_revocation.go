@@ -249,6 +249,53 @@ func (s *SQLiteBanStore) ListBansPageE(limit, offset int) ([]BanEntry, error) {
 	return entries, nil
 }
 
+func (s *SQLiteBanStore) ListBansAfter(limit int, nextID string) ([]BanEntry, error) {
+	if limit <= 0 {
+		return []BanEntry{}, nil
+	}
+
+	query := "SELECT hardware_id, reason, banned_at, banned_by, note FROM hardware_bans"
+	args := make([]any, 0, 4)
+
+	if nextID != "" {
+		cursor, err := DecodeBanCursor(nextID)
+		if err != nil {
+			return nil, err
+		}
+		query += " WHERE (banned_at < ?) OR (banned_at = ? AND hardware_id < ?)"
+		args = append(args, cursor.BannedAt, cursor.BannedAt, cursor.HardwareID[:])
+	}
+
+	query += " ORDER BY banned_at DESC, hardware_id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]BanEntry, 0, limit)
+	for rows.Next() {
+		var entry BanEntry
+		var hwid []byte
+		var reason string
+		if err := rows.Scan(&hwid, &reason, &entry.BannedAt, &entry.BannedBy, &entry.Note); err == nil {
+			if len(hwid) == 32 {
+				copy(entry.HardwareID[:], hwid)
+			}
+			entry.Reason = RevocationReason(reason)
+			entries = append(entries, entry)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
 func (s *SQLiteBanStore) CountBans() int {
 	total, err := s.CountBansE()
 	if err != nil {

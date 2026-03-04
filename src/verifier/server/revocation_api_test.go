@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
@@ -333,13 +334,111 @@ func TestAPI_ListBans(t *testing.T) {
 	}
 
 	var resp struct {
-		Bans  []banResponse `json:"bans"`
-		Count int           `json:"count"`
+		Bans   []banResponse `json:"bans"`
+		Count  int           `json:"count"`
+		NextID string        `json:"next_id"`
 	}
 	json.NewDecoder(rec.Body).Decode(&resp)
 
 	if resp.Count != 2 {
 		t.Errorf("Expected 2 bans, got %d", resp.Count)
+	}
+	if resp.NextID != "" {
+		t.Fatalf("expected empty next_id when all results fit in one page, got %q", resp.NextID)
+	}
+}
+
+func TestAPI_ListBans_RejectsOffsetPagination(t *testing.T) {
+	mux, _ := setupTestAPIListening(t)
+
+	req := httptest.NewRequest("GET", "/api/v1/bans?offset=999999999", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "offset pagination is not supported") {
+		t.Fatalf("Expected offset deprecation error, got body=%q", rec.Body.String())
+	}
+}
+
+func TestAPI_ListBans_CursorPagination(t *testing.T) {
+	mux, _ := setupTestAPIListening(t)
+
+	hwids := []string{
+		"1111111111111111111111111111111111111111111111111111111111111111",
+		"2222222222222222222222222222222222222222222222222222222222222222",
+		"3333333333333333333333333333333333333333333333333333333333333333",
+	}
+
+	for _, hwid := range hwids {
+		body := fmt.Sprintf(`{"hardware_id":"%s","reason":"cheating","actor":"admin"}`, hwid)
+		req := adminRequest("POST", "/api/v1/bans", body)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("Ban %s failed: %d", hwid[:8], rec.Code)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	req1 := httptest.NewRequest("GET", "/api/v1/bans?limit=2", nil)
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first page expected 200, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	var page1 struct {
+		Bans   []banResponse `json:"bans"`
+		Count  int           `json:"count"`
+		NextID string        `json:"next_id"`
+	}
+	if err := json.NewDecoder(rec1.Body).Decode(&page1); err != nil {
+		t.Fatalf("decode first page failed: %v", err)
+	}
+	if page1.Count != 2 || len(page1.Bans) != 2 {
+		t.Fatalf("expected first page size 2, got count=%d len=%d", page1.Count, len(page1.Bans))
+	}
+	if page1.NextID == "" {
+		t.Fatal("expected next_id on non-final page")
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/v1/bans?limit=2&next_id="+page1.NextID, nil)
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second page expected 200, got %d body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	var page2 struct {
+		Bans   []banResponse `json:"bans"`
+		Count  int           `json:"count"`
+		NextID string        `json:"next_id"`
+	}
+	if err := json.NewDecoder(rec2.Body).Decode(&page2); err != nil {
+		t.Fatalf("decode second page failed: %v", err)
+	}
+	if page2.Count != 1 || len(page2.Bans) != 1 {
+		t.Fatalf("expected second page size 1, got count=%d len=%d", page2.Count, len(page2.Bans))
+	}
+	if page2.NextID != "" {
+		t.Fatalf("expected empty next_id on final page, got %q", page2.NextID)
+	}
+
+	seen := map[string]bool{}
+	for _, b := range page1.Bans {
+		seen[b.HardwareID] = true
+	}
+	for _, b := range page2.Bans {
+		if seen[b.HardwareID] {
+			t.Fatalf("duplicate ban across pages: %s", b.HardwareID)
+		}
+		seen[b.HardwareID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 unique bans across pages, got %d", len(seen))
 	}
 }
 
