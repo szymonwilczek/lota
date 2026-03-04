@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,39 @@ import (
 )
 
 const sessionTokenDomain = "lota-session-token:v1"
+
+func wipeBytes(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+
+func cloneSensitive(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func wipeReportSensitive(report *types.AttestationReport) {
+	if report == nil {
+		return
+	}
+	wipeBytes(report.TPM.QuoteSignature[:])
+	wipeBytes(report.TPM.AttestData[:])
+	wipeBytes(report.TPM.AIKPublic[:])
+	wipeBytes(report.TPM.AIKCertificate[:])
+	wipeBytes(report.TPM.EKCertificate[:])
+	wipeBytes(report.TPM.Nonce[:])
+	wipeBytes(report.TPM.PrevAIKPublic[:])
+	wipeBytes(report.EventLog)
+}
 
 func sameRSAPublicKey(a, b *rsa.PublicKey) bool {
 	if a == nil || b == nil {
@@ -434,6 +468,9 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 // clientID (hex-encoded HardwareID from the TPM report) so that
 // transport identity (e.g. NATed IP) is never used as durable identity.
 func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+	reportBuf := cloneSensitive(reportData)
+	defer wipeBytes(reportBuf)
+
 	startTime := time.Now()
 	v.totalAttests.Add(1)
 	v.metrics.AttestationTotal.Inc()
@@ -474,12 +511,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 	}()
 
-	report, err := types.ParseReport(reportData)
+	report, err := types.ParseReport(reportBuf)
 	if err != nil {
 		clog.Error("report parse failed", "error", err)
 		result.Result = types.VerifyOldVersion
 		return result, err
 	}
+	defer wipeReportSensitive(report)
 
 	if err := validateTPMFieldSizes(report); err != nil {
 		clog.Error("invalid TPM field sizes in report", "error", err)
@@ -573,7 +611,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// extract the AIK from the report (untrusted input)
 	var reportAIK *rsa.PublicKey
 	if report.TPM.AIKPublicSize > 0 {
-		aikData := report.TPM.AIKPublic[:report.TPM.AIKPublicSize]
+		aikData := cloneSensitive(report.TPM.AIKPublic[:report.TPM.AIKPublicSize])
+		defer wipeBytes(aikData)
 		reportAIK, err = ParseRSAPublicKey(aikData)
 		if err != nil {
 			clog.Error("failed to parse AIK public key", "error", err)
@@ -602,11 +641,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 		var aikCert, ekCert []byte
 		if report.TPM.AIKCertSize > 0 {
-			aikCert = report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
+			aikCert = cloneSensitive(report.TPM.AIKCertificate[:report.TPM.AIKCertSize])
+			defer wipeBytes(aikCert)
 			clog.Info("AIK certificate provided", "size", report.TPM.AIKCertSize)
 		}
 		if report.TPM.EKCertSize > 0 {
-			ekCert = report.TPM.EKCertificate[:report.TPM.EKCertSize]
+			ekCert = cloneSensitive(report.TPM.EKCertificate[:report.TPM.EKCertSize])
+			defer wipeBytes(ekCert)
 			clog.Info("EK certificate provided", "size", report.TPM.EKCertSize)
 		}
 
@@ -710,7 +751,9 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					result.Result = types.VerifySigFail
 					return result, errors.New("rotation attempt missing prev_aik_public")
 				}
-				prevKey, perr := ParseRSAPublicKey(report.TPM.PrevAIKPublic[:report.TPM.PrevAIKSize])
+				prevAIKData := cloneSensitive(report.TPM.PrevAIKPublic[:report.TPM.PrevAIKSize])
+				defer wipeBytes(prevAIKData)
+				prevKey, perr := ParseRSAPublicKey(prevAIKData)
 				if perr != nil {
 					v.metrics.Rejections.Inc("sig_fail")
 					result.Result = types.VerifySigFail
@@ -739,8 +782,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					result.Result = types.VerifySigFail
 					return result, errors.New("AIK rotation requires both AIK and EK certificates")
 				}
-				aikCert := report.TPM.AIKCertificate[:report.TPM.AIKCertSize]
-				ekCert := report.TPM.EKCertificate[:report.TPM.EKCertSize]
+				aikCert := cloneSensitive(report.TPM.AIKCertificate[:report.TPM.AIKCertSize])
+				ekCert := cloneSensitive(report.TPM.EKCertificate[:report.TPM.EKCertSize])
+				defer wipeBytes(aikCert)
+				defer wipeBytes(ekCert)
 
 				// reported hardware_id must be consistent with EK certificate
 				if err := verifyHardwareIDMatchesEKCert(report, ekCert); err != nil {
@@ -804,7 +849,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	// verify PCR digest binding: ensure reported PCR values match TPM-signed digest
 	if report.TPM.AttestSize > 0 {
-		attestData := report.TPM.AttestData[:report.TPM.AttestSize]
+		attestData := cloneSensitive(report.TPM.AttestData[:report.TPM.AttestSize])
+		defer wipeBytes(attestData)
 		if err := VerifyPCRDigest(attestData, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")

@@ -19,6 +19,7 @@
 
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
+#include <openssl/crypto.h>
 #include <openssl/encoder.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
@@ -45,6 +46,12 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
                                          int had_existing_aik);
+
+static void secure_bzero(void *ptr, size_t len) {
+  if (!ptr || len == 0)
+    return;
+  OPENSSL_cleanse(ptr, len);
+}
 
 typedef int (*tpm_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
                                   uint32_t *out_val);
@@ -537,6 +544,7 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
     memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
     rc = Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value);
+    secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
     if (rc != TSS2_RC_SUCCESS)
       return tss2_rc_to_errno(rc);
   }
@@ -567,10 +575,13 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   rc = Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
                   ESYS_TR_NONE, &qualifying_data, &in_scheme, &pcr_selection,
                   &quoted, &signature);
+  secure_bzero(qualifying_data.buffer, sizeof(qualifying_data.buffer));
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
 
   if (quoted->size > LOTA_MAX_ATTEST_SIZE) {
+    secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+    secure_bzero(signature, sizeof(*signature));
     Esys_Free(quoted);
     Esys_Free(signature);
     return -ENOSPC;
@@ -583,6 +594,8 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     size_t sig_size = signature->signature.rsassa.sig.size;
     response->hash_alg = signature->signature.rsassa.hash;
     if (sig_size > LOTA_MAX_SIG_SIZE) {
+      secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+      secure_bzero(signature, sizeof(*signature));
       Esys_Free(quoted);
       Esys_Free(signature);
       return -ENOSPC;
@@ -594,6 +607,8 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
     size_t sig_size = signature->signature.rsapss.sig.size;
     response->hash_alg = signature->signature.rsapss.hash;
     if (sig_size > LOTA_MAX_SIG_SIZE) {
+      secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+      secure_bzero(signature, sizeof(*signature));
       Esys_Free(quoted);
       Esys_Free(signature);
       return -ENOSPC;
@@ -602,11 +617,15 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
            sig_size);
     response->signature_size = (uint16_t)sig_size;
   } else {
+    secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+    secure_bzero(signature, sizeof(*signature));
     Esys_Free(quoted);
     Esys_Free(signature);
     return -ENOTSUP;
   }
 
+  secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
+  secure_bzero(signature, sizeof(*signature));
   Esys_Free(quoted);
   Esys_Free(signature);
 
@@ -1250,6 +1269,7 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 
   n = write(fd, &rec, sizeof(rec));
   if (n != (ssize_t)sizeof(rec)) {
+    secure_bzero(&rec, sizeof(rec));
     ret = -EIO;
     close(fd);
     unlink(tmp);
@@ -1257,12 +1277,14 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
   }
 
   if (fsync(fd) != 0) {
+    secure_bzero(&rec, sizeof(rec));
     ret = -errno;
     close(fd);
     unlink(tmp);
     return ret;
   }
 
+  secure_bzero(&rec, sizeof(rec));
   close(fd);
 
   if (rename(tmp, path) != 0) {
@@ -1300,17 +1322,25 @@ static int tpm_aik_load_auth(struct tpm_context *ctx) {
 
   n = read(fd, &rec, sizeof(rec));
   close(fd);
-  if (n != (ssize_t)sizeof(rec))
+  if (n != (ssize_t)sizeof(rec)) {
+    secure_bzero(&rec, sizeof(rec));
     return -EIO;
+  }
 
-  if (le32toh(rec.magic) != TPM_AIK_AUTH_MAGIC)
+  if (le32toh(rec.magic) != TPM_AIK_AUTH_MAGIC) {
+    secure_bzero(&rec, sizeof(rec));
     return -EINVAL;
-  if (le32toh(rec.version) != TPM_AIK_AUTH_VERSION)
+  }
+  if (le32toh(rec.version) != TPM_AIK_AUTH_VERSION) {
+    secure_bzero(&rec, sizeof(rec));
     return -ENOTSUP;
+  }
 
   sz = le16toh(rec.size);
-  if (sz != TPM_AIK_AUTH_SIZE)
+  if (sz != TPM_AIK_AUTH_SIZE) {
+    secure_bzero(&rec, sizeof(rec));
     return -EINVAL;
+  }
 
   for (size_t i = 0; i < TPM_AIK_AUTH_SIZE; i++) {
     if (rec.auth[i] != 0) {
@@ -1318,11 +1348,14 @@ static int tpm_aik_load_auth(struct tpm_context *ctx) {
       break;
     }
   }
-  if (!nonzero)
+  if (!nonzero) {
+    secure_bzero(&rec, sizeof(rec));
     return -EKEYREVOKED;
+  }
 
   memcpy(ctx->aik_auth, rec.auth, TPM_AIK_AUTH_SIZE);
   ctx->aik_auth_loaded = true;
+  secure_bzero(&rec, sizeof(rec));
   return 0;
 }
 
@@ -1371,11 +1404,14 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
   Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
 
   ret = tpm_aik_save_auth(ctx, new_auth);
-  if (ret < 0)
+  if (ret < 0) {
+    secure_bzero(new_auth, sizeof(new_auth));
     return ret;
+  }
 
   memcpy(ctx->aik_auth, new_auth, TPM_AIK_AUTH_SIZE);
   ctx->aik_auth_loaded = true;
+  secure_bzero(new_auth, sizeof(new_auth));
   return 0;
 }
 
