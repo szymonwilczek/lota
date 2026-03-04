@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,7 @@ const (
 	maxJSONDepth     = 64
 	maxJSONTokens    = 32768
 	maxClientOffset  = 10000
+	maxDetailChars   = 2048
 )
 
 // serves the monitoring REST API
@@ -1085,7 +1087,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 			Result:     e.Result,
 			DurationMs: e.DurationMs,
 			PCR14:      e.PCR14,
-			Details:    e.Details,
+			Details:    sanitizeAttestationDetail(e.Details),
 			RemoteAddr: e.RemoteAddr,
 		}
 	}
@@ -1155,6 +1157,34 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 	}
 
 	return nil
+}
+
+func sanitizeAttestationDetail(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	b := strings.Builder{}
+	b.Grow(len(s))
+	count := 0
+	for _, r := range s {
+		if count >= maxDetailChars {
+			break
+		}
+		if (r < 0x20 && r != '\n' && r != '\r' && r != '\t') || r == 0x7f {
+			b.WriteRune(' ')
+		} else {
+			b.WriteRune(r)
+		}
+		count++
+	}
+
+	out := html.EscapeString(b.String())
+	if count < len([]rune(s)) {
+		out += "...[truncated]"
+	}
+
+	return out
 }
 
 func validateJSONComplexity(body []byte) error {

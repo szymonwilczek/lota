@@ -121,6 +121,66 @@ func TestSessionValidateEndpoint_BadToken(t *testing.T) {
 	}
 }
 
+func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
+	aikStore := store.NewMemoryStore()
+	m := metrics.New()
+	cfg := verify.DefaultConfig()
+	cfg.RequireCert = false
+	auditLog := store.NewMemoryAuditLog()
+	attLog := store.NewMemoryAttestationLog()
+	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
+	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+	cfg.Metrics = m
+	v := verify.NewVerifier(cfg, aikStore)
+	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+
+	srv := &Server{verifier: v, addr: ":8443"}
+	mux := http.NewServeMux()
+	NewAPIHandler(mux, v, srv, auditLog, nil, m, attLog, "admin-key", "reader-key")
+
+	err := attLog.Record(store.AttestationRecord{
+		ClientID:   "malicious-client",
+		Result:     "parse_error",
+		DurationMs: 1.23,
+		Details:    "<script>alert(1)</script>\x00' OR 1=1 --",
+	})
+	if err != nil {
+		t.Fatalf("attestation record insert failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/attestations", nil)
+	req.Header.Set("Authorization", "Bearer reader-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Attestations []attestationResponse `json:"attestations"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Attestations) != 1 {
+		t.Fatalf("expected one attestation entry, got %d", len(resp.Attestations))
+	}
+
+	details := resp.Attestations[0].Details
+	if strings.Contains(details, "<script>") || strings.Contains(details, "</script>") {
+		t.Fatalf("details were not sanitized: %q", details)
+	}
+	if strings.ContainsRune(details, '\x00') {
+		t.Fatalf("details still contain control characters: %q", details)
+	}
+	if !strings.Contains(details, "&lt;script&gt;") {
+		t.Fatalf("expected escaped html marker, got: %q", details)
+	}
+}
+
 func TestSessionValidateEndpoint_RejectsDeepJSONNesting(t *testing.T) {
 	mux, _ := setupTestAPI(t)
 
