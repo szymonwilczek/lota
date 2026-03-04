@@ -792,6 +792,7 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid hardware_id: " + err.Error()})
 		return
 	}
+	canonicalHWID := store.FormatHardwareID(hwid)
 
 	if !store.IsValidReason(req.Reason) {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("invalid reason %q, must be one of: cheating, compromised, hardware_change, admin", req.Reason)})
@@ -809,17 +810,17 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "hardware ID is already banned"})
 			return
 		}
-		h.log.Error("ban failed", "hardware_id", req.HardwareID, "error", err)
+		h.log.Error("ban failed", "hardware_id", canonicalHWID, "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
 	logging.Security(h.log, "hardware banned",
-		"hardware_id", req.HardwareID, "actor", req.Actor, "reason", req.Reason)
+		"hardware_id", canonicalHWID, "actor", req.Actor, "reason", req.Reason)
 
 	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":      "banned",
-		"hardware_id": req.HardwareID,
+		"hardware_id": canonicalHWID,
 		"reason":      req.Reason,
 	})
 }
@@ -845,6 +846,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid hardware_id: " + err.Error()})
 		return
 	}
+	canonicalHWID := store.FormatHardwareID(hwid)
 
 	err = banStr.UnbanHardware(hwid)
 	if err != nil {
@@ -852,16 +854,16 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})
 			return
 		}
-		h.log.Error("unban failed", "hardware_id", hwidHex, "error", err)
+		h.log.Error("unban failed", "hardware_id", canonicalHWID, "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
 
-	logging.Security(h.log, "hardware unbanned", "hardware_id", hwidHex)
+	logging.Security(h.log, "hardware unbanned", "hardware_id", canonicalHWID)
 
 	writeJSON(w, map[string]string{
 		"status":      "unbanned",
-		"hardware_id": hwidHex,
+		"hardware_id": canonicalHWID,
 	})
 }
 

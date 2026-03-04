@@ -115,9 +115,18 @@ func FormatHardwareID(hwid [32]byte) string {
 // decodes a hex-encoded hardware identity
 func ParseHardwareID(hexStr string) ([32]byte, error) {
 	var hwid [32]byte
+	if len(hexStr) != 64 {
+		return hwid, errors.New("hardware ID must be exactly 64 lowercase hex characters")
+	}
+	for i := 0; i < len(hexStr); i++ {
+		c := hexStr[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return hwid, errors.New("hardware ID must be exactly 64 lowercase hex characters")
+		}
+	}
 	decoded, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return hwid, errors.New("invalid hex encoding")
+		return hwid, errors.New("invalid hardware ID encoding")
 	}
 	if len(decoded) != 32 {
 		return hwid, errors.New("hardware ID must be exactly 32 bytes")
