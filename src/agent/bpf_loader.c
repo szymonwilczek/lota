@@ -64,6 +64,27 @@ struct trusted_lib_key {
   uint64_t ino;
 };
 
+static int harden_fd_cloexec(int fd, const char *label) {
+  int flags;
+
+  if (fd < 0)
+    return -EINVAL;
+
+  flags = fcntl(fd, F_GETFD, 0);
+  if (flags < 0)
+    return -errno;
+
+  if ((flags & FD_CLOEXEC) != 0)
+    return 0;
+
+  if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+    return -errno;
+
+  lota_info("Applied FD_CLOEXEC hardening on %s fd=%d", label ? label : "fd",
+            fd);
+  return 0;
+}
+
 /*
  * Returns 1 in initial PID namespace, 0 in nested PID namespace, <0 on error.
  */
@@ -540,16 +561,33 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     lota_err("Failed to find events map");
     goto err_close;
   }
+  err = harden_fd_cloexec(ctx->ringbuf_fd, "events map");
+  if (err < 0) {
+    lota_err("Failed to harden events map fd: %s", strerror(-err));
+    goto err_close;
+  }
 
   /* Get stats map fd */
   ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
   if (ctx->stats_fd < 0) {
     ctx->stats_fd = -1; // stats map is optional
+  } else {
+    err = harden_fd_cloexec(ctx->stats_fd, "stats map");
+    if (err < 0) {
+      lota_err("Failed to harden stats map fd: %s", strerror(-err));
+      goto err_close;
+    }
   }
 
   ctx->config_fd = bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
   if (ctx->config_fd < 0) {
     ctx->config_fd = -1;
+  } else {
+    err = harden_fd_cloexec(ctx->config_fd, "lota_config map");
+    if (err < 0) {
+      lota_err("Failed to harden lota_config map fd: %s", strerror(-err));
+      goto err_close;
+    }
   }
 
   ctx->task_auth_fd =
@@ -559,12 +597,23 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     lota_err("Failed to find lota_task_auth map");
     goto err_close;
   }
+  err = harden_fd_cloexec(ctx->task_auth_fd, "lota_task_auth map");
+  if (err < 0) {
+    lota_err("Failed to harden lota_task_auth map fd: %s", strerror(-err));
+    goto err_close;
+  }
 
   ret = set_task_auth_flags(ctx->task_auth_fd, getpid(),
                             LOTA_TASK_AUTH_ADMIN | LOTA_TASK_AUTH_AGENT);
   if (ret < 0) {
     lota_err("Failed to register task auth flags: %s", strerror(-ret));
     err = ret;
+    goto err_close;
+  }
+
+  if (bpf_map_freeze(ctx->task_auth_fd) < 0) {
+    err = -errno;
+    lota_err("Failed to freeze lota_task_auth map: %s", strerror(errno));
     goto err_close;
   }
 
@@ -587,6 +636,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
   ctx->integrity_fd =
       bpf_object__find_map_fd_by_name(ctx->obj, "integrity_config");
   if (ctx->integrity_fd >= 0) {
+    err = harden_fd_cloexec(ctx->integrity_fd, "integrity_config map");
+    if (err < 0) {
+      lota_err("Failed to harden integrity_config map fd: %s", strerror(-err));
+      goto err_close;
+    }
+
     struct integrity_data cfg = {0};
 
     build_expected_integrity_config(&cfg);
@@ -608,6 +663,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
   if (ctx->trusted_libs_fd < 0) {
     ctx->trusted_libs_fd = -1; /* optional map */
+  } else {
+    err = harden_fd_cloexec(ctx->trusted_libs_fd, "trusted_libs map");
+    if (err < 0) {
+      lota_err("Failed to harden trusted_libs map fd: %s", strerror(-err));
+      goto err_close;
+    }
   }
 
   /* Get trusted parent mountpoint map fd */
@@ -615,6 +676,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
   if (ctx->trusted_lib_mnt_fd < 0) {
     ctx->trusted_lib_mnt_fd = -1; /* optional map */
+  } else {
+    err = harden_fd_cloexec(ctx->trusted_lib_mnt_fd, "trusted_lib_mnt map");
+    if (err < 0) {
+      lota_err("Failed to harden trusted_lib_mnt map fd: %s", strerror(-err));
+      goto err_close;
+    }
   }
 
   /* Get protected PIDs map fd */
@@ -622,6 +689,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
   if (ctx->protected_pids_fd < 0) {
     ctx->protected_pids_fd = -1; /* optional map */
+  } else {
+    err = harden_fd_cloexec(ctx->protected_pids_fd, "protected_pids map");
+    if (err < 0) {
+      lota_err("Failed to harden protected_pids map fd: %s", strerror(-err));
+      goto err_close;
+    }
   }
 
   /* Get fs-verity allowlist map fd */
@@ -629,6 +702,14 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity_digest");
   if (ctx->allow_verity_digest_fd < 0) {
     ctx->allow_verity_digest_fd = -1; /* optional map */
+  } else {
+    err = harden_fd_cloexec(ctx->allow_verity_digest_fd,
+                            "allow_verity_digest map");
+    if (err < 0) {
+      lota_err("Failed to harden allow_verity_digest map fd: %s",
+               strerror(-err));
+      goto err_close;
+    }
   }
 
   ctx->loaded = true;
