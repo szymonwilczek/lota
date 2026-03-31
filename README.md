@@ -54,3 +54,6 @@ TPM 2.0 (Hardware: PCRs) -> eBPF LSM Kernel (Binary Monitoring) -> LOTA Agent Us
 ⚠️ **Heavily** in `development`.
 
 I don't even want to give up the setting up this project in the README right now (of course it can be done, I documented it inside the code), but it instantly reducing the number of people trying to get this to work on right now.
+
+
+**Update**: This will eventually become my BEng Thesis Project. I have so little time to grow this project up right now. I did not forget about it.
