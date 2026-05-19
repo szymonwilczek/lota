@@ -42,6 +42,7 @@
 #include "daemon_loop.h"
 #include "dbus.h"
 #include "event.h"
+#include "hardening.h"
 #include "hash_verify.h"
 #include "io_utils.h"
 #include "iommu.h"
@@ -565,6 +566,21 @@ int main(int argc, char *argv[]) {
   config_init(&cfg);
 
   journal_init("lota-agent");
+
+  /*
+   * apply in-process hardening before touching any TPM/IPC/BPF state.
+   * runs unconditionally so non-systemd launches (recovery shells,
+   * integration test harnesses) cannot bypass the defenses the
+   * systemd unit normally provides
+   */
+  {
+    int harden_ret = hardening_apply_all();
+    if (harden_ret < 0) {
+      fprintf(stderr, "Failed to apply process hardening: %s\n",
+              strerror(-harden_ret));
+      return 1;
+    }
+  }
 
   for (int i = 1; i < argc; i++) {
     if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-f") == 0) &&

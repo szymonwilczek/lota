@@ -58,7 +58,7 @@ HARDENING_LDFLAGS := -Wl,-z,relro,-z,now
 
 # Agent link flags
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
-LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd
+LDFLAGS += -lbpf -ltss2-esys -ltss2-tcti-device -lcrypto -lssl -lsystemd -lseccomp
 
 # Detect architecture from compiler if not specified
 ifndef ARCH
@@ -123,6 +123,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/journal.c \
               $(AGENT_DIR)/selftest.c \
               $(AGENT_DIR)/event.c \
+              $(AGENT_DIR)/hardening.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -284,6 +285,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
 	$(TEST_BIN_DIR)/test_aik_rotation \
+	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
 	$(TEST_BIN_DIR)/sdk_demo \
 	$(TEST_BIN_DIR)/lota_ipc_test \
@@ -345,6 +347,10 @@ $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c 
 	$(CC) $(CFLAGS) -DLOTA_TPM_TESTING -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
@@ -390,6 +396,7 @@ test-unit: all $(TEST_BINS)
 	@./build/test_policy_sign
 	@./build/test_policy_export
 	@./build/test_aik_rotation
+	@./build/test_hardening
 	@./build/test_server_sdk
 	@./build/test_anticheat
 	@./build/test_loader_symbols
