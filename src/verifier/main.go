@@ -82,12 +82,14 @@ var (
 	requireCert     = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	allowPermissive = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts      stringSliceFlag
+	ekCRLs          stringSliceFlag
 	nonceDBPath     = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	allowMemNonces  = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
 
 func main() {
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted CA certificate (PEM) for AIK/EK certificate chain verification; may be repeated")
+	flag.Var(&ekCRLs, "ek-crl", "CRL file (PEM or DER) used to revoke compromised AIK/EK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Parse()
 
 	// initialize structured logger
@@ -206,7 +208,11 @@ func main() {
 		}
 
 		if len(aikCACerts) > 0 || *requireCert {
-			cs, err := store.NewCertificateStore(*aikStorePath, []string(aikCACerts), *requireCert)
+			if len(ekCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--ek-crl requires at least one --aik-ca-cert to verify CRL signatures")
+				os.Exit(1)
+			}
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(ekCRLs), *requireCert)
 			if err != nil {
 				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
 				os.Exit(1)
@@ -215,6 +221,7 @@ func main() {
 			logger.Info("certificate-backed AIK store initialized",
 				"path", *aikStorePath,
 				"trusted_cas", len(aikCACerts),
+				"loaded_crls", cs.CRLCount(),
 				"require_cert", *requireCert,
 				"registered_clients", len(cs.ListClients()))
 		} else {

@@ -683,6 +683,7 @@ type CertificateStore struct {
 	trustedCAs   []*x509.Certificate
 	caPool       *x509.CertPool
 	requireCerts bool
+	crls         *revocationListSet
 }
 
 // TCG EK Credential Profile OID for TPM 2.0
@@ -723,6 +724,15 @@ func validateClientID(id string) error {
 // caCertPaths: paths to trusted CA certificates (TPM manufacturers, Privacy CAs)
 // requireCerts: if true, reject registrations without valid certificates
 func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bool) (*CertificateStore, error) {
+	return NewCertificateStoreWithCRL(storePath, caCertPaths, nil, requireCerts)
+}
+
+// NewCertificateStoreWithCRL extends NewCertificateStore with operator
+// supplied CRL paths. Each CRL is verified against the configured CA
+// roots at load time; a CRL whose signature does not chain or whose
+// issuer is unknown is rejected up front. Lookups during certificate
+// verification consult these lists in addition to the chain check.
+func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
 	if requireCerts && len(caCertPaths) == 0 {
 		return nil, ErrNoTrustedCAs
 	}
@@ -737,6 +747,7 @@ func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bo
 		trustedCAs:   make([]*x509.Certificate, 0),
 		caPool:       x509.NewCertPool(),
 		requireCerts: requireCerts,
+		crls:         newRevocationListSet(),
 	}
 
 	// load ca certificates
@@ -749,8 +760,18 @@ func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bo
 		cs.caPool.AddCert(cert)
 	}
 
+	for _, path := range crlPaths {
+		if err := cs.crls.loadAndVerify(path, cs.trustedCAs); err != nil {
+			return nil, fmt.Errorf("failed to load CRL %s: %w", path, err)
+		}
+	}
+
 	return cs, nil
 }
+
+// CRLCount returns the number of CRLs loaded into the store. Exported
+// for startup logging; the value is informational only.
+func (cs *CertificateStore) CRLCount() int { return cs.crls.size() }
 
 func loadCertificate(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
@@ -875,6 +896,11 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 		return fmt.Errorf("%w: public key mismatch", ErrCertificateKeyMatch)
 	}
 
+	// consult operator-supplied CRLs after chain + key checks pass
+	if err := cs.crls.check(cert, now); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -920,6 +946,11 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 	}
 	if !found {
 		return ErrCertificateEKOID
+	}
+
+	// consult operator-supplied CRLs (TPM manufacturer revocation feeds)
+	if err := cs.crls.check(cert, now); err != nil {
+		return err
 	}
 
 	return nil
