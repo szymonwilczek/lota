@@ -675,6 +675,180 @@ static void test_provision_rejects_swtpm_vendor(void) {
   PASS();
 }
 
+static void test_rc_success_is_zero(void) {
+  TEST("tpm_test_rc_to_errno: TSS2_RC_SUCCESS -> 0");
+
+  if (tpm_test_rc_to_errno(TSS2_RC_SUCCESS) != 0) {
+    FAIL("expected 0");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_rc_lockout_raw(void) {
+  TEST("tpm_test_rc_is_lockout: raw TPM2_RC_LOCKOUT");
+
+  if (!tpm_test_rc_is_lockout(TPM2_RC_LOCKOUT)) {
+    FAIL("LOCKOUT not detected");
+    return;
+  }
+  if (tpm_test_rc_is_transient(TPM2_RC_LOCKOUT)) {
+    FAIL("LOCKOUT must not be transient");
+    return;
+  }
+  if (tpm_test_rc_to_errno(TPM2_RC_LOCKOUT) != -EOWNERDEAD) {
+    FAIL("expected -EOWNERDEAD for LOCKOUT");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_rc_lockout_resmgr_layer(void) {
+  TPM2_RC wrapped = (TPM2_RC)(TSS2_RESMGR_TPM_RC_LAYER | TPM2_RC_LOCKOUT);
+
+  TEST("tpm_test_rc_is_lockout: resmgr-wrapped LOCKOUT");
+
+  if (!tpm_test_rc_is_lockout(wrapped)) {
+    FAIL("layered LOCKOUT not detected");
+    return;
+  }
+  if (tpm_test_rc_to_errno(wrapped) != -EOWNERDEAD) {
+    FAIL("expected -EOWNERDEAD for layered LOCKOUT");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_rc_transient_codes(void) {
+  TPM2_RC transient[] = {
+      TPM2_RC_RETRY,         TPM2_RC_YIELDED,        TPM2_RC_TESTING,
+      TPM2_RC_NV_RATE,       TPM2_RC_NV_UNAVAILABLE, TPM2_RC_SESSION_MEMORY,
+      TPM2_RC_OBJECT_MEMORY, TPM2_RC_MEMORY,
+  };
+
+  TEST("tpm_test_rc_is_transient: WARN codes -> EAGAIN");
+
+  for (size_t i = 0; i < sizeof(transient) / sizeof(transient[0]); i++) {
+    if (!tpm_test_rc_is_transient(transient[i])) {
+      char ebuf[64];
+      snprintf(ebuf, sizeof(ebuf), "code 0x%X not transient",
+               (unsigned)transient[i]);
+      FAIL(ebuf);
+      return;
+    }
+    if (tpm_test_rc_to_errno(transient[i]) != -EAGAIN) {
+      char ebuf[64];
+      snprintf(ebuf, sizeof(ebuf), "code 0x%X != -EAGAIN",
+               (unsigned)transient[i]);
+      FAIL(ebuf);
+      return;
+    }
+    if (tpm_test_rc_is_lockout(transient[i])) {
+      FAIL("transient must not be classified as lockout");
+      return;
+    }
+  }
+
+  PASS();
+}
+
+static void test_rc_auth_fail_with_session_bits(void) {
+  /* TPM2_RC_AUTH_FAIL is a format-1 code; the actual returned RC carries
+   * session/handle indices in bits 8-11. tpm_test_rc_to_errno must strip
+   * those scratch bits before mapping. */
+  TPM2_RC auth_fail_with_session = (TPM2_RC)(TPM2_RC_AUTH_FAIL | 0x300);
+
+  TEST("tpm_test_rc_to_errno: AUTH_FAIL with session offset -> EACCES");
+
+  if (tpm_test_rc_to_errno(auth_fail_with_session) != -EACCES) {
+    FAIL("expected -EACCES");
+    return;
+  }
+  if (tpm_test_rc_is_lockout(auth_fail_with_session)) {
+    FAIL("AUTH_FAIL must not be lockout");
+    return;
+  }
+  if (tpm_test_rc_is_transient(auth_fail_with_session)) {
+    FAIL("AUTH_FAIL must not be transient");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_rc_value_and_handle(void) {
+  TEST("tpm_test_rc_to_errno: VALUE/HANDLE map cleanly");
+
+  if (tpm_test_rc_to_errno(TPM2_RC_VALUE) != -EINVAL) {
+    FAIL("VALUE != -EINVAL");
+    return;
+  }
+  if (tpm_test_rc_to_errno(TPM2_RC_HANDLE) != -ENOENT) {
+    FAIL("HANDLE != -ENOENT");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_rc_tcti_layer(void) {
+  TEST("tpm_test_rc_to_errno: TCTI layer codes");
+
+  if (tpm_test_rc_to_errno(TSS2_TCTI_RC_NO_CONNECTION) != -ENODEV) {
+    FAIL("NO_CONNECTION != -ENODEV");
+    return;
+  }
+  if (tpm_test_rc_to_errno(TSS2_TCTI_RC_TRY_AGAIN) != -EAGAIN) {
+    FAIL("TRY_AGAIN != -EAGAIN");
+    return;
+  }
+  if (!tpm_test_rc_is_transient(TSS2_TCTI_RC_TRY_AGAIN)) {
+    FAIL("TRY_AGAIN must be transient");
+    return;
+  }
+
+  PASS();
+}
+
+static void test_lockout_flag_lifecycle(void) {
+  struct tpm_context ctx;
+
+  TEST("tpm_is_locked_out reflects sticky state and resets cleanly");
+  make_ctx(&ctx);
+
+  if (tpm_is_locked_out(&ctx)) {
+    FAIL("fresh context must not be in lockout");
+    return;
+  }
+
+  /* lockout-record helper is internal; tests drive the public
+   * surface by toggling the latched flag manually. */
+  ctx.lockout_active = true;
+  ctx.lockout_first_seen = time(NULL);
+  ctx.lockout_event_count = 3;
+
+  if (!tpm_is_locked_out(&ctx)) {
+    FAIL("lockout_active was ignored");
+    return;
+  }
+
+  tpm_reset_lockout_state(&ctx);
+
+  if (tpm_is_locked_out(&ctx)) {
+    FAIL("reset did not clear lockout state");
+    return;
+  }
+  if (ctx.lockout_first_seen != 0) {
+    FAIL("first_seen not cleared by reset");
+    return;
+  }
+
+  PASS();
+}
+
 int main(void) {
   printf("\n=== AIK Rotation Tests ===\n\n");
 
@@ -699,6 +873,14 @@ int main(void) {
   test_needs_rotation_boundary();
   test_get_prev_public_small_buf();
   test_provision_rejects_swtpm_vendor();
+  test_rc_success_is_zero();
+  test_rc_lockout_raw();
+  test_rc_lockout_resmgr_layer();
+  test_rc_transient_codes();
+  test_rc_auth_fail_with_session_bits();
+  test_rc_value_and_handle();
+  test_rc_tcti_layer();
+  test_lockout_flag_lifecycle();
 
   cleanup_tmp_dir();
 

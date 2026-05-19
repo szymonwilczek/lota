@@ -47,6 +47,7 @@ enum lota_ipc_result {
   LOTA_IPC_ERR_RATE_LIMITED = 0x06,
   LOTA_IPC_ERR_ACCESS_DENIED = 0x07,
   LOTA_IPC_ERR_BAD_VERSION = 0x08,
+  LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
   LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -58,6 +59,7 @@ enum lota_ipc_result {
 #define LOTA_STATUS_IOMMU_OK (1 << 2)    /* IOMMU verified */
 #define LOTA_STATUS_BPF_LOADED (1 << 3)  /* BPF LSM active */
 #define LOTA_STATUS_SECURE_BOOT (1 << 4) /* Secure Boot enabled */
+#define LOTA_STATUS_TPM_LOCKOUT (1 << 5) /* TPM signaled DA lockout */
 
 /*
  * Request header

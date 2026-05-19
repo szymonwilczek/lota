@@ -688,6 +688,33 @@ int do_attest(const char *server, int port, const char *ca_cert,
 }
 
 /*
+ * Reconcile LOTA_STATUS_TPM_LOCKOUT against the TPM context.
+ *
+ * The TPM module owns the sticky lockout flag; the IPC status bitmap is
+ * recomputed before every ipc_update_status() call so the bit reflects
+ * the most recent observation. Transitions are logged at notice/error
+ * severity so operators can correlate against TPM resource exhaustion.
+ */
+static uint32_t reconcile_tpm_lockout(uint32_t flags) {
+  static bool last_known = false;
+  bool now = tpm_is_locked_out(&g_agent.tpm_ctx);
+
+  if (now && !last_known) {
+    lota_err("TPM DA lockout detected: TPM2_RC_LOCKOUT observed "
+             "(events=%u, first_seen=%lld)",
+             g_agent.tpm_ctx.lockout_event_count,
+             (long long)g_agent.tpm_ctx.lockout_first_seen);
+  } else if (!now && last_known) {
+    lota_notice("TPM DA lockout cleared after successful TPM operation");
+  }
+  last_known = now;
+
+  if (now)
+    return flags | LOTA_STATUS_TPM_LOCKOUT;
+  return flags & ~LOTA_STATUS_TPM_LOCKOUT;
+}
+
+/*
  * Continuous attestation loop.
  * Re-attests every interval_sec seconds with exponential backoff on failure.
  */
@@ -772,7 +799,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
               (unsigned long)g_agent.tpm_ctx.aik_meta.generation, (long)age);
   }
 
-  ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
+  ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags), 0);
 
   sdnotify_ready();
   sdnotify_status("Attesting to %s:%d", server, port);
@@ -810,7 +837,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       /* update ipc: attestation successful */
       status_flags |= LOTA_STATUS_ATTESTED;
       valid_until = (uint64_t)(now + interval_sec + 60); /* buffer */
-      ipc_update_status(&g_agent.ipc_ctx, status_flags, valid_until);
+      ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
+                        valid_until);
       ipc_record_attestation(&g_agent.ipc_ctx, true);
       sdnotify_status("Attested, valid until %lu", (unsigned long)valid_until);
     } else {
@@ -835,7 +863,19 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
       /* update ipc: clear attested flag after multiple failures */
       if (consecutive_failures >= 3) {
         status_flags &= ~LOTA_STATUS_ATTESTED;
-        ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
+        ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
+                          0);
+      } else {
+        /*
+         * Even when the attested bit is still asserted, a failure round may
+         * be the first time the TPM signaled DA lockout; surface that bit
+         * promptly so SDK clients can refuse to issue new tokens.
+         */
+        uint32_t refreshed = reconcile_tpm_lockout(status_flags);
+        if (refreshed != status_flags) {
+          status_flags = refreshed;
+          ipc_update_status(&g_agent.ipc_ctx, status_flags, valid_until);
+        }
       }
       ipc_record_attestation(&g_agent.ipc_ctx, false);
       sdnotify_status("Attestation failed (%d consecutive)",

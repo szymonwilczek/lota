@@ -63,24 +63,201 @@ static int tpm_read_prop(struct tpm_context *ctx, TPM2_PT prop,
 }
 
 /*
- * Helper: Convert TSS2 return code to errno
+ * TPM 2.0 return-code dispatch.
+ *
+ * The TSS2 stack layers status into the high byte of TSS2_RC (bits 16-23);
+ * resource manager and TPM-origin codes are accepted, anything else is
+ * treated as opaque transport failure. Format-1 TPM codes embed parameter,
+ * handle, and session indices in bits 6-11; the dispatch strips that
+ * scratch space so callers can pattern-match against the bare TCG code.
+ */
+
+#define TPM_RC_LAYER_MASK 0x00FF0000U
+#define TPM_RC_CODE_MASK 0x0000FFFFU
+#define TPM_RC_FMT1_BIT 0x080U
+#define TPM_RC_FMT1_BASE_MASK 0x0BFU /* bits 0-5 + FMT1 indicator */
+
+/* Backoff parameters for transient TPM errors (RETRY/YIELDED/NV_RATE/...) */
+#define TPM_RETRY_MAX_ATTEMPTS 6U
+#define TPM_RETRY_BASE_MS 25U
+#define TPM_RETRY_CAP_MS 4000U
+
+static bool tpm_rc_layer_is_tpm(TSS2_RC rc) {
+  uint32_t layer = rc & TPM_RC_LAYER_MASK;
+  return layer == 0U || layer == TSS2_RESMGR_TPM_RC_LAYER;
+}
+
+static TSS2_RC tpm_rc_decode(TSS2_RC rc) {
+  TSS2_RC code = rc & TPM_RC_CODE_MASK;
+  if (code & TPM_RC_FMT1_BIT)
+    return code & TPM_RC_FMT1_BASE_MASK;
+  return code;
+}
+
+static bool tss2_rc_is_lockout(TSS2_RC rc) {
+  if (!tpm_rc_layer_is_tpm(rc))
+    return false;
+  return tpm_rc_decode(rc) == TPM2_RC_LOCKOUT;
+}
+
+static bool tss2_rc_is_transient(TSS2_RC rc) {
+  if (rc == (TSS2_RC)TSS2_TCTI_RC_TRY_AGAIN)
+    return true;
+
+  if (!tpm_rc_layer_is_tpm(rc))
+    return false;
+
+  switch (tpm_rc_decode(rc)) {
+  case TPM2_RC_RETRY:
+  case TPM2_RC_YIELDED:
+  case TPM2_RC_TESTING:
+  case TPM2_RC_NV_RATE:
+  case TPM2_RC_NV_UNAVAILABLE:
+  case TPM2_RC_SESSION_MEMORY:
+  case TPM2_RC_OBJECT_MEMORY:
+  case TPM2_RC_MEMORY:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/*
+ * Helper: Convert TSS2 return code to errno.
+ *
+ * LOCKOUT is surfaced as -EOWNERDEAD so callers can distinguish it from
+ * generic IO failures without consulting tpm_context state. Transient
+ * codes map to -EAGAIN; format-1 auth/handle/value errors keep their
+ * familiar errno mapping.
  */
 static int tss2_rc_to_errno(TSS2_RC rc) {
   if (rc == TSS2_RC_SUCCESS)
     return 0;
 
-  /* common errors */
   switch (rc) {
   case TSS2_TCTI_RC_NO_CONNECTION:
+  case TSS2_TCTI_RC_IO_ERROR:
     return -ENODEV;
+  case TSS2_TCTI_RC_TRY_AGAIN:
+    return -EAGAIN;
   case TSS2_ESYS_RC_BAD_REFERENCE:
     return -EINVAL;
   case TSS2_ESYS_RC_MEMORY:
     return -ENOMEM;
   default:
+    break;
+  }
+
+  if (!tpm_rc_layer_is_tpm(rc))
+    return -EIO;
+
+  switch (tpm_rc_decode(rc)) {
+  case TPM2_RC_LOCKOUT:
+    return -EOWNERDEAD;
+  case TPM2_RC_RETRY:
+  case TPM2_RC_YIELDED:
+  case TPM2_RC_TESTING:
+  case TPM2_RC_NV_RATE:
+  case TPM2_RC_NV_UNAVAILABLE:
+  case TPM2_RC_SESSION_MEMORY:
+  case TPM2_RC_OBJECT_MEMORY:
+  case TPM2_RC_MEMORY:
+    return -EAGAIN;
+  case TPM2_RC_HANDLE:
+  case TPM2_RC_REFERENCE_H0:
+    return -ENOENT;
+  case TPM2_RC_AUTH_FAIL:
+  case TPM2_RC_BAD_AUTH:
+  case TPM2_RC_NV_AUTHORIZATION:
+    return -EACCES;
+  case TPM2_RC_VALUE:
+  case TPM2_RC_SIZE:
+    return -EINVAL;
+  default:
     return -EIO;
   }
 }
+
+static void tpm_backoff_sleep(unsigned attempt) {
+  unsigned ms = TPM_RETRY_BASE_MS << (attempt > 7 ? 7 : attempt);
+  if (ms > TPM_RETRY_CAP_MS)
+    ms = TPM_RETRY_CAP_MS;
+
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+
+  while (nanosleep(&ts, &ts) == -1 && errno == EINTR)
+    ;
+}
+
+static void tpm_record_lockout(struct tpm_context *ctx) {
+  if (!ctx)
+    return;
+
+  ctx->lockout_event_count++;
+  if (!ctx->lockout_active) {
+    ctx->lockout_active = true;
+    ctx->lockout_first_seen = time(NULL);
+  }
+}
+
+static void tpm_clear_lockout(struct tpm_context *ctx) {
+  if (!ctx || !ctx->lockout_active)
+    return;
+
+  ctx->lockout_active = false;
+  ctx->lockout_first_seen = 0;
+}
+
+/*
+ * Run an Esys_* call with retry/backoff for transient errors and sticky
+ * lockout accounting. Non-transient errors break the loop immediately so
+ * the caller can dispatch on the returned TSS2_RC.
+ *
+ * ctx_ may be NULL when invoked from contexts that do not yet hold a
+ * struct tpm_context (e.g. early initialization).
+ */
+#define TPM_CALL_RETRY(ctx_, rc_var_, expr_)                                   \
+  do {                                                                         \
+    unsigned _tpm_attempt = 0;                                                 \
+    for (;;) {                                                                 \
+      (rc_var_) = (expr_);                                                     \
+      if ((rc_var_) == TSS2_RC_SUCCESS) {                                      \
+        tpm_clear_lockout((ctx_));                                             \
+        break;                                                                 \
+      }                                                                        \
+      if (tss2_rc_is_lockout((rc_var_))) {                                     \
+        tpm_record_lockout((ctx_));                                            \
+        break;                                                                 \
+      }                                                                        \
+      if (!tss2_rc_is_transient((rc_var_)) ||                                  \
+          _tpm_attempt >= TPM_RETRY_MAX_ATTEMPTS)                              \
+        break;                                                                 \
+      tpm_backoff_sleep(_tpm_attempt++);                                       \
+    }                                                                          \
+  } while (0)
+
+bool tpm_is_locked_out(const struct tpm_context *ctx) {
+  return ctx && ctx->lockout_active;
+}
+
+void tpm_reset_lockout_state(struct tpm_context *ctx) {
+  if (!ctx)
+    return;
+  ctx->lockout_active = false;
+  ctx->lockout_first_seen = 0;
+}
+
+#ifdef LOTA_TPM_TESTING
+int tpm_test_rc_to_errno(uint32_t rc) { return tss2_rc_to_errno((TSS2_RC)rc); }
+int tpm_test_rc_is_transient(uint32_t rc) {
+  return tss2_rc_is_transient((TSS2_RC)rc) ? 1 : 0;
+}
+int tpm_test_rc_is_lockout(uint32_t rc) {
+  return tss2_rc_is_lockout((TSS2_RC)rc) ? 1 : 0;
+}
+#endif
 
 int tpm_init(struct tpm_context *ctx) {
   TSS2_RC rc;
@@ -104,6 +281,9 @@ int tpm_init(struct tpm_context *ctx) {
   memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
   ctx->prev_aik_public_size = 0;
   ctx->grace_deadline = 0;
+  ctx->lockout_active = false;
+  ctx->lockout_first_seen = 0;
+  ctx->lockout_event_count = 0;
 
   /*
    * Initialize TCTI context for device access.
@@ -176,8 +356,9 @@ int tpm_self_test(struct tpm_context *ctx) {
    * Run TPM self-test.
    * fullTest=YES means run all diagnostics.
    */
-  rc = Esys_SelfTest(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                     TPM2_YES);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_SelfTest(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                               ESYS_TR_NONE, TPM2_YES));
 
   return tss2_rc_to_errno(rc);
 }
@@ -206,9 +387,11 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
   pcr_selection.pcrSelections[0].pcrSelect[pcr_index / 8] =
       (1 << (pcr_index % 8));
 
-  rc = Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                     &pcr_selection, &pcr_update_counter, &pcr_selection_out,
-                     &pcr_values);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                               ESYS_TR_NONE, &pcr_selection,
+                               &pcr_update_counter, &pcr_selection_out,
+                               &pcr_values));
 
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
@@ -263,9 +446,11 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
   pcr_selection.pcrSelections[0].pcrSelect[2] =
       (uint8_t)((pcr_mask >> 16) & 0xFF);
 
-  rc = Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                     &pcr_selection, &pcr_update_counter, &pcr_selection_out,
-                     &pcr_values);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_PCR_Read(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                               ESYS_TR_NONE, &pcr_selection,
+                               &pcr_update_counter, &pcr_selection_out,
+                               &pcr_values));
 
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
@@ -311,16 +496,18 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out) {
   TSS2_RC rc;
   ESYS_TR key_handle = ESYS_TR_NONE;
 
-  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle, ESYS_TR_NONE,
-                             ESYS_TR_NONE, ESYS_TR_NONE, &key_handle);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle,
+                                       ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                       &key_handle));
   if (rc == TSS2_RC_SUCCESS) {
     if (handle_out)
       *handle_out = key_handle;
     return 1;
   }
 
-  /* TPM2_RC_HANDLE means the object doesn't exist */
-  if ((rc & 0xFF) == TPM2_RC_HANDLE)
+  /* TPM2_RC_HANDLE indicates the persistent object is absent */
+  if (tpm_rc_layer_is_tpm(rc) && tpm_rc_decode(rc) == TPM2_RC_HANDLE)
     return 0;
 
   return tss2_rc_to_errno(rc);
@@ -398,10 +585,12 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
   TPM2B_DATA outside_info = {.size = 0};
   TPML_PCR_SELECTION creation_pcr = {.count = 0};
 
-  rc = Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
-                          ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
-                          &outside_info, &creation_pcr, out_handle, &out_public,
-                          &creation_data, &creation_hash, &creation_ticket);
+  TPM_CALL_RETRY(
+      ctx, rc,
+      Esys_CreatePrimary(ctx->esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
+                         ESYS_TR_NONE, ESYS_TR_NONE, &in_sensitive, &in_public,
+                         &outside_info, &creation_pcr, out_handle, &out_public,
+                         &creation_data, &creation_hash, &creation_ticket));
 
   Esys_Free(out_public);
   Esys_Free(creation_data);
@@ -543,7 +732,8 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
   {
     TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
     memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
-    rc = Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value);
+    TPM_CALL_RETRY(ctx, rc,
+                   Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value));
     secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
     if (rc != TSS2_RC_SUCCESS)
       return tss2_rc_to_errno(rc);
@@ -572,9 +762,10 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
       pcr_selection.pcrSelections[0].pcrSelect[i / 8] |= (1 << (i % 8));
   }
 
-  rc = Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                  ESYS_TR_NONE, &qualifying_data, &in_scheme, &pcr_selection,
-                  &quoted, &signature);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_Quote(ctx->esys_ctx, key_handle, ESYS_TR_PASSWORD,
+                            ESYS_TR_NONE, ESYS_TR_NONE, &qualifying_data,
+                            &in_scheme, &pcr_selection, &quoted, &signature));
   secure_bzero(qualifying_data.buffer, sizeof(qualifying_data.buffer));
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
@@ -845,8 +1036,9 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
    * PCRs 16-23 are available for OS/application use.
    * PCR 14 for LOTA self-measurement.
    */
-  rc = Esys_PCR_Extend(ctx->esys_ctx, pcr_handle, ESYS_TR_PASSWORD,
-                       ESYS_TR_NONE, ESYS_TR_NONE, &digests);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_PCR_Extend(ctx->esys_ctx, pcr_handle, ESYS_TR_PASSWORD,
+                                 ESYS_TR_NONE, ESYS_TR_NONE, &digests));
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
 
@@ -881,8 +1073,10 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
     return -ENOKEY;
 
   /* read public portion of AIK */
-  rc = Esys_ReadPublic(ctx->esys_ctx, key_handle, ESYS_TR_NONE, ESYS_TR_NONE,
-                       ESYS_TR_NONE, &out_public, &name, &qualified_name);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_ReadPublic(ctx->esys_ctx, key_handle, ESYS_TR_NONE,
+                                 ESYS_TR_NONE, ESYS_TR_NONE, &out_public, &name,
+                                 &qualified_name));
   if (rc != TSS2_RC_SUCCESS) {
     ret = tss2_rc_to_errno(rc);
     goto cleanup;
@@ -1020,8 +1214,10 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
    * Try to read EK from standard persistent handle.
    * Most TPMs have EK provisioned at 0x81010001.
    */
-  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE, ESYS_TR_NONE,
-                             ESYS_TR_NONE, ESYS_TR_NONE, &ek_handle);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE,
+                                       ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                       &ek_handle));
   if (rc != TSS2_RC_SUCCESS) {
     /*
      * EK not at standard handle - this is common.
@@ -1050,8 +1246,10 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id) {
     return 1; /* AIK fallback */
   }
 
-  rc = Esys_ReadPublic(ctx->esys_ctx, ek_handle, ESYS_TR_NONE, ESYS_TR_NONE,
-                       ESYS_TR_NONE, &ek_public, &ek_name, &ek_qualified_name);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_ReadPublic(ctx->esys_ctx, ek_handle, ESYS_TR_NONE,
+                                 ESYS_TR_NONE, ESYS_TR_NONE, &ek_public,
+                                 &ek_name, &ek_qualified_name));
   if (rc != TSS2_RC_SUCCESS) {
     ret = tss2_rc_to_errno(rc);
     goto cleanup;
@@ -1381,9 +1579,11 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
       return ret;
 
     if (ret == 1) {
-      rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
-                             ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                             ctx->aik_handle, &persistent_handle);
+      TPM_CALL_RETRY(ctx, rc,
+                     Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+                                       old_handle, ESYS_TR_PASSWORD,
+                                       ESYS_TR_NONE, ESYS_TR_NONE,
+                                       ctx->aik_handle, &persistent_handle));
       if (rc != TSS2_RC_SUCCESS)
         return tss2_rc_to_errno(rc);
       Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
@@ -1394,9 +1594,11 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
   if (ret < 0)
     return ret;
 
-  rc = Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER, primary_handle,
-                         ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                         ctx->aik_handle, &persistent_handle);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+                                   primary_handle, ESYS_TR_PASSWORD,
+                                   ESYS_TR_NONE, ESYS_TR_NONE, ctx->aik_handle,
+                                   &persistent_handle));
   Esys_FlushContext(ctx->esys_ctx, primary_handle);
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
@@ -1728,9 +1930,10 @@ static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
   if (!ctx || !ctx->initialized || !out_val)
     return -EINVAL;
 
-  rc = Esys_GetCapability(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                          ESYS_TR_NONE, TPM2_CAP_TPM_PROPERTIES, prop, 1, &more,
-                          &cap_data);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_GetCapability(ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, TPM2_CAP_TPM_PROPERTIES, prop,
+                                    1, &more, &cap_data));
   if (rc != TSS2_RC_SUCCESS)
     return tss2_rc_to_errno(rc);
 
@@ -1765,17 +1968,21 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
   }
 
   /* ESYS handle for NV index */
-  rc = Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_CERT_HANDLE, ESYS_TR_NONE,
-                             ESYS_TR_NONE, ESYS_TR_NONE, &nv_handle);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_CERT_HANDLE,
+                                       ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                       &nv_handle));
   if (rc != TSS2_RC_SUCCESS) {
-    if ((rc & 0xFF) == TPM2_RC_HANDLE)
+    if (tpm_rc_layer_is_tpm(rc) && tpm_rc_decode(rc) == TPM2_RC_HANDLE)
       return -ENOENT; /* no certificate at this handle */
     return tss2_rc_to_errno(rc);
   }
 
   /* read NV public to get size */
-  rc = Esys_NV_ReadPublic(ctx->esys_ctx, nv_handle, ESYS_TR_NONE, ESYS_TR_NONE,
-                          ESYS_TR_NONE, &nv_public, &nv_name);
+  TPM_CALL_RETRY(ctx, rc,
+                 Esys_NV_ReadPublic(ctx->esys_ctx, nv_handle, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &nv_public,
+                                    &nv_name));
   if (rc != TSS2_RC_SUCCESS) {
     return tss2_rc_to_errno(rc);
   }
@@ -1796,9 +2003,10 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
     if (size_to_read > max_nv_size)
       size_to_read = max_nv_size;
 
-    rc = Esys_NV_Read(ctx->esys_ctx, ESYS_TR_RH_OWNER, nv_handle,
-                      ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                      (uint16_t)size_to_read, offset, &nv_data);
+    TPM_CALL_RETRY(ctx, rc,
+                   Esys_NV_Read(ctx->esys_ctx, ESYS_TR_RH_OWNER, nv_handle,
+                                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                                (uint16_t)size_to_read, offset, &nv_data));
     if (rc != TSS2_RC_SUCCESS) {
       return tss2_rc_to_errno(rc);
     }

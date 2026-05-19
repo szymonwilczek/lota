@@ -113,6 +113,19 @@ struct tpm_context {
   uint8_t prev_aik_public[LOTA_MAX_AIK_PUB_SIZE];
   size_t prev_aik_public_size;
   time_t grace_deadline; /* 0 if no grace period active */
+
+  /*
+   * Dictionary-attack lockout state.
+   *
+   * lockout_active is sticky: it is set the first time a TPM call returns
+   * TPM2_RC_LOCKOUT (regardless of TSS2 layer wrapping) and only cleared
+   * by a subsequent successful TPM operation. It allows the agent to
+   * surface a stable "TPM locked" signal over IPC / D-Bus instead of
+   * flapping on transient lockout windows.
+   */
+  bool lockout_active;
+  time_t lockout_first_seen; /* time_t; 0 if not in lockout */
+  uint32_t lockout_event_count;
 };
 
 /*
@@ -420,12 +433,36 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
  */
 int tpm_read_event_log(uint8_t *buf, size_t buf_size, size_t *out_size);
 
+/*
+ * tpm_is_locked_out - Report sticky TPM dictionary-attack lockout state
+ * @ctx: TPM context
+ *
+ * Returns true once a TPM operation has surfaced TPM2_RC_LOCKOUT and the
+ * agent has not yet observed a successful TPM call clearing it.
+ */
+bool tpm_is_locked_out(const struct tpm_context *ctx);
+
+/*
+ * tpm_reset_lockout_state - Clear sticky lockout flag without contacting TPM
+ * @ctx: TPM context
+ *
+ * Used by administrative paths that have externally validated the TPM is
+ * no longer in DA lockout (for example after Esys_DictionaryAttackLockReset
+ * was issued by a privileged tool).
+ */
+void tpm_reset_lockout_state(struct tpm_context *ctx);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
                                        uint32_t *out_val);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);
+
+/* Unit-test hooks into the internal TPM return-code dispatch. */
+int tpm_test_rc_to_errno(uint32_t rc);
+int tpm_test_rc_is_transient(uint32_t rc);
+int tpm_test_rc_is_lockout(uint32_t rc);
 #endif
 
 #endif /* LOTA_TPM_H */
