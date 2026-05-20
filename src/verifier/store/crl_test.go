@@ -244,6 +244,76 @@ func TestCRL_NoCRLForIssuerIsAccepted(t *testing.T) {
 	}
 }
 
+// writeCRLNoNextUpdate emits a syntactically valid CertificateList whose
+// TBSCertList omits the OPTIONAL nextUpdate field. CreateRevocationList in
+// crypto/x509 refuses to do this (NextUpdate is required at the template
+// layer), so the CRL is hand-marshaled via encoding/asn1. The signature is
+// a placeholder: loadAndVerify rejects on the missing NextUpdate before
+// reaching signature verification, which is the contract under test.
+func writeCRLNoNextUpdate(t *testing.T, dir string, ca *x509.Certificate) string {
+	t.Helper()
+
+	sigAlgOID := pkix.AlgorithmIdentifier{
+		Algorithm:  asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}, // sha256WithRSAEncryption
+		Parameters: asn1.RawValue{Tag: 5},                              // NULL
+	}
+
+	tbs := struct {
+		Version    int
+		Signature  pkix.AlgorithmIdentifier
+		Issuer     asn1.RawValue
+		ThisUpdate time.Time
+	}{
+		Version:    1, // v2
+		Signature:  sigAlgOID,
+		Issuer:     asn1.RawValue{FullBytes: ca.RawSubject},
+		ThisUpdate: time.Now().Add(-time.Hour).UTC(),
+	}
+	tbsDER, err := asn1.Marshal(tbs)
+	if err != nil {
+		t.Fatalf("marshal tbs: %v", err)
+	}
+
+	crl := struct {
+		TBSCertList        asn1.RawValue
+		SignatureAlgorithm pkix.AlgorithmIdentifier
+		SignatureValue     asn1.BitString
+	}{
+		TBSCertList:        asn1.RawValue{FullBytes: tbsDER},
+		SignatureAlgorithm: sigAlgOID,
+		SignatureValue:     asn1.BitString{Bytes: []byte{0x00}, BitLength: 8},
+	}
+	der, err := asn1.Marshal(crl)
+	if err != nil {
+		t.Fatalf("marshal crl: %v", err)
+	}
+
+	buf := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+	path := filepath.Join(dir, "no-next-update.pem")
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, _ := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	crlPath := writeCRLNoNextUpdate(t, dir, ca)
+
+	_, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, []string{crlPath}, false)
+	if err == nil {
+		t.Fatal("expected CRL load to fail: missing NextUpdate")
+	}
+	if !errors.Is(err, ErrCRLMissingNextUpdate) {
+		t.Fatalf("expected ErrCRLMissingNextUpdate, got %v", err)
+	}
+}
+
 func TestCRL_AcceptsDEREncodedFile(t *testing.T) {
 	dir := t.TempDir()
 

@@ -9,7 +9,9 @@
 // CRL refresh is intentionally out of scope: production deployments are
 // expected to redeploy the verifier (or atomically replace the CRL files
 // and SIGHUP it) when a TPM manufacturer publishes a new revocation feed.
-// Stale CRLs (NextUpdate < now) fail closed.
+// Stale CRLs (NextUpdate < now) fail closed. CRLs without a NextUpdate
+// field are rejected at load time (RFC 5280 p5.1.2.5): without an upper
+// bound on freshness the staleness check has no semantic meaning.
 
 package store
 
@@ -26,10 +28,11 @@ import (
 
 // revocation lookup errors
 var (
-	ErrCertificateRevoked = errors.New("certificate is revoked by configured CRL")
-	ErrCRLStale           = errors.New("CRL is past its NextUpdate; refusing to trust issuer")
-	ErrCRLSignature       = errors.New("CRL signature verification failed against trusted CAs")
-	ErrCRLNoIssuer        = errors.New("CRL issuer is not among trusted CAs")
+	ErrCertificateRevoked   = errors.New("certificate is revoked by configured CRL")
+	ErrCRLStale             = errors.New("CRL is past its NextUpdate; refusing to trust issuer")
+	ErrCRLSignature         = errors.New("CRL signature verification failed against trusted CAs")
+	ErrCRLNoIssuer          = errors.New("CRL issuer is not among trusted CAs")
+	ErrCRLMissingNextUpdate = errors.New("CRL is missing NextUpdate; RFC 5280 p5.1.2.5 requires it for production use")
 )
 
 // revocationListSet holds CRLs grouped by issuer subject DN.
@@ -66,6 +69,17 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 	crl, err := parseCRL(data)
 	if err != nil {
 		return fmt.Errorf("parse CRL %s: %w", path, err)
+	}
+
+	// RFC 5280 p5.1.2.5 marks NextUpdate as OPTIONAL at the ASN.1 level
+	// but mandates it for production profiles. Without NextUpdate the
+	// staleness check in check() has no upper bound, so a CRL that omits
+	// the field would silently be honored forever - defeating the
+	// fail-closed contract documented at the top of this file. Reject
+	// at load time so operators see the misconfiguration at startup
+	// rather than at the first attestation.
+	if crl.NextUpdate.IsZero() {
+		return fmt.Errorf("%w: %s", ErrCRLMissingNextUpdate, path)
 	}
 
 	// signature must verify against one of the trusted CA certificates
@@ -121,7 +135,10 @@ func (s *revocationListSet) check(cert *x509.Certificate, now time.Time) error {
 
 	allStale := true
 	for _, crl := range crls {
-		if !crl.NextUpdate.IsZero() && now.After(crl.NextUpdate) {
+		// loadAndVerify rejects CRLs without NextUpdate, but defend in
+		// depth: any zero NextUpdate that reaches this path is treated
+		// as immediately stale rather than as "never expires".
+		if crl.NextUpdate.IsZero() || now.After(crl.NextUpdate) {
 			continue
 		}
 		allStale = false
