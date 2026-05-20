@@ -6,12 +6,16 @@
 // CertificateStore, and exposes a lookup by (issuer, serial) that the
 // EK/AIK verification paths consult before accepting a certificate.
 //
-// CRL refresh is intentionally out of scope: production deployments are
-// expected to redeploy the verifier (or atomically replace the CRL files
-// and SIGHUP it) when a TPM manufacturer publishes a new revocation feed.
-// Stale CRLs (NextUpdate < now) fail closed. CRLs without a NextUpdate
-// field are rejected at load time (RFC 5280 p5.1.2.5): without an upper
-// bound on freshness the staleness check has no semantic meaning.
+// Production deployments refresh a CRL feed by writing the new file
+// atomically onto the configured --ek-crl path and sending the verifier
+// SIGHUP: the signal handler in src/verifier/main.go calls
+// CertificateStore.ReloadCRLs(), which re-validates every CRL against
+// the trusted CAs and atomically swaps the active set on success. A
+// failed reload leaves the previous set in place so a malformed update
+// cannot drop revocations on the floor. Stale CRLs (NextUpdate < now)
+// fail closed. CRLs without a NextUpdate field are rejected at load
+// time (RFC 5280 p5.1.2.5): without an upper bound on freshness the
+// staleness check has no semantic meaning.
 
 package store
 

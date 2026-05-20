@@ -449,6 +449,102 @@ func TestCRL_LoadRejectsWeakSignatureAlgorithm(t *testing.T) {
 	}
 }
 
+// TestCRL_ReloadHotSwapsRevocations covers the SIGHUP refresh path: a
+// CRL file that originally revoked one serial is rewritten in place to
+// revoke a different serial, ReloadCRLs() is invoked, and lookups
+// switch over to the new feed without recreating the store.
+func TestCRL_ReloadHotSwapsRevocations(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, caKey := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	const initialSerial = 0x301
+	const refreshedSerial = 0x302
+
+	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour),
+		initialSerial)
+
+	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, []string{crlPath}, true)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	// initial state: initialSerial revoked, refreshedSerial accepted.
+	_, initialLeafDER := buildEKLeaf(t, ca, caKey, initialSerial)
+	if err := cs.verifyEKCertificate(initialLeafDER); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("pre-reload: expected ErrCertificateRevoked for serial %x, got %v",
+			initialSerial, err)
+	}
+	_, refreshedLeafDER := buildEKLeaf(t, ca, caKey, refreshedSerial)
+	if err := cs.verifyEKCertificate(refreshedLeafDER); err != nil {
+		t.Fatalf("pre-reload: serial %x must verify, got %v",
+			refreshedSerial, err)
+	}
+
+	// rewrite the same path with a refreshed feed; writeCRL truncates
+	// and re-creates the file under the same name (crl.pem).
+	if _, err := os.Stat(crlPath); err != nil {
+		t.Fatalf("CRL path missing before refresh: %v", err)
+	}
+	_ = writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour),
+		refreshedSerial)
+
+	if err := cs.ReloadCRLs(); err != nil {
+		t.Fatalf("ReloadCRLs: %v", err)
+	}
+	if cs.CRLCount() != 1 {
+		t.Fatalf("expected 1 CRL after reload, got %d", cs.CRLCount())
+	}
+
+	// post-reload: refreshedSerial rejects, initialSerial accepted.
+	if err := cs.verifyEKCertificate(refreshedLeafDER); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("post-reload: expected ErrCertificateRevoked for serial %x, got %v",
+			refreshedSerial, err)
+	}
+	if err := cs.verifyEKCertificate(initialLeafDER); err != nil {
+		t.Fatalf("post-reload: serial %x must verify, got %v",
+			initialSerial, err)
+	}
+}
+
+// TestCRL_ReloadRejectsBadFeedKeepsPreviousSet covers the failure
+// path: when the refreshed CRL fails any startup gate (signature,
+// NextUpdate, algorithm allow-list, ...) the previous set must remain
+// active so a malformed update cannot drop revocations on the floor.
+func TestCRL_ReloadRejectsBadFeedKeepsPreviousSet(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, caKey := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	const revoked = 0x401
+	crlPath := writeCRL(t, dir, ca, caKey, time.Now().Add(time.Hour), revoked)
+
+	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, []string{crlPath}, true)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	// overwrite the file with a CRL signed by an unrelated CA: signature
+	// verification must fail and ReloadCRLs() return an error.
+	other, otherKey := buildCA(t)
+	_ = writeCRL(t, dir, other, otherKey, time.Now().Add(time.Hour),
+		revoked)
+
+	if err := cs.ReloadCRLs(); err == nil {
+		t.Fatal("expected ReloadCRLs to reject CRL signed by untrusted CA")
+	}
+
+	// previous set must still flag the originally revoked serial.
+	_, leafDER := buildEKLeaf(t, ca, caKey, revoked)
+	if err := cs.verifyEKCertificate(leafDER); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("expected ErrCertificateRevoked from preserved set, got %v", err)
+	}
+}
+
 func TestCRL_LoadRejectsMissingNextUpdate(t *testing.T) {
 	dir := t.TempDir()
 

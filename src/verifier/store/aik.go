@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -683,7 +684,13 @@ type CertificateStore struct {
 	trustedCAs   []*x509.Certificate
 	caPool       *x509.CertPool
 	requireCerts bool
-	crls         *revocationListSet
+	// crlPaths holds the operator-configured CRL file paths captured at
+	// construction. ReloadCRLs() walks the same list, re-validates every
+	// CRL against the trust anchor, and atomically swaps the in-memory
+	// set in via crls.Store so concurrent verify paths see the new feed
+	// without holding a long lock.
+	crlPaths []string
+	crls     atomic.Pointer[revocationListSet]
 }
 
 // TCG EK Credential Profile OID for TPM 2.0
@@ -747,8 +754,9 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths
 		trustedCAs:   make([]*x509.Certificate, 0),
 		caPool:       x509.NewCertPool(),
 		requireCerts: requireCerts,
-		crls:         newRevocationListSet(),
+		crlPaths:     append([]string(nil), crlPaths...),
 	}
+	cs.crls.Store(newRevocationListSet())
 
 	// load ca certificates
 	for _, path := range caCertPaths {
@@ -760,18 +768,60 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths
 		cs.caPool.AddCert(cert)
 	}
 
-	for _, path := range crlPaths {
-		if err := cs.crls.loadAndVerify(path, cs.trustedCAs); err != nil {
-			return nil, fmt.Errorf("failed to load CRL %s: %w", path, err)
+	if len(cs.crlPaths) > 0 {
+		set, err := buildRevocationListSet(cs.crlPaths, cs.trustedCAs)
+		if err != nil {
+			return nil, err
 		}
+		cs.crls.Store(set)
 	}
 
 	return cs, nil
 }
 
+// buildRevocationListSet parses every CRL path against the supplied
+// trust anchor and returns a fully-validated set. Used by both the
+// initial NewCertificateStoreWithCRL() build and the ReloadCRLs()
+// hot-swap path so the two code paths apply identical gates.
+func buildRevocationListSet(paths []string, cas []*x509.Certificate) (*revocationListSet, error) {
+	set := newRevocationListSet()
+	for _, path := range paths {
+		if err := set.loadAndVerify(path, cas); err != nil {
+			return nil, fmt.Errorf("failed to load CRL %s: %w", path, err)
+		}
+	}
+	return set, nil
+}
+
+// ReloadCRLs re-parses every CRL path configured at construction time,
+// validates the new feed against the trusted CA pool, and atomically
+// swaps the active revocation set on success. Verify paths reading via
+// cs.crls.Load() continue against the previous set during the rebuild
+// and pick up the new one on their next call; failure to validate
+// leaves the previous set untouched so a malformed update cannot drop
+// revocations on the floor.
+//
+// The verifier daemon wires this to SIGHUP so operators can install a
+// refreshed manufacturer feed without restarting the process.
+func (cs *CertificateStore) ReloadCRLs() error {
+	if len(cs.crlPaths) == 0 {
+		// nothing to refresh; treat as a successful no-op so the SIGHUP
+		// handler can blanket-call ReloadCRLs() without branching on
+		// whether the operator configured any CRLs at startup.
+		cs.crls.Store(newRevocationListSet())
+		return nil
+	}
+	set, err := buildRevocationListSet(cs.crlPaths, cs.trustedCAs)
+	if err != nil {
+		return err
+	}
+	cs.crls.Store(set)
+	return nil
+}
+
 // CRLCount returns the number of CRLs loaded into the store. Exported
 // for startup logging; the value is informational only.
-func (cs *CertificateStore) CRLCount() int { return cs.crls.size() }
+func (cs *CertificateStore) CRLCount() int { return cs.crls.Load().size() }
 
 func loadCertificate(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
@@ -897,7 +947,7 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 	}
 
 	// consult operator-supplied CRLs after chain + key checks pass
-	if err := cs.crls.check(cert, now); err != nil {
+	if err := cs.crls.Load().check(cert, now); err != nil {
 		return err
 	}
 
@@ -949,7 +999,7 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 	}
 
 	// consult operator-supplied CRLs (TPM manufacturer revocation feeds)
-	if err := cs.crls.check(cert, now); err != nil {
+	if err := cs.crls.Load().check(cert, now); err != nil {
 		return err
 	}
 

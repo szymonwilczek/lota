@@ -353,13 +353,39 @@ func main() {
 	}
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	sig := <-sigCh
-	logger.Info("shutting down", "signal", sig.String())
+	// crlReloader is non-nil only when the operator booted with a
+	// certificate-backed AIK store; that is also the only path that
+	// loaded any CRLs. SIGHUP re-runs the same load+verify gates as
+	// startup and atomically swaps the active set on success, leaving
+	// the existing set in place when the refresh fails.
+	type crlReloader interface{ ReloadCRLs() error }
+	reloader, _ := aikStore.(crlReloader)
 
-	srv.Stop()
-	logger.Info("LOTA Verifier stopped")
+	for sig := range sigCh {
+		switch sig {
+		case syscall.SIGHUP:
+			if reloader == nil {
+				logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+				continue
+			}
+			if err := reloader.ReloadCRLs(); err != nil {
+				logger.Error("SIGHUP: CRL reload failed; keeping previous set", "error", err)
+				continue
+			}
+			if cs, ok := aikStore.(interface{ CRLCount() int }); ok {
+				logger.Info("SIGHUP: CRL feed reloaded", "loaded_crls", cs.CRLCount())
+			} else {
+				logger.Info("SIGHUP: CRL feed reloaded")
+			}
+		default:
+			logger.Info("shutting down", "signal", sig.String())
+			srv.Stop()
+			logger.Info("LOTA Verifier stopped")
+			return
+		}
+	}
 }
 
 // creates a self-signed certificate for testing
