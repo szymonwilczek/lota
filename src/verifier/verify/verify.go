@@ -151,6 +151,7 @@ type Verifier struct {
 	// policy enforcement
 	requireEventLog bool
 	requireCert     bool
+	requireBootPCRs bool
 }
 
 type sessionTokenRecord struct {
@@ -237,6 +238,12 @@ type VerifierConfig struct {
 	// AIK or EK certificates (disables pure TOFU)
 	RequireCert bool
 
+	// if true, reject attestation reports whose pcr_mask does not
+	// include PCR 0, 1, and 7 (firmware, platform configuration,
+	// Secure Boot policy). An agent that omits these bits would
+	// bypass the BootBaselineStorer pin even when one is configured.
+	RequireBootPCRs bool
+
 	// if true, allow policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
@@ -251,6 +258,7 @@ func DefaultConfig() VerifierConfig {
 		AIKMaxAge:             30 * 24 * time.Hour, // 30 days
 		RequireEventLog:       true,
 		RequireCert:           true,
+		RequireBootPCRs:       true,
 		AllowPermissivePolicy: false,
 	}
 }
@@ -303,6 +311,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		aikMaxAge:        effectiveAIKMaxAge,
 		requireEventLog:  cfg.RequireEventLog,
 		requireCert:      cfg.RequireCert,
+		requireBootPCRs:  cfg.RequireBootPCRs,
 		startTime:        time.Now(),
 		tokenIndex:       make(map[[32]byte]sessionTokenRecord),
 	}
@@ -966,12 +975,30 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// pin firmware / SecureBoot PCRs (0, 1, 7) on stores that support it.
-	// Skip the check when the agent attestation did not select these
-	// PCRs (legacy clients pre-dating the wider mask) so existing fleets
-	// roll over on next agent upgrade rather than dropping offline.
+	// In the default (production) configuration the mask is mandatory:
+	// without bits 0/1/7 the BootBaselineStorer pin is silently skipped,
+	// which an attacker-controlled agent can exploit to strip the
+	// firmware / Secure Boot baseline from its attestation. Operators
+	// that still need to roll over legacy fleets predating the wider
+	// mask can disable this guard via VerifierConfig.RequireBootPCRs.
 	const bootPCRMask = (uint32(1) << 0) | (uint32(1) << 1) | (uint32(1) << 7)
-	if bootStore, ok := v.baselineStore.(BootBaselineStorer); ok &&
-		report.TPM.PCRMask&bootPCRMask == bootPCRMask {
+	haveBootPCRs := report.TPM.PCRMask&bootPCRMask == bootPCRMask
+	if v.requireBootPCRs && !haveBootPCRs {
+		logging.Security(clog, "report omits firmware/SecureBoot PCRs from pcr_mask",
+			"pcr_mask", fmt.Sprintf("0x%08x", report.TPM.PCRMask),
+			"required_mask", fmt.Sprintf("0x%08x", bootPCRMask))
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("FAIL_PCR_FAIL: report does not include firmware/SecureBoot PCRs in pcr_mask")
+	}
+	bootStore, bootStoreOK := v.baselineStore.(BootBaselineStorer)
+	if v.requireBootPCRs && !bootStoreOK {
+		clog.Error("baseline store does not support boot PCR pinning; refusing attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_BASELINE_ERROR: store missing boot PCR support")
+	}
+	if bootStoreOK && haveBootPCRs {
 		boot := BootBaseline{
 			PCR0: report.TPM.PCRValues[0],
 			PCR1: report.TPM.PCRValues[1],

@@ -126,6 +126,7 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
 	auditLog := store.NewMemoryAuditLog()
 	attLog := store.NewMemoryAttestationLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
@@ -257,6 +258,7 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
@@ -298,6 +300,7 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
 	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
