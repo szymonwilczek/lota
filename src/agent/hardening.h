@@ -68,12 +68,44 @@ int hardening_apply_no_dumpable(void);
 int hardening_apply_seccomp(void);
 
 /*
+ * hardening_apply_basics - Pre-CLI defenses safe under any launch path
+ *
+ * Applies PR_SET_NO_NEW_PRIVS and PR_SET_DUMPABLE=0. Neither call blocks
+ * a sysadmin running ./lota-agent --shutdown or --test-tpm under strace,
+ * so the binary remains diagnosable in recovery shells while still
+ * refusing to expose secrets via /proc/<pid>/{mem,maps,environ} or to
+ * gain privileges through an unexpected execve.
+ *
+ * Must be invoked unconditionally at process start (before getopt and
+ * before any TPM/IPC/BPF interaction).
+ *
+ * Returns: 0 on success, negative errno on the first failing step.
+ */
+int hardening_apply_basics(void);
+
+/*
+ * hardening_apply_daemon - Daemon-mode defenses (tracer refusal + seccomp)
+ *
+ * Refuses startup under a ptracer and installs the seccomp blocklist
+ * documented on hardening_apply_seccomp(). Invoked only by long-running
+ * entry points (run_daemon, do_continuous_attest, do_attest); diagnostic
+ * one-shots (--shutdown, --test-tpm, --export-policy, --gen-signing-key,
+ * --sign-policy, --verify-policy) skip this step so an admin debugging a
+ * misconfiguration with strace/gdb is not blocked by -EPERM.
+ *
+ * Requires hardening_apply_basics() to have completed first (seccomp
+ * needs PR_SET_NO_NEW_PRIVS).
+ *
+ * Returns: 0 on success, negative errno on the first failing step.
+ */
+int hardening_apply_daemon(void);
+
+/*
  * hardening_apply_all - Convenience wrapper invoking the helpers above
  *
- * Order is significant: tracer-pid -> NO_NEW_PRIVS -> NOT-dumpable ->
- * seccomp. The first hard failure short-circuits with its errno; the
- * caller is expected to abort startup on a non-zero return so the agent
- * never runs in a half-hardened state.
+ * Equivalent to hardening_apply_basics() followed by
+ * hardening_apply_daemon(). Retained for test harnesses that exercise
+ * the full sequence in a single forked child.
  *
  * Returns: 0 on success, negative errno on the first failing step.
  */

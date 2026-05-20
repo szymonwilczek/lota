@@ -142,6 +142,73 @@ static int child_apply_all_succeeds(void) {
   return hardening_apply_all() == 0 ? 0 : 1;
 }
 
+/*
+ * hardening_apply_basics must enable the prctl guards but leave the
+ * seccomp blocklist uninstalled, so a diagnostic CLI mode invoked
+ * after this step can still issue calls (e.g. mount, ptrace) the
+ * daemon path would refuse.
+ */
+static int child_apply_basics_no_seccomp(void) {
+  if (hardening_apply_basics() != 0)
+    return 1;
+  if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
+    return 1;
+  if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0)
+    return 1;
+
+  /*
+   * Seccomp blocklist must still be absent. Calling mount() requires
+   * CAP_SYS_ADMIN, which the test process generally lacks: a
+   * non-EPERM errno (typically EPERM from the capability check
+   * itself, ENOENT for the target, EACCES from the source) tells
+   * us the syscall reached the kernel rather than being filtered
+   * back at SCMP_ACT_ERRNO. The actual signal we need is "errno
+   * is not EPERM caused by seccomp"; we detect that by issuing a
+   * call that fails with EFAULT when the kernel reads the source
+   * path. seccomp would have returned EPERM before the kernel
+   * dereferenced any argument.
+   */
+  errno = 0;
+  long ret = syscall(SYS_mount, (void *)0x1, (void *)0x1, (void *)0x1,
+                     (unsigned long)0, (void *)0x1);
+  if (ret == 0)
+    return 1; /* mount must never succeed in the test process */
+  if (errno == EPERM) {
+    /*
+     * EPERM could be either the capability check or seccomp. To
+     * disambiguate, call prctl(PR_GET_SECCOMP) which returns 2
+     * (SECCOMP_MODE_FILTER) only when a filter is installed.
+     */
+    int mode = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
+    if (mode == 2)
+      return 1; /* filter was installed -> basics did too much */
+  }
+  return 0;
+}
+
+/*
+ * hardening_apply_daemon, run after basics, completes the lockdown:
+ * seccomp is installed and mount() is refused with EPERM.
+ */
+static int child_apply_daemon_installs_seccomp(void) {
+  if (hardening_apply_basics() != 0)
+    return 1;
+  if (hardening_apply_daemon() != 0)
+    return 1;
+
+  if (prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 2)
+    return 1; /* expected SECCOMP_MODE_FILTER */
+
+  errno = 0;
+  long ret = syscall(SYS_mount, "none", "/tmp/lota_should_never_mount", "tmpfs",
+                     0, "");
+  if (ret == 0)
+    return 1;
+  if (errno != EPERM)
+    return 1;
+  return 0;
+}
+
 static void run_child_case(const char *name, int (*body)(void)) {
   TEST(name);
 
@@ -172,6 +239,10 @@ int main(void) {
                  child_seccomp_allows_benign_syscalls);
   run_child_case("apply_all returns 0 in a clean child",
                  child_apply_all_succeeds);
+  run_child_case("apply_basics: prctl guards set, seccomp filter absent",
+                 child_apply_basics_no_seccomp);
+  run_child_case("apply_daemon after basics installs seccomp filter",
+                 child_apply_daemon_installs_seccomp);
 
   printf("\n  Result: %d/%d passed\n\n", tests_passed, tests_run);
   return (tests_passed == tests_run) ? 0 : 1;

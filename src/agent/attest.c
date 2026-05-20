@@ -26,6 +26,7 @@
 #include "attest.h"
 #include "bpf_loader.h"
 #include "dbus.h"
+#include "hardening.h"
 #include "iommu.h"
 #include "ipc.h"
 #include "journal.h"
@@ -649,6 +650,17 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
   printf("=== Remote Attestation ===\n\n");
 
+  /*
+   * Long-running attestation path: install tracer refusal and the
+   * seccomp blocklist before any TPM/IPC work. Diagnostic CLI paths
+   * already skipped this in main() so admins keep strace access.
+   */
+  ret = hardening_apply_daemon();
+  if (ret < 0) {
+    fprintf(stderr, "Failed to apply daemon hardening: %s\n", strerror(-ret));
+    return ret;
+  }
+
   ret = net_init();
   if (ret < 0) {
     fprintf(stderr, "Failed to initialize network: %s\n", strerror(-ret));
@@ -741,6 +753,18 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
   lota_info("Continuous attestation starting");
   lota_info("Server: %s:%d, interval: %d seconds", server, port, interval_sec);
+
+  /*
+   * Long-running attestation loop: install tracer refusal and the
+   * seccomp blocklist before any TPM/IPC/BPF work. Diagnostic CLI
+   * paths already skipped this in main() so admins keep strace
+   * access on --shutdown, --test-tpm, and similar one-shots.
+   */
+  ret = hardening_apply_daemon();
+  if (ret < 0) {
+    lota_err("Failed to apply daemon hardening: %s", strerror(-ret));
+    return ret;
+  }
 
   wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 

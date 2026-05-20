@@ -224,6 +224,21 @@ static int run_daemon(const struct run_daemon_params *params) {
 
   lota_info("LOTA agent starting");
 
+  /*
+   * Daemon-mode hardening: refuse to start under a tracer and install
+   * the seccomp blocklist. Pre-CLI hardening already set
+   * no_new_privs and dumpable=0; running these here keeps the
+   * diagnostic admin paths (--shutdown, --test-tpm, ...) usable
+   * under strace while the long-running daemon remains locked down.
+   */
+  {
+    int harden_ret = hardening_apply_daemon();
+    if (harden_ret < 0) {
+      lota_err("Failed to apply daemon hardening: %s", strerror(-harden_ret));
+      return harden_ret;
+    }
+  }
+
   /* detect watchdog interval */
   wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
   if (wd_enabled)
@@ -568,13 +583,15 @@ int main(int argc, char *argv[]) {
   journal_init("lota-agent");
 
   /*
-   * apply in-process hardening before touching any TPM/IPC/BPF state.
-   * runs unconditionally so non-systemd launches (recovery shells,
-   * integration test harnesses) cannot bypass the defenses the
-   * systemd unit normally provides
+   * Pre-CLI hardening is restricted to no_new_privs + dumpable=0.
+   * Tracer refusal and the seccomp blocklist are deferred to the
+   * daemon entry points so short-lived admin/diagnostic modes
+   * (--shutdown, --test-tpm, --export-policy, --gen-signing-key,
+   * --sign-policy, --verify-policy) can still be run under strace
+   * or gdb without the binary returning -EPERM at the first hop.
    */
   {
-    int harden_ret = hardening_apply_all();
+    int harden_ret = hardening_apply_basics();
     if (harden_ret < 0) {
       fprintf(stderr, "Failed to apply process hardening: %s\n",
               strerror(-harden_ret));

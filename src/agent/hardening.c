@@ -134,12 +134,8 @@ int hardening_apply_seccomp(void) {
   return 0;
 }
 
-int hardening_apply_all(void) {
+int hardening_apply_basics(void) {
   int ret;
-
-  ret = hardening_refuse_if_traced();
-  if (ret < 0)
-    return ret;
 
   ret = hardening_apply_no_new_privs();
   if (ret < 0) {
@@ -153,12 +149,30 @@ int hardening_apply_all(void) {
     return ret;
   }
 
+  lota_info("hardening: applied no_new_privs, dumpable=0");
+  return 0;
+}
+
+int hardening_apply_daemon(void) {
+  int ret;
+
+  ret = hardening_refuse_if_traced();
+  if (ret < 0)
+    return ret;
+
   ret = hardening_apply_seccomp();
   if (ret < 0) {
     lota_err("hardening: seccomp filter load failed: %s", strerror(-ret));
     return ret;
   }
 
-  lota_info("hardening: applied no_new_privs, dumpable=0, seccomp blocklist");
+  lota_info("hardening: applied tracer refusal and seccomp blocklist");
   return 0;
+}
+
+int hardening_apply_all(void) {
+  int ret = hardening_apply_basics();
+  if (ret < 0)
+    return ret;
+  return hardening_apply_daemon();
 }
