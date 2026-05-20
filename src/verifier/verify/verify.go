@@ -906,6 +906,50 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, fmt.Errorf("FAIL_BASELINE_ERROR: baseline store unavailable")
 	}
 
+	// pin firmware / SecureBoot PCRs (0, 1, 7) on stores that support it.
+	// Skip the check when the agent attestation did not select these
+	// PCRs (legacy clients pre-dating the wider mask) so existing fleets
+	// roll over on next agent upgrade rather than dropping offline.
+	const bootPCRMask = (uint32(1) << 0) | (uint32(1) << 1) | (uint32(1) << 7)
+	if bootStore, ok := v.baselineStore.(BootBaselineStorer); ok &&
+		report.TPM.PCRMask&bootPCRMask == bootPCRMask {
+		boot := BootBaseline{
+			PCR0: report.TPM.PCRValues[0],
+			PCR1: report.TPM.PCRValues[1],
+			PCR7: report.TPM.PCRValues[7],
+		}
+		bootResult, bootBaseline := bootStore.CheckAndUpdateBootPCRs(clientID, boot)
+		switch bootResult {
+		case TOFUFirstUse:
+			clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
+				"pcr0", hex.EncodeToString(boot.PCR0[:]),
+				"pcr1", hex.EncodeToString(boot.PCR1[:]),
+				"pcr7", hex.EncodeToString(boot.PCR7[:]))
+		case TOFUMatch:
+			clog.Debug("boot PCRs match baseline")
+		case TOFUMismatch:
+			expected0, expected1, expected7 := boot.PCR0, boot.PCR1, boot.PCR7
+			if bootBaseline != nil {
+				expected0, expected1, expected7 = bootBaseline.PCR0, bootBaseline.PCR1, bootBaseline.PCR7
+			}
+			logging.Security(clog, "firmware/SecureBoot PCR drift detected",
+				"actual_pcr0", hex.EncodeToString(boot.PCR0[:]),
+				"actual_pcr1", hex.EncodeToString(boot.PCR1[:]),
+				"actual_pcr7", hex.EncodeToString(boot.PCR7[:]),
+				"expected_pcr0", hex.EncodeToString(expected0[:]),
+				"expected_pcr1", hex.EncodeToString(expected1[:]),
+				"expected_pcr7", hex.EncodeToString(expected7[:]))
+			v.metrics.Rejections.Inc("integrity_mismatch")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: firmware/SecureBoot PCRs changed from baseline")
+		case TOFUError:
+			clog.Error("boot baseline store error, refusing attestation")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyIntegrityMismatch
+			return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
+		}
+	}
+
 	if report.Header.Flags&types.FlagIOMMUOK == 0 {
 		clog.Warn("IOMMU not verified")
 		// IMPORTANT: policy determines if this is required

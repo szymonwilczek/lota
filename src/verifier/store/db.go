@@ -125,6 +125,17 @@ var migrations = []migration{
 			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
 		`,
 	},
+	{
+		version:     3,
+		description: "pin firmware / SecureBoot PCRs (0, 1, 7) on baselines",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN pcr0 BLOB;
+			ALTER TABLE baselines ADD COLUMN pcr1 BLOB;
+			ALTER TABLE baselines ADD COLUMN pcr7 BLOB;
+			ALTER TABLE baselines ADD COLUMN boot_first_seen TIMESTAMP;
+			ALTER TABLE baselines ADD COLUMN boot_last_seen  TIMESTAMP;
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

@@ -173,3 +173,85 @@ func (s *SQLiteBaselineStore) Stats() BaselineStats {
 
 	return stats
 }
+
+// CheckAndUpdateBootPCRs persists PCR0/PCR1/PCR7 alongside the existing
+// PCR14 baseline. The boot columns are nullable so existing PCR14-only
+// rows from older deployments TOFU-establish the firmware baseline on
+// their next attestation rather than being rejected.
+func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	var (
+		storedPCR0, storedPCR1, storedPCR7 []byte
+		bootFirst, bootLast                sql.NullTime
+	)
+
+	err := s.db.QueryRow(
+		"SELECT pcr0, pcr1, pcr7, boot_first_seen, boot_last_seen FROM baselines WHERE client_id = ?",
+		clientID,
+	).Scan(&storedPCR0, &storedPCR1, &storedPCR7, &bootFirst, &bootLast)
+
+	if err == sql.ErrNoRows {
+		// no row at all - cannot pin boot PCRs before the PCR14 baseline
+		// was inserted. Surface as error so the caller fails closed.
+		return TOFUError, nil
+	}
+	if err != nil {
+		slog.Error("boot baseline SELECT failed",
+			"client_id", clientID, "error", err)
+		return TOFUError, nil
+	}
+
+	if len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0 {
+		// PCR14 row exists but no boot baseline yet - TOFU first use
+		_, err := s.db.Exec(
+			"UPDATE baselines SET pcr0 = ?, pcr1 = ?, pcr7 = ?, boot_first_seen = ?, boot_last_seen = ? WHERE client_id = ?",
+			boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now.UTC(), now.UTC(), clientID,
+		)
+		if err != nil {
+			slog.Error("boot baseline INSERT failed",
+				"client_id", clientID, "error", err)
+			return TOFUError, nil
+		}
+
+		out := boot
+		out.FirstSeen = now
+		out.LastSeen = now
+		return TOFUFirstUse, &out
+	}
+
+	var stored BootBaseline
+	if len(storedPCR0) == types.HashSize {
+		copy(stored.PCR0[:], storedPCR0)
+	}
+	if len(storedPCR1) == types.HashSize {
+		copy(stored.PCR1[:], storedPCR1)
+	}
+	if len(storedPCR7) == types.HashSize {
+		copy(stored.PCR7[:], storedPCR7)
+	}
+	if bootFirst.Valid {
+		stored.FirstSeen = bootFirst.Time
+	}
+	if bootLast.Valid {
+		stored.LastSeen = bootLast.Time
+	}
+
+	if stored.PCR0 != boot.PCR0 || stored.PCR1 != boot.PCR1 || stored.PCR7 != boot.PCR7 {
+		return TOFUMismatch, &stored
+	}
+
+	_, err = s.db.Exec(
+		"UPDATE baselines SET boot_last_seen = ? WHERE client_id = ?",
+		now.UTC(), clientID,
+	)
+	if err != nil {
+		slog.Warn("boot baseline update failed", "client_id", clientID, "error", err)
+	}
+
+	stored.LastSeen = now
+	return TOFUMatch, &stored
+}

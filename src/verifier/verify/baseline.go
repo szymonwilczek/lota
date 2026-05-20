@@ -48,16 +48,46 @@ type ClientBaseline struct {
 	AttestCount uint64
 }
 
+// boot-chain PCR values that must remain stable across reboots.
+//
+// PCR0  - SRTM, CRTM, BIOS / UEFI firmware code
+// PCR1  - host platform configuration: SMBIOS, BIOS settings, boot order
+// PCR7  - Secure Boot policy and authority chain
+//
+// Pinned via TOFU on first attestation; any deviation surfaces a
+// firmware / SecureBoot / cmdline change to the operator instead of
+// silently accepting the new measurements as if they were genuine.
+type BootBaseline struct {
+	PCR0 [types.HashSize]byte
+	PCR1 [types.HashSize]byte
+	PCR7 [types.HashSize]byte
+
+	// timestamps mirror ClientBaseline semantics
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
+// BootBaselineStorer is optionally implemented by baseline stores that
+// pin firmware / SecureBoot PCRs in addition to PCR14. Callers should
+// type-assert and degrade to PCR14-only validation if not satisfied.
+type BootBaselineStorer interface {
+	// CheckAndUpdateBootPCRs validates PCR0/PCR1/PCR7 against the stored
+	// baseline. Semantics mirror BaselineStorer.CheckAndUpdate.
+	CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline)
+}
+
 // manages per-client PCR baselines (TOFU)
 type BaselineStore struct {
-	mu        sync.RWMutex
-	baselines map[string]*ClientBaseline // clientID -> baseline
+	mu            sync.RWMutex
+	baselines     map[string]*ClientBaseline // clientID -> PCR14 baseline
+	bootBaselines map[string]*BootBaseline   // clientID -> PCR0/1/7 baseline
 }
 
 // creates a new baseline store
 func NewBaselineStore() *BaselineStore {
 	return &BaselineStore{
-		baselines: make(map[string]*ClientBaseline),
+		baselines:     make(map[string]*ClientBaseline),
+		bootBaselines: make(map[string]*BootBaseline),
 	}
 }
 
@@ -168,4 +198,32 @@ func (s *BaselineStore) Stats() BaselineStats {
 // returns hex-encoded PCR 14 value
 func FormatPCR14(pcr14 [types.HashSize]byte) string {
 	return hex.EncodeToString(pcr14[:])
+}
+
+// CheckAndUpdateBootPCRs pins PCR0/PCR1/PCR7 with TOFU semantics that
+// mirror CheckAndUpdate(). Any deviation from the stored boot baseline
+// surfaces a firmware / SecureBoot / boot-order change.
+func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	existing, exists := s.bootBaselines[clientID]
+	if !exists {
+		stored := boot
+		stored.FirstSeen = now
+		stored.LastSeen = now
+		s.bootBaselines[clientID] = &stored
+		out := stored
+		return TOFUFirstUse, &out
+	}
+
+	if existing.PCR0 != boot.PCR0 || existing.PCR1 != boot.PCR1 || existing.PCR7 != boot.PCR7 {
+		out := *existing
+		return TOFUMismatch, &out
+	}
+
+	existing.LastSeen = now
+	out := *existing
+	return TOFUMatch, &out
 }

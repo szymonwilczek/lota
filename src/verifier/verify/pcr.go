@@ -402,6 +402,7 @@ func StrictPolicy() *PCRPolicy {
 
 // calculates the PCR mask required by this policy
 // always includes PCR 14 (LOTA self-measurement) as it is required for baseline verification
+// and the firmware / SecureBoot PCRs (0, 1, 7) so the verifier can TOFU-pin them
 func (p *PCRPolicy) GetRequiredMask() uint32 {
 	mask := uint32(0)
 
@@ -412,13 +413,11 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 		}
 	}
 
-	// PCR 14
-	mask |= (1 << 14)
-
-	// PCR 0 (SRTM) and PCR 1 (BIOS) for debugging context
-	if len(p.PCRs) == 0 {
-		mask |= (1 << 0) | (1 << 1)
-	}
+	// PCR 14: LOTA self-measurement; required for runtime baseline.
+	// PCR 0:  SRTM / firmware code.
+	// PCR 1:  host platform configuration (BIOS settings, boot order).
+	// PCR 7:  Secure Boot policy + authority chain.
+	mask |= (1 << 14) | (1 << 0) | (1 << 1) | (1 << 7)
 
 	return mask
 }
