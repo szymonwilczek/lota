@@ -143,6 +143,108 @@ func TestAgentHashStore_MemoryBackfillsLegacyRow(t *testing.T) {
 	}
 }
 
+// TestMemoryAtomicAttestation_FirstUseSeedsBothHalves asserts that
+// CheckAndUpdateAttestation on a fresh client commits the agent_hash
+// pin and the boot baseline in a single critical section: a subsequent
+// call with a different boot baseline must report TOFUMismatch from
+// the canonical pin established by the first call.
+func TestMemoryAtomicAttestation_FirstUseSeedsBothHalves(t *testing.T) {
+	bs := NewBaselineStore()
+
+	var pcr14, agentHash [types.HashSize]byte
+	for i := range pcr14 {
+		pcr14[i] = 0x14
+	}
+	for i := range agentHash {
+		agentHash[i] = 0x44
+	}
+	boot := &BootBaseline{}
+	for i := range boot.PCR0 {
+		boot.PCR0[i] = 0xB0
+		boot.PCR1[i] = 0xB1
+		boot.PCR7[i] = 0xB7
+	}
+
+	out := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, boot)
+	if out.AgentHashResult != TOFUFirstUse {
+		t.Fatalf("agent_hash first-use: got %v, want TOFUFirstUse", out.AgentHashResult)
+	}
+	if !out.BootProvided {
+		t.Fatal("BootProvided must mirror non-nil boot input")
+	}
+	if out.BootResult != TOFUFirstUse {
+		t.Fatalf("boot first-use: got %v, want TOFUFirstUse", out.BootResult)
+	}
+
+	rogue := &BootBaseline{}
+	for i := range rogue.PCR0 {
+		rogue.PCR0[i] = 0xAA
+		rogue.PCR1[i] = 0xBB
+		rogue.PCR7[i] = 0xCC
+	}
+	out2 := bs.CheckAndUpdateAttestation("atomic-c1", pcr14, agentHash, rogue)
+	if out2.AgentHashResult != TOFUMatch {
+		t.Fatalf("second-round agent_hash: got %v, want TOFUMatch", out2.AgentHashResult)
+	}
+	if out2.BootResult != TOFUMismatch {
+		t.Fatalf("second-round boot with rogue pins: got %v, want TOFUMismatch", out2.BootResult)
+	}
+}
+
+// TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow asserts
+// that a boot mismatch terminates the transaction without writing to
+// the agent_hash side either: a subsequent good attestation must still
+// see the original (non-incremented) attest_count.
+func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T) {
+	bs := NewBaselineStore()
+
+	var pcr14, agentHash [types.HashSize]byte
+	for i := range pcr14 {
+		pcr14[i] = 0x21
+	}
+	for i := range agentHash {
+		agentHash[i] = 0x42
+	}
+	good := &BootBaseline{}
+	for i := range good.PCR0 {
+		good.PCR0[i] = 0x01
+		good.PCR1[i] = 0x02
+		good.PCR7[i] = 0x07
+	}
+	rogue := &BootBaseline{}
+	for i := range rogue.PCR0 {
+		rogue.PCR0[i] = 0x99
+	}
+
+	first := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good)
+	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
+		t.Fatalf("seed call: agent=%v boot=%v",
+			first.AgentHashResult, first.BootResult)
+	}
+	if first.AgentHashBaseline.AttestCount != 1 {
+		t.Fatalf("seed attest_count: got %d, want 1",
+			first.AgentHashBaseline.AttestCount)
+	}
+
+	bad := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, rogue)
+	if bad.BootResult != TOFUMismatch {
+		t.Fatalf("rogue boot must mismatch, got %v", bad.BootResult)
+	}
+
+	// re-attest with good pins; attest_count must still increment from
+	// 1 (the seed write) to 2, proving the mismatch did not bump the
+	// counter behind the operator's back.
+	good2 := bs.CheckAndUpdateAttestation("atomic-c2", pcr14, agentHash, good)
+	if good2.AgentHashResult != TOFUMatch || good2.BootResult != TOFUMatch {
+		t.Fatalf("recovery call: agent=%v boot=%v",
+			good2.AgentHashResult, good2.BootResult)
+	}
+	if good2.AgentHashBaseline.AttestCount != 2 {
+		t.Fatalf("attest_count after recovery: got %d, want 2",
+			good2.AgentHashBaseline.AttestCount)
+	}
+}
+
 // TestMatchBootCommitmentPCR14_ExactMatch verifies that an attestation
 // where the quote's restartCount equals the value the agent extended
 // with is accepted with zero drift.

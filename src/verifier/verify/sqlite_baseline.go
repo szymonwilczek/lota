@@ -8,6 +8,7 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"sync"
@@ -362,4 +363,297 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 
 	stored.LastSeen = now
 	return TOFUMatch, &stored
+}
+
+// CheckAndUpdateAttestation commits the agent_hash pin and (when boot
+// is non-nil) the firmware/SecureBoot pin in a single SQLite
+// transaction held under BEGIN IMMEDIATE on a dedicated connection.
+// BEGIN IMMEDIATE acquires SQLite's RESERVED write lock at the
+// transaction start instead of upgrading from SHARED on the first
+// write, so a second process attempting the same transaction blocks
+// until the first COMMIT / ROLLBACK. Combined with PRAGMA
+// busy_timeout=5000 from db.go this serialises every multi-process
+// writer onto the baselines row and closes the window in which a
+// CheckAndUpdateBootPCRs running in process B could observe a
+// half-pinned row left behind by process A and TOFU-establish
+// attacker-controlled PCR0/PCR1/PCR7.
+//
+// The function holds s.mu in addition to the SQL lock so the
+// transaction is also single-writer inside the calling process; the
+// database/sql connection pool is bypassed via db.Conn() so BEGIN
+// IMMEDIATE, the SELECT/UPDATE statements, and COMMIT all run on the
+// same underlying connection. A non-success branch ROLLBACKs and
+// leaves the persistent row untouched, mirroring the existing split
+// methods' semantics.
+func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
+	pcr14, agentHash [types.HashSize]byte,
+	boot *BootBaseline) AttestationOutcome {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx := context.Background()
+	outcome := AttestationOutcome{BootProvided: boot != nil}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		slog.Error("attestation tx: acquire conn failed",
+			"client_id", clientID, "error", err)
+		outcome.AgentHashResult = TOFUError
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		slog.Error("attestation tx: BEGIN IMMEDIATE failed",
+			"client_id", clientID, "error", err)
+		outcome.AgentHashResult = TOFUError
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var (
+		storedPCR14, storedAgentHash       []byte
+		storedPCR0, storedPCR1, storedPCR7 []byte
+		firstSeen, lastSeen                time.Time
+		attestCount                        uint64
+		bootFirst, bootLast                sql.NullTime
+	)
+	err = conn.QueryRowContext(ctx, `
+		SELECT pcr14, agent_hash, first_seen, last_seen, attest_count,
+		       pcr0, pcr1, pcr7, boot_first_seen, boot_last_seen
+		  FROM baselines WHERE client_id = ?`, clientID).
+		Scan(&storedPCR14, &storedAgentHash, &firstSeen, &lastSeen,
+			&attestCount, &storedPCR0, &storedPCR1, &storedPCR7,
+			&bootFirst, &bootLast)
+
+	now := time.Now()
+	switch {
+	case err == sql.ErrNoRows:
+		// fresh client: insert both halves in one statement.
+		if boot != nil {
+			if _, err := conn.ExecContext(ctx, `
+				INSERT INTO baselines (
+					client_id, pcr14, agent_hash, first_seen, last_seen,
+					attest_count, pcr0, pcr1, pcr7, boot_first_seen,
+					boot_last_seen
+				) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC(),
+				boot.PCR0[:], boot.PCR1[:], boot.PCR7[:],
+				now.UTC(), now.UTC()); err != nil {
+				slog.Error("attestation tx: INSERT (with boot) failed",
+					"client_id", clientID, "error", err)
+				outcome.AgentHashResult = TOFUError
+				outcome.BootResult = TOFUError
+				return outcome
+			}
+			outcome.AgentHashResult = TOFUFirstUse
+			outcome.AgentHashBaseline = &ClientBaseline{
+				PCR14: pcr14, AgentHash: agentHash,
+				FirstSeen: now, LastSeen: now, AttestCount: 1,
+			}
+			outcome.BootResult = TOFUFirstUse
+			bb := *boot
+			bb.FirstSeen, bb.LastSeen = now, now
+			outcome.BootBaseline = &bb
+		} else {
+			if _, err := conn.ExecContext(ctx, `
+				INSERT INTO baselines (
+					client_id, pcr14, agent_hash, first_seen, last_seen,
+					attest_count
+				) VALUES (?, ?, ?, ?, ?, 1)`,
+				clientID, pcr14[:], agentHash[:], now.UTC(), now.UTC()); err != nil {
+				slog.Error("attestation tx: INSERT (agent_hash only) failed",
+					"client_id", clientID, "error", err)
+				outcome.AgentHashResult = TOFUError
+				return outcome
+			}
+			outcome.AgentHashResult = TOFUFirstUse
+			outcome.AgentHashBaseline = &ClientBaseline{
+				PCR14: pcr14, AgentHash: agentHash,
+				FirstSeen: now, LastSeen: now, AttestCount: 1,
+			}
+		}
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			slog.Error("attestation tx: COMMIT failed",
+				"client_id", clientID, "error", err)
+			outcome.AgentHashResult = TOFUError
+			if boot != nil {
+				outcome.BootResult = TOFUError
+			}
+			return outcome
+		}
+		committed = true
+		return outcome
+
+	case err != nil:
+		slog.Error("attestation tx: SELECT failed",
+			"client_id", clientID, "error", err)
+		outcome.AgentHashResult = TOFUError
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+
+	// --- existing row: decide agent_hash branch ---
+	var stored [types.HashSize]byte
+	hasStored := len(storedAgentHash) == types.HashSize
+	if hasStored {
+		copy(stored[:], storedAgentHash)
+	}
+	var pcr14Stored [types.HashSize]byte
+	if len(storedPCR14) == types.HashSize {
+		copy(pcr14Stored[:], storedPCR14)
+	}
+
+	switch {
+	case !hasStored:
+		outcome.AgentHashResult = TOFULegacyBackfill
+	case stored != agentHash:
+		// mismatch terminates the transaction without writes.
+		outcome.AgentHashResult = TOFUMismatch
+		outcome.AgentHashBaseline = &ClientBaseline{
+			PCR14: pcr14Stored, AgentHash: stored,
+			FirstSeen: firstSeen, LastSeen: lastSeen,
+			AttestCount: attestCount,
+		}
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	default:
+		outcome.AgentHashResult = TOFUMatch
+	}
+
+	// --- decide boot branch ---
+	bootZero := len(storedPCR0) == 0 && len(storedPCR1) == 0 && len(storedPCR7) == 0
+	if boot != nil {
+		if bootZero {
+			outcome.BootResult = TOFUFirstUse
+		} else {
+			var storedBoot BootBaseline
+			if len(storedPCR0) == types.HashSize {
+				copy(storedBoot.PCR0[:], storedPCR0)
+			}
+			if len(storedPCR1) == types.HashSize {
+				copy(storedBoot.PCR1[:], storedPCR1)
+			}
+			if len(storedPCR7) == types.HashSize {
+				copy(storedBoot.PCR7[:], storedPCR7)
+			}
+			if bootFirst.Valid {
+				storedBoot.FirstSeen = bootFirst.Time
+			}
+			if bootLast.Valid {
+				storedBoot.LastSeen = bootLast.Time
+			}
+			if storedBoot.PCR0 != boot.PCR0 ||
+				storedBoot.PCR1 != boot.PCR1 ||
+				storedBoot.PCR7 != boot.PCR7 {
+				outcome.AgentHashBaseline = &ClientBaseline{
+					PCR14: pcr14Stored, AgentHash: stored,
+					FirstSeen: firstSeen, LastSeen: lastSeen,
+					AttestCount: attestCount,
+				}
+				outcome.BootResult = TOFUMismatch
+				outcome.BootBaseline = &storedBoot
+				return outcome
+			}
+			outcome.BootResult = TOFUMatch
+		}
+	}
+
+	// --- commit phase: both halves passed; build a single UPDATE ---
+	newCount := attestCount + 1
+	if boot != nil {
+		switch outcome.BootResult {
+		case TOFUFirstUse:
+			if _, err := conn.ExecContext(ctx, `
+				UPDATE baselines
+				   SET agent_hash      = ?,
+				       last_seen       = ?,
+				       attest_count    = ?,
+				       pcr0            = ?,
+				       pcr1            = ?,
+				       pcr7            = ?,
+				       boot_first_seen = ?,
+				       boot_last_seen  = ?
+				 WHERE client_id = ?`,
+				agentHash[:], now.UTC(), newCount,
+				boot.PCR0[:], boot.PCR1[:], boot.PCR7[:],
+				now.UTC(), now.UTC(), clientID); err != nil {
+				slog.Error("attestation tx: UPDATE (boot first-use) failed",
+					"client_id", clientID, "error", err)
+				outcome.AgentHashResult = TOFUError
+				outcome.BootResult = TOFUError
+				return outcome
+			}
+			bb := *boot
+			bb.FirstSeen, bb.LastSeen = now, now
+			outcome.BootBaseline = &bb
+		case TOFUMatch:
+			if _, err := conn.ExecContext(ctx, `
+				UPDATE baselines
+				   SET agent_hash     = ?,
+				       last_seen      = ?,
+				       attest_count   = ?,
+				       boot_last_seen = ?
+				 WHERE client_id = ?`,
+				agentHash[:], now.UTC(), newCount, now.UTC(), clientID); err != nil {
+				slog.Error("attestation tx: UPDATE (boot match) failed",
+					"client_id", clientID, "error", err)
+				outcome.AgentHashResult = TOFUError
+				outcome.BootResult = TOFUError
+				return outcome
+			}
+			outcome.BootBaseline = &BootBaseline{
+				PCR0: boot.PCR0, PCR1: boot.PCR1, PCR7: boot.PCR7,
+				FirstSeen: bootFirst.Time, LastSeen: now,
+			}
+		}
+	} else {
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE baselines
+			   SET agent_hash   = ?,
+			       last_seen    = ?,
+			       attest_count = ?
+			 WHERE client_id = ?`,
+			agentHash[:], now.UTC(), newCount, clientID); err != nil {
+			slog.Error("attestation tx: UPDATE (agent_hash only) failed",
+				"client_id", clientID, "error", err)
+			outcome.AgentHashResult = TOFUError
+			return outcome
+		}
+	}
+
+	outcome.AgentHashBaseline = &ClientBaseline{
+		PCR14:       pcr14Stored,
+		AgentHash:   agentHash,
+		FirstSeen:   firstSeen,
+		LastSeen:    now,
+		AttestCount: newCount,
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		slog.Error("attestation tx: COMMIT failed",
+			"client_id", clientID, "error", err)
+		outcome.AgentHashResult = TOFUError
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+	committed = true
+	return outcome
 }

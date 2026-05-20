@@ -307,6 +307,139 @@ func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
 	}
 }
 
+// TestSQLiteAtomicAttestation_ConcurrentSeed serialises two goroutines
+// that race to seed the baselines row for the same client with
+// different boot baselines. With BEGIN IMMEDIATE inside
+// CheckAndUpdateAttestation, exactly one goroutine wins TOFUFirstUse;
+// the loser observes TOFUMismatch on the boot half because the row
+// it sees was already pinned by the winner. The agent_hash pin is
+// identical in both calls, so the loser's agent_hash result must be
+// TOFUMatch.
+func TestSQLiteAtomicAttestation_ConcurrentSeed(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	bs := NewSQLiteBaselineStore(db)
+
+	const clientID = "concurrent-seed"
+	var pcr14, agentHash [types.HashSize]byte
+	for i := range pcr14 {
+		pcr14[i] = 0x14
+	}
+	for i := range agentHash {
+		agentHash[i] = 0xAB
+	}
+
+	bootA := &BootBaseline{}
+	for i := range bootA.PCR0 {
+		bootA.PCR0[i] = 0xA0
+		bootA.PCR1[i] = 0xA1
+		bootA.PCR7[i] = 0xA7
+	}
+	bootB := &BootBaseline{}
+	for i := range bootB.PCR0 {
+		bootB.PCR0[i] = 0xB0
+		bootB.PCR1[i] = 0xB1
+		bootB.PCR7[i] = 0xB7
+	}
+
+	type result struct {
+		out AttestationOutcome
+	}
+	resCh := make(chan result, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootA)}
+	}()
+	go func() {
+		<-start
+		resCh <- result{out: bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, bootB)}
+	}()
+	close(start)
+
+	r1 := <-resCh
+	r2 := <-resCh
+
+	firstUse := 0
+	mismatch := 0
+	if r1.out.AgentHashResult == TOFUFirstUse && r1.out.BootResult == TOFUFirstUse {
+		firstUse++
+	}
+	if r2.out.AgentHashResult == TOFUFirstUse && r2.out.BootResult == TOFUFirstUse {
+		firstUse++
+	}
+	if r1.out.AgentHashResult == TOFUMatch && r1.out.BootResult == TOFUMismatch {
+		mismatch++
+	}
+	if r2.out.AgentHashResult == TOFUMatch && r2.out.BootResult == TOFUMismatch {
+		mismatch++
+	}
+	if firstUse != 1 || mismatch != 1 {
+		t.Fatalf("expected exactly one winner and one loser; r1=%+v r2=%+v",
+			r1.out, r2.out)
+	}
+}
+
+// TestSQLiteAtomicAttestation_RecoversFromBootMismatch mirrors the
+// in-memory test: a boot mismatch must not advance the agent_hash
+// row state, so a subsequent attestation with the correct boot
+// baseline observes attest_count exactly one greater than the first
+// successful seed.
+func TestSQLiteAtomicAttestation_RecoversFromBootMismatch(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	bs := NewSQLiteBaselineStore(db)
+
+	const clientID = "atomic-recovery"
+	var pcr14, agentHash [types.HashSize]byte
+	for i := range pcr14 {
+		pcr14[i] = 0x33
+	}
+	for i := range agentHash {
+		agentHash[i] = 0x55
+	}
+	good := &BootBaseline{}
+	for i := range good.PCR0 {
+		good.PCR0[i] = 0xC0
+		good.PCR1[i] = 0xC1
+		good.PCR7[i] = 0xC7
+	}
+	rogue := &BootBaseline{}
+	for i := range rogue.PCR0 {
+		rogue.PCR0[i] = 0xEE
+	}
+
+	first := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	if first.AgentHashResult != TOFUFirstUse || first.BootResult != TOFUFirstUse {
+		t.Fatalf("seed: %+v", first)
+	}
+	if first.AgentHashBaseline.AttestCount != 1 {
+		t.Fatalf("seed attest_count: got %d want 1", first.AgentHashBaseline.AttestCount)
+	}
+
+	bad := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, rogue)
+	if bad.BootResult != TOFUMismatch {
+		t.Fatalf("rogue boot must mismatch: %+v", bad)
+	}
+
+	recovered := bs.CheckAndUpdateAttestation(clientID, pcr14, agentHash, good)
+	if recovered.AgentHashResult != TOFUMatch || recovered.BootResult != TOFUMatch {
+		t.Fatalf("recovery: %+v", recovered)
+	}
+	if recovered.AgentHashBaseline.AttestCount != 2 {
+		t.Fatalf("post-recovery attest_count: got %d want 2",
+			recovered.AgentHashBaseline.AttestCount)
+	}
+}
+
 func TestSQLiteNonce_RecordAndContains(t *testing.T) {
 	t.Log("TEST: SQLite used nonce record and contains")
 

@@ -187,6 +187,44 @@ type AgentHashStorer interface {
 		currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline)
 }
 
+// AttestationOutcome is the result of a single AtomicBaselineStorer
+// transaction. The two TOFU results report the per-component decision;
+// the snapshots carry whichever baseline values the caller needs to
+// surface in security logs or pass back to the agent. BootProvided
+// mirrors the caller's intent so consumers can distinguish "boot
+// pin not supplied this round" from "boot pin succeeded silently".
+type AttestationOutcome struct {
+	AgentHashResult   TOFUResult
+	AgentHashBaseline *ClientBaseline
+	BootProvided      bool
+	BootResult        TOFUResult
+	BootBaseline      *BootBaseline
+}
+
+// AtomicBaselineStorer is implemented by baseline stores that can
+// commit both the agent_hash pin and the firmware/SecureBoot PCR pin
+// in a single read-modify-write transaction. Splitting the two writes
+// into successive AgentHashStorer + BootBaselineStorer calls opens a
+// race in multi-process verifier deployments: one process can finish
+// the PCR14/agent_hash insert and a second process can sneak in
+// between with a CheckAndUpdateBootPCRs that sees the row without the
+// boot columns yet and TOFU-establishes attacker-controlled
+// PCR0/PCR1/PCR7. The combined transaction closes the window by
+// taking an exclusive write lock for the entire decision.
+//
+// The contract is the same as the split methods:
+//   - agentHash is always evaluated;
+//   - boot, when non-nil, is evaluated in the same critical section;
+//     when nil, the boot columns are left untouched and
+//     AttestationOutcome.BootProvided is false on return;
+//   - any mismatch leaves persistent state unchanged so the caller's
+//     reject path matches the pre-transaction view.
+type AtomicBaselineStorer interface {
+	CheckAndUpdateAttestation(clientID string,
+		pcr14, agentHash [types.HashSize]byte,
+		boot *BootBaseline) AttestationOutcome
+}
+
 // manages per-client PCR baselines (TOFU)
 type BaselineStore struct {
 	mu            sync.RWMutex
@@ -397,4 +435,122 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 	existing.LastSeen = now
 	out := *existing
 	return TOFUMatch, &out
+}
+
+// CheckAndUpdateAttestation commits the agent_hash pin and (when boot
+// is non-nil) the firmware/SecureBoot pin in a single critical
+// section, matching the SQLite store's BEGIN IMMEDIATE contract on a
+// process-local map. The in-memory store does not face the
+// multi-process race that motivated the interface, but exposing the
+// combined call keeps the verifier wiring uniform across stores so
+// tests and production share one decision path.
+//
+// Mismatch in either component leaves the existing baseline
+// untouched, mirroring the SQLite implementation.
+func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
+	pcr14, agentHash [types.HashSize]byte,
+	boot *BootBaseline) AttestationOutcome {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	outcome := AttestationOutcome{BootProvided: boot != nil}
+
+	// --- agent_hash branch ---
+	existing, exists := s.baselines[clientID]
+	if !exists {
+		b := &ClientBaseline{
+			PCR14:       pcr14,
+			AgentHash:   agentHash,
+			FirstSeen:   now,
+			LastSeen:    now,
+			AttestCount: 1,
+		}
+		// snapshot first; row not committed yet in case boot mismatches.
+		snap := *b
+		outcome.AgentHashResult = TOFUFirstUse
+		outcome.AgentHashBaseline = &snap
+
+		// boot branch on a fresh row mirrors the agent_hash decision:
+		// any incoming boot baseline becomes the canonical pin.
+		if boot != nil {
+			stored := *boot
+			stored.FirstSeen = now
+			stored.LastSeen = now
+			outcome.BootResult = TOFUFirstUse
+			bootSnap := stored
+			outcome.BootBaseline = &bootSnap
+			s.bootBaselines[clientID] = &stored
+		}
+		s.baselines[clientID] = b
+		return outcome
+	}
+
+	var zero [types.HashSize]byte
+	switch {
+	case existing.AgentHash == zero:
+		// legacy row backfill - tentative until the boot decision below.
+		outcome.AgentHashResult = TOFULegacyBackfill
+	case existing.AgentHash != agentHash:
+		// agent_hash mismatch terminates the transaction: leave the row
+		// untouched and return the stored snapshot for security logging.
+		snap := *existing
+		outcome.AgentHashResult = TOFUMismatch
+		outcome.AgentHashBaseline = &snap
+		if boot != nil {
+			// boot side carries no decision because no write happens.
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	default:
+		outcome.AgentHashResult = TOFUMatch
+	}
+
+	// --- boot branch ---
+	if boot != nil {
+		existingBoot, hasBoot := s.bootBaselines[clientID]
+		if !hasBoot {
+			outcome.BootResult = TOFUFirstUse
+		} else if existingBoot.PCR0 != boot.PCR0 ||
+			existingBoot.PCR1 != boot.PCR1 ||
+			existingBoot.PCR7 != boot.PCR7 {
+			// boot mismatch: undo any tentative state and return.
+			snap := *existing
+			outcome.AgentHashBaseline = &snap
+			snapBoot := *existingBoot
+			outcome.BootResult = TOFUMismatch
+			outcome.BootBaseline = &snapBoot
+			return outcome
+		} else {
+			outcome.BootResult = TOFUMatch
+		}
+	}
+
+	// --- commit phase: both components passed ---
+	if outcome.AgentHashResult == TOFULegacyBackfill {
+		existing.AgentHash = agentHash
+	}
+	existing.LastSeen = now
+	existing.AttestCount++
+	snap := *existing
+	outcome.AgentHashBaseline = &snap
+
+	if boot != nil {
+		switch outcome.BootResult {
+		case TOFUFirstUse:
+			stored := *boot
+			stored.FirstSeen = now
+			stored.LastSeen = now
+			s.bootBaselines[clientID] = &stored
+			snapBoot := stored
+			outcome.BootBaseline = &snapBoot
+		case TOFUMatch:
+			existingBoot := s.bootBaselines[clientID]
+			existingBoot.LastSeen = now
+			snapBoot := *existingBoot
+			outcome.BootBaseline = &snapBoot
+		}
+	}
+
+	return outcome
 }
