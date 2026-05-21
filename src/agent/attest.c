@@ -733,7 +733,11 @@ int do_attest(const char *server, int port, const char *ca_cert,
  * function-static) so unit tests can drive deterministic
  * cleared->locked->cleared sequences and a future second writer
  * (e.g. an out-of-loop reconciliation path) would observe the same
- * value rather than its own private copy.
+ * value rather than its own private copy. That hypothetical writer
+ * still needs a real lock: today reconcile_tpm_lockout() and
+ * handle_get_token() both reach the same tpm_context (directly as
+ * g_agent.tpm_ctx here, and through ipc_context.tpm in IPC) only
+ * because the production daemon runs them on the same epoll thread.
  */
 static uint32_t reconcile_tpm_lockout(uint32_t flags) {
   bool now = tpm_is_locked_out(&g_agent.tpm_ctx);

@@ -39,6 +39,22 @@
 
 /*
  * Agent global runtime state.
+ *
+ * Threading model:
+ *   The production daemon is intentionally single-threaded. The main
+ *   epoll loop serializes signal handling, IPC, D-Bus, BPF ring-buffer
+ *   consumption, TPM attestation, AIK rotation, and status updates on
+ *   this one struct. None of the embedded contexts carry a general
+ *   purpose lock.
+ *
+ *   ipc_context.tpm is only a borrowed pointer to tpm_ctx below. It is
+ *   safe because GET_TOKEN handlers run inside the same event loop that
+ *   mutates tpm_ctx through reconcile_tpm_lockout(), tpm_quote(),
+ *   tpm_rotate_aik(), and cleanup. Any future worker thread, threaded
+ *   IPC server, asynchronous TPM quote path, or D-Bus callback thread
+ *   must add an explicit serialization boundary before it touches this
+ *   state or any alias of it. Treat direct g_agent access as event-loop
+ *   owned unless the field documents a narrower rule.
  */
 struct agent_globals {
   volatile sig_atomic_t running;

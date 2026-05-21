@@ -59,7 +59,16 @@ struct ipc_context {
   struct ipc_listener extra[IPC_MAX_EXTRA_LISTENERS];
   int extra_count;
 
-  /* TPM context for token signing */
+  /*
+   * TPM context for token signing.
+   *
+   * Borrowed, not owned. In the production daemon this points at
+   * g_agent.tpm_ctx and is used only from the same single-threaded
+   * epoll loop that owns all TPM mutations. ipc_context provides no
+   * locking around the pointer or the pointed-to tpm_context; a future
+   * threaded IPC implementation must serialize GET_TOKEN against the
+   * attestation loop, AIK rotation, lockout reconciliation, and cleanup.
+   */
   struct tpm_context *tpm;
   uint32_t quote_pcr_mask;
 
