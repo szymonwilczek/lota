@@ -342,7 +342,7 @@ static int run_daemon(const struct run_daemon_params *params) {
       goto cleanup_tpm;
     } else {
       ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
-                  (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
+                  LOTA_TOKEN_QUOTE_PCR_MASK);
       lota_info("AIK ready, signed tokens enabled");
 
       ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);

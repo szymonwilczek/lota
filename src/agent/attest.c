@@ -831,8 +831,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
     return ret;
   }
 
-  ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
-              (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
+  ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx, LOTA_TOKEN_QUOTE_PCR_MASK);
 
   ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
   if (ret < 0) {

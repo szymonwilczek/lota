@@ -25,6 +25,19 @@
 #define LOTA_PCR_SELF 14
 
 /*
+ * PCR mask covered by the agent quote that backs every signed IPC
+ * token: firmware (PCR0), platform configuration (PCR1), Secure
+ * Boot policy (PCR7), and the LOTA self-measurement (PCR14). The
+ * mask MUST match the verifier-side PCRPolicy.GetRequiredMask()
+ * default so a token signed for a local SDK consumer carries the
+ * same firmware-baseline evidence as a remote attestation.
+ * Without PCR7 the SDK server cannot reproduce the verifier's
+ * Secure Boot gate against the same digest.
+ */
+#define LOTA_TOKEN_QUOTE_PCR_MASK                                              \
+  ((1U << 0) | (1U << 1) | (1U << 7) | (1U << LOTA_PCR_SELF))
+
+/*
  * Agent global runtime state.
  */
 struct agent_globals {
