@@ -18,46 +18,117 @@
 
 #include <seccomp.h>
 
+/*
+ * hardening_parse_tracer_pid - inspect a /proc/<pid>/status payload
+ *                              for the TracerPid: field
+ * @buf: NUL-terminated copy of the /proc payload (the function does
+ *       not read past the first NUL; truncation past the TracerPid
+ *       line is therefore safe).
+ * @out_tracer: caller-owned output; on -EPERM holds the offending
+ *              pid, otherwise zero.
+ *
+ * Returns:
+ *    0       - field present, tracer is pid 0 (not traced);
+ *   -EPERM   - field present, tracer is a non-zero pid;
+ *   -ENOTSUP - field absent (procfs without TracerPid);
+ *   -EINVAL  - field present but malformed (no digits, trailing
+ *              garbage such as "0XYZ", ...);
+ *   -ERANGE  - tracer pid exceeds INT32_MAX.
+ *
+ * Exposed via hardening.c rather than hardening.h so the surface
+ * stays internal; tests link it through LOTA_HARDENING_TESTING.
+ */
+int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer) {
+  if (!buf || !out_tracer)
+    return -EINVAL;
+  *out_tracer = 0;
+
+  /*
+   * Match "TracerPid:" at the start of a line. /proc emits the field
+   * once with a leading newline (or as the first line in pathological
+   * cases); searching for the "\n" prefix prevents a future field
+   * whose value happens to contain "TracerPid:" from being mistaken
+   * for the real one.
+   */
+  const char *p = (buf[0] == 'T' && strncmp(buf, "TracerPid:", 10) == 0)
+                      ? buf
+                      : strstr(buf, "\nTracerPid:");
+  if (!p)
+    return -ENOTSUP;
+  if (*p == '\n')
+    p++;
+  p += sizeof("TracerPid:") - 1;
+  while (*p == ' ' || *p == '\t')
+    p++;
+
+  /*
+   * Parse a non-negative decimal up to the newline. Two contracts:
+   *   - at least one digit must be present;
+   *   - the digit run must be terminated by '\n' (or by the end of
+   *     the buffer when /proc truncated the trailing newline). Any
+   *     other trailing character means the value is malformed -
+   *     e.g. "0XYZ" - and must NOT be silently coerced to
+   *     tracer == 0 the way the original parser did.
+   */
+  long tracer = 0;
+  const char *digit_start = p;
+  while (*p >= '0' && *p <= '9') {
+    tracer = tracer * 10 + (*p - '0');
+    if (tracer > 0x7fffffff)
+      return -ERANGE;
+    p++;
+  }
+  if (p == digit_start)
+    return -EINVAL;
+  if (*p != '\n' && *p != '\0')
+    return -EINVAL;
+
+  *out_tracer = tracer;
+  return tracer == 0 ? 0 : -EPERM;
+}
+
 int hardening_refuse_if_traced(void) {
   int fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
   if (fd < 0)
     return -errno;
 
-  char buf[4096];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
-  int saved_errno = errno;
+  /*
+   * /proc/<pid>/status can exceed 4 KiB on hosts with dense cgroup
+   * namespaces, many supplementary groups, or large Cpus_allowed_list
+   * / Mems_allowed_list bitmaps. TracerPid: lands in the first ~200
+   * bytes in practice but the parser must not rely on that, so the
+   * read is done in a loop that drains the file up to a generous
+   * 32 KiB cap. The cap exists only to bound resident memory; a
+   * status file larger than that on a non-malicious kernel is
+   * unheard of, and partial truncation past the TracerPid: line
+   * cannot hide a tracer because that field appears near the top.
+   */
+  char buf[32 * 1024];
+  size_t off = 0;
+  while (off < sizeof(buf) - 1) {
+    ssize_t n = read(fd, buf + off, sizeof(buf) - 1 - off);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      int err = -errno;
+      close(fd);
+      return err;
+    }
+    if (n == 0)
+      break;
+    off += (size_t)n;
+  }
   close(fd);
 
-  if (n < 0)
-    return -saved_errno;
-  if (n == 0)
+  if (off == 0)
     return -EIO;
+  buf[off] = '\0';
 
-  buf[n] = '\0';
-
-  const char *p = strstr(buf, "TracerPid:");
-  if (!p) {
-    /* /proc/self/status without TracerPid is an unsupported kernel. */
-    return -ENOTSUP;
-  }
-  p += sizeof("TracerPid:") - 1;
-  while (*p == ' ' || *p == '\t')
-    p++;
-
-  /* parse a non-negative decimal up to the newline */
   long tracer = 0;
-  while (*p >= '0' && *p <= '9') {
-    tracer = tracer * 10 + (*p - '0');
-    p++;
-    if (tracer > 0x7fffffff)
-      return -ERANGE;
-  }
-
-  if (tracer != 0) {
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret == -EPERM)
     lota_err("hardening: refusing to start under tracer pid %ld", tracer);
-    return -EPERM;
-  }
-  return 0;
+  return ret;
 }
 
 int hardening_apply_no_new_privs(void) {

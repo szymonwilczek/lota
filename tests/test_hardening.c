@@ -45,6 +45,127 @@ static int tests_passed;
     printf("FAIL: %s\n", msg);                                                 \
   } while (0)
 
+/*
+ * hardening_parse_tracer_pid_buf lives in hardening.c without a public
+ * prototype; tests link the symbol directly so the parser branches can
+ * be exercised without spinning up a real ptracer.
+ */
+int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer);
+
+static void test_tracer_pid_parser_accepts_zero(void) {
+  TEST("parse_tracer_pid: well-formed status with TracerPid: 0");
+  static const char buf[] = "Name:\tlota-agent\n"
+                            "Umask:\t0022\n"
+                            "State:\tR (running)\n"
+                            "Tgid:\t12345\n"
+                            "TracerPid:\t0\n"
+                            "Uid:\t0\t0\t0\t0\n";
+  long tracer = 0xDEAD;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != 0 || tracer != 0) {
+    FAIL("expected ret=0 tracer=0");
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_returns_pid_on_attach(void) {
+  TEST("parse_tracer_pid: non-zero pid -> -EPERM with the pid");
+  static const char buf[] = "Name:\tagent\n"
+                            "TracerPid:\t98765\n";
+  long tracer = 0;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != -EPERM) {
+    FAIL("expected -EPERM");
+    return;
+  }
+  if (tracer != 98765) {
+    FAIL("expected tracer=98765");
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_rejects_garbage_suffix(void) {
+  TEST("parse_tracer_pid: '0XYZ' must NOT silently parse as 0");
+  static const char buf[] = "Name:\tagent\n"
+                            "TracerPid:\t0XYZ\n";
+  long tracer = 0;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != -EINVAL) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+    FAIL(msg);
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_rejects_missing_field(void) {
+  TEST("parse_tracer_pid: kernel without TracerPid: -> -ENOTSUP");
+  static const char buf[] = "Name:\tagent\n"
+                            "Umask:\t0022\n"
+                            "State:\tR\n";
+  long tracer = 0;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != -ENOTSUP) {
+    FAIL("expected -ENOTSUP");
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_rejects_no_digits(void) {
+  TEST("parse_tracer_pid: 'TracerPid:\\t\\n' (no digits) -> -EINVAL");
+  static const char buf[] = "Name:\tagent\n"
+                            "TracerPid:\t\n";
+  long tracer = 0;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != -EINVAL) {
+    FAIL("expected -EINVAL");
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_rejects_overflow(void) {
+  TEST("parse_tracer_pid: pid above INT32_MAX -> -ERANGE");
+  static const char buf[] = "Name:\tagent\n"
+                            "TracerPid:\t9999999999\n";
+  long tracer = 0;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != -ERANGE) {
+    FAIL("expected -ERANGE");
+    return;
+  }
+  PASS();
+}
+
+static void test_tracer_pid_parser_finds_field_after_dense_prefix(void) {
+  TEST("parse_tracer_pid: long prefix before TracerPid: still parses");
+  /*
+   * Synthesise a dense /proc/self/status-like prefix to verify the
+   * parser does not depend on TracerPid: landing in the first 200
+   * bytes. The prefix mirrors what a host with many supplementary
+   * groups + dense Cpus_allowed bitmap would emit.
+   */
+  char buf[16 * 1024];
+  size_t off = 0;
+  off += (size_t)snprintf(buf + off, sizeof(buf) - off, "Name:\tagent\n");
+  while (off < sizeof(buf) - 256) {
+    off += (size_t)snprintf(buf + off, sizeof(buf) - off,
+                            "Cpus_allowed:\tffffffff,ffffffff,ffffffff\n");
+  }
+  off += (size_t)snprintf(buf + off, sizeof(buf) - off, "TracerPid:\t0\n");
+  long tracer = 0xDEAD;
+  int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+  if (ret != 0 || tracer != 0) {
+    FAIL("expected ret=0 tracer=0 across the dense prefix");
+    return;
+  }
+  PASS();
+}
+
 /* run @body in a forked child, exit code 0 == success, non-zero == failure */
 static int run_in_child(int (*body)(void)) {
   pid_t pid = fork();
@@ -275,6 +396,14 @@ static void run_child_case(const char *name, int (*body)(void)) {
 
 int main(void) {
   printf("\n=== Hardening Tests ===\n\n");
+
+  test_tracer_pid_parser_accepts_zero();
+  test_tracer_pid_parser_rejects_garbage_suffix();
+  test_tracer_pid_parser_rejects_missing_field();
+  test_tracer_pid_parser_returns_pid_on_attach();
+  test_tracer_pid_parser_rejects_no_digits();
+  test_tracer_pid_parser_rejects_overflow();
+  test_tracer_pid_parser_finds_field_after_dense_prefix();
 
   run_child_case("refuse_if_traced: clean process returns 0",
                  child_refuse_if_traced_untraced);

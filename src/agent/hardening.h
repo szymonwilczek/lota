@@ -22,7 +22,18 @@
  * Reads /proc/self/status and inspects the TracerPid field. Any non-zero
  * tracer indicates an attached ptracer (gdb, strace, frida-server, ...).
  *
- * Returns: 0 if not traced, -EPERM if traced, negative errno on I/O error.
+ * Ordering note: hardening_apply_basics() drops PR_SET_DUMPABLE to 0
+ * before this function runs (see hardening_apply_all() and
+ * hardening_apply_daemon()). PR_SET_DUMPABLE=0 makes the process
+ * non-attachable via PTRACE_ATTACH for any process without
+ * CAP_SYS_PTRACE, which closes the TOCTOU window between reading
+ * TracerPid and finishing startup: an unprivileged attacker cannot
+ * attach in that interval because the kernel-side dumpable check
+ * fires first.
+ *
+ * Returns: 0 if not traced, -EPERM if traced, -EINVAL on a malformed
+ * TracerPid line, -ENOTSUP on a kernel that omits the field, -ERANGE
+ * on a tracer pid that overflows int32, negative errno on I/O error.
  */
 int hardening_refuse_if_traced(void);
 
