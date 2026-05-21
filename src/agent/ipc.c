@@ -850,7 +850,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
   ret = tpm_quote(ctx->tpm, binding_nonce, ctx->quote_pcr_mask, &quote);
   if (ret < 0) {
-    lota_err("tpm_quote failed: %s", strerror(-ret));
+    lota_err("tpm_quote failed: %s", tpm_strerror(ret));
     fail = true;
     /*
      * tpm_quote() latches lockout_active on the tpm_context the

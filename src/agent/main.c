@@ -329,7 +329,7 @@ static int run_daemon(const struct run_daemon_params *params) {
   lota_info("Initializing TPM");
   ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
-    lota_err("Failed to initialize TPM: %s", strerror(-ret));
+    lota_err("Failed to initialize TPM: %s", tpm_strerror(ret));
     goto cleanup_tpm;
   } else {
     lota_info("TPM initialized");
@@ -338,7 +338,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     lota_info("Provisioning AIK");
     ret = tpm_provision_aik(&g_agent.tpm_ctx);
     if (ret < 0) {
-      lota_err("AIK provisioning failed: %s", strerror(-ret));
+      lota_err("AIK provisioning failed: %s", tpm_strerror(ret));
       goto cleanup_tpm;
     } else {
       ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
@@ -347,7 +347,7 @@ static int run_daemon(const struct run_daemon_params *params) {
 
       ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
       if (ret < 0) {
-        lota_err("Failed to load AIK metadata: %s", strerror(-ret));
+        lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
         goto cleanup_tpm;
       } else {
         int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
@@ -360,7 +360,7 @@ static int run_daemon(const struct run_daemon_params *params) {
     lota_info("Performing self-measurement");
     ret = self_measure(&g_agent.tpm_ctx);
     if (ret < 0) {
-      lota_err("Self-measurement failed: %s", strerror(-ret));
+      lota_err("Self-measurement failed: %s", tpm_strerror(ret));
       goto cleanup_tpm;
     } else {
       lota_info("Self-measurement complete (PCR %d extended)", LOTA_PCR_SELF);

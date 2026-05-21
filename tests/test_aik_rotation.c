@@ -697,8 +697,8 @@ static void test_rc_lockout_raw(void) {
     FAIL("LOCKOUT must not be transient");
     return;
   }
-  if (tpm_test_rc_to_errno(TPM2_RC_LOCKOUT) != -EOWNERDEAD) {
-    FAIL("expected -EOWNERDEAD for LOCKOUT");
+  if (tpm_test_rc_to_errno(TPM2_RC_LOCKOUT) != -LOTA_ERR_TPM_LOCKED) {
+    FAIL("expected -LOTA_ERR_TPM_LOCKED for LOCKOUT");
     return;
   }
 
@@ -714,8 +714,8 @@ static void test_rc_lockout_resmgr_layer(void) {
     FAIL("layered LOCKOUT not detected");
     return;
   }
-  if (tpm_test_rc_to_errno(wrapped) != -EOWNERDEAD) {
-    FAIL("expected -EOWNERDEAD for layered LOCKOUT");
+  if (tpm_test_rc_to_errno(wrapped) != -LOTA_ERR_TPM_LOCKED) {
+    FAIL("expected -LOTA_ERR_TPM_LOCKED for layered LOCKOUT");
     return;
   }
 
@@ -858,6 +858,44 @@ static void test_lockout_flag_lifecycle(void) {
  * test exercises its contract directly so the build catches any
  * regression in self_hash_ready gating or buffer width.
  */
+/*
+ * tpm_strerror must produce a LOTA-specific string for our private
+ * code and fall back to strerror() for any POSIX value. Both the
+ * negative and absolute encoding of the value must yield the same
+ * output because callers pass the raw return without normalising
+ * the sign.
+ */
+static void test_tpm_strerror_maps_lota_private(void) {
+  TEST("tpm_strerror covers LOTA_ERR_TPM_LOCKED + POSIX fallback");
+
+  const char *neg = tpm_strerror(-LOTA_ERR_TPM_LOCKED);
+  const char *pos = tpm_strerror(LOTA_ERR_TPM_LOCKED);
+  if (!neg || !pos) {
+    FAIL("tpm_strerror returned NULL");
+    return;
+  }
+  if (strstr(neg, "lockout") == NULL || strstr(pos, "lockout") == NULL) {
+    FAIL("expected the description to mention the lockout");
+    return;
+  }
+
+  /* POSIX value still routes through strerror */
+  const char *einval = tpm_strerror(-EINVAL);
+  const char *strerror_einval = strerror(EINVAL);
+  if (!einval || !strerror_einval || strcmp(einval, strerror_einval) != 0) {
+    FAIL("tpm_strerror should fall back to strerror for POSIX values");
+    return;
+  }
+
+  /* Zero must not return NULL nor confuse the caller */
+  if (!tpm_strerror(0)) {
+    FAIL("tpm_strerror(0) must not be NULL");
+    return;
+  }
+
+  PASS();
+}
+
 static void fill_pattern(uint8_t *buf, size_t n, uint8_t seed) {
   for (size_t i = 0; i < n; i++)
     buf[i] = (uint8_t)(seed ^ i);
@@ -1265,6 +1303,7 @@ int main(void) {
   test_rc_tcti_layer();
   test_lockout_flag_lifecycle();
   test_self_hash_pin_round_trip();
+  test_tpm_strerror_maps_lota_private();
   test_clock_state_save_load_round_trip();
   test_clock_state_load_missing_is_enoent();
   test_clock_state_load_rejects_corrupt();

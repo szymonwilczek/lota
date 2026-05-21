@@ -151,7 +151,7 @@ int export_policy(int mode) {
       snap.pcrs[i].valid = true;
     } else {
       fprintf(stderr, "Warning: Failed to read PCR %d: %s\n", pcrs_to_export[i],
-              strerror(-ret));
+              tpm_strerror(ret));
     }
   }
 
@@ -160,7 +160,7 @@ int export_policy(int mode) {
                                     sizeof(snap.kernel_path));
   if (ret < 0) {
     fprintf(stderr, "Warning: Failed to find kernel path metadata: %s\n",
-            strerror(-ret));
+            tpm_strerror(ret));
   }
 
   {
@@ -176,7 +176,7 @@ int export_policy(int mode) {
       fprintf(stderr,
               "Warning: Failed to read kernel-relevant measured boot PCR "
               "(tried 11/9/8/4): %s\n",
-              strerror(-ret));
+              tpm_strerror(ret));
     }
   }
 
@@ -199,7 +199,8 @@ int export_policy(int mode) {
       if (ret == 0) {
         snap.agent_hash_valid = true;
       } else {
-        fprintf(stderr, "Warning: Failed to hash agent: %s\n", strerror(-ret));
+        fprintf(stderr, "Warning: Failed to hash agent: %s\n",
+                tpm_strerror(ret));
       }
     }
   }
@@ -270,7 +271,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
    */
   ret = tpm_get_hardware_id(&g_agent.tpm_ctx, report->tpm.hardware_id);
   if (ret < 0) {
-    fprintf(stderr, "Warning: Failed to get hardware ID: %s\n", strerror(-ret));
+    fprintf(stderr, "Warning: Failed to get hardware ID: %s\n",
+            tpm_strerror(ret));
     /* continue with zero hardware ID - verifier may reject */
     memset(report->tpm.hardware_id, 0, sizeof(report->tpm.hardware_id));
   } else {
@@ -320,7 +322,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
     if (ret < 0) {
       fprintf(stderr,
               "Self-measurement has not run; agent_hash unavailable: %s\n",
-              strerror(-ret));
+              tpm_strerror(ret));
       goto cleanup;
     }
     if (len > 0) {
@@ -382,7 +384,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
   ret = tpm_quote(&g_agent.tpm_ctx, binding_nonce, challenge->pcr_mask,
                   &quote_resp);
   if (ret < 0) {
-    fprintf(stderr, "TPM Quote failed: %s\n", strerror(-ret));
+    fprintf(stderr, "TPM Quote failed: %s\n", tpm_strerror(ret));
     goto cleanup;
   }
   lota_dbg("TPM quote generated (sig: %u bytes, attest: %u bytes)",
@@ -434,7 +436,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
       lota_dbg("AIK public key exported (%zu bytes, DER SPKI)", aik_size);
     } else {
       fprintf(stderr, "Warning: Failed to export AIK public key: %s\n",
-              strerror(-ret));
+              tpm_strerror(ret));
       report->tpm.aik_public_size = 0;
     }
   }
@@ -455,7 +457,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
       report->tpm.ek_cert_size = 0;
     } else {
       fprintf(stderr, "Warning: Failed to read EK certificate: %s\n",
-              strerror(-ret));
+              tpm_strerror(ret));
       report->tpm.ek_cert_size = 0;
     }
   }
@@ -670,7 +672,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
   printf("Initializing TPM...\n");
   ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to initialize TPM: %s\n", strerror(-ret));
+    fprintf(stderr, "Failed to initialize TPM: %s\n", tpm_strerror(ret));
     net_cleanup();
     return ret;
   }
@@ -678,13 +680,14 @@ int do_attest(const char *server, int port, const char *ca_cert,
   printf("Performing self-measurement...\n");
   ret = self_measure(&g_agent.tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Warning: Self-measurement failed: %s\n", strerror(-ret));
+    fprintf(stderr, "Warning: Self-measurement failed: %s\n",
+            tpm_strerror(ret));
   }
 
   printf("Checking AIK...\n");
   ret = tpm_provision_aik(&g_agent.tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to provision AIK: %s\n", strerror(-ret));
+    fprintf(stderr, "Failed to provision AIK: %s\n", tpm_strerror(ret));
     tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     return ret;
@@ -692,7 +695,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
   ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
   if (ret < 0) {
-    fprintf(stderr, "Failed to load AIK metadata: %s\n", strerror(-ret));
+    fprintf(stderr, "Failed to load AIK metadata: %s\n", tpm_strerror(ret));
     tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     return ret;
@@ -789,7 +792,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   lota_info("Initializing TPM");
   ret = tpm_init(&g_agent.tpm_ctx);
   if (ret < 0) {
-    lota_err("Failed to initialize TPM: %s", strerror(-ret));
+    lota_err("Failed to initialize TPM: %s", tpm_strerror(ret));
     net_cleanup();
     dbus_cleanup(g_agent.dbus_ctx);
     ipc_cleanup(&g_agent.ipc_ctx);
@@ -809,7 +812,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
      * operator addresses the root cause (typically a cold reboot
      * after a live binary upgrade) before traffic resumes.
      */
-    lota_err("Self-measurement failed: %s", strerror(-ret));
+    lota_err("Self-measurement failed: %s", tpm_strerror(ret));
     tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     dbus_cleanup(g_agent.dbus_ctx);
@@ -820,7 +823,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
   lota_info("Checking AIK");
   ret = tpm_provision_aik(&g_agent.tpm_ctx);
   if (ret < 0) {
-    lota_err("Failed to provision AIK: %s", strerror(-ret));
+    lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
     tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     dbus_cleanup(g_agent.dbus_ctx);
@@ -833,7 +836,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
   ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
   if (ret < 0) {
-    lota_err("Failed to load AIK metadata: %s", strerror(-ret));
+    lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
     tpm_cleanup(&g_agent.tpm_ctx);
     net_cleanup();
     dbus_cleanup(g_agent.dbus_ctx);
@@ -863,7 +866,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
                   (long)tpm_aik_age(&g_agent.tpm_ctx));
         ret = tpm_rotate_aik(&g_agent.tpm_ctx);
         if (ret < 0) {
-          lota_err("AIK rotation failed: %s", strerror(-ret));
+          lota_err("AIK rotation failed: %s", tpm_strerror(ret));
         } else {
           lota_info("AIK rotated -> generation %lu",
                     (unsigned long)g_agent.tpm_ctx.aik_meta.generation);

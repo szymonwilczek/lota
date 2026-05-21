@@ -139,10 +139,18 @@ static bool tss2_rc_is_transient(TSS2_RC rc) {
 /*
  * Helper: Convert TSS2 return code to errno.
  *
- * LOCKOUT is surfaced as -EOWNERDEAD so callers can distinguish it from
- * generic IO failures without consulting tpm_context state. Transient
- * codes map to -EAGAIN; format-1 auth/handle/value errors keep their
- * familiar errno mapping.
+ * LOCKOUT is surfaced as -LOTA_ERR_TPM_LOCKED, a LOTA-private value
+ * documented in tpm.h. The POSIX errno table has no entry that
+ * honestly describes a TPM dictionary-attack lockout: -EOWNERDEAD
+ * means "robust mutex owner died" and would mislead anyone reading
+ * strace output or syslog, -EACCES is associated with file-
+ * permission failures. The private code lives outside the 1..4095
+ * range glibc/kernel use so it cannot collide; log sites print it
+ * via tpm_strerror() and dispatch sites use the tpm_is_locked_out()
+ * predicate that inspects the sticky TSS2_RC, not the errno return.
+ *
+ * Transient codes map to -EAGAIN; format-1 auth/handle/value errors
+ * keep their familiar errno mapping.
  */
 static int tss2_rc_to_errno(TSS2_RC rc) {
   if (rc == TSS2_RC_SUCCESS)
@@ -167,7 +175,7 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
 
   switch (tpm_rc_decode(rc)) {
   case TPM2_RC_LOCKOUT:
-    return -EOWNERDEAD;
+    return -LOTA_ERR_TPM_LOCKED;
   case TPM2_RC_RETRY:
   case TPM2_RC_YIELDED:
   case TPM2_RC_TESTING:
@@ -189,6 +197,18 @@ static int tss2_rc_to_errno(TSS2_RC rc) {
     return -EINVAL;
   default:
     return -EIO;
+  }
+}
+
+const char *tpm_strerror(int err) {
+  int code = err < 0 ? -err : err;
+  switch (code) {
+  case 0:
+    return "success";
+  case LOTA_ERR_TPM_LOCKED:
+    return "TPM dictionary-attack lockout engaged";
+  default:
+    return strerror(code);
   }
 }
 

@@ -22,6 +22,41 @@ struct tpm_quote_response;
 #define TPM_DEVICE_PATH "/dev/tpmrm0"
 
 /*
+ * LOTA-private error codes.
+ *
+ * The POSIX errno table has no value that honestly describes a TPM
+ * dictionary-attack lockout. Earlier revisions of the code surfaced
+ * TPM2_RC_LOCKOUT as -EOWNERDEAD, which on Linux means "robust
+ * mutex owner died" and would confuse anyone reading strace output
+ * or system journals. EACCES would be no better - operators
+ * legitimately associate it with file-permission failures.
+ *
+ * LOTA_ERR_TPM_LOCKED lives well above the 1..133 range glibc
+ * populates and above the kernel-internal codes (ERESTART*,
+ * ERESTART_RESTARTBLOCK) so it cannot collide with any current or
+ * forseeable POSIX value. Callers that consume tpm_*() return
+ * codes should print the value through tpm_strerror() so the
+ * journal entry carries the real cause instead of "Unknown error
+ * 4097". Code that needs to dispatch on the lockout state still
+ * uses the tpm_is_locked_out() predicate (which inspects the
+ * sticky TSS2_RC) - the errno value is for log fidelity, not for
+ * control flow.
+ */
+#define LOTA_ERR_TPM_LOCKED 4097
+
+/*
+ * tpm_strerror - error-to-string helper that handles both POSIX
+ *                errno values and LOTA-private codes.
+ *
+ * Accepts the return value of any tpm_*() function (negative errno
+ * or zero) and returns a stable, descriptive string. POSIX values
+ * are routed through strerror(); LOTA-private codes (currently
+ * LOTA_ERR_TPM_LOCKED) carry their own message. Pass either the
+ * raw negative value (-ret) or the absolute - both work.
+ */
+const char *tpm_strerror(int err);
+
+/*
  * EK Certificate handle (RSA 2048)
  */
 #define TPM_EK_CERT_HANDLE 0x01c00002
