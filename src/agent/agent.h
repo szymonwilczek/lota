@@ -74,6 +74,18 @@ struct agent_globals {
 
   char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
   int policy_trust_lib_count;
+
+  /*
+   * Edge-trigger cache for the TPM DA-lockout transition logger.
+   * reconcile_tpm_lockout() inspects this to decide whether the
+   * current observation crosses the cleared->locked or
+   * locked->cleared boundary. Lives on the globals struct (rather
+   * than as a function-static) so test harnesses can drive
+   * deterministic state and a hypothetical second reconciliation
+   * thread shares the same view; the existing single-threaded
+   * epoll loop is the only writer today.
+   */
+  bool tpm_lockout_last_known;
 };
 
 extern struct agent_globals g_agent;

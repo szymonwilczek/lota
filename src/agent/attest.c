@@ -717,20 +717,25 @@ int do_attest(const char *server, int port, const char *ca_cert,
  * recomputed before every ipc_update_status() call so the bit reflects
  * the most recent observation. Transitions are logged at notice/error
  * severity so operators can correlate against TPM resource exhaustion.
+ *
+ * Edge-trigger state lives on struct agent_globals (not as a
+ * function-static) so unit tests can drive deterministic
+ * cleared->locked->cleared sequences and a future second writer
+ * (e.g. an out-of-loop reconciliation path) would observe the same
+ * value rather than its own private copy.
  */
 static uint32_t reconcile_tpm_lockout(uint32_t flags) {
-  static bool last_known = false;
   bool now = tpm_is_locked_out(&g_agent.tpm_ctx);
 
-  if (now && !last_known) {
+  if (now && !g_agent.tpm_lockout_last_known) {
     lota_err("TPM DA lockout detected: TPM2_RC_LOCKOUT observed "
              "(events=%u, first_seen=%lld)",
              g_agent.tpm_ctx.lockout_event_count,
              (long long)g_agent.tpm_ctx.lockout_first_seen);
-  } else if (!now && last_known) {
+  } else if (!now && g_agent.tpm_lockout_last_known) {
     lota_notice("TPM DA lockout cleared after successful TPM operation");
   }
-  last_known = now;
+  g_agent.tpm_lockout_last_known = now;
 
   if (now)
     return flags | LOTA_STATUS_TPM_LOCKOUT;
