@@ -95,6 +95,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
          "(default)\n");
   printf("                      monitor     - log events only\n");
   printf("                      maintenance - allow all, minimal logging\n");
+  printf("                    A CLI --mode that weakens the configured\n");
+  printf("                    'enforce' mode requires:\n");
+  printf("                      --insecure-allow-mode-downgrade\n");
+  printf("  --insecure-allow-mode-downgrade\n");
+  printf("                    Acknowledge that --mode weakens cfg.mode\n"
+         "                    'enforce' to monitor/maintenance.\n");
   printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted libraries\n");
   printf("                    (requires --mode enforce)\n");
   printf("  --strict-exec     Enforce strict executable policy (fs-verity "

@@ -49,7 +49,14 @@ Requires=lota-agent.socket
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/lota-agent --mode monitor
+#
+# No --mode flag here on purpose. Mode is driven by /etc/lota/lota.conf
+# (default: enforce) so an operator who configured the host for enforce
+# is not silently downgraded to monitor by the packaged unit. A daemon
+# invoked with an explicit CLI --mode that weakens an enforce config
+# refuses to start unless --insecure-allow-mode-downgrade is passed.
+#
+ExecStart=/usr/bin/lota-agent
 ExecStop=/usr/bin/lota-agent --shutdown
 ExecReload=/bin/kill -HUP $MAINPID
 WatchdogSec=60s

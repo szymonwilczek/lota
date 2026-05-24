@@ -532,6 +532,9 @@ int main(int argc, char *argv[]) {
   const char *ca_cert_path = NULL;
   int no_verify_tls = 0;
   int insecure_allow_no_verify_tls = 0;
+  int insecure_allow_mode_downgrade = 0;
+  bool cli_mode_set = false;
+  int config_file_mode = -1;
   const char *pin_sha256_hex = NULL;
   uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
   int has_pin = 0;
@@ -555,6 +558,7 @@ int main(int argc, char *argv[]) {
       {"ca-cert", required_argument, 0, 'C'},
       {"no-verify-tls", no_argument, 0, 'K'},
       {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
+      {"insecure-allow-mode-downgrade", no_argument, 0, 1002},
       {"pin-sha256", required_argument, 0, 'F'},
       {"bpf", required_argument, 0, 'b'},
       {"mode", required_argument, 0, 'm'},
@@ -628,8 +632,10 @@ int main(int argc, char *argv[]) {
   bpf_path = cfg.bpf_path;
   {
     int cfg_mode = parse_mode(cfg.mode);
-    if (cfg_mode >= 0)
+    if (cfg_mode >= 0) {
       g_agent.mode = cfg_mode;
+      config_file_mode = cfg_mode;
+    }
   }
   strict_mmap = cfg.strict_mmap;
   strict_exec = cfg.strict_exec;
@@ -747,6 +753,9 @@ int main(int argc, char *argv[]) {
     case 1000:
       insecure_allow_no_verify_tls = 1;
       break;
+    case 1002:
+      insecure_allow_mode_downgrade = 1;
+      break;
     case 'F':
       pin_sha256_hex = optarg;
       break;
@@ -760,6 +769,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Valid modes: monitor, enforce, maintenance\n");
         return 1;
       }
+      cli_mode_set = true;
       break;
     case 'M':
       strict_mmap = true;
@@ -1070,6 +1080,28 @@ int main(int argc, char *argv[]) {
     else
       return do_attest(server_addr, server_port, ca_cert_path, no_verify_tls,
                        has_pin ? pin_sha256_bin : NULL);
+  }
+
+  /*
+   * Mode downgrade guard.
+   *
+   * The packaged systemd unit does not pass --mode and lets the agent
+   * pick up cfg.mode (default enforce). An operator who hand-edits the
+   * unit to add --mode monitor, or who packages their own unit with a
+   * weakened mode, would otherwise silently override the configured
+   * enforce policy. Refuse to start in that case and require the
+   * caller to acknowledge the downgrade explicitly. Maintenance and
+   * monitor are both treated as weakenings of enforce.
+   */
+  if (cli_mode_set && config_file_mode == LOTA_MODE_ENFORCE &&
+      g_agent.mode != LOTA_MODE_ENFORCE && !insecure_allow_mode_downgrade) {
+    fprintf(stderr,
+            "ERROR: CLI --mode %s weakens configured mode 'enforce'.\n"
+            "Either remove --mode from the invocation (config drives mode)\n"
+            "or pass --insecure-allow-mode-downgrade to acknowledge the\n"
+            "downgrade explicitly.\n",
+            mode_to_string(g_agent.mode));
+    return 1;
   }
 
   if (daemon_flag) {
