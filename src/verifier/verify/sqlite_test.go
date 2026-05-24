@@ -600,6 +600,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -663,6 +664,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	cfg1 := DefaultConfig()
 	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
+	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -688,6 +690,7 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	cfg2 := DefaultConfig()
 	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
+	cfg2.RequireInitramfsLock = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -729,6 +732,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	cfg1 := DefaultConfig()
 	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
+	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -753,6 +757,7 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	cfg2 := DefaultConfig()
 	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
+	cfg2.RequireInitramfsLock = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -799,6 +804,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -876,6 +882,7 @@ func TestSQLiteIntegration_AIKPersistence(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 

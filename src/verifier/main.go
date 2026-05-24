@@ -75,20 +75,21 @@ var (
 	policyFile   = flag.String("policy", "", "PCR policy file (YAML)")
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
 
-	generateCert       = flag.Bool("generate-cert", false, "Generate self-signed certificate")
-	aikMaxAge          = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
-	logFormat          = flag.String("log-format", "text", "Log output format: text or json")
-	logLevel           = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
-	requireEventLog    = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
-	requireCert        = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
-	allowLegacyPCRMask = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
-	maxRestartSkew     = flag.Uint("max-restart-count-skew", 1024, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required.")
-	rejectLegacyBase   = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
-	allowPermissive    = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
-	aikCACerts         stringSliceFlag
-	ekCRLs             stringSliceFlag
-	nonceDBPath        = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
-	allowMemNonces     = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	generateCert         = flag.Bool("generate-cert", false, "Generate self-signed certificate")
+	aikMaxAge            = flag.Duration("aik-max-age", 30*24*time.Hour, "Maximum AIK registration age before key rotation is required (0 = no expiry)")
+	logFormat            = flag.String("log-format", "text", "Log output format: text or json")
+	logLevel             = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
+	requireEventLog      = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
+	requireCert          = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
+	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
+	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
+	maxRestartSkew       = flag.Uint("max-restart-count-skew", 1024, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required.")
+	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
+	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
+	aikCACerts           stringSliceFlag
+	ekCRLs               stringSliceFlag
+	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
 
 func main() {
@@ -146,6 +147,10 @@ func main() {
 	verifierCfg.RequireBootPCRs = !*allowLegacyPCRMask
 	if *allowLegacyPCRMask {
 		logger.Warn("INSECURE: --allow-legacy-pcr-mask is set; agents may attest without PCR 0/1/7 and bypass the firmware/Secure Boot baseline pin")
+	}
+	verifierCfg.RequireInitramfsLock = !*allowNoInitramfsLock
+	if *allowNoInitramfsLock {
+		logger.Warn("INSECURE: --allow-no-initramfs-lock is set; agents may attest without the initramfs PCR14 lock, leaving the kernel-handoff -> lota-agent window uncovered")
 	}
 	if *maxRestartSkew > math.MaxUint32 {
 		logger.Error("--max-restart-count-skew exceeds uint32 range",

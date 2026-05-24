@@ -152,6 +152,7 @@ type Verifier struct {
 	requireEventLog       bool
 	requireCert           bool
 	requireBootPCRs       bool
+	requireInitramfsLock  bool
 	rejectLegacyBaselines bool
 	maxRestartCountSkew   uint32
 }
@@ -246,6 +247,16 @@ type VerifierConfig struct {
 	// bypass the BootBaselineStorer pin even when one is configured.
 	RequireBootPCRs bool
 
+	// if true, reject attestation reports that do not advertise the
+	// initramfs PCR14 lock (FlagInitramfsLockV1). The lock is extended
+	// by the 90lota dracut helper before pivot_root, so it closes the
+	// kernel-handoff -> lota-agent window in which PCR14 is still
+	// OS-writable from locality 0. A fleet that opts out (legacy host
+	// without the dracut module) can keep attesting under the bare
+	// FlagBootCommitmentV1 derivation, but the verifier no longer
+	// authenticates the initramfs-stage pin for that report.
+	RequireInitramfsLock bool
+
 	// RejectLegacyBaselines refuses any attestation whose
 	// CheckAndUpdateAgentHash result is TOFULegacyBackfill. The
 	// backfill branch fires once per client - when a baseline row
@@ -283,6 +294,7 @@ func DefaultConfig() VerifierConfig {
 		RequireEventLog:       true,
 		RequireCert:           true,
 		RequireBootPCRs:       true,
+		RequireInitramfsLock:  true,
 		MaxRestartCountSkew:   1024,
 		AllowPermissivePolicy: false,
 	}
@@ -337,6 +349,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireEventLog:       cfg.RequireEventLog,
 		requireCert:           cfg.RequireCert,
 		requireBootPCRs:       cfg.RequireBootPCRs,
+		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
@@ -945,6 +958,22 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
 		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitmentV1")
+	}
+	// The initramfs PCR14 lock pins PCR14 to a fixed
+	// SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1" || resetCount || restartCount)
+	// before pivot_root. Without it, any code path that runs in
+	// userspace before the agent's first PCR14 extend can poison the
+	// boot-commitment baseline. The default production profile
+	// rejects reports that do not advertise FlagInitramfsLockV1; a
+	// fleet that explicitly opts out (see RequireInitramfsLock) keeps
+	// attesting on the bare FlagBootCommitmentV1 derivation but
+	// surfaces the gap to the operator.
+	if v.requireInitramfsLock && !useInitramfsLock {
+		logging.Security(clog, "report omits FlagInitramfsLockV1; initramfs PCR14 lock required",
+			"flags", fmt.Sprintf("0x%08x", report.Header.Flags))
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("FAIL_PCR_FAIL: report missing FlagInitramfsLockV1 (initramfs PCR14 lock required)")
 	}
 
 	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory in

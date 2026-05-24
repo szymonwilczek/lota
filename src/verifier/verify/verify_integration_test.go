@@ -281,6 +281,10 @@ func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	// fixtures emit pcr_mask 0x4003 (PCR 0/1/14); production-default
 	// enforcement of PCR 0/1/7 is exercised by dedicated tests.
 	cfg.RequireBootPCRs = false
+	// fixtures predate the initramfs PCR14 lock and emit reports
+	// without FlagInitramfsLockV1; the dedicated lock-policy tests
+	// cover the require path.
+	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, aikStore)
 
@@ -950,6 +954,7 @@ func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 
 	verifier := NewVerifier(cfg, aikStore)
@@ -978,5 +983,94 @@ func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
 	}
 	if result.Result != types.VerifyOK {
 		t.Fatalf("expected VerifyOK with RequireBootPCRs=false, got %d", result.Result)
+	}
+}
+
+// TestVerify_RejectsMissingInitramfsLockByDefault asserts that the
+// default (production) configuration refuses any attestation that does
+// not advertise FlagInitramfsLockV1. createValidReport emits a legacy
+// report whose Header.Flags omits the bit, so the verifier must close
+// the kernel-handoff -> lota-agent PCR14 window with VerifyPCRFail
+// before any downstream baseline write.
+func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
+	aikStore := store.NewMemoryStore()
+
+	cfg := DefaultConfig()
+	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
+	// RequireInitramfsLock left at its DefaultConfig value (true).
+	cfg.NonceLifetime = 1 * time.Second
+
+	verifier := NewVerifier(cfg, aikStore)
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
+
+	clientID := "initramfs-lock-default-reject"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	if err == nil {
+		t.Fatal("expected rejection: report omits FlagInitramfsLockV1 under default RequireInitramfsLock=true")
+	}
+	if result.Result != types.VerifyPCRFail {
+		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
+	}
+	if !strings.Contains(err.Error(), "FlagInitramfsLockV1") {
+		t.Fatalf("expected error to mention FlagInitramfsLockV1, got: %v", err)
+	}
+}
+
+// TestVerify_AcceptsMissingInitramfsLockWhenOptedOut pairs with the
+// reject test above: the --allow-no-initramfs-lock escape hatch must
+// keep a legacy fleet (no 90lota dracut module) attestable while the
+// operator works through the rollout.
+func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
+	aikStore := store.NewMemoryStore()
+
+	cfg := DefaultConfig()
+	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.NonceLifetime = 1 * time.Second
+
+	verifier := NewVerifier(cfg, aikStore)
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default): %v", err)
+	}
+
+	clientID := "initramfs-lock-opt-out"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	if err != nil {
+		t.Fatalf("VerifyReport: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("expected VerifyOK with RequireInitramfsLock=false, got %d", result.Result)
 	}
 }
