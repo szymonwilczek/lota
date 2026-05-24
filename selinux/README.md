@@ -214,6 +214,49 @@ sudo udevadm trigger --subsystem-match=tpm
 ls -Z /dev/tpm*
 ```
 
+#### "TPM device carries SELinux label ... expected lota_tpm_device_t"
+
+The agent reads `security.selinux` on `/dev/tpmrm0` and `/dev/tpm0`
+at the hardening gate. If the udev relabel did not run (broken
+symlink in `/etc/udev/rules.d`, missing
+`/usr/lib/udev/rules.d/99-lota-tpm.rules`, or a host kernel that
+labelled the device before the rule was installed), any other root
+SELinux domain (`tpm2-abrmd_t`, generic `init_t`, ...) still has
+rw access to the TPM resource manager. That domain can flood the
+chip and exhaust TPM sessions, the NV rate budget, or the DA
+counter; LOTA stays fail-closed
+(`LOTA_ERR_TPM_LOCKED` -> `LOTA_STATUS_TPM_LOCKOUT`), but
+attestation availability drops. Re-run the udev install steps
+above; the agent will start once the label is `lota_tpm_device_t`.
+
+#### TPM DoS / DA lockout runbook
+
+When `LOTA_STATUS_TPM_LOCKOUT` shows up on `lota-agent status` or
+on the D-Bus `StatusChanged` signal:
+
+```bash
+# Confirm the TPM is currently in dictionary-attack lockout.
+sudo tpm2_getcap properties-variable | grep -E "lockoutCounter|lockoutInterval"
+
+# Identify other processes holding the TPM resource manager fd.
+sudo lsof /dev/tpmrm0 /dev/tpm0
+
+# Inspect recent denials from non-LOTA domains.
+sudo ausearch -ts recent -m AVC -c tpm2-abrmd
+
+# Reset the lockout (requires lockoutAuth, typically empty on
+# stock distributions; otherwise consult the platform admin):
+sudo tpm2_dictionarylockout --setup-parameters \
+    --max-tries=32 --recovery-time=120 --lockout-recovery=120
+sudo tpm2_dictionarylockout --clear-lockout
+```
+
+The agent re-publishes the status flag on the next attestation
+cycle. If the lockout returns on a host where `ls -Z /dev/tpm*`
+shows `lota_tpm_device_t`, the offender is inside the
+`lota_agent_t` policy boundary; check `/var/log/lota` for repeated
+`LOTA_ERR_TPM_LOCKED` retries before escalating to hardware.
+
 #### BPF program loading fails
 
 ```bash

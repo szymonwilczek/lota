@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
@@ -376,6 +377,67 @@ static int kernel_module_sig_enforced(void) {
 }
 
 /*
+ * Returns 0 when /dev/tpmrm0 carries the SELinux label
+ * "lota_tpm_device_t", a negative errno otherwise.
+ *
+ * Rationale (TPM DoS / lockout). LOTA fences /dev/tpm[0-9]* and
+ * /dev/tpmrm[0-9]* behind the dedicated SELinux type
+ * lota_tpm_device_t via configs/udev/99-lota-tpm.rules so only the
+ * lota_agent_t domain can open them. Without the fence, any other
+ * root domain can flood the resource manager and exhaust TPM
+ * sessions, the NV rate budget, or the DA counter. The agent stays
+ * fail-closed (LOTA_ERR_TPM_LOCKED -> LOTA_STATUS_TPM_LOCKOUT), but
+ * availability of attestation tokens collapses. The udev rule
+ * fires at device-add time and is not retroactive: on a host whose
+ * /etc/udev/rules.d link was broken, the kernel labels the device
+ * with the generic tpm_device_t and every other root domain
+ * (e.g. tpm2-abrmd_t) still has rw access to it. Read the label
+ * directly via getxattr(2) so the daemon does not need libselinux
+ * at link time and the check works even when SELinux is in
+ * permissive mode (the label still tells us whether the relabel
+ * happened).
+ */
+static int tpm_device_selinux_label_ok(void) {
+  static const char *const tpm_paths[] = {"/dev/tpmrm0", "/dev/tpm0"};
+  const char *expected = "lota_tpm_device_t";
+  bool any_present = false;
+
+  for (size_t i = 0; i < sizeof(tpm_paths) / sizeof(tpm_paths[0]); i++) {
+    char ctx[256];
+    ssize_t got =
+        getxattr(tpm_paths[i], "security.selinux", ctx, sizeof(ctx) - 1);
+    if (got < 0) {
+      if (errno == ENOENT)
+        continue;
+      if (errno == ENOTSUP) {
+        /* Filesystem has no SELinux xattr support (no SELinux on
+         * host). Report success on the assumption the operator
+         * runs a non-SELinux deployment; the udev fence is then
+         * not the active defence anyway. */
+        return 0;
+      }
+      lota_err("getxattr(security.selinux) failed on %s: %s", tpm_paths[i],
+               strerror(errno));
+      return -errno;
+    }
+    any_present = true;
+    ctx[got] = '\0';
+    if (!strstr(ctx, expected)) {
+      lota_err("TPM device %s carries SELinux label %s; expected %s "
+               "(udev rule configs/udev/99-lota-tpm.rules did not relabel the "
+               "device, so any other root domain can rw the TPM and DoS LOTA "
+               "attestation availability)",
+               tpm_paths[i], ctx, expected);
+      return -EPERM;
+    }
+  }
+
+  if (!any_present)
+    return -ENOENT;
+  return 0;
+}
+
+/*
  * Returns 0 when /proc/self/exe carries an fs-verity digest, a
  * negative errno otherwise.
  *
@@ -441,6 +503,31 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs) {
   if (ret < 0) {
     lota_err("IMA appraisal policy is required for anti-tamper startup");
     return ret;
+  }
+
+  ret = tpm_device_selinux_label_ok();
+  if (ret == -ENOENT) {
+    lota_warn("No /dev/tpm[rm]0 devices present at hardening gate; "
+              "skipping SELinux confinement check");
+  } else if (ret < 0) {
+    /*
+     * The label mismatch already logged a SECURITY-tagged error
+     * inside tpm_device_selinux_label_ok(). Treat it the same as
+     * the other hardening prerequisites: hard-fail by default so
+     * the operator notices the broken udev relabel at startup;
+     * the existing --insecure-allow-mutable-rootfs escape hatch
+     * also tolerates the deviation since a host that opts into a
+     * mutable rootfs is already in the legacy-acknowledged
+     * profile and is not running a tight SELinux deployment.
+     */
+    if (allow_mutable_rootfs) {
+      lota_warn("INSECURE: TPM device SELinux label check failed and "
+                "--insecure-allow-mutable-rootfs was set; another root "
+                "domain can DoS the TPM resource manager and reduce "
+                "attestation availability");
+    } else {
+      return ret;
+    }
   }
 
   ret = agent_self_fsverity_enabled();
