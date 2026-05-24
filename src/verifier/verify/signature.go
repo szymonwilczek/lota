@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: MIT
 // LOTA Verifier - Signature verification module
 //
-// This module is intentionally separated from certificate chain validation
-// to allow easy substitution of trust models:
-//   - TOFU (Trust On First Use) - current MVP
-//   - CA-based certificate chain - future production
-//   - Privacy CA (DAA) - advanced privacy-preserving
+// The signature verifier validates the TPM quote (TPMS_ATTEST +
+// signature) against an AIK public key. It is intentionally
+// decoupled from the AIK trust model so the same verifier handles
+// every supported source for the public key:
+//   - Certificate-backed AIK chain via CertificateStore. The
+//     production default (VerifierConfig.RequireCert=true) takes
+//     this path: the AIK and EK certificates have already been
+//     chain-verified against the configured trust roots and the
+//     hardware ID has been bound to the EK modulus before the
+//     signature is checked.
+//   - Legacy TOFU pin via MemoryStore / FileStore for hosts that
+//     opted out of --require-cert. The AIK was pinned on first use
+//     and subsequent quotes must verify against the same key.
+//   - Optional future Privacy CA / DAA flow. The interface stays
+//     intentionally minimal so a new strategy can be plugged in
+//     without touching the quote-verification fast path.
 
 package verify
 
@@ -27,7 +38,10 @@ type SignatureVerifier interface {
 	// verifies the TPM quote signature
 	// attestData: raw TPMS_ATTEST from TPM
 	// signature: signature over attestData
-	// aikPubKey: AIK public key (from TOFU store or certificate)
+	// aikPubKey: AIK public key; provided by the caller after it
+	//   has been resolved through the active trust model (cert
+	//   chain on the production path, legacy TOFU pin under
+	//   --no-require-cert).
 	VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error
 
 	// returns verifier name for logging

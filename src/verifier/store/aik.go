@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: MIT
 // LOTA Verifier - AIK key store
 //
-// Manages Attestation Identity Keys using TOFU (Trust On First Use).
-// Designed for now to be replaceable with certificate-based trust in the future.
+// Manages Attestation Identity Keys. The production trust model is
+// certificate-backed: VerifierConfig.RequireCert defaults to true, so
+// RegisterAIKWithCert() is the path every first registration takes on
+// a production deployment. The verifier resolves the manufacturer EK
+// chain through AIKCertificateVerifier and pins the
+// SHA-256(EK modulus) into the report.TPM.HardwareID binding before
+// the AIK is allowed to sign attestations.
+//
+// The legacy TOFU path remains for two narrow cases: hosts that
+// opted out of --require-cert (operator acknowledges no chain
+// verification), and the in-memory test store (MemoryStore) used by
+// the verifier's own unit and integration tests. Production builds
+// with --require-cert (the default) never take that branch at
+// runtime; the methods stay in the interface so the test store and
+// the cert-backed store share one shape.
 
 package store
 
@@ -31,7 +44,10 @@ type AIKStore interface {
 	// retrieves AIK public key for client
 	GetAIK(clientID string) (*rsa.PublicKey, error)
 
-	// stores AIK public key for client (TOFU)
+	// stores AIK public key for client. Reserved for the legacy
+	// TOFU branch used by the test MemoryStore and by deployments
+	// that opted out of --require-cert; production registrations go
+	// through RegisterAIKWithCert.
 	RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 
 	// stores AIK with certificate verification
@@ -54,11 +70,13 @@ type AIKStore interface {
 	RotateAIK(clientID string, newKey *rsa.PublicKey) error
 }
 
-// stores that have trust anchors for certificate validation
-// can implement this to allow certificate-backed AIK rotation.
-//
-// this is intentionally separate from RegisterAIKWithCert because
-// rotation needs to verify certificates without attempting a TOFU registration.
+// Stores that hold trust anchors for certificate validation
+// implement this to gate AIK rotation behind the same chain
+// verification that RegisterAIKWithCert applies to first
+// registration. It is intentionally separate from
+// RegisterAIKWithCert: rotation must re-verify the new certificate
+// chain without touching the existing per-client baseline, while
+// RegisterAIKWithCert creates the baseline atomically.
 type AIKCertificateVerifier interface {
 	VerifyCertificatesForAIK(pubKey *rsa.PublicKey, aikCertDER, ekCertDER []byte) error
 }
@@ -449,13 +467,22 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	return nil
 }
 
-// falls back to TOFU (no cert verification)
+// FileStore has no embedded CA roots, so it cannot verify the
+// AIK/EK certificate chain. The legacy TOFU registration path is
+// used as the implementation; production deployments are expected
+// to use CertificateStore (cert-backed) and reach this branch only
+// in tests or under an explicit --no-require-cert configuration.
 func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return fs.RegisterAIK(clientID, pubKey)
 }
 
-// registers hardware ID for client or validates against existing
-// implements TOFU: first registration stores the ID, subsequent calls verify match
+// Registers the hardware ID (SHA-256 of the EK modulus) for a
+// client on first attestation and validates the same value on every
+// subsequent attestation. The first-use branch is not a free TOFU
+// trust upgrade: on the cert-backed path
+// (RegisterAIKWithCert) the modulus has already been compared
+// against the EK certificate by verifyHardwareIDMatchesEKCert(), so
+// pinning here only records the value the chain already authenticated.
 func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
 	if err := validateClientID(clientID); err != nil {
 		return err
@@ -611,7 +638,11 @@ func (ms *MemoryStore) CountClients() int {
 	return len(ms.keys)
 }
 
-// for MemoryStore falls back to TOFU (no cert verification)
+// MemoryStore is the in-process test store; it has no trust anchors
+// and therefore cannot verify the AIK/EK chain. Falls through to
+// the legacy TOFU registration path so unit tests can drive the
+// register/rotate code without provisioning a fake CA. Production
+// stores (CertificateStore) override this with chain verification.
 func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return ms.RegisterAIK(clientID, pubKey)
 }
@@ -842,7 +873,12 @@ func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 }
 
 func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	// TOFU fallback when no certificates provided
+	// Cert-less registration entry. Production deployments run with
+	// cs.requireCerts == true (the default carried from
+	// VerifierConfig.RequireCert) so this branch is the canonical
+	// reject path. The legacy TOFU fall-through under
+	// requireCerts == false remains only for hosts that
+	// intentionally opted out via the operator-facing CLI.
 	if cs.requireCerts {
 		return ErrNoCertificate
 	}
@@ -857,7 +893,11 @@ func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Pub
 		}
 	}
 
-	// if no certificates provided, fall back to TOFU (if allowed)
+	// No certs supplied. Under cs.requireCerts the if-block above
+	// already rejected, so this fall-through is only reachable
+	// when the operator explicitly opted out of --require-cert;
+	// the legacy registration path then records the key without
+	// chain verification.
 	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
 		return cs.RegisterAIK(clientID, pubKey)
 	}
