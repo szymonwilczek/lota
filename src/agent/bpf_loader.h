@@ -37,7 +37,8 @@ struct bpf_loader_ctx {
   int trusted_lib_mnt_fd;                    /* 'trusted_lib_mnt' map fd */
   int protected_pids_fd;                     /* Protected PIDs map fd */
   int allow_verity_digest_fd;                /* 'allow_verity_digest' map fd */
-  bool loaded; /* Program is loaded and attached */
+  bool loaded;   /* BPF object loaded into the kernel and maps resolved */
+  bool attached; /* LSM / fmod_ret programs attached to kernel hooks */
 };
 
 /*
@@ -89,7 +90,7 @@ typedef int (*bpf_event_handler_t)(void *ctx, void *data, size_t len);
 int bpf_loader_init(struct bpf_loader_ctx *ctx);
 
 /*
- * bpf_loader_load - Load and attach BPF program
+ * bpf_loader_load - Load BPF object into the kernel and resolve maps
  * @ctx: Initialized context
  * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
  * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to
@@ -100,12 +101,38 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx);
  * verification and BPF object signature verification. This is intended for now
  * and will be changed!
  *
- * Loads the BPF object, verifies it, and attaches enforcement hooks.
+ * Verifies the detached signature, loads the BPF object into the
+ * kernel, resolves all map fds, hardens fd cloexec, sets task_auth +
+ * integrity_config + early LOCK_BPF, and leaves the loader in the
+ * loaded-but-not-attached state. The caller must invoke
+ * bpf_loader_attach() to commit programs to LSM / fmod_ret hooks;
+ * doing so only after the full startup policy is written to
+ * lota_config closes the small attach -> startup-policy window in
+ * which an attached hook would observe a partially configured map.
  *
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
                     const char *bpf_pubkey_pem_path);
+
+/*
+ * bpf_loader_attach - Attach loaded BPF programs to their hooks
+ * @ctx: Context after a successful bpf_loader_load()
+ *
+ * Attaches every BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_TRACING program
+ * to its kernel hook and verifies that the security-critical
+ * required-programs set (lota_ptrace_access_check and
+ * lota_ptrace_may_access_fallback) is fully attached. Refusing to
+ * proceed with a partial attach keeps the fail-deep contract: the
+ * daemon never reaches sd_notify(READY=1) with a known ptrace
+ * coverage gap. Call only after the full enforcement policy has been
+ * written to lota_config so the very first invocation of every
+ * attached hook sees the operator-configured strict_* / block_* /
+ * mode bits, not the post-load default zeros.
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+int bpf_loader_attach(struct bpf_loader_ctx *ctx);
 
 /*
  * bpf_loader_setup_ringbuf - Set up ring buffer for events

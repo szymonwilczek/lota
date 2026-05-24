@@ -379,16 +379,9 @@ static int run_daemon(const struct run_daemon_params *params) {
     lota_err("Failed to load BPF program: %s", strerror(-ret));
     goto cleanup_bpf;
   }
-  lota_info("BPF program loaded");
+  lota_info(
+      "BPF program loaded (attach deferred until startup policy applied)");
   status_flags |= LOTA_STATUS_BPF_LOADED;
-
-  /* BPF event fd to epoll */
-  int bpf_fd = bpf_loader_get_event_fd(&g_agent.bpf_ctx);
-  if (bpf_fd >= 0) {
-    ev.events = EPOLLIN;
-    ev.data.fd = bpf_fd;
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
-  }
 
   struct agent_startup_policy startup_policy = {
       .mode = g_agent.mode,
@@ -405,9 +398,26 @@ static int run_daemon(const struct run_daemon_params *params) {
       .allow_verity_count = g_allow_verity_count,
   };
 
+  /*
+   * Write the full enforcement policy (mode + strict_* + block_* +
+   * protected pids + verity allowlist) into lota_config / aux maps
+   * BEFORE BPF programs go live. agent_apply_startup_policy() calls
+   * the bpf_loader_set_* helpers that operate on map fds resolved by
+   * bpf_loader_load(); it does not need attached programs. Doing
+   * this here closes the attach -> startup-policy window: the very
+   * first invocation of every LSM hook below sees the operator
+   * policy, not the post-load default zeros.
+   */
   ret = agent_apply_startup_policy(&startup_policy);
   if (ret < 0)
     goto cleanup_bpf;
+
+  ret = bpf_loader_attach(&g_agent.bpf_ctx);
+  if (ret < 0) {
+    lota_err("Failed to attach BPF programs: %s", strerror(-ret));
+    goto cleanup_bpf;
+  }
+  lota_info("BPF programs attached under full enforcement policy");
 
   ret = bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event, NULL);
   if (ret < 0) {
@@ -415,6 +425,14 @@ static int run_daemon(const struct run_daemon_params *params) {
     goto cleanup_bpf;
   }
   lota_info("Ring buffer ready");
+
+  /* BPF ringbuf epoll fd registered after setup_ringbuf creates it */
+  int bpf_fd = bpf_loader_get_event_fd(&g_agent.bpf_ctx);
+  if (bpf_fd >= 0) {
+    ev.events = EPOLLIN;
+    ev.data.fd = bpf_fd;
+    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
+  }
 
   ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
 

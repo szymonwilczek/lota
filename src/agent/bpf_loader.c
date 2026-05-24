@@ -351,6 +351,30 @@ static int kernel_ima_appraisal_enabled(void) {
   return 0;
 }
 
+/*
+ * Returns 0 when the running kernel enforces module signatures, a
+ * negative errno otherwise. /sys/module/module/parameters/sig_enforce
+ * reflects CONFIG_MODULE_SIG_FORCE plus any boot-time
+ * module.sig_enforce=1 override. Without it, root (or an unsigned
+ * automated kmod load triggered before lota-agent attaches its
+ * kernel_read_file LSM hook) can insert an unsigned kernel module
+ * during the boot -> agent window and survive every later
+ * enforcement gate the agent installs.
+ */
+static int kernel_module_sig_enforced(void) {
+  char buf[16];
+  size_t len = 0;
+  int ret = read_text_file("/sys/module/module/parameters/sig_enforce", buf,
+                           sizeof(buf), &len);
+  if (ret < 0)
+    return ret;
+  if (len == 0)
+    return -EIO;
+  if (buf[0] == 'Y' || buf[0] == '1')
+    return 0;
+  return -EPERM;
+}
+
 int bpf_loader_verify_kernel_runtime_hardening(void) {
   int ret;
 
@@ -358,6 +382,14 @@ int bpf_loader_verify_kernel_runtime_hardening(void) {
   if (ret < 0) {
     lota_err("Kernel lockdown is not in restrictive mode "
              "(integrity/confidentiality required)");
+    return ret;
+  }
+
+  ret = kernel_module_sig_enforced();
+  if (ret < 0) {
+    lota_err("Kernel module signature enforcement is not active "
+             "(module.sig_enforce=1 required to close the boot -> agent "
+             "module-load window)");
     return ret;
   }
 
@@ -480,7 +512,6 @@ out:
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
                     const char *bpf_pubkey_pem_path) {
   struct bpf_program *prog;
-  struct bpf_link *link;
   int err;
   int ret;
 
@@ -524,100 +555,14 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
   }
 
   /*
-   * Attach all supported runtime enforcement programs.
-   *
-   * LOTA attaches two program classes here:
-   *
-   *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
-   *     (bprm_check_security, kernel_read_file, kernel_load_data,
-   *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
-   *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are the
-   *     authoritative deny points for execve / module load / mprotect /
-   *     ptrace_attach / signal delivery / BPF map writes.
-   *
-   *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
-   *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback). The
-   *     LSM ptrace_access_check hook covers PTRACE_ATTACH and friends,
-   *     but process_vm_readv(2) / process_vm_writev(2) reach the same
-   *     credential check through mm_access() -> __ptrace_may_access()
-   *     without always re-entering the ptrace_access_check LSM call
-   *     chain (the precise dispatch depends on the kernel
-   *     configuration). The fmod_ret hook enforces the identical
-   *     "agent task / protected pid / block_ptrace in enforce mode"
-   *     predicate on the permission return value, returning -EPERM so
-   *     cross-process memory access is blocked through the same gate
-   *     as PTRACE_ATTACH. The fallback is required, not aspirational:
-   *     a kernel that refuses to attach the fmod_ret program (no
-   *     CONFIG_FUNCTION_ERROR_INJECTION, hidden symbol, ...) fails the
-   *     bpf_program__attach() call below and aborts startup, which
-   *     keeps the fail-deep contract: the agent never runs with a
-   *     known process_vm_* policy gap.
+   * Program attach is intentionally deferred until bpf_loader_attach().
+   * Resolving map fds, hardening them, writing task_auth /
+   * integrity_config / early LOCK_BPF, and then letting the caller
+   * populate the full enforcement policy (mode + strict_* + block_*)
+   * BEFORE programs go live closes the attach -> startup-policy
+   * window: every hook observes the operator policy from its very
+   * first invocation, not post-load default zeros.
    */
-  /*
-   * Track attachment of the security-critical programs so a partial
-   * BPF object (or a kernel that silently refuses to attach a
-   * specific program type) is caught here instead of silently
-   * shipping a daemon with a known policy gap. The fmod_ret hook on
-   * __ptrace_may_access is the only program in lota_lsm.bpf.o that
-   * is not an LSM hook; if it failed to attach (e.g. no
-   * CONFIG_FUNCTION_ERROR_INJECTION, kernel symbol not whitelisted)
-   * the process_vm_readv / writev / /proc/PID/mem / process_madvise
-   * paths would not be covered. The LSM ptrace_access_check hook
-   * carries the canonical PTRACE_ATTACH gate; without it the
-   * fmod_ret hook alone cannot fail closed against PTRACE_ATTACH.
-   * Both must attach for the daemon to run.
-   */
-  static const char *const required_programs[] = {
-      "lota_ptrace_access_check",
-      "lota_ptrace_may_access_fallback",
-  };
-  const size_t required_count =
-      sizeof(required_programs) / sizeof(required_programs[0]);
-  bool required_attached[sizeof(required_programs) /
-                         sizeof(required_programs[0])] = {false};
-
-  bpf_object__for_each_program(prog, ctx->obj) {
-    enum bpf_prog_type prog_type = bpf_program__type(prog);
-
-    if (prog_type != BPF_PROG_TYPE_LSM && prog_type != BPF_PROG_TYPE_TRACING)
-      continue;
-
-    link = bpf_program__attach(prog);
-    if (!link) {
-      err = -errno;
-      lota_err("Failed to attach program %s: %d", bpf_program__name(prog), err);
-      goto err_close;
-    }
-
-    if (ctx->link_count < BPF_MAX_LSM_LINKS) {
-      ctx->links[ctx->link_count++] = link;
-    } else {
-      lota_err("Too many attached BPF programs, increase BPF_MAX_LSM_LINKS");
-      bpf_link__destroy(link);
-      err = -E2BIG;
-      goto err_close;
-    }
-
-    const char *attached_name = bpf_program__name(prog);
-    lota_info("Attached BPF program: %s", attached_name);
-
-    for (size_t i = 0; i < required_count; i++) {
-      if (strcmp(attached_name, required_programs[i]) == 0) {
-        required_attached[i] = true;
-        break;
-      }
-    }
-  }
-
-  for (size_t i = 0; i < required_count; i++) {
-    if (!required_attached[i]) {
-      lota_err("Required BPF program %s not attached; refusing to run with "
-               "ptrace policy gap",
-               required_programs[i]);
-      err = -ENOENT;
-      goto err_close;
-    }
-  }
 
   /* Get ring buffer map fd */
   ctx->ringbuf_fd = bpf_object__find_map_fd_by_name(ctx->obj, "events");
@@ -791,6 +736,114 @@ err_close:
   return err;
 }
 
+int bpf_loader_attach(struct bpf_loader_ctx *ctx) {
+  struct bpf_program *prog;
+  struct bpf_link *link;
+  int err;
+
+  if (!ctx)
+    return -EINVAL;
+
+  if (!ctx->loaded)
+    return -EINVAL;
+
+  if (ctx->attached)
+    return -EALREADY;
+
+  /*
+   * Attach all supported runtime enforcement programs.
+   *
+   * Two program classes go live here:
+   *
+   *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
+   *     (bprm_check_security, kernel_read_file, kernel_load_data,
+   *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
+   *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are
+   *     the authoritative deny points for execve / module load /
+   *     mprotect / ptrace_attach / signal delivery / BPF map writes.
+   *
+   *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
+   *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback).
+   *     The LSM ptrace_access_check hook covers PTRACE_ATTACH and
+   *     friends, but process_vm_readv/writev, /proc/PID/mem,
+   *     process_madvise, kcmp, migrate_pages, move_pages and
+   *     get_robust_list reach the same credential check through
+   *     mm_access() -> __ptrace_may_access() without always
+   *     re-entering the LSM call chain. The fmod_ret hook enforces
+   *     the identical "agent task / protected pid / block_ptrace in
+   *     enforce mode" predicate on the permission return value.
+   *
+   * The required-programs table catches a partial BPF object or a
+   * kernel that silently refuses one of the program types (e.g.
+   * fmod_ret on __ptrace_may_access without
+   * CONFIG_FUNCTION_ERROR_INJECTION). A missing required program
+   * surfaces as -ENOENT here so the daemon exits before
+   * sd_notify(READY=1).
+   */
+  static const char *const required_programs[] = {
+      "lota_ptrace_access_check",
+      "lota_ptrace_may_access_fallback",
+  };
+  const size_t required_count =
+      sizeof(required_programs) / sizeof(required_programs[0]);
+  bool required_attached[sizeof(required_programs) /
+                         sizeof(required_programs[0])] = {false};
+
+  bpf_object__for_each_program(prog, ctx->obj) {
+    enum bpf_prog_type prog_type = bpf_program__type(prog);
+
+    if (prog_type != BPF_PROG_TYPE_LSM && prog_type != BPF_PROG_TYPE_TRACING)
+      continue;
+
+    link = bpf_program__attach(prog);
+    if (!link) {
+      err = -errno;
+      lota_err("Failed to attach program %s: %d", bpf_program__name(prog), err);
+      goto err_detach;
+    }
+
+    if (ctx->link_count < BPF_MAX_LSM_LINKS) {
+      ctx->links[ctx->link_count++] = link;
+    } else {
+      lota_err("Too many attached BPF programs, increase BPF_MAX_LSM_LINKS");
+      bpf_link__destroy(link);
+      err = -E2BIG;
+      goto err_detach;
+    }
+
+    const char *attached_name = bpf_program__name(prog);
+    lota_info("Attached BPF program: %s", attached_name);
+
+    for (size_t i = 0; i < required_count; i++) {
+      if (strcmp(attached_name, required_programs[i]) == 0) {
+        required_attached[i] = true;
+        break;
+      }
+    }
+  }
+
+  for (size_t i = 0; i < required_count; i++) {
+    if (!required_attached[i]) {
+      lota_err("Required BPF program %s not attached; refusing to run with "
+               "ptrace policy gap",
+               required_programs[i]);
+      err = -ENOENT;
+      goto err_detach;
+    }
+  }
+
+  ctx->attached = true;
+  return 0;
+
+err_detach:
+  for (int i = 0; i < ctx->link_count; i++) {
+    bpf_link__destroy(ctx->links[i]);
+    ctx->links[i] = NULL;
+  }
+  ctx->link_count = 0;
+  return err;
+}
+
 int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
                              bpf_event_handler_t handler, void *handler_ctx) {
   if (!ctx || !ctx->loaded || !handler)
@@ -890,6 +943,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx) {
   }
 
   ctx->loaded = false;
+  ctx->attached = false;
   ctx->ringbuf_fd = -1;
   ctx->stats_fd = -1;
   ctx->config_fd = -1;
