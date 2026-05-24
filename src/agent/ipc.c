@@ -1337,7 +1337,19 @@ static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len) {
     return payload_len == sizeof(struct lota_ipc_pid_request);
 
   default:
-    return 1;
+    /*
+     * Unknown command. The dispatcher returns LOTA_IPC_ERR_UNKNOWN_CMD
+     * regardless of payload contents, but a non-zero payload still
+     * consumed up to LOTA_IPC_MAX_PAYLOAD bytes of recv_buf on the
+     * way in. A malicious local client could pump 64 KiB of payload
+     * per unknown command and force the agent to copy and discard it
+     * indefinitely. Require zero payload here so the bad request is
+     * rejected as soon as the IPC header is parsed; the client gets
+     * the same LOTA_IPC_ERR_BAD_REQUEST it would get for any other
+     * malformed length, and the agent never reads the body off the
+     * socket.
+     */
+    return payload_len == 0;
   }
 }
 
