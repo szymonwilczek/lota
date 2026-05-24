@@ -39,4 +39,20 @@ struct agent_loop_ctx {
 
 int agent_run_event_loop(struct agent_loop_ctx *ctx);
 
+/*
+ * agent_ringbuf_drop_delta - compute alertable BPF ringbuf drop delta
+ * @current: current drop counter snapshot returned by
+ *           bpf_loader_get_extended_stats().drops
+ * @last:    in/out pointer to the last observed counter; updated to
+ *           @current on return so successive calls report monotonic
+ *           increments
+ *
+ * Returns the increase since the last call. A non-zero return is the
+ * forensic signal: every step the agent failed to push an event to
+ * user-space because the BPF ringbuf was full. A counter rollback
+ * (BPF stats reset across map reload) is treated as zero delta and
+ * just resets the baseline so the next monotonic delta reads cleanly.
+ */
+uint64_t agent_ringbuf_drop_delta(uint64_t current, uint64_t *last);
+
 #endif

@@ -60,6 +60,9 @@ enum lota_ipc_result {
 #define LOTA_STATUS_BPF_LOADED (1 << 3)  /* BPF LSM active */
 #define LOTA_STATUS_SECURE_BOOT (1 << 4) /* Secure Boot enabled */
 #define LOTA_STATUS_TPM_LOCKOUT (1 << 5) /* TPM signaled DA lockout */
+#define LOTA_STATUS_RINGBUF_DROPS                                              \
+  (1 << 6) /* BPF events ringbuf dropped at least one event since last poll;  \
+              forensic stream incomplete, enforcement unaffected */
 
 /*
  * Request header
