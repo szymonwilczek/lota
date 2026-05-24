@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -525,10 +526,56 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
   /*
    * Attach all supported runtime enforcement programs.
    *
-   * LOTA currently uses LSM hooks and a tracing fallback (fmod_ret) for
-   * __ptrace_may_access to cover process_vm_* access paths. This will be
-   * properly done in the future.
+   * LOTA attaches two program classes here:
+   *
+   *   - BPF_PROG_TYPE_LSM hooks for the primary policy gates
+   *     (bprm_check_security, kernel_read_file, kernel_load_data,
+   *     mmap_file, file_mprotect, ptrace_access_check, task_kill,
+   *     task_free, task_fix_setuid, bpf_map, bpf, ...). These are the
+   *     authoritative deny points for execve / module load / mprotect /
+   *     ptrace_attach / signal delivery / BPF map writes.
+   *
+   *   - A BPF_PROG_TYPE_TRACING fmod_ret hook on __ptrace_may_access
+   *     (src/bpf/lota_lsm.bpf.c::lota_ptrace_may_access_fallback). The
+   *     LSM ptrace_access_check hook covers PTRACE_ATTACH and friends,
+   *     but process_vm_readv(2) / process_vm_writev(2) reach the same
+   *     credential check through mm_access() -> __ptrace_may_access()
+   *     without always re-entering the ptrace_access_check LSM call
+   *     chain (the precise dispatch depends on the kernel
+   *     configuration). The fmod_ret hook enforces the identical
+   *     "agent task / protected pid / block_ptrace in enforce mode"
+   *     predicate on the permission return value, returning -EPERM so
+   *     cross-process memory access is blocked through the same gate
+   *     as PTRACE_ATTACH. The fallback is required, not aspirational:
+   *     a kernel that refuses to attach the fmod_ret program (no
+   *     CONFIG_FUNCTION_ERROR_INJECTION, hidden symbol, ...) fails the
+   *     bpf_program__attach() call below and aborts startup, which
+   *     keeps the fail-deep contract: the agent never runs with a
+   *     known process_vm_* policy gap.
    */
+  /*
+   * Track attachment of the security-critical programs so a partial
+   * BPF object (or a kernel that silently refuses to attach a
+   * specific program type) is caught here instead of silently
+   * shipping a daemon with a known policy gap. The fmod_ret hook on
+   * __ptrace_may_access is the only program in lota_lsm.bpf.o that
+   * is not an LSM hook; if it failed to attach (e.g. no
+   * CONFIG_FUNCTION_ERROR_INJECTION, kernel symbol not whitelisted)
+   * the process_vm_readv / writev / /proc/PID/mem / process_madvise
+   * paths would not be covered. The LSM ptrace_access_check hook
+   * carries the canonical PTRACE_ATTACH gate; without it the
+   * fmod_ret hook alone cannot fail closed against PTRACE_ATTACH.
+   * Both must attach for the daemon to run.
+   */
+  static const char *const required_programs[] = {
+      "lota_ptrace_access_check",
+      "lota_ptrace_may_access_fallback",
+  };
+  const size_t required_count =
+      sizeof(required_programs) / sizeof(required_programs[0]);
+  bool required_attached[sizeof(required_programs) /
+                         sizeof(required_programs[0])] = {false};
+
   bpf_object__for_each_program(prog, ctx->obj) {
     enum bpf_prog_type prog_type = bpf_program__type(prog);
 
@@ -551,7 +598,25 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       goto err_close;
     }
 
-    lota_info("Attached BPF program: %s", bpf_program__name(prog));
+    const char *attached_name = bpf_program__name(prog);
+    lota_info("Attached BPF program: %s", attached_name);
+
+    for (size_t i = 0; i < required_count; i++) {
+      if (strcmp(attached_name, required_programs[i]) == 0) {
+        required_attached[i] = true;
+        break;
+      }
+    }
+  }
+
+  for (size_t i = 0; i < required_count; i++) {
+    if (!required_attached[i]) {
+      lota_err("Required BPF program %s not attached; refusing to run with "
+               "ptrace policy gap",
+               required_programs[i]);
+      err = -ENOENT;
+      goto err_close;
+    }
   }
 
   /* Get ring buffer map fd */

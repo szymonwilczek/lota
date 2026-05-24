@@ -1467,29 +1467,58 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 /* ======================================================================
  * Tracing fallback: __ptrace_may_access
  *
- * process_vm_readv()/process_vm_writev() call mm_access() which relies on
- * __ptrace_may_access(). Most kernels invoke ptrace_access_check LSM from
- * this path, but this fallback enforces the same policy directly at the
- * permission return point to avoid configuration-dependent gaps.
+ * process_vm_readv(2) / process_vm_writev(2) reach the same credential
+ * check that PTRACE_ATTACH does, but through mm_access() ->
+ * __ptrace_may_access() rather than through ptrace_attach(). Whether
+ * that call chain re-enters the ptrace_access_check LSM hook depends on
+ * the kernel configuration, so this fmod_ret hook enforces the same
+ * "agent task / protected pid / block_ptrace in enforce mode" predicate
+ * directly on the permission return value. It is part of the policy
+ * contract, not a debug aid: the user-space loader (bpf_loader.c) treats
+ * a failed attach as a hard startup error so the agent never runs with
+ * a known process_vm_* gap.
  *
- * Return: original ret when allowed, -EPERM to deny
+ * Return: original ret when allowed, -EPERM to deny.
  * ====================================================================== */
 SEC("fmod_ret/__ptrace_may_access")
 int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
              unsigned int mode, int ret) {
-  struct lota_exec_event *event;
+  struct lota_exec_event *event = NULL;
   u32 child_pid;
   u32 lota_mode;
   int blocked = 0;
+  int emit_event = 0;
 
   (void)mode;
 
+  /*
+   * A previous hook (LSM ptrace_access_check or another fmod_ret
+   * program in the chain) already denied this call. Preserve that
+   * decision instead of overriding it - inverting -EPERM to 0 would
+   * defeat both Yama and the ptrace_access_check enforcement path
+   * above.
+   */
   if (ret != 0)
     return ret;
+
+  if (!child)
+    return 0;
 
   lota_mode = get_mode();
   child_pid = BPF_CORE_READ(child, pid);
 
+  /*
+   * Identical predicate to lota_ptrace_access_check above. The two
+   * hooks form one logical gate: ptrace_access_check covers the
+   * canonical PTRACE_ATTACH / pidfd_getfd paths, and this fmod_ret
+   * hook covers the chain that reaches __ptrace_may_access without
+   * always re-entering the LSM (process_vm_readv/writev,
+   * /proc/PID/mem read/write, process_madvise, kcmp, migrate_pages,
+   * move_pages, get_robust_list). Both hooks share the same agent /
+   * protected-pid / block_ptrace predicate so an attacker cannot
+   * find a credential check the verifier sees but the agent does
+   * not.
+   */
   if (is_lota_agent_task(child)) {
     blocked = 1;
   }
@@ -1504,17 +1533,22 @@ int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
     blocked = 1;
   }
 
-  if (!blocked)
-    return ret;
-
+  /*
+   * Count every attempt, not only blocked ones. Pairs with
+   * ptrace_access_check, so per-process attempt rate visible to the
+   * forensics path even when call reaches mm via process_vm_* or
+   * /proc/PID/mem and never hits the LSM hook.
+   */
   inc_stat(STAT_PTRACE_ATTEMPTS);
-  inc_stat(STAT_PTRACE_BLOCKED);
 
-  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  emit_event = should_emit_event(lota_mode, blocked);
+  if (emit_event) {
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  }
   if (event) {
     __builtin_memset(event, 0, sizeof(*event));
     event->timestamp_ns = bpf_ktime_get_ns();
-    event->event_type = LOTA_EVENT_PTRACE_BLOCKED;
+    event->event_type = blocked ? LOTA_EVENT_PTRACE_BLOCKED : LOTA_EVENT_PTRACE;
     event->tgid = bpf_get_current_pid_tgid() >> 32;
     event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
     event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -1532,11 +1566,16 @@ int BPF_PROG(lota_ptrace_may_access_fallback, struct task_struct *child,
 
     bpf_ringbuf_submit(event, 0);
     inc_stat(STAT_EVENTS_SENT);
-  } else {
+  } else if (emit_event) {
     inc_stat(STAT_RINGBUF_DROPS);
   }
 
-  return -EPERM;
+  if (blocked) {
+    inc_stat(STAT_PTRACE_BLOCKED);
+    return -EPERM;
+  }
+
+  return 0;
 }
 
 /* ======================================================================
