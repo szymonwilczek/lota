@@ -241,6 +241,48 @@ func (s *SQLiteBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 	}
 }
 
+// GetBootBaseline returns the persisted PCR0/PCR1/PCR7 row for a
+// client or nil when the boot baseline has never been pinned. A row
+// whose boot columns are still NULL counts as "not enrolled" and
+// returns nil.
+func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var (
+		pcr0, pcr1, pcr7    []byte
+		bootFirst, bootLast sql.NullTime
+	)
+	err := s.db.QueryRow(
+		"SELECT pcr0, pcr1, pcr7, boot_first_seen, boot_last_seen FROM baselines WHERE client_id = ?",
+		clientID,
+	).Scan(&pcr0, &pcr1, &pcr7, &bootFirst, &bootLast)
+	if err != nil {
+		return nil
+	}
+	if len(pcr0) == 0 && len(pcr1) == 0 && len(pcr7) == 0 {
+		return nil
+	}
+
+	out := BootBaseline{}
+	if len(pcr0) == types.HashSize {
+		copy(out.PCR0[:], pcr0)
+	}
+	if len(pcr1) == types.HashSize {
+		copy(out.PCR1[:], pcr1)
+	}
+	if len(pcr7) == types.HashSize {
+		copy(out.PCR7[:], pcr7)
+	}
+	if bootFirst.Valid {
+		out.FirstSeen = bootFirst.Time
+	}
+	if bootLast.Valid {
+		out.LastSeen = bootLast.Time
+	}
+	return &out
+}
+
 func (s *SQLiteBaselineStore) ClearBaseline(clientID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

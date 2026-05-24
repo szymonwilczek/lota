@@ -277,6 +277,18 @@ type BootBaselineStorer interface {
 	CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline)
 }
 
+// BootBaselineReader is implemented by baseline stores that can return
+// the persisted PCR0/PCR1/PCR7 baseline for a client without performing
+// a TOFU write. The verifier uses it to gate first-use boot baselines
+// behind an enrollment ceremony: if no baseline row exists and the
+// active policy does not pin PCR0/PCR1/PCR7 explicitly, the production
+// configuration refuses the attestation instead of TOFU-establishing
+// whatever firmware/Secure Boot values the agent ships up. A nil
+// return is the canonical "not enrolled" signal.
+type BootBaselineReader interface {
+	GetBootBaseline(clientID string) *BootBaseline
+}
+
 // AgentHashStorer is optionally implemented by baseline stores that can
 // pin the agent self-hash alongside (or instead of) PCR14. The hash is
 // the SHA-256 of the agent binary as captured by the agent at startup;
@@ -411,6 +423,20 @@ func (s *BaselineStore) GetBaseline(clientID string) *ClientBaseline {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.baselines[clientID]
+}
+
+// GetBootBaseline returns the persisted PCR0/PCR1/PCR7 row for a
+// client or nil when the boot baseline has never been pinned. It is
+// the read-only side of BootBaselineStorer and never writes.
+func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	b, ok := s.bootBaselines[clientID]
+	if !ok {
+		return nil
+	}
+	out := *b
+	return &out
 }
 
 // removes stored baseline for a client

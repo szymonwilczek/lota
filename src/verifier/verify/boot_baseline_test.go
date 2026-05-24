@@ -143,3 +143,110 @@ func TestBootBaseline_SQLiteDetectsMismatch(t *testing.T) {
 		t.Fatalf("snapshot must expose stored baseline, got %+v", snap)
 	}
 }
+
+func TestBootBaseline_MemoryGetBootBaselineNilWhenUnpinned(t *testing.T) {
+	bs := NewBaselineStore()
+	if got := bs.GetBootBaseline("never-seen"); got != nil {
+		t.Fatalf("expected nil for unpinned client, got %+v", got)
+	}
+
+	bs.CheckAndUpdateBootPCRs("c1", boot(0x10, 0x11, 0x17))
+	got := bs.GetBootBaseline("c1")
+	if got == nil {
+		t.Fatal("expected populated baseline after first use")
+	}
+	if got.PCR0[0] != 0x10 || got.PCR1[0] != 0x11 || got.PCR7[0] != 0x17 {
+		t.Fatalf("baseline values not preserved: %+v", got)
+	}
+}
+
+func TestBootBaseline_SQLiteGetBootBaselineNilWhenUnpinned(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/baselines.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	bs := NewSQLiteBaselineStore(db)
+
+	if got := bs.GetBootBaseline("never-seen"); got != nil {
+		t.Fatalf("expected nil for unpinned client, got %+v", got)
+	}
+
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xCC
+	bs.CheckAndUpdate("c1", pcr14)
+	// row exists but boot columns still NULL -> nil
+	if got := bs.GetBootBaseline("c1"); got != nil {
+		t.Fatalf("expected nil while boot columns NULL, got %+v", got)
+	}
+	bs.CheckAndUpdateBootPCRs("c1", boot(0x30, 0x31, 0x37))
+	got := bs.GetBootBaseline("c1")
+	if got == nil {
+		t.Fatal("expected populated baseline after first use")
+	}
+	if got.PCR0[0] != 0x30 || got.PCR7[0] != 0x37 {
+		t.Fatalf("baseline values not preserved: %+v", got)
+	}
+}
+
+func TestPCRVerifier_ActivePolicyDeclaresBootPCRs(t *testing.T) {
+	v := NewPCRVerifier()
+
+	// no active policy
+	if v.ActivePolicyDeclaresBootPCRs() {
+		t.Fatal("expected false with no active policy")
+	}
+
+	pinAll := &PCRPolicy{
+		Name: "pin-all",
+		PCRs: map[int]string{
+			0: "aa",
+			1: "bb",
+			7: "cc",
+		},
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(pinAll); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.SetActivePolicy("pin-all"); err != nil {
+		t.Fatalf("SetActivePolicy: %v", err)
+	}
+	if !v.ActivePolicyDeclaresBootPCRs() {
+		t.Fatal("expected true when PCR0/1/7 all pinned")
+	}
+
+	pinPartial := &PCRPolicy{
+		Name: "pin-partial",
+		PCRs: map[int]string{
+			0: "aa",
+			7: "cc",
+		},
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(pinPartial); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.SetActivePolicy("pin-partial"); err != nil {
+		t.Fatalf("SetActivePolicy: %v", err)
+	}
+	if v.ActivePolicyDeclaresBootPCRs() {
+		t.Fatal("expected false when PCR1 missing")
+	}
+
+	pinNone := &PCRPolicy{
+		Name:        "pin-none",
+		PCRs:        map[int]string{14: "dd"},
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(pinNone); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.SetActivePolicy("pin-none"); err != nil {
+		t.Fatalf("SetActivePolicy: %v", err)
+	}
+	if v.ActivePolicyDeclaresBootPCRs() {
+		t.Fatal("expected false when no boot PCR is pinned")
+	}
+}

@@ -153,6 +153,7 @@ type Verifier struct {
 	requireCert           bool
 	requireBootPCRs       bool
 	requireInitramfsLock  bool
+	requireBootEnrollment bool
 	rejectLegacyBaselines bool
 	maxRestartCountSkew   uint32
 }
@@ -257,6 +258,21 @@ type VerifierConfig struct {
 	// authenticates the initramfs-stage pin for that report.
 	RequireInitramfsLock bool
 
+	// if true, refuse to TOFU-establish a per-client boot baseline
+	// (PCR0/PCR1/PCR7) the first time a client reports. The baseline
+	// must be authenticated through one of two enrollment paths:
+	//   - the active (signed) policy explicitly pins PCR0/PCR1/PCR7,
+	//     so the operator-approved firmware/Secure Boot values are
+	//     compared against the report by the existing PCRVerifier;
+	//   - the baseline store already holds a row for the client,
+	//     i.e. the host has been enrolled out-of-band.
+	// Without one of those, a first-attestation host that boots on
+	// already-compromised firmware would silently pin the attacker's
+	// PCR0/1/7 as the canonical baseline. The default (true) closes
+	// that branch; legacy fleets that depend on pure TOFU first use
+	// must set this to false explicitly.
+	RequireBootEnrollment bool
+
 	// RejectLegacyBaselines refuses any attestation whose
 	// CheckAndUpdateAgentHash result is TOFULegacyBackfill. The
 	// backfill branch fires once per client - when a baseline row
@@ -295,6 +311,7 @@ func DefaultConfig() VerifierConfig {
 		RequireCert:           true,
 		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
+		RequireBootEnrollment: true,
 		MaxRestartCountSkew:   1024,
 		AllowPermissivePolicy: false,
 	}
@@ -350,6 +367,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireCert:           cfg.RequireCert,
 		requireBootPCRs:       cfg.RequireBootPCRs,
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
+		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
@@ -1079,6 +1097,40 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				PCR7: report.TPM.PCRValues[7],
 			}
 			bootPtr = &boot
+		}
+
+		// Enrollment gate.
+		//
+		// The atomic transaction below will TOFU-establish the
+		// per-client PCR0/PCR1/PCR7 row on first use. With pure
+		// TOFU, a brand-new client that boots on already-tampered
+		// firmware would silently pin the attacker-controlled
+		// values as the canonical baseline; later attestations
+		// would then "match" the poisoned baseline. Refuse that
+		// branch when the operator has not authenticated the
+		// initial PCR0/1/7 values through either:
+		//   - the active signed policy (PCR0+PCR1+PCR7 hex
+		//     entries that the existing PCRVerifier compares
+		//     against the report), or
+		//   - an out-of-band baseline row that is already
+		//     present in the store for this client.
+		// The check runs only when the verifier is about to write
+		// boot columns (bootPtr non-nil) so PCR14-only legacy
+		// flows are unaffected.
+		if v.requireBootEnrollment && bootPtr != nil {
+			reader, readerOK := v.baselineStore.(BootBaselineReader)
+			enrolled := false
+			if readerOK && reader.GetBootBaseline(clientID) != nil {
+				enrolled = true
+			}
+			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
+				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+					"active_policy", v.pcrVerifier.GetActivePolicy(),
+					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or disable RequireBootEnrollment for legacy hosts")
+				v.metrics.Rejections.Inc("baseline_error")
+				result.Result = types.VerifyIntegrityMismatch
+				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+			}
 		}
 
 		outcome := atomicStore.CheckAndUpdateAttestation(

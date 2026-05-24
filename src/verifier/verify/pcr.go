@@ -350,6 +350,31 @@ func (v *PCRVerifier) GetActivePolicyConfig() (*PCRPolicy, bool) {
 	return policy, ok
 }
 
+// ActivePolicyDeclaresBootPCRs reports whether the active policy pins
+// expected hex values for PCR0, PCR1, and PCR7. A policy that pins
+// all three authenticates the firmware/Secure Boot baseline through
+// the signed-policy channel, so first-use of the per-client boot
+// baseline is no longer a pure TOFU decision. Used by the
+// enrollment gate in Verify().
+func (v *PCRVerifier) ActivePolicyDeclaresBootPCRs() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	if !ok || policy == nil {
+		return false
+	}
+	if _, ok := policy.PCRs[0]; !ok {
+		return false
+	}
+	if _, ok := policy.PCRs[1]; !ok {
+		return false
+	}
+	if _, ok := policy.PCRs[7]; !ok {
+		return false
+	}
+	return true
+}
+
 // returns names of all loaded policies
 func (v *PCRVerifier) ListPolicies() []string {
 	v.mu.RLock()

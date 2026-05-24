@@ -83,6 +83,7 @@ var (
 	requireCert          = flag.Bool("require-cert", true, "Reject TOFU registrations without AIK/EK certificates")
 	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
+	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline. With the default (false), a first-attestation client must either be covered by a signed policy that pins PCR0/PCR1/PCR7 or be pre-enrolled in the baseline store; otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	maxRestartSkew       = flag.Uint("max-restart-count-skew", 1024, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required.")
 	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
@@ -151,6 +152,10 @@ func main() {
 	verifierCfg.RequireInitramfsLock = !*allowNoInitramfsLock
 	if *allowNoInitramfsLock {
 		logger.Warn("INSECURE: --allow-no-initramfs-lock is set; agents may attest without the initramfs PCR14 lock, leaving the kernel-handoff -> lota-agent window uncovered")
+	}
+	verifierCfg.RequireBootEnrollment = !*allowTOFUBoot
+	if *allowTOFUBoot {
+		logger.Warn("INSECURE: --allow-tofu-boot-baseline is set; a first-attestation client will TOFU-pin whatever PCR0/PCR1/PCR7 values it reports, including firmware/Secure Boot state that may already be compromised")
 	}
 	if *maxRestartSkew > math.MaxUint32 {
 		logger.Error("--max-restart-count-skew exceeds uint32 range",
