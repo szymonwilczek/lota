@@ -44,12 +44,16 @@ func (s *SQLiteUsedNonceBackend) Contains(nonceKey string) bool {
 
 func (s *SQLiteUsedNonceBackend) Count() int {
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM used_nonces").Scan(&count)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM used_nonces").Scan(&count); err != nil {
+		return 0
+	}
 	return count
 }
 
 func (s *SQLiteUsedNonceBackend) Cleanup(olderThan time.Time) {
-	s.db.Exec("DELETE FROM used_nonces WHERE used_at < ?", olderThan.UTC())
+	if _, err := s.db.Exec("DELETE FROM used_nonces WHERE used_at < ?", olderThan.UTC()); err != nil {
+		return
+	}
 }
 
 // converts raw nonce key bytes to hex string for safe DB storage

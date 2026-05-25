@@ -216,7 +216,9 @@ func runMigrations(db *sql.DB) error {
 		}
 
 		if _, err := tx.Exec(m.sql); err != nil {
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				return fmt.Errorf("migration %d (%s) failed: %w; rollback failed: %v", m.version, m.description, err, rbErr)
+			}
 			return fmt.Errorf("migration %d (%s) failed: %w", m.version, m.description, err)
 		}
 
@@ -224,7 +226,9 @@ func runMigrations(db *sql.DB) error {
 			"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
 			m.version, time.Now().UTC(),
 		); err != nil {
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				return fmt.Errorf("failed to record migration %d: %w; rollback failed: %v", m.version, err, rbErr)
+			}
 			return fmt.Errorf("failed to record migration %d: %w", m.version, err)
 		}
 

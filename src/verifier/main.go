@@ -201,8 +201,12 @@ func main() {
 		attestLog = store.NewSQLiteAttestationLog(db)
 		verifierCfg.AttestationLog = attestLog
 
-		ver, _ := store.SchemaVersion(db)
-		logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
+		ver, err := store.SchemaVersion(db)
+		if err != nil {
+			logger.Warn("failed to read SQLite schema version", "path", *dbPath, "error", err)
+		} else {
+			logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
+		}
 	} else {
 		// persist used nonce history even without --db
 		// otherwise, a verifier restart re-opens a replay window within nonce TTL
@@ -371,7 +375,10 @@ func main() {
 	// startup and atomically swaps the active set on success, leaving
 	// the existing set in place when the refresh fails.
 	type crlReloader interface{ ReloadCRLs() error }
-	reloader, _ := aikStore.(crlReloader)
+	var reloader crlReloader
+	if r, ok := aikStore.(crlReloader); ok {
+		reloader = r
+	}
 
 	for sig := range sigCh {
 		switch sig {

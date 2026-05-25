@@ -12,6 +12,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -53,7 +54,9 @@ func (s *SQLiteRevocationStore) Revoke(clientID string, reason RevocationReason,
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note)
+		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -86,13 +89,18 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read affected rows after unrevoke: %w", err)
+	}
 	if rows == 0 {
 		return ErrNotRevoked
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("unrevoke", clientID, "", "", "")
+		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -155,7 +163,9 @@ func (s *SQLiteBanStore) BanHardware(hardwareID [32]byte, reason RevocationReaso
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note)
+		if err := s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -186,13 +196,18 @@ func (s *SQLiteBanStore) UnbanHardware(hardwareID [32]byte) error {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read affected rows after hardware unban: %w", err)
+	}
 	if rows == 0 {
 		return ErrNotBanned
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", "")
+		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+			return err
+		}
 	}
 
 	return nil

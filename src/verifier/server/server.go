@@ -39,6 +39,15 @@ func newChallengeID() (string, error) {
 	return hex.EncodeToString(buf[:]), nil
 }
 
+func unixTimeFromUint64(ts uint64) time.Time {
+	const maxInt64AsUint64 = uint64(1<<63 - 1)
+
+	if ts > maxInt64AsUint64 {
+		return time.Unix(1<<63-1, 0)
+	}
+	return time.Unix(int64(ts), 0)
+}
+
 type Server struct {
 	verifier   *verify.Verifier
 	auditLog   store.AuditLog
@@ -259,11 +268,15 @@ func (s *Server) Stop() {
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		s.httpServer.Shutdown(ctx)
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			s.log.Warn("HTTP shutdown failed", "error", err)
+		}
 	}
 
 	if s.listener != nil {
-		s.listener.Close()
+		if err := s.listener.Close(); err != nil {
+			s.log.Warn("listener close failed", "error", err)
+		}
 	}
 	s.wg.Wait()
 }
@@ -333,7 +346,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+		clog.Error("failed to set write deadline", "error", err)
+		s.metrics.ConnectionErrors.Inc()
+		return
+	}
 	challengeData := challenge.Serialize()
 	if _, err := conn.Write(challengeData); err != nil {
 		clog.Error("failed to send challenge", "error", err)
@@ -344,7 +361,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clog.Debug("challenge sent")
 
 	// read attestation report
-	conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(s.readTimeout)); err != nil {
+		clog.Error("failed to set read deadline", "error", err)
+		s.metrics.ConnectionErrors.Inc()
+		return
+	}
 
 	// read header to get total size
 	headerBuf := make([]byte, 32)
@@ -395,13 +416,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	if result.Result == types.VerifyOK {
 		clog.Info("attestation successful",
-			"valid_until", time.Unix(int64(result.ValidUntil), 0).UTC())
+			"valid_until", unixTimeFromUint64(result.ValidUntil).UTC())
 	}
 }
 
 // sends the full verification result, preserving SessionToken and ValidUntil
 func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
-	conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+		s.log.Warn("failed to set write deadline", "error", err)
+		return
+	}
 	if _, err := conn.Write(result.Serialize()); err != nil {
 		s.log.Warn("failed to send result",
 			"remote_addr", conn.RemoteAddr(), "error", err)

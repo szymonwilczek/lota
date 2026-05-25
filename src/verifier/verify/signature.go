@@ -227,7 +227,7 @@ func hashName(h crypto.Hash) string {
 	case crypto.SHA512:
 		return "SHA-512"
 	default:
-		return fmt.Sprintf("hash(%d)", int(h))
+		return fmt.Sprintf("hash(%d)", uint(h))
 	}
 }
 

@@ -121,7 +121,9 @@ func (s *MemoryRevocationStore) Revoke(clientID string, reason RevocationReason,
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note)
+		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -149,7 +151,9 @@ func (s *MemoryRevocationStore) Unrevoke(clientID string) error {
 	delete(s.revocations, clientID)
 
 	if s.auditLog != nil {
-		s.auditLog.Log("unrevoke", clientID, "", "", "")
+		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+			return err
+		}
 	}
 
 	return nil

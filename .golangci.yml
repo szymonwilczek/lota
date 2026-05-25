@@ -1,0 +1,24 @@
+run:
+  timeout: 5m
+  tests: false
+  modules-download-mode: readonly
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosec
+    - gosimple
+    - govet
+    - revive
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    check-blank: true
+    check-type-assertions: true
+  revive:
+    rules:
+      - name: exported
+        disabled: true

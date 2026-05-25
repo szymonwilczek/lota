@@ -51,9 +51,10 @@ func New(opts Options) *slog.Logger {
 
 	replaceAttr := func(groups []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.LevelKey {
-			lvl := a.Value.Any().(slog.Level)
-			if name, ok := levelNames[lvl]; ok {
-				a.Value = slog.StringValue(name)
+			if lvl, ok := a.Value.Any().(slog.Level); ok {
+				if name, ok := levelNames[lvl]; ok {
+					a.Value = slog.StringValue(name)
+				}
 			}
 		}
 		return a

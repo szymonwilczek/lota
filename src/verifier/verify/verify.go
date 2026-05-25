@@ -97,6 +97,14 @@ func deriveHardwareIDFromEKCert(ekCertDER []byte) ([types.HardwareIDSize]byte, e
 	}
 }
 
+func unixTimestamp(t time.Time) uint64 {
+	ts := t.Unix()
+	if ts < 0 {
+		return 0
+	}
+	return uint64(ts)
+}
+
 func verifyHardwareIDMatchesEKCert(report *types.AttestationReport, ekCertDER []byte) error {
 	if report == nil {
 		return errors.New("nil attestation report")
@@ -391,7 +399,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 		return
 	}
 
-	now := uint64(time.Now().Unix())
+	now := unixTimestamp(time.Now())
 	v.tokenMu.Lock()
 	defer v.tokenMu.Unlock()
 
@@ -418,7 +426,7 @@ func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTok
 		return st
 	}
 
-	now := uint64(time.Now().Unix())
+	now := unixTimestamp(time.Now())
 
 	v.tokenMu.Lock()
 	defer v.tokenMu.Unlock()
@@ -567,14 +575,16 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		}
 		if v.attestationLog != nil {
 			resultStr := types.VerifyResultString(result.Result)
-			_ = v.attestationLog.Record(store.AttestationRecord{
+			if err := v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
 				ClientID:   clientID,
 				HardwareID: hwID,
 				Result:     resultStr,
 				DurationMs: float64(duration.Milliseconds()),
 				PCR14:      pcr14Hex,
-			})
+			}); err != nil {
+				clog.Warn("failed to record attestation decision", "error", err)
+			}
 		}
 	}()
 
@@ -1302,7 +1312,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clog.Info("verification successful")
 
 	result.Result = types.VerifyOK
-	result.ValidUntil = uint64(time.Now().Add(v.sessionTokenLife).Unix())
+	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
 	sessionToken, err := v.deriveSessionToken(report, clientID, result.ValidUntil, result.Result)
 	if err != nil {
 		result.Result = types.VerifyInternalError

@@ -137,7 +137,9 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 
 	// reconstruct the raw TPML_PCR_SELECTION bytes for signature verification
 	var pcrSelectBuf bytes.Buffer
-	binary.Write(&pcrSelectBuf, binary.BigEndian, count)
+	if err := binary.Write(&pcrSelectBuf, binary.BigEndian, count); err != nil {
+		return nil, fmt.Errorf("failed to encode PCR selection count: %w", err)
+	}
 	var pcrHashAlg uint16
 
 	for i := uint32(0); i < count; i++ {
@@ -159,7 +161,9 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 			return nil, err
 		}
 
-		binary.Write(&pcrSelectBuf, binary.BigEndian, hashAlg)
+		if err := binary.Write(&pcrSelectBuf, binary.BigEndian, hashAlg); err != nil {
+			return nil, fmt.Errorf("failed to encode PCR hash algorithm: %w", err)
+		}
 		pcrSelectBuf.WriteByte(sizeOfSelect)
 		pcrSelectBuf.Write(selectBytes)
 	}
@@ -216,7 +220,7 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.
 
 	h := sha256.New()
 	for i := 0; i < types.PCRCount; i++ {
-		if pcrMask&(1<<uint(i)) != 0 {
+		if pcrMask&(uint32(1)<<i) != 0 {
 			h.Write(pcrValues[i][:])
 		}
 	}

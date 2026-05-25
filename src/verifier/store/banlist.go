@@ -171,7 +171,9 @@ func (s *MemoryBanStore) BanHardware(hardwareID [32]byte, reason RevocationReaso
 	}
 
 	if s.auditLog != nil {
-		s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note)
+		if err := s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -199,7 +201,9 @@ func (s *MemoryBanStore) UnbanHardware(hardwareID [32]byte) error {
 	delete(s.bans, hardwareID)
 
 	if s.auditLog != nil {
-		s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", "")
+		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+			return err
+		}
 	}
 
 	return nil

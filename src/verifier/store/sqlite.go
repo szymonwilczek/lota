@@ -130,7 +130,7 @@ func (s *SQLiteAIKStore) RegisterHardwareID(clientID string, hardwareID [32]byte
 		return fmt.Errorf("failed to query hardware ID: %w", err)
 	}
 
-	if existing != nil && len(existing) == 32 {
+	if len(existing) == 32 {
 		var stored [32]byte
 		copy(stored[:], existing)
 		if stored != hardwareID {
@@ -278,6 +278,8 @@ func (s *SQLiteAIKStore) ExistingClients(clientIDs []string) (map[string]struct{
 			args[j] = id
 		}
 
+		// #nosec G202 -- placeholders are generated as question marks and
+		// all client IDs are still passed separately through args.
 		query := "SELECT id FROM clients WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
@@ -344,7 +346,10 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 		return fmt.Errorf("failed to rotate AIK: %w", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read affected rows after AIK rotation: %w", err)
+	}
 	if rows == 0 {
 		return errors.New("client not registered")
 	}

@@ -287,7 +287,9 @@ func (s *SQLiteBaselineStore) ClearBaseline(clientID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.db.Exec("DELETE FROM baselines WHERE client_id = ?", clientID)
+	if _, err := s.db.Exec("DELETE FROM baselines WHERE client_id = ?", clientID); err != nil {
+		return
+	}
 }
 
 func (s *SQLiteBaselineStore) ListClients() []string {
@@ -317,10 +319,16 @@ func (s *SQLiteBaselineStore) Stats() BaselineStats {
 
 	stats := BaselineStats{}
 
-	s.db.QueryRow("SELECT COUNT(*) FROM baselines").Scan(&stats.TotalClients)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM baselines").Scan(&stats.TotalClients); err != nil {
+		return stats
+	}
 
-	s.db.QueryRow("SELECT MIN(first_seen) FROM baselines").Scan(&stats.OldestBaseline)
-	s.db.QueryRow("SELECT MAX(first_seen) FROM baselines").Scan(&stats.NewestBaseline)
+	if err := s.db.QueryRow("SELECT MIN(first_seen) FROM baselines").Scan(&stats.OldestBaseline); err != nil {
+		return stats
+	}
+	if err := s.db.QueryRow("SELECT MAX(first_seen) FROM baselines").Scan(&stats.NewestBaseline); err != nil {
+		return stats
+	}
 
 	return stats
 }
@@ -460,7 +468,10 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+			if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+				slog.Warn("attestation tx: rollback failed",
+					"client_id", clientID, "error", err)
+			}
 		}
 	}()
 

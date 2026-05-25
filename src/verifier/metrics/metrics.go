@@ -128,7 +128,6 @@ func (lc *LabeledCounter) Total() int64 {
 // tracks the distribution of observed values
 // implements cumulative bucket counting compatible with Prometheus
 type Histogram struct {
-	mu      sync.Mutex
 	bounds  []float64      // upper bounds (sorted), not including +Inf
 	buckets []atomic.Int64 // cumulative counts: buckets[i] = count <= bounds[i]
 	inf     atomic.Int64   // count of ALL observations (the +Inf bucket)

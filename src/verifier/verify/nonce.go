@@ -81,9 +81,11 @@ func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error
 	if len(m.index) >= m.maxSize {
 		front := m.order.Front()
 		if front != nil {
-			entry := front.Value.(usedNonceEntry)
+			entry, ok := front.Value.(usedNonceEntry)
 			m.order.Remove(front)
-			delete(m.index, entry.key)
+			if ok {
+				delete(m.index, entry.key)
+			}
 		}
 	}
 
@@ -104,8 +106,8 @@ func (m *memoryUsedNonceBackend) Count() int {
 func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
 	for elem := m.order.Front(); elem != nil; {
 		next := elem.Next()
-		entry := elem.Value.(usedNonceEntry)
-		if entry.usedAt.Before(olderThan) {
+		entry, ok := elem.Value.(usedNonceEntry)
+		if ok && entry.usedAt.Before(olderThan) {
 			m.order.Remove(elem)
 			delete(m.index, entry.key)
 		}
@@ -341,7 +343,9 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 	identityID := hex.EncodeToString(report.TPM.HardwareID[:])
 	if err := ns.checkIdentityRateLimit(identityID); err != nil {
 		delete(ns.pending, key)
-		_ = ns.usedBackend.Record(key, time.Now())
+		if recordErr := ns.usedBackend.Record(key, time.Now()); recordErr != nil {
+			return fmt.Errorf("%w; failed to record rejected nonce: %v", err, recordErr)
+		}
 		if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
 			cs.pendingCount--
 			if cs.pendingCount < 0 {
@@ -373,7 +377,9 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 	delete(ns.pending, key)
 
 	// record as used
-	ns.usedBackend.Record(key, time.Now())
+	if err := ns.usedBackend.Record(key, time.Now()); err != nil {
+		return fmt.Errorf("failed to record used nonce: %w", err)
+	}
 
 	// update binding state
 	if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
