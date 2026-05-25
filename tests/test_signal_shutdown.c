@@ -36,12 +36,12 @@ static int tests_passed;
 #define PASS()                                                                 \
 	do {                                                                   \
 		tests_passed++;                                                \
-		printf("PASS\n");                                             \
+		printf("PASS\n");                                              \
 	} while (0)
 
 #define FAIL(fmt, ...)                                                         \
 	do {                                                                   \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__);                    \
+		printf("FAIL: " fmt "\n", ##__VA_ARGS__);                      \
 	} while (0)
 
 static volatile sig_atomic_t sig_running = 1;

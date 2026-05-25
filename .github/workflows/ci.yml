@@ -1,0 +1,63 @@
+name: Build and unit tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libbpf-dev libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Build all
+        run: make all
+
+      - name: Run unit tests
+        run: make test-unit
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format
+
+      - name: clang-format dry-run
+        run: |
+          set -eu
+          mapfile -d '' files < <(find src include tests -type f \
+            \( -name '*.c' -o -name '*.h' \) \
+            ! -name 'vmlinux.h' -print0)
+          clang-format --dry-run --Werror "${files[@]}"
