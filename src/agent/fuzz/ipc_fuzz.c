@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: MIT
-// LOTA Agent - IPC Fuzz Harness
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA Agent - IPC Fuzz Harness
+ */
 
 #include "../agent.h"
 #include <errno.h>
@@ -11,7 +13,9 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 
-// Mocks
+/*
+ * Mocks
+ */
 static const uint8_t *g_fuzz_data;
 static size_t g_fuzz_size;
 static size_t g_fuzz_pos;
@@ -22,7 +26,7 @@ ssize_t fuzz_recv(int sockfd, void *buf, size_t len, int flags)
 	(void)flags;
 
 	if (g_fuzz_pos >= g_fuzz_size)
-		return 0; // EOF
+		return 0;
 
 	size_t available = g_fuzz_size - g_fuzz_pos;
 	size_t to_read = (len < available) ? len : available;
@@ -37,7 +41,7 @@ ssize_t fuzz_send(int sockfd, const void *buf, size_t len, int flags)
 	(void)sockfd;
 	(void)buf;
 	(void)flags;
-	return len; // pretend that sent everything
+	return len;
 }
 
 int fuzz_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
@@ -90,15 +94,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	g_fuzz_pos = 0;
 
 	memset(&ctx, 0, sizeof(ctx));
-	ctx.epoll_fd = 100; // fake FD
+	ctx.epoll_fd = 100;
 	ctx.running = true;
 
-	// reset globals
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		clients[i] = NULL;
 	client_count = 0;
 
-	client = client_create(50, 1000, 1000, 1234); // fake FD 50, UID/GID/PID
+	client = client_create(50, 1000, 1000, 1234);
 	if (!client)
 		return 0;
 
@@ -108,7 +111,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 		int ret = handle_client_read(&ctx, client);
 		if (ret < 0)
-			break; // error or disconnect
+			break;
 
 		if (client->send_len > 0) {
 			handle_client_write(&ctx, client);

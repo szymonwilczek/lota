@@ -9,18 +9,18 @@
  *
  *   struct lota_client *client = lota_connect();
  *   if (!client) {
- *       // LOTA agent not running or not installed
+ *       LOTA agent not running or not installed.
  *       return;
  *   }
  *
  *   if (lota_is_attested(client)) {
  *       struct lota_token token;
  *       if (lota_get_token(client, NULL, &token) == LOTA_OK) {
- *           // Serialize token and send to game server
+ *           Serialize token and send to game server.
  *           size_t sz = lota_token_serialized_size(&token);
  *           uint8_t *buf = malloc(sz);
  *           lota_token_serialize(&token, buf, sz);
- *           // send buf (sz bytes) to game server
+ *           Send buf (sz bytes) to game server.
  *           free(buf);
  *           lota_token_free(&token);
  *       }

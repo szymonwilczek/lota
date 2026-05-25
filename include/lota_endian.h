@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: MIT
-//
-// Little-endian encoding helpers shared across user-space.
+/* SPDX-License-Identifier: MIT */
+/*
+ * Little-endian encoding helpers shared across user-space.
+ */
 
 #ifndef LOTA_ENDIAN_H
 #define LOTA_ENDIAN_H

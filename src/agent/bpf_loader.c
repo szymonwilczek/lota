@@ -773,7 +773,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	/* Get stats map fd */
 	ctx->stats_fd = bpf_object__find_map_fd_by_name(ctx->obj, "stats");
 	if (ctx->stats_fd < 0) {
-		ctx->stats_fd = -1; // stats map is optional
+		ctx->stats_fd = -1; /* stats map is optional */
 	} else {
 		err = harden_fd_cloexec(ctx->stats_fd, "stats map");
 		if (err < 0) {

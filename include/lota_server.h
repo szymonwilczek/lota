@@ -23,12 +23,12 @@
  *       token_bytes, token_len,
  *       aik_pub_der, aik_pub_len,
  *       server_nonce,
- *       60,          // max 60 seconds old
+ *       60,          max 60 seconds old
  *       &claims
  *   );
  *
  *   if (ret == LOTA_SERVER_OK) {
- *       // Client is attested and token is fresh
+ *       Client is attested and token is fresh.
  *   }
  */
 

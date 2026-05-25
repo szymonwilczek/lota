@@ -1,11 +1,12 @@
-// SPDX-License-Identifier: MIT
-//
-// Runtime protected PID digest helper
-//
-// Computes a canonical SHA-256 digest over the runtime protected PID set:
-//   SHA256("lota-runtime-protect-pids:v1\0" || count_LE || pid0_LE || ...)
-//
-// The PID list must be sorted in strictly increasing order.
+/* SPDX-License-Identifier: MIT */
+/*
+ * Runtime protected PID digest helper.
+ *
+ * Computes a canonical SHA-256 digest over the runtime protected PID set:
+ *   SHA256("lota-runtime-protect-pids:v1\0" || count_LE || pid0_LE || ...)
+ *
+ * The PID list must be sorted in strictly increasing order.
+ */
 
 #ifndef LOTA_RUNTIME_PROTECT_DIGEST_H
 #define LOTA_RUNTIME_PROTECT_DIGEST_H

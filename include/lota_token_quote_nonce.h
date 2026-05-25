@@ -1,24 +1,25 @@
-// SPDX-License-Identifier: MIT
-//
-// LOTA token quote nonce (token verification domain)
-//
-// This helper computes the TPM quote nonce used in the *token* path (agent IPC
-// GET_TOKEN and server-side token verification).
-//
-// Scheme:
-//   token_quote_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE ||
-//                              client_nonce || policy_digest ||
-//                              runtime_protect_digest ||
-//                              runtime_protect_epoch_LE)
-//
-// This binds TPMS_ATTEST.extraData (quote nonce) to the token's wire-format
-// metadata and the client's challenge nonce.
-//
-// IMPORTANT:
-// - This is intentionally different from the *attestation report binding nonce*
-//   used by the remote attestation verifier/agent report path.
-// - Do not confuse these two nonce domains; they bind different data and serve
-//   different trust models.
+/* SPDX-License-Identifier: MIT */
+/*
+ * LOTA token quote nonce (token verification domain)
+ *
+ * This helper computes the TPM quote nonce used in the token path
+ * (agent IPC GET_TOKEN and server-side token verification).
+ *
+ * Scheme:
+ *   token_quote_nonce = SHA256(valid_until_LE || flags_LE || pcr_mask_LE ||
+ *                              client_nonce || policy_digest ||
+ *                              runtime_protect_digest ||
+ *                              runtime_protect_epoch_LE)
+ *
+ * This binds TPMS_ATTEST.extraData (quote nonce) to the token's
+ * wire-format metadata and the client's challenge nonce.
+ *
+ * IMPORTANT:
+ * - This is intentionally different from the attestation report binding
+ *   nonce used by the remote attestation verifier/agent report path.
+ * - Do not confuse these two nonce domains; they bind different data and
+ *   serve different trust models.
+ */
 
 #ifndef LOTA_TOKEN_QUOTE_NONCE_H
 #define LOTA_TOKEN_QUOTE_NONCE_H
@@ -43,8 +44,11 @@ static inline void lota__secure_bzero(void *ptr, size_t len)
 	OPENSSL_cleanse(ptr, len);
 }
 
-// Computes the token quote nonce used as TPMS_ATTEST.extraData in the token
-// path. Returns 0 on success, or a negative errno-style value on failure.
+/*
+ * Computes the token quote nonce used as TPMS_ATTEST.extraData in the
+ * token path. Returns 0 on success, or a negative errno-style value on
+ * failure.
+ */
 static inline int lota_compute_token_quote_nonce(
     uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
     const uint8_t client_nonce[LOTA_TOKEN_NONCE_SIZE],
