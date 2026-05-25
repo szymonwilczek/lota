@@ -26,6 +26,12 @@
 /* upper bound for kernel log buffer allocation */
 #define KLOG_MAX_SIZE (1 << 22) /* 4 MB */
 
+static void set_iommu_cmdline(struct iommu_status *status, const char *param)
+{
+	status->flags |= IOMMU_FLAG_CMDLINE_SET;
+	snprintf(status->cmdline_param, IOMMU_CMDLINE_PARAM_MAX, "%s", param);
+}
+
 static bool cmdline_has_param(const char *cmdline, const char *param)
 {
 	size_t plen = strlen(param);
@@ -114,32 +120,17 @@ int iommu_check_cmdline(struct iommu_status *status)
 		buf[n - 1] = '\0';
 
 	/*
-	 * Check for Intel IOMMU parameters
-	 * intel_iommu=on enables IOMMU
+	 * first match wins so Intel host with both arch families pinned on the
+	 * command line never sees AMD overwrite the recorded value
 	 */
 	if (cmdline_has_param(buf, "intel_iommu=on")) {
-		status->flags |= IOMMU_FLAG_CMDLINE_SET;
-		strncpy(status->cmdline_param, "intel_iommu=on",
-			IOMMU_CMDLINE_PARAM_MAX - 1);
-		status->cmdline_param[IOMMU_CMDLINE_PARAM_MAX - 1] = '\0';
+		set_iommu_cmdline(status, "intel_iommu=on");
 		ret = 0;
-	}
-
-	/*
-	 * Check for AMD IOMMU parameters
-	 * amd_iommu=on or amd_iommu=force
-	 */
-	if (cmdline_has_param(buf, "amd_iommu=force")) {
-		status->flags |= IOMMU_FLAG_CMDLINE_SET;
-		strncpy(status->cmdline_param, "amd_iommu=force",
-			IOMMU_CMDLINE_PARAM_MAX - 1);
-		status->cmdline_param[IOMMU_CMDLINE_PARAM_MAX - 1] = '\0';
+	} else if (cmdline_has_param(buf, "amd_iommu=force")) {
+		set_iommu_cmdline(status, "amd_iommu=force");
 		ret = 0;
 	} else if (cmdline_has_param(buf, "amd_iommu=on")) {
-		status->flags |= IOMMU_FLAG_CMDLINE_SET;
-		strncpy(status->cmdline_param, "amd_iommu=on",
-			IOMMU_CMDLINE_PARAM_MAX - 1);
-		status->cmdline_param[IOMMU_CMDLINE_PARAM_MAX - 1] = '\0';
+		set_iommu_cmdline(status, "amd_iommu=on");
 		ret = 0;
 	}
 
