@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 # LOTA PCR Policy - Production Template
 #
-# WARNING: This file ships with empty PCR and hash lists.
-# It will NOT verify any measurements until you fill in real values.
-# Run 'sudo lota-agent --export-policy' to generate a complete policy
-# from your live system.
+# WARNING: This file ships with placeholder PCR values. The verifier
+# REJECTS attestations from clients whose PCR 0/1/7 do not match a pin
+# in this file unless the operator opts in to TOFU boot enrollment
+# explicitly (see policies/README.md, "Boot enrollment ceremony").
+# Replace the placeholders below with real values from your hardware.
 #
 # How to collect values:
 #   Full policy:   sudo lota-agent --export-policy > my-policy.yaml
@@ -13,18 +14,23 @@
 #
 # PCR meanings (SHA-256):
 #   PCR 0:   SRTM, BIOS/UEFI firmware measurements
+#   PCR 1:   UEFI configuration data (NVRAM-resident BIOS settings)
 #   PCR 7:   Secure Boot state (policies and certificates)
-#   PCR 14:  LOTA agent self-measurement (handled by TOFU)
+#   PCR 14:  LOTA agent self-measurement (boot-commitment derived,
+#            never TOFU under the production verifier default)
 
 name: production
 description: "Production policy - customize PCR values for your environment"
 
-# Expected PCR values (SHA-256 hex-encoded, 64 chars)
-# Only listed PCRs are verified; PCR 14 uses TOFU baseline
+# Expected PCR values (SHA-256 hex-encoded, 64 chars).
+# PCR 0/1/7 are REQUIRED under VerifierConfig.RequireBootEnrollment=true
+# (the production default). Leaving them as placeholders means the
+# verifier rejects every client until the operator either pins real
+# values here or runs `lota-agent --export-policy` on a known-good host.
 pcrs:
-  # Uncomment and set real values from your system:
-  # 0: "aaaa..."  # Firmware - stable per hardware/firmware version
-  # 7: "bbbb..."  # Secure Boot - stable until certificates change
+  0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
+  1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
+  7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
 
 # Allowed kernel image hashes (SHA-256)
 # Add all kernels that should be permitted to boot

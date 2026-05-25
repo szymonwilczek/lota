@@ -17,14 +17,19 @@
 name: strict
 description: "Strict security policy - all protections required"
 
-# Critical PCR values that MUST match
-# Customize for your specific hardware and software stack
+# Critical PCR values that MUST match.
+#
+# All three boot PCRs are REQUIRED under VerifierConfig.RequireBootEnrollment=true
+# (the production default). The strict profile rejects any host whose
+# firmware, UEFI configuration, or Secure Boot state drifts from the
+# pinned values below; that is the whole point of this profile.
 pcrs:
-  # PCR 0: Firmware - changes indicate firmware tampering/update
-  # 0: "REPLACE_WITH_YOUR_FIRMWARE_MEASUREMENT"
-
-  # PCR 7: Secure Boot - changes indicate Secure Boot state modification
-  # 7: "REPLACE_WITH_YOUR_SECUREBOOT_STATE"
+  # PCR 0: SRTM firmware measurements; changes indicate firmware update
+  0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
+  # PCR 1: UEFI configuration / NVRAM-resident BIOS settings
+  1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
+  # PCR 7: Secure Boot policies + certificates
+  7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
 
 # Only specifically approved kernel versions
 kernel_hashes:

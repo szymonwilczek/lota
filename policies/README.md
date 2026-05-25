@@ -88,15 +88,38 @@ lota-verifier --policy /path/to/my-policy.yaml
 | `require_secureboot` | UEFI Secure Boot enabled            | Hardware-dependent |
 | `require_lockdown`   | Kernel lockdown mode active         | `false` (optional) |
 
-## TOFU (Trust On First Use)
+## Boot enrollment ceremony
 
-PCR 14 (LOTA self-measurement) uses TOFU semantics:
+The production verifier defaults to
+`VerifierConfig.RequireBootEnrollment = true`. Under that default the
+verifier rejects any client whose PCR 0, PCR 1, or PCR 7 cannot be
+matched against a known-good baseline. Two paths satisfy that contract:
 
-- First attestation: PCR 14 value is stored as baseline
-- Subsequent attestations: PCR 14 must match baseline
+1. **Pinned policy (recommended).** The operator commits real PCR 0/1/7
+   values into the YAML policy (production.yaml or strict.yaml) before
+   the first attestation. New clients are accepted only when their
+   live PCR 0/1/7 match those pins. This is the path the production
+   template above is wired for.
+2. **Out-of-band boot enrollment.** The operator runs
+   `lota-agent --export-policy` on a single known-good host, signs the
+   resulting policy, and ships it to the fleet; subsequent clients
+   inherit the PCR 0/1/7 baseline from the signed policy without
+   contacting the verifier first.
 
-This allows deployment without pre-computing every agent hash while still
-detecting tampering after initial enrollment.
+A short-lived `--allow-tofu-boot-baseline` switch on the verifier exists
+for closed test fixtures. It explicitly weakens the contract above by
+accepting whatever PCR 0/1/7 the first attestation reports; the verifier
+emits a warning-level log line on every accept under that switch and the
+operator must turn it back off before the deployment is considered
+production.
+
+PCR 14 (LOTA agent self-measurement) is not TOFU. It is derived
+deterministically from the boot-commitment chain
+(`tpm_boot_commitment_digest`) and the verifier rederives the same
+value during signature verification; an agent rebuild that legitimately
+changes the self-measurement is handled by updating the signed policy
+rather than by trusting whatever value the next attestation happens to
+report.
 
 ## Updating Policies
 
