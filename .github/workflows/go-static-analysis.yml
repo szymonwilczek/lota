@@ -25,6 +25,18 @@ jobs:
           go-version-file: src/verifier/go.mod
           cache-dependency-path: src/verifier/go.sum
 
+      - name: Verify go.mod is tidy
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eu
+          for mod in src/verifier src/sdk/server; do
+            (cd "$mod" && go mod tidy)
+          done
+          if ! git diff --exit-code -- '**/go.mod' '**/go.sum'; then
+            echo "go.mod/go.sum out of sync with sources -- run 'go mod tidy' locally" >&2
+            exit 1
+          fi
+
       - name: Run Go tests
         run: go test ./...
 

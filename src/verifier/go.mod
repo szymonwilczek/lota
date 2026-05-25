@@ -2,7 +2,10 @@ module github.com/szymonwilczek/lota/verifier
 
 go 1.24.0
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.44.3
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -15,5 +18,4 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.44.3 // indirect
 )
