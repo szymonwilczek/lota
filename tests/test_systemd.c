@@ -375,52 +375,6 @@ static void test_journal_macros_no_crash(void) {
   PASS();
 }
 
-/*
- * The packaged unit must not pass a --mode flag on ExecStart. The agent
- * picks cfg.mode (default enforce) and refuses to weaken that without
- * --insecure-allow-mode-downgrade. A unit that re-introduces e.g.
- * --mode monitor silently demotes the daemon below the configured
- * policy, so guard the regression here.
- */
-static void test_packaged_unit_does_not_set_mode(void) {
-  TEST("packaged unit: ExecStart has no --mode override");
-
-  FILE *fp = fopen("systemd/lota-agent.service", "re");
-  if (!fp) {
-    /* tests are sometimes run from build/, retry one level up */
-    fp = fopen("../systemd/lota-agent.service", "re");
-  }
-  if (!fp) {
-    FAIL("could not open lota-agent.service");
-    return;
-  }
-
-  char line[1024];
-  bool saw_exec_start = false;
-  bool saw_mode_flag = false;
-  while (fgets(line, sizeof(line), fp)) {
-    if (strncmp(line, "ExecStart=", 10) != 0)
-      continue;
-    saw_exec_start = true;
-    if (strstr(line, " --mode") || strstr(line, "\t--mode") ||
-        strstr(line, " -m ") || strstr(line, "\t-m ")) {
-      saw_mode_flag = true;
-      break;
-    }
-  }
-  fclose(fp);
-
-  if (!saw_exec_start) {
-    FAIL("ExecStart= not found");
-    return;
-  }
-  if (saw_mode_flag) {
-    FAIL("ExecStart must not pass --mode (would override cfg.mode)");
-    return;
-  }
-  PASS();
-}
-
 static void test_journal_level_filter(void) {
   TEST("journal: level filter suppresses debug");
 
@@ -457,9 +411,6 @@ int main(void) {
   test_is_unix_socket_stdin();
   test_is_unix_socket_real();
   test_sd_listen_fds_start();
-
-  /* packaged unit invariants */
-  test_packaged_unit_does_not_set_mode();
 
   /* journal tests */
   test_journal_init_null();

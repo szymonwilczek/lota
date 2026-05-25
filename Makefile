@@ -297,6 +297,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_hash_verify \
 	$(TEST_BIN_DIR)/test_dbus \
 	$(TEST_BIN_DIR)/test_systemd \
+	$(TEST_BIN_DIR)/test_packaging \
 	$(TEST_BIN_DIR)/test_steam_runtime \
 	$(TEST_BIN_DIR)/test_wine_hook \
 	$(TEST_BIN_DIR)/test_daemon \
@@ -332,6 +333,10 @@ $(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/jo
 
 $(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_packaging: tests/test_packaging.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
@@ -419,6 +424,7 @@ test-unit: all $(TEST_BINS)
 	@./build/test_hash_verify
 	@./build/test_dbus
 	@./build/test_systemd
+	@./build/test_packaging
 	@./build/test_steam_runtime
 	@./build/test_wine_hook
 	@./build/test_daemon
