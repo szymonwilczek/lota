@@ -283,7 +283,11 @@ struct tpm_context {
  * tpm_init - Initialize TPM context
  * @ctx: Pointer to context structure to initialize
  *
- * Opens connection to TPM via /dev/tpmrm0 (resource manager).
+ * Opens connection to TPM via /dev/tpmrm0 (resource manager) unless
+ * LOTA_TCTI is set. LOTA_TCTI is a LOTA-level override passed to the
+ * TSS2 TCTI loader (for example, "swtpm:host=127.0.0.1,port=2321").
+ * LOTA_AIK_META_PATH may redirect AIK metadata/auth files for tests
+ * and demos that must not touch /var/lib/lota.
  * Must be paired with tpm_cleanup().
  *
  * Returns: 0 on success, negative errno on failure

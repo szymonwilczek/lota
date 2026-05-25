@@ -17,9 +17,12 @@ Install the normal project dependencies plus the demo tools:
 | TSS2 loader      | `tpm2-tss-devel`                                |
 | examples build   | `SDL2-devel`, `libcurl-devel`, `golang`, `make` |
 
-The runner uses the `swtpm` TCTI directly through `TSS2_TCTI`; it does
-not talk to `/dev/tpmrm0`. AIK metadata and AIK auth are redirected
-with `LOTA_AIK_META_PATH` into the same temporary demo directory.
+The runner uses the `swtpm` TCTI directly through the agent's
+`LOTA_TCTI` override; it does not talk to `/dev/tpmrm0`. This is a
+LOTA-level environment variable passed into the TSS2 TCTI loader, not
+a promise that libtss2 itself reads `LOTA_TCTI`. AIK metadata and AIK
+auth are redirected with `LOTA_AIK_META_PATH` into the same temporary
+demo directory.
 
 ## Run
 
@@ -41,16 +44,15 @@ sudo -E examples/demo/setup.sh --no-build
 
 Useful flags:
 
-| Flag                   | Meaning                                       |
-| ---------------------  | --------------------------------------------- |
-| `--dry-run`            | print the ordered steps without starting them |
-| `--yes`                | skip ENTER gates                              |
-| `--no-build`           | require existing artifacts under `build/`     |
-| `--keep-tmp`           | keep logs and swtpm state after exit          |
-| `--listen HOST:PORT`   | demo server listen address                    |
-| `--interval SEC`       | heartbeat interval for `demo_anticheat`       |
-| `--tpm-port PORT`      | swtpm command port                            |
-| `--tpm-ctrl-port PORT` | swtpm control port                            |
+| Flag                  | Meaning                                       |
+| --------------------- | --------------------------------------------- |
+| `--dry-run`           | print the ordered steps without starting them |
+| `--yes`               | skip ENTER gates                              |
+| `--no-build`          | require existing artifacts under `build/`     |
+| `--keep-tmp`          | keep logs and swtpm state after exit          |
+| `--listen HOST:PORT`  | demo server listen address                    |
+| `--interval SEC`      | heartbeat interval for `demo_anticheat`       |
+| `--tpm-port PORT`     | swtpm command port; control port is `PORT+1`  |
 
 CI and quick ordering checks use:
 

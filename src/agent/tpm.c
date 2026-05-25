@@ -690,7 +690,7 @@ int tpm_init(struct tpm_context *ctx)
 			return -ENAMETOOLONG;
 	}
 
-	tcti_conf = getenv("TSS2_TCTI");
+	tcti_conf = getenv("LOTA_TCTI");
 	if (tcti_conf && tcti_conf[0]) {
 		rc = Tss2_TctiLdr_Initialize(tcti_conf, &ctx->tcti_ctx);
 		if (rc != TSS2_RC_SUCCESS)

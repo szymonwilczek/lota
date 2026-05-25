@@ -15,7 +15,7 @@ SERVER_URL="${LOTA_DEMO_SERVER_URL:-http://$LISTEN_ADDR}"
 GAME_ID="${LOTA_DEMO_GAME_ID:-trust-pong}"
 INTERVAL_SEC="${LOTA_DEMO_INTERVAL_SEC:-5}"
 TPM_PORT="${LOTA_DEMO_TPM_PORT:-23221}"
-TPM_CTRL_PORT="${LOTA_DEMO_TPM_CTRL_PORT:-23222}"
+TPM_CTRL_PORT=""
 
 DRY_RUN=0
 NO_BUILD=0
@@ -37,7 +37,7 @@ usage() {
 	cat <<EOF
 Usage: $0 [--dry-run] [--yes] [--no-build] [--keep-tmp]
           [--listen HOST:PORT] [--game-id ID] [--interval SEC]
-          [--tpm-port PORT] [--tpm-ctrl-port PORT]
+          [--tpm-port PORT]
 
 Runs the local swtpm-backed demo chain:
   make all && make examples
@@ -246,11 +246,6 @@ parse_args() {
 			TPM_PORT="$2"
 			shift
 			;;
-		--tpm-ctrl-port)
-			[ "$#" -ge 2 ] || die "--tpm-ctrl-port requires PORT"
-			TPM_CTRL_PORT="$2"
-			shift
-			;;
 		--help | -h)
 			usage
 			exit 0
@@ -283,11 +278,13 @@ check_inputs() {
 		die "--tpm-port must be a TCP port"
 		;;
 	esac
-	case "$TPM_CTRL_PORT" in
-	'' | *[!0-9]*)
-		die "--tpm-ctrl-port must be a TCP port"
-		;;
-	esac
+	if [ "$TPM_PORT" -le 0 ] || [ "$TPM_PORT" -ge 65535 ]; then
+		die "--tpm-port must be in range 1..65534"
+	fi
+	if [ -n "${LOTA_DEMO_TPM_CTRL_PORT:-}" ]; then
+		die "LOTA_DEMO_TPM_CTRL_PORT is not supported; swtpm control port is --tpm-port + 1"
+	fi
+	TPM_CTRL_PORT=$((TPM_PORT + 1))
 
 	if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
 		die "real run needs root for /run/lota/lota.sock; use sudo -E $0"
@@ -365,7 +362,7 @@ start_agent() {
 
 	log "Step 4/7: start lota-agent against swtpm"
 	start_bg agent env \
-		TSS2_TCTI="$TCTI" \
+		LOTA_TCTI="$TCTI" \
 		LOTA_AIK_META_PATH="$AIK_DIR/aik_meta.dat" \
 		XDG_RUNTIME_DIR="$RUNTIME_DIR" \
 		"$BUILD_DIR/lota-agent" --test-signed
