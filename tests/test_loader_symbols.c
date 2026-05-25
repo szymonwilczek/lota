@@ -13,7 +13,7 @@
 		exit(1);                                                       \
 	} while (0)
 
-void test_resolve_existing_symbol(void)
+static void test_resolve_existing_symbol(void)
 {
 	printf("Testing resolve_kernel_symbol...\n");
 	unsigned long addr = resolve_kernel_symbol("_text");
@@ -39,7 +39,7 @@ void test_resolve_existing_symbol(void)
  * could call attach in the wrong order and silently land BPF programs
  * in front of a partially configured lota_config map.
  */
-void test_attach_refuses_before_load(void)
+static void test_attach_refuses_before_load(void)
 {
 	printf("Testing bpf_loader_attach refuses unloaded context...\n");
 

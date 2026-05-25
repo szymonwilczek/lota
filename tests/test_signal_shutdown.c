@@ -21,6 +21,7 @@
 
 #include "../src/agent/agent.h"
 #include "../src/agent/daemon.h"
+#include "../src/agent/journal.h"
 #include "../src/agent/shutdown.h"
 
 static int tests_run;

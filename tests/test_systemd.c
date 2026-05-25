@@ -28,11 +28,10 @@
 #include <syslog.h>
 #include <unistd.h>
 
+#include "../src/agent/ipc.h"
 #include "../src/agent/journal.h"
 #include "../src/agent/sdnotify.h"
 
-struct ipc_context;
-struct dbus_context;
 void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 {
 	(void)ctx;

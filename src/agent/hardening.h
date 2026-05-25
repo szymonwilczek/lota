@@ -139,4 +139,13 @@ int hardening_apply_daemon(void);
  */
 int hardening_apply_all(void);
 
+/*
+ * hardening_parse_tracer_pid_buf - Parse /proc/self/status TracerPid line
+ *
+ * Internal helper exported only so the unit test in tests/test_hardening.c
+ * can drive it with synthetic /proc buffers. Production callers go
+ * through hardening_refuse_if_traced().
+ */
+int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer);
+
 #endif /* LOTA_AGENT_HARDENING_H */

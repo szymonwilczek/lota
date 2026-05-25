@@ -79,6 +79,9 @@ static const char *device_path(void)
 }
 #endif
 
+int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
+			       uint8_t out_digest[HASH_SIZE]);
+
 /*
  * lota_initramfs_lock_commit - reproduce the domain-separated digest
  *

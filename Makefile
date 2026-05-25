@@ -52,16 +52,21 @@ CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += -I$(INC_DIR)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong
+CFLAGS += -fstack-clash-protection
+CFLAGS += -fcf-protection=full
 CFLAGS += -D_FORTIFY_SOURCE=2
 CFLAGS += -fPIE
 CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
 
 # Version string injected into the server-side SDK at build time.
 LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
 SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 
 # Linker hardening
-HARDENING_LDFLAGS := -Wl,-z,relro,-z,now
+HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
 # Agent link flags
 LDFLAGS := -pie $(HARDENING_LDFLAGS)
