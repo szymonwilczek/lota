@@ -1,14 +1,38 @@
 # SPDX-License-Identifier: MIT
 #
-# Intentionally empty: Not yet implemented
-#
-# The top-level Makefile sources this fragment under `make examples`
-# once the heartbeat producer exists. The default target stays in
-# place so `make examples` is a no-op for the scaffolding step.
+# Build rules for the demo heartbeat producer. Invoked by the
+# top-level Makefile under `make examples`. TOP_DIR / BUILD_DIR /
+# INC_DIR / SDK_BUILD_DIR are passed in from the parent so this
+# fragment never reaches back into the top Makefile's private state.
+
+TARGET := $(BUILD_DIR)/demo_anticheat
+SRCS := heartbeat_loop.c
+
+CC ?= gcc
+CFLAGS := -Wall -Wextra -Werror -O2 -g
+CFLAGS += -I$(INC_DIR)
+CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong -fstack-clash-protection
+CFLAGS += -fcf-protection=full
+CFLAGS += -D_FORTIFY_SOURCE=2 -fPIE
+CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
+CFLAGS += $(shell pkg-config --cflags libcurl)
+
+LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
+LDLIBS := -L$(SDK_BUILD_DIR) -llota_anticheat -llotagaming -llotaserver -lcrypto
+LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR)
+LDLIBS += $(shell pkg-config --libs libcurl)
 
 .PHONY: all clean
-all:
-	@:
+
+all: $(TARGET)
+
+$(TARGET): $(SRCS) $(SDK_BUILD_DIR)/liblota_anticheat.so
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
+	@echo "Built: $@"
 
 clean:
-	@:
+	rm -f $(TARGET)
