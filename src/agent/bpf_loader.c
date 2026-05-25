@@ -791,7 +791,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
     }
     lota_info("Early BPF map lock enabled during loader init");
   } else {
-    lota_warn("lota_config map unavailable, early LOCK_BPF not applied");
+    lota_err("lota_config map unavailable, early LOCK_BPF not applied");
   }
 
   /* Integrity config map */
@@ -817,7 +817,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
       lota_err("Failed to update integrity_config map: %s", strerror(errno));
     }
   } else {
-    lota_warn("integrity_config map not found in BPF object");
+    lota_err("integrity_config map not found in BPF object");
   }
 
   /* Get trusted libraries map fd */

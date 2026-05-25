@@ -183,7 +183,7 @@ static void apply_runtime_flags_transactional(
                               new_cfg->strict_mmap ? 1 : 0) == 0) {
       *strict_mmap = new_cfg->strict_mmap;
     } else {
-      lota_warn("Failed to apply strict mmap on reload");
+      lota_err("Failed to apply strict mmap on reload");
       runtime_flags_failed = true;
     }
   }
@@ -193,7 +193,7 @@ static void apply_runtime_flags_transactional(
                               new_cfg->block_ptrace ? 1 : 0) == 0) {
       *block_ptrace = new_cfg->block_ptrace;
     } else {
-      lota_warn("Failed to apply block ptrace on reload");
+      lota_err("Failed to apply block ptrace on reload");
       runtime_flags_failed = true;
     }
   }
@@ -203,7 +203,7 @@ static void apply_runtime_flags_transactional(
                               new_cfg->strict_exec ? 1 : 0) == 0) {
       *strict_exec = new_cfg->strict_exec;
     } else {
-      lota_warn("Failed to apply strict exec on reload");
+      lota_err("Failed to apply strict exec on reload");
       runtime_flags_failed = true;
     }
   }
@@ -213,7 +213,7 @@ static void apply_runtime_flags_transactional(
                               new_cfg->strict_modules ? 1 : 0) == 0) {
       *strict_modules = new_cfg->strict_modules;
     } else {
-      lota_warn("Failed to apply strict modules on reload");
+      lota_err("Failed to apply strict modules on reload");
       runtime_flags_failed = true;
     }
   }
@@ -223,7 +223,7 @@ static void apply_runtime_flags_transactional(
                               new_cfg->block_anon_exec ? 1 : 0) == 0) {
       *block_anon_exec = new_cfg->block_anon_exec;
     } else {
-      lota_warn("Failed to apply block anonymous exec on reload");
+      lota_err("Failed to apply block anonymous exec on reload");
       runtime_flags_failed = true;
     }
   }
@@ -234,7 +234,7 @@ static void apply_runtime_flags_transactional(
                                 old_strict_mmap ? 1 : 0) == 0) {
         *strict_mmap = old_strict_mmap;
       } else {
-        lota_warn("Failed to rollback strict mmap after reload error");
+        lota_err("Failed to rollback strict mmap after reload error");
       }
     }
     if (*block_ptrace != old_block_ptrace) {
@@ -242,7 +242,7 @@ static void apply_runtime_flags_transactional(
                                 old_block_ptrace ? 1 : 0) == 0) {
         *block_ptrace = old_block_ptrace;
       } else {
-        lota_warn("Failed to rollback block ptrace after reload error");
+        lota_err("Failed to rollback block ptrace after reload error");
       }
     }
     if (*strict_exec != old_strict_exec) {
@@ -250,7 +250,7 @@ static void apply_runtime_flags_transactional(
                                 old_strict_exec ? 1 : 0) == 0) {
         *strict_exec = old_strict_exec;
       } else {
-        lota_warn("Failed to rollback strict exec after reload error");
+        lota_err("Failed to rollback strict exec after reload error");
       }
     }
     if (*strict_modules != old_strict_modules) {
@@ -258,7 +258,7 @@ static void apply_runtime_flags_transactional(
                                 old_strict_modules ? 1 : 0) == 0) {
         *strict_modules = old_strict_modules;
       } else {
-        lota_warn("Failed to rollback strict modules after reload error");
+        lota_err("Failed to rollback strict modules after reload error");
       }
     }
     if (*block_anon_exec != old_block_anon_exec) {
@@ -266,7 +266,7 @@ static void apply_runtime_flags_transactional(
                                 old_block_anon_exec ? 1 : 0) == 0) {
         *block_anon_exec = old_block_anon_exec;
       } else {
-        lota_warn("Failed to rollback block anonymous exec after reload error");
+        lota_err("Failed to rollback block anonymous exec after reload error");
       }
     }
     lota_warn("Keeping previous runtime enforcement flags after reload errors");
@@ -302,9 +302,9 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
                "restoring previous PID protection set");
       for (int k = 0; k < old_protect_pid_count; k++) {
         if (bpf_loader_protect_pid(&g_agent.bpf_ctx, old_protect_pids[k]) < 0) {
-          lota_warn("Failed to restore protected PID %u after reload "
-                    "allocation failure",
-                    old_protect_pids[k]);
+          lota_err("Failed to restore protected PID %u after reload "
+                   "allocation failure",
+                   old_protect_pids[k]);
         }
       }
       return;
@@ -315,7 +315,7 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
     for (int k = 0; k < new_cfg->protect_pid_count; k++) {
       uint32_t pid = new_cfg->protect_pids[k];
       if (bpf_loader_protect_pid(&g_agent.bpf_ctx, pid) < 0) {
-        lota_warn("Failed to protect PID %u on reload", pid);
+        lota_err("Failed to protect PID %u on reload", pid);
         apply_failed = true;
         break;
       }
@@ -327,9 +327,9 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
         bpf_loader_unprotect_pid(&g_agent.bpf_ctx, new_pids[k]);
       for (int k = 0; k < old_protect_pid_count; k++) {
         if (bpf_loader_protect_pid(&g_agent.bpf_ctx, old_protect_pids[k]) < 0) {
-          lota_warn("Failed to restore protected PID %u after reload apply "
-                    "failure",
-                    old_protect_pids[k]);
+          lota_err("Failed to restore protected PID %u after reload apply "
+                   "failure",
+                   old_protect_pids[k]);
         }
       }
       free(new_pids);
@@ -364,8 +364,8 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
     int untrust_ret =
         bpf_loader_untrust_lib(&g_agent.bpf_ctx, old_trust_libs[k]);
     if (untrust_ret < 0 && untrust_ret != -ENOENT) {
-      lota_warn("Failed to remove trusted lib %s on reload: %s",
-                old_trust_libs[k], strerror(-untrust_ret));
+      lota_err("Failed to remove trusted lib %s on reload: %s",
+               old_trust_libs[k], strerror(-untrust_ret));
       trust_reload_failed = true;
       break;
     }
@@ -375,8 +375,8 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
     const char *lib = new_cfg->trust_libs[k];
     int trust_ret = bpf_loader_trust_lib(&g_agent.bpf_ctx, lib);
     if (trust_ret < 0) {
-      lota_warn("Failed to trust lib %s on reload: %s", lib,
-                strerror(-trust_ret));
+      lota_err("Failed to trust lib %s on reload: %s", lib,
+               strerror(-trust_ret));
       trust_reload_failed = true;
       break;
     }
@@ -393,8 +393,8 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
       int restore_ret =
           bpf_loader_trust_lib(&g_agent.bpf_ctx, old_trust_libs[k]);
       if (restore_ret < 0) {
-        lota_warn("Failed to restore trusted lib %s after reload error: %s",
-                  old_trust_libs[k], strerror(-restore_ret));
+        lota_err("Failed to restore trusted lib %s after reload error: %s",
+                 old_trust_libs[k], strerror(-restore_ret));
         continue;
       }
       copy_path(trust_libs[restored_libs], old_trust_libs[k]);
@@ -510,7 +510,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
     int auth_ret =
         verify_reload_downgrade_authorization_fd(cfg_fd, cfg_path, cfg);
     if (auth_ret < 0) {
-      lota_warn("Unauthorized ENFORCE mode downgrade request ignored");
+      lota_err("Unauthorized ENFORCE mode downgrade request ignored");
       close(cfg_fd);
       free(new_cfg.protect_pids);
       sdnotify_ready();
@@ -526,7 +526,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
                 mode_to_string(new_mode));
       *mode = new_mode;
     } else {
-      lota_warn("Failed to apply new mode");
+      lota_err("Failed to apply new mode");
     }
   }
 
