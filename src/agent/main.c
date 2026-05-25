@@ -16,57 +16,37 @@
  *   --daemon        Run as daemon
  */
 #include <errno.h>
-#include <fcntl.h>
-#include <getopt.h>
-#include <limits.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <sys/random.h>
 #include <sys/signalfd.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <time.h>
 #include <unistd.h>
 
-#include "../../include/attestation.h"
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
 #include "bpf_loader.h"
+#include "cli.h"
 #include "config.h"
 #include "daemon.h"
 #include "daemon_loop.h"
 #include "dbus.h"
+#include "diagnostics.h"
 #include "event.h"
 #include "hardening.h"
 #include "hash_verify.h"
-#include "io_utils.h"
 #include "iommu.h"
 #include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"
-#include "net.h"
-#include "parse_utils.h"
-#include "path_validate.h"
-#include "policy.h"
-#include "quote.h"
-#include "reload.h"
 #include "sdnotify.h"
 #include "selftest.h"
+#include "shutdown.h"
 #include "startup_policy.h"
-#include "steam_runtime.h"
-#include "test_servers.h"
 #include "tpm.h"
-
-#define DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
-#define DEFAULT_VERIFIER_PORT 8443
-
-/* Default AIK TTL */
-#define DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 /* Global state */
 struct agent_globals g_agent = {
@@ -74,113 +54,8 @@ struct agent_globals g_agent = {
     .dbus_ctx = NULL,
     .mode = LOTA_MODE_MONITOR,
 };
+
 static volatile sig_atomic_t g_reload = 0;
-
-/* Runtime config from CLI */
-static uint32_t *g_protect_pids = NULL;
-static int g_protect_pid_count = 0;
-static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
-static int g_trust_lib_count;
-static char g_allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
-static int g_allow_verity_count;
-static int g_no_hash_cache;
-
-static int validate_path_arg(const char *key, const char *p)
-{
-	if (!key || !p)
-		return -EINVAL;
-	if (p[0] == '\0')
-		return -EINVAL;
-	if (lota_str_has_control(p)) {
-		fprintf(stderr, "Invalid %s: contains control characters\n",
-			key);
-		return -EINVAL;
-	}
-	if (!lota_path_is_abs(p)) {
-		fprintf(stderr, "Invalid %s: expected absolute path\n", key);
-		return -EINVAL;
-	}
-	if (lota_path_has_dotdot_segment(p)) {
-		fprintf(stderr,
-			"Invalid %s: '..' path traversal is not allowed\n",
-			key);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int copy_string_checked(const char *field, char *dst, size_t dst_sz,
-			       const char *src)
-{
-	int n;
-
-	if (!field || !dst || !src || dst_sz == 0)
-		return -EINVAL;
-
-	n = snprintf(dst, dst_sz, "%s", src);
-	if (n < 0)
-		return -EIO;
-
-	if ((size_t)n >= dst_sz) {
-		fprintf(
-		    stderr,
-		    "Value for %s is too long (%d bytes), max allowed is %zu\n",
-		    field, n, dst_sz - 1);
-		return -EOVERFLOW;
-	}
-
-	return 0;
-}
-
-static int ipc_request_shutdown(void)
-{
-	struct sockaddr_un addr;
-	struct lota_ipc_request req = {
-	    .magic = LOTA_IPC_MAGIC,
-	    .version = LOTA_IPC_VERSION,
-	    .cmd = LOTA_IPC_CMD_SHUTDOWN,
-	    .payload_len = 0,
-	};
-	struct lota_ipc_response resp;
-	int fd;
-	int ret;
-
-	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-	if (fd < 0)
-		return -errno;
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
-	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		ret = -errno;
-		close(fd);
-		return ret;
-	}
-
-	ret = lota_write_full(fd, &req, sizeof(req));
-	if (ret < 0) {
-		close(fd);
-		return ret;
-	}
-
-	ret = lota_read_full(fd, &resp, sizeof(resp));
-	close(fd);
-	if (ret < 0)
-		return ret;
-
-	if (resp.magic != LOTA_IPC_MAGIC || resp.version != LOTA_IPC_VERSION)
-		return -EPROTO;
-
-	if (resp.result != LOTA_IPC_OK)
-		return -EACCES;
-
-	if (resp.payload_len != 0)
-		return -EPROTO;
-
-	return 0;
-}
 
 struct run_daemon_params {
 	const char *bpf_path;
@@ -289,15 +164,16 @@ static int run_daemon(const struct run_daemon_params *params)
 		return -errno;
 	}
 
-	ret = hash_verify_init(&g_agent.hash_ctx,
-			       g_no_hash_cache ? HASH_CACHE_DISABLED : 0);
+	ret = hash_verify_init(&g_agent.hash_ctx, cli_runtime_no_hash_cache()
+						      ? HASH_CACHE_DISABLED
+						      : 0);
 	if (ret < 0) {
 		lota_err("Failed to initialize hash cache: %s", strerror(-ret));
 		close(sfd);
 		close(epoll_fd);
 		return ret;
 	}
-	if (g_no_hash_cache)
+	if (cli_runtime_no_hash_cache())
 		lota_info("Hash cache disabled (--no-hash-cache)");
 	else
 		lota_info("Hash verification cache ready");
@@ -408,12 +284,12 @@ static int run_daemon(const struct run_daemon_params *params)
 	    .block_ptrace = block_ptrace,
 	    .strict_modules = strict_modules,
 	    .block_anon_exec = block_anon_exec,
-	    .protect_pids = g_protect_pids,
-	    .protect_pid_count = g_protect_pid_count,
-	    .trust_libs = g_trust_libs,
-	    .trust_lib_count = g_trust_lib_count,
-	    .allow_verity = g_allow_verity,
-	    .allow_verity_count = g_allow_verity_count,
+	    .protect_pids = *cli_runtime_protect_pids(),
+	    .protect_pid_count = *cli_runtime_protect_pid_count(),
+	    .trust_libs = cli_runtime_trust_libs(),
+	    .trust_lib_count = *cli_runtime_trust_lib_count(),
+	    .allow_verity = cli_runtime_allow_verity(),
+	    .allow_verity_count = *cli_runtime_allow_verity_count(),
 	    .allow_mutable_rootfs = params->allow_mutable_rootfs,
 	};
 
@@ -473,10 +349,10 @@ static int run_daemon(const struct run_daemon_params *params)
 	    .block_ptrace = &block_ptrace,
 	    .strict_modules = &strict_modules,
 	    .block_anon_exec = &block_anon_exec,
-	    .protect_pids = &g_protect_pids,
-	    .protect_pid_count = &g_protect_pid_count,
-	    .trust_libs = g_trust_libs,
-	    .trust_lib_count = &g_trust_lib_count,
+	    .protect_pids = cli_runtime_protect_pids(),
+	    .protect_pid_count = cli_runtime_protect_pid_count(),
+	    .trust_libs = cli_runtime_trust_libs(),
+	    .trust_lib_count = cli_runtime_trust_lib_count(),
 	    .ipc_ctx = &g_agent.ipc_ctx,
 	    .dbus_ctx = g_agent.dbus_ctx,
 	    .bpf_ctx = &g_agent.bpf_ctx,
@@ -561,12 +437,9 @@ cleanup_epoll:
 
 int main(int argc, char *argv[])
 {
-	int opt;
-	int test_tpm_flag = 0;
-	int test_iommu_flag = 0;
-	int test_ipc_flag = 0;
-	int test_signed_flag = 0;
-	int shutdown_flag = 0;
+	struct cli_options opts;
+	struct lota_config cfg;
+	int rc;
 
 	if (daemon_install_signals(&g_agent.running, &g_reload) < 0) {
 		fprintf(stderr, "Failed to install signal handlers: %s\n",
@@ -574,640 +447,30 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	int export_policy_flag = 0;
-	int attest_flag = 0;
-	const char *gen_signing_key_prefix = NULL;
-	const char *sign_policy_file = NULL;
-	const char *verify_policy_file = NULL;
-	const char *signing_key_path = NULL;
-	const char *policy_pubkey_path = NULL;
-	int attest_interval = 0; /* 0 = one-shot, >0 = continuous */
-	uint32_t aik_ttl = DEFAULT_AIK_TTL;
-	bool strict_mmap = false;
-	bool strict_exec = false;
-	bool block_ptrace = false;
-	bool strict_modules = false;
-	bool block_anon_exec = false;
-	int daemon_flag = 0;
-	const char *pid_file_path = NULL;
-	int pid_fd = -1;
-	const char *bpf_path = DEFAULT_BPF_PATH;
-	const char *server_addr = "localhost";
-	bool server_overridden = false;
-	int server_port = DEFAULT_VERIFIER_PORT;
-	const char *ca_cert_path = NULL;
-	int no_verify_tls = 0;
-	int insecure_allow_no_verify_tls = 0;
-	int insecure_allow_mode_downgrade = 0;
-	int insecure_allow_mutable_rootfs = 0;
-	bool cli_mode_set = false;
-	int config_file_mode = -1;
-	const char *pin_sha256_hex = NULL;
-	uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
-	int has_pin = 0;
-	static struct lota_config cfg;
-	const char *config_path = NULL;
-	int dump_config_flag = 0;
+	journal_init("lota-agent");
 
-	static struct option long_options[] = {
-	    {"config", required_argument, 0, 'f'},
-	    {"dump-config", no_argument, 0, 'Z'},
-	    {"test-tpm", no_argument, 0, 't'},
-	    {"test-iommu", no_argument, 0, 'i'},
-	    {"test-ipc", no_argument, 0, 'c'},
-	    {"test-signed", no_argument, 0, 'S'},
-	    {"shutdown", no_argument, 0, 1001},
-	    {"export-policy", no_argument, 0, 'E'},
-	    {"attest", no_argument, 0, 'a'},
-	    {"attest-interval", required_argument, 0, 'I'},
-	    {"server", required_argument, 0, 's'},
-	    {"port", required_argument, 0, 'p'},
-	    {"ca-cert", required_argument, 0, 'C'},
-	    {"no-verify-tls", no_argument, 0, 'K'},
-	    {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
-	    {"insecure-allow-mode-downgrade", no_argument, 0, 1002},
-	    {"insecure-allow-mutable-rootfs", no_argument, 0, 1003},
-	    {"pin-sha256", required_argument, 0, 'F'},
-	    {"bpf", required_argument, 0, 'b'},
-	    {"mode", required_argument, 0, 'm'},
-	    {"strict-mmap", no_argument, 0, 'M'},
-	    {"strict-exec", no_argument, 0, 'Y'},
-	    {"block-ptrace", no_argument, 0, 'P'},
-	    {"strict-modules", no_argument, 0, 'J'},
-	    {"block-anon-exec", no_argument, 0, 'X'},
-	    {"protect-pid", required_argument, 0, 'R'},
-	    {"trust-lib", required_argument, 0, 'L'},
-	    {"allow-verity", required_argument, 0, 'A'},
-	    {"daemon", no_argument, 0, 'd'},
-	    {"pid-file", required_argument, 0, 'D'},
-	    {"aik-ttl", required_argument, 0, 'T'},
-	    {"gen-signing-key", required_argument, 0, 'G'},
-	    {"sign-policy", required_argument, 0, 'g'},
-	    {"verify-policy", required_argument, 0, 'V'},
-	    {"signing-key", required_argument, 0, 'k'},
-	    {"policy-pubkey", required_argument, 0, 'Q'},
-	    {"no-hash-cache", no_argument, 0, 'H'},
-	    {"help", no_argument, 0, 'h'},
-	    {0, 0, 0, 0}};
+	rc = hardening_apply_basics();
+	if (rc < 0) {
+		fprintf(stderr, "Failed to apply process hardening: %s\n",
+			strerror(-rc));
+		return 1;
+	}
 
 	config_init(&cfg);
 
-	journal_init("lota-agent");
+	rc = cli_parse(argc, argv, &opts, &cfg);
+	if (rc == -1)
+		return 0; /* --help */
+	if (rc != 0)
+		return rc;
 
-	/*
-	 * Pre-CLI hardening is restricted to no_new_privs + dumpable=0.
-	 * Tracer refusal and the seccomp blocklist are deferred to the
-	 * daemon entry points so short-lived admin/diagnostic modes
-	 * (--shutdown, --test-tpm, --export-policy, --gen-signing-key,
-	 * --sign-policy, --verify-policy) can still be run under strace
-	 * or gdb without the binary returning -EPERM at the first hop.
-	 */
-	{
-		int harden_ret = hardening_apply_basics();
-		if (harden_ret < 0) {
-			fprintf(stderr,
-				"Failed to apply process hardening: %s\n",
-				strerror(-harden_ret));
-			return 1;
-		}
-	}
+	rc = cli_finalize_pin(&opts);
+	if (rc != 0)
+		return rc;
 
-	for (int i = 1; i < argc; i++) {
-		if ((strcmp(argv[i], "--config") == 0 ||
-		     strcmp(argv[i], "-f") == 0) &&
-		    i + 1 < argc) {
-			config_path = argv[++i];
-		}
-	}
-
-	{
-		int cfg_ret = config_load(&cfg, config_path);
-		if (cfg_ret == -ENOENT && !config_path) {
-			/* default config file does not exist -> not an error */
-		} else if (cfg_ret == -ENOENT) {
-			fprintf(stderr, "Config file not found: %s\n",
-				config_path);
-			return 1;
-		} else if (cfg_ret < 0) {
-			fprintf(stderr, "Failed to load config %s: %s\n",
-				config_path ? config_path
-					    : LOTA_CONFIG_DEFAULT_PATH,
-				strerror(-cfg_ret));
-			return 1;
-		}
-	}
-
-	server_addr = cfg.server;
-	server_port = cfg.port;
-	ca_cert_path = cfg.ca_cert[0] ? cfg.ca_cert : NULL;
-	pin_sha256_hex = cfg.pin_sha256[0] ? cfg.pin_sha256 : NULL;
-	bpf_path = cfg.bpf_path;
-	{
-		int cfg_mode = parse_mode(cfg.mode);
-		if (cfg_mode >= 0) {
-			agent_globals_lock(&g_agent);
-			g_agent.mode = cfg_mode;
-			agent_globals_unlock(&g_agent);
-			config_file_mode = cfg_mode;
-		}
-	}
-	strict_mmap = cfg.strict_mmap;
-	strict_exec = cfg.strict_exec;
-	block_ptrace = cfg.block_ptrace;
-	strict_modules = cfg.strict_modules;
-	block_anon_exec = cfg.block_anon_exec;
-	attest_interval = cfg.attest_interval;
-	aik_ttl = cfg.aik_ttl;
-	agent_globals_lock(&g_agent);
-	g_agent.tpm_ctx.aik_handle = cfg.aik_handle;
-	agent_globals_unlock(&g_agent);
-	{
-		int kret = tpm_set_kernel_path(
-		    &g_agent.tpm_ctx,
-		    cfg.kernel_path[0] ? cfg.kernel_path : NULL);
-		if (kret < 0) {
-			fprintf(stderr, "Invalid kernel_path in config: %s\n",
-				strerror(-kret));
-			return 1;
-		}
-	}
-	daemon_flag = cfg.daemon ? 1 : 0;
-	pid_file_path = cfg.pid_file;
-	signing_key_path = cfg.signing_key[0] ? cfg.signing_key : NULL;
-	policy_pubkey_path = cfg.policy_pubkey[0] ? cfg.policy_pubkey : NULL;
-
-	g_protect_pid_count = 0;
-	if (cfg.protect_pid_count > 0) {
-		uint32_t *new_pids = realloc(
-		    g_protect_pids, cfg.protect_pid_count * sizeof(uint32_t));
-		if (!new_pids) {
-			fprintf(stderr, "Memory allocation failed while "
-					"loading protected PIDs "
-					"from config\n");
-			return 1;
-		}
-		g_protect_pids = new_pids;
-		for (int i = 0; i < cfg.protect_pid_count; i++)
-			g_protect_pids[i] = cfg.protect_pids[i];
-		g_protect_pid_count = cfg.protect_pid_count;
-	}
-	g_trust_lib_count = cfg.trust_lib_count;
-	for (int i = 0; i < cfg.trust_lib_count; i++) {
-		if (copy_string_checked("trust_libs", g_trust_libs[i],
-					sizeof(g_trust_libs[i]),
-					cfg.trust_libs[i]) < 0) {
-			return 1;
-		}
-	}
-
-	g_allow_verity_count = cfg.allow_verity_count;
-	for (int i = 0; i < cfg.allow_verity_count; i++) {
-		if (copy_string_checked("allow_verity", g_allow_verity[i],
-					sizeof(g_allow_verity[i]),
-					cfg.allow_verity[i]) < 0) {
-			return 1;
-		}
-	}
-
-	while ((opt = getopt_long(
-		    argc, argv,
-		    "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:Hh",
-		    long_options, NULL)) != -1) {
-		switch (opt) {
-		case 't':
-			test_tpm_flag = 1;
-			break;
-		case 'i':
-			test_iommu_flag = 1;
-			break;
-		case 'c':
-			test_ipc_flag = 1;
-			break;
-		case 'S':
-			test_signed_flag = 1;
-			break;
-		case 1001:
-			shutdown_flag = 1;
-			break;
-		case 'E':
-			export_policy_flag = 1;
-			break;
-		case 'a':
-			attest_flag = 1;
-			break;
-		case 'I':
-			attest_flag = 1;
-			{
-				long v;
-				if (safe_parse_long(optarg, &v) < 0 || v < 0 ||
-				    v > INT_MAX) {
-					fprintf(stderr,
-						"Invalid interval: %s\n",
-						optarg);
-					return 1;
-				}
-				attest_interval = (int)v;
-			}
-			if (attest_interval != 0 &&
-			    attest_interval < MIN_ATTEST_INTERVAL) {
-				fprintf(stderr,
-					"Warning: interval %d too low, using "
-					"minimum %d seconds\n",
-					attest_interval, MIN_ATTEST_INTERVAL);
-				attest_interval = MIN_ATTEST_INTERVAL;
-			}
-			break;
-		case 's':
-			server_addr = optarg;
-			server_overridden = true;
-			break;
-		case 'p': {
-			long v;
-			if (safe_parse_long(optarg, &v) < 0 || v <= 0 ||
-			    v > 65535) {
-				fprintf(stderr, "Invalid port: %s\n", optarg);
-				return 1;
-			}
-			server_port = (int)v;
-		} break;
-		case 'C':
-			ca_cert_path = optarg;
-			break;
-		case 'K':
-			no_verify_tls = 1;
-			break;
-		case 1000:
-			insecure_allow_no_verify_tls = 1;
-			break;
-		case 1002:
-			insecure_allow_mode_downgrade = 1;
-			break;
-		case 1003:
-			insecure_allow_mutable_rootfs = 1;
-			break;
-		case 'F':
-			pin_sha256_hex = optarg;
-			break;
-		case 'b':
-			bpf_path = optarg;
-			break;
-		case 'm': {
-			int opt_mode = parse_mode(optarg);
-			if (opt_mode < 0) {
-				fprintf(stderr, "Invalid mode: %s\n", optarg);
-				fprintf(stderr, "Valid modes: monitor, "
-						"enforce, maintenance\n");
-				return 1;
-			}
-			agent_globals_lock(&g_agent);
-			g_agent.mode = opt_mode;
-			agent_globals_unlock(&g_agent);
-			cli_mode_set = true;
-			break;
-		}
-		case 'M':
-			strict_mmap = true;
-			break;
-		case 'Y':
-			strict_exec = true;
-			break;
-		case 'P':
-			block_ptrace = true;
-			break;
-		case 'J':
-			strict_modules = true;
-			break;
-		case 'X':
-			block_anon_exec = true;
-			break;
-		case 'R': {
-			uint32_t v;
-			if (safe_parse_u32_dec(optarg, &v) < 0 || v == 0) {
-				fprintf(stderr, "Invalid PID: %s\n", optarg);
-				return 1;
-			}
-			if (g_protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
-				fprintf(
-				    stderr,
-				    "Too many --protect-pid entries (max %d)\n",
-				    LOTA_MAX_PROTECTED_PIDS);
-				return 1;
-			}
-			uint32_t *new_pids =
-			    realloc(g_protect_pids, (g_protect_pid_count + 1) *
-							sizeof(uint32_t));
-			if (!new_pids) {
-				fprintf(stderr, "Memory allocation failed for "
-						"protected PID\n");
-				return 1;
-			}
-			g_protect_pids = new_pids;
-			g_protect_pids[g_protect_pid_count++] = v;
-		} break;
-		case 'L':
-			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
-				if (copy_string_checked(
-					"trust-lib",
-					g_trust_libs[g_trust_lib_count],
-					sizeof(g_trust_libs[g_trust_lib_count]),
-					optarg) < 0) {
-					return 1;
-				}
-				g_trust_lib_count++;
-			} else {
-				fprintf(
-				    stderr,
-				    "Too many --trust-lib entries (max %d)\n",
-				    LOTA_CONFIG_MAX_LIBS);
-				return 1;
-			}
-			break;
-		case 'A':
-			if (g_allow_verity_count >= LOTA_CONFIG_MAX_VERITY) {
-				fprintf(stderr,
-					"Too many --allow-verity entries (max "
-					"%d)\n",
-					LOTA_CONFIG_MAX_VERITY);
-				return 1;
-			}
-			if (validate_path_arg("allow-verity", optarg) < 0)
-				return 1;
-			if (copy_string_checked(
-				"allow-verity",
-				g_allow_verity[g_allow_verity_count],
-				sizeof(g_allow_verity[g_allow_verity_count]),
-				optarg) < 0) {
-				return 1;
-			}
-			g_allow_verity_count++;
-			break;
-		case 'd':
-			daemon_flag = 1;
-			break;
-		case 'D':
-			pid_file_path = optarg;
-			break;
-		case 'T': {
-			uint32_t v;
-			if (safe_parse_u32_dec(optarg, &v) < 0) {
-				fprintf(stderr, "Invalid AIK TTL: %s\n",
-					optarg);
-				return 1;
-			}
-			aik_ttl = v;
-		}
-			if (aik_ttl > 0 && aik_ttl < 3600) {
-				fprintf(stderr,
-					"Warning: AIK TTL %u too low, using "
-					"3600s (1 hour)\n",
-					aik_ttl);
-				aik_ttl = 3600;
-			}
-			break;
-		case 'G':
-			gen_signing_key_prefix = optarg;
-			break;
-		case 'g':
-			sign_policy_file = optarg;
-			break;
-		case 'V':
-			verify_policy_file = optarg;
-			break;
-		case 'k':
-			signing_key_path = optarg;
-			break;
-		case 'Q':
-			policy_pubkey_path = optarg;
-			break;
-		case 'H':
-			g_no_hash_cache = 1;
-			break;
-		case 'f':
-			/* --config: handled in pre-scan above */
-			break;
-		case 'Z':
-			dump_config_flag = 1;
-			break;
-		case 'h':
-		default:
-			print_usage(argv[0], DEFAULT_BPF_PATH,
-				    DEFAULT_VERIFIER_PORT);
-			return (opt == 'h') ? 0 : 1;
-		}
-	}
-
-	if (shutdown_flag) {
-		int sret = ipc_request_shutdown();
-		if (sret < 0) {
-			fprintf(stderr, "Shutdown request failed: %s\n",
-				strerror(-sret));
-			return 1;
-		}
-		return 0;
-	}
-
-	if (dump_config_flag) {
-		if (server_overridden) {
-			if (copy_string_checked("server", cfg.server,
-						sizeof(cfg.server),
-						server_addr) < 0) {
-				return 1;
-			}
-		}
-		cfg.port = server_port;
-		if (ca_cert_path) {
-			if (ca_cert_path != cfg.ca_cert) {
-				if (copy_string_checked("ca_cert", cfg.ca_cert,
-							sizeof(cfg.ca_cert),
-							ca_cert_path) < 0) {
-					return 1;
-				}
-			}
-		} else {
-			cfg.ca_cert[0] = '\0';
-		}
-		if (pin_sha256_hex) {
-			if (pin_sha256_hex != cfg.pin_sha256) {
-				if (copy_string_checked("pin_sha256",
-							cfg.pin_sha256,
-							sizeof(cfg.pin_sha256),
-							pin_sha256_hex) < 0) {
-					return 1;
-				}
-			}
-		} else {
-			cfg.pin_sha256[0] = '\0';
-		}
-
-		if (bpf_path != cfg.bpf_path) {
-			if (copy_string_checked("bpf_path", cfg.bpf_path,
-						sizeof(cfg.bpf_path),
-						bpf_path) < 0) {
-				return 1;
-			}
-		}
-		if (g_agent.mode == LOTA_MODE_ENFORCE)
-			snprintf(cfg.mode, sizeof(cfg.mode), "enforce");
-		else if (g_agent.mode == LOTA_MODE_MAINTENANCE)
-			snprintf(cfg.mode, sizeof(cfg.mode), "maintenance");
-		else
-			snprintf(cfg.mode, sizeof(cfg.mode), "monitor");
-
-		cfg.strict_mmap = strict_mmap;
-		cfg.block_ptrace = block_ptrace;
-		cfg.strict_modules = strict_modules;
-		cfg.block_anon_exec = block_anon_exec;
-		cfg.attest_interval = attest_interval;
-		cfg.aik_ttl = aik_ttl;
-		cfg.aik_handle = g_agent.tpm_ctx.aik_handle;
-		cfg.daemon = daemon_flag ? true : false;
-		if (pid_file_path != cfg.pid_file) {
-			if (copy_string_checked("pid_file", cfg.pid_file,
-						sizeof(cfg.pid_file),
-						pid_file_path) < 0) {
-				return 1;
-			}
-		}
-
-		if (signing_key_path) {
-			if (signing_key_path != cfg.signing_key) {
-				if (copy_string_checked("signing_key",
-							cfg.signing_key,
-							sizeof(cfg.signing_key),
-							signing_key_path) < 0) {
-					return 1;
-				}
-			}
-		} else {
-			cfg.signing_key[0] = '\0';
-		}
-
-		if (policy_pubkey_path) {
-			if (policy_pubkey_path != cfg.policy_pubkey) {
-				if (copy_string_checked(
-					"policy_pubkey", cfg.policy_pubkey,
-					sizeof(cfg.policy_pubkey),
-					policy_pubkey_path) < 0) {
-					return 1;
-				}
-			}
-		} else {
-			cfg.policy_pubkey[0] = '\0';
-		}
-
-		cfg.trust_lib_count = g_trust_lib_count;
-		for (int i = 0; i < g_trust_lib_count; i++) {
-			if (copy_string_checked("trust_libs", cfg.trust_libs[i],
-						sizeof(cfg.trust_libs[i]),
-						g_trust_libs[i]) < 0) {
-				return 1;
-			}
-		}
-
-		cfg.allow_verity_count = g_allow_verity_count;
-		for (int i = 0; i < g_allow_verity_count; i++) {
-			if (copy_string_checked("allow_verity",
-						cfg.allow_verity[i],
-						sizeof(cfg.allow_verity[i]),
-						g_allow_verity[i]) < 0) {
-				return 1;
-			}
-		}
-
-		free(cfg.protect_pids);
-		cfg.protect_pids = NULL;
-		cfg.protect_pid_count = 0;
-		if (g_protect_pid_count > 0) {
-			cfg.protect_pids =
-			    malloc(g_protect_pid_count * sizeof(uint32_t));
-			if (!cfg.protect_pids) {
-				fprintf(stderr,
-					"Warning: failed to allocate "
-					"protect_pid list for dump-config\n");
-			} else {
-				memcpy(cfg.protect_pids, g_protect_pids,
-				       g_protect_pid_count * sizeof(uint32_t));
-				cfg.protect_pid_count = g_protect_pid_count;
-			}
-		}
-
-		config_dump(&cfg, stdout);
-		return 0;
-	}
-
-	/* parse certificate pin if provided */
-	if (pin_sha256_hex) {
-		if (net_parse_pin_sha256(pin_sha256_hex, pin_sha256_bin) < 0) {
-			fprintf(stderr,
-				"Invalid --pin-sha256 value: '%s'\n"
-				"Expected 64 hex characters (colons/spaces "
-				"allowed).\n"
-				"Example: openssl x509 -in cert.pem "
-				"-fingerprint -sha256 -noout\n",
-				pin_sha256_hex);
-			return 1;
-		}
-		has_pin = 1;
-		if (no_verify_tls) {
-			fprintf(stderr, "Warning: --pin-sha256 with "
-					"--no-verify-tls: PKI validation\n"
-					"is disabled but certificate pinning "
-					"remains active.\n");
-		}
-	}
-
-	/* policy signing operations */
-	{
-		struct policy_ops_args policy_ops = {
-		    .gen_signing_key_prefix = gen_signing_key_prefix,
-		    .sign_policy_file = sign_policy_file,
-		    .verify_policy_file = verify_policy_file,
-		    .signing_key_path = signing_key_path,
-		    .policy_pubkey_path = policy_pubkey_path,
-		};
-		int ret = handle_policy_ops(&policy_ops);
-		if (ret != -1)
-			return ret;
-	}
-
-	if (test_tpm_flag)
-		return test_tpm();
-
-	if (test_iommu_flag)
-		return test_iommu();
-
-	if (export_policy_flag)
-		return export_policy(g_agent.mode);
-
-	if (test_ipc_flag)
-		return run_ipc_test_server();
-
-	if (test_signed_flag)
-		return run_signed_ipc_test_server();
-
-	if (attest_flag) {
-		if (no_verify_tls && !insecure_allow_no_verify_tls) {
-			fprintf(stderr, "ERROR: --no-verify-tls is INSECURE "
-					"and requires explicit "
-					"confirmation.\n"
-					"Re-run with: --no-verify-tls "
-					"--insecure-allow-no-verify-tls\n");
-			return 1;
-		}
-		if (no_verify_tls && ca_cert_path) {
-			fprintf(stderr, "Warning: --ca-cert ignored when "
-					"--no-verify-tls is set\n");
-		}
-		if (attest_interval > 0)
-			return do_continuous_attest(
-			    server_addr, server_port, ca_cert_path,
-			    no_verify_tls, has_pin ? pin_sha256_bin : NULL,
-			    attest_interval, aik_ttl);
-		else
-			return do_attest(server_addr, server_port, ca_cert_path,
-					 no_verify_tls,
-					 has_pin ? pin_sha256_bin : NULL);
-	}
+	rc = diagnostics_dispatch(&opts, &cfg);
+	if (rc >= 0)
+		return rc;
 
 	/*
 	 * Mode downgrade guard.
@@ -1220,9 +483,9 @@ int main(int argc, char *argv[])
 	 * caller to acknowledge the downgrade explicitly. Maintenance and
 	 * monitor are both treated as weakenings of enforce.
 	 */
-	if (cli_mode_set && config_file_mode == LOTA_MODE_ENFORCE &&
+	if (opts.cli_mode_set && opts.config_file_mode == LOTA_MODE_ENFORCE &&
 	    g_agent.mode != LOTA_MODE_ENFORCE &&
-	    !insecure_allow_mode_downgrade) {
+	    !opts.insecure_allow_mode_downgrade) {
 		fprintf(
 		    stderr,
 		    "ERROR: CLI --mode %s weakens configured mode 'enforce'.\n"
@@ -1235,7 +498,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (daemon_flag) {
+	if (opts.daemon_flag) {
 		int dret = daemonize();
 		if (dret < 0) {
 			fprintf(stderr, "Failed to daemonize: %s\n",
@@ -1244,7 +507,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	pid_fd = pidfile_create(pid_file_path);
+	int pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
 		fprintf(
 		    stderr,
@@ -1254,36 +517,32 @@ int main(int argc, char *argv[])
 	if (pid_fd < 0) {
 		fprintf(stderr, "Warning: Failed to create PID file: %s\n",
 			strerror(-pid_fd));
-		/* non-fatal: continue without PID file */
-		pid_fd = -1;
+		pid_fd = -1; /* non-fatal */
 	}
 
-	{
-		if (!policy_pubkey_path || policy_pubkey_path[0] == '\0') {
-			fprintf(stderr,
-				"ERROR: BPF object signature verification "
+	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
+		fprintf(stderr, "ERROR: BPF object signature verification "
 				"requires --policy-pubkey\n"
 				"Set policy_pubkey in config or pass "
 				"--policy-pubkey PATH.\n");
-			pidfile_remove(pid_file_path, pid_fd);
-			return 1;
-		}
-
-		struct run_daemon_params run_params = {
-		    .bpf_path = bpf_path,
-		    .bpf_pubkey_path = policy_pubkey_path,
-		    .mode = g_agent.mode,
-		    .strict_mmap = strict_mmap,
-		    .strict_exec = strict_exec,
-		    .block_ptrace = block_ptrace,
-		    .strict_modules = strict_modules,
-		    .block_anon_exec = block_anon_exec,
-		    .allow_mutable_rootfs = insecure_allow_mutable_rootfs != 0,
-		    .config_path = config_path,
-		    .cfg = &cfg,
-		};
-		int ret = run_daemon(&run_params);
-		pidfile_remove(pid_file_path, pid_fd);
-		return ret;
+		pidfile_remove(opts.pid_file_path, pid_fd);
+		return 1;
 	}
+
+	struct run_daemon_params run_params = {
+	    .bpf_path = opts.bpf_path,
+	    .bpf_pubkey_path = opts.policy_pubkey_path,
+	    .mode = g_agent.mode,
+	    .strict_mmap = opts.strict_mmap,
+	    .strict_exec = opts.strict_exec,
+	    .block_ptrace = opts.block_ptrace,
+	    .strict_modules = opts.strict_modules,
+	    .block_anon_exec = opts.block_anon_exec,
+	    .allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
+	    .config_path = opts.config_path,
+	    .cfg = &cfg,
+	};
+	rc = run_daemon(&run_params);
+	pidfile_remove(opts.pid_file_path, pid_fd);
+	return rc;
 }

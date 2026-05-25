@@ -113,6 +113,8 @@ AGTEST_SRCS = tests/test_main.c \
 
 # Agent main source files
 AGENT_SRCS := $(AGENT_DIR)/main.c \
+			  $(AGENT_DIR)/cli.c \
+			  $(AGENT_DIR)/diagnostics.c \
 			  $(AGENT_DIR)/daemon_loop.c \
 			  $(AGENT_DIR)/daemon_loop_telemetry.c \
 			  $(AGENT_DIR)/main_utils.c \
