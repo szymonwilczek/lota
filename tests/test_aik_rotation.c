@@ -21,7 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../src/agent/tpm.h"
+#include "../src/agent/agent_internal.h"
 
 static uint32_t tpm_ascii4(char a, char b, char c, char d)
 {

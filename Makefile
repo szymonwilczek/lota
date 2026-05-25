@@ -404,7 +404,7 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_TPM_TESTING -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
+	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-tcti-device -lcrypto -lssl
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)

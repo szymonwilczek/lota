@@ -9,6 +9,11 @@
 #ifndef LOTA_TPM_H
 #define LOTA_TPM_H
 
+/* Umbrella test gate -- see src/agent/agent_internal.h. */
+#if defined(LOTA_INTERNAL_TESTS) && !defined(LOTA_TPM_TESTING)
+#define LOTA_TPM_TESTING 1
+#endif
+
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
