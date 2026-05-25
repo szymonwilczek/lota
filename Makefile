@@ -244,7 +244,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all
+.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install check-version-tag test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all examples examples-clean
 
 bpf: $(BPF_OBJ)
 
@@ -261,6 +261,45 @@ server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
 wine-hook: $(WINE_HOOK_LIB)
 
 anticheat: $(ANTICHEAT_LIB)
+
+# Examples (opt-in: end-to-end demo material under examples/).
+#
+# `make all` deliberately does NOT depend on this target so the agent
+# build stays fast and the demo SDL2/libcurl/Go toolchains stay
+# optional. Recurse into every per-component fragment that is in tree;
+# each fragment writes its artifacts under build/examples/.
+EXAMPLES_DIR := examples
+EXAMPLES_BUILD_DIR := $(BUILD_DIR)/examples
+EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
+
+$(EXAMPLES_BUILD_DIR): | $(BUILD_DIR)
+	mkdir -p $@
+
+examples: $(EXAMPLES_BUILD_DIR)
+	@for frag in $(EXAMPLES_FRAGMENTS); do \
+		dir=$$(dirname $$frag); \
+		echo "==> examples: $$dir"; \
+		$(MAKE) -C $$dir -f Makefile.fragment \
+			TOP_DIR=$(CURDIR) \
+			BUILD_DIR=$(CURDIR)/$(EXAMPLES_BUILD_DIR) \
+			INC_DIR=$(CURDIR)/$(INC_DIR) \
+			SDK_BUILD_DIR=$(CURDIR)/$(BUILD_DIR) || exit $$?; \
+	done
+	@if command -v go >/dev/null 2>&1 && [ -f $(EXAMPLES_DIR)/demo_server/main.go ]; then \
+		echo "==> examples: $(EXAMPLES_DIR)/demo_server"; \
+		cd $(EXAMPLES_DIR)/demo_server && \
+			go build -o $(CURDIR)/$(EXAMPLES_BUILD_DIR)/demo_server . ; \
+	else \
+		echo "SKIP: demo_server (go not installed or stub absent)"; \
+	fi
+
+examples-clean:
+	rm -rf $(EXAMPLES_BUILD_DIR)
+	@for frag in $(EXAMPLES_FRAGMENTS); do \
+		dir=$$(dirname $$frag); \
+		$(MAKE) -C $$dir -f Makefile.fragment clean \
+			BUILD_DIR=$(CURDIR)/$(EXAMPLES_BUILD_DIR) 2>/dev/null || true; \
+	done
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
@@ -575,6 +614,8 @@ help:
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
+	@echo "  examples         Build end-to-end demo material under examples/"
+	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  test             Run unit tests and best-effort integration checks"

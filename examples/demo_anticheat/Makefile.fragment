@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+#
+# Intentionally empty: Not yet implemented
+#
+# The top-level Makefile sources this fragment under `make examples`
+# once the heartbeat producer exists. The default target stays in
+# place so `make examples` is a no-op for the scaffolding step.
+
+.PHONY: all clean
+all:
+	@:
+
+clean:
+	@:
