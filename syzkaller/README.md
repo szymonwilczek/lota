@@ -23,33 +23,47 @@ This directory contains configuration for fuzzing the LOTA kernel environment us
     The binaries will be in `bin/` (e.g., `bin/syz-manager`, `bin/linux_amd64/syz-prog2c`).
 
 2.  **Compile Linux Kernel**:
-    Use a config with KASAN, KCOV, etc. enabled. Download Linux 6.18.10 (or latest stable).
+    Use a config with KASAN, KCOV, and the LSM/BPF/namespaces options
+    syzkaller needs. Download Linux 6.18.10 (or latest stable).
 
     ```bash
     wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.10.tar.xz
     tar xJf linux-6.18.10.tar.xz
     cd linux-6.18.10
     make defconfig
-    ./scripts/config -e KCT_KASAN -e KCOV -e KCOV_INSTRUMENT_ALL -e KCOV_ENABLE_COMPARISONS -e DEBUG_FS -e DEBUG_INFO -e KALLSYMS -e KALLSYMS_ALL -e NAMESPACES -e UTS_NS -e IPC_NS -e PID_NS -e NET_NS -e CGROUPS -e CGROUP_NET_PRIO -e CGROUP_NET_CLASSID -e BPF_SYSCALL -e USER_NS -e ADVISE_SYSCALLS -e MEMBARRIER -e KINGS -e VIRTIO_NET -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_CONSOLE
+    ./scripts/config \
+        -e KASAN -e KASAN_GENERIC -e KASAN_INLINE \
+        -e KCOV -e KCOV_INSTRUMENT_ALL -e KCOV_ENABLE_COMPARISONS \
+        -e DEBUG_FS -e DEBUG_INFO_DWARF4 -e DEBUG_INFO_BTF \
+        -e KALLSYMS -e KALLSYMS_ALL \
+        -e NAMESPACES -e UTS_NS -e IPC_NS -e PID_NS -e NET_NS \
+        -e USER_NS \
+        -e CGROUPS -e CGROUP_NET_PRIO -e CGROUP_NET_CLASSID \
+        -e BPF_SYSCALL -e BPF_LSM -e DEBUG_INFO_BTF \
+        -e ADVISE_SYSCALLS -e MEMBARRIER \
+        -e VIRTIO_NET -e VIRTIO_BLK -e VIRTIO_PCI -e VIRTIO_CONSOLE
+    make olddefconfig
     make -j$(nproc)
     ```
 
 3.  **Create Image**:
-    Create a Debian strech image using `create-image.sh` script from Syzkaller repo:
+    Create a current Debian image (Bookworm or Trixie -- Stretch reached
+    end of life in 2022 and its apt mirrors are gone). The
+    `create-image.sh` script accepts a `--distribution` flag.
 
     ```bash
     wget https://raw.githubusercontent.com/google/syzkaller/master/tools/create-image.sh -O create-image.sh
     chmod +x create-image.sh
-    ./create-image.sh
+    ./create-image.sh --distribution bookworm
     ```
 
-    This creates `stretch.img` and `stretch.id_rsa`.
+    This creates `bookworm.img` and `bookworm.id_rsa`.
 
 4.  **Configure**:
     Edit `lota.cfg` and set paths to:
     - `kernel_obj`: Path to your compiled kernel source.
-    - `image`: Path to `stretch.img`.
-    - `sshkey`: Path to `stretch.id_rsa`.
+    - `image`: Path to `bookworm.img`.
+    - `sshkey`: Path to `bookworm.id_rsa`.
     - `syzkaller`: Path to syzkaller repo (if cloned) or leave default if installed.
 
     Use `sandbox: "none"` and keep BPF/kexec/ptrace syscalls enabled if you
