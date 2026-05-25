@@ -4,12 +4,10 @@
 # Master Makefile
 #
 # Targets:
-#   all       - Build agent and BPF program
-#   bpf       - Build only BPF program
-#   agent     - Build only user-space agent
-#   clean     - Remove build artifacts
+#   help      - Show operator-facing target list
+#   all       - Build agent, verifier, SDKs, initramfs helper and BPF program
+#   test-unit - Build and run local unit tests
 #   install   - Install to system
-#   test      - Run basic tests
 #
 # Requirements:
 #   - clang, llvm (for BPF compilation)
@@ -18,6 +16,8 @@
 #   - tpm2-tss-devel
 #   - openssl-devel (for SHA-256)
 #
+
+.DEFAULT_GOAL := help
 
 # Compiler settings
 CC := gcc
@@ -228,7 +228,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install test
+.PHONY: help all bpf agent initramfs-lock verifier sdk server-sdk wine-hook anticheat clean install test test-unit test-hardware test-sdk fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all
 
 bpf: $(BPF_OBJ)
 
@@ -522,27 +522,40 @@ $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o: src/agent/fuzz/net_wire_fuzz.c | $(BUIL
 fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
 
-# Build all fuzz targets
-.PHONY: fuzz-all
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
 
-# Help target
-.PHONY: help
 help:
-	@echo "LOTA Makefile targets:"
-	@echo "  all        - Build agent, verifier, SDKs and BPF program (default)"
-	@echo "  bpf        - Build only BPF program"
-	@echo "  agent      - Build only user-space agent"
-	@echo "  initramfs-lock - Build only the initramfs PCR14 lock helper"
-	@echo "  verifier   - Build only Go verifier"
-	@echo "  sdk        - Build only gaming SDK library"
-	@echo "  server-sdk - Build only server-side verification SDK"
-	@echo "  wine-hook  - Build only Wine/Proton LD_PRELOAD hook"
-	@echo "  anticheat  - Build only anti-cheat compatibility layer"
-	@echo "  clean      - Remove build artifacts"
-	@echo "  install    - Install to /usr (requires root)"
-	@echo "  test       - Run basic unit tests"
-	@echo "  test-hardware - Run hardware tests (requires root/sudo)"
+	@echo "Usage: make <target>"
 	@echo ""
-	@echo "Prerequisites (Fedora):"
-	@echo "  sudo dnf install clang llvm libbpf-devel tpm2-tss-devel openssl-devel bpftool golang"
+	@echo "Build targets:"
+	@echo "  all              Build agent, verifier, SDKs, initramfs helper and BPF object"
+	@echo "  agent            Build user-space agent only"
+	@echo "  bpf              Build BPF LSM object only"
+	@echo "  initramfs-lock   Build PCR14 initramfs lock helper only"
+	@echo "  verifier         Build Go verifier only"
+	@echo "  sdk              Build gaming SDK shared/static libraries"
+	@echo "  server-sdk       Build server SDK shared/static libraries"
+	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
+	@echo "  anticheat        Build anti-cheat compatibility layer"
+	@echo ""
+	@echo "Test targets:"
+	@echo "  test             Run unit tests and best-effort integration checks"
+	@echo "  test-unit        Same as test; builds required artifacts first"
+	@echo "  test-sdk         Print SDK integration-test instructions"
+	@echo "  test-hardware    Run hardware tests against local IOMMU/TPM (root required)"
+	@echo ""
+	@echo "Fuzz targets:"
+	@echo "  fuzz-all         Build every fuzz target"
+	@echo "  fuzz-agent       Build IPC/agent fuzz target"
+	@echo "  fuzz-config      Build config parser fuzz target"
+	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
+	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
+	@echo ""
+	@echo "Install/cleanup targets:"
+	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
+	@echo "  clean            Remove build artifacts"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make all"
+	@echo "  make test-unit"
+	@echo "  sudo make install"
