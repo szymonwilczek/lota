@@ -1,14 +1,55 @@
 # SPDX-License-Identifier: MIT
 #
-# Intentionally empty: Not yet implemented
+# Build rules for the trust_pong demo client. Invoked by the
+# top-level Makefile under `make examples`. TOP_DIR / BUILD_DIR /
+# INC_DIR / SDK_BUILD_DIR are passed in from the parent so this
+# fragment never reaches back into the top Makefile's private state.
 #
-# The top-level Makefile sources this fragment under `make examples`
-# once trust_pong is in tree. The default target stays in place so
-# `make examples` is a no-op for the scaffolding step.
+# SDL2 and libcurl are optional system dependencies: hosts
+# that do not have them installed get a clear SKIP line instead of a
+# build break, so the rest of `make examples` still completes on a
+# clean Fedora 44 box that has not yet installed the demo packages.
+
+TARGET := $(BUILD_DIR)/trust_pong
+SRCS := trust_pong.c ui.c
+
+CC ?= gcc
+PKG_OK := $(shell pkg-config --exists sdl2 libcurl && echo yes)
+
+CFLAGS := -Wall -Wextra -Werror -O2 -g
+CFLAGS += -I$(INC_DIR)
+CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong -fstack-clash-protection
+CFLAGS += -fcf-protection=full
+CFLAGS += -D_FORTIFY_SOURCE=2 -fPIE
+CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
+ifeq ($(PKG_OK),yes)
+CFLAGS += $(shell pkg-config --cflags sdl2 libcurl)
+endif
+
+LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
+LDLIBS := -L$(SDK_BUILD_DIR) -llotagaming
+LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR)
+LDLIBS += -lpthread
+ifeq ($(PKG_OK),yes)
+LDLIBS += $(shell pkg-config --libs sdl2 libcurl)
+endif
 
 .PHONY: all clean
+
+ifeq ($(PKG_OK),yes)
+all: $(TARGET)
+
+$(TARGET): $(SRCS) $(SDK_BUILD_DIR)/liblotagaming.so
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
+	@echo "Built: $@"
+else
 all:
-	@:
+	@echo "SKIP: trust_pong (install SDL2-devel, libcurl-devel)"
+endif
 
 clean:
-	@:
+	rm -f $(TARGET)
