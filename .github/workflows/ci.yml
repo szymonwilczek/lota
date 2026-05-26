@@ -25,10 +25,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential clang llvm pkg-config \
-            libbpf-dev libelf-dev zlib1g-dev \
+            libelf-dev zlib1g-dev \
             libtss2-dev \
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev
+
+      - name: Install libbpf >= 1.0
+        # Ubuntu 22.04 ships libbpf 0.5; 24.04 ships 1.3. The agent's
+        # bpf_loader requires the libbpf 1.x API surface (kernel_log_level,
+        # bpf_program__set_log_level, bpf_program__type). Pin to the same
+        # stable libbpf release on every matrix entry so the CI toolchain
+        # is deterministic instead of distro-version dependent.
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+          pkg-config --modversion libbpf
 
       - name: Set up Go
         uses: actions/setup-go@v5
