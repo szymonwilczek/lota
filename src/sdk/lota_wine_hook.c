@@ -598,53 +598,70 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
 }
 
 /*
- * Event-driven refresh thread.
- * Subscribes to agent events and waits for notifications.
- * Falls back to polling on error/timeout.
+ * Refresh thread. Prefers the event-driven path (lota_subscribe +
+ * lota_poll_events) and falls back to a fixed-cadence
+ * refresh_once() poll when SUBSCRIBE is denied. The agent restricts
+ * SUBSCRIBE to its own PID by design (see ipc.c:ipc_client_is_agent_self),
+ * so EACCES is the steady-state outcome for any external client and
+ * must not produce a warning per process.
  */
 static void *refresh_thread_fn(void *arg)
 {
 	sigset_t all;
 	int ret;
+	bool subscribed;
 
 	(void)arg;
 
 	sigfillset(&all);
 	pthread_sigmask(SIG_BLOCK, &all, NULL);
 
+	subscribed = false;
+
 	while (g_hook.running) {
-		/* ensure connection */
 		if (!g_hook.client) {
 			g_hook.client = hook_connect();
 			if (!g_hook.client) {
-				if (g_hook.log_level <= HOOK_LOG_DEBUG)
-					LOG_DBG("agent not available, retrying "
-						"in %ds",
-						g_hook.refresh_sec);
+				LOG_DBG("agent not available, retrying in %ds",
+					g_hook.refresh_sec);
 				sleep(g_hook.refresh_sec);
 				continue;
 			}
 			LOG_INF("connected to agent");
-
-			/* initial queries */
 			refresh_once();
 
-			/* subscribe to updates */
 			ret = lota_subscribe(g_hook.client, LOTA_EVENT_STATUS,
 					     hook_status_cb, NULL);
-			if (ret != LOTA_OK)
-				LOG_WRN("subscribe failed: %s",
-					lota_strerror(ret));
+			subscribed = (ret == LOTA_OK);
+			if (!subscribed) {
+				if (ret == LOTA_ERR_ACCESS_DENIED)
+					LOG_DBG("subscribe denied (agent-only "
+						"by design), polling every %ds",
+						g_hook.refresh_sec);
+				else
+					LOG_WRN("subscribe failed: %s, "
+						"falling back to polling",
+						lota_strerror(ret));
+			}
 		}
 
-		ret = lota_poll_events(g_hook.client, 5000);
+		if (subscribed) {
+			ret = lota_poll_events(g_hook.client, 5000);
+		} else {
+			sleep(g_hook.refresh_sec);
+			refresh_once();
+			ret = g_hook.client ? LOTA_OK : LOTA_ERR_NOT_CONNECTED;
+		}
 
 		if (ret == LOTA_ERR_PROTOCOL || ret == LOTA_ERR_NOT_CONNECTED ||
 		    ret == -EPIPE || ret == -ECONNRESET) {
 			LOG_WRN("connection lost (%s), reconnecting...",
 				lota_strerror(ret));
-			lota_disconnect(g_hook.client);
-			g_hook.client = NULL;
+			if (g_hook.client) {
+				lota_disconnect(g_hook.client);
+				g_hook.client = NULL;
+			}
+			subscribed = false;
 			/* avoid tight loop on persistent failure */
 			sleep(1);
 		} else if (ret != LOTA_OK && ret != LOTA_ERR_TIMEOUT) {
