@@ -203,19 +203,36 @@ done
 # that drives Steam.
 install_systemd_dropin() {
     local uid dropin_dir dropin
-    uid="$(id -u)"
+
+    # Need root to write under /etc/systemd/system. The operator UID
+    # is recovered from $SUDO_UID (sudo sets it) so the drop-in
+    # cannot accidentally pin XDG_RUNTIME_DIR to /run/user/0 when
+    # the caller forgot to wrap with sudo from their own session.
+    if [[ $EUID -ne 0 ]]; then
+        fail "--install-systemd-dropin must run as root (try: sudo $(basename "$0") --install-systemd-dropin)"
+        return 1
+    fi
+    if [[ -z "${SUDO_UID:-}" ]]; then
+        fail "could not determine the operator UID"
+        fail "invoke as: sudo $(basename "$0") --install-systemd-dropin"
+        fail "(direct 'su -' / login as root strips \$SUDO_UID and is not supported)"
+        return 1
+    fi
+
+    uid="$SUDO_UID"
+    case "$uid" in
+        ''|*[!0-9]*)
+            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+            return 1
+            ;;
+    esac
+    if [[ "$uid" -eq 0 ]]; then
+        fail "SUDO_UID=0; rerun from a non-root login shell"
+        return 1
+    fi
+
     dropin_dir="/etc/systemd/system/lota-agent.service.d"
     dropin="${dropin_dir}/10-xdg-runtime.conf"
-
-    if [[ $EUID -ne 0 ]]; then
-        fail "--install-systemd-dropin must run as root (try: sudo)"
-        return 1
-    fi
-    if [[ "$uid" -eq 0 ]]; then
-        fail "current user is root; rerun under the operator account"
-        fail "with: sudo -E -u <operator> $(basename "$0") --install-systemd-dropin"
-        return 1
-    fi
 
     info "Installing drop-in: ${dropin}"
     mkdir -p "$dropin_dir"
