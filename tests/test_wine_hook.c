@@ -872,6 +872,71 @@ static void test_policy_whitespace_tolerant(void)
 		     "whitespace");
 }
 
+static void test_write_status_marks_online_branch(void)
+{
+	char buf[1024];
+	ssize_t n;
+	struct lota_status status;
+
+	TEST("write_status: live branch stamps LOTA_OFFLINE=0");
+
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "%s/status_live_marker", tmpdir);
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK;
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+	n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=0")) {
+		FAIL("missing LOTA_OFFLINE=0");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=1")) {
+		FAIL("missing LOTA_ATTESTED=1");
+		return;
+	}
+	PASS();
+}
+
+static void test_write_status_payload_offline_marker(void)
+{
+	char buf[1024];
+	ssize_t n;
+	struct lota_status zero;
+
+	TEST("write_status_payload(offline=1) stamps LOTA_OFFLINE=1");
+
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
+		 "%s/status_offline_marker", tmpdir);
+
+	memset(&zero, 0, sizeof(zero));
+	if (write_status_payload(&zero, 1) != 0) {
+		FAIL("write_status_payload failed");
+		return;
+	}
+	n = read_file_contents(g_hook.status_path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_OFFLINE=1")) {
+		FAIL("missing LOTA_OFFLINE=1");
+		return;
+	}
+	if (!strstr(buf, "LOTA_ATTESTED=0")) {
+		FAIL("attested flag leaked into offline payload");
+		return;
+	}
+	PASS();
+}
+
 static void test_hook_active_when_not_started(void)
 {
 	TEST("lota_hook_active() returns 0 when not initialized");
@@ -983,6 +1048,8 @@ int main(void)
 	test_write_status_attested();
 	test_write_status_not_attested();
 	test_write_status_zero_flags();
+	test_write_status_marks_online_branch();
+	test_write_status_payload_offline_marker();
 
 	/* process activation policy */
 	test_policy_default_skips_usr_bin();

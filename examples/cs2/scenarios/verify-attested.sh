@@ -102,15 +102,30 @@ if [ -z "$STATUS_PATH" ]; then
 	done
 fi
 
-# Translate the file's existence + LOTA_ATTESTED value into a
-# canonical verdict string. The status file is small and rewritten
-# atomically by the hook, so a single grep is enough; no awk / sed
-# pipeline that would race against the writer.
+# Translate the file's existence + LOTA_ATTESTED / LOTA_OFFLINE
+# values into a canonical verdict. The status file is small and
+# rewritten atomically by the hook, so a single grep pass per field
+# is enough; no awk / sed pipeline that would race against the writer.
+#
+# Decision order:
+#   - file missing                       -> OFFLINE (hook never ran
+#                                           or token dir not mounted)
+#   - LOTA_OFFLINE=1                     -> OFFLINE (hook lost agent;
+#                                           publish_offline_status())
+#   - LOTA_ATTESTED=1                    -> TRUSTED
+#   - LOTA_ATTESTED=0                    -> UNTRUSTED
 classify() {
 	local path="$1"
 	local attested
+	local offline
 
 	if [ ! -e "$path" ]; then
+		printf 'OFFLINE'
+		return
+	fi
+	offline="$(grep -E '^LOTA_OFFLINE=' "$path" 2>/dev/null | head -n1 |
+		cut -d= -f2 || true)"
+	if [ "$offline" = "1" ]; then
 		printf 'OFFLINE'
 		return
 	fi
@@ -140,7 +155,12 @@ if [ "$ONCE" -eq 1 ]; then
 	exit "$?"
 fi
 
-printf 'watching %s every %ds (Ctrl-C to stop)\n' "$STATUS_PATH" "$INTERVAL"
+printf 'watching %s, polling every %ds (Ctrl-C to stop)\n' \
+	"$STATUS_PATH" "$INTERVAL"
+printf '(verdict transitions are emitted only when the underlying file ' \
+	"$INTERVAL"
+printf 'changes; the LOTA hook itself rewrites the file at its own\n'
+printf 'LOTA_HOOK_REFRESH_SEC cadence, default 60s.)\n'
 last=""
 while :; do
 	verdict="$(classify "$STATUS_PATH")"

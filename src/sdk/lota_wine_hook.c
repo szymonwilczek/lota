@@ -405,23 +405,31 @@ static int atomic_write(const char *path, const void *data, size_t len)
 /*
  * Write the text status file.
  *
+ * Render the agent's last reported status into the key=value text file
+ * the operator-facing consumers (verify-attested.sh, server-side
+ * bridges) poll. @offline non-zero means the hook lost the agent
+ * channel entirely: the LOTA_OFFLINE=1 marker lets consumers
+ * distinguish "agent reachable, says not attested" (UNTRUSTED) from
+ * "agent unreachable" (OFFLINE).
+ *
  * Format: key=value, one per line, no quoting.
  * Parseable from C, Python, shell, and Wine-side code.
  */
-static int write_status(const struct lota_status *status)
+static int write_status_payload(const struct lota_status *status, int offline)
 {
 	char buf[512];
 	int len;
 
 	len = snprintf(buf, sizeof(buf),
 		       "LOTA_ATTESTED=%d\n"
+		       "LOTA_OFFLINE=%d\n"
 		       "LOTA_FLAGS=0x%08x\n"
 		       "LOTA_VALID_UNTIL=%lu\n"
 		       "LOTA_ATTEST_COUNT=%u\n"
 		       "LOTA_FAIL_COUNT=%u\n"
 		       "LOTA_UPDATED=%lu\n"
 		       "LOTA_PID=%d\n",
-		       (status->flags & LOTA_FLAG_ATTESTED) ? 1 : 0,
+		       (status->flags & LOTA_FLAG_ATTESTED) ? 1 : 0, offline,
 		       status->flags, (unsigned long)status->valid_until,
 		       status->attest_count, status->fail_count,
 		       (unsigned long)time(NULL), (int)getpid());
@@ -430,6 +438,11 @@ static int write_status(const struct lota_status *status)
 		return -ENOMEM;
 
 	return atomic_write(g_hook.status_path, buf, (size_t)len);
+}
+
+static int write_status(const struct lota_status *status)
+{
+	return write_status_payload(status, 0);
 }
 
 #ifdef LOTA_HOOK_TESTING
@@ -550,8 +563,7 @@ static void publish_offline_status(void)
 	struct lota_status offline = {0};
 	int ret;
 
-	offline.valid_until = (uint64_t)time(NULL);
-	ret = write_status(&offline);
+	ret = write_status_payload(&offline, 1);
 	if (ret < 0)
 		LOG_WRN("write_status (offline): %s", strerror(-ret));
 	unlink(g_hook.token_path);
