@@ -49,6 +49,30 @@ TPM 2.0 (Hardware: PCRs) -> eBPF LSM Kernel (Binary Monitoring) -> LOTA Agent Us
 | Replay attacks           | Nonce in TPM Quote         |
 | Boot parameter tampering | PCR 8/9 measurement        |
 
+## Live demo
+
+A scripted, single-host walk-through of the full attestation chain
+lives under [examples/demo/](examples/demo/README.md): an isolated
+`swtpm` sandbox, the LOTA agent, a Go reference verifier/server, a
+C heartbeat producer, and an SDL2 client.
+
+```sh
+sudo -E examples/demo/setup.sh
+```
+
+The runner pauses between phases so the operator can narrate each
+step. A companion script,
+[`examples/demo/demo_tamper.sh`](examples/demo/demo_tamper.sh),
+arms an out-of-band tamper marker that flips the next heartbeat
+from `TRUSTED` to `UNTRUSTED` without touching the agent or the
+swtpm sandbox; the SDL2 client mirrors the verdict in its banner
+and freezes after two consecutive `UNTRUSTED` ticks.
+
+See [examples/demo/README.md](examples/demo/README.md) for the
+five-step operator walk-through, dependency list,
+`setup.sh` / `demo_tamper.sh` flag references, and the
+asciinema-capture invocation used for the recorded session.
+
 ## Status
 
 ⚠️ **Heavily** in `development`.
