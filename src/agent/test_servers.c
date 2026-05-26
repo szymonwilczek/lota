@@ -38,8 +38,21 @@ int run_ipc_test_server(void)
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
 
+	/*
+	 * GET_TOKEN is gated by g_agent.policy_digest_set. The only
+	 * producer is startup_policy_apply(), which --test-ipc skips.
+	 * Provision a fixed-pattern digest so the IPC bridge issues
+	 * tokens under the test profile; the pattern is reserved for
+	 * test fixtures and never appears in a real SHA-256.
+	 */
+	agent_globals_lock(&g_agent);
+	memset(g_agent.policy_digest, 0xA5, sizeof(g_agent.policy_digest));
+	g_agent.policy_digest_set = 1;
+	agent_globals_unlock(&g_agent);
+
 	printf("IPC server running (simulated ATTESTED state, no TPM).\n");
 	printf("Tokens will be UNSIGNED.\n");
+	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 
 	sdnotify_ready();
