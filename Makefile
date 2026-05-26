@@ -188,15 +188,23 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 		-ltss2-esys -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
 
+# auto-generated header dependencies. -MMD writes a sibling
+# <object>.d listing every header the .c file pulled in;
+# -MP adds phony targets for those headers so a deleted header
+# does not break the next build. The .d files are included at the
+# bottom of this Makefile so make rebuilds any .o whose headers
+# changed.
+DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
+
 # compile agent
 $(BUILD_DIR)/agent/%.o: $(AGENT_DIR)/%.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 # compile SDK
 $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
+	$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
 # server SDK version string (liblotaserver + dependents)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
@@ -641,3 +649,10 @@ help:
 	@echo "  make all"
 	@echo "  make test-unit"
 	@echo "  sudo make install"
+
+# pull in auto-generated header dependencies
+-include $(AGENT_OBJS:.o=.d)
+-include $(SDK_OBJS:.o=.d)
+-include $(SERVER_SDK_OBJS:.o=.d)
+-include $(WINE_HOOK_OBJS:.o=.d)
+-include $(ANTICHEAT_OBJS:.o=.d)
