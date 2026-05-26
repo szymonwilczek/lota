@@ -15,5 +15,9 @@ adds a single verification surface on top.
 | [`agent-down.md`](agent-down.md)        | hook degrades gracefully when the agent goes down and re-attaches when it comes back; CS2 keeps running    |
 | [`lib-block.md`](lib-block.md)          | BPF LSM (`security_mmap_file`) blocks an unauthorised `LD_PRELOAD` library before its constructor can run  |
 
-Only `lib-block.md` requires the full enforce-mode agent because the
-LSM gates only fire once the BPF object is attached.
+The scenarios run on the same Fedora 44 + `--test-signed`
+setup the main CS2 walk-through bootstraps (real TPM Quote
+plus the in-tree fixture policy digest, no production policy
+file needed). `lib-block.md` is the exception: it requires the
+full enforce-mode agent because the LSM gates only fire once
+the BPF object is attached.

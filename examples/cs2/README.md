@@ -103,19 +103,31 @@ not tracked.
    IPC extra listener on /run/user/1000/lota/lota.sock
    ```
 
-   For ad-hoc bring-up without touching systemd state, run the
-   agent directly under the operator's `XDG_RUNTIME_DIR`:
+   For the integration test against CS2 you want the
+   TPM-signed-token path, which is `--test-signed`:
 
    ```sh
    sudo systemctl stop lota-agent.socket lota-agent.service
    sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-       /usr/bin/lota-agent --test-ipc
+       /usr/bin/lota-agent --test-signed
    ```
 
-   `--test-ipc` is a no-TPM simulated-attested mode that proves
-   the IPC bridge end-to-end without a TPM quote; `--test-signed`
-   takes the same shape but routes through the real TPM, and the
-   full systemd path is the production target.
+   `--test-signed` provisions the TPM AIK at startup, runs the
+   IPC + container listener under the operator's
+   `XDG_RUNTIME_DIR`, and signs `GET_TOKEN` responses with a
+   real TPM Quote. The fixture policy digest (0xA5 x 32) is
+   applied automatically; the banner prints
+   `Tokens will be SIGNED by TPM AIK!` plus the digest line.
+   `--test-ipc` exists for the IPC bridge alone (status only,
+   no token); the Wine hook needs the signed-token path to
+   produce `lota-token.bin`.
+
+   The full systemd daemon path (`systemctl start
+   lota-agent.service` against the live `lota-agent.service`
+   unit) is the eventual production target. It also requires
+   the signed BPF object, an `/etc/lota/lota.conf` with policy
+   entries, fs-verity on the agent binary, and the rest of the boot-time chain.
+   Not yet implemented.
 
 3. **Run `lota-steam-setup`** under the operator account (not
    root) to confirm the runtime preconditions:
@@ -200,16 +212,32 @@ ls -l   "$XDG_RUNTIME_DIR/lota/"
 cat     "$XDG_RUNTIME_DIR/lota/lota-status"
 ```
 
-A healthy run prints `LOTA_ATTESTED=1`, a non-zero
-`LOTA_VALID_UNTIL` timestamp, and `LOTA_PID` matching the game
-process. The `lota-token.bin` file size matches the
+A healthy run prints `LOTA_ATTESTED=1`, `LOTA_OFFLINE=0`, a
+non-zero `LOTA_VALID_UNTIL` timestamp, and `LOTA_PID` matching
+the game process. The `lota-token.bin` file size matches the
 `LOTA_GAMING_MAX_TOKEN` budget exposed by the gaming SDK; the
-binary is opaque to the operator but `xxd | head` is enough to
-confirm it is not all-zeros. Under `--test-ipc` the agent refuses
-`GET_TOKEN` because no `policy_digest` is loaded, so the binary
-token file is empty -- the status file alone proves the IPC
-bridge end-to-end; the binary token requires `--test-signed` or
-the full daemon path.
+first four bytes are the `LOTK` magic followed by the wire
+header, the TPM Quote bytes, and the AIK signature.
+
+`xxd | head` is enough to confirm the file is not all-zeros:
+
+```sh
+xxd "$XDG_RUNTIME_DIR/lota/lota-token.bin" | head -3
+# 00000000: 4c4f 544b ...    LOTK...
+```
+
+`--test-ipc` (the no-TPM IPC bridge) writes only the status
+file because GET_TOKEN refuses to issue unsigned tokens. The
+hook produces `lota-token.bin` only on the `--test-signed`
+path (or the eventual full systemd daemon path).
+
+When the agent goes away the hook rewrites `lota-status` with
+`LOTA_OFFLINE=1` and unlinks the token / snapshot artefacts.
+The consumer reads the marker and treats the session as
+OFFLINE rather than UNTRUSTED: those two states have distinct
+meanings ("hook lost the agent" vs "agent says no") and the
+marker is what lets a downstream verifier act on them
+separately.
 
 The `lota-proton-hook` wrapper attaches the hook only to processes
 whose executable lives outside the FHS system paths (`/usr/`,
@@ -316,7 +344,7 @@ file during a launch attempt and match against this table:
 | `lota-proton-hook: hook library not found`   | `make install` skipped, or installed to a non-standard `LIBDIR`. Set `LOTA_HOOK_LIB_PATH` to the actual `.so` path, or re-run `sudo install -m 755 build/liblota_wine_hook.so /usr/lib64/`.                                                |
 | `hook active (pid=...)` repeated for shells / utilities | The hook was loaded with `LOTA_HOOK_ACTIVATE_PATH` set to a prefix that matches a system path, or `LOTA_HOOK_SKIP_PATH` was set in a way that overrides the FHS default. Drop the env override and let the built-in `/usr/, /bin/, /sbin/, /lib/, /lib64/` skip list apply. |
 | `agent not available, retrying in 60s` from the game PID (`/proc/<pid>/exe` ends in `/cs2`) | The socket the hook is pointed at is not reachable inside the pressure-vessel container. The most common cause is that `PRESSURE_VESSEL_FILESYSTEMS_RW` is missing from the launch options, so the container's tmpfs view of `/run/user/<uid>` does not include the LOTA socket directory. |
-| `connected to agent` followed by `get_token: Agent returned error` | Agent reachable but refusing token issuance. Under `--test-ipc` this is expected (`policy_digest is not set`). Switch to `--test-signed` plus a loaded policy for the full token path. |
+| `connected to agent` followed by `get_token: Agent returned error` | Agent reachable but refusing token issuance. Under `--test-ipc` this is expected (`policy_digest is not set` plus `TPM context is required - refuse to issue unsigned tokens`). Switch to `--test-signed` to provision a real TPM Quote; the in-tree fixture policy digest is applied automatically on the test paths. |
 | No files appear under `$XDG_RUNTIME_DIR/lota` (only `lota.sock`) | The token directory was created by the agent (root-owned) before the hook tried to write. Remove the directory and let the hook recreate it as the operator user, or `chown` it to `$USER:lota`.                                                  |
 | Game window never appears, Steam shows "Running" | Older hook revisions (before the `should_activate()` filter) ran the constructor inside every launcher utility and stalled on the 2 s connect timeout per hop. Reinstall `liblota_wine_hook.so` from this tree.                                  |
 

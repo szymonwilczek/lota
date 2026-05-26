@@ -8,19 +8,19 @@ without taking the game with it. The visible signal is the
 the file in sync with the agent's last known attestation state and
 unlinks it on a clean detach.
 
-The scenario is operator-driven and runs against the same
-`--test-ipc` agent + Steam launch options the main
-[examples/cs2/README.md](../README.md) walk-through uses. No game
-state is destroyed and the hook will recover on its own when the
-agent comes back up.
+The scenario is operator-driven and runs against the
+`--test-signed` agent the main
+[examples/cs2/README.md](../README.md) walk-through uses for
+the end-to-end integration test. No game state is destroyed and
+the hook will recover on its own when the agent comes back up.
 
 ## Prerequisites
 
 - The agent is running with the operator's `XDG_RUNTIME_DIR` in
-  scope:
+  scope (TPM-signed token path, fixture policy digest applied):
   ```sh
   sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-      /usr/bin/lota-agent --test-ipc
+      /usr/bin/lota-agent --test-signed
   ```
 - Counter-Strike 2 launches cleanly with the LOTA launch options
   set (see the main CS2 README). At a minimum the launch line
@@ -85,7 +85,7 @@ process (and the Steam reaper) plus periodic
 
    ```sh
    sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
-       /usr/bin/lota-agent --test-ipc
+       /usr/bin/lota-agent --test-signed
    ```
 
    On the next refresh tick the hook reconnects, rewrites
@@ -95,9 +95,11 @@ process (and the Steam reaper) plus periodic
    21:57:35 TRUSTED
    ```
 
-4. Quit CS2 from inside the game. The hook destructor runs,
-   unlinks `lota-status`, and the watcher prints a final
-   `OFFLINE` transition. CS2's shutdown is unaffected.
+4. Quit CS2 from inside the game. The hook destructor leaves
+   the artefacts in place (the next session overwrites them);
+   if you want to verify the OFFLINE path independently you can
+   kill the agent before quitting CS2 and confirm the watcher
+   flips. CS2's shutdown is unaffected.
 
 ## What this proves
 
@@ -107,10 +109,12 @@ process (and the Steam reaper) plus periodic
 - The hook re-establishes the attestation channel on its own
   cadence; no game restart, no LD_PRELOAD reload.
 - The verdict surface (`lota-status`) is the single source of
-  truth a server-side or game-side integrator polls. The watcher
-  in `verify-attested.sh` is the minimal possible such consumer
-  and ships with the demo so an integrator does not have to
-  invent it.
+  truth a server-side or game-side integrator polls. The hook
+  writes `LOTA_OFFLINE=1` on disconnect so the watcher can
+  distinguish OFFLINE (no agent) from UNTRUSTED (agent says
+  no); the watcher in `verify-attested.sh` is the minimal
+  possible consumer of both signals and ships with the demo so
+  an integrator does not have to invent it.
 - Per-state log lines in `console-linux.txt` are stable enough to
   drive a runtime monitor (`grep -E 'connection lost|connected to
   agent'`); the contract is documented in
