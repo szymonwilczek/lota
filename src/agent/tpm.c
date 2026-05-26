@@ -685,8 +685,8 @@ int tpm_init(struct tpm_context *ctx)
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
 		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
-			     "%s", aik_meta_path) >=
-		    (int)sizeof(ctx->aik_meta_path))
+			     "%s",
+			     aik_meta_path) >= (int)sizeof(ctx->aik_meta_path))
 			return -ENAMETOOLONG;
 	}
 
@@ -701,8 +701,7 @@ int tpm_init(struct tpm_context *ctx)
 		 * Initialize TCTI context for device access.
 		 * First call with NULL to get required size.
 		 */
-		rc = Tss2_Tcti_Device_Init(NULL, &tcti_size,
-					   TPM_DEVICE_PATH);
+		rc = Tss2_Tcti_Device_Init(NULL, &tcti_size, TPM_DEVICE_PATH);
 		if (rc != TSS2_RC_SUCCESS)
 			return tss2_rc_to_errno(rc);
 
