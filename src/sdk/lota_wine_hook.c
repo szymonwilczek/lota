@@ -539,6 +539,25 @@ static struct lota_client *hook_connect(void)
  * All failures are handled gracefully -- the hook never aborts
  * the host process.
  */
+/*
+ * Publish an explicit "offline" status so consumers of lota-status
+ * (verify-attested.sh, server-side bridges) observe the transition
+ * to OFFLINE. The token / snapshot files are also unlinked because
+ * they cannot be trusted past the disconnect.
+ */
+static void publish_offline_status(void)
+{
+	struct lota_status offline = {0};
+	int ret;
+
+	offline.valid_until = (uint64_t)time(NULL);
+	ret = write_status(&offline);
+	if (ret < 0)
+		LOG_WRN("write_status (offline): %s", strerror(-ret));
+	unlink(g_hook.token_path);
+	unlink(g_hook.snapshot_path);
+}
+
 static void refresh_once(void)
 {
 	struct lota_status status;
@@ -548,6 +567,7 @@ static void refresh_once(void)
 		g_hook.client = hook_connect();
 		if (!g_hook.client) {
 			LOG_DBG("agent not available");
+			publish_offline_status();
 			return;
 		}
 		LOG_DBG("connected to agent");
@@ -558,6 +578,7 @@ static void refresh_once(void)
 		LOG_DBG("get_status: %s -> reconnecting", lota_strerror(ret));
 		lota_disconnect(g_hook.client);
 		g_hook.client = NULL;
+		publish_offline_status();
 		return;
 	}
 
