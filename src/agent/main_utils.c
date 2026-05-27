@@ -118,6 +118,17 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "                    rootfs cannot yet ship fs-verity; the\n"
 	       "                    dirty-shutdown (panic/power-loss/SIGKILL)\n"
 	       "                    coverage gap stays open on that host.\n");
+	printf("  --insecure-allow-dev-kernel\n");
+	printf(
+	    "                    Downgrade the kernel-hardening floor\n"
+	    "                    (lockdown=integrity, module.sig_enforce=1,\n"
+	    "                    IMA appraisal policy active) from hard\n"
+	    "                    fail to warn. Implies\n"
+	    "                    --insecure-allow-mutable-rootfs. Required\n"
+	    "                    to start the full daemon on a stock\n"
+	    "                    Fedora 44 / Ubuntu 24.04 dev host whose\n"
+	    "                    cmdline is not provisioned for the\n"
+	    "                    production anti-tamper baseline.\n");
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "
 	       "libraries\n");
 	printf("                    (requires --mode enforce)\n");

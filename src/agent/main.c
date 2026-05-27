@@ -67,6 +67,7 @@ struct run_daemon_params {
 	bool strict_modules;
 	bool block_anon_exec;
 	bool allow_mutable_rootfs;
+	bool allow_dev_kernel;
 	const char *config_path;
 	struct lota_config *cfg;
 };
@@ -288,6 +289,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	    .allow_verity = cli_runtime_allow_verity(),
 	    .allow_verity_count = *cli_runtime_allow_verity_count(),
 	    .allow_mutable_rootfs = params->allow_mutable_rootfs,
+	    .allow_dev_kernel = params->allow_dev_kernel,
 	};
 
 	/*
@@ -535,6 +537,7 @@ int main(int argc, char *argv[])
 	    .strict_modules = opts.strict_modules,
 	    .block_anon_exec = opts.block_anon_exec,
 	    .allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
+	    .allow_dev_kernel = opts.insecure_allow_dev_kernel != 0,
 	    .config_path = opts.config_path,
 	    .cfg = &cfg,
 	};

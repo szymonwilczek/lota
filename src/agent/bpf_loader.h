@@ -241,12 +241,23 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
  */
 /*
  * @allow_mutable_rootfs: when true, the agent-binary fs-verity self
- *   check is skipped (the function still requires lockdown, module
- *   signature enforcement, and IMA appraisal). Reserved for legacy
- *   hosts whose rootfs cannot yet ship fs-verity; the call site logs
- *   the deviation so the dirty-shutdown coverage gap stays visible.
+ *   check and the TPM device SELinux label check are downgraded from
+ *   hard fail to warn. Reserved for hosts whose rootfs cannot yet ship
+ *   fs-verity; the call site logs the deviation so the dirty-shutdown
+ *   coverage gap stays visible.
+ *
+ * @allow_dev_kernel: when true, the kernel-side hard-fail checks
+ *   (lockdown=integrity, module.sig_enforce, IMA appraisal policy)
+ *   are downgraded to warn-and-continue. Reserved for development
+ *   hosts whose kernel cmdline does not configure the production
+ *   anti-tamper baseline. Implies allow_mutable_rootfs because a
+ *   host that opts out of the kernel hardening floor is by definition
+ *   outside the production rootfs contract too. Loud warnings emitted
+ *   per skipped check so the deviation is visible in journalctl and
+ *   in process listings (the flag is CLI-only, never config-file).
  */
-int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
+int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs,
+					       bool allow_dev_kernel);
 
 /*
  * bpf_loader_protect_pid - Add a PID to the protected set
