@@ -27,11 +27,13 @@
 # `lota-steam-setup --install-systemd-dropin` automates the same
 # substitution + install pair for the calling user.
 #
-# Multi-user note: the drop-in is single-valued, so a host with more
-# than one interactive operator should pick whichever user runs the
-# Steam container. A future per-user lota-agent@.service template
-# can carry the per-UID logic without an operator edit; until that
-# lands, the drop-in is the supported path.
+# Multi-user note: the drop-in is single-valued. Hosts with more
+# than one interactive operator should use the
+# `container_listener_uid` config knob in /etc/lota/lota.conf
+# instead. Each entry yields a /run/user/<uid>/lota/lota.sock
+# listener at startup, capped at LOTA_CONFIG_MAX_CONTAINER_LISTENERS.
+# `lota-steam-setup --register-uid` automates the conf-file edit and
+# the lota-agent.service restart for the caller's $SUDO_UID.
 
 [Service]
 Environment=XDG_RUNTIME_DIR=/run/user/1000

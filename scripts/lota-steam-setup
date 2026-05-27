@@ -25,6 +25,7 @@ LOTA_GROUP="lota"
 SOCKET_NAME="lota.sock"
 PRIMARY_SOCKET="/run/lota/${SOCKET_NAME}"
 HOOK_LIB="liblota_wine_hook.so"
+LOTA_CONF="/etc/lota/lota.conf"
 
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
@@ -57,6 +58,14 @@ Options:
                               (\$XDG_RUNTIME_DIR/lota/lota.sock)
                               comes up under the operator's
                               runtime dir on boot. Requires root.
+                              Single-operator hosts only; for
+                              multiple operators use --register-uid.
+  --register-uid              Append container_listener_uid = \$SUDO_UID
+                              to ${LOTA_CONF} and restart lota-agent so
+                              every configured operator UID gets its
+                              own /run/user/<uid>/lota/lota.sock
+                              listener. Supersedes the drop-in on
+                              multi-user hosts. Requires root.
   --help                      Show this help message
 
 Environment:
@@ -173,6 +182,7 @@ check_container_socket() {
 
 verify_only=false
 install_dropin=false
+register_uid=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -182,6 +192,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --install-systemd-dropin)
             install_dropin=true
+            shift
+            ;;
+        --register-uid)
+            register_uid=true
             shift
             ;;
         --help|-h)
@@ -261,6 +275,70 @@ if $install_dropin; then
     echo "Drop-in active. From the operator account run:"
     echo "  lota-steam-setup --verify"
     echo "to confirm the new /run/user/${SUDO_UID}/lota/lota.sock listener,"
+    echo "then paste the printed Steam launch options into the game's"
+    echo "Properties -> General -> Launch options field."
+    exit 0
+fi
+
+# register_container_listener_uid: appends container_listener_uid =
+# $SUDO_UID to /etc/lota/lota.conf so the agent creates an extra
+# /run/user/<uid>/lota/lota.sock listener for every configured
+# operator. Multi-user superset of --install-systemd-dropin: the
+# config knob accepts up to LOTA_CONFIG_MAX_CONTAINER_LISTENERS
+# entries, while the drop-in can only pin one XDG_RUNTIME_DIR.
+register_container_listener_uid() {
+    local uid line
+
+    if [[ $EUID -ne 0 ]]; then
+        fail "--register-uid must run as root (try: sudo $(basename "$0") --register-uid)"
+        return 1
+    fi
+    if [[ -z "${SUDO_UID:-}" ]]; then
+        fail "could not determine the operator UID"
+        fail "invoke as: sudo $(basename "$0") --register-uid"
+        fail "(direct 'su -' / login as root strips \$SUDO_UID and is not supported)"
+        return 1
+    fi
+
+    uid="$SUDO_UID"
+    case "$uid" in
+        ''|*[!0-9]*)
+            fail "SUDO_UID=${SUDO_UID} is not a positive integer"
+            return 1
+            ;;
+    esac
+    if [[ "$uid" -eq 0 ]]; then
+        fail "SUDO_UID=0; rerun from a non-root login shell"
+        return 1
+    fi
+
+    if [[ ! -f "$LOTA_CONF" ]]; then
+        fail "$LOTA_CONF does not exist; install LOTA before --register-uid"
+        return 1
+    fi
+
+    line="container_listener_uid = ${uid}"
+    if grep -Eq "^[[:space:]]*container_listener_uid[[:space:]]*=[[:space:]]*${uid}[[:space:]]*$" "$LOTA_CONF"; then
+        ok "uid=${uid} already registered in ${LOTA_CONF}"
+    else
+        info "Appending '${line}' to ${LOTA_CONF}"
+        printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
+            "$line" >>"$LOTA_CONF"
+        ok "uid=${uid} registered in ${LOTA_CONF}"
+    fi
+
+    if systemctl is-active --quiet lota-agent.service; then
+        info "Restarting lota-agent.service to pick up the new UID"
+        systemctl restart lota-agent.service
+    fi
+}
+
+if $register_uid; then
+    register_container_listener_uid || exit 1
+    echo ""
+    echo "From the operator account run:"
+    echo "  lota-steam-setup --verify"
+    echo "to confirm /run/user/${SUDO_UID}/lota/lota.sock is live,"
     echo "then paste the printed Steam launch options into the game's"
     echo "Properties -> General -> Launch options field."
     exit 0

@@ -88,6 +88,23 @@ not tracked.
    (`make install` deploys it to
    `/usr/share/lota/systemd/` as a reference).
 
+   The drop-in is single-valued: only one operator UID can have
+   its `/run/user/<uid>/lota/lota.sock` listener active at a
+   time. Hosts with multiple interactive operators should use
+   the `container_listener_uid` config knob in
+   `/etc/lota/lota.conf` instead. Each entry produces a
+   `/run/user/<uid>/lota/lota.sock` listener at startup, up to
+   `LOTA_CONFIG_MAX_CONTAINER_LISTENERS`. Run
+
+   ```sh
+   sudo lota-steam-setup --register-uid
+   ```
+
+   from each operator's login shell to append their
+   `$SUDO_UID` to the config and restart
+   `lota-agent.service`. The drop-in is then redundant on the
+   multi-user path and can be left out.
+
    With the drop-in in place start the agent via systemd:
 
    ```sh
