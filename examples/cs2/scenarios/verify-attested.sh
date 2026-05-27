@@ -157,8 +157,7 @@ fi
 
 printf 'watching %s, polling every %ds (Ctrl-C to stop)\n' \
 	"$STATUS_PATH" "$INTERVAL"
-printf '(verdict transitions are emitted only when the underlying file ' \
-	"$INTERVAL"
+printf '(verdict transitions are emitted only when the underlying file '
 printf 'changes; the LOTA hook itself rewrites the file at its own\n'
 printf 'LOTA_HOOK_REFRESH_SEC cadence, default 60s.)\n'
 last=""
