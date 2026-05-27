@@ -67,7 +67,6 @@ struct cli_options {
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;
 	int insecure_allow_mutable_rootfs;
-	int insecure_allow_dev_kernel;
 	const char *pin_sha256_hex;
 	uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
 	int has_pin;

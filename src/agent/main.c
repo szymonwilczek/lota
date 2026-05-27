@@ -67,7 +67,6 @@ struct run_daemon_params {
 	bool strict_modules;
 	bool block_anon_exec;
 	bool allow_mutable_rootfs;
-	bool allow_dev_kernel;
 	const char *config_path;
 	struct lota_config *cfg;
 };
@@ -116,8 +115,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	 * under strace while the long-running daemon remains locked down.
 	 */
 	{
-		int harden_ret =
-		    hardening_apply_daemon(params->allow_dev_kernel);
+		int harden_ret = hardening_apply_daemon();
 		if (harden_ret < 0) {
 			lota_err("Failed to apply daemon hardening: %s",
 				 strerror(-harden_ret));
@@ -233,8 +231,7 @@ static int run_daemon(const struct run_daemon_params *params)
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
 
-			ret = tpm_aik_load_metadata(&g_agent.tpm_ctx,
-						    params->allow_dev_kernel);
+			ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 			if (ret < 0) {
 				lota_err("Failed to load AIK metadata: %s",
 					 tpm_strerror(ret));
@@ -268,8 +265,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		goto cleanup_tpm;
 	}
 
-	ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path,
-			      params->allow_dev_kernel);
+	ret = bpf_loader_load(&g_agent.bpf_ctx, bpf_path, bpf_pubkey_path);
 	if (ret < 0) {
 		lota_err("Failed to load BPF program: %s", strerror(-ret));
 		goto cleanup_bpf;
@@ -292,7 +288,6 @@ static int run_daemon(const struct run_daemon_params *params)
 	    .allow_verity = cli_runtime_allow_verity(),
 	    .allow_verity_count = *cli_runtime_allow_verity_count(),
 	    .allow_mutable_rootfs = params->allow_mutable_rootfs,
-	    .allow_dev_kernel = params->allow_dev_kernel,
 	};
 
 	/*
@@ -522,23 +517,12 @@ int main(int argc, char *argv[])
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		if (opts.insecure_allow_dev_kernel) {
-			lota_warn(
-			    "INSECURE: --policy-pubkey absent and "
-			    "--insecure-allow-dev-kernel was set; loading the "
-			    "BPF object without signature verification. A "
-			    "tampered /usr/lib/lota/lota_lsm.bpf.o on this "
-			    "host "
-			    "cannot be detected at agent start.");
-		} else {
-			fprintf(stderr,
-				"ERROR: BPF object signature verification "
+		fprintf(stderr, "ERROR: BPF object signature verification "
 				"requires --policy-pubkey\n"
 				"Set policy_pubkey in config or pass "
 				"--policy-pubkey PATH.\n");
-			pidfile_remove(opts.pid_file_path, pid_fd);
-			return 1;
-		}
+		pidfile_remove(opts.pid_file_path, pid_fd);
+		return 1;
 	}
 
 	struct run_daemon_params run_params = {
@@ -551,7 +535,6 @@ int main(int argc, char *argv[])
 	    .strict_modules = opts.strict_modules,
 	    .block_anon_exec = opts.block_anon_exec,
 	    .allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
-	    .allow_dev_kernel = opts.insecure_allow_dev_kernel != 0,
 	    .config_path = opts.config_path,
 	    .cfg = &cfg,
 	};

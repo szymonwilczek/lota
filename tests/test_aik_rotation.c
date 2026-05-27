@@ -133,7 +133,7 @@ static void test_metadata_save_load(void)
 		return;
 	}
 
-	ret = tpm_aik_load_metadata(&ctx2, false);
+	ret = tpm_aik_load_metadata(&ctx2);
 	if (ret != 0) {
 		FAIL("load returned error");
 		return;
@@ -168,7 +168,7 @@ static void test_metadata_default_creation(void)
 	unlink(ctx.aik_meta_path);
 
 	before = time(NULL);
-	ret = tpm_aik_load_metadata(&ctx, false);
+	ret = tpm_aik_load_metadata(&ctx);
 	after = time(NULL);
 
 	if (ret != 0) {
@@ -227,7 +227,7 @@ static void test_metadata_bad_magic(void)
 	}
 	close(fd);
 
-	ret = tpm_aik_load_metadata(&ctx, false);
+	ret = tpm_aik_load_metadata(&ctx);
 	if (ret == 0) {
 		FAIL("should reject bad magic");
 		return;
@@ -264,7 +264,7 @@ static void test_metadata_bad_version(void)
 	}
 	close(fd);
 
-	ret = tpm_aik_load_metadata(&ctx, false);
+	ret = tpm_aik_load_metadata(&ctx);
 	if (ret == 0) {
 		FAIL("should reject version 99");
 		return;
@@ -562,7 +562,7 @@ static void test_metadata_truncated(void)
 	}
 	close(fd);
 
-	ret = tpm_aik_load_metadata(&ctx, false);
+	ret = tpm_aik_load_metadata(&ctx);
 	if (ret == 0) {
 		FAIL("should reject truncated file");
 		return;

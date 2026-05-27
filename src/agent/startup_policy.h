@@ -30,17 +30,6 @@ struct agent_startup_policy {
 	 * dirty-shutdown coverage gap stays open on that host.
 	 */
 	bool allow_mutable_rootfs;
-
-	/*
-	 * When true, the kernel hardening floor checks (lockdown,
-	 * module sig enforce, IMA appraisal) downgrade from hard fail
-	 * to warn-and-continue. Reserved for development hosts whose
-	 * kernel cmdline has not been provisioned to the production
-	 * anti-tamper baseline. Set by the --insecure-allow-dev-kernel
-	 * CLI flag; never honored from /etc/lota/lota.conf so it stays
-	 * visible in process listings.
-	 */
-	bool allow_dev_kernel;
 };
 
 int agent_apply_startup_policy(const struct agent_startup_policy *policy);

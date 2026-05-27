@@ -2746,7 +2746,7 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 	return 0;
 }
 
-int tpm_aik_load_metadata(struct tpm_context *ctx, bool allow_dev_reset)
+int tpm_aik_load_metadata(struct tpm_context *ctx)
 {
 	const char *path;
 	int fd;
@@ -2774,22 +2774,8 @@ int tpm_aik_load_metadata(struct tpm_context *ctx, bool allow_dev_reset)
 				int exists = aik_exists(ctx, NULL);
 				if (exists < 0)
 					return exists;
-				if (exists == 1) {
-					if (!allow_dev_reset)
-						return -EKEYREVOKED;
-					fprintf(
-					    stderr,
-					    "INSECURE: AIK exists in TPM but "
-					    "metadata file %s is missing; "
-					    "--insecure-allow-dev-kernel is in "
-					    "effect, re-initialising metadata. "
-					    "A rollback that wiped the file "
-					    "but kept the persistent handle "
-					    "cannot be distinguished from a "
-					    "clean fresh install on this "
-					    "host.\n",
-					    path);
-				}
+				if (exists == 1)
+					return -EKEYREVOKED;
 			}
 		}
 

@@ -490,66 +490,31 @@ static int agent_self_fsverity_enabled(void)
 	return ret;
 }
 
-int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs,
-					       bool allow_dev_kernel)
+int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	int ret;
 
-	/*
-	 * Dev-mode is a strict superset of mutable-rootfs. A host that
-	 * opted out of the kernel hardening floor cannot meaningfully
-	 * promise rootfs immutability either; bundle the relaxations so
-	 * the operator only needs one knob for the entire dev profile.
-	 */
-	if (allow_dev_kernel)
-		allow_mutable_rootfs = true;
-
 	ret = kernel_lockdown_restrictive();
 	if (ret < 0) {
-		if (allow_dev_kernel) {
-			lota_warn(
-			    "INSECURE: kernel lockdown is not in restrictive "
-			    "mode and --insecure-allow-dev-kernel was set; "
-			    "unsigned kernel modules and direct hardware "
-			    "access "
-			    "remain reachable from root context");
-		} else {
-			lota_err("Kernel lockdown is not in restrictive mode "
-				 "(integrity/confidentiality required)");
-			return ret;
-		}
+		lota_err("Kernel lockdown is not in restrictive mode "
+			 "(integrity/confidentiality required)");
+		return ret;
 	}
 
 	ret = kernel_module_sig_enforced();
 	if (ret < 0) {
-		if (allow_dev_kernel) {
-			lota_warn(
-			    "INSECURE: module.sig_enforce is not active and "
-			    "--insecure-allow-dev-kernel was set; the boot -> "
-			    "agent window allows unsigned kernel module loads "
-			    "to bypass every LOTA LSM gate that arrives later");
-		} else {
-			lota_err(
-			    "Kernel module signature enforcement is not active "
-			    "(module.sig_enforce=1 required to close the boot "
-			    "-> agent module-load window)");
-			return ret;
-		}
+		lota_err(
+		    "Kernel module signature enforcement is not active "
+		    "(module.sig_enforce=1 required to close the boot -> agent "
+		    "module-load window)");
+		return ret;
 	}
 
 	ret = kernel_ima_appraisal_enabled();
 	if (ret < 0) {
-		if (allow_dev_kernel) {
-			lota_warn(
-			    "INSECURE: IMA appraisal policy is absent and "
-			    "--insecure-allow-dev-kernel was set; on-disk "
-			    "tampering of agent binaries, libraries, and "
-			    "policy files cannot be detected at startup");
-		} else {
-			lota_err("IMA appraisal policy is required for "
-				 "anti-tamper startup");
-			return ret;
-		}
+		lota_err(
+		    "IMA appraisal policy is required for anti-tamper startup");
+		return ret;
 	}
 
 	ret = tpm_device_selinux_label_ok();
@@ -725,7 +690,7 @@ out:
 }
 
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
-		    const char *bpf_pubkey_pem_path, bool allow_dev_kernel)
+		    const char *bpf_pubkey_pem_path)
 {
 	struct bpf_program *prog;
 	int err;
@@ -734,31 +699,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	if (!ctx || !bpf_obj_path)
 		return -EINVAL;
 
+	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
+		lota_err("BPF public key is required to verify %s signature",
+			 bpf_obj_path);
+		return -EINVAL;
+	}
+
 	if (ctx->loaded)
 		return -EALREADY;
 
-	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0') {
-		if (allow_dev_kernel) {
-			lota_warn(
-			    "INSECURE: loading %s without signature "
-			    "verification (--insecure-allow-dev-kernel); "
-			    "a tampered BPF object cannot be detected here",
-			    bpf_obj_path);
-		} else {
-			lota_err(
-			    "BPF public key is required to verify %s signature",
-			    bpf_obj_path);
-			return -EINVAL;
-		}
-	} else {
-		ret = verify_bpf_object_signature(bpf_obj_path,
-						  bpf_pubkey_pem_path);
-		if (ret < 0) {
-			lota_err("BPF object signature verification failed for "
-				 "%s: %s",
-				 bpf_obj_path, strerror(-ret));
-			return ret;
-		}
+	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
+	if (ret < 0) {
+		lota_err("BPF object signature verification failed for %s: %s",
+			 bpf_obj_path, strerror(-ret));
+		return ret;
 	}
 
 	struct bpf_object_open_opts opts = {

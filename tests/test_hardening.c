@@ -237,7 +237,7 @@ static int child_seccomp_kills_on_mount(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_mount, "none", "/tmp/lota_should_never_mount", "tmpfs", 0,
 		"");
@@ -248,7 +248,7 @@ static int child_seccomp_kills_on_ptrace_self(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_ptrace, 0 /* PTRACE_TRACEME */, 0, 0, 0);
 	return 0;
@@ -258,7 +258,7 @@ static int child_seccomp_kills_on_io_uring_setup(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_io_uring_setup, 1, 0);
 	return 0;
@@ -268,7 +268,7 @@ static int child_seccomp_kills_on_userfaultfd(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_userfaultfd, 0);
 	return 0;
@@ -278,7 +278,7 @@ static int child_seccomp_kills_on_pidfd_send_signal(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_pidfd_send_signal, -1, 0, 0, 0);
 	return 0;
@@ -289,7 +289,7 @@ static int child_seccomp_kills_on_modify_ldt(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_modify_ldt, 0, 0, 0);
 	return 0;
@@ -297,7 +297,7 @@ static int child_seccomp_kills_on_modify_ldt(void)
 #endif
 
 /*
- * TSYNC propagation: after hardening_apply_seccomp(false) installs the
+ * TSYNC propagation: after hardening_apply_seccomp() installs the
  * filter with SCMP_FLTATR_CTL_TSYNC enabled, a thread spawned later
  * inherits the filter. Issuing a denied syscall from that thread
  * therefore must terminate the whole process via SIGSYS; without
@@ -316,7 +316,7 @@ static int child_seccomp_tsync_kills_spawned_thread(void)
 {
 	if (hardening_apply_basics() != 0)
 		return 1;
-	if (hardening_apply_daemon(false) != 0)
+	if (hardening_apply_daemon() != 0)
 		return 1;
 
 	pthread_t t;
@@ -330,7 +330,7 @@ static int child_seccomp_kills_on_personality(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 	syscall(SYS_personality, (long)0xFFFFFFFF);
 	return 0;
@@ -340,7 +340,7 @@ static int child_seccomp_allows_benign_syscalls(void)
 {
 	if (hardening_apply_no_new_privs() != 0)
 		return 1;
-	if (hardening_apply_seccomp(false) != 0)
+	if (hardening_apply_seccomp() != 0)
 		return 1;
 
 	/* getpid + write should remain allowed by the blocklist policy */
@@ -358,7 +358,7 @@ static int child_seccomp_allows_benign_syscalls(void)
 
 static int child_apply_all_succeeds(void)
 {
-	return hardening_apply_all(false) == 0 ? 0 : 1;
+	return hardening_apply_all() == 0 ? 0 : 1;
 }
 
 /*
@@ -419,7 +419,7 @@ static int child_apply_daemon_installs_seccomp(void)
 {
 	if (hardening_apply_basics() != 0)
 		return 1;
-	if (hardening_apply_daemon(false) != 0)
+	if (hardening_apply_daemon() != 0)
 		return 1;
 	if (prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 2)
 		return 1; /* expected SECCOMP_MODE_FILTER */

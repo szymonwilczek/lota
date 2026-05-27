@@ -223,7 +223,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	    {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
 	    {"insecure-allow-mode-downgrade", no_argument, 0, 1002},
 	    {"insecure-allow-mutable-rootfs", no_argument, 0, 1003},
-	    {"insecure-allow-dev-kernel", no_argument, 0, 1004},
 	    {"pin-sha256", required_argument, 0, 'F'},
 	    {"bpf", required_argument, 0, 'b'},
 	    {"mode", required_argument, 0, 'm'},
@@ -343,9 +342,6 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1003:
 			opts->insecure_allow_mutable_rootfs = 1;
-			break;
-		case 1004:
-			opts->insecure_allow_dev_kernel = 1;
 			break;
 		case 'F':
 			opts->pin_sha256_hex = optarg;

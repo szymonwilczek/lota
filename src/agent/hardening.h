@@ -93,20 +93,7 @@ int hardening_apply_no_dumpable(void);
  *
  * Returns: 0 on success, negative errno on filter build/load failure.
  */
-/*
- * @allow_dev_kernel: when true, the seccomp action for every
- *   blocklisted syscall is downgraded from SCMP_ACT_KILL_PROCESS
- *   to SCMP_ACT_ERRNO(EPERM). Reserved for the
- *   --insecure-allow-dev-kernel diagnostic path because a stacked
- *   systemd-side filter (SystemCallFilter=, LockPersonality=) may
- *   route a syscall through libc to one of these names; in that
- *   environment SIGSYS terminates the agent before the operator
- *   can read which call hit, while EPERM lets the agent log a
- *   meaningful errno and either skip or fail the call cleanly.
- *   Production callers pass false so a hit on the blocklist is the
- *   tamper-evidence signal it was meant to be.
- */
-int hardening_apply_seccomp(bool allow_dev_kernel);
+int hardening_apply_seccomp(void);
 
 /*
  * hardening_apply_basics - Pre-CLI defenses safe under any launch path
@@ -139,7 +126,7 @@ int hardening_apply_basics(void);
  *
  * Returns: 0 on success, negative errno on the first failing step.
  */
-int hardening_apply_daemon(bool allow_dev_kernel);
+int hardening_apply_daemon(void);
 
 /*
  * hardening_apply_all - Convenience wrapper invoking the helpers above
@@ -150,7 +137,7 @@ int hardening_apply_daemon(bool allow_dev_kernel);
  *
  * Returns: 0 on success, negative errno on the first failing step.
  */
-int hardening_apply_all(bool allow_dev_kernel);
+int hardening_apply_all(void);
 
 /*
  * hardening_parse_tracer_pid_buf - Parse /proc/self/status TracerPid line

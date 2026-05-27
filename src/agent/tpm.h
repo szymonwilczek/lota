@@ -601,16 +601,7 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id);
  *
  * Returns: 0 on success, negative errno on failure
  */
-/*
- * @allow_dev_reset: when true and the metadata file is missing
- *   despite an AIK existing in the TPM persistent slot, log a warn
- *   and re-initialize a fresh metadata header instead of returning
- *   -EKEYREVOKED. Reserved for the --insecure-allow-dev-kernel path
- *   where a previous run lost the metadata file but the persistent
- *   AIK survived; production must reject this state because it
- *   could mask a rollback attempt.
- */
-int tpm_aik_load_metadata(struct tpm_context *ctx, bool allow_dev_reset);
+int tpm_aik_load_metadata(struct tpm_context *ctx);
 
 /*
  * tpm_aik_save_metadata - Persist AIK metadata to disk
