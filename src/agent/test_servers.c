@@ -15,7 +15,7 @@
 #include "sdnotify.h"
 #include "tpm.h"
 
-int run_ipc_test_server(void)
+int run_ipc_test_server(const struct lota_config *cfg)
 {
 	int ret;
 	uint64_t valid_until;
@@ -27,7 +27,7 @@ int run_ipc_test_server(void)
 			strerror(-ret));
 		return 1;
 	}
-	setup_container_listener(&g_agent.ipc_ctx, NULL);
+	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	valid_until = (uint64_t)(time(NULL) + 3600);
@@ -69,7 +69,7 @@ int run_ipc_test_server(void)
 	return 0;
 }
 
-int run_signed_ipc_test_server(void)
+int run_signed_ipc_test_server(const struct lota_config *cfg)
 {
 	int ret;
 	uint64_t valid_until;
@@ -102,7 +102,7 @@ int run_signed_ipc_test_server(void)
 		tpm_cleanup(&g_agent.tpm_ctx);
 		return 1;
 	}
-	setup_container_listener(&g_agent.ipc_ctx, NULL);
+	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,

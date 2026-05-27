@@ -110,10 +110,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return export_policy(g_agent.mode);
 
 	if (opts->test_ipc_flag)
-		return run_ipc_test_server();
+		return run_ipc_test_server(cfg);
 
 	if (opts->test_signed_flag)
-		return run_signed_ipc_test_server();
+		return run_signed_ipc_test_server(cfg);
 
 	if (opts->attest_flag) {
 		if (opts->no_verify_tls &&
