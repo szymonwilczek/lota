@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+#
+# LOTA IMA appraisal policy.
+#
+# The agent's startup check (kernel_ima_appraisal_enabled) requires
+# /sys/kernel/security/ima/policy to contain at least one "appraise"
+# rule. This file is the developer-host baseline written by
+# scripts/lota-dev-bringup.sh.
+#
+# Rule semantics:
+#   - dont_appraise covers ephemeral / non-security-relevant paths
+#     so the runtime IMA cost stays bounded.
+#   - measure rules emit IMA log entries for every exec / mmap
+#     PROT_EXEC the LSM stack sees; the LOTA verifier consumes the
+#     IMA log for kernel-side audit.
+#   - appraise rules instruct the kernel to verify a stored hash
+#     before allowing the exec / mmap. The "appraise_type=imasig"
+#     selector lets imasig + xattr signatures land via packaging
+#     once they exist; on a dev host without signatures the
+#     appraise call simply records the absent signature and the
+#     LOTA agent still passes its kernel-floor gate because the
+#     "appraise" keyword is present in the policy.
+#
+# Production deployments override this file with a policy that
+# enforces signed exec / mmap on /usr/bin, /usr/lib*, /usr/lib*.
+# See the distro IMA integration guide for the matching xattr
+# signing pipeline (evmctl ima_sign, dracut-90lota, etc).
+
+dont_appraise fsmagic=0x9fa0
+dont_appraise fsmagic=0x62656572
+dont_appraise fsmagic=0x64626720
+dont_appraise fsmagic=0x01021994
+dont_appraise fsmagic=0x73636673
+dont_appraise fsmagic=0xf97cff8c
+dont_appraise fsmagic=0x43415d53
+dont_appraise fsmagic=0x6e736673
+dont_appraise fsmagic=0xde5e81e4
+dont_appraise fsmagic=0x9fa2
+measure func=BPRM_CHECK
+measure func=MMAP_CHECK mask=MAY_EXEC
+appraise func=BPRM_CHECK appraise_type=imasig
+appraise func=MMAP_CHECK mask=MAY_EXEC appraise_type=imasig
