@@ -34,6 +34,14 @@
  */
 #define LOTA_CONFIG_MAX_VERITY 256
 
+/*
+ * Maximum number of operator UIDs that get a container-accessible
+ * IPC listener at /run/user/<uid>/lota/lota.sock. Must match
+ * IPC_MAX_EXTRA_LISTENERS so every entry has a slot in
+ * struct ipc_context.extra[]. Asserted in main_utils.c.
+ */
+#define LOTA_CONFIG_MAX_CONTAINER_LISTENERS 4
+
 struct lota_config {
 	/* Verifier connection */
 	char server[256];
@@ -75,6 +83,16 @@ struct lota_config {
 	/* Protected PIDs */
 	uint32_t *protect_pids;
 	int protect_pid_count;
+
+	/*
+	 * Operator UIDs that receive an additional listener under
+	 * /run/user/<uid>/lota/lota.sock. Steam pressure-vessel only
+	 * mounts /run/user/<uid> into the container, so each user that
+	 * launches games needs a per-UID secondary socket. Empty list
+	 * falls back to the legacy XDG_RUNTIME_DIR-driven single listener.
+	 */
+	uint32_t container_listener_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	int container_listener_uid_count;
 
 	/* Log level: "debug", "info", "warn", "error" */
 	char log_level[16];

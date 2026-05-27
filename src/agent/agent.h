@@ -126,7 +126,9 @@ static inline void agent_globals_unlock(struct agent_globals *agent)
 }
 
 int self_measure(struct tpm_context *ctx);
-void setup_container_listener(struct ipc_context *ctx);
+struct lota_config;
+void setup_container_listener(struct ipc_context *ctx,
+			      const struct lota_config *cfg);
 void setup_dbus(struct ipc_context *ctx);
 int ipc_init_or_activate(struct ipc_context *ctx);
 

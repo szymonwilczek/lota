@@ -266,12 +266,69 @@ void setup_dbus(struct ipc_context *ctx)
 		lota_warn("D-Bus unavailable, using socket IPC only");
 }
 
-void setup_container_listener(struct ipc_context *ctx)
+/*
+ * IPC_MAX_EXTRA_LISTENERS is the only hard cap on per-UID listener
+ * slots; LOTA_CONFIG_MAX_CONTAINER_LISTENERS mirrors that constant so
+ * config_load() can reject overflow before ever reach this code path.
+ * Asserted to keep the two definitions wired together.
+ */
+_Static_assert(LOTA_CONFIG_MAX_CONTAINER_LISTENERS <= IPC_MAX_EXTRA_LISTENERS,
+	       "container listener cap exceeds ipc extra-listener slots");
+
+static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
 {
 	char dir[PATH_MAX];
 	char path[PATH_MAX];
+	int n, ret;
+
+	n = snprintf(dir, sizeof(dir), "/run/user/%u/%s", uid,
+		     STEAM_RT_SOCKET_DIR_SUFFIX);
+	if (n < 0 || (size_t)n >= sizeof(dir))
+		return -ENAMETOOLONG;
+
+	n = snprintf(path, sizeof(path), "%s/%s", dir, STEAM_RT_SOCKET_NAME);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -ENAMETOOLONG;
+
+	if (strcmp(path, LOTA_IPC_SOCKET_PATH) == 0)
+		return -EINVAL;
+
+	ret = steam_runtime_ensure_socket_dir(dir);
+	if (ret < 0) {
+		fprintf(stderr,
+			"Warning: cannot create container socket dir %s: %s\n",
+			dir, strerror(-ret));
+		return ret;
+	}
+
+	ret = ipc_add_listener(ctx, path);
+	if (ret < 0) {
+		fprintf(stderr, "Warning: container listener %s: %s\n", path,
+			strerror(-ret));
+		return ret;
+	}
+
+	return 0;
+}
+
+void setup_container_listener(struct ipc_context *ctx,
+			      const struct lota_config *cfg)
+{
 	struct steam_runtime_info rt_info;
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
 	int ret;
+
+	if (cfg && cfg->container_listener_uid_count > 0) {
+		for (int i = 0; i < cfg->container_listener_uid_count; i++)
+			(void)add_listener_for_uid(
+			    ctx, cfg->container_listener_uids[i]);
+
+		ret = steam_runtime_detect(&rt_info);
+		if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
+			steam_runtime_log_info(&rt_info);
+		return;
+	}
 
 	ret = steam_runtime_container_socket_dir(dir, sizeof(dir));
 	if (ret < 0)

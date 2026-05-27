@@ -27,7 +27,7 @@ int run_ipc_test_server(void)
 			strerror(-ret));
 		return 1;
 	}
-	setup_container_listener(&g_agent.ipc_ctx);
+	setup_container_listener(&g_agent.ipc_ctx, NULL);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	valid_until = (uint64_t)(time(NULL) + 3600);
@@ -102,7 +102,7 @@ int run_signed_ipc_test_server(void)
 		tpm_cleanup(&g_agent.tpm_ctx);
 		return 1;
 	}
-	setup_container_listener(&g_agent.ipc_ctx);
+	setup_container_listener(&g_agent.ipc_ctx, NULL);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,

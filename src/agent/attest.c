@@ -862,7 +862,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		lota_warn("IPC init failed: %s", strerror(-ret));
 		lota_warn("Gaming clients will not be able to query status");
 	} else {
-		setup_container_listener(&g_agent.ipc_ctx);
+		setup_container_listener(&g_agent.ipc_ctx, NULL);
 		setup_dbus(&g_agent.ipc_ctx);
 	}
 

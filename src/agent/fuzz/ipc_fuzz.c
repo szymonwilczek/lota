@@ -68,9 +68,12 @@ int self_measure(struct tpm_context *ctx)
 	(void)ctx;
 	return 0;
 }
-void setup_container_listener(struct ipc_context *ctx)
+struct lota_config;
+void setup_container_listener(struct ipc_context *ctx,
+			      const struct lota_config *cfg)
 {
 	(void)ctx;
+	(void)cfg;
 }
 void setup_dbus(struct ipc_context *ctx)
 {

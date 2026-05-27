@@ -153,6 +153,10 @@ static void test_config_init_defaults(void)
 		FAIL("protect_pid_count != 0");
 		return;
 	}
+	if (cfg.container_listener_uid_count != 0) {
+		FAIL("container_listener_uid_count != 0");
+		return;
+	}
 	if (cfg.ca_cert[0] != '\0') {
 		FAIL("ca_cert not empty");
 		return;
@@ -522,6 +526,95 @@ static void test_config_load_protect_pids_multiple(void)
 	PASS();
 }
 
+static void test_config_load_container_listener_uids_multiple(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load accumulates multiple container_listener_uid entries");
+	write_config("uids.conf", "container_listener_uid = 1000\n"
+				  "container_listener_uid = 1001\n"
+				  "container_listener_uid = 1002\n");
+	config_path("uids.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		FAIL("load failed");
+		return;
+	}
+	if (cfg.container_listener_uid_count != 3) {
+		FAIL("count != 3");
+		return;
+	}
+	if (cfg.container_listener_uids[0] != 1000 ||
+	    cfg.container_listener_uids[1] != 1001 ||
+	    cfg.container_listener_uids[2] != 1002) {
+		FAIL("uid values");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_container_listener_uid_duplicate(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load rejects duplicate container_listener_uid");
+	write_config("dup_uid.conf", "container_listener_uid = 1000\n"
+				     "container_listener_uid = 1000\n");
+	config_path("dup_uid.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret == 0) {
+		FAIL("expected non-zero return on duplicate UID");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_container_listener_uid_overflow(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char buf[512];
+	int ret, len = 0;
+
+	TEST("config_load rejects > LOTA_CONFIG_MAX_CONTAINER_LISTENERS UIDs");
+	for (int i = 0; i <= LOTA_CONFIG_MAX_CONTAINER_LISTENERS; i++)
+		len += snprintf(buf + len, sizeof(buf) - len,
+				"container_listener_uid = %d\n", 1000 + i);
+	write_config("overflow_uid.conf", buf);
+	config_path("overflow_uid.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret == 0) {
+		FAIL("expected non-zero return on overflow");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_container_listener_uid_invalid(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load rejects non-numeric container_listener_uid");
+	write_config("bad_uid.conf", "container_listener_uid = root\n");
+	config_path("bad_uid.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret == 0) {
+		FAIL("expected non-zero return on non-numeric UID");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_load_boolean_variants(void)
 {
 	struct lota_config cfg;
@@ -879,6 +972,9 @@ static void test_config_dump_roundtrip(void)
 	}
 	cfg1.protect_pids[0] = 11;
 	cfg1.protect_pids[1] = 22;
+	cfg1.container_listener_uid_count = 2;
+	cfg1.container_listener_uids[0] = 1000;
+	cfg1.container_listener_uids[1] = 1001;
 
 	/* dump to file */
 	snprintf(dump_path, sizeof(dump_path), "%s/dumped.conf", tmpdir);
@@ -938,6 +1034,12 @@ static void test_config_dump_roundtrip(void)
 		FAIL("protect_pids mismatch");
 		return;
 	}
+	if (cfg2.container_listener_uid_count != 2 ||
+	    cfg2.container_listener_uids[0] != 1000 ||
+	    cfg2.container_listener_uids[1] != 1001) {
+		FAIL("container_listener_uids mismatch");
+		return;
+	}
 	free(cfg1.protect_pids);
 	free(cfg2.protect_pids);
 	PASS();
@@ -981,6 +1083,8 @@ static void test_config_load_all_known_keys(void)
 				 "trust_lib = /all/lib2.so\n"
 				 "protect_pid = 1\n"
 				 "protect_pid = 2\n"
+				 "container_listener_uid = 1000\n"
+				 "container_listener_uid = 1001\n"
 				 "log_level = error\n");
 	config_path("all.conf", path, sizeof(path));
 	config_init(&cfg);
@@ -1057,6 +1161,12 @@ static void test_config_load_all_known_keys(void)
 	}
 	if (cfg.protect_pid_count != 2) {
 		FAIL("protect_pid_count");
+		return;
+	}
+	if (cfg.container_listener_uid_count != 2 ||
+	    cfg.container_listener_uids[0] != 1000 ||
+	    cfg.container_listener_uids[1] != 1001) {
+		FAIL("container_listener_uids");
 		return;
 	}
 	if (strcmp(cfg.log_level, "error") != 0) {
@@ -1176,6 +1286,10 @@ int main(void)
 	test_config_load_hyphen_keys();
 	test_config_load_trust_libs_multiple();
 	test_config_load_protect_pids_multiple();
+	test_config_load_container_listener_uids_multiple();
+	test_config_load_container_listener_uid_duplicate();
+	test_config_load_container_listener_uid_overflow();
+	test_config_load_container_listener_uid_invalid();
 	test_config_load_boolean_variants();
 	test_config_load_invalid_boolean();
 	test_config_load_invalid_mode();

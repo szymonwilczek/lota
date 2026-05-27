@@ -502,6 +502,39 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return 0;
 	}
 
+	if (strcmp(key, "container_listener_uid") == 0 ||
+	    strcmp(key, "container-listener-uid") == 0) {
+		long v;
+		if (safe_parse_long(value, &v) != 0 || v < 0 ||
+		    v > (long)UINT32_MAX) {
+			fprintf(stderr,
+				"%s:%d: invalid container_listener_uid '%s'\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		if (cfg->container_listener_uid_count >=
+		    LOTA_CONFIG_MAX_CONTAINER_LISTENERS) {
+			fprintf(stderr,
+				"%s:%d: too many container_listener_uid "
+				"entries (max %d)\n",
+				filepath, lineno,
+				LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+			return -1;
+		}
+		for (int i = 0; i < cfg->container_listener_uid_count; i++) {
+			if (cfg->container_listener_uids[i] == (uint32_t)v) {
+				fprintf(stderr,
+					"%s:%d: duplicate "
+					"container_listener_uid '%s'\n",
+					filepath, lineno, value);
+				return -1;
+			}
+		}
+		cfg->container_listener_uids
+		    [cfg->container_listener_uid_count++] = (uint32_t)v;
+		return 0;
+	}
+
 	/* logging */
 	if (strcmp(key, "log_level") == 0 || strcmp(key, "log-level") == 0) {
 		set_str(cfg->log_level, sizeof(cfg->log_level), value);
@@ -721,5 +754,13 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		fprintf(fp, "\n# Protected PIDs\n");
 		for (int i = 0; i < cfg->protect_pid_count; i++)
 			fprintf(fp, "protect_pid = %u\n", cfg->protect_pids[i]);
+	}
+
+	if (cfg->container_listener_uid_count > 0) {
+		fprintf(fp, "\n# Container-accessible IPC listeners "
+			    "(per operator UID)\n");
+		for (int i = 0; i < cfg->container_listener_uid_count; i++)
+			fprintf(fp, "container_listener_uid = %u\n",
+				cfg->container_listener_uids[i]);
 	}
 }

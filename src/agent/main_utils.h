@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "config.h"
 #include "ipc.h"
 #include "shutdown.h"
 #include "tpm.h"
@@ -24,7 +25,15 @@ struct policy_ops_args {
 
 int handle_policy_ops(const struct policy_ops_args *args);
 void setup_dbus(struct ipc_context *ctx);
-void setup_container_listener(struct ipc_context *ctx);
+/*
+ * @cfg: when non-NULL and container_listener_uid_count > 0, lay down
+ *       one /run/user/<uid>/lota/lota.sock listener per configured UID.
+ *       Otherwise fall back to the legacy XDG_RUNTIME_DIR-driven path
+ *       (single secondary listener for the agent's own runtime dir,
+ *       pinned by the systemd drop-in on single-operator hosts).
+ */
+void setup_container_listener(struct ipc_context *ctx,
+			      const struct lota_config *cfg);
 int ipc_init_or_activate(struct ipc_context *ctx);
 int self_measure(struct tpm_context *ctx);
 

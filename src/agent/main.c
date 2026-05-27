@@ -183,7 +183,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
-	setup_container_listener(&g_agent.ipc_ctx);
+	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
 	/* IPC epoll fd to main loop */
