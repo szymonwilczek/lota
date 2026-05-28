@@ -24,6 +24,15 @@
 #define POLICY_PRIVKEY_SIZE 32 /* Ed25519 private key seed size */
 
 /*
+ * Maximum signed-object file size. Bounds both the signer (read the
+ * file into memory before Ed25519) and the verifier (read the BPF
+ * object back to recompute the signature). 4 MiB covers the
+ * compiled lota_lsm.bpf.o plus headroom.
+ * config-style policy files are orders of magnitude below.
+ */
+#define LOTA_MAX_SIGNED_OBJECT_SIZE (4 * 1024 * 1024)
+
+/*
  * policy_sign_generate_keypair - Generate an Ed25519 keypair
  *
  * @privkey_pem_path: Output path for PEM-encoded private key (PKCS#8)

@@ -26,11 +26,6 @@
 #endif
 
 /*
- * Maximum policy file size: 64 KiB.
- */
-#define POLICY_MAX_FILE_SIZE (64 * 1024)
-
-/*
  * Read entire file into malloc'd buffer.
  * Returns buffer (caller frees) or NULL on error.
  */
@@ -72,7 +67,7 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len,
 	}
 
 	expected_size = (size_t)st.st_size;
-	if (expected_size > POLICY_MAX_FILE_SIZE) {
+	if (expected_size > LOTA_MAX_SIGNED_OBJECT_SIZE) {
 		*err_out = -EFBIG;
 		fclose(f);
 		return NULL;
