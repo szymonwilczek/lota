@@ -171,9 +171,16 @@ kernel_read_proc_symlinks(lota_agent_t)
 # /proc/kallsyms. bpf_loader::resolve_kernel_symbol() reads it to pin
 # sig_enforce and lockdown addresses into the integrity_cfg map so the
 # LSM programs can verify at runtime that module.sig_enforce has not
-# been flipped. proc_t carries kallsyms (no dedicated type in
-# selinux-policy 44.x); the read class is the only access required.
-kernel_read_proc_files(lota_agent_t)
+# been flipped. selinux-policy 44.x labels /proc/kallsyms as
+# system_map_t (the same type as /boot/System.map; the kallsyms node
+# is exposed under that label via genfscon), so neither
+# kernel_read_system_state() nor kernel_read_proc_files() (both
+# proc_t-scoped) cover the read. Grant the file class directly; the
+# /proc dir traversal is already granted via kernel_read_system_state.
+gen_require(`
+	type system_map_t;
+')
+allow lota_agent_t system_map_t:file read_file_perms;
 
 # /boot/vmlinuz-*
 files_read_boot_files(lota_agent_t)
