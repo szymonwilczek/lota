@@ -32,8 +32,27 @@ type lota_agent_t;
 type lota_agent_exec_t;
 init_daemon_domain(lota_agent_t, lota_agent_exec_t)
 
+#
+# Packaged lota-agent.service sets enough hardening directives
+# that systemd implicitly applies NoNewPrivileges=yes before exec.
+# Under NNP a SELinux domain transition is refused unless the source
+# domain holds process2:{ nnp_transition nosuid_transition } against
+# the target -- without this, init_t cannot enter lota_agent_t and
+# the daemon runs (and is denied lota_var_t / lota_tpm_device_t access)
+# under init_t's context.
+#
+allow init_t lota_agent_t:process2 { nnp_transition nosuid_transition };
+
+#
+# /run/lota -- socket-activation runtime dir owned by systemd
+# (init_t) on RuntimeDirectory=lota creation, and managed by
+# lota_agent_t for the agent's witness files under /var/lib/lota.
+# files_pid_file() assigns the pid_file attribute that systemd
+# already has cascading manage rights on for socket activation
+# (dir create, sock_file bind, rmdir on unit stop)
+#
 type lota_var_t;
-files_type(lota_var_t)
+files_pid_file(lota_var_t)
 
 type lota_etc_t;
 files_config_file(lota_etc_t)
@@ -155,6 +174,10 @@ files_read_boot_symlinks(lota_agent_t)
 
 # /sys
 dev_read_sysfs(lota_agent_t)
+# /sys/kernel/btf/vmlinux -- libbpf mmaps it during bpf_object__load to
+# resolve CO-RE relocations against the running kernel; without the
+# mmap class allow the load fails with -EINVAL at bpf_create_map_xattr.
+dev_map_sysfs(lota_agent_t)
 
 # /sys/firmware/efi/efivars
 fs_read_efivarfs_files(lota_agent_t)
@@ -168,6 +191,43 @@ kernel_read_ring_buffer(lota_agent_t)
 
 # /proc/cmdline
 kernel_read_kernel_sysctls(lota_agent_t)
+
+#
+# Logging + IPC under systemd
+#
+# journal_init() in src/agent/journal.c routes lota_info/lota_warn/
+# lota_err through sd_journal_send() whenever INVOCATION_ID is set
+# (i.e. when systemd execs the agent). sd_journal_send() opens
+# /run/systemd/journal/socket (syslogd_var_run_t). Without the
+# logging_send_syslog_msg() rule below every diagnostic line the
+# agent emits is silently dropped, so a startup that fails any
+# downstream gate shows up in journalctl as exactly two stdout
+# lines from test_iommu() with no context, and the operator has
+# no way to attribute the failure.
+#
+# dbus_system_bus_client() grants connect+write on the system D-Bus
+# socket (system_dbusd_var_run_t). The agent registers
+# org.lota.Agent1 there for the policy reload + status RPC paths;
+# without this rule dbus_init() succeeds (libdbus connects via
+# autolaunch fallback) but every method dispatch is denied at the
+# kernel and the verifier sees no D-Bus surface from inside the
+# guest.
+#
+# pidfs_t arrived with kernel 6.9+ (Fedora 44 ships 6.19+). libsystemd
+# 259 calls fstatfs() on the pidfd dirfd it opens internally during
+# sd_listen_fds / sd_notify, so the agent must be able to getattr
+# the pidfs root. No refpolicy interface exists yet, allow rule
+# is explicit.
+#
+logging_send_syslog_msg(lota_agent_t)
+logging_send_audit_msgs(lota_agent_t)
+
+dbus_system_bus_client(lota_agent_t)
+
+gen_require(`
+	type pidfs_t;
+')
+allow lota_agent_t pidfs_t:filesystem getattr;
 
 #
 # Network
