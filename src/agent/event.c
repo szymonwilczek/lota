@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "../../include/lota.h"
 #include "agent.h"
@@ -41,7 +42,8 @@ static bool hash_is_nonzero(const uint8_t hash[LOTA_HASH_SIZE])
  */
 int handle_exec_event(void *ctx, void *data, size_t len)
 {
-	struct lota_exec_event *event = data;
+	struct lota_exec_event event_copy;
+	struct lota_exec_event *event = &event_copy;
 	const char *event_type_str;
 	uint8_t content_hash[LOTA_HASH_SIZE];
 	char hash_hex[LOTA_HASH_SIZE * 2 + 1];
@@ -51,9 +53,21 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	int hash_ret;
 	(void)ctx;
 
-	if (len < sizeof(*event))
+	if (len < sizeof(event_copy))
 		return 0;
 
+	/*
+	 * libbpf maps the ring buffer records read-only into the
+	 * consumer's address space, so any write to the record
+	 * delivered by ring_buffer__poll() raises SIGSEGV. Take a
+	 * private copy before NUL-terminating the variable-length
+	 * string fields; hash_verify_event() calls open(event->filename,
+	 * ...) downstream and therefore needs the path NUL-terminated.
+	 * BPF synthesises some filename values via __builtin_memcpy()
+	 * without a trailing NUL, which is why the termination cannot
+	 * be skipped entirely.
+	 */
+	memcpy(&event_copy, data, sizeof(event_copy));
 	event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
 	event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
 
