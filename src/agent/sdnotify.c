@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,9 +25,20 @@
 
 #include <systemd/sd-daemon.h>
 
+/*
+ * systemd creates the notify socket mode 0777 by design so any process
+ * inside a unit, privileged or not, can report status; the inode mode
+ * therefore carries no authenticity signal. The anti-spoof boundary is
+ * the parent directory: only a writer of that directory can replace the
+ * socket node. Require the socket and its directory to belong to the
+ * expected owner and the directory to deny group/other writes.
+ */
 static int validate_filesystem_notify_socket(const char *path, uid_t owner)
 {
 	struct stat st;
+	char dir[PATH_MAX];
+	const char *slash;
+	size_t dirlen;
 
 	if (!path)
 		return -EINVAL;
@@ -40,7 +52,26 @@ static int validate_filesystem_notify_socket(const char *path, uid_t owner)
 	if (st.st_uid != owner)
 		return -EPERM;
 
-	if ((st.st_mode & S_IWOTH) != 0)
+	slash = strrchr(path, '/');
+	if (!slash || slash == path)
+		return -EPERM;
+
+	dirlen = (size_t)(slash - path);
+	if (dirlen >= sizeof(dir))
+		return -EPERM;
+	memcpy(dir, path, dirlen);
+	dir[dirlen] = '\0';
+
+	if (stat(dir, &st) < 0)
+		return -EPERM;
+
+	if (!S_ISDIR(st.st_mode))
+		return -EPERM;
+
+	if (st.st_uid != owner)
+		return -EPERM;
+
+	if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0)
 		return -EPERM;
 
 	return 0;
