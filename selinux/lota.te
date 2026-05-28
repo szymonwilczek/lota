@@ -168,6 +168,13 @@ tunable_policy(`lota_bpf_load',`
 domain_read_all_domains_state(lota_agent_t)
 kernel_read_proc_symlinks(lota_agent_t)
 
+# /proc/kallsyms. bpf_loader::resolve_kernel_symbol() reads it to pin
+# sig_enforce and lockdown addresses into the integrity_cfg map so the
+# LSM programs can verify at runtime that module.sig_enforce has not
+# been flipped. proc_t carries kallsyms (no dedicated type in
+# selinux-policy 44.x); the read class is the only access required.
+kernel_read_proc_files(lota_agent_t)
+
 # /boot/vmlinuz-*
 files_read_boot_files(lota_agent_t)
 files_read_boot_symlinks(lota_agent_t)
