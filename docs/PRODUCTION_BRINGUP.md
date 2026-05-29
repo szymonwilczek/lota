@@ -184,3 +184,112 @@ Production deployments treat the signing key as a sealed
 infrastructure artefact: kept off-host, rotated through the
 operator's PKI, and never present in `/etc/lota` on a live machine.
 The bring-up script's key generation is explicitly developer-only.
+
+## Operational constraints
+
+### Agent restart requires reboot
+
+The agent's `lota_task_kill` LSM hook blocks `SIGTERM` and `SIGKILL`
+delivered from any other task -- including PID 1 -- because the
+hook treats the agent itself as a protected target. This is the
+load-bearing surface that prevents a local-root attacker from
+killing the agent out of band, dropping the BPF coverage, and
+swapping a tampered binary into place before the next attestation.
+
+The trade-off is that `systemctl restart lota-agent` does **not**
+work the way it does for other units. After the stop request, the
+old process keeps running, refuses to release `/run/lota/lota.sock`
+and the BPF maps, and the next `ExecStart=` fails with `-EPERM`
+when libbpf tries to recreate the same map names. The unit then
+loops on `Restart=on-failure` while the original PID stays alive
+forever.
+
+Two supported paths exist:
+
+1. **Graceful via IPC.** `ExecStop=/usr/bin/lota-agent --shutdown`
+   sends a privileged IPC command to the running agent; the
+   handler sets `g_agent.running = 0`, which exits the daemon loop
+   cleanly. As long as the IPC socket is reachable and the agent
+   is not wedged in a syscall, this is the canonical update path
+   and does not require a reboot.
+
+2. **Cold reboot.** If the IPC path is unreachable (agent hang,
+   socket gone, kernel deadlock) the only remaining recovery is
+   to reboot the host. There is no kill-bypass for PID 1 and there
+   never will be: every grace window would be an attack surface for
+   an init-domain compromise. Operators planning updates therefore
+   schedule them alongside a regular maintenance reboot.
+
+### VM testing caveats
+
+The supported development environment is a KVM guest with a swTPM
+backend attached over TIS. Two behaviours diverge from bare metal
+and the agent's startup gates treat them as integrity violations
+unless the operator works around them.
+
+- **swTPM persists state across guest reboots.** The TPM resource
+  manager runs as a host process backed by an NV state file. A
+  `sudo reboot` inside the guest does **not** reset the TPM and
+  even `sudo virsh destroy fedora-lota && sudo virsh start
+  fedora-lota` from the host keeps the same `resetCount` unless
+  the libvirt XML carries `<backend ... persistent_state='no'/>`
+  or swTPM is started with `--flags startup-clear`. The guest's
+  PCR14 resets to all-zero on each Startup(CLEAR) but
+  `resetCount` does not advance; the agent's witness records the
+  old `(resetCount, last_extend)` tuple and the next start
+  reports `PCR14 cleared while resetCount=N unchanged since last
+  extend`. Before each test run on a guest without that XML
+  setting, wipe the witness and evict the persistent AIK:
+
+  ```sh
+  sudo systemctl stop lota-agent.service lota-agent.socket
+  sudo find /var/lib/lota -mindepth 1 -delete
+  for h in 0x81010002 0x81010003 0x81010004 0x81010005; do
+      sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true
+  done
+  ```
+
+- **The repo is virtiofs-mounted read-only at `/mnt/lota`.**
+  `sudo make install` recurses into the `all` target through the
+  `install: check-version-tag all` prerequisite, so `make` will
+  try to write dependency files to `build/` in the current working
+  directory and fail with `EROFS` on the virtiofs mount. Pass the
+  build directory explicitly on the same invocation:
+
+  ```sh
+  sudo make BUILD_DIR=/var/tmp/lota-build install
+  ```
+
+- **`sudo make install` does not load the SELinux module.** The
+  install rule lands `lota.pp` under the source tree but does not
+  call `semodule -i`. After any change to `selinux/lota.te`, rebuild
+  the module on the host (the in-tree `selinux/Makefile` writes to
+  `tmp/` in the cwd, which the read-only virtiofs blocks), then
+  load the package inside the guest:
+
+  ```sh
+  # [host]
+  cd selinux && make && sha256sum lota.pp
+  # [guest]
+  sudo semodule -i /mnt/lota/selinux/lota.pp
+  ```
+
+  Verify the rule landed with `sesearch -A -s lota_agent_t ...`
+  before retrying the agent. The stock policy `dontaudit`s many
+  reads that the agent legitimately needs (e.g. kallsyms,
+  securityfs), so denials may be silent: run `sudo semodule -DB`
+  before reproducing to surface them, then `sudo semodule -B` to
+  re-enable.
+
+- **`/usr/bin/lota-agent` must carry `lota_agent_exec_t`.** A
+  fresh `make install` writes the file with the default `bin_t`
+  label on systems where the in-tree `lota.fc` has not been loaded
+  yet; without the executable type, `init_t` does not transition
+  to `lota_agent_t` at exec and the daemon runs with no TPM, BPF,
+  or `/etc/lota` access. Restore the label after install:
+
+  ```sh
+  sudo restorecon -v /usr/bin/lota-agent
+  ls -lZ /usr/bin/lota-agent
+  # expect: system_u:object_r:lota_agent_exec_t:s0
+  ```
