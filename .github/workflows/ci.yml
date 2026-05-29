@@ -358,3 +358,48 @@ jobs:
           make clean
           make all
           make valgrind-unit
+
+  sanitizers-clang:
+    name: asan-ubsan-unit-clang
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        # clang ships its own compiler-rt ASan/UBSan runtime, so no
+        # libasan package is needed here. This pass catches defects the
+        # gcc sanitizer can miss and proves the tree stays clang-clean.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git make
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Build and run unit tests under clang ASan + UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: make CC=clang SANITIZE=address,undefined test-unit
