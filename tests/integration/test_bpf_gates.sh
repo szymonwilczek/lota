@@ -56,7 +56,14 @@ for f in "$VICTIM_BIN" "$EVIL_SO"; do
 	fi
 done
 
-OPERATOR_UID="${SUDO_UID:-$(id -u)}"
+# The victim runs as root and reaches the agent over the primary
+# /run/lota/lota.sock. That socket lives in a 0750 root:root runtime
+# dir, so an unprivileged victim would need a per-UID listener
+# (lota-steam-setup --register-uid) plus XDG_RUNTIME_DIR wiring that
+# this self-contained gate test deliberately avoids. The LSM gates
+# key off the protected-PID set, not the actor's credentials, so a
+# root victim is the strongest target: it proves a root attacker is
+# still rejected.
 PASS=0
 FAIL=0
 
@@ -69,7 +76,7 @@ bad()  { printf '[bpf-gates] \033[31mFAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAIL+1)
 # of an unauthorised .so from inside a protected process.
 #
 note "stage 1: security_mmap_file (delegated to block-demo run.sh)"
-if sudo -u "#${OPERATOR_UID}" "$VICTIM_BIN" "$EVIL_SO" >/dev/null 2>&1; then
+if "$VICTIM_BIN" "$EVIL_SO" >/dev/null 2>&1; then
 	ok "mmap_file blocks unauthorised dlopen from protected task"
 else
 	rc=$?
@@ -88,7 +95,7 @@ fi
 # exits non-zero with "Operation not permitted".
 #
 note "stage 2: ptrace_access_check (external attach to protected PID)"
-sudo -u "#${OPERATOR_UID}" "$VICTIM_BIN" --sleep \
+"$VICTIM_BIN" --sleep \
 	>/tmp/bpf-gates-victim.log 2>&1 &
 VICTIM_PID=$!
 
