@@ -242,11 +242,11 @@ unsigned long resolve_kernel_symbol(const char *name)
 	}
 
 	while (fgets(line, sizeof(line), f)) {
-		char sym_name[256];
+		char sym_name[512];
 		char type;
 		unsigned long a;
 
-		if (sscanf(line, "%lx %c %s", &a, &type, sym_name) == 3) {
+		if (sscanf(line, "%lx %c %511s", &a, &type, sym_name) == 3) {
 			if (strcmp(name, sym_name) == 0) {
 				addr = a;
 				break;
