@@ -171,13 +171,20 @@ int main(int argc, char *argv[])
 			victims[nvictims++] = p;
 	}
 
-	/* Maximal enforcement so every hook takes its strict branch. */
+	/*
+	 * Enforce, but only the flags that are safe on a stock guest with
+	 * no trust allowlist. STRICT_MMAP / STRICT_EXEC / STRICT_MODULES /
+	 * BLOCK_ANON_EXEC are global gates: with an empty trusted_libs /
+	 * allow_verity set they reject every exec and executable mapping
+	 * on the system, which kills sshd and syz-executor and bricks the
+	 * VM ("can't ssh into the instance"). BLOCK_PTRACE is PID-scoped to
+	 * the protected victims and LOCK_BPF only guards LOTA's own maps,
+	 * so both are safe. Every hook is still attached and runs its
+	 * prologue (mode + is_protected_task lookup + map reads) on every
+	 * matching syscall, which is the coverage syzkaller needs.
+	 */
 	set_cfg(cfg_fd, LOTA_CFG_MODE, LOTA_MODE_ENFORCE);
-	set_cfg(cfg_fd, LOTA_CFG_STRICT_MMAP, 1);
 	set_cfg(cfg_fd, LOTA_CFG_BLOCK_PTRACE, 1);
-	set_cfg(cfg_fd, LOTA_CFG_BLOCK_ANON_EXEC, 1);
-	set_cfg(cfg_fd, LOTA_CFG_STRICT_EXEC, 1);
-	set_cfg(cfg_fd, LOTA_CFG_STRICT_MODULES, 1);
 	set_cfg(cfg_fd, LOTA_CFG_LOCK_BPF, 1);
 
 	protect_pid(pp_fd, (uint32_t)getpid());
