@@ -1,0 +1,13 @@
+# Go coverage ratchet floors, percent of statements per package.
+# Enforced by scripts/check-go-coverage.sh in CI: a package dropping
+# below its floor fails the build. The target is 100% -- raise these
+# numbers as tests land, never lower them. Floors are the integer floor
+# of the measured coverage at the time they were recorded.
+github.com/szymonwilczek/lota/verifier 0
+github.com/szymonwilczek/lota/verifier/logging 96
+github.com/szymonwilczek/lota/verifier/metrics 94
+github.com/szymonwilczek/lota/verifier/server 53
+github.com/szymonwilczek/lota/verifier/store 62
+github.com/szymonwilczek/lota/verifier/types 79
+github.com/szymonwilczek/lota/verifier/verify 68
+github.com/szymonwilczek/lota/sdk/server 81

@@ -193,6 +193,7 @@ jobs:
             scripts/lota-steam-setup \
             scripts/lota-proton-hook \
             scripts/lota-dev-bringup.sh \
+            scripts/check-go-coverage.sh \
             examples/demo/setup.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \

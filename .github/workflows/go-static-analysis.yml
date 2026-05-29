@@ -46,3 +46,22 @@ jobs:
           version: v1.64.8
           working-directory: src/verifier
           args: --config ../../.golangci.yml ./...
+
+  go-coverage:
+    name: go-coverage-ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      - name: Coverage ratchet
+        # Fails if any Go package drops below its recorded floor in
+        # .github/go-coverage-baseline. Raise the floors as tests land;
+        # the target is 100%.
+        run: ./scripts/check-go-coverage.sh
