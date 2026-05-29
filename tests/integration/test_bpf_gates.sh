@@ -31,6 +31,12 @@
 
 set -euo pipefail
 
+# Stages 2 and 3 assert on the kernel's EPERM string emitted by strace
+# and kill. strerror() is localised, so for example a pl_PL host prints
+# and the English grep misses a gate that fired correctly.
+# Pin the C locale so the errno string is byte-stable on every host.
+export LC_ALL=C
+
 if [[ $EUID -ne 0 ]]; then
 	echo "[bpf-gates] must run as root (ptrace + BPF visibility)" >&2
 	exit 2
@@ -68,8 +74,14 @@ PASS=0
 FAIL=0
 
 note() { printf '[bpf-gates] %s\n' "$*"; }
-ok()   { printf '[bpf-gates] \033[32mPASS\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
-bad()  { printf '[bpf-gates] \033[31mFAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAIL+1)); }
+ok() {
+	printf '[bpf-gates] \033[32mPASS\033[0m %s\n' "$*"
+	PASS=$((PASS + 1))
+}
+bad() {
+	printf '[bpf-gates] \033[31mFAIL\033[0m %s\n' "$*" >&2
+	FAIL=$((FAIL + 1))
+}
 
 #
 # Stage 1: security_mmap_file -- file-backed PROT_EXEC mapping
