@@ -369,6 +369,20 @@ static int child_apply_all_succeeds(void)
  */
 static int child_apply_basics_no_seccomp(void)
 {
+	/*
+	 * Capture the seccomp mode the process inherited before any
+	 * hardening runs. A bare runner starts at SECCOMP_MODE_DISABLED
+	 * (0); the Fedora CI matrix entries execute inside a container
+	 * runtime that installs its own default filter, so they start at
+	 * SECCOMP_MODE_FILTER (2). The invariant under test is that
+	 * apply_basics does not change the seccomp mode, not that the mode
+	 * is a fixed value: PR_GET_SECCOMP cannot count stacked filters,
+	 * so an absolute "== 0" check is environment-dependent and wrong.
+	 */
+	int seccomp_before = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
+	if (seccomp_before < 0)
+		return 1;
+
 	if (hardening_apply_basics() != 0)
 		return 1;
 	if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
@@ -377,33 +391,14 @@ static int child_apply_basics_no_seccomp(void)
 		return 1;
 
 	/*
-	 * Seccomp blocklist must still be absent. Calling mount() requires
-	 * CAP_SYS_ADMIN, which the test process generally lacks: a
-	 * non-EPERM errno (typically EPERM from the capability check
-	 * itself, ENOENT for the target, EACCES from the source) tells
-	 * us the syscall reached the kernel rather than being filtered
-	 * back at SCMP_ACT_ERRNO. The actual signal we need is "errno
-	 * is not EPERM caused by seccomp"; we detect that by issuing a
-	 * call that fails with EFAULT when the kernel reads the source
-	 * path. seccomp would have returned EPERM before the kernel
-	 * dereferenced any argument.
+	 * The blocklist belongs to apply_daemon, so apply_basics must
+	 * leave the seccomp state exactly as it found it. Comparing
+	 * against the inherited baseline holds both on a bare host and
+	 * inside a container that already carries a default profile.
 	 */
-	errno = 0;
-	long ret = syscall(SYS_mount, (void *)0x1, (void *)0x1, (void *)0x1,
-			   (unsigned long)0, (void *)0x1);
-	if (ret == 0)
-		return 1; /* mount must never succeed in the test process */
-	if (errno == EPERM) {
-		/*
-		 * EPERM could be either the capability check or seccomp. To
-		 * disambiguate, call prctl(PR_GET_SECCOMP) which returns 2
-		 * (SECCOMP_MODE_FILTER) only when a filter is installed.
-		 */
-		int mode = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
-		if (mode == 2)
-			return 1; /* filter was installed -> basics did too much
-				   */
-	}
+	if (prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != seccomp_before)
+		return 1;
+
 	return 0;
 }
 
@@ -522,7 +517,7 @@ int main(void)
 		       child_seccomp_allows_benign_syscalls);
 	run_child_case("apply_all returns 0 in a clean child",
 		       child_apply_all_succeeds);
-	run_child_case("apply_basics: prctl guards set, seccomp filter absent",
+	run_child_case("apply_basics: prctl guards set, seccomp mode unchanged",
 		       child_apply_basics_no_seccomp);
 	run_child_case("apply_daemon after basics installs seccomp filter",
 		       child_apply_daemon_installs_seccomp);
