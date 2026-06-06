@@ -10,6 +10,9 @@ full model and the release flow.
   it covers PRs aimed at `lota-next`): build, unit tests, linters, Go static
   analysis, cross-arch build, the reproducible-build gate, security analysis,
   and the Go fuzz targets (short, seeded smoke run).
+- **Cross-architecture build**: the arm64 workflow starts on every pull
+  request, but skips QEMU and the arm64 container when the commit range does
+  not change source, build, BPF, policy, or deployment inputs.
 - **Every push to `lota-next`**: the same workflows run on the branch tip, so
   the integration line is continuously built and fuzzed.
 - **Out of band**: Syzkaller fuzzes the BPF LSM / kernel surface against
