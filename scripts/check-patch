@@ -1,0 +1,577 @@
+#!/usr/bin/env bash
+# Local contributor-side patch quality checker.
+#
+# This script checks the local commit range before a branch is pushed. It reuses
+# scripts/check-pr-quality.sh for DCO and hotpath documentation rules so local
+# checks stay aligned with CI.
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [[ -z ${ROOT:-} ]]; then
+	printf 'FAIL repository\n'
+	printf 'fix: run this script from inside the LOTA git repository.\n'
+	exit 2
+fi
+cd "$ROOT" || exit 2
+
+FAILURES=0
+
+usage() {
+	cat <<'USAGE'
+usage: scripts/check-patch [<base-commit> [<head-commit>]]
+
+Runs local patch checks for commits in base..head. If base is omitted, the
+script uses the upstream merge-base, origin/lota-next, or lota-next in that
+order. Head defaults to HEAD.
+
+Checks:
+  - CI-equivalent DCO and hotpath documentation rules,
+  - conventional commit subjects with scope parentheses,
+  - standalone Problem: and Solution: commit body sections,
+  - one blank line before the Signed-off-by trailer,
+  - commit body lines wrapped to 75 columns, with a two-column tolerance,
+  - body detail proportional to changed files and lines,
+  - trailing whitespace in patches and commit messages,
+  - clang-format and gofmt on changed C, header, and Go files,
+  - full project build.
+USAGE
+}
+
+pass() {
+	printf 'PASS %s\n' "$1"
+}
+
+fail() {
+	printf 'FAIL %s\n' "$1"
+	printf 'fix: %s\n' "$2"
+	FAILURES=$((FAILURES + 1))
+}
+
+note() {
+	printf 'INFO %s\n' "$1"
+}
+
+short_commit() {
+	git rev-parse --short=12 "$1"
+}
+
+commit_subject() {
+	git log -1 --format=%s "$1"
+}
+
+write_commit_message() {
+	local commit=$1
+	local output=$2
+
+	git cat-file commit "$commit" | sed '1,/^$/d' >"$output"
+}
+
+resolve_base() {
+	local upstream
+
+	if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
+		git merge-base HEAD "$upstream"
+		return
+	fi
+
+	if git rev-parse --verify --quiet origin/lota-next >/dev/null; then
+		git merge-base HEAD origin/lota-next
+		return
+	fi
+
+	if git rev-parse --verify --quiet lota-next >/dev/null; then
+		git merge-base HEAD lota-next
+		return
+	fi
+
+	return 1
+}
+
+require_commits() {
+	local base=$1
+	local head=$2
+	local -n out=$3
+
+	mapfile -t out < <(git rev-list --reverse "$base..$head")
+	if ((${#out[@]} == 0)); then
+		fail "commit range" "select a base that leaves at least one local commit to check."
+		return 1
+	fi
+
+	pass "commit range"
+	return 0
+}
+
+collect_changed_files() {
+	local base=$1
+	local head=$2
+	local -n out=$3
+
+	mapfile -t out < <(
+		{
+			git diff --name-only --diff-filter=ACMRT "$base..$head"
+			git diff --name-only --diff-filter=ACMRT --cached
+			git diff --name-only --diff-filter=ACMRT
+		} | sort -u
+	)
+}
+
+check_ci_policy() {
+	local base=$1
+	local head=$2
+	local output_file
+	local github_output
+
+	output_file=$(mktemp)
+	github_output=$(mktemp)
+
+	if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
+		pass "DCO and hotpath documentation"
+	else
+		sed 's/^/  /' "$output_file"
+		fail "DCO and hotpath documentation" \
+			"run scripts/check-pr-quality.sh $base $head and fix the reported commit."
+	fi
+
+	if grep -q '^ai_assisted=true$' "$github_output"; then
+		note "AI-assisted marker found; CI will add the AI-Assisted label."
+	fi
+
+	rm -f "$output_file" "$github_output"
+}
+
+check_commit_subjects() {
+	local rc=0
+	local commit
+	local subject
+	local scoped_conventional_re='^[A-Za-z][A-Za-z0-9_-]*\([^)]*\)!?:'
+
+	for commit in "$@"; do
+		subject=$(commit_subject "$commit")
+		if [[ $subject =~ $scoped_conventional_re ]]; then
+			printf '  %s %s\n' "$(short_commit "$commit")" "$subject"
+			rc=1
+		fi
+	done
+
+	if ((rc == 0)); then
+		pass "commit subject style"
+	else
+		fail "commit subject style" \
+			"replace scoped conventional subjects such as fix(...): or feat(...): with the project subject style."
+	fi
+}
+
+commit_body_words() {
+	local commit=$1
+
+	git log -1 --format=%B "$commit" |
+		awk '
+			NR == 1 { next }
+			/^[A-Za-z0-9-]+-by:[[:space:]]/ { next }
+			/^Signed-off-by:[[:space:]]/ { next }
+			{
+				for (i = 1; i <= NF; i++)
+					words++
+			}
+			END { print words + 0 }
+		'
+}
+
+commit_change_size() {
+	local commit=$1
+
+	git diff-tree --no-commit-id --numstat -r "$commit" |
+		awk '
+			{
+				files++
+				if ($1 ~ /^[0-9]+$/)
+					lines += $1
+				if ($2 ~ /^[0-9]+$/)
+					lines += $2
+			}
+			END { print files + 0, lines + 0 }
+		'
+}
+
+check_commit_body_contract() {
+	local rc=0
+	local commit
+	local msg_file
+
+	msg_file=$(mktemp)
+
+	for commit in "$@"; do
+		write_commit_message "$commit" "$msg_file"
+		if grep -q '^Problem:[[:space:]].' "$msg_file"; then
+			printf '  Problem: must be standalone: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		elif ! grep -q '^Problem:$' "$msg_file"; then
+			printf '  missing Problem: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		fi
+		if grep -q '^Solution:[[:space:]].' "$msg_file"; then
+			printf '  Solution: must be standalone: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		elif ! grep -q '^Solution:$' "$msg_file"; then
+			printf '  missing Solution: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		fi
+	done
+
+	rm -f "$msg_file"
+
+	if ((rc == 0)); then
+		pass "commit body contract"
+	else
+		fail "commit body contract" \
+			"place Problem: and Solution: on their own lines, then put text on the following line."
+	fi
+}
+
+check_commit_body_layout() {
+	local rc=0
+	local commit
+	local msg_file
+	local output_file
+
+	msg_file=$(mktemp)
+	output_file=$(mktemp)
+
+	for commit in "$@"; do
+		write_commit_message "$commit" "$msg_file"
+
+		if ! awk '
+			/^Signed-off-by:/ {
+				if (NR == 1 || (prev != "" && prev !~ /^Signed-off-by:/)) {
+					bad = 1
+					print FNR ": Signed-off-by must be preceded by one blank line"
+				}
+			}
+			{ prev = $0 }
+			END { exit bad ? 1 : 0 }
+		' "$msg_file" >"$output_file"; then
+			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+			sed 's/^/    /' "$output_file"
+			rc=1
+		fi
+
+		if ! awk '
+			NR == 1 { next }
+			/^$/ { next }
+			/^[A-Za-z0-9-]+-by:[[:space:]]/ { next }
+			length($0) > 77 && $0 ~ /[[:space:]]/ {
+				bad = 1
+				printf "%d: body line is %d columns\n", FNR, length($0)
+			}
+			END { exit bad ? 1 : 0 }
+		' "$msg_file" >"$output_file"; then
+			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+			sed 's/^/    /' "$output_file"
+			rc=1
+		fi
+	done
+
+	rm -f "$msg_file" "$output_file"
+
+	if ((rc == 0)); then
+		pass "commit body layout"
+	else
+		fail "commit body layout" \
+			"run scripts/format-patch over the same base..head range, then review the rewritten descriptions."
+	fi
+}
+
+check_body_proportion() {
+	local rc=0
+	local commit
+	local words files lines min_words
+
+	for commit in "$@"; do
+		words=$(commit_body_words "$commit")
+		read -r files lines < <(commit_change_size "$commit")
+		min_words=0
+		if ((files >= 5 || lines >= 100)); then
+			min_words=80
+		elif ((files >= 3 || lines >= 40)); then
+			min_words=40
+		fi
+
+		if ((min_words > 0 && words < min_words)); then
+			printf '  %s %s: %d files, %d changed lines, %d body words, expected at least %d\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" \
+				"$files" "$lines" "$words" "$min_words"
+			rc=1
+		fi
+	done
+
+	if ((rc == 0)); then
+		pass "commit body detail"
+	else
+		fail "commit body detail" \
+			"expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
+	fi
+}
+
+check_patch_whitespace() {
+	local rc=0
+	local commit
+	local output_file
+
+	output_file=$(mktemp)
+	for commit in "$@"; do
+		if ! git show --check --format= "$commit" >"$output_file" 2>&1; then
+			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+			sed 's/^/    /' "$output_file"
+			rc=1
+		fi
+	done
+
+	if ! git diff --check >"$output_file" 2>&1; then
+		printf '  unstaged changes:\n'
+		sed 's/^/    /' "$output_file"
+		rc=1
+	fi
+
+	if ! git diff --check --cached >"$output_file" 2>&1; then
+		printf '  staged changes:\n'
+		sed 's/^/    /' "$output_file"
+		rc=1
+	fi
+
+	rm -f "$output_file"
+
+	if ((rc == 0)); then
+		pass "patch trailing whitespace"
+	else
+		fail "patch trailing whitespace" \
+			"remove reported trailing whitespace from files before pushing."
+	fi
+}
+
+check_message_whitespace() {
+	local rc=0
+	local commit
+	local msg_file
+	local trailing_blank_count
+
+	msg_file=$(mktemp)
+	for commit in "$@"; do
+		write_commit_message "$commit" "$msg_file"
+		if grep -nE '[[:blank:]]$' "$msg_file"; then
+			printf '  trailing whitespace in message: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		fi
+
+		trailing_blank_count=$(
+			awk '
+				NF { blank = 0; next }
+				{ blank++ }
+				END { print blank + 0 }
+			' "$msg_file"
+		)
+		if ((trailing_blank_count > 0)); then
+			printf '  trailing blank line in message: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")"
+			rc=1
+		fi
+	done
+
+	rm -f "$msg_file"
+
+	if ((rc == 0)); then
+		pass "commit message trailing whitespace"
+	else
+		fail "commit message trailing whitespace" \
+			"run scripts/format-patch over the same base..head range."
+	fi
+}
+
+is_text_file() {
+	local path=$1
+
+	[[ -f $path ]] || return 1
+	LC_ALL=C grep -Iq '' "$path"
+}
+
+check_file_endings() {
+	local rc=0
+	local path
+	local blank_count
+	local -a files=("$@")
+
+	for path in "${files[@]}"; do
+		is_text_file "$path" || continue
+		blank_count=$(
+			awk '
+				NF { blank = 0; next }
+				{ blank++ }
+				END { print blank + 0 }
+			' "$path"
+		)
+		if ((blank_count > 0)); then
+			printf '  %s ends with %d trailing blank line(s)\n' "$path" "$blank_count"
+			rc=1
+		fi
+	done
+
+	if ((rc == 0)); then
+		pass "file trailing blank lines"
+	else
+		fail "file trailing blank lines" \
+			"remove blank lines after the last content line in changed text files."
+	fi
+}
+
+check_clang_format() {
+	local formatter=""
+	local path
+	local output_file
+	local -a c_files=()
+
+	for path in "$@"; do
+		case "$path" in
+		*.c | *.h)
+			[[ $path == include/vmlinux.h ]] && continue
+			[[ -f $path ]] && c_files+=("$path")
+			;;
+		esac
+	done
+
+	if ((${#c_files[@]} == 0)); then
+		pass "clang-format"
+		return
+	fi
+
+	if command -v clang-format-22 >/dev/null 2>&1; then
+		formatter=clang-format-22
+	elif command -v clang-format >/dev/null 2>&1; then
+		formatter=clang-format
+	fi
+
+	if [[ -z $formatter ]]; then
+		fail "clang-format" \
+			"install clang-format or clang-format-22 and run it on changed C and header files."
+		return
+	fi
+
+	output_file=$(mktemp)
+	if "$formatter" --dry-run --Werror "${c_files[@]}" >"$output_file" 2>&1; then
+		pass "clang-format"
+	else
+		sed 's/^/  /' "$output_file"
+		fail "clang-format" \
+			"run $formatter -i on the reported C and header files."
+	fi
+	rm -f "$output_file"
+}
+
+check_gofmt() {
+	local path
+	local output
+	local -a go_files=()
+
+	for path in "$@"; do
+		case "$path" in
+		*.go)
+			[[ -f $path ]] && go_files+=("$path")
+			;;
+		esac
+	done
+
+	if ((${#go_files[@]} == 0)); then
+		pass "gofmt"
+		return
+	fi
+
+	if ! command -v gofmt >/dev/null 2>&1; then
+		fail "gofmt" "install Go and run gofmt on changed Go files."
+		return
+	fi
+
+	output=$(gofmt -l "${go_files[@]}")
+	if [[ -z $output ]]; then
+		pass "gofmt"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /'
+		fail "gofmt" "run gofmt -w on the reported Go files."
+	fi
+}
+
+check_build() {
+	if env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
+		make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
+		pass "build"
+	else
+		fail "build" \
+			"run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all and fix the compiler error."
+	fi
+}
+
+main() {
+	local base=""
+	local head="HEAD"
+	local -a commits changed_files
+
+	if (($# > 0)) && [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+		usage
+		return 0
+	fi
+	if (($# > 2)); then
+		usage
+		return 2
+	fi
+
+	if (($# >= 1)); then
+		base=$1
+	else
+		if ! base=$(resolve_base); then
+			fail "base selection" \
+				"pass the base commit explicitly, for example scripts/check-patch origin/lota-next HEAD."
+			return 1
+		fi
+	fi
+	if (($# >= 2)); then
+		head=$2
+	fi
+
+	if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+		fail "base commit" "pass an existing commit as the base revision."
+		return 1
+	fi
+	if ! git cat-file -e "$head^{commit}" 2>/dev/null; then
+		fail "head commit" "pass an existing commit as the head revision."
+		return 1
+	fi
+
+	note "checking $(git rev-parse --short=12 "$base")..$(git rev-parse --short=12 "$head")"
+	require_commits "$base" "$head" commits || return 1
+	collect_changed_files "$base" "$head" changed_files
+
+	check_ci_policy "$base" "$head"
+	check_commit_subjects "${commits[@]}"
+	check_commit_body_contract "${commits[@]}"
+	check_commit_body_layout "${commits[@]}"
+	check_body_proportion "${commits[@]}"
+	check_patch_whitespace "${commits[@]}"
+	check_message_whitespace "${commits[@]}"
+	check_file_endings "${changed_files[@]}"
+	check_clang_format "${changed_files[@]}"
+	check_gofmt "${changed_files[@]}"
+	check_build
+
+	if ((FAILURES != 0)); then
+		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"
+		return 1
+	fi
+
+	printf 'PASS patch quality checks completed.\n'
+}
+
+main "$@"
