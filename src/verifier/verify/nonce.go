@@ -361,7 +361,9 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID str
 	}
 
 	// verify nonce inside tpms_attest (signed by tpm)
-	// compute binding nonce = SHA-256(challenge_nonce || hardware_id)
+	// compute binding nonce =
+	// SHA-256(challenge_nonce || hardware_id || signed_flags ||
+	// kernel_hash || agent_hash || iommu_status)
 	// to verify that the TPM quote is bound to the reported hardware identity
 	if report.TPM.AttestSize == 0 {
 		return errors.New("no attestation data - cannot verify nonce binding")
