@@ -1,91 +1,258 @@
-# LOTA - Linux Open Trusted Attestation
+Linux Open Trusted Attestation
+==============================
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-red.svg)](LICENSE)
+Linux Open Trusted Attestation, or LOTA, is a Linux attestation and
+runtime-integrity framework.
 
-Transparent system integrity framework that proves to remote servers (e.g., game servers) that a Linux system is untampered.
+It lets a remote verifier or game server decide
+whether a host was enrolled through a manufacturer-backed TPM, booted into an
+approved firmware and Secure Boot state, runs the expected LOTA agent image,
+and enforces the configured runtime gates through BPF LSM.
 
-# Read before anything else in this repository
+LOTA is **not** a behavioral anti-cheat engine. It does **not** scan gameplay state,
+input, memory signatures, or network behavior. It provides a hardware-backed
+trust substrate that game, anti-cheat, fleet, or relying-party policy can build
+on top of.
 
-I am incredibly absorbed in creating this project and I hope that one day it will become the standard in the Linux gaming industry. Stallman said that maybe it is TiVoization, but any solution seems better to me than none at all. In the end I really \*don't care\*\* about the politics around, just on the technology behind it. You want it? You have it (when it will be ready), you don't want it? Fine, then no gaming or some sort. It's just an option, not a required way to run a fully blown distro. Linux will always be fully open-source, so if you don't want to give up the tinkering with the kernel - just have 2 of those and pick it up through GRUB or your desired bootloader. It's that simple.
+Trust Chain Overview
+--------------------
 
-The project is in active development toward its first functional release. If it succeeds, it could enable anti-cheat solutions on Linux, unlocking a broader gaming ecosystem on the platform.
+The production trust chain is:
 
-Anti-cheat vendors have historically declined to support Linux because they cannot establish the same trust guarantees available on locked-down platforms. LOTA provides the missing cryptographic trust chain to address this gap.
+```text
+TPM 2.0 EK certificate --> Attestation CA (1) --> LOTA agent (2) --> Verifier / SDK consumer (3)
 
-## Overview
+(1) Attestation CA
+  - verifies EK roots
+  - runs TPM2 credential activation
+  - issues an AIK certificate
 
-LOTA establishes a cryptographic chain of trust from hardware (TPM 2.0) through the kernel (eBPF/LSM) to a user-space agent, and finally to a remote verifier.
+(2) LOTA agent
+  - owns TPM interaction
+  - measures boot and runtime state
+  - loads signed BPF LSM policy
 
-TPM 2.0 (Hardware: PCRs) -> eBPF LSM Kernel (Binary Monitoring) -> LOTA Agent User-Space (Attestation Report) -> Remote Verifier (Validation)
-
-## Features
-
-- **Hardware Root of Trust**: TPM 2.0 PCR measurements for Measured Boot
-- **IOMMU Verification**: Ensures VT-d/AMD-Vi is enabled (DMA attack protection)
-- **Binary Execution Monitoring**: eBPF LSM hooks track all program executions
-- **Challenge-Response Protocol**: Nonce-based attestation prevents replay attacks
-- **CO-RE Support**: BPF program works across different kernel versions
-
-## Requirements
-
-### Hardware
-- TPM 2.0 chip
-- Intel VT-d or AMD-Vi IOMMU
-
-### Kernel
-- Linux 5.7+ with:
-  - `CONFIG_BPF_LSM=y`
-  - `CONFIG_DEBUG_INFO_BTF=y`
-  - LSM includes `bpf` (check `/sys/kernel/security/lsm`)
-
-## Security Model
-
-| Attack Vector             | Protection                                     |
-| ------------------------- | ---------------------------------------------- |
-| AIK not in a genuine TPM  | Credential activation via the Privacy CA       |
-| Hardware identity spoofing| Identity is the CA-issued device pseudonym     |
-| Binary / library tampering| eBPF LSM gates on exec / mmap / mprotect       |
-| Kernel rootkits           | Measured Boot (PCR 0/1/7) + PCR14 self-measure |
-| DMA attacks               | IOMMU verification                             |
-| Replay attacks            | One-time nonce bound into the TPM quote        |
-
-The AIK that signs attestation quotes is proven to live in a genuine,
-manufacturer-certified TPM through TPM 2.0 credential activation performed
-by the self-hosted attestation CA (`lota-attest-ca`); verifiers trust the
-CA-issued AIK certificate and never see the Endorsement Key. Each host
-enrolls once with `lota-agent --enroll`; see
-[examples/enrollment/](examples/enrollment/README.md).
-
-## Live demo
-
-A scripted, single-host walk-through of the full attestation chain
-lives under [examples/demo/](examples/demo/README.md): an isolated
-`swtpm` sandbox, the LOTA agent, a Go reference verifier/server, a
-C heartbeat producer, and an SDL2 client.
-
-```sh
-sudo -E examples/demo/setup.sh
+(3) Verifier or SDK consumer
+  - checks AIK certificate trust
+  - verifies TPM quote freshness
+  - enforces PCR, boot, runtime, and token policy
 ```
 
-The runner pauses between phases so the operator can narrate each
-step. A companion script,
-[`examples/demo/demo_tamper.sh`](examples/demo/demo_tamper.sh),
-arms an out-of-band tamper marker that flips the next heartbeat
-from `TRUSTED` to `UNTRUSTED` without touching the agent or the
-swtpm sandbox; the SDL2 client mirrors the verdict in its banner
-and freezes after two consecutive `UNTRUSTED` ticks.
+The verifier trusts a CA-issued AIK certificate, not an agent-asserted public
+key. Firmware and Secure Boot state are pinned through PCR 0, PCR 1, and PCR 7.
+LOTA's own boot commitment is bound through PCR14. Runtime protection is
+enforced by the agent and BPF LSM hooks, with fs-verity, SELinux, lockdown,
+module signing, and signed BPF objects forming the production floor.
 
-See [examples/demo/README.md](examples/demo/README.md) for the
-five-step operator walk-through, dependency list,
-`setup.sh` / `demo_tamper.sh` flag references, and the
-asciinema-capture invocation used for the recorded session.
+For the complete security boundary, read
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 
-## Status
+Quick Start
+-----------
 
-⚠️ **Heavily** in `development`.
+* Build the tree:
+  `env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all`
+* Run unit tests:
+  `env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit`
+* Build optional examples: `make examples`
+* Bring up a production host: see
+  [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* Run the end-to-end demo material: see
+  [`examples/README.md`](examples/README.md)
+* Report a vulnerability: see [`SECURITY.md`](SECURITY.md)
+* Contribute a patch: see [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
-I don't even want to give up the setting up this project in the README right now (of course it can be done, I documented it inside the code), but it instantly reducing the number of people trying to get this to work on right now.
+Build inputs include a C toolchain, clang/LLVM for BPF, libbpf, TPM2-TSS,
+OpenSSL, systemd, libseccomp, D-Bus headers, and Go for the verifier and
+attestation CA.
 
+Authoritative build and test policy is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
-**Update**: This will eventually become my BEng Thesis Project. I have so little time to grow this project up right now. I did not forget about it.
+Essential Documentation
+-----------------------
+
+All users should know where these documents live:
+
+* Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
+* Production bring-up: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* Development and testing policy: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+* Branch and release flow: [`docs/BRANCHING.md`](docs/BRANCHING.md)
+* Reproducible builds: [`docs/BUILD-REPRODUCIBLE.md`](docs/BUILD-REPRODUCIBLE.md)
+* Performance evaluation: [`docs/PERF.md`](docs/PERF.md)
+* PCR policies: [`policies/README.md`](policies/README.md)
+* SELinux policy: [`selinux/README.md`](selinux/README.md)
+* EK root bundle material: [`configs/ek-roots/README.md`](configs/ek-roots/README.md)
+* Security reporting: [`SECURITY.md`](SECURITY.md)
+* Code of Conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+
+Repository Map
+--------------
+
+* `src/agent/` - privileged host agent, TPM interaction, BPF loading, IPC,
+  reporting, enrollment, and runtime measurement.
+* `src/bpf/` - BPF LSM enforcement programs.
+* `src/initramfs/` - PCR14 initramfs lock helper and dracut integration.
+* `src/attestca/` - attestation CA and TPM credential-activation service.
+* `src/verifier/` - verifier, policy engine, stores, API server, nonce
+  handling, revocation, and report validation.
+* `src/sdk/` and `include/` - C SDK, server SDK, token formats, and public
+  integration headers.
+* `policies/`, `configs/`, `systemd/`, `selinux/`, and `dbus/` - production
+  deployment policy and service material.
+* `examples/` - enrollment, demo server, anti-cheat heartbeat, game UI,
+  sealed-key, mTLS, runtime remeasurement, and blocking scenarios.
+* `benchmarks/` and `syzkaller/` - performance and kernel-surface validation
+  material.
+
+Who Are You?
+============
+
+* Operator - deploying the agent and verifier on real hosts.
+* Game or anti-cheat integrator - consuming trust verdicts and SDK tokens.
+* Security reviewer - auditing the trust model and reporting vulnerabilities.
+* TPM or attestation engineer - reviewing enrollment, EK roots, AIKs, and PCRs.
+* Kernel or BPF engineer - reviewing runtime gates and LSM portability.
+* Distribution maintainer - packaging, signing, and reproducing releases.
+* New contributor - preparing patches against `lota-next`.
+* Academic reviewer - evaluating design, threat model, and measurements.
+* Automated coding assistant - following project contribution rules.
+
+For Specific Users
+==================
+
+Operator
+--------
+
+Production operation starts with the bring-up document. The agent intentionally
+fails closed when required gates are missing.
+
+* Production checklist: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* PCR policy templates: [`policies/README.md`](policies/README.md)
+* SELinux policy: [`selinux/README.md`](selinux/README.md)
+* EK root bundles: [`configs/ek-roots/README.md`](configs/ek-roots/README.md)
+* Example configuration: [`configs/lota.conf.example`](configs/lota.conf.example)
+* Re-enrollment flow: [`examples/enrollment/README.md`](examples/enrollment/README.md)
+
+Game or Anti-Cheat Integrator
+-----------------------------
+
+LOTA exposes trust decisions and token verification material. Gameplay policy
+remains outside this repository.
+
+* Example index: [`examples/README.md`](examples/README.md)
+* Reference server: [`examples/demo_server/README.md`](examples/demo_server/README.md)
+* Anti-cheat heartbeat producer:
+  [`examples/demo_anticheat/README.md`](examples/demo_anticheat/README.md)
+* Demo game client: [`examples/demo_game/README.md`](examples/demo_game/README.md)
+* End-to-end demo: [`examples/demo/README.md`](examples/demo/README.md)
+* mTLS example: [`examples/mtls/README.md`](examples/mtls/README.md)
+* Runtime remeasurement:
+  [`examples/runtime_remeasure/README.md`](examples/runtime_remeasure/README.md)
+
+Security Reviewer
+-----------------
+
+Start with the threat model and the security reporting policy. Do not file
+public issues for exploitable vulnerabilities.
+
+* Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
+* Security reporting: [`SECURITY.md`](SECURITY.md)
+* Reproducible release verification:
+  [`docs/BUILD-REPRODUCIBLE.md`](docs/BUILD-REPRODUCIBLE.md)
+* Production bring-up: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* Development tests and fuzzing: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+* Performance baseline: [`docs/PERF.md`](docs/PERF.md)
+
+TPM or Attestation Engineer
+---------------------------
+
+The hardware trust contract is centered on EK root validation, credential
+activation, AIK certificates, TPM quotes, PCR policy, and PCR14 boot
+commitment.
+
+* Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
+* Enrollment example: [`examples/enrollment/README.md`](examples/enrollment/README.md)
+* EK root bundles: [`configs/ek-roots/README.md`](configs/ek-roots/README.md)
+* PCR policy documentation: [`policies/README.md`](policies/README.md)
+* Production bring-up: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+
+Kernel or BPF Engineer
+----------------------
+
+The kernel-facing surface lives in the BPF LSM object, loader, runtime
+measurement path, initramfs PCR14 lock, SELinux policy, and Syzkaller harness.
+
+* BPF and production gates: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* SELinux policy: [`selinux/README.md`](selinux/README.md)
+* Kernel test policy: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+* Syzkaller harness: [`syzkaller/README.md`](syzkaller/README.md)
+* Runtime remeasurement example:
+  [`examples/runtime_remeasure/README.md`](examples/runtime_remeasure/README.md)
+
+Distribution Maintainer
+-----------------------
+
+Packaging must preserve the security contract. Release artifacts are intended
+to be reproducible and verified against signed manifests.
+
+* Reproducible builds: [`docs/BUILD-REPRODUCIBLE.md`](docs/BUILD-REPRODUCIBLE.md)
+* Release and branch flow: [`docs/BRANCHING.md`](docs/BRANCHING.md)
+* Production install gates: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* systemd units: [`systemd/`](systemd/)
+* udev rules: [`configs/udev/99-lota-tpm.rules`](configs/udev/99-lota-tpm.rules)
+* IMA policy: [`configs/ima/lota-ima-policy`](configs/ima/lota-ima-policy)
+* SELinux policy: [`selinux/README.md`](selinux/README.md)
+
+New Contributor
+---------------
+
+Development happens on `lota-next`. Open pull requests there, not against
+`main`.
+
+* Contribution rules: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+* Development and testing policy: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+* Branch model: [`docs/BRANCHING.md`](docs/BRANCHING.md)
+* Local patch checks: `scripts/check-patch`
+* Commit-message normalizer: `scripts/format-patch`
+* Code of Conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+
+Academic Reviewer
+-----------------
+
+For thesis or architecture review, read the security model first, then the
+production and measurement documents.
+
+* Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
+* Production bring-up: [`docs/PRODUCTION_BRINGUP.md`](docs/PRODUCTION_BRINGUP.md)
+* Performance evaluation: [`docs/PERF.md`](docs/PERF.md)
+* Reproducible builds: [`docs/BUILD-REPRODUCIBLE.md`](docs/BUILD-REPRODUCIBLE.md)
+* Examples: [`examples/README.md`](examples/README.md)
+
+Automated Coding Assistant
+--------------------------
+
+Automated tools must follow the same contribution rules as human contributors.
+They must not weaken security checks, invent threat-model claims, remove DCO
+trailers, or bypass documentation updates for changed behavior.
+
+* Contribution rules: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+* Development policy: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+* Security reporting: [`SECURITY.md`](SECURITY.md)
+* Local quality gate: `scripts/check-patch`
+
+Communication and Support
+=========================
+
+* Security vulnerabilities: use GitHub Private Vulnerability Reporting for
+  `github.com/szymonwilczek/lota`; see [`SECURITY.md`](SECURITY.md).
+* General contribution process: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+* Conduct reports: see [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+* Release status and supported versions are documented in release notes and
+  [`docs/BRANCHING.md`](docs/BRANCHING.md).
+
+Licensing
+=========
+
+Source files carry SPDX license identifiers. The userspace components are
+primarily MIT-licensed. Kernel-facing BPF and shared kernel-contract headers
+use GPL-2.0-only where required by the Linux kernel interface.
