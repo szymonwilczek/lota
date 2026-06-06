@@ -1,0 +1,138 @@
+# LOTA Threat Model
+
+This document states what LOTA is designed to protect, what the current
+implementation enforces, and what remains outside its boundary.
+
+## Security Objectives
+
+LOTA provides a hardware-backed attestation substrate for Linux hosts. It is NOT
+a behavioral cheat detector.
+
+The protected properties are:
+
+- the attesting key is bound to a manufacturer-certified TPM through TPM 2.0
+  credential activation,
+- the verifier accepts only AIK certificates issued by the deployment's
+  attestation CA,
+- the TPM quote is fresh and bound to verifier-provided nonce material,
+- firmware and Secure Boot state are pinned through PCR 0, PCR 1, and PCR 7,
+- LOTA's boot commitment is bound through PCR14,
+- the agent binary and runtime-protected executable image are measured and
+  bound into attestation or token material,
+- kernel-side enforcement gates executable mappings, ptrace, kernel module
+  loading, and protected process mutation through BPF LSM programs,
+- release artifacts can be rebuilt and checked against signed hashes.
+
+An integrator can build game-specific or fleet-specific policy on top of these
+properties. LOTA does not inspect gameplay behavior, memory signatures, network
+patterns, or user input.
+
+## Trust Boundaries
+
+### Host
+
+The host runs a TPM 2.0 device, Linux with BPF LSM support, SELinux enforcing
+mode for the packaged policy, kernel lockdown, module signature enforcement,
+IMA appraisal, fs-verity, and the LOTA agent.
+
+The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
+measurement, local IPC, D-Bus status, and attestation report construction.
+
+### Attestation CA
+
+The attestation CA verifies the EK certificate chain, runs credential
+activation against the TPM, and issues a short-lived AIK certificate. Verifiers
+trust the CA certificate, not an agent-asserted public key.
+
+The CA key is a high-value fleet secret. The current implementation supports a
+PEM-backed `crypto.Signer` path.
+
+HSM or KMS-backed signing is an enterprise deployment requirement, in progress,
+not property implemented by the current tree.
+
+### Verifier
+
+The verifier validates AIK certificates, TPM quotes, PCR policy, event logs,
+boot commitments, runtime protection digests, token nonces, revocations, and
+ban state.
+
+The current default store is SQLite and session-token state is process-local.
+Multi-instance high availability requires a shared backend and shared or
+stateless token validation.
+
+### SDK Consumer
+
+The game, anti-cheat service, or relying server consumes LOTA status and token
+verification results. It remains responsible for gameplay policy and behavioral
+detection.
+
+## Active Threats
+
+| Threat | LOTA control | Residual risk |
+| ------ | ------------ | ------------- |
+| Software-only fake attester | Enrollment requires TPM 2.0 credential activation. The CA issues an AIK certificate only after proving the AIK and EK live in the same TPM. | A verifier must run with the production CA trust root and certificate requirement enabled. |
+| Replayed attestation | Verifier challenges are one-time nonces with expiry and used-nonce tracking. The TPM quote covers a binding nonce. | Clock and storage availability are operational dependencies for replay tracking. |
+| Agent-asserted report metadata | The attestation binding nonce covers hardware identity, signed flags, kernel hash, agent hash, and IOMMU status before verification of `TPMS_ATTEST.extraData`. | Metadata outside that binding must not be promoted to security decisions without extending the binding. |
+| Firmware or Secure Boot drift | Production policy pins PCR 0, PCR 1, and PCR 7. | Firmware updates require deliberate policy rotation. |
+| Agent binary drift | PCR14 boot commitment and agent hash policy bind the agent image. fs-verity protects the installed binary. | Replacing the agent binary requires cold reboot, fs-verity re-enable, policy update, and re-attestation. |
+| Early PCR14 tamper | Initramfs PCR14 lock runs before normal userspace; udev and SELinux restrict TPM device access; systemd ordering starts the agent before login-capable targets. | PCR14 is OS-writable by the PC Client Profile. Userspace cannot make that race impossible on every platform. |
+| Runtime image substitution | BPF LSM gates executable mmap and mprotect for protected processes against the fs-verity allow-list. The agent re-measures file-backed executable mappings from the kernel side. | Anonymous executable memory and JIT code are not measured as modules. The intended bound is W^X plus policy enforcement. |
+| ptrace or process mutation | BPF LSM hooks protect the agent and protected PIDs, including `__ptrace_may_access` where available. | Hook availability and verifier behavior must be validated on the target kernel. |
+| Kernel module or memory-only load | Kernel lockdown, module signature enforcement, and BPF LSM gates reject unsafe load paths. | A kernel vulnerability or disabled production gate is outside LOTA's software boundary. |
+| DMA attack | The agent reports IOMMU state and production policy can require it. | Platform firmware and hardware must actually expose and enable the IOMMU. |
+| EK certificate spoofing | The CA verifies EK certificate chains against pinned manufacturer roots. | A deployment must ship verified roots for the supported TPM vendors or narrow supported hardware accordingly. |
+| Supply-chain artifact swap | Reproducible builds and cosign-signed `SHA256SUMS` bind released artifacts to the source tag and release workflow identity. | Consumers must verify the signed manifest and rebuild with the documented toolchain. |
+| Remote MITM | Enrollment and verifier communication use TLS, with examples using explicit CA material rather than disabled verification. | Operators must provision and rotate TLS certificates correctly. |
+
+## STRIDE Mapping
+
+| STRIDE class | LOTA treatment |
+| ------------ | -------------- |
+| Spoofing | TPM credential activation, CA-issued AIK certificates, TLS server authentication, mTLS demo for SDK-server integration. |
+| Tampering | PCR policy, PCR14 boot commitment, fs-verity, signed BPF objects, BPF LSM gates, SELinux confinement. |
+| Repudiation | Verifier logs attestation decisions, nonce use, baseline changes, and AIK state. Release artifacts are signed through Sigstore. |
+| Information disclosure | Verifiers receive CA-issued pseudonyms rather than EK certificates. Reports should not expose EK material after enrollment. |
+| Denial of service | Rate limits and nonce limits bound challenge pressure. Local enforcement may intentionally fail closed when production gates are missing. |
+| Elevation of privilege | LOTA reduces post-boot tamper paths through lockdown, module signing, BPF LSM, SELinux, and ptrace restrictions. It does not replace the kernel's own privilege boundary. |
+
+## Explicit Non-Goals
+
+- Detecting cheat behavior by scanning memory, input, game state, or network
+  patterns.
+- Supporting hosts that intentionally disable lockdown, module signature
+  enforcement, SELinux enforcing mode, fs-verity, IMA appraisal, or TPM access
+  control required by production policy.
+- Proving that an arbitrary already-compromised kernel is honest without a
+  lower hardware launch or TEE trust anchor.
+- Measuring anonymous executable memory as a trusted module set.
+- Making PCR14 immutable from userspace on platforms where the TPM profile
+  leaves it OS-writable.
+- Replacing operator key management, CA key ceremony, or release governance.
+
+## Validation Status
+
+The software paths are covered by local build, unit, fuzz, and integration
+tests as documented in [`docs/DEVELOPMENT.md`](DEVELOPMENT.md).
+
+Hardware TPM validation remains required for release claims that depend on
+physical TPM behavior. swtpm validation is useful for protocol and regression
+coverage, but it is not a substitute for running the full enrollment,
+attestation, and runtime protection path on target hardware.
+
+## Operational Requirements
+
+Production deployments must:
+
+- install the agent, systemd units, SELinux policy, udev TPM labeling, IMA
+  policy, and signed BPF object,
+- enroll each host through the attestation CA,
+- configure verifiers with the CA root and a production PCR policy,
+- maintain EK root bundles for the supported TPM vendors,
+- verify release manifests before shipping binaries,
+- validate BPF LSM hook attachment on the target kernel and distribution,
+- document operator recovery for AIK rotation, policy rotation, and legitimate
+  binary updates.
+
+See [`docs/PRODUCTION_BRINGUP.md`](PRODUCTION_BRINGUP.md),
+[`policies/README.md`](../policies/README.md), and
+[`selinux/README.md`](../selinux/README.md) for the deployment details.
