@@ -29,6 +29,23 @@ full model and the release flow.
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
 
+## Pull request quality gate
+
+The `PR quality` workflow checks each commit in a pull request before the
+build matrix runs:
+
+- every commit must carry a DCO `Signed-off-by` trailer,
+- commits with AI assistant co-author or generator trailers are labeled
+  `AI-Assisted`,
+- a commit that changes a hotpath file must update one of the documented
+  companion files in the same commit.
+
+The hotpath-to-documentation contract is versioned in
+[`.github/pr-quality-hotpaths.txt`](../.github/pr-quality-hotpaths.txt).
+It intentionally keys off critical surfaces rather than commit size: TPM
+enrollment, verifier policy, BPF LSM enforcement, SDK token formats,
+deployment policy, CI, build, and release process.
+
 ## How the fuzzers work
 
 - **Go fuzzing** is native (`func FuzzXxx(f *testing.F)`). Targets cover the
