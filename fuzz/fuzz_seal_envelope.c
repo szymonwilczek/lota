@@ -16,7 +16,7 @@
 //
 // Build:
 //   clang -fsanitize=fuzzer,address -g -O1 -Iinclude \
-//     src/agent/fuzz/seal_envelope_fuzz.c src/agent/seal_envelope.c \
+//     fuzz/fuzz_seal_envelope.c src/agent/seal_envelope.c \
 //     -o build/fuzz-seal-envelope -lcrypto
 //
 // Run:
@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../include/lota_envelope.h"
+#include "../include/lota_envelope.h"
 
 /*
  * Mirror tpm_unseal_secret_envelope()'s open path: rebuild the AAD exactly

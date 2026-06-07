@@ -4,7 +4,7 @@
  *
  * Build:
  *   clang -fsanitize=fuzzer,address -g -O1 \
- *     src/agent/fuzz/net_pin_fuzz.c \
+ *     fuzz/fuzz_net_pin.c \
  *     -o build/fuzz-net-pin
  *
  * Run:

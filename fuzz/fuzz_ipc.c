@@ -3,20 +3,25 @@
  * LOTA Agent - IPC Fuzz Harness
  *
  * Drives the local IPC request parser the agent exposes on its control
- * socket. Raw bytes almost never satisfy the magic/version header, so the
- * harness frames the fuzz input into one or more well-formed IPC requests:
- * a fuzzer-chosen command, a fuzzer-chosen payload length, and a payload
- * carved from the input. That carries control past the header gate into
+ * socket.
+ *
+ * Raw bytes almost never satisfy the magic/version header, so the harness
+ * frames the fuzz input into one or more well-formed IPC requests:
+ * a fuzzer-chosen command, a fuzzer-chosen payload length, and a payload carved
+ * from the input.
+ *
+ * That carries control past the header gate into
  * validate_request_payload_len(), the per-command dispatch, and -- when the
  * input packs several requests back to back -- the pipelined-leftover
- * memmove in handle_client_read(). The peer identity is set to this process
- * so the same-UID / PID-stability / agent-self checks run for real instead
- * of bailing on a bogus credential.
+ * memmove in handle_client_read().
+ *
+ * The peer identity is set to this process so the same-UID / PID-stability /
+ * agent-self checks run for real instead of bailing on a bogus credential.
  */
 
-#include "../agent.h"
-#include "../test_servers.h"
-#include "../../../include/lota_ipc.h"
+#include "../src/agent/agent.h"
+#include "../src/agent/test_servers.h"
+#include "../include/lota_ipc.h"
 #include <errno.h>
 #include <signal.h>
 #include <stddef.h>
@@ -104,7 +109,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	return -1;
 }
 
-#include "../ipc.c"
+#include "../src/agent/ipc.c"
 
 /*
  * Frame a sequence of well-formed IPC requests into out[].

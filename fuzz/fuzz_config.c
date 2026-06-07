@@ -6,7 +6,7 @@
  *   clang -fsanitize=fuzzer,address -g -O1 \
  *     -DTPM_AIK_HANDLE=0x81010002 -DLOTA_TPM_H \
  *     -include src/agent/config.h \
- *     src/agent/fuzz/config_fuzz.c src/agent/config.c \
+ *     fuzz/fuzz_config.c src/agent/config.c \
  *     -o build/fuzz-config
  *
  * Run:
@@ -15,7 +15,7 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include "../config.h"
+#include "../src/agent/config.h"
 
 #include <stdint.h>
 #include <stdio.h>

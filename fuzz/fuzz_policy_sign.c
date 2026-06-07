@@ -15,7 +15,7 @@
 //
 // Build:
 //   clang -fsanitize=fuzzer,address -g -O1 \
-//     src/agent/fuzz/policy_sign_fuzz.c src/agent/policy_sign.c \
+//     fuzz/fuzz_policy_sign.c src/agent/policy_sign.c \
 //     -o build/fuzz-policy-sign -lcrypto
 //
 // Run:
@@ -28,7 +28,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "../policy_sign.h"
+#include "../src/agent/policy_sign.h"
 
 static char g_priv_path[] = "/tmp/lota-policy-fuzz-priv-XXXXXX";
 static char g_pub_path[] = "/tmp/lota-policy-fuzz-pub-XXXXXX";

@@ -4,7 +4,7 @@
  *
  * Build:
  *   clang -fsanitize=fuzzer,address -g -O1 \
- *     src/agent/fuzz/net_wire_fuzz.c \
+ *     fuzz/fuzz_net_wire.c \
  *     -o build/fuzz-net-wire
  *
  * Run:

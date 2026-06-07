@@ -19,7 +19,7 @@
 //
 // Build:
 //   clang -fsanitize=fuzzer,address -g -O1 \
-//     src/agent/fuzz/tpm_attest_fuzz.c \
+//     fuzz/fuzz_tpm_attest.c \
 //     -o build/fuzz-tpm-attest -ltss2-mu
 //
 // Run:

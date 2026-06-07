@@ -118,7 +118,9 @@ dependency refresh does not drag in a security-doc edit.
   enrollment wire protocol. Each target seeds from its own encoder and asserts
   the real contract. CI discovers the targets and shards them across runners,
   so wall-clock stays bounded as targets are added.
-- **C fuzzers** are libFuzzer harnesses built by `make fuzz-*`.
+- **C fuzzers** are libFuzzer harnesses under `fuzz/`, one `fuzz_<name>.c` per
+  target, built by `make fuzz-*` (or all at once with `make fuzz-all`); they
+  link the agent sources under `src/agent/` that they exercise.
 - **Syzkaller** loads the production BPF LSM object and attaches every hook in
   enforce mode inside a guest, so `syz-executor`'s syscalls actually traverse
   the LOTA kernel surface (MODE A). It runs against `lota-next`.
