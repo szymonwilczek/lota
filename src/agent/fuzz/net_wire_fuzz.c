@@ -85,6 +85,8 @@ static int parse_result(const uint8_t *buf, size_t size,
 	return 0;
 }
 
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	struct verifier_challenge challenge;

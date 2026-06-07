@@ -74,6 +74,8 @@ static int fuzz_net_parse_pin_sha256(const char *hex, uint8_t *out)
 	return 0;
 }
 
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	uint8_t out[NET_PIN_SHA256_LEN];
