@@ -61,14 +61,15 @@ creates a backup branch before updating the current branch.
 
 ## Pull request quality gate
 
-The `PR quality` workflow checks each commit in a pull request before the
-build matrix runs:
+The `PR quality` workflow checks commit metadata and the aggregate pull request
+diff before the build matrix runs:
 
-- every commit must carry a DCO `Signed-off-by` trailer,
+- every non-merge commit created on top of a tree that already carries the
+  quality gate must carry a DCO `Signed-off-by` trailer,
 - commits with AI assistant co-author or generator trailers are labeled
   `AI-Assisted`,
-- a commit that changes a hotpath file must update one of the documented
-  companion files in the same commit.
+- a pull request that changes a hotpath file must update one of the documented
+  companion files in the same pull request diff.
 
 The hotpath-to-documentation contract is versioned in
 [`.github/pr-quality-hotpaths.txt`](../.github/pr-quality-hotpaths.txt).

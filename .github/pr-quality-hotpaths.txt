@@ -4,8 +4,10 @@
 # hot_globs|doc_globs|reason
 #
 # Globs are Bash [[ string == pattern ]] patterns separated by spaces.
-# A non-test commit that touches any hot_globs entry must also touch at
-# least one matching doc_globs entry in the same commit.
+# In commit mode, a non-test commit that touches any hot_globs entry must also
+# touch at least one matching doc_globs entry in the same commit.
+# In PR diff mode, the same mapping is enforced against the aggregate pull
+# request diff.
 
 src/agent/tpm.c src/agent/tpm.h src/agent/attest.c src/agent/enroll*.c src/agent/enroll*.h src/attestca/* include/attestation.h include/lota_enroll.h|docs/PRODUCTION_BRINGUP.md docs/THREAT_MODEL.md examples/enrollment/README.md configs/ek-roots/README.md|TPM enrollment, attestation reports and CA activation define the hardware trust contract.
 src/verifier/verify/* src/verifier/types/* src/verifier/store/* src/verifier/server/*|docs/THREAT_MODEL.md docs/PRODUCTION_BRINGUP.md docs/DEVELOPMENT.md policies/README.md examples/demo_server/README.md|Verifier, policy, nonce, baseline, revocation and monitoring logic define relying-party behavior.
