@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"encoding/pem"
 	"flag"
@@ -41,6 +42,10 @@ func main() {
 		listen       = flag.String("listen", ":8444", "TLS listen address")
 		caCertPath   = flag.String("ca-cert", "", "PEM CA certificate that signs AIK certificates")
 		caKeyPath    = flag.String("ca-key", "", "(dev-only) PEM PKCS#8 CA private key; production holds the CA key in an HSM")
+		p11Module    = flag.String("ca-key-pkcs11-module", "", "PKCS#11 module path holding the CA key (HSM/SoftHSM); requires a pkcs11-tagged build, PIN in LOTA_CA_PKCS11_PIN")
+		p11Token     = flag.String("ca-key-pkcs11-token", "", "PKCS#11 token label the CA key lives on")
+		p11Label     = flag.String("ca-key-pkcs11-label", "", "PKCS#11 CA key object label")
+		p11ID        = flag.String("ca-key-pkcs11-id", "", "PKCS#11 CA key object id (hex); alternative to -ca-key-pkcs11-label")
 		tlsCertPath  = flag.String("tls-cert", "", "PEM server TLS certificate")
 		tlsKeyPath   = flag.String("tls-key", "", "PEM server TLS private key")
 		ekRootBundle = flag.String("ek-root-bundle", "", "directory holding a pinned multi-vendor EK root bundle (see "+ca.EKBundleManifestName+")")
@@ -56,8 +61,15 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if err := run(*listen, runConfig{
-		caCertPath:   *caCertPath,
-		caKeyPath:    *caKeyPath,
+		caCertPath: *caCertPath,
+		caKeyPath:  *caKeyPath,
+		pkcs11: pkcs11KeyConfig{
+			module: *p11Module,
+			token:  *p11Token,
+			label:  *p11Label,
+			id:     *p11ID,
+			pin:    os.Getenv("LOTA_CA_PKCS11_PIN"),
+		},
 		tlsCertPath:  *tlsCertPath,
 		tlsKeyPath:   *tlsKeyPath,
 		pseudonymKey: *pseudonymKey,
@@ -75,6 +87,7 @@ func main() {
 type runConfig struct {
 	caCertPath   string
 	caKeyPath    string
+	pkcs11       pkcs11KeyConfig
 	tlsCertPath  string
 	tlsKeyPath   string
 	pseudonymKey string
@@ -86,11 +99,23 @@ type runConfig struct {
 }
 
 func run(listen string, cfg runConfig, log *slog.Logger) error {
-	for name, path := range map[string]string{
-		"ca-cert": cfg.caCertPath, "ca-key": cfg.caKeyPath,
+	required := map[string]string{
+		"ca-cert":  cfg.caCertPath,
 		"tls-cert": cfg.tlsCertPath, "tls-key": cfg.tlsKeyPath,
 		"pseudonym-key": cfg.pseudonymKey,
-	} {
+	}
+
+	// CA key comes from exactly one source:
+	// PKCS#11 token or an on-disk PEM
+	// -ca-key is required only when no token is configured
+	if cfg.pkcs11.requested() {
+		if cfg.caKeyPath != "" {
+			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both")
+		}
+	} else {
+		required["ca-key"] = cfg.caKeyPath
+	}
+	for name, path := range required {
 		if path == "" {
 			return fmt.Errorf("missing required -%s", name)
 		}
@@ -103,17 +128,39 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("read ca-cert: %w", err)
 	}
-	caKeyPEM, err := os.ReadFile(cfg.caKeyPath)
-	if err != nil {
-		return fmt.Errorf("read ca-key: %w", err)
-	}
 
 	// CA signing key anchors the whole fleet's trust.
-	// On-disk key is a development convenience only; production holds it in an HSM.
-	// Warn loudly so an on-disk key is never mistaken for a production default.
-	log.Warn("using on-disk CA signing key -- development-only fallback; "+
-		"hold the CA key in an HSM in production",
-		"flag", "-ca-key", "doc", "docs/PRODUCTION_BRINGUP.md")
+	// Load it either from a PKCS#11 token (production) or an on-disk PEM (dev-only)
+	var (
+		caKeyPEM []byte
+		caSigner crypto.Signer
+	)
+	if cfg.pkcs11.requested() {
+		var closeToken func() error
+		caSigner, closeToken, err = newPKCS11Signer(cfg.pkcs11)
+		if err != nil {
+			return fmt.Errorf("CA PKCS#11 key: %w", err)
+		}
+		defer func() {
+			if cerr := closeToken(); cerr != nil {
+				log.Warn("closing PKCS#11 token", "error", cerr)
+			}
+		}()
+		log.Info("using PKCS#11 CA signing key",
+			"module", cfg.pkcs11.module, "token", cfg.pkcs11.token)
+	} else {
+		caKeyPEM, err = os.ReadFile(cfg.caKeyPath)
+		if err != nil {
+			return fmt.Errorf("read ca-key: %w", err)
+		}
+
+		// On-disk key is a development convenience only;
+		// Production holds it in an HSM.
+		// Warn loudly so it is never mistaken for a default.
+		log.Warn("using on-disk CA signing key -- development-only fallback; "+
+			"hold the CA key in an HSM in production",
+			"flag", "-ca-key", "doc", "docs/PRODUCTION_BRINGUP.md")
+	}
 
 	var ekRootPEMs [][]byte
 	// operator-provisioned, pin-enforced bundle is the trust baseline
@@ -141,6 +188,7 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	issuer, err := ca.NewIssuer(ca.IssuerConfig{
 		CACertPEM:  caCertPEM,
 		CAKeyPEM:   caKeyPEM,
+		CASigner:   caSigner,
 		EKRootPEMs: ekRootPEMs,
 		AIKCertTTL: cfg.aikCertTTL,
 	})
