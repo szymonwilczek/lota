@@ -237,6 +237,9 @@ applied to an on-disk key, so a wrong token or label cannot sign under the
 CA identity. `-ca-key` and the `-ca-key-pkcs11-*` flags are mutually
 exclusive.
 
+The CA key ceremony, rotation, and the offline-root / online-intermediate
+topology are covered in [`CA-KEY.md`](CA-KEY.md).
+
 The bundle ships empty: the supported set is every TPM whose EK
 certificate chains to a root you can verify and pin, not a fixed vendor
 list. Build it from the platforms you actually attest -- draft a sources
