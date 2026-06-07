@@ -4,6 +4,7 @@
  */
 
 #include "../agent.h"
+#include "../test_servers.h"
 #include <errno.h>
 #include <signal.h>
 #include <stddef.h>
@@ -20,7 +21,7 @@ static const uint8_t *g_fuzz_data;
 static size_t g_fuzz_size;
 static size_t g_fuzz_pos;
 
-ssize_t fuzz_recv(int sockfd, void *buf, size_t len, int flags)
+static ssize_t fuzz_recv(int sockfd, void *buf, size_t len, int flags)
 {
 	(void)sockfd;
 	(void)flags;
@@ -36,7 +37,7 @@ ssize_t fuzz_recv(int sockfd, void *buf, size_t len, int flags)
 	return (ssize_t)to_read;
 }
 
-ssize_t fuzz_send(int sockfd, const void *buf, size_t len, int flags)
+static ssize_t fuzz_send(int sockfd, const void *buf, size_t len, int flags)
 {
 	(void)sockfd;
 	(void)buf;
@@ -44,7 +45,7 @@ ssize_t fuzz_send(int sockfd, const void *buf, size_t len, int flags)
 	return len;
 }
 
-int fuzz_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
+static int fuzz_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 {
 	(void)epfd;
 	(void)op;
@@ -63,29 +64,28 @@ struct agent_globals g_agent = {
     .mode = 0,
 };
 
-int self_measure(struct tpm_context *ctx)
+/* self_measure, setup_dbus, setup_container_listener and
+ * ipc_init_or_activate now come from main_utils.o, which the fuzz link
+ * pulls in -- defining them here too would clash. Only the symbols no
+ * linked object provides are stubbed below.
+ *
+ * diagnostics.c references the test servers, which are filtered out of the
+ * fuzz link, so stub those.
+ */
+int run_ipc_test_server(const struct lota_config *cfg)
 {
-	(void)ctx;
-	return 0;
-}
-struct lota_config;
-void setup_container_listener(struct ipc_context *ctx,
-			      const struct lota_config *cfg)
-{
-	(void)ctx;
 	(void)cfg;
+	return -1;
 }
-void setup_dbus(struct ipc_context *ctx)
+int run_signed_ipc_test_server(const struct lota_config *cfg)
 {
-	(void)ctx;
-}
-int ipc_init_or_activate(struct ipc_context *ctx)
-{
-	(void)ctx;
+	(void)cfg;
 	return -1;
 }
 
 #include "../ipc.c"
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
@@ -96,15 +96,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	g_fuzz_size = size;
 	g_fuzz_pos = 0;
 
+	/* clients now live on the context (client_list/count/map) */
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.epoll_fd = 100;
 	ctx.running = true;
 
-	for (int i = 0; i < MAX_CLIENTS; i++)
-		clients[i] = NULL;
-	client_count = 0;
-
-	client = client_create(50, 1000, 1000, 1234);
+	client = client_create(&ctx, 50, 1000, 1000, 1234);
 	if (!client)
 		return 0;
 
@@ -121,7 +118,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		}
 	}
 
-	client_destroy(client);
+	client_destroy(&ctx, client);
 
 	return 0;
 }
