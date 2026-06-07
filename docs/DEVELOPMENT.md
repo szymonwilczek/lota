@@ -84,6 +84,11 @@ while operator provisioning and host bring-up scripts (`lota-*`,
 [`PRODUCTION_BRINGUP.md`](PRODUCTION_BRINGUP.md) and the relevant example
 READMEs instead.
 
+Module and workspace manifests (`go.mod`, `go.sum`, `go.work`) map to this
+file rather than a runtime surface: a dependency or Go-directive change is a
+contributor concern, not a trust-model or integrator-contract change, so a
+dependency refresh does not drag in a security-doc edit.
+
 ## How the fuzzers work
 
 - **Go fuzzing** is native (`func FuzzXxx(f *testing.F)`). Targets cover the
