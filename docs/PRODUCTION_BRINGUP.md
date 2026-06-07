@@ -187,6 +187,17 @@ lota-attest-ca -listen :8444 \
 example a swtpm CA in the enrollment demo) on top of the bundle; pass
 either or both.
 
+#### CA signing key
+
+CA signing key is the anchor every issued AIK certificate chains to,
+so the CA loads it as a `crypto.Signer` and checks the signer's public key
+against the CA certificate at startup -- a key that does not match the
+certificate is refused, whether it comes from a file or an external store.
+
+The source is selectable: an on-disk PKCS#8 PEM (`-ca-key`) for development,
+or an external key store that never exposes the private key for production.
+The sections below cover the production options.
+
 The bundle ships empty: the supported set is every TPM whose EK
 certificate chains to a root you can verify and pin, not a fixed vendor
 list. Build it from the platforms you actually attest -- draft a sources

@@ -92,7 +92,17 @@ type IssuerConfig struct {
 	CACertPEM []byte
 
 	// CAKeyPEM is the PEM-encoded PKCS#8 CA private key.
+	// It is used only when CASigner is nil; an on-disk key
+	// is the dev-only fallback.
 	CAKeyPEM []byte
+
+	// CASigner is a pre-built signer for the CA key
+	// Typically backed by an HSM or other external key store that never
+	// exposes the private key. When set, it takes precedence over CAKeyPEM
+	// and the private key material never enters the process.
+	// Its public key must match the CA certificate, the same check applied
+	// to an on-disk key.
+	CASigner crypto.Signer
 
 	// EKRootPEMs are the PEM-encoded TPM manufacturer root certificates.
 	EKRootPEMs [][]byte
@@ -112,9 +122,20 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		return nil, ErrCANotCA
 	}
 
-	caKey, err := parseSignerPEM(cfg.CAKeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("CA key: %w", err)
+	// externally held signer (HSM, KMS, ...) takes precedence
+	// the on-disk PEM is the dev-only fallback.
+	// Either way the signer's public key is checked against
+	// the CA certificate so a misconfigured key store cannot
+	// sign under the wrong identity
+	caKey := cfg.CASigner
+	if caKey == nil {
+		caKey, err = parseSignerPEM(cfg.CAKeyPEM)
+		if err != nil {
+			return nil, fmt.Errorf("CA key: %w", err)
+		}
+	}
+	if caKey.Public() == nil {
+		return nil, ErrUnsupportedCAKey
 	}
 	if !publicKeysMatch(caKey.Public(), caCert.PublicKey) {
 		return nil, ErrCAKeyMismatch

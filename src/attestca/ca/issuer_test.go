@@ -237,6 +237,99 @@ func TestNewIssuerRejectsKeyMismatch(t *testing.T) {
 	}
 }
 
+// signerFromPEM parses a PKCS#8 PEM key into a crypto.Signer, standing in
+// for an external (HSM) signer the production path supplies.
+func signerFromPEM(t *testing.T, keyPEM []byte) crypto.Signer {
+	t.Helper()
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		t.Fatal("no PEM block in test key")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse PKCS#8 key: %v", err)
+	}
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		t.Fatal("test key is not a crypto.Signer")
+	}
+	return signer
+}
+
+func TestNewIssuerAcceptsExternalSigner(t *testing.T) {
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	root := makeRoot(t, "tpm-vendor-root")
+
+	// CASigner stands in for an HSM-held key
+	// no PEM key material is given
+	is, err := NewIssuer(IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CASigner:   signerFromPEM(t, caKeyPEM),
+		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer with external signer: %v", err)
+	}
+
+	aikKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("AIK key: %v", err)
+	}
+	aikCertDER, err := is.IssueAIKCertificate(&aikKey.PublicKey, "device-hsm", time.Now())
+	if err != nil {
+		t.Fatalf("IssueAIKCertificate via external signer: %v", err)
+	}
+
+	aikCert, err := x509.ParseCertificate(aikCertDER)
+	if err != nil {
+		t.Fatalf("parse issued AIK cert: %v", err)
+	}
+	caCert, _ := x509.ParseCertificate(is.CACertDER())
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+	if _, err := aikCert.Verify(x509.VerifyOptions{
+		Roots:     pool,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}); err != nil {
+		t.Fatalf("AIK cert from external signer does not chain to CA: %v", err)
+	}
+}
+
+func TestNewIssuerExternalSignerRejectsMismatch(t *testing.T) {
+	caCertPEM, _ := makeLOTACAPEM(t)
+	_, otherKeyPEM := makeLOTACAPEM(t)
+	root := makeRoot(t, "tpm-vendor-root")
+
+	// signer whose public key does not match the CA certificate
+	// must be rejected just like an on-disk mismatch
+	_, err := NewIssuer(IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CASigner:   signerFromPEM(t, otherKeyPEM),
+		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
+	})
+	if err == nil {
+		t.Fatal("accepted external signer that does not match the CA certificate")
+	}
+}
+
+func TestNewIssuerSignerTakesPrecedenceOverPEM(t *testing.T) {
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	_, otherKeyPEM := makeLOTACAPEM(t)
+	root := makeRoot(t, "tpm-vendor-root")
+
+	// matching CASigner must win over a non-matching CAKeyPEM,
+	// proving the PEM path is ignored entirely when a signer is supplied
+	_, err := NewIssuer(IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CAKeyPEM:   otherKeyPEM,
+		CASigner:   signerFromPEM(t, caKeyPEM),
+		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
+	})
+	if err != nil {
+		t.Fatalf("external signer did not take precedence over PEM: %v", err)
+	}
+}
+
 func TestNewIssuerRequiresEKRoots(t *testing.T) {
 	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
 	_, err := NewIssuer(IssuerConfig{CACertPEM: caCertPEM, CAKeyPEM: caKeyPEM})
