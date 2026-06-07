@@ -17,6 +17,9 @@ full model and the release flow.
   the integration line is continuously built and fuzzed.
 - **Out of band**: Syzkaller fuzzes the BPF LSM / kernel surface against
   `lota-next` (configured separately, not in `.github/workflows`).
+- **Continuous external fuzzing**: a push to `lota-next` also fires the
+  `notify-fuzz` workflow, which posts to an `ntfy.sh` topic so a standalone
+  host running the Go fuzz targets resyncs to the new tip at once.
 
 ## Go toolchain and dependencies
 
