@@ -187,6 +187,28 @@ lota-attest-ca -listen :8444 \
 example a swtpm CA in the enrollment demo) on top of the bundle; pass
 either or both.
 
+The bundle ships empty: the supported set is every TPM whose EK
+certificate chains to a root you can verify and pin, not a fixed vendor
+list. Build it from the platforms you actually attest -- draft a sources
+line from a host's EK certificate, verify each pin out of band against the
+vendor's published value, then materialize the bundle:
+
+```sh
+# walk the EK cert's issuer chain to the self-signed root and draft a line
+sudo tpm2_nvread 0x01c00002 -o ek.der
+cp configs/ek-roots/sources.example sources
+scripts/lota-ek-root-pin.sh ek.der >>sources
+
+# after verifying each pin out of band, fetch and pin the roots
+scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
+```
+
+`lota-ek-root-pin.sh` prints a fingerprint over what the network returned;
+it does not vouch for it, so confirm the pin against the vendor before the
+line enters `sources`. See
+[`configs/ek-roots/README.md`](../configs/ek-roots/README.md) for the full
+flow.
+
 Enroll the agent once per host (repeat before the certificate TTL
 expires, default 24h):
 
