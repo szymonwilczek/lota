@@ -4,7 +4,7 @@
  *
  * Build:
  *   clang -fsanitize=fuzzer,address -g -O1 \
- *     src/agent/fuzz/net_wire_fuzz.c \
+ *     fuzz/fuzz_net_wire.c \
  *     -o build/fuzz-net-wire
  *
  * Run:
@@ -84,6 +84,8 @@ static int parse_result(const uint8_t *buf, size_t size,
 
 	return 0;
 }
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {

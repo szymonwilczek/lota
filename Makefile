@@ -291,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -821,43 +821,80 @@ valgrind-smoke: all examples
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
+# Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
+# the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
-FUZZ_AGENT_OBJS += $(BUILD_DIR)/agent/fuzz/ipc_fuzz.o
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
 
-$(BUILD_DIR)/agent/fuzz/ipc_fuzz.o: src/agent/fuzz/ipc_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/agent/fuzz:
+$(BUILD_DIR)/fuzz:
 	mkdir -p $@
 
 fuzz-agent: $(FUZZ_AGENT_OBJS)
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
 # Config parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/config_fuzz.o: src/agent/fuzz/config_fuzz.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/agent/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/agent/fuzz/config_fuzz.o $(BUILD_DIR)/agent/fuzz/config_obj.o
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
 # Net pin SHA-256 parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o: src/agent/fuzz/net_pin_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_net_pin.o: fuzz/fuzz_net_pin.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-net-pin: $(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o
+fuzz-net-pin: $(BUILD_DIR)/fuzz/fuzz_net_pin.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
 
 # Net wire protocol parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o: src/agent/fuzz/net_wire_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_net_wire.o: fuzz/fuzz_net_wire.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
+fuzz-net-wire: $(BUILD_DIR)/fuzz/fuzz_net_wire.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
 
-fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
+# Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
+$(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
+
+# Sealed-envelope parser + AES-256-GCM core fuzz (links seal_envelope.c)
+$(BUILD_DIR)/fuzz/fuzz_seal_envelope.o: fuzz/fuzz_seal_envelope.c include/lota_envelope.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
+
+# TPM attestation-structure unmarshal fuzz (standalone, tss2-mu only)
+$(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
+
+# Policy Ed25519 signature-verify fuzz (links policy_sign.c)
+$(BUILD_DIR)/fuzz/fuzz_policy_sign.o: fuzz/fuzz_policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
+
+fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
+	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -906,6 +943,9 @@ help:
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
 	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
+	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
+	@echo "  fuzz-tpm-attest  Build TPM attestation-structure unmarshal fuzz target"
+	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Benchmark targets (see benchmarks/README.md):"

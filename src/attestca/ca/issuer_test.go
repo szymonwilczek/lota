@@ -23,23 +23,23 @@ type certAndKey struct {
 	key  crypto.Signer
 }
 
-func mustSerial(t *testing.T) *big.Int {
-	t.Helper()
+func mustSerial(tb testing.TB) *big.Int {
+	tb.Helper()
 	s, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		t.Fatalf("serial: %v", err)
+		tb.Fatalf("serial: %v", err)
 	}
 	return s
 }
 
-func makeRoot(t *testing.T, cn string) certAndKey {
-	t.Helper()
+func makeRoot(tb testing.TB, cn string) certAndKey {
+	tb.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("root key: %v", err)
+		tb.Fatalf("root key: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          mustSerial(t),
+		SerialNumber:          mustSerial(tb),
 		Subject:               pkix.Name{CommonName: cn},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -49,7 +49,7 @@ func makeRoot(t *testing.T, cn string) certAndKey {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
-		t.Fatalf("root cert: %v", err)
+		tb.Fatalf("root cert: %v", err)
 	}
 	cert, _ := x509.ParseCertificate(der)
 	return certAndKey{cert: cert, der: der, key: key}
@@ -57,18 +57,18 @@ func makeRoot(t *testing.T, cn string) certAndKey {
 
 // makeEKCert mints an RSA EK leaf signed by root, carrying the TCG EK OID
 // in the requested placement.
-func makeEKCert(t *testing.T, root certAndKey, opts func(*x509.Certificate)) ([]byte, *rsa.PublicKey) {
-	t.Helper()
+func makeEKCert(tb testing.TB, root certAndKey, opts func(*x509.Certificate)) ([]byte, *rsa.PublicKey) {
+	tb.Helper()
 	ekKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("EK key: %v", err)
+		tb.Fatalf("EK key: %v", err)
 	}
 	ekPolicyOID, err := x509.OIDFromInts([]uint64{2, 23, 133, 8, 1})
 	if err != nil {
-		t.Fatalf("EK policy OID: %v", err)
+		tb.Fatalf("EK policy OID: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: mustSerial(t),
+		SerialNumber: mustSerial(tb),
 		Subject:      pkix.Name{CommonName: "tpm-ek"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
@@ -79,7 +79,7 @@ func makeEKCert(t *testing.T, root certAndKey, opts func(*x509.Certificate)) ([]
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &ekKey.PublicKey, root.key)
 	if err != nil {
-		t.Fatalf("EK cert: %v", err)
+		tb.Fatalf("EK cert: %v", err)
 	}
 	return der, &ekKey.PublicKey
 }
@@ -88,14 +88,14 @@ func pemBlock(typ string, der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der})
 }
 
-func makeLOTACAPEM(t *testing.T) (caCertPEM, caKeyPEM []byte) {
-	t.Helper()
+func makeLOTACAPEM(tb testing.TB) (caCertPEM, caKeyPEM []byte) {
+	tb.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("CA key: %v", err)
+		tb.Fatalf("CA key: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          mustSerial(t),
+		SerialNumber:          mustSerial(tb),
 		Subject:               pkix.Name{CommonName: "lota-attest-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
@@ -105,25 +105,25 @@ func makeLOTACAPEM(t *testing.T) (caCertPEM, caKeyPEM []byte) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
-		t.Fatalf("CA cert: %v", err)
+		tb.Fatalf("CA cert: %v", err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		t.Fatalf("marshal CA key: %v", err)
+		tb.Fatalf("marshal CA key: %v", err)
 	}
 	return pemBlock("CERTIFICATE", der), pemBlock("PRIVATE KEY", keyDER)
 }
 
-func newTestIssuer(t *testing.T, root certAndKey) *Issuer {
-	t.Helper()
-	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+func newTestIssuer(tb testing.TB, root certAndKey) *Issuer {
+	tb.Helper()
+	caCertPEM, caKeyPEM := makeLOTACAPEM(tb)
 	is, err := NewIssuer(IssuerConfig{
 		CACertPEM:  caCertPEM,
 		CAKeyPEM:   caKeyPEM,
 		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
 	})
 	if err != nil {
-		t.Fatalf("NewIssuer: %v", err)
+		tb.Fatalf("NewIssuer: %v", err)
 	}
 	return is
 }

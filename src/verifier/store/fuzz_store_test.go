@@ -94,6 +94,48 @@ func FuzzParseHardwareID(f *testing.F) {
 	})
 }
 
+// fuzzes the bans pagination cursor decoder (next_id comes from the HTTP API)
+func FuzzDecodeBanCursor(f *testing.F) {
+	// seed 1: well-formed cursor
+	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	// seed 2: missing hardware ID half
+	f.Add("1700000000000000000")
+	// seed 3: too many colons
+	f.Add("1:2:3")
+	// seed 4: non-numeric timestamp
+	f.Add("notanumber:abcdef")
+	// seed 5: negative timestamp
+	f.Add("-5:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	// seed 6: empty
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, nextID string) {
+		cur, err := DecodeBanCursor(nextID)
+		if err != nil {
+			return
+		}
+
+		// decoded cursor must survive an encode/decode round-trip
+		// unchanged (the encoder is what the API hands back to clients)
+		enc := EncodeBanCursor(BanEntry{
+			HardwareID: cur.HardwareID,
+			BannedAt:   cur.BannedAt,
+		})
+		cur2, err2 := DecodeBanCursor(enc)
+		if err2 != nil {
+			t.Errorf("re-decode of encoded cursor %q failed: %v", enc, err2)
+		}
+		if cur.HardwareID != cur2.HardwareID {
+			t.Errorf("round-trip changed hardware ID: %x -> %x",
+				cur.HardwareID, cur2.HardwareID)
+		}
+		if !cur.BannedAt.Equal(cur2.BannedAt) {
+			t.Errorf("round-trip changed timestamp: %v -> %v",
+				cur.BannedAt, cur2.BannedAt)
+		}
+	})
+}
+
 // fuzzes X.509 AIK certificate parsing (DER input from untrusted agent)
 func FuzzParseAIKCertificate(f *testing.F) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
