@@ -23,13 +23,82 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide whether arm64 cross-build is required
+        id: cross_build
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -eu
+          zero="0000000000000000000000000000000000000000"
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+          else
+            base="$PUSH_BEFORE_SHA"
+            head="$HEAD_SHA"
+          fi
+
+          if [ "$base" = "$zero" ]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            echo "reason=initial push has no diff base" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base"
+          fi
+          if ! git cat-file -e "$head^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$head"
+          fi
+
+          changed="$(mktemp)"
+          git diff --name-only "$base" "$head" >"$changed"
+
+          run=false
+          matched=""
+          while IFS= read -r path; do
+            case "$path" in
+              Makefile | VERSION | go.work | go.work.sum | */Makefile.fragment | \
+              */go.mod | */go.sum | src/* | include/* | tests/* | benchmarks/* | \
+              policies/* | configs/* | selinux/* | systemd/* | dbus/* | \
+              .github/workflows/cross-arch.yml | *.c | *.h | *.go)
+                run=true
+                matched="$path"
+                break
+                ;;
+            esac
+          done <"$changed"
+
+          if [ "$run" = true ]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            echo "reason=relevant input changed: $matched" >>"$GITHUB_OUTPUT"
+          else
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "reason=no source, build, BPF, policy, or deployment input changed" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip arm64 cross-build
+        if: steps.cross_build.outputs.run != 'true'
+        env:
+          SKIP_REASON: ${{ steps.cross_build.outputs.reason }}
+        run: |
+          echo "Skipping arm64 cross-build: $SKIP_REASON"
 
       - name: Set up QEMU for arm64
+        if: steps.cross_build.outputs.run == 'true'
         uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
         with:
           platforms: arm64
 
       - name: Build and unit-test under linux/arm64
+        if: steps.cross_build.outputs.run == 'true'
         # emulates aarch64 and runs the full build, the BPF object
         # and the unit suite so a wrong-endian parser or a layout
         # assumption fails here instead of on an ARM host

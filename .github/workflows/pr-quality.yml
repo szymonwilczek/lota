@@ -1,0 +1,39 @@
+name: PR quality
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-quality:
+    name: commit hygiene and hotpath docs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the source and commit range
+      pull-requests: write # add the AI-Assisted label when commit metadata declares AI assistance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check PR commits
+        id: quality
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/check-pr-quality.sh "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Label AI-assisted pull request
+        if: steps.quality.outputs.ai_assisted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR_NUMBER" --add-label "AI-Assisted"

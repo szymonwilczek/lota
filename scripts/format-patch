@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+# Normalize local commit messages without touching file trees.
+#
+# This script rewrites commits in base..head and changes commit messages only.
+# It removes trailing whitespace, fixes simple Problem:/Solution: inline body
+# headings, keeps one blank line before Signed-off-by, and wraps body text.
+
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [[ -z ${ROOT:-} ]]; then
+	printf 'ERROR: run this script from inside the LOTA git repository.\n' >&2
+	exit 2
+fi
+cd "$ROOT"
+
+usage() {
+	cat <<'USAGE'
+usage: scripts/format-patch [<base-commit> [<head-commit>]]
+
+Rewrites local commits in base..head so commit messages follow the local patch
+format. The commit file trees are NOT modified.
+
+The message rewrite:
+  - removes trailing spaces, trailing tabs, and final blank lines,
+  - turns "Problem: text" and "Solution: text" into standalone headings,
+  - keeps one blank line before the first Signed-off-by trailer,
+  - wraps body text to 75 columns, allowing a final word to reach 77 columns.
+
+If base is omitted, the script uses the upstream merge-base, origin/lota-next,
+or lota-next in that order. Head defaults to HEAD and must be the current branch
+tip.
+USAGE
+}
+
+die() {
+	printf 'ERROR: %s\n' "$*" >&2
+	exit 2
+}
+
+resolve_base() {
+	local upstream
+
+	if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
+		git merge-base HEAD "$upstream"
+		return
+	fi
+
+	if git rev-parse --verify --quiet origin/lota-next >/dev/null; then
+		git merge-base HEAD origin/lota-next
+		return
+	fi
+
+	if git rev-parse --verify --quiet lota-next >/dev/null; then
+		git merge-base HEAD lota-next
+		return
+	fi
+
+	return 1
+}
+
+normalize_message() {
+	local input=$1
+	local output=$2
+
+	perl -0e '
+		use strict;
+		use warnings;
+
+		my $text = do { local $/; <> };
+		$text =~ s/[ \t]+$//mg;
+		$text =~ s/^Problem:[ \t]+(.+)$/Problem:\n$1/mg;
+		$text =~ s/^Solution:[ \t]+(.+)$/Solution:\n$1/mg;
+
+		my @in = split /\n/, $text, -1;
+		pop @in while @in && $in[-1] eq "";
+
+		my @out;
+		my @paragraph;
+		my $signed_off_block = 0;
+
+		sub flush_paragraph {
+			return unless @paragraph;
+			my @words = map { split /[ \t]+/ } @paragraph;
+			my $line = "";
+
+			for my $word (@words) {
+				next if $word eq "";
+				if ($line eq "") {
+					$line = $word;
+					next;
+				}
+				if (length($line) + 1 + length($word) <= 77) {
+					$line .= " $word";
+					next;
+				}
+				push @out, $line;
+				$line = $word;
+			}
+			push @out, $line if $line ne "";
+			@paragraph = ();
+		}
+
+		for my $idx (0 .. $#in) {
+			my $line = $in[$idx];
+
+			if ($idx == 0) {
+				push @out, $line;
+				next;
+			}
+
+			if ($line eq "") {
+				flush_paragraph();
+				push @out, "" if @out && $out[-1] ne "";
+				$signed_off_block = 0;
+				next;
+			}
+
+			if ($line eq "Problem:" || $line eq "Solution:") {
+				flush_paragraph();
+				push @out, $line;
+				$signed_off_block = 0;
+				next;
+			}
+
+			if ($line =~ /^Signed-off-by:\s/) {
+				flush_paragraph();
+				if (!$signed_off_block) {
+					pop @out while @out && $out[-1] eq "";
+					push @out, "" if @out;
+				}
+				push @out, $line;
+				$signed_off_block = 1;
+				next;
+			}
+
+			if ($line =~ /^[A-Za-z0-9-]+-by:\s/) {
+				flush_paragraph();
+				push @out, $line;
+				next;
+			}
+
+			push @paragraph, $line;
+			$signed_off_block = 0;
+		}
+
+		flush_paragraph();
+		pop @out while @out && $out[-1] eq "";
+		print join("\n", @out), "\n";
+	' "$input" >"$output"
+}
+
+write_commit_message() {
+	local commit=$1
+	local output=$2
+
+	git cat-file commit "$commit" | sed '1,/^$/d' >"$output"
+}
+
+main() {
+	local base=""
+	local head="HEAD"
+	local branch
+	local head_commit
+	local backup_branch
+	local safe_branch
+	local tmpdir
+	local commit tree parent_count new_parent new_commit
+	local old_msg new_msg
+	local author_name author_email author_date
+	local committer_name committer_email committer_date
+	local changed=0
+	local rewritten=0
+	local -a commits sign_args=()
+
+	if (($# > 0)) && [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+		usage
+		return 0
+	fi
+	if (($# > 2)); then
+		usage
+		return 2
+	fi
+
+	if (($# >= 1)); then
+		base=$1
+	else
+		base=$(resolve_base) || die "cannot select a base commit; pass it explicitly"
+	fi
+	if (($# >= 2)); then
+		head=$2
+	fi
+
+	git cat-file -e "$base^{commit}" 2>/dev/null || die "base commit not found: $base"
+	git cat-file -e "$head^{commit}" 2>/dev/null || die "head commit not found: $head"
+
+	branch=$(git symbolic-ref --quiet --short HEAD) || die "detached HEAD is not supported"
+	head_commit=$(git rev-parse "$head")
+	[[ $(git rev-parse HEAD) == "$head_commit" ]] ||
+		die "head must be the current branch tip"
+
+	git diff --quiet || die "working tree has unstaged changes"
+	git diff --cached --quiet || die "index has staged changes"
+
+	mapfile -t commits < <(git rev-list --reverse "$base..$head")
+	((${#commits[@]} > 0)) || die "no commits in selected range"
+
+	if git rev-list --merges "$base..$head" | grep -q .; then
+		die "merge commits are not supported by this message-only rewrite"
+	fi
+
+	tmpdir=$(mktemp -d)
+	trap "rm -rf -- '$tmpdir'" EXIT
+
+	safe_branch=${branch//\//-}
+	backup_branch="backup-${safe_branch}-before-format-patch-$(date -u +%Y%m%d%H%M%S)"
+	git branch "$backup_branch" "$head_commit"
+
+	if [[ $(git config --bool commit.gpgsign || true) == true ]]; then
+		sign_args=(-S)
+	fi
+
+	new_parent=$(git rev-parse "$base")
+	for commit in "${commits[@]}"; do
+		old_msg="$tmpdir/$commit.old"
+		new_msg="$tmpdir/$commit.new"
+		write_commit_message "$commit" "$old_msg"
+		normalize_message "$old_msg" "$new_msg"
+
+		if ! cmp -s "$old_msg" "$new_msg"; then
+			changed=1
+		fi
+
+		if ((changed == 0)); then
+			new_parent=$commit
+			continue
+		fi
+
+		tree=$(git show -s --format=%T "$commit")
+		parent_count=$(git rev-list --parents -n1 "$commit" | awk '{ print NF - 1 }')
+		((parent_count == 1)) || die "non-linear commit found: $commit"
+
+		author_name=$(git show -s --format=%an "$commit")
+		author_email=$(git show -s --format=%ae "$commit")
+		author_date=$(git show -s --format=%aI "$commit")
+		committer_name=$(git show -s --format=%cn "$commit")
+		committer_email=$(git show -s --format=%ce "$commit")
+		committer_date=$(git show -s --format=%cI "$commit")
+
+		new_commit=$(
+			GIT_AUTHOR_NAME="$author_name" \
+				GIT_AUTHOR_EMAIL="$author_email" \
+				GIT_AUTHOR_DATE="$author_date" \
+				GIT_COMMITTER_NAME="$committer_name" \
+				GIT_COMMITTER_EMAIL="$committer_email" \
+				GIT_COMMITTER_DATE="$committer_date" \
+				git commit-tree "${sign_args[@]}" "$tree" -p "$new_parent" -F "$new_msg"
+		)
+		new_parent=$new_commit
+		rewritten=$((rewritten + 1))
+	done
+
+	if ((changed == 0)); then
+		git branch -D "$backup_branch" >/dev/null
+		printf 'No commit message whitespace changes needed.\n'
+		return 0
+	fi
+
+	git update-ref "refs/heads/$branch" "$new_parent" "$head_commit"
+	printf 'Rewrote %d commit(s) on %s.\n' "$rewritten" "$branch"
+	printf 'Backup branch: %s\n' "$backup_branch"
+	printf 'Only commit messages were normalized; commit file trees were preserved.\n'
+	printf 'Review every rewritten description before pushing.\n'
+}
+
+main "$@"
