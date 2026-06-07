@@ -291,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -857,7 +857,14 @@ $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o: src/agent/fuzz/net_wire_fuzz.c | $(BUIL
 fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
 
-fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
+# Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
+$(BUILD_DIR)/agent/fuzz/enroll_fuzz.o: src/agent/fuzz/enroll_fuzz.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-enroll: $(BUILD_DIR)/agent/fuzz/enroll_fuzz.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
+
+fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
