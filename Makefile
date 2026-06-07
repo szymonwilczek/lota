@@ -291,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -874,8 +874,15 @@ $(BUILD_DIR)/agent/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD
 fuzz-seal-envelope: $(BUILD_DIR)/agent/fuzz/seal_envelope_fuzz.o $(BUILD_DIR)/agent/fuzz/seal_envelope_obj.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
+# TPM attestation-structure unmarshal fuzz (standalone, tss2-mu only)
+$(BUILD_DIR)/agent/fuzz/tpm_attest_fuzz.o: src/agent/fuzz/tpm_attest_fuzz.c | $(BUILD_DIR)/agent/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-tpm-attest: $(BUILD_DIR)/agent/fuzz/tpm_attest_fuzz.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
+
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
-	fuzz-seal-envelope
+	fuzz-seal-envelope fuzz-tpm-attest
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -925,6 +932,7 @@ help:
 	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
 	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
 	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
+	@echo "  fuzz-tpm-attest  Build TPM attestation-structure unmarshal fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Benchmark targets (see benchmarks/README.md):"
