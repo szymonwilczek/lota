@@ -1,4 +1,9 @@
-# LOTA EK manufacturer root sources.
+# LOTA EK manufacturer root sources -- template.
+#
+# This ships empty on purpose: a pin is only worth anything when you have
+# verified it out of band against a value the vendor controls. Copy this to
+# `sources`, then add one line per root your fleet's EK certificates chain
+# to. Every line here is a comment, so an unedited copy produces no bundle.
 #
 # One line per trusted vendor root:
 #
@@ -7,23 +12,18 @@
 #   sha256    lowercase hex SHA-256 over the certificate DER. Verify this
 #             out of band against the vendor's published fingerprint before
 #             trusting a root -- this pin is the whole point of the bundle.
+#             Never trust the value the download itself hands you.
 #   filename  bare name the root is written under in the bundle directory.
 #   url       distribution point the root is fetched from.
 #   label     free text, for the manifest and diagnostics.
 #
 # lota-ek-roots-update.sh fetches each url, recomputes the DER SHA-256, and
-# refuses to write any root whose fingerprint does not match the pin. Lines
-# whose pin is still the REPLACE_ME placeholder are rejected, so an
-# unverified vendor cannot slip into the bundle.
+# refuses to write any root whose fingerprint does not match the pin.
 #
-# Two honesty markers, both fail-closed:
-#   REPLACE_ME  pin  -- no operator-verified fingerprint yet; the tool stops.
-#   UNVERIFIED  url  -- no source I could confirm; replace it with the root
-#                       your own platforms actually chain to.
-#
-# None of these URLs is authoritative on its own. The reliable way to find
-# the right root for a platform is to take an actual EK certificate and walk
-# its issuer chain to the self-signed root:
+# The supported hardware set is not a fixed vendor list -- it is every TPM
+# whose EK root you can verify and pin. The reliable way to find the right
+# root for a platform is to walk an actual EK certificate up to its
+# self-signed root:
 #
 #   # discrete TPM / Intel PTT: EK cert lives in TPM NV
 #   sudo tpm2_nvreadpublic                       # find the 0x01c0xxxx EK cert
@@ -33,36 +33,18 @@
 #   #   $ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
 #   #   $ek.ManufacturerCertificates + $ek.AdditionalCertificates
 #   # follow each "CA Issuers" URL up until issuer == subject (the root),
-#   # then: sha256sum root.der  -> the pin.
+#   # then: sha256sum root.der  -> the pin (after out-of-band confirmation).
 #
-# Fill in only the vendors your fleet attests.
-
-# Infineon publishes its OPTIGA TPM root via its own PKI host.
-# Documented starting point. Confirm the fingerprint before trusting it.
-REPLACE_ME  infineon-optiga-rsa-root.pem  https://pki.infineon.com/OptigaRsaRootCA/OptigaRsaRootCA.crt  Infineon OPTIGA TPM RSA Root CA
-
-# Intel runs two EK PKIs: legacy discrete / early-PTT roots at
-# upgrades.intel.com, and the Intel OnDie CA
-# (https://tsci.intel.com/content/OnDieCA/) used by modern CSME firmware TPM
-# (PTT) on Tiger Lake and later -- a CSME PTT EK cert has an issuer like
-# "CSME <SoC> PTT" that chains up through OnDie CA, NOT the legacy root.
-# The legacy URL below does not fit a CSME/PTT chain, so it is left UNVERIFIED:
-# walk your EK cert's issuer up the OnDie CA repo to its self-signed root and
-# record that URL + pin.
-REPLACE_ME  intel-ek-root.pem             UNVERIFIED  Intel EK Root CA (legacy upgrades.intel.com) / Intel OnDie CA root (CSME PTT)
-
-# STM publishes its TPM EK CA chain via GlobalSign (ST application note
-# TN1330, "TPM EK certificate"). The line below pins the ST TPM Root.
-# The chain's top root is GlobalSign Trusted Computing CA
-# (https://secure.globalsign.com/cacert/gstpmroot.crt) -- pin whichever
-# level your fleet's EK certificates terminate at.
-REPLACE_ME  stm-tpm-ek-root.pem           https://secure.globalsign.com/cacert/stmtpmekroot.crt  STMicroelectronics TPM EK Root CA
-
-# AMD fTPM and AMD-based vTPM EK certificates have no single stable public
-# root distribution point: on most platforms they chain under Microsoft's
-# TPM PKI rather than an AMD root, and many AMD fTPMs ship without an EK
-# certificate provisioned in NV at all.
-# There is nothing to pin until you have an actual EK cert whose chain
-# you can walk, so both stay UNVERIFIED.
-REPLACE_ME  amd-ftpm-ek-root.pem          UNVERIFIED  AMD fTPM EK Root CA
-REPLACE_ME  microsoft-tpm-root.pem        UNVERIFIED  Microsoft TPM Root CA (covers AMD fTPM / vTPM EK chains)
+# See configs/ek-roots/README.md for the full discovery and verification flow.
+#
+# Two manufacturers publish a root over a channel you can verify and pin
+# directly; the lines below are starting hints, not active entries -- fill
+# the pin you verified and uncomment:
+#
+# <sha256>  infineon-optiga-rsa-root.pem  https://pki.infineon.com/OptigaRsaRootCA/OptigaRsaRootCA.crt  Infineon OPTIGA TPM RSA Root CA
+# <sha256>  stm-tpm-ek-root.pem           https://secure.globalsign.com/cacert/stmtpmekroot.crt        STMicroelectronics TPM EK Root CA
+#
+# Intel (legacy upgrades.intel.com vs Intel OnDie CA for CSME PTT), AMD fTPM,
+# and AMD vTPM do not reduce to a single shippable root -- walk a real EK
+# certificate from the platform and pin whatever self-signed root it
+# terminates at. See the README.

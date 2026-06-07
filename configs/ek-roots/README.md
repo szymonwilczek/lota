@@ -4,13 +4,12 @@ The attestation CA accepts an Endorsement Key certificate only if it chains
 to a TPM manufacturer root the operator trusts. Production fleets span
 several manufacturers, so the trust set is a *bundle* of vendor roots.
 
-What this directory ships is **not** the vendor certificates themselves --
-those are published by each manufacturer and fetched out of band -- but the
-machinery that turns them into a pin-enforced bundle:
+What this directory ships is **not** vendor certificates -- it is the
+machinery that turns operator-verified roots into a pin-enforced bundle:
 
-- `sources.example` -- the canonical per-vendor download URLs and the slots
-  for the SHA-256 fingerprint you verify against each vendor's published
-  value.
+- `sources.example` -- the per-vendor template: one line per root, carrying
+  the SHA-256 fingerprint you verified out of band, the file it is written
+  under, and where it was fetched.
 - `lota-ek-roots-update.sh` (in `scripts/`) -- fetches each root, refuses
   any download whose fingerprint does not match the pin you recorded, and
   writes the populated bundle directory.
@@ -22,26 +21,43 @@ into the directory is rejected. A swapped or injected root therefore cannot
 widen the trusted manufacturer set without the change showing up as a pin
 edit in version control.
 
-## Vendors
+## Why no roots ship here
 
-The bundle is meant to cover the manufacturers a LOTA fleet realistically
-sees. `sources.example` lists, per vendor, a starting point for the root
-distribution:
+The bundle ships empty by design. A pin is only worth anything if it was
+verified **out of band** against a source the vendor controls -- a signed
+advisory, a release note, a fingerprint the manufacturer publishes
+separately from the download. That verification is an act the operator
+performs against their own platforms; the project cannot stand in for it,
+and a fingerprint computed over a blob the project happened to download is
+worth nothing (a man in the middle hands you a matching pair).
 
-| Vendor              | Root family                | Distribution                                          |
-|---------------------|----------------------------|-------------------------------------------------------|
-| Infineon            | OPTIGA TPM RSA/ECC root CA  | Infineon PKI host (documented hint)                   |
-| STMicroelectronics  | ST TPM EK root CA          | GlobalSign (ST app note TN1330; documented hint)      |
-| Intel               | PTT / EK root CA           | legacy upgrades.intel.com **or** Intel OnDie CA (CSME PTT) -- `UNVERIFIED` |
-| AMD fTPM            | AMD fTPM EK root           | no single public root -- `UNVERIFIED`                 |
-| Microsoft           | Microsoft TPM Root CA      | covers AMD fTPM / vTPM EK chains -- `UNVERIFIED`       |
+Two manufacturers publish a root over a channel an operator can verify and
+pin directly: **Infineon** (OPTIGA TPM root via its PKI host) and
+**STMicroelectronics** (ST TPM EK root via GlobalSign, ST app note TN1330).
+The others do not reduce to a single shippable anchor:
 
-Cover only the manufacturers your fleet actually attests; an unused vendor
-root only widens the trust set.
+- **Intel** runs two PKIs -- the legacy discrete / early-PTT roots
+  (historically at `upgrades.intel.com`) and the
+  [Intel OnDie CA](https://software.intel.com/sites/manageability/AMT_Implementation_and_Reference_Guide/default.htm?turl=WordDocuments%2FODCA.htm)
+  used by modern CSME firmware TPM (PTT) on Tiger Lake and later. A CSME PTT
+  EK cert (issuer `CSME <SoC> PTT`) chains through the OnDie CA root
+  (`https://tsci.intel.com/content/OnDieCA/certs/OnDie_CA_RootCA_Certificate.cer`),
+  not the legacy root, so which root to pin depends on the platform -- walk
+  the EK cert's chain to be sure.
+- **AMD fTPM** and AMD-based **vTPM** EK certificates chain under
+  Microsoft's TPM PKI on most platforms, not an AMD root, and many AMD
+  fTPMs ship with no EK certificate in NV at all -- there is nothing to pin
+  until you have an EK cert whose chain you can walk.
 
-**No URL here is authoritative on its own.** The reliable way to find the
-right root for a platform is to take an actual EK certificate and walk its
-issuer chain to the self-signed root:
+So the supported hardware set is not a fixed vendor list. It is **every TPM
+whose EK certificate chains to a root you can verify and pin** -- which on
+real platforms is determined by walking an actual EK certificate up to its
+self-signed root, not by trusting a name in a table.
+
+## Finding the root for a platform
+
+Take an EK certificate from a host you mean to attest and walk its issuer
+chain to the self-signed root:
 
 ```sh
 # discrete TPM / Intel PTT: the EK cert lives in TPM NV
@@ -57,28 +73,15 @@ On a Windows host the chain comes from PowerShell (admin):
 `ManufacturerCertificates` and `AdditionalCertificates`; export each
 (`[IO.File]::WriteAllBytes(...,$c.RawData)`) and walk the same way.
 
-`sources.example` only ships a documented URL where the vendor itself
-publishes one (Infineon, STM via GlobalSign). Where I could not confirm a
-source it ships `UNVERIFIED`, so the tool stops until you supply the root
-your own platforms chain to:
-
-- **Intel** runs two PKIs -- legacy discrete / early-PTT roots at
-  `upgrades.intel.com`, and the Intel OnDie CA
-  (`tsci.intel.com/content/OnDieCA`) used by modern CSME firmware TPM (PTT)
-  on Tiger Lake and later. A CSME PTT EK cert (issuer `CSME <SoC> PTT`)
-  chains through OnDie CA, not the legacy root, so the legacy URL is not a
-  safe default.
-- **AMD fTPM** and AMD-based **vTPM** EK certificates chain under Microsoft's
-  TPM PKI on most platforms, and many AMD fTPMs ship with no EK certificate
-  in NV at all (`tpm2_nvreadpublic` shows no `0x01c0xxxx` cert) -- there is
-  nothing to pin until you have an EK cert whose chain you can walk.
+The pin you record is the SHA-256 over the root's DER **after** you have
+confirmed that root against the vendor's published value -- never the value
+the download alone hands you.
 
 ## Provisioning a bundle
 
-1. Copy the template and fill each `pin` with the SHA-256 fingerprint the
-   vendor publishes for that root (verify it out of band -- a vendor
-   advisory, a signed release note -- never trust the value the download
-   itself hands you):
+1. Copy the template and add one line per root your fleet's EK certificates
+   chain to. Fill each `pin` with the SHA-256 you verified out of band (a
+   vendor advisory, a signed release note -- never the download itself):
 
    ```sh
    cp sources.example sources
