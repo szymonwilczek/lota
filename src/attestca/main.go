@@ -40,7 +40,7 @@ func main() {
 	var (
 		listen       = flag.String("listen", ":8444", "TLS listen address")
 		caCertPath   = flag.String("ca-cert", "", "PEM CA certificate that signs AIK certificates")
-		caKeyPath    = flag.String("ca-key", "", "PEM PKCS#8 CA private key")
+		caKeyPath    = flag.String("ca-key", "", "(dev-only) PEM PKCS#8 CA private key; production holds the CA key in an HSM")
 		tlsCertPath  = flag.String("tls-cert", "", "PEM server TLS certificate")
 		tlsKeyPath   = flag.String("tls-key", "", "PEM server TLS private key")
 		ekRootBundle = flag.String("ek-root-bundle", "", "directory holding a pinned multi-vendor EK root bundle (see "+ca.EKBundleManifestName+")")
@@ -107,6 +107,13 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("read ca-key: %w", err)
 	}
+
+	// CA signing key anchors the whole fleet's trust.
+	// On-disk key is a development convenience only; production holds it in an HSM.
+	// Warn loudly so an on-disk key is never mistaken for a production default.
+	log.Warn("using on-disk CA signing key -- development-only fallback; "+
+		"hold the CA key in an HSM in production",
+		"flag", "-ca-key", "doc", "docs/PRODUCTION_BRINGUP.md")
 
 	var ekRootPEMs [][]byte
 	// operator-provisioned, pin-enforced bundle is the trust baseline

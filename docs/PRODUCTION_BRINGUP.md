@@ -198,6 +198,12 @@ The source is selectable: an on-disk PKCS#8 PEM (`-ca-key`) for development,
 or an external key store that never exposes the private key for production.
 The sections below cover the production options.
 
+`-ca-key` is a **development-only fallback**. The key sits in the clear on
+the host, so a host compromise yields the fleet's signing root. The CA logs
+a loud warning at startup whenever it is used, and it is never the
+production default: a production CA holds the key in an HSM (next section)
+and keeps `-ca-key` for local bring-up and tests only.
+
 The bundle ships empty: the supported set is every TPM whose EK
 certificate chains to a root you can verify and pin, not a fixed vendor
 list. Build it from the platforms you actually attest -- draft a sources
