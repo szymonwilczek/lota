@@ -66,6 +66,48 @@ jobs:
           working-directory: src/attestca
           args: --config ../../.golangci.yml ./...
 
+  pkcs11-softhsm:
+    name: pkcs11-softhsm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install SoftHSM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends softhsm2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/attestca/go.mod
+          cache-dependency-path: src/attestca/go.sum
+
+      - name: Initialise a SoftHSM token
+        run: |
+          set -eu
+          conf="$RUNNER_TEMP/softhsm2.conf"
+          tokens="$RUNNER_TEMP/softhsm-tokens"
+          mkdir -p "$tokens"
+          printf 'directories.tokendir = %s\nobjectstore.backend = file\n' \
+            "$tokens" >"$conf"
+          export SOFTHSM2_CONF="$conf"
+          softhsm2-util --init-token --free --label lota-ca \
+            --pin 1234 --so-pin 12345678
+          echo "SOFTHSM2_CONF=$conf" >>"$GITHUB_ENV"
+
+      - name: Exercise the PKCS#11 CA signer against SoftHSM
+        working-directory: src/attestca
+        env:
+          CGO_ENABLED: "1"
+          LOTA_TEST_PKCS11_MODULE: /usr/lib/softhsm/libsofthsm2.so
+          LOTA_TEST_PKCS11_TOKEN: lota-ca
+          LOTA_CA_PKCS11_PIN: "1234"
+        run: go test -tags pkcs11 -run TestPKCS11SignerIssuesAIK -count=1 -v .
+
   go-coverage:
     name: go-coverage-ratchet
     runs-on: ubuntu-latest

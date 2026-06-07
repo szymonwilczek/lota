@@ -36,7 +36,8 @@ the toolchain standard library, not the directive. golangci-lint runs at v2
 key: `make attest-ca GO_TAGS=pkcs11` (or `go build -tags pkcs11`) compiles
 in the `crypto11` dependency and needs cgo plus a PKCS#11 module. The
 default build is pure-Go and carries no PKCS#11 code, so the reproducible
-build and the standard binary are unaffected.
+build and the standard binary are unaffected. The `pkcs11-softhsm` job in
+`go-static-analysis.yml` exercises that path against SoftHSM on every PR.
 
 ## Testing policy
 
