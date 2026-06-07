@@ -26,7 +26,8 @@ build (`go-version-file` plus `GOTOOLCHAIN=auto` on the runners). Bump the
 directive across all modules and `go.work` together, and refresh module
 dependencies in the same change, so the graph stays consistent. The
 govulncheck job pins an explicit patched `1.25.x` because it reports against
-the toolchain standard library, not the directive.
+the toolchain standard library, not the directive. golangci-lint runs at v2
+(`.golangci.yml` carries `version: "2"`).
 
 ## Testing policy
 
