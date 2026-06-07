@@ -52,15 +52,30 @@ activation-bound to the EK and the verifier trusted it through the
 certificate chain alone.
 
 This demo passes a single `-ek-root` because swTPM mints one local CA. A
-production fleet instead trusts a pin-enforced multi-vendor bundle:
+production fleet instead trusts a pin-enforced multi-vendor bundle. The
+bundle ships empty: the supported hardware set is every TPM whose EK
+certificate chains to a root you can verify and pin, not a fixed vendor
+list. Build a bundle from the platforms you actually attest:
 
 ```sh
+# 1. draft a sources line from a host's EK certificate (walks the issuer
+#    chain to the self-signed root and fingerprints it)
+sudo tpm2_nvread 0x01c00002 -o ek.der
+cp configs/ek-roots/sources.example sources
+scripts/lota-ek-root-pin.sh ek.der >>sources
+
+# 2. verify each pin out of band against the vendor's published value,
+#    then materialize the bundle (re-checks every fingerprint, fails closed)
+scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
+
+# 3. point the CA at it
 lota-attest-ca ... -ek-root-bundle /var/lib/lota/ek-roots
 ```
 
 The CA fails closed if any pinned manufacturer root is missing, mismatched,
-or unpinned. See [`configs/ek-roots/README.md`](../../configs/ek-roots/README.md)
-for how to materialize the bundle from the vendor sources.
+or unpinned, and requires at least one root source to start at all. See
+[`configs/ek-roots/README.md`](../../configs/ek-roots/README.md) for the
+full discovery and verification flow.
 
 The script starts `lota-verifier` from a writable runtime directory
 (`RUN_DIR`, default: a fresh `/tmp/lota-enrollment.*`) and points

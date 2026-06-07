@@ -109,7 +109,7 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	}
 
 	var ekRootPEMs [][]byte
-	// shipped, pin-enforced bundle is the trust baseline
+	// operator-provisioned, pin-enforced bundle is the trust baseline
 	// -ek-root adds operator-supplied roots (e.g. a swtpm CA in the demo tor) on top
 	if cfg.ekRootBundle != "" {
 		bundlePEMs, err := ca.LoadEKRootBundle(cfg.ekRootBundle)

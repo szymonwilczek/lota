@@ -73,18 +73,31 @@ On a Windows host the chain comes from PowerShell (admin):
 `ManufacturerCertificates` and `AdditionalCertificates`; export each
 (`[IO.File]::WriteAllBytes(...,$c.RawData)`) and walk the same way.
 
-The pin you record is the SHA-256 over the root's DER **after** you have
-confirmed that root against the vendor's published value -- never the value
-the download alone hands you.
+`scripts/lota-ek-root-pin.sh` automates the walk: hand it the EK certificate
+and it follows the AIA chain to the self-signed root, then prints the root
+PEM and a ready sources line carrying the root's SHA-256:
+
+```sh
+sudo tpm2_nvread 0x01c00002 -o ek.der
+scripts/lota-ek-root-pin.sh ek.der
+# de0e...99b  acme-tpm-root-ca.pem  https://...  Acme TPM Root CA
+```
+
+The pin it prints is over what the network returned -- it does **not**
+vouch for it. The pin you record is the SHA-256 over the root's DER **after**
+you have confirmed that root against the vendor's published value -- never
+the value the download alone hands you.
 
 ## Provisioning a bundle
 
 1. Copy the template and add one line per root your fleet's EK certificates
-   chain to. Fill each `pin` with the SHA-256 you verified out of band (a
+   chain to -- `lota-ek-root-pin.sh` drafts a line from a platform's EK
+   certificate. Fill each `pin` with the SHA-256 you verified out of band (a
    vendor advisory, a signed release note -- never the download itself):
 
    ```sh
    cp sources.example sources
+   scripts/lota-ek-root-pin.sh ek.der >>sources   # draft a line, then verify its pin
    $EDITOR sources
    ```
 
