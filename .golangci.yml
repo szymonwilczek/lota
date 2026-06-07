@@ -1,24 +1,47 @@
+version: "2"
 run:
-  timeout: 5m
-  tests: false
   modules-download-mode: readonly
-
+  tests: false
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - gosec
-    - gosimple
     - govet
     - revive
     - staticcheck
     - unused
-
-linters-settings:
-  errcheck:
-    check-blank: true
-    check-type-assertions: true
-  revive:
-    rules:
-      - name: exported
-        disabled: true
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    staticcheck:
+      checks:
+        - all
+        - -ST1*
+        - -QF1*
+    gosec:
+      excludes:
+        - G115
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

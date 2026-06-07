@@ -18,6 +18,17 @@ full model and the release flow.
 - **Out of band**: Syzkaller fuzzes the BPF LSM / kernel surface against
   `lota-next` (configured separately, not in `.github/workflows`).
 
+## Go toolchain and dependencies
+
+Every module and the workspace pin the same `go` directive (`1.25.8`) and
+carry **no** `toolchain` directive, so the system or CI Go selects the
+build (`go-version-file` plus `GOTOOLCHAIN=auto` on the runners). Bump the
+directive across all modules and `go.work` together, and refresh module
+dependencies in the same change, so the graph stays consistent. The
+govulncheck job pins an explicit patched `1.25.x` because it reports against
+the toolchain standard library, not the directive. golangci-lint runs at v2
+(`.golangci.yml` carries `version: "2"`).
+
 ## Testing policy
 
 | Layer | What | How |
@@ -83,6 +94,11 @@ while operator provisioning and host bring-up scripts (`lota-*`,
 `setup-fsverity.sh`) are deployment steps and map to the operator-facing
 [`PRODUCTION_BRINGUP.md`](PRODUCTION_BRINGUP.md) and the relevant example
 READMEs instead.
+
+Module and workspace manifests (`go.mod`, `go.sum`, `go.work`) map to this
+file rather than a runtime surface: a dependency or Go-directive change is a
+contributor concern, not a trust-model or integrator-contract change, so a
+dependency refresh does not drag in a security-doc edit.
 
 ## How the fuzzers work
 
