@@ -18,6 +18,16 @@ full model and the release flow.
 - **Out of band**: Syzkaller fuzzes the BPF LSM / kernel surface against
   `lota-next` (configured separately, not in `.github/workflows`).
 
+## Go toolchain and dependencies
+
+Every module and the workspace pin the same `go` directive (`1.25.8`) and
+carry **no** `toolchain` directive, so the system or CI Go selects the
+build (`go-version-file` plus `GOTOOLCHAIN=auto` on the runners). Bump the
+directive across all modules and `go.work` together, and refresh module
+dependencies in the same change, so the graph stays consistent. The
+govulncheck job pins an explicit patched `1.25.x` because it reports against
+the toolchain standard library, not the directive.
+
 ## Testing policy
 
 | Layer | What | How |
