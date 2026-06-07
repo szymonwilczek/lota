@@ -77,6 +77,13 @@ It intentionally keys off critical surfaces rather than commit size: TPM
 enrollment, verifier policy, BPF LSM enforcement, SDK token formats,
 deployment policy, CI, build, and release process.
 
+Scripts are split by audience: developer-workflow tooling (`check-*`,
+`format-patch`, the CI gate scripts) maps to the contributor docs above,
+while operator provisioning and host bring-up scripts (`lota-*`,
+`setup-fsverity.sh`) are deployment steps and map to the operator-facing
+[`PRODUCTION_BRINGUP.md`](PRODUCTION_BRINGUP.md) and the relevant example
+READMEs instead.
+
 ## How the fuzzers work
 
 - **Go fuzzing** is native (`func FuzzXxx(f *testing.F)`). Targets cover the
