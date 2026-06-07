@@ -32,6 +32,13 @@ govulncheck job pins an explicit patched `1.25.x` because it reports against
 the toolchain standard library, not the directive. golangci-lint runs at v2
 (`.golangci.yml` carries `version: "2"`).
 
+`lota-attest-ca` has an optional PKCS#11 build for an HSM-backed CA signing
+key: `make attest-ca GO_TAGS=pkcs11` (or `go build -tags pkcs11`) compiles
+in the `crypto11` dependency and needs cgo plus a PKCS#11 module. The
+default build is pure-Go and carries no PKCS#11 code, so the reproducible
+build and the standard binary are unaffected. The `pkcs11-softhsm` job in
+`go-static-analysis.yml` exercises that path against SoftHSM on every PR.
+
 ## Testing policy
 
 | Layer | What | How |

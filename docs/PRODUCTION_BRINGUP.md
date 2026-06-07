@@ -187,6 +187,59 @@ lota-attest-ca -listen :8444 \
 example a swtpm CA in the enrollment demo) on top of the bundle; pass
 either or both.
 
+#### CA signing key
+
+CA signing key is the anchor every issued AIK certificate chains to,
+so the CA loads it as a `crypto.Signer` and checks the signer's public key
+against the CA certificate at startup -- a key that does not match the
+certificate is refused, whether it comes from a file or an external store.
+
+The source is selectable: an on-disk PKCS#8 PEM (`-ca-key`) for development,
+or an external key store that never exposes the private key for production.
+The sections below cover the production options.
+
+`-ca-key` is a **development-only fallback**. The key sits in the clear on
+the host, so a host compromise yields the fleet's signing root. The CA logs
+a loud warning at startup whenever it is used, and it is never the
+production default: a production CA holds the key in an HSM (next section)
+and keeps `-ca-key` for local bring-up and tests only.
+
+#### CA signing key in an HSM (PKCS#11)
+
+Production CA holds its signing key in a PKCS#11 token (an HSM, or SoftHSM
+for tests) so the private key never leaves the device. This needs a
+PKCS#11-enabled build of the CA -- the default binary is pure-Go and has no
+PKCS#11 support:
+
+```sh
+make BUILD_DIR=/var/tmp/lota-build attest-ca GO_TAGS=pkcs11   # cgo + PKCS#11
+```
+
+Point the CA at the token instead of `-ca-key`. The PIN is read from the
+environment, never a flag, so it stays out of the process argument list:
+
+```sh
+export LOTA_CA_PKCS11_PIN=...                 # token user PIN
+lota-attest-ca -listen :8444 \
+    -ca-cert ca.crt \
+    -ca-key-pkcs11-module /usr/lib64/softhsm/libsofthsm2.so \
+    -ca-key-pkcs11-token lota-ca \
+    -ca-key-pkcs11-label lota-ca-key \
+    -tls-cert tls.crt -tls-key tls.key \
+    -pseudonym-key pseudonym.key \
+    -ek-root-bundle /var/lib/lota/ek-roots
+```
+
+Select the key by `-ca-key-pkcs11-label` (CKA_LABEL) or
+`-ca-key-pkcs11-id` (CKA_ID, hex). The CA checks the token key's public key
+against `ca.crt` at startup and refuses to run on a mismatch, the same check
+applied to an on-disk key, so a wrong token or label cannot sign under the
+CA identity. `-ca-key` and the `-ca-key-pkcs11-*` flags are mutually
+exclusive.
+
+The CA key ceremony, rotation, and the offline-root / online-intermediate
+topology are covered in [`CA-KEY.md`](CA-KEY.md).
+
 The bundle ships empty: the supported set is every TPM whose EK
 certificate chains to a root you can verify and pin, not a fixed vendor
 list. Build it from the platforms you actually attest -- draft a sources
