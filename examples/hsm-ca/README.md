@@ -23,6 +23,10 @@ CA key inside it, then prints the flags to use. It needs `softhsm2-util` and
 examples/hsm-ca/setup-token.sh           # defaults: token lota-ca, key lota-ca-key, PIN 1234
 ```
 
+The script probes the common module paths (Fedora `/usr/lib64/pkcs11`, Debian
+`/usr/lib/.../softhsm`); on an unusual layout set `MODULE=/path/to/libsofthsm2.so`.
+It prints the resolved `-ca-key-pkcs11-module` to paste into step 3.
+
 The PIN is passed to the CA through `LOTA_CA_PKCS11_PIN`, never a flag, so it
 stays out of the process argument list.
 

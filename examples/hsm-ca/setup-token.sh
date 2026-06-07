@@ -31,15 +31,19 @@ die() {
 command -v softhsm2-util >/dev/null 2>&1 || die "softhsm2-util not found (install softhsm2)"
 command -v pkcs11-tool >/dev/null 2>&1 || die "pkcs11-tool not found (install opensc)"
 
-# locate the SoftHSM PKCS#11 module across the common distro paths
-MODULE=""
-for cand in \
-  /usr/lib/softhsm/libsofthsm2.so \
-  /usr/lib64/softhsm/libsofthsm2.so \
-  /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so; do
-  [ -e "$cand" ] && MODULE="$cand" && break
-done
-[ -n "$MODULE" ] || die "libsofthsm2.so not found; set MODULE by hand"
+# honor an explicit MODULE override; otherwise probe the common distro paths
+# (Fedora ships it under /usr/lib64/pkcs11, Debian under softhsm/)
+MODULE="${MODULE:-}"
+if [ -z "$MODULE" ]; then
+  for cand in \
+    /usr/lib/softhsm/libsofthsm2.so \
+    /usr/lib64/softhsm/libsofthsm2.so \
+    /usr/lib64/pkcs11/libsofthsm2.so \
+    /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so; do
+    [ -e "$cand" ] && MODULE="$cand" && break
+  done
+fi
+[ -n "$MODULE" ] || die "libsofthsm2.so not found; set MODULE=/path/to/libsofthsm2.so"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/lota-hsm-ca.XXXXXX")"
 export SOFTHSM2_CONF="$WORK/softhsm2.conf"
