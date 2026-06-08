@@ -291,7 +291,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -903,8 +903,16 @@ $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c | $(BUILD_DIR)/fuzz
 fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
+# TPM2B response/credential unmarshal fuzz (standalone, tss2-mu only)
+$(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
+
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
-	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk
+	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
+	fuzz-tpm-resp
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -957,6 +965,7 @@ help:
 	@echo "  fuzz-tpm-attest  Build TPM attestation-structure unmarshal fuzz target"
 	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
 	@echo "  fuzz-server-sdk  Build server SDK token-verify fuzz target"
+	@echo "  fuzz-tpm-resp    Build TPM2B response/credential unmarshal fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Benchmark targets (see benchmarks/README.md):"
