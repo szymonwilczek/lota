@@ -47,7 +47,7 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 | Sanitizers | ASan / UBSan on the C side | `SANITIZE=address,undefined make test-unit` |
 | Memory | valgrind memcheck | `make valgrind-unit`, `make valgrind-smoke` |
 | Fuzz (Go) | verifier / SDK / attest-CA parsers of untrusted bytes | `go test -run x -fuzz=Fuzz... ./...`; CI runs every target per PR |
-| Fuzz (C) | IPC, config, TLS-pin, wire, enrollment-reply decoders, sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature verify | `make fuzz-all` |
+| Fuzz (C) | IPC, config, TLS-pin, wire, enrollment-reply decoders, sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature verify, server SDK token verify | `make fuzz-all` |
 | Kernel | BPF LSM live in a guest | Syzkaller harness `lota_bpf_fuzz` (see `syzkaller/README.md`) |
 | Repro | bit-for-bit build | `make reproducible-build`; gated in CI |
 
