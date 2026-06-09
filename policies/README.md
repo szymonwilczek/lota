@@ -39,10 +39,13 @@ description: "My production environment policy"
 
 pcrs:
   0: "abc123..." # From baseline export
-  7: "def456..." # From baseline export
+  1: "..." # From baseline export
+  7: "def456..." # Secure Boot anchor, from baseline export
+  8: "..." # Kernel cmdline (GRUB); PCR 12 on systemd-boot/UKI
 
-kernel_hashes:
-  - "sha256_hash_of_vmlinuz"
+# kernel_hashes is advisory only (self-reported, spoofable) - leave empty
+# and trust the kernel via PCR 7 + PCR 8. See "Kernel trust" below.
+kernel_hashes: []
 
 agent_hashes:
   - "sha256_hash_of_lota_agent"
@@ -121,14 +124,47 @@ changes the self-measurement is handled by updating the signed policy
 rather than by trusting whatever value the next attestation happens to
 report.
 
+## Kernel trust
+
+Kernel is bound through the TPM-rooted boot measurements, not through a
+hash the agent reports about itself:
+
+- **PCR 7 (Secure Boot) is the anchor.** It reflects the signing chain that
+  authorized the kernel, so a kernel signed by a trusted key keeps the same
+  PCR 7 across updates. Pinning it means "only a trusted-signed kernel booted"
+  with no per-kernel maintenance: the distribution re-signs each kernel with
+  the same key. This is the recommended baseline for every host.
+- **PCR 8 (kernel command line) is recommended.** On GRUB the cmdline and boot
+  config are measured into PCR 8; pinning it rejects a correctly signed kernel
+  booted with a sabotaged command line (`init=`, `lockdown=none`,
+  `module.sig_enforce=0`). The cmdline rarely changes, so this stays
+  low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
+  pin 12 there instead of 8.
+- **`kernel_hashes` is advisory only, not a trust control.** The value is the
+  agent's userspace `sha256(/boot/vmlinuz)`, self-reported by code running on
+  the kernel, so a compromised kernel can spoof it. Leave it empty and rely on
+  PCR 7 + PCR 8. A mismatch is at most a weak cross-check, never the boundary.
+- **Exact-image (PCR 4/9) and a kernel-version floor are optional and not in
+  the default templates.** Pinning the exact kernel image or initrd (PCR 4/9)
+  adds anti-rollback at the cost of a per-kernel hash treadmill; a sound
+  low-maintenance version floor needs the measured UKI `.osrel` and is revisited
+  when systemd-boot/UKI is in scope. A kernel version read from userspace is
+  spoofable and must never gate attestation.
+
+Secure Boot must be on for PCR 7 to mean anything; that is the one firmware
+setting a host needs for kernel trust to hold.
+
 ## Updating Policies
 
 When software is updated:
 
-1. Update `kernel_hashes` when kernel is upgraded
-2. Update `agent_hashes` when LOTA agent is upgraded
-3. PCR 0/7 typically only change with firmware updates
-4. Clear TOFU baseline if agent binary changes legitimately
+1. PCR 7 stays stable across kernel updates (same signing key), so a signed
+   kernel upgrade needs no policy change. Do not maintain per-kernel
+   `kernel_hashes` - leave them empty (see "Kernel trust").
+2. Update `agent_hashes` when the LOTA agent binary is upgraded.
+3. PCR 0/1/7 typically only change with firmware or Secure Boot key updates;
+   PCR 8 only when the kernel command line changes.
+4. Clear the TOFU baseline if the agent binary changes legitimately.
 
 ```bash
 # Re-export policy after updates

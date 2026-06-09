@@ -15,7 +15,13 @@
 # PCR meanings (SHA-256):
 #   PCR 0:   SRTM, BIOS/UEFI firmware measurements
 #   PCR 1:   UEFI configuration data (NVRAM-resident BIOS settings)
-#   PCR 7:   Secure Boot state (policies and certificates)
+#   PCR 7:   Secure Boot state (policies and certificates) - the
+#            maintenance-free signed-kernel anchor: a kernel signed by a
+#            trusted key keeps the same PCR 7 across updates
+#   PCR 8:   kernel command line + boot config (GRUB). Pinning it rejects a
+#            signed kernel booted with a sabotaged cmdline (init=, lockdown=,
+#            module.sig_enforce=). On systemd-boot/UKI the cmdline lands in
+#            PCR 12 - pin 12 there instead of 8.
 #   PCR 14:  LOTA agent self-measurement (boot-commitment derived,
 #            never TOFU under the production verifier default)
 
@@ -31,12 +37,20 @@ pcrs:
   0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
   1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
   7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
+  # PCR 8: kernel cmdline integrity on GRUB (recommended). Stays stable
+  # across kernel updates because the cmdline rarely changes.
+  # Capture with `lota-agent --export-policy`.
+  # Remove this line on systemd-boot/UKI hosts and pin 12 instead.
+  8: "REPLACE_WITH_REAL_PCR8_FROM_lota-agent_--export-policy"
 
-# Allowed kernel image hashes (SHA-256)
-# Add all kernels that should be permitted to boot
-kernel_hashes:
-  # - "sha256_of_vmlinuz_version_1"
-  # - "sha256_of_vmlinuz_version_2"
+# Allowed kernel image hashes (SHA-256).
+# ADVISORY ONLY, NOT a trust control: this hash is the agent's userspace
+# sha256(/boot/vmlinuz), self-reported by code running on the kernel, so a
+# compromised kernel can spoof it. The kernel trust anchor is PCR 7 (signed
+# kernel) plus PCR 8 (cmdline) above.
+# Leave empty in production; populating it does not add real assurance and
+# forces a per-kernel maintenance treadmill.
+kernel_hashes: []
 
 # Allowed LOTA agent binary hashes (SHA-256)
 # Update when deploying new agent versions
