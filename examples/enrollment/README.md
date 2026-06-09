@@ -37,6 +37,12 @@ fails and the CA refuses to issue.
 Requires a provisioned TPM (real or swTPM) with a readable EK
 certificate, and the built binaries (`make all`).
 
+Enrollment requires an **RSA endorsement key** (the TCG EK template H-1,
+which every TPM 2.0 ships) and an RSA AIK: credential activation wraps the
+secret to the EK with RSA-OAEP, and the verifier authenticates quotes with
+an RSA AIK. A TPM that presents an ECC EK is refused at `Begin` with a clear
+error naming the key type; there is no ECC activation path.
+
 ```sh
 # 1. generate the CA material you host (CA key/cert, pseudonym key, TLS)
 ./gen-ca.sh ./ca

@@ -70,7 +70,7 @@ var (
 	ErrEKExpired        = errors.New("EK certificate is expired")
 	ErrEKNotYet         = errors.New("EK certificate is not yet valid")
 	ErrEKMissingOID     = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
-	ErrEKKeyType        = errors.New("EK certificate public key is not RSA")
+	ErrEKKeyType        = errors.New("EK certificate public key is not RSA; enrollment requires an RSA endorsement key (TCG EK template H-1)")
 	ErrEKKeySize        = errors.New("EK certificate RSA key too small")
 	ErrCANotCA          = errors.New("CA certificate is not a certificate authority")
 	ErrCAKeyMismatch    = errors.New("CA private key does not match CA certificate")
@@ -210,7 +210,12 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 
 	rsaPub, ok := cert.PublicKey.(*rsa.PublicKey)
 	if !ok {
-		return nil, ErrEKKeyType
+		// Credential activation wraps the secret to an RSA EK
+		// (TPM2_MakeCredential is RSA-OAEP here)
+		// ECC or other EK is refused with a message that names
+		// the offending algorithm so an operator knows the host
+		// needs its RSA EK provisioned
+		return nil, fmt.Errorf("%w: certificate carries a %s key", ErrEKKeyType, cert.PublicKeyAlgorithm)
 	}
 	if rsaPub.N.BitLen() < MinEKKeyBits {
 		return nil, fmt.Errorf("%w: %d bits", ErrEKKeySize, rsaPub.N.BitLen())

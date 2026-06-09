@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -149,6 +150,39 @@ func TestVerifyEKCertificateAcceptsEKUOID(t *testing.T) {
 	})
 	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
 		t.Fatalf("rejected EK certificate with EKU-placed OID: %v", err)
+	}
+}
+
+// ECC endorsement key is well-formed and chains to a trusted root, but
+// credential activation wraps the secret to an RSA EK, so enrollment must
+// refuse it with ErrEKKeyType (not a chain or OID error) and name the type
+func TestVerifyEKCertificateRejectsECCKey(t *testing.T) {
+	root := makeRoot(t, "tpm-vendor-root")
+	is := newTestIssuer(t, root)
+
+	ekKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("EK key: %v", err)
+	}
+	ekPolicyOID, err := x509.OIDFromInts([]uint64{2, 23, 133, 8, 1})
+	if err != nil {
+		t.Fatalf("EK policy OID: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: mustSerial(t),
+		Subject:      pkix.Name{CommonName: "tpm-ek-ecc"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		Policies:     []x509.OID{ekPolicyOID},
+	}
+	ekDER, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &ekKey.PublicKey, root.key)
+	if err != nil {
+		t.Fatalf("ECC EK cert: %v", err)
+	}
+
+	_, err = is.VerifyEKCertificate(ekDER, time.Now())
+	if !errors.Is(err, ErrEKKeyType) {
+		t.Fatalf("expected ErrEKKeyType for ECC EK, got %v", err)
 	}
 }
 
@@ -342,8 +376,9 @@ func TestVerifyEKCertificateIgnoresTPMCriticalExtensions(t *testing.T) {
 	root := makeRoot(t, "tpm-vendor-root")
 	is := newTestIssuer(t, root)
 
-	// Genuine EK certificates mark TCG extensions critical; Go cannot
-	// process them. The verifier must still accept the certificate.
+	// Genuine EK certificates mark TCG extensions critical
+	// Go cannot process them
+	// Verifier must still accept the certificate
 	ekDER, _ := makeEKCert(t, root, func(c *x509.Certificate) {
 		c.ExtraExtensions = []pkix.Extension{
 			{Id: asn1.ObjectIdentifier{2, 5, 29, 9}, Critical: true, Value: []byte{0x30, 0x00}},

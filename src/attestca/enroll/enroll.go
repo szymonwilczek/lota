@@ -42,8 +42,8 @@ var (
 	ErrUnknownSession     = errors.New("unknown or consumed enrollment session")
 	ErrSessionExpired     = errors.New("enrollment session expired")
 	ErrActivationMismatch = errors.New("activation secret does not match challenge")
-	ErrEKKeyType          = errors.New("EK certificate does not carry an RSA key")
-	ErrAIKKeyType         = errors.New("AIK template does not carry an RSA key")
+	ErrEKKeyType          = errors.New("EK certificate does not carry an RSA key; enrollment requires an RSA endorsement key (TCG EK template H-1)")
+	ErrAIKKeyType         = errors.New("AIK template does not carry an RSA key; enrollment requires an RSA AIK")
 	ErrTooManyPending     = errors.New("too many outstanding enrollment sessions")
 )
 
