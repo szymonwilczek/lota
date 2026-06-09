@@ -33,7 +33,15 @@ out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 
 for m in "${MODULES[@]}"; do
-	(cd "$ROOT/$m" && go test -cover ./...) | tee -a "$out"
+	extra=()
+	# Postgres-backed stores only run under the pg_integration tag
+	# against a live server; without them the store/verify floors
+	# cannot be met.
+	# -p 1 serializes the two packages sharing one database.
+	if [[ "$m" == src/verifier && -n "${LOTA_TEST_PG_DSN:-}" ]]; then
+		extra=(-tags pg_integration -p 1)
+	fi
+	(cd "$ROOT/$m" && go test "${extra[@]}" -cover ./...) | tee -a "$out"
 done
 
 rc=0

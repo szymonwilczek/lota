@@ -111,6 +111,20 @@ jobs:
   go-coverage:
     name: go-coverage-ratchet
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+        env:
+          POSTGRES_USER: lota
+          POSTGRES_PASSWORD: lota
+          POSTGRES_DB: lota
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lota"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,6 +141,11 @@ jobs:
         # Fails if any Go package drops below its recorded floor in
         # .github/go-coverage-baseline. Raise the floors as tests land;
         # the target is 100%.
+        # Postgres service lets the verifier module run its
+        # pg_integration-tagged tests so the Postgres
+        # store/session code counts toward the floors.
+        env:
+          LOTA_TEST_PG_DSN: postgres://lota:lota@127.0.0.1:5432/lota?sslmode=disable
         run: ./scripts/check-go-coverage.sh
 
   go-licenses:
