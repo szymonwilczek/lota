@@ -26,13 +26,14 @@ import (
 
 // TCG event types
 const (
-	EvNoAction       uint32 = 0x00000003
-	EvSeparator      uint32 = 0x00000004
-	EvAction         uint32 = 0x00000005
-	EvEFIAction      uint32 = 0x80000007
-	EvEFIVarBoot     uint32 = 0x80000001
-	EvEFIBootService uint32 = 0x80000002
-	EvEFIGPTEvent    uint32 = 0x80000006
+	EvNoAction                uint32 = 0x00000003
+	EvSeparator               uint32 = 0x00000004
+	EvAction                  uint32 = 0x00000005
+	EvIPL                     uint32 = 0x0000000D
+	EvEFIVariableDriverConfig uint32 = 0x80000001
+	EvEFIVariableBoot         uint32 = 0x80000002
+	EvEFIGPTEvent             uint32 = 0x80000006
+	EvEFIAction               uint32 = 0x80000007
 )
 
 // TCG hash algorithm IDs
