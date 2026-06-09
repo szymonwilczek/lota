@@ -75,7 +75,8 @@ pcrs:
 
 		// must have warnings
 		hasReqs := policy.RequireIOMMU || policy.RequireEnforce ||
-			policy.RequireModuleSig || policy.RequireSecureBoot || policy.RequireLockdown
+			policy.RequireModuleSig || policy.RequireSecureBoot ||
+			policy.RequireLockdown || policy.RequireCmdlinePolicy
 		if len(policy.PCRs) == 0 && len(policy.KernelHashes) == 0 &&
 			len(policy.AgentHashes) == 0 && !hasReqs {
 			if len(warnings) == 0 {
