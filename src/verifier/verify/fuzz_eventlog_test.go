@@ -93,3 +93,22 @@ func FuzzReplayEventLog(f *testing.F) {
 		}
 	})
 }
+
+func FuzzParseUEFIVariableData(f *testing.F) {
+	f.Add(encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01}))
+	f.Add(encodeUEFIVariableData([16]byte{}, "", nil))
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		v, err := parseUEFIVariableData(data)
+		if err != nil {
+			return
+		}
+		if v == nil {
+			t.Fatal("nil result without error")
+		}
+		if len(v.VariableData) > len(data) {
+			t.Fatalf("variable data longer than input: %d > %d", len(v.VariableData), len(data))
+		}
+	})
+}
