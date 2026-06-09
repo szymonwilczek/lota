@@ -251,8 +251,15 @@ func (v *PCRVerifier) SetActivePolicy(name string) error {
 	return nil
 }
 
-// checks report against active policy
+// checks report against active policy without event-log boot facts;
+// policies that gate on Secure Boot or the cmdline fail closed here
 func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
+	return v.VerifyReportWithFacts(report, nil)
+}
+
+// checks report against active policy using the quote-authenticated
+// boot facts extracted from the event log
+func (v *PCRVerifier) VerifyReportWithFacts(report *types.AttestationReport, facts *BootFacts) error {
 	v.mu.RLock()
 	policy, exists := v.policies[v.active]
 	v.mu.RUnlock()
@@ -261,10 +268,10 @@ func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
 		return errors.New("no active policy configured")
 	}
 
-	return v.verifyAgainstPolicy(report, policy)
+	return v.verifyAgainstPolicy(report, policy, facts)
 }
 
-func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy) error {
+func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
@@ -339,10 +346,25 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check secure boot
+	// check secure boot from the firmware-measured event log value;
+	// the agent-reported FlagSecureBoot is telemetry only (a
+	// compromised kernel sets it freely)
 	if policy.RequireSecureBoot {
-		if report.Header.Flags&types.FlagSecureBoot == 0 {
-			return errors.New("Secure Boot not enabled")
+		if facts == nil || !facts.SecureBootTrusted {
+			return errors.New("Secure Boot state not authenticated by event log")
+		}
+		if !facts.SecureBoot.Found {
+			return errors.New("event log carries no SecureBoot measurement")
+		}
+		if !facts.SecureBoot.Enabled {
+			return errors.New("Secure Boot disabled per firmware measurement")
+		}
+	}
+
+	// check the measured kernel cmdline against the parameter denylist
+	if policy.RequireCmdlinePolicy {
+		if err := verifyCmdlinePolicy(policy, facts); err != nil {
+			return err
 		}
 	}
 
@@ -395,6 +417,15 @@ func (v *PCRVerifier) ActivePolicyDeclaresBootPCRs() bool {
 		return false
 	}
 	return true
+}
+
+// reports whether the active policy gates on the measured kernel
+// cmdline; drives PCR 8 consistency enforcement in the event-log check
+func (v *PCRVerifier) ActivePolicyRequiresCmdline() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	return ok && policy != nil && policy.RequireCmdlinePolicy
 }
 
 // returns names of all loaded policies

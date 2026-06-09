@@ -17,7 +17,10 @@ package verify
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // firmware-measured Secure Boot configuration recovered from the log
@@ -170,4 +173,98 @@ func MatchCmdlineDeny(cmdline string, deny []string) []string {
 		}
 	}
 	return hits
+}
+
+// BootFacts carries the event-log-derived boot state the policy gates
+// consume.
+// *Trusted field is set only when the source PCR is covered by the quote
+// mask and the event-log replay reproduces the quoted value,
+// i.e. the TPM vouches for the log entries the fact came from
+type BootFacts struct {
+	SecureBoot        SecureBootState
+	SecureBootTrusted bool // PCR 7 quoted + replay-consistent
+
+	Cmdlines       []string
+	CmdlineTrusted bool // PCR 8 quoted + replay-consistent
+	PCR8Quoted     bool
+	PCR8Reported   [types.HashSize]byte
+	PCR8EventsSeen bool
+}
+
+// reports whether the PCR's quoted value is independently authenticated
+// by the event log: the quote covers it and the replay reproduces it
+func pcrReplayAuthenticated(report *types.AttestationReport, replay *ReplayResult, pcr int) bool {
+	if pcr < 0 || pcr >= types.PCRCount {
+		return false
+	}
+	if replay.ExtendCounts[pcr] == 0 {
+		return false
+	}
+	if report.TPM.PCRMask&(1<<uint(pcr)) == 0 {
+		return false
+	}
+	return report.TPM.PCRValues[pcr] == replay.PCRValues[pcr]
+}
+
+// derives the policy-facing boot facts from a parsed and replayed
+// event log. Fails on malformed or conflicting SecureBoot measurements.
+func ExtractBootFacts(report *types.AttestationReport, parsed *ParsedEventLog, replay *ReplayResult) (*BootFacts, error) {
+	if report == nil || parsed == nil || replay == nil {
+		return nil, errors.New("nil report/event log/replay")
+	}
+
+	sb, err := ExtractSecureBootState(parsed)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BootFacts{
+		SecureBoot:        sb,
+		SecureBootTrusted: pcrReplayAuthenticated(report, replay, 7),
+		Cmdlines:          ExtractKernelCmdlines(parsed),
+		CmdlineTrusted:    pcrReplayAuthenticated(report, replay, 8),
+		PCR8Quoted:        report.TPM.PCRMask&(1<<8) != 0,
+		PCR8Reported:      report.TPM.PCRValues[8],
+		PCR8EventsSeen:    replay.ExtendCounts[8] > 0,
+	}, nil
+}
+
+// enforces the cmdline parameter policy against the measured kernel
+// command line. GRUB-only in v1: a host whose TPM-quoted PCR 8 is zero
+// and whose log carries no PCR 8 measurement never ran a PCR 8-measuring
+// bootloader (systemd-boot/UKI measure the cmdline into PCR 12), so the
+// check is skipped there. A non-zero quoted PCR 8 without a measured
+// cmdline means the log was truncated: the TPM proves something was
+// measured, so reject.
+func verifyCmdlinePolicy(policy *PCRPolicy, facts *BootFacts) error {
+	if facts == nil {
+		return errors.New("cmdline policy requires event-log boot facts")
+	}
+
+	// the zero-PCR8 skip below is only sound when the zero value is
+	// TPM-attested, not agent-asserted
+	if !facts.PCR8Quoted {
+		return errors.New("cmdline policy: PCR 8 not covered by quote")
+	}
+
+	var zero [types.HashSize]byte
+	if facts.PCR8Reported == zero && !facts.PCR8EventsSeen && len(facts.Cmdlines) == 0 {
+		slog.Info("cmdline policy: PCR 8 is zero with no measured cmdline; skipping (non-GRUB bootloader)")
+		return nil
+	}
+
+	if !facts.CmdlineTrusted {
+		return errors.New("cmdline policy: kernel cmdline measurement not authenticated by quote")
+	}
+	if len(facts.Cmdlines) == 0 {
+		return errors.New("cmdline policy: PCR 8 is non-zero but the log carries no measured kernel cmdline")
+	}
+
+	deny := policy.EffectiveCmdlineDeny()
+	for _, c := range facts.Cmdlines {
+		if hits := MatchCmdlineDeny(c, deny); len(hits) > 0 {
+			return fmt.Errorf("kernel cmdline carries denied parameters %v", hits)
+		}
+	}
+	return nil
 }
