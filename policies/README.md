@@ -74,8 +74,8 @@ lota-verifier --policy /path/to/my-policy.yaml
 | 6     | UEFI        | Resume from S4/S5 state transitions       |
 | 7     | UEFI        | Secure Boot state (policies/certificates) |
 | 8     | OS          | Kernel command line (grub2 measured boot) |
-| 9     | OS          | Linux IMA measurements (if enabled)       |
-| 10    | OS          | IMA verified measurements                 |
+| 9     | OS          | Bootloader-loaded files (kernel/initrd)   |
+| 10    | OS          | Linux IMA measurements (if enabled)       |
 | 11-13 | OS          | Application-defined                       |
 | 14    | LOTA        | Agent self-measurement                    |
 | 15    | OS          | Reserved                                  |
@@ -83,13 +83,61 @@ lota-verifier --policy /path/to/my-policy.yaml
 
 ## Security Requirements
 
-| Requirement          | Description                         | Typical Default    |
-| -------------------- | ----------------------------------- | ------------------ |
-| `require_iommu`      | DMA protection via VT-d/AMD-Vi      | `true`             |
-| `require_enforce`    | SELinux/AppArmor in enforce mode    | `true`             |
-| `require_module_sig` | Kernel module signature enforcement | Distro-dependent   |
-| `require_secureboot` | UEFI Secure Boot enabled            | Hardware-dependent |
-| `require_lockdown`   | Kernel lockdown mode active         | `false` (optional) |
+| Requirement              | Description                                  | Typical Default    |
+| ------------------------ | -------------------------------------------- | ------------------ |
+| `require_iommu`          | DMA protection via VT-d/AMD-Vi               | `true`             |
+| `require_enforce`        | SELinux/AppArmor in enforce mode             | `true`             |
+| `require_module_sig`     | Kernel module signature enforcement          | Distro-dependent   |
+| `require_secureboot`     | Secure Boot enabled (event-log enforced)     | `true`             |
+| `require_lockdown`       | Kernel lockdown mode active                  | `false` (optional) |
+| `require_cmdline_policy` | Kernel cmdline denylist (event-log enforced) | `true`             |
+| `cmdline_deny`           | Operator extensions to the cmdline denylist  | `[]`               |
+
+## Kernel trust: event-log Secure Boot + cmdline policy
+
+Raw PCR pins (the `pcrs:` map) authenticate one firmware/bootloader
+configuration and suit a homogeneous enterprise fleet. They cannot serve
+a diverse single-machine population: PCR 7 differs per OEM key set and
+drifts on dbx updates, and PCR 8 hashes the per-machine `root=UUID`. The
+two knobs below are the machine-independent alternative. Both read the
+TPM event log the agent already ships and trust an extracted value only
+after the log replay reproduces the TPM-quoted value of the PCR it came
+from, so a client cannot fabricate or strip the underlying events.
+
+`require_secureboot` requires the firmware-measured `SecureBoot` EFI
+variable (PCR 7, `EV_EFI_VARIABLE_DRIVER_CONFIG`) to be present and
+enabled. The agent-reported Secure Boot header flag is telemetry only; a
+compromised kernel sets it freely. This check is bootloader-independent.
+Players must have Secure Boot enabled in firmware setup; any kernel
+signed for Secure Boot (including self-signed via MOK) passes, so custom
+performance kernels stay usable.
+
+`require_cmdline_policy` requires the GRUB-measured kernel command line
+(PCR 8, `EV_IPL`) to be free of denylisted parameters. The builtin
+denylist rejects parameters that defeat the signed kernel's integrity
+guarantees and never appear on a stock distribution command line:
+
+| Entry                  | Why                                          |
+| ---------------------- | -------------------------------------------- |
+| `init=` / `rdinit=`    | arbitrary userspace entry point              |
+| `rd.break`             | dracut pre-pivot root shell                  |
+| `lockdown=none`        | disables kernel lockdown                     |
+| `module.sig_enforce=0` | unsigned kernel modules                      |
+| `selinux=0` / `enforcing=0` / `apparmor=0` / `security=none` | LSM off |
+| `systemd.debug_shell`  | root shell on tty9                           |
+| `kgdboc=`              | kernel debugger console (live memory patch)  |
+
+Per-machine parameters (`root=UUID`, `rootflags`, cosmetics) are
+ignored, so one policy covers every machine. `cmdline_deny` extends the
+list per fleet. Matching normalizes the kernel's `-`/`_` parameter-name
+equivalence.
+
+Bootloader coverage: GRUB measures the command line into PCR 8 and is
+fully checked. systemd-boot/UKI hosts measure the command line into
+PCR 12 via sd-stub and skip the cmdline check (the quoted PCR 8 must be
+zero - a non-zero PCR 8 with no measured cmdline events is treated as a
+truncated log and rejected);
+`require_secureboot` applies everywhere regardless of bootloader.
 
 ## Boot enrollment ceremony
 

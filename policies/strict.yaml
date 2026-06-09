@@ -48,5 +48,7 @@ agent_hashes:
 require_iommu: true
 require_enforce: true
 require_module_sig: true
-require_secureboot: true
+require_secureboot: true # event-log enforced (firmware-measured SecureBoot variable)
 require_lockdown: true
+require_cmdline_policy: true # event-log enforced kernel cmdline denylist (PCR 8)
+cmdline_deny: []
