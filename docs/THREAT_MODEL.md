@@ -168,7 +168,9 @@ Production deployments must:
 
 - install the agent, systemd units, SELinux policy, udev TPM labeling, IMA
   policy, and signed BPF object,
-- enroll each host through the attestation CA,
+- enroll each host through the attestation CA (enrollment requires an RSA
+  endorsement key, the TCG EK template H-1 that every TPM 2.0 ships, and an
+  RSA AIK; an ECC EK is refused at the start of the ceremony),
 - configure verifiers with the CA root and a production PCR policy,
 - maintain EK root bundles for the supported TPM vendors,
 - verify release manifests before shipping binaries,
