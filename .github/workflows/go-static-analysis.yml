@@ -279,3 +279,44 @@ jobs:
             echo "::endgroup::"
           done
           exit "$rc"
+
+  postgres-integration:
+    name: postgres-integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lota
+          POSTGRES_PASSWORD: lota
+          POSTGRES_DB: lota
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lota"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache-dependency-path: src/verifier/go.sum
+
+      # exercises the Postgres store backend against a real server: schema
+      # migration idempotency, the AIK/revocation/ban/audit/attestation
+      # stores, and the boot-baseline atomic pin contract (including the
+      # concurrent first-use race).
+      # -p 1 keeps the two packages from racing each other's TRUNCATE
+      # on the shared database
+      - name: Run Postgres integration tests
+        working-directory: src/verifier
+        env:
+          LOTA_TEST_PG_DSN: postgres://lota:lota@127.0.0.1:5432/lota?sslmode=disable
+        run: go test -tags pg_integration -p 1 -count=1 -v ./store/ ./verify/
