@@ -256,6 +256,59 @@ func TestPCRVerifier_VerifyReport_PCRNotInQuote(t *testing.T) {
 	t.Logf("Missing PCR in quote correctly detected: %v", err)
 }
 
+func TestPCRVerifier_VerifyReport_CmdlinePCR8(t *testing.T) {
+	t.Log("SECURITY TEST: kernel command-line PCR 8 pinning is enforced")
+
+	const pcr8Hex = "1111111111111111111111111111111111111111111111111111111111111111"
+
+	policy := &PCRPolicy{
+		Name: "pin-cmdline",
+		PCRs: map[int]string{8: pcr8Hex},
+	}
+
+	// required mask must request PCR 8, otherwise the challenge would
+	// never ask the agent to quote it and the pin could be silently skipped
+	if policy.GetRequiredMask()&(1<<8) == 0 {
+		t.Fatal("GetRequiredMask does not request PCR 8 for a policy that pins it")
+	}
+
+	pcr8 := make([]byte, types.HashSize)
+	for i := range pcr8 {
+		pcr8[i] = 0x11
+	}
+
+	newReport := func() *types.AttestationReport {
+		r := &types.AttestationReport{}
+		r.TPM.PCRMask = 1 << 8
+		copy(r.TPM.PCRValues[8][:], pcr8)
+		return r
+	}
+
+	// matching cmdline measurement passes the PCR check
+	v := NewPCRVerifier()
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.verifyAgainstPolicy(newReport(), policy); err != nil {
+		t.Fatalf("matching PCR 8 rejected: %v", err)
+	}
+
+	// tampered command line (different PCR 8) is rejected
+	bad := newReport()
+	bad.TPM.PCRValues[8][0] = 0x22
+	if err := v.verifyAgainstPolicy(bad, policy); err == nil {
+		t.Error("expected rejection for mismatched PCR 8 (tampered cmdline)")
+	}
+
+	// report that omits PCR 8 from the quote is rejected, so the cmdline
+	// pin cannot be dropped by an agent that simply does not quote it
+	missing := newReport()
+	missing.TPM.PCRMask = 1 << 14 // only PCR 14
+	if err := v.verifyAgainstPolicy(missing, policy); err == nil {
+		t.Error("expected rejection when PCR 8 is absent from the quote")
+	}
+}
+
 func TestPCRVerifier_VerifyReport_RequireIOMMU(t *testing.T) {
 	t.Log("SECURITY TEST: IOMMU requirement enforcement")
 
