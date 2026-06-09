@@ -178,7 +178,9 @@ func runPgMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to take migration advisory lock: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			slog.Warn("failed to release migration advisory lock", "error", err)
+		}
 	}()
 
 	if _, err := conn.ExecContext(ctx, `

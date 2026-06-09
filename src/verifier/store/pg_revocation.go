@@ -12,7 +12,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -230,11 +229,12 @@ func (s *PostgresBanStore) ListBansPageE(limit, offset int) ([]BanEntry, error) 
 	query := "SELECT hardware_id, reason, banned_at, banned_by, note FROM hardware_bans ORDER BY banned_at DESC"
 	args := make([]any, 0, 2)
 	if limit > 0 {
+		// args is empty here, so limit is always $1 and offset $2
 		args = append(args, limit)
-		query += " LIMIT $" + strconv.Itoa(len(args))
+		query += " LIMIT $1"
 		if offset > 0 {
 			args = append(args, offset)
-			query += " OFFSET $" + strconv.Itoa(len(args))
+			query += " OFFSET $2"
 		}
 	}
 
@@ -278,12 +278,13 @@ func (s *PostgresBanStore) ListBansAfter(limit int, nextID string) ([]BanEntry, 
 		if err != nil {
 			return nil, err
 		}
-		query += " WHERE (banned_at < $1) OR (banned_at = $2 AND hardware_id < $3)"
-		args = append(args, cursor.BannedAt, cursor.BannedAt, cursor.HardwareID[:])
+		query += " WHERE (banned_at < $1) OR (banned_at = $2 AND hardware_id < $3)" +
+			" ORDER BY banned_at DESC, hardware_id DESC LIMIT $4"
+		args = append(args, cursor.BannedAt, cursor.BannedAt, cursor.HardwareID[:], limit)
+	} else {
+		query += " ORDER BY banned_at DESC, hardware_id DESC LIMIT $1"
+		args = append(args, limit)
 	}
-
-	args = append(args, limit)
-	query += " ORDER BY banned_at DESC, hardware_id DESC LIMIT $" + strconv.Itoa(len(args))
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

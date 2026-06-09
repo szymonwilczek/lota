@@ -194,11 +194,12 @@ func (s *PostgresAIKStore) ListClientsPageE(limit, offset int) ([]string, error)
 	args := make([]any, 0, 2)
 
 	if limit > 0 {
+		// args is empty here, so limit is always $1 and offset $2
 		args = append(args, limit)
-		query += " LIMIT $" + strconv.Itoa(len(args))
+		query += " LIMIT $1"
 		if offset > 0 {
 			args = append(args, offset)
-			query += " OFFSET $" + strconv.Itoa(len(args))
+			query += " OFFSET $2"
 		}
 	}
 

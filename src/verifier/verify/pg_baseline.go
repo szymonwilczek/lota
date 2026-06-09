@@ -63,7 +63,9 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("baseline tx rollback failed", "client_id", clientID, "error", err)
+			}
 		}
 	}()
 
@@ -167,7 +169,9 @@ func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("baseline tx rollback failed", "client_id", clientID, "error", err)
+			}
 		}
 	}()
 
@@ -422,7 +426,9 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("baseline tx rollback failed", "client_id", clientID, "error", err)
+			}
 		}
 	}()
 
