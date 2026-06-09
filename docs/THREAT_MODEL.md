@@ -102,12 +102,55 @@ detection.
 - Supporting hosts that intentionally disable lockdown, module signature
   enforcement, SELinux enforcing mode, fs-verity, IMA appraisal, or TPM access
   control required by production policy.
-- Proving that an arbitrary already-compromised kernel is honest without a
-  lower hardware launch or TEE trust anchor.
+- Proving the runtime integrity of the kernel. Measured boot binds the kernel
+  *image* that was loaded (see "Root of trust" below); it cannot prove that a
+  kernel which booted clean stays honest, because a kernel compromised at
+  runtime (a 0-day, a signed-but-vulnerable driver, a DMA write) produces the
+  same boot measurements and sits inside the TCB that produces the agent's
+  measurements. A measurement produced by layer N cannot bootstrap trust in
+  layer N.
 - Measuring anonymous executable memory as a trusted module set.
 - Making PCR14 immutable from userspace on platforms where the TPM profile
   leaves it OS-writable.
 - Replacing operator key management, CA key ceremony, or release governance.
+
+## Root of trust: static measured boot (SRTM), not DRTM
+
+LOTA roots its boot measurements in the platform's Static Root of Trust for
+Measurement (SRTM): the firmware measures itself, the Secure Boot policy, and
+the boot chain into the TPM, and the boot chain measures the kernel image,
+command line, and initrd before the kernel runs. LOTA pins PCR 0/1/7 (firmware,
+platform config, Secure Boot) and PCR 14 (its own boot commitment) today; the
+kernel-image PCRs from the same SRTM (PCR 4, and PCR 8/9 on GRUB or 11/12/13 on
+systemd-boot/UKI) are available to deployments that also pin them. Because these
+measurements are taken before the kernel executes and are extended into hardware
+PCRs, a compromised kernel cannot forge them after the fact. The practical trust
+anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
+signing chain and stays constant across kernel updates, so a fleet trusts the
+distribution's signing key without maintaining a per-kernel hash.
+
+Dynamic Root of Trust for Measurement (DRTM) - Intel TXT, AMD SKINIT, driven
+on Linux by the TrenchBoot / Secure Launch project - would re-measure the
+kernel from a CPU-rooted late launch into PCR 17-22, removing the firmware and
+bootloader from the trusted computing base. LOTA does not adopt DRTM, for two
+reasons that are structural, not temporary:
+
+- It is not universal. DRTM requires specific hardware and firmware (Intel TXT
+  with a chipset-signed SINIT ACM, or AMD SKINIT, plus IOMMU, plus firmware
+  enablement that consumer boards frequently hide or omit) and bleeding-edge
+  kernel and bootloader support. LOTA targets every machine with a TPM 2.0 and
+  a recent Linux, including ordinary gaming hosts; a feature gated on
+  server-class platform configuration cannot be part of that baseline.
+- It cannot be validated without that hardware. DRTM relies on real CPU
+  instructions and signed ACMs that swtpm and the usual emulators do not
+  provide, so the path cannot be exercised in CI or on a developer workstation.
+
+DRTM also does not remove the need for a reference value: it relocates the root
+of trust but still produces a measurement that an operator must compare against
+a pinned value or a signature, so it does not lower the maintenance burden it is
+sometimes assumed to. Runtime kernel integrity therefore remains out of scope;
+deployments that require it must add a layer below the kernel (DRTM, a measuring
+hypervisor, or a confidential-computing TEE) outside LOTA.
 
 ## Validation Status
 
