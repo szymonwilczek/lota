@@ -203,6 +203,7 @@ func main() {
 
 		verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
+		verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
 
 		auditLog = store.NewPostgresAuditLog(db)
 		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
