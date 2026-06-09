@@ -220,3 +220,146 @@ func TestPostgresUsedNonce(t *testing.T) {
 		t.Fatal("live nonce should survive cleanup")
 	}
 }
+
+// TestPostgresBaselineInspection covers the monitoring-facing reads and
+// the operator reset path: GetBaseline, ListClients, Stats, ClearBaseline.
+func TestPostgresBaselineInspection(t *testing.T) {
+	s := pgBaselineStore(t)
+
+	if s.GetBaseline("absent") != nil {
+		t.Fatal("GetBaseline on unknown client should be nil")
+	}
+
+	if r, _ := s.CheckAndUpdate("ins-a", fill(0x14)); r != TOFUFirstUse {
+		t.Fatal("first use ins-a")
+	}
+	if r, _ := s.CheckAndUpdate("ins-b", fill(0x15)); r != TOFUFirstUse {
+		t.Fatal("first use ins-b")
+	}
+	if r, _ := s.CheckAndUpdate("ins-a", fill(0x14)); r != TOFUMatch {
+		t.Fatal("match ins-a")
+	}
+
+	b := s.GetBaseline("ins-a")
+	if b == nil || b.PCR14 != fill(0x14) || b.AttestCount != 2 {
+		t.Fatalf("GetBaseline ins-a: %+v", b)
+	}
+	if b.FirstSeen.IsZero() || b.LastSeen.Before(b.FirstSeen) {
+		t.Fatalf("GetBaseline timestamps: %+v", b)
+	}
+
+	clients := s.ListClients()
+	if len(clients) != 2 || clients[0] != "ins-a" || clients[1] != "ins-b" {
+		t.Fatalf("ListClients: %v", clients)
+	}
+
+	st := s.Stats()
+	if st.TotalClients != 2 || st.OldestBaseline.IsZero() || st.NewestBaseline.Before(st.OldestBaseline) {
+		t.Fatalf("Stats: %+v", st)
+	}
+
+	s.ClearBaseline("ins-a")
+	if s.GetBaseline("ins-a") != nil {
+		t.Fatal("ClearBaseline left a row behind")
+	}
+	if got := s.ListClients(); len(got) != 1 || got[0] != "ins-b" {
+		t.Fatalf("ListClients after clear: %v", got)
+	}
+}
+
+// TestPostgresBootPCRsLegacyPath covers the standalone boot-PCR pin used by
+// the non-FlagBootCommitment flow: first use, match, drift, and the
+// backfill of a PCR14-only legacy row.
+func TestPostgresBootPCRsLegacyPath(t *testing.T) {
+	s := pgBaselineStore(t)
+	boot := BootBaseline{PCR0: fill(0xA0), PCR1: fill(0xA1), PCR7: fill(0xA7)}
+
+	// no PCR14 row yet: boot pin must fail closed, never auto-create
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-c", boot); r != TOFUError {
+		t.Fatalf("boot pin without PCR14 row: got %v, want TOFUError", r)
+	}
+
+	if r, _ := s.CheckAndUpdate("boot-c", fill(0x14)); r != TOFUFirstUse {
+		t.Fatal("PCR14 first use boot-c")
+	}
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-c", boot); r != TOFUFirstUse {
+		t.Fatal("boot first use")
+	}
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-c", boot); r != TOFUMatch {
+		t.Fatal("boot match")
+	}
+
+	drift := boot
+	drift.PCR7 = fill(0xFF)
+	r, stored := s.CheckAndUpdateBootPCRs("boot-c", drift)
+	if r != TOFUMismatch {
+		t.Fatalf("boot drift: got %v", r)
+	}
+	if stored == nil || stored.PCR7 != fill(0xA7) {
+		t.Fatalf("drift must report the pinned baseline: %+v", stored)
+	}
+
+	// legacy PCR14-only row TOFU-establishes boot columns on next sight
+	if r, _ := s.CheckAndUpdate("boot-leg", fill(0x14)); r != TOFUFirstUse {
+		t.Fatal("legacy PCR14 first use")
+	}
+	if s.GetBootBaseline("boot-leg") != nil {
+		t.Fatal("legacy row should have no boot baseline yet")
+	}
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-leg", boot); r != TOFUFirstUse {
+		t.Fatal("legacy boot backfill should be first use")
+	}
+}
+
+// TestPostgresSessionTokenLifecycle covers the upsert and miss paths the
+// cross-instance test does not reach.
+func TestPostgresSessionTokenLifecycle(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+	db, err := store.OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("TRUNCATE session_tokens"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	s := NewPostgresSessionTokenStore(db)
+	now := unixTimestamp(time.Now())
+
+	var miss [32]byte
+	miss[5] = 0x99
+	if st := s.Validate(miss, true, now); st.Exists {
+		t.Fatalf("unknown token should not exist: %+v", st)
+	}
+
+	var tok [32]byte
+	tok[1] = 0x42
+	rec := sessionTokenRecord{
+		ClientID:   "client-x",
+		ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
+		Flags:      0x1,
+		PCRMask:    0x7F,
+	}
+	s.Remember(tok, rec)
+
+	// re-attestation reissues the same token id: upsert refreshes the row
+	rec.ValidUntil = unixTimestamp(time.Now().Add(2 * time.Hour))
+	rec.Flags = 0x3
+	s.Remember(tok, rec)
+
+	st := s.Validate(tok, false, now)
+	if !st.Exists || st.Flags != 0x3 || st.ValidUntil != rec.ValidUntil {
+		t.Fatalf("upsert not visible: %+v", st)
+	}
+
+	// consuming twice keeps reporting consumed without resurrecting state
+	if st = s.Validate(tok, true, now); !st.Consumed {
+		t.Fatalf("first consume: %+v", st)
+	}
+	if st = s.Validate(tok, true, now); !st.Exists || !st.Consumed {
+		t.Fatalf("second consume: %+v", st)
+	}
+}

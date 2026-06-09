@@ -114,6 +114,31 @@ func TestPostgresAIKStore(t *testing.T) {
 	if ex, _ := s.ExistingClients([]string{"c1", "cX"}); len(ex) != 1 {
 		t.Fatalf("ExistingClients = %v", ex)
 	}
+
+	// cert-carrying registration delegates to the same uniqueness contract
+	k3, _ := rsa.GenerateKey(rand.Reader, 2048)
+	if err := s.RegisterAIKWithCert("c3", &k3.PublicKey, []byte{0x30}, []byte{0x30}); err != nil {
+		t.Fatalf("RegisterAIKWithCert: %v", err)
+	}
+
+	if cl := s.ListClients(); len(cl) != 2 || cl[0] != "c1" || cl[1] != "c3" {
+		t.Fatalf("ListClients = %v", cl)
+	}
+	if cl := s.ListClientsPage(1, 1); len(cl) != 1 || cl[0] != "c3" {
+		t.Fatalf("ListClientsPage = %v", cl)
+	}
+	if ok, err := s.HasClient("c1"); err != nil || !ok {
+		t.Fatalf("HasClient c1: %v %v", ok, err)
+	}
+	if ok, err := s.HasClient("cX"); err != nil || ok {
+		t.Fatalf("HasClient cX: %v %v", ok, err)
+	}
+	if at, err := s.GetRegisteredAt("c1"); err != nil || at.IsZero() {
+		t.Fatalf("GetRegisteredAt: %v %v", at, err)
+	}
+	if _, err := s.GetRegisteredAt("cX"); err == nil {
+		t.Fatal("GetRegisteredAt on unknown client should fail")
+	}
 }
 
 func TestPostgresRevocationBanAudit(t *testing.T) {
@@ -129,6 +154,9 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	}
 	if e, ok := rev.IsRevoked("c1"); !ok || e.RevokedBy != "op" {
 		t.Fatal("IsRevoked")
+	}
+	if lr := rev.ListRevocations(); len(lr) != 1 || lr[0].ClientID != "c1" {
+		t.Fatalf("ListRevocations = %+v", lr)
 	}
 	if err := rev.Unrevoke("c1"); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
@@ -154,6 +182,12 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	}
 	if lb, err := ban.ListBansAfter(10, ""); err != nil || len(lb) != 1 {
 		t.Fatalf("ListBansAfter: %v len=%d", err, len(lb))
+	}
+	if lb := ban.ListBans(); len(lb) != 1 || lb[0].HardwareID != hw {
+		t.Fatalf("ListBans = %+v", lb)
+	}
+	if lb := ban.ListBansPage(1, 0); len(lb) != 1 {
+		t.Fatalf("ListBansPage = %+v", lb)
 	}
 	if err := ban.UnbanHardware(hw); err != nil {
 		t.Fatalf("UnbanHardware: %v", err)
