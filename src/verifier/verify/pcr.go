@@ -52,6 +52,27 @@ type PCRPolicy struct {
 
 	// if true, fails if kernel lockdown not enabled
 	RequireLockdown bool `yaml:"require_lockdown"`
+
+	// if true, fails when the event-log-measured kernel command line
+	// carries a denylisted parameter (builtin denylist + cmdline_deny).
+	// GRUB-only in v1: hosts with no PCR 8 cmdline measurement and a
+	// zero quoted PCR 8 skip the check (systemd-boot/UKI measure the
+	// cmdline into PCR 12 instead)
+	RequireCmdlinePolicy bool `yaml:"require_cmdline_policy"`
+
+	// operator extensions to the builtin cmdline parameter denylist;
+	// entry forms: "param" (bare or any value), "param=" (any value),
+	// "param=value" (exact pair)
+	CmdlineDeny []string `yaml:"cmdline_deny"`
+}
+
+// returns the effective cmdline denylist: builtin rules plus operator
+// extensions from the policy file
+func (p *PCRPolicy) EffectiveCmdlineDeny() []string {
+	out := make([]string, 0, len(builtinCmdlineDeny)+len(p.CmdlineDeny))
+	out = append(out, builtinCmdlineDeny...)
+	out = append(out, p.CmdlineDeny...)
+	return out
 }
 
 // manages PCR policies and verification
@@ -109,7 +130,8 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 	}
 
 	hasAnyRequirement := policy.RequireIOMMU || policy.RequireEnforce ||
-		policy.RequireModuleSig || policy.RequireSecureBoot || policy.RequireLockdown
+		policy.RequireModuleSig || policy.RequireSecureBoot ||
+		policy.RequireLockdown || policy.RequireCmdlinePolicy
 	if !hasAnyRequirement && len(policy.PCRs) == 0 {
 		warnings = append(warnings, fmt.Sprintf(
 			"policy '%s': no security requirements enabled -> effectively permissive",
@@ -412,16 +434,17 @@ func DefaultPolicy() *PCRPolicy {
 // Requires all available security features to be enabled.
 func StrictPolicy() *PCRPolicy {
 	return &PCRPolicy{
-		Name:              "strict",
-		Description:       "High-security policy - requires all security features enabled",
-		PCRs:              map[int]string{}, // defined via TOFU or custom policy
-		KernelHashes:      []string{},
-		AgentHashes:       []string{},
-		RequireIOMMU:      true,
-		RequireEnforce:    true,
-		RequireModuleSig:  true,
-		RequireSecureBoot: true,
-		RequireLockdown:   true,
+		Name:                 "strict",
+		Description:          "High-security policy - requires all security features enabled",
+		PCRs:                 map[int]string{}, // defined via TOFU or custom policy
+		KernelHashes:         []string{},
+		AgentHashes:          []string{},
+		RequireIOMMU:         true,
+		RequireEnforce:       true,
+		RequireModuleSig:     true,
+		RequireSecureBoot:    true,
+		RequireLockdown:      true,
+		RequireCmdlinePolicy: true,
 	}
 }
 
@@ -443,6 +466,12 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 	// PCR 1:  host platform configuration (BIOS settings, boot order).
 	// PCR 7:  Secure Boot policy + authority chain.
 	mask |= (1 << 14) | (1 << 0) | (1 << 1) | (1 << 7)
+
+	// PCR 8: GRUB kernel cmdline; the cmdline gate can only trust the
+	// measured command line when the quote covers the PCR it extends
+	if p.RequireCmdlinePolicy {
+		mask |= 1 << 8
+	}
 
 	return mask
 }

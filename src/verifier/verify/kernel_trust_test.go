@@ -164,3 +164,78 @@ func TestExtractKernelCmdlines_MultipleKernelCmdlines(t *testing.T) {
 		t.Errorf("unexpected cmdlines: %q", got)
 	}
 }
+
+func TestMatchCmdlineDeny_CleanFedoraCmdline(t *testing.T) {
+	t.Log("TEST: Stock Fedora GRUB cmdline passes the builtin denylist")
+
+	cmdline := "root=UUID=bfcb1962-9c52-4077-9ec3-da7fec4314fb ro rootflags=subvol=root " +
+		"rhgb quiet drm.edid_firmware=DP-1:edid/a.bin,HDMI-A-1:edid/b.bin usbcore.autosuspend=-1"
+	if hits := MatchCmdlineDeny(cmdline, builtinCmdlineDeny); len(hits) != 0 {
+		t.Errorf("clean cmdline matched denylist: %v", hits)
+	}
+}
+
+func TestMatchCmdlineDeny_BuiltinEntries(t *testing.T) {
+	t.Log("TEST: Every builtin denylist class is caught")
+
+	cases := []string{
+		"ro quiet init=/bin/sh",
+		"ro rdinit=/bin/sh",
+		"ro rd.break",
+		"ro rd.break=pre-mount",
+		"ro lockdown=none",
+		"ro module.sig_enforce=0",
+		"ro selinux=0",
+		"ro enforcing=0",
+		"ro apparmor=0",
+		"ro security=none",
+		"ro systemd.debug_shell",
+		"ro systemd.debug_shell=1",
+		"ro kgdboc=ttyS0,115200",
+	}
+	for _, c := range cases {
+		if hits := MatchCmdlineDeny(c, builtinCmdlineDeny); len(hits) == 0 {
+			t.Errorf("dangerous cmdline %q not matched", c)
+		}
+	}
+}
+
+func TestMatchCmdlineDeny_DashUnderscoreEquivalence(t *testing.T) {
+	t.Log("TEST: Kernel '-'/'_' parameter-name equivalence cannot bypass rules")
+
+	if hits := MatchCmdlineDeny("ro module.sig-enforce=0", builtinCmdlineDeny); len(hits) == 0 {
+		t.Error("dash-spelled module.sig-enforce=0 not matched")
+	}
+	if hits := MatchCmdlineDeny("ro systemd.debug-shell=1", builtinCmdlineDeny); len(hits) == 0 {
+		t.Error("dash-spelled systemd.debug-shell not matched")
+	}
+}
+
+func TestMatchCmdlineDeny_ExactValueRules(t *testing.T) {
+	t.Log("TEST: Exact key=value rules do not match legitimate values")
+
+	clean := []string{
+		"ro lockdown=integrity",
+		"ro security=selinux",
+		"ro enforcing=1",
+		"ro selinux=1",
+	}
+	for _, c := range clean {
+		if hits := MatchCmdlineDeny(c, builtinCmdlineDeny); len(hits) != 0 {
+			t.Errorf("legitimate cmdline %q matched: %v", c, hits)
+		}
+	}
+}
+
+func TestMatchCmdlineDeny_OperatorExtension(t *testing.T) {
+	t.Log("TEST: Operator cmdline_deny entries extend the builtin set")
+
+	policy := &PCRPolicy{CmdlineDeny: []string{"nokaslr"}}
+	deny := policy.EffectiveCmdlineDeny()
+	if hits := MatchCmdlineDeny("ro nokaslr", deny); len(hits) == 0 {
+		t.Error("operator-denied nokaslr not matched")
+	}
+	if hits := MatchCmdlineDeny("ro init=/bin/sh", deny); len(hits) == 0 {
+		t.Error("builtin rule lost after operator extension")
+	}
+}

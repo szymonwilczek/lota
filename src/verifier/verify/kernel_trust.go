@@ -115,3 +115,59 @@ func stripImagePathToken(s string) string {
 	}
 	return ""
 }
+
+// builtinCmdlineDeny rejects parameters that defeat the signed kernel's
+// integrity guarantees while staying machine-independent: none of them
+// appear on a stock distribution command line. Rule forms:
+//
+//	"param"   bare flag or any valued form
+//	"param="  any value
+//	"param=v" exact key=value pair
+var builtinCmdlineDeny = []string{
+	"init=",         // arbitrary userspace entry point
+	"rdinit=",       // arbitrary entry point via initramfs
+	"rd.break",      // dracut pre-pivot root shell
+	"lockdown=none", // disables kernel lockdown
+	"module.sig_enforce=0",
+	"selinux=0",
+	"enforcing=0",
+	"apparmor=0",
+	"security=none",
+	"systemd.debug_shell", // root shell on tty9
+	"kgdboc=",             // kernel debugger console: live memory patching
+}
+
+// kernel parameter names treat '-' and '_' as equivalent
+func normalizeParamKey(k string) string {
+	return strings.ReplaceAll(k, "-", "_")
+}
+
+// reports whether a single cmdline token matches a deny rule
+func cmdlineTokenMatches(token, rule string) bool {
+	tKey, tVal, tHasVal := strings.Cut(token, "=")
+	rKey, rVal, rHasVal := strings.Cut(rule, "=")
+	if normalizeParamKey(tKey) != normalizeParamKey(rKey) {
+		return false
+	}
+	if !rHasVal || rVal == "" {
+		return true
+	}
+	return tHasVal && tVal == rVal
+}
+
+// returns the deny rules matched by any parameter on cmdline.
+// Tokenization is whitespace-based and does not honor kernel quoting,
+// so a denied key inside a quoted value still matches (fail closed).
+func MatchCmdlineDeny(cmdline string, deny []string) []string {
+	var hits []string
+	seen := make(map[string]bool)
+	for _, token := range strings.Fields(cmdline) {
+		for _, rule := range deny {
+			if !seen[rule] && cmdlineTokenMatches(token, rule) {
+				seen[rule] = true
+				hits = append(hits, rule)
+			}
+		}
+	}
+	return hits
+}
