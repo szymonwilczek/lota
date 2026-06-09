@@ -15,6 +15,7 @@ intentionally a single-purpose component; they are wired together by
 | `cs2/`             | Proton / CS2 integration smoke note                          |
 | `block-demo/`      | Self-protecting victim + dummy evil.so; proves the BPF LSM gate rejects an unauthorised dlopen end-to-end. |
 | `sealed-key/`      | Offline sealed-key round-trip: seal a secret to the boot/PCR state, unseal it, and prove it fails closed after the state changes. |
+| `ha-postgres/`     | Multi-instance verifier on a shared Postgres backend: two instances share enforcement and session-token state via `--pg-dsn`, so a token issued by one validates on the other. |
 
 The whole tree is built with `make examples` from the repository root.
 The target is opt-in: `make all` does not depend on it, so the agent
