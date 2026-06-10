@@ -47,11 +47,36 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 | Sanitizers | ASan / UBSan on the C side | `SANITIZE=address,undefined make test-unit` |
 | Memory | valgrind memcheck | `make valgrind-unit`, `make valgrind-smoke` |
 | Fuzz (Go) | verifier / SDK / attest-CA parsers of untrusted bytes | `go test -run x -fuzz=Fuzz... ./...`; CI runs every target per PR |
+| Postgres | verifier store/session backends against a real server | `go test -tags pg_integration -p 1 ./store/ ./verify/` with `LOTA_TEST_PG_DSN`; CI job `postgres-integration` |
 | Fuzz (C) | IPC, config, TLS-pin, wire, enrollment-reply decoders, sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature verify, server SDK token verify, TPM2B response/credential unmarshal | `make fuzz-all` |
 | Kernel | BPF LSM live in a guest | Syzkaller harness `lota_bpf_fuzz` (see `syzkaller/README.md`) |
 | Repro | bit-for-bit build | `make reproducible-build`; gated in CI |
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
+
+### Postgres-backed tests and the coverage ratchet
+
+Multi-instance verifier ships a Postgres backend (`jackc/pgx/v5`,
+pure-Go, stdlib `database/sql` driver). Its store and session code is
+compiled into every build but only exercised by tests behind the
+`pg_integration` build tag, which need a live server:
+
+```bash
+podman run -d -e POSTGRES_USER=lota -e POSTGRES_PASSWORD=lota \
+  -e POSTGRES_DB=lota -p 55432:5432 docker.io/library/postgres:16-alpine
+cd src/verifier
+LOTA_TEST_PG_DSN="postgres://lota:lota@127.0.0.1:55432/lota?sslmode=disable" \
+  go test -tags pg_integration -p 1 -count=1 ./store/ ./verify/
+```
+
+Use `-p 1`: both packages truncate tables in one shared database, and pick
+a host port that is actually free - a foreign Postgres already bound to the
+port answers with confusing auth failures. The coverage ratchet
+(`scripts/check-go-coverage.sh`) enables the tag for `src/verifier` when
+`LOTA_TEST_PG_DSN` is set; the CI `go-coverage-ratchet` job provides a
+postgres service, so the recorded floors for the `store` and `verify`
+packages assume the Postgres tests ran. Without the DSN the script still
+works but those two packages report lower coverage than their floors.
 
 ## Local patch checks
 

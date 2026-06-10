@@ -11,6 +11,8 @@
 //   --key FILE         TLS private key file
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
+//   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
+//                      (or LOTA_PG_DSN); mutually exclusive with --db
 //   --policy FILE      PCR policy file (YAML)
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
 
@@ -19,6 +21,8 @@
 //   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, the
 //                       read tier is public on a loopback bind and the server
 //                       refuses a non-loopback bind unless LOTA_ADMIN_API_KEY is set
+//   LOTA_PG_DSN         PostgreSQL DSN for the shared storage backend; keeps
+//                       connection credentials out of the process argument list
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -90,6 +94,7 @@ var (
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts           stringSliceFlag
 	ekCRLs               stringSliceFlag
+	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
@@ -169,7 +174,81 @@ func main() {
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
 
-	if *dbPath != "" {
+	// resolve the Postgres DSN from flag or environment
+	// the env form keeps connection credentials out of the process argument list
+	dsn := *pgDSN
+	if dsn == "" {
+		dsn = os.Getenv("LOTA_PG_DSN")
+	}
+	if dsn != "" && *dbPath != "" {
+		logger.Error("choose one storage backend: --pg-dsn (Postgres) or --db (SQLite), not both")
+		os.Exit(1)
+	}
+
+	if dsn != "" {
+		// Postgres backend: shared, multi-instance state for deployments
+		// behind a load balancer.
+		// Mutable enforcement, baseline and nonce state lives in Postgres
+		// so any instance sees writes made by any peer.
+		//
+		// Unlike the SQLite --db block, this path supports the
+		// certificate-backed AIK store, so a production --require-cert fleet
+		// can run several verifier instances against one database
+		db, err := store.OpenPostgresDB(dsn)
+		if err != nil {
+			logger.Error("failed to open Postgres database", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
+		verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
+		verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
+
+		auditLog = store.NewPostgresAuditLog(db)
+		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
+		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
+
+		attestLog = store.NewPostgresAttestationLog(db)
+		verifierCfg.AttestationLog = attestLog
+
+		// AIK store: certificate-backed when the deployment verifies chains
+		// (the production default), otherwise a shared TOFU store in Postgres
+		if *requireCert || len(aikCACerts) > 0 {
+			if *requireCert && len(aikCACerts) == 0 {
+				logger.Error("--require-cert requires a trusted attestation-CA root for AIK verification",
+					"hint", "provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)")
+				os.Exit(1)
+			}
+			if len(ekCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--ek-crl requires at least one --aik-ca-cert to verify CRL signatures")
+				os.Exit(1)
+			}
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(ekCRLs), *requireCert)
+			if err != nil {
+				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
+				os.Exit(1)
+			}
+			aikStore = cs
+			logger.Info("certificate-backed AIK store initialized",
+				"path", *aikStorePath,
+				"trusted_cas", len(aikCACerts),
+				"loaded_crls", cs.CRLCount(),
+				"require_cert", *requireCert,
+				"registered_clients", len(cs.ListClients()))
+		} else {
+			aikStore = store.NewPostgresAIKStore(db)
+			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
+		}
+
+		ver, err := store.SchemaVersion(db)
+		if err != nil {
+			logger.Warn("failed to read Postgres schema version", "error", err)
+		} else {
+			logger.Info("Postgres store initialized", "schema_version", ver)
+		}
+	} else if *dbPath != "" {
 		if *requireCert {
 			logger.Error("--require-cert is enabled but SQLite AIK store does not support certificate chain verification",
 				"hint", "run without --db and configure --aik-ca-cert to use CertificateStore, or disable --require-cert (INSECURE)")

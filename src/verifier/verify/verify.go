@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -116,9 +115,9 @@ type Verifier struct {
 	sessionTokenKey      [32]byte
 	sessionTokenKeyReady bool
 
-	// issued session tokens (ephemeral in-memory index for validation API)
-	tokenMu    sync.Mutex
-	tokenIndex map[[32]byte]sessionTokenRecord
+	// store for issued session tokens; in-memory by default (single node),
+	// Postgres for multi-instance validation behind a load balancer
+	sessionTokenStore SessionTokenStore
 
 	// monitoring
 	startTime      time.Time
@@ -195,6 +194,11 @@ type VerifierConfig struct {
 
 	// optional: persistent used nonce backend (nil = in-memory)
 	UsedNonceBackend UsedNonceBackend
+
+	// optional: shared session-token store (nil = in-memory, single node).
+	// Postgres-backed store lets several instances behind a load balancer
+	// validate each other's tokens.
+	SessionTokenStore SessionTokenStore
 
 	// optional: revocation enforcement (nil = no revocation checks)
 	RevocationStore store.RevocationStore
@@ -346,7 +350,12 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
-		tokenIndex:            make(map[[32]byte]sessionTokenRecord),
+		sessionTokenStore:     cfg.SessionTokenStore,
+	}
+
+	// default to the in-memory store (single node) when none is configured
+	if v.sessionTokenStore == nil {
+		v.sessionTokenStore = newMemorySessionTokenStore()
 	}
 
 	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
@@ -366,17 +375,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 		return
 	}
 
-	now := unixTimestamp(time.Now())
-	v.tokenMu.Lock()
-	defer v.tokenMu.Unlock()
-
-	for k, rec := range v.tokenIndex {
-		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
-			delete(v.tokenIndex, k)
-		}
-	}
-
-	v.tokenIndex[token] = sessionTokenRecord{
+	v.sessionTokenStore.Remember(token, sessionTokenRecord{
 		ClientID:   clientID,
 		HardwareID: identity,
 		ValidUntil: validUntil,
@@ -384,54 +383,14 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 		Flags:      report.Header.Flags,
 		PCRMask:    report.TPM.PCRMask,
 		Consumed:   false,
-	}
+	})
 }
 
 func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTokenStatus {
-	st := SessionTokenStatus{}
 	if v == nil {
-		return st
+		return SessionTokenStatus{}
 	}
-
-	now := unixTimestamp(time.Now())
-
-	v.tokenMu.Lock()
-	defer v.tokenMu.Unlock()
-
-	for k, rec := range v.tokenIndex {
-		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
-			delete(v.tokenIndex, k)
-		}
-	}
-
-	rec, ok := v.tokenIndex[token]
-	if !ok {
-		return st
-	}
-
-	st.Exists = true
-	st.ClientID = rec.ClientID
-	st.HardwareID = rec.HardwareID
-	st.ValidUntil = rec.ValidUntil
-	st.ResultCode = rec.ResultCode
-	st.Flags = rec.Flags
-	st.PCRMask = rec.PCRMask
-	st.Consumed = rec.Consumed
-	st.Expired = rec.ValidUntil > 0 && rec.ValidUntil <= now
-
-	if st.Expired {
-		delete(v.tokenIndex, token)
-		st.Exists = false
-		return st
-	}
-
-	if consume && !rec.Consumed {
-		rec.Consumed = true
-		v.tokenIndex[token] = rec
-		st.Consumed = true
-	}
-
-	return st
+	return v.sessionTokenStore.Validate(token, consume, unixTimestamp(time.Now()))
 }
 
 func (v *Verifier) deriveSessionToken(report *types.AttestationReport, clientID string,

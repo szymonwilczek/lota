@@ -44,11 +44,11 @@ The attestation CA verifies the EK certificate chain, runs credential
 activation against the TPM, and issues a short-lived AIK certificate. Verifiers
 trust the CA certificate, not an agent-asserted public key.
 
-The CA key is a high-value fleet secret. The current implementation supports a
-PEM-backed `crypto.Signer` path.
-
-HSM or KMS-backed signing is an enterprise deployment requirement, in progress,
-not property implemented by the current tree.
+The CA key is a high-value fleet secret. It is loaded as a `crypto.Signer`, so
+both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11 token
+(HSM or SoftHSM, built with the `pkcs11` tag) are supported. Production
+deployments hold the key in an HSM; the on-disk path is logged loudly and is
+never the production default. See [`CA-KEY.md`](CA-KEY.md).
 
 ### Verifier
 
@@ -56,9 +56,12 @@ The verifier validates AIK certificates, TPM quotes, PCR policy, event logs,
 boot commitments, runtime protection digests, token nonces, revocations, and
 ban state.
 
-The current default store is SQLite and session-token state is process-local.
-Multi-instance high availability requires a shared backend and shared or
-stateless token validation.
+The default store is SQLite for single-node deployments. A Postgres backend
+(selected with `--pg-dsn`) holds the baseline, used-nonce, revocation, ban,
+audit, attestation and session-token state in a shared database, so several
+verifier instances behind a load balancer share enforcement state and any
+instance validates a session token issued by any peer. See
+[`HA_DEPLOYMENT.md`](HA_DEPLOYMENT.md) for the supported topologies.
 
 ### SDK Consumer
 
