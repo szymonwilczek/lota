@@ -16,6 +16,8 @@ The protected properties are:
   attestation CA,
 - the TPM quote is fresh and bound to verifier-provided nonce material,
 - firmware and Secure Boot state are pinned through PCR 0, PCR 1, and PCR 7,
+- Secure Boot enablement and the kernel command line are enforced
+  machine-independently from the quote-bound TPM event log,
 - LOTA's boot commitment is bound through PCR14,
 - the agent binary and runtime-protected executable image are measured and
   bound into attestation or token material,
@@ -76,7 +78,9 @@ detection.
 | Software-only fake attester | Enrollment requires TPM 2.0 credential activation. The CA issues an AIK certificate only after proving the AIK and EK live in the same TPM. | A verifier must run with the production CA trust root and certificate requirement enabled. |
 | Replayed attestation | Verifier challenges are one-time nonces with expiry and used-nonce tracking. The TPM quote covers a binding nonce. | Clock and storage availability are operational dependencies for replay tracking. |
 | Agent-asserted report metadata | The attestation binding nonce covers hardware identity, signed flags, kernel hash, agent hash, and IOMMU status before verification of `TPMS_ATTEST.extraData`. | Metadata outside that binding must not be promoted to security decisions without extending the binding. |
-| Firmware or Secure Boot drift | Production policy pins PCR 0, PCR 1, and PCR 7. | Firmware updates require deliberate policy rotation. |
+| Firmware or Secure Boot drift | Production policy pins PCR 0, PCR 1, and PCR 7 for homogeneous fleets. | Firmware updates require deliberate policy rotation. Raw pins do not scale to diverse single-machine populations; the event-log checks below cover those. |
+| Secure Boot disabled to boot a tampered kernel | The verifier reads the firmware-measured `SecureBoot` variable from the event log (PCR 7) and accepts it only when the log replay reproduces the TPM-quoted PCR, so the value cannot be fabricated or stripped. The agent-reported Secure Boot flag is telemetry only. | Kernels signed for Secure Boot (including operator/MOK-signed) pass; the control rejects unsigned boots, not signed-but-malicious kernels. |
+| Signed kernel sabotaged via command line (`init=`, `rd.break`, `lockdown=none`, ...) | The verifier checks the GRUB-measured kernel command line (PCR 8 event log, quote-bound) against a machine-independent parameter denylist; a non-zero quoted PCR 8 with no measured command line is rejected as a truncated log. | GRUB-only today: systemd-boot/UKI hosts measure the command line into PCR 12 and skip this check (Secure Boot enforcement still applies). Denylist coverage is enumerative, not semantic. |
 | Agent binary drift | PCR14 boot commitment and agent hash policy bind the agent image. fs-verity protects the installed binary. | Replacing the agent binary requires cold reboot, fs-verity re-enable, policy update, and re-attestation. |
 | Early PCR14 tamper | Initramfs PCR14 lock runs before normal userspace; udev and SELinux restrict TPM device access; systemd ordering starts the agent before login-capable targets. | PCR14 is OS-writable by the PC Client Profile. Userspace cannot make that race impossible on every platform. |
 | Runtime image substitution | BPF LSM gates executable mmap and mprotect for protected processes against the fs-verity allow-list. The agent re-measures file-backed executable mappings from the kernel side. | Anonymous executable memory and JIT code are not measured as modules. The intended bound is W^X plus policy enforcement. |

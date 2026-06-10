@@ -29,7 +29,7 @@ func FuzzParseEventLog(f *testing.F) {
 	log2 := buildTestEventLog([]EventLogEntry{
 		{PCRIndex: 0, EventType: 0x00000001, Digests: map[uint16][]byte{AlgSHA256: d1[:]}, EventData: []byte("fw")},
 		{PCRIndex: 4, EventType: EvAction, Digests: map[uint16][]byte{AlgSHA256: d2[:]}, EventData: []byte("bl")},
-		{PCRIndex: 7, EventType: EvEFIVarBoot, Digests: map[uint16][]byte{AlgSHA256: d3[:]}, EventData: []byte("sb")},
+		{PCRIndex: 7, EventType: EvEFIVariableDriverConfig, Digests: map[uint16][]byte{AlgSHA256: d3[:]}, EventData: []byte("sb")},
 	})
 	f.Add(log2)
 
@@ -71,8 +71,8 @@ func FuzzReplayEventLog(f *testing.F) {
 	d2 := sha256.Sum256([]byte("first"))
 	d3 := sha256.Sum256([]byte("second"))
 	log2 := buildTestEventLog([]EventLogEntry{
-		{PCRIndex: 7, EventType: EvEFIVarBoot, Digests: map[uint16][]byte{AlgSHA256: d2[:]}},
-		{PCRIndex: 7, EventType: EvEFIBootService, Digests: map[uint16][]byte{AlgSHA256: d3[:]}},
+		{PCRIndex: 7, EventType: EvEFIVariableDriverConfig, Digests: map[uint16][]byte{AlgSHA256: d2[:]}},
+		{PCRIndex: 7, EventType: EvEFIVariableBoot, Digests: map[uint16][]byte{AlgSHA256: d3[:]}},
 	})
 	f.Add(log2)
 
@@ -90,6 +90,25 @@ func FuzzReplayEventLog(f *testing.F) {
 		}
 		if result.TotalEntries != len(parsed.Entries) {
 			t.Fatalf("TotalEntries=%d, parsed entries=%d", result.TotalEntries, len(parsed.Entries))
+		}
+	})
+}
+
+func FuzzParseUEFIVariableData(f *testing.F) {
+	f.Add(encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01}))
+	f.Add(encodeUEFIVariableData([16]byte{}, "", nil))
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		v, err := parseUEFIVariableData(data)
+		if err != nil {
+			return
+		}
+		if v == nil {
+			t.Fatal("nil result without error")
+		}
+		if len(v.VariableData) > len(data) {
+			t.Fatalf("variable data longer than input: %d > %d", len(v.VariableData), len(data))
 		}
 	})
 }

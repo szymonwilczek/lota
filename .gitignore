@@ -1,6 +1,7 @@
 build
 lota-verifier.crt
 lota-verifier.key
+.host-ek-issuer.pem
 tests/sdk_demo
 src/verifier/verifier
 /linux-6.18.10

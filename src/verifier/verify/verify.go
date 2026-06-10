@@ -659,28 +659,36 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		clog.Debug("PCR digest verified against TPM-signed attestation")
 	}
 
-	if err := v.pcrVerifier.VerifyReport(report); err != nil {
-		clog.Error("PCR verification failed", "error", err)
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
-		return result, err
-	}
-
-	// verify event log -> independent PCR reconstruction
+	// verify event log -> independent PCR reconstruction + boot facts.
+	// Runs before the policy gates because RequireSecureBoot and the
+	// cmdline policy consume the quote-authenticated facts extracted
+	// here. PCR 8 consistency is enforced whenever the active policy
+	// gates on the measured cmdline; otherwise a forged kernel_cmdline
+	// event would go undetected.
+	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
-		if err := VerifyEventLog(report); err != nil {
+		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.ActivePolicyRequiresCmdline())
+		if err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
 			return result, fmt.Errorf("event log inconsistency: %w", err)
 		}
+		bootFacts = facts
 		clog.Debug("event log verified", "size", len(report.EventLog))
 	} else {
 		clog.Error("event log required but not provided")
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
 		return result, errors.New("event log required but not provided")
+	}
+
+	if err := v.pcrVerifier.VerifyReportWithFacts(report, bootFacts); err != nil {
+		clog.Error("PCR verification failed", "error", err)
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, err
 	}
 
 	// check agent self-measurement against baseline

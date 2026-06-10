@@ -13,6 +13,7 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -20,19 +21,21 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"unicode/utf16"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // TCG event types
 const (
-	EvNoAction       uint32 = 0x00000003
-	EvSeparator      uint32 = 0x00000004
-	EvAction         uint32 = 0x00000005
-	EvEFIAction      uint32 = 0x80000007
-	EvEFIVarBoot     uint32 = 0x80000001
-	EvEFIBootService uint32 = 0x80000002
-	EvEFIGPTEvent    uint32 = 0x80000006
+	EvNoAction                uint32 = 0x00000003
+	EvSeparator               uint32 = 0x00000004
+	EvAction                  uint32 = 0x00000005
+	EvIPL                     uint32 = 0x0000000D
+	EvEFIVariableDriverConfig uint32 = 0x80000001
+	EvEFIVariableBoot         uint32 = 0x80000002
+	EvEFIGPTEvent             uint32 = 0x80000006
+	EvEFIAction               uint32 = 0x80000007
 )
 
 // TCG hash algorithm IDs
@@ -48,6 +51,7 @@ const (
 	maxTCGHeaderDataSize uint32 = 1 << 20 // 1MB
 	maxTCGEventDataSize  uint32 = 1 << 20 // 1MB
 	maxTCGDigestCount    uint32 = 16      // sane upper bound for digest algorithms
+	maxUEFIVarNameUnits  uint64 = 1 << 10 // UTF-16 code units; EFI variable names are short
 )
 
 // single measurement entry from the event log
@@ -246,6 +250,68 @@ func parsePCREvent2(data []byte, algList []uint16) (*EventLogEntry, int, error) 
 	return entry, offset, nil
 }
 
+// EFI global variable namespace GUID 8be4df61-93ca-11d2-aa0d-00e098032b8c
+// in the on-disk mixed-endian layout (first three fields little-endian)
+var efiGlobalVariableGUID = [16]byte{
+	0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+}
+
+// decoded UEFI_VARIABLE_DATA payload of an EV_EFI_VARIABLE_* event
+type UEFIVariableData struct {
+	VariableName [16]byte // EFI_GUID, on-disk mixed-endian layout
+	UnicodeName  string
+	VariableData []byte
+}
+
+// parses the UEFI_VARIABLE_DATA structure (TCG PC Client Platform
+// Firmware Profile):
+//
+//	VariableName       EFI_GUID (16)
+//	UnicodeNameLength  u64 (UTF-16 code units)
+//	VariableDataLength u64
+//	UnicodeName        UTF-16LE[UnicodeNameLength]
+//	VariableData       u8[VariableDataLength]
+func parseUEFIVariableData(data []byte) (*UEFIVariableData, error) {
+	if len(data) < 32 {
+		return nil, errors.New("UEFI variable data too short")
+	}
+
+	out := &UEFIVariableData{}
+	copy(out.VariableName[:], data[:16])
+
+	nameUnits := binary.LittleEndian.Uint64(data[16:])
+	varLen := binary.LittleEndian.Uint64(data[24:])
+
+	if nameUnits > maxUEFIVarNameUnits {
+		return nil, fmt.Errorf("UEFI variable name too long: %d units", nameUnits)
+	}
+	avail := uint64(len(data)) - 32
+	nameBytes := nameUnits * 2
+	if nameBytes > avail || varLen > avail-nameBytes {
+		return nil, errors.New("UEFI variable data truncated")
+	}
+
+	name := make([]uint16, nameUnits)
+	for i := range name {
+		name[i] = binary.LittleEndian.Uint16(data[32+2*i:])
+	}
+	out.UnicodeName = string(utf16.Decode(name))
+
+	out.VariableData = make([]byte, varLen)
+	copy(out.VariableData, data[32+nameBytes:32+nameBytes+varLen])
+
+	return out, nil
+}
+
+// extracts the NUL-terminated string an EV_IPL event carries
+func parseIPLEventString(data []byte) string {
+	if i := bytes.IndexByte(data, 0); i >= 0 {
+		data = data[:i]
+	}
+	return string(data)
+}
+
 // returns digest size in bytes for a given TCG algorithm ID
 func algDigestSize(algID uint16) int {
 	switch algID {
@@ -329,33 +395,40 @@ func VerifyEventLogConsistency(report *types.AttestationReport, replay *ReplayRe
 	return mismatches
 }
 
-// performs full event log verification:
+// performs full event log verification and derives the boot facts the
+// policy gates consume:
 // - parse the binary event log
 // - replay PCR extend operations
 // - compare replayed PCRs against reported values
-// - log warnings for mismatches (firmware PCRs 0-7 should match)
+// - extract Secure Boot state and kernel cmdline (see BootFacts)
 //
-// Returns nil if event log is empty/absent (optional feature).
-// Returns error only for parsing failures, not PCR mismatches
-func VerifyEventLog(report *types.AttestationReport) error {
+// enforcePCR8 removes PCR 8 from the consistency skip set.
+// It must be set whenever the active policy gates on the measured kernel cmdline:
+// forged kernel_cmdline event breaks the PCR 8 replay and is only caught when the
+// PCR is consistency-checked.
+func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool) (*BootFacts, error) {
 	if len(report.EventLog) == 0 {
-		return errors.New("TPM event log missing from report")
+		return nil, errors.New("TPM event log missing from report")
 	}
 
 	parsed, err := ParseEventLog(report.EventLog)
 	if err != nil {
-		return fmt.Errorf("event log parse failed: %w", err)
+		return nil, fmt.Errorf("event log parse failed: %w", err)
 	}
 
 	replay, err := ReplayEventLog(parsed)
 	if err != nil {
-		return fmt.Errorf("event log replay failed: %w", err)
+		return nil, fmt.Errorf("event log replay failed: %w", err)
 	}
 
 	// skip PCR 14 (LOTA self-measurement, extended at runtime)
-	// skip PCR 8-9 (may have OS-level IMA extensions)
+	// skip PCR 9 (bootloader-loaded files, not modeled by any policy)
+	// skip PCR 8 (GRUB cmdline) only while no policy consumes it
 	skipPCRs := map[int]bool{
-		8: true, 9: true, 14: true,
+		9: true, 14: true,
+	}
+	if !enforcePCR8 {
+		skipPCRs[8] = true
 	}
 
 	mismatches := VerifyEventLogConsistency(report, replay, skipPCRs)
@@ -363,14 +436,26 @@ func VerifyEventLog(report *types.AttestationReport) error {
 		for _, m := range mismatches {
 			slog.Warn("event log PCR mismatch", "detail", m)
 		}
-		return fmt.Errorf("event log verification: %d PCR mismatches detected", len(mismatches))
+		return nil, fmt.Errorf("event log verification: %d PCR mismatches detected", len(mismatches))
+	}
+
+	facts, err := ExtractBootFacts(report, parsed, replay)
+	if err != nil {
+		return nil, fmt.Errorf("event log semantic extraction failed: %w", err)
 	}
 
 	slog.Info("event log verified",
 		"entries", replay.TotalEntries,
 		"pcrs_replayed", countNonZero(replay.ExtendCounts[:]))
 
-	return nil
+	return facts, nil
+}
+
+// VerifyEventLog is the facts-free wrapper kept for callers that only
+// need the parse/replay/consistency verdict
+func VerifyEventLog(report *types.AttestationReport) error {
+	_, err := VerifyEventLogWithPolicy(report, false)
+	return err
 }
 
 func countNonZero(counts []int) int {

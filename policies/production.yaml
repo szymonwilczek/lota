@@ -61,5 +61,22 @@ agent_hashes:
 require_iommu: true # DMA protection via IOMMU/VT-d
 require_enforce: true # LSM (SELinux/AppArmor) in enforce mode
 require_module_sig: false # Signed kernel modules (distribution-dependent)
-require_secureboot: false # UEFI Secure Boot (requires hardware support)
 require_lockdown: false # Kernel lockdown mode
+
+# Kernel trust (universal, machine-independent; see README "Kernel trust").
+# Both checks read the TPM event log and bind it to the quote, so they
+# work for a diverse population without per-machine PCR pins.
+#
+# Secure Boot must be enabled per the firmware-measured SecureBoot
+# variable (PCR 7). The agent-reported flag is telemetry only.
+require_secureboot: true
+# The GRUB-measured kernel command line (PCR 8) must be free of
+# denylisted parameters (init=, rd.break, lockdown=none, ...). Hosts
+# whose bootloader does not measure into PCR 8 (systemd-boot/UKI) skip
+# this check; Secure Boot enforcement still applies there.
+require_cmdline_policy: true
+# Operator extensions to the builtin denylist. Entry forms:
+#   "param"   - bare flag or any valued form
+#   "param="  - any value
+#   "param=v" - exact key=value pair
+cmdline_deny: []

@@ -289,14 +289,14 @@ func TestPCRVerifier_VerifyReport_CmdlinePCR8(t *testing.T) {
 	if err := v.AddPolicy(policy); err != nil {
 		t.Fatalf("AddPolicy: %v", err)
 	}
-	if err := v.verifyAgainstPolicy(newReport(), policy); err != nil {
+	if err := v.verifyAgainstPolicy(newReport(), policy, nil); err != nil {
 		t.Fatalf("matching PCR 8 rejected: %v", err)
 	}
 
 	// tampered command line (different PCR 8) is rejected
 	bad := newReport()
 	bad.TPM.PCRValues[8][0] = 0x22
-	if err := v.verifyAgainstPolicy(bad, policy); err == nil {
+	if err := v.verifyAgainstPolicy(bad, policy, nil); err == nil {
 		t.Error("expected rejection for mismatched PCR 8 (tampered cmdline)")
 	}
 
@@ -304,7 +304,7 @@ func TestPCRVerifier_VerifyReport_CmdlinePCR8(t *testing.T) {
 	// pin cannot be dropped by an agent that simply does not quote it
 	missing := newReport()
 	missing.TPM.PCRMask = 1 << 14 // only PCR 14
-	if err := v.verifyAgainstPolicy(missing, policy); err == nil {
+	if err := v.verifyAgainstPolicy(missing, policy, nil); err == nil {
 		t.Error("expected rejection when PCR 8 is absent from the quote")
 	}
 }
