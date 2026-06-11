@@ -124,3 +124,36 @@ the manifest is the audit trail for any change to the trusted set.
 A vendor that rotates its root publishes the new fingerprint; record it as a
 new line (keep the old one until every host with the older EK is retired so
 both chains keep verifying through the overlap).
+
+## Manufacturer CRLs
+
+Root bundle without the matching revocation feed is half a trust anchor:
+manufacturers revoke EK certificates in bulk (the ROCA / CVE-2017-15361
+advisory revoked millions of Infineon EKs whose private key is recoverable
+from the public modulus), and an EK with a recoverable key lets a software
+attacker complete credential activation without any TPM. Pass each
+manufacturer CRL to the CA with `-ek-crl <file>` (repeatable; PEM or DER, a
+file may bundle several PEM blocks):
+
+```sh
+lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots \
+    -ek-crl /var/lib/lota/ek-crls/infineon.crl ...
+```
+
+Each CRL must be signed by a certificate present in the loaded EK trust
+set; manufacturers that issue EK certificates through an intermediate CA
+sign their CRLs with that intermediate, so the intermediate must be part of
+the bundle for the feed to load.
+
+The CA fails closed at startup on a CRL that does not verify, omits `NextUpdate`,
+or uses a weak signature algorithm, and an issuer whose every loaded CRL is
+past `NextUpdate` is refused at enrollment time.
+
+An issuer with no configured CRL is accepted (standard RFC 5280 semantics) --
+ship the feed for every manufacturer that publishes one.
+
+Refresh a feed by rewriting the file atomically and sending the daemon
+SIGHUP; a refresh that fails validation keeps the previous set active.
+The CRL distribution point is usually listed in the EK certificate's
+`crlDistributionPoints` extension
+(`openssl x509 -in ek.der -inform DER -noout -ext crlDistributionPoints`).

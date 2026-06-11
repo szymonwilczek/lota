@@ -387,7 +387,7 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 # GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
 # HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
 GO_TAGS ?=
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 	@echo "Built: $@"
 

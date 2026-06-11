@@ -14,8 +14,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/szymonwilczek/lota/crl"
 )
 
 type certAndKey struct {
@@ -46,7 +50,7 @@ func makeRoot(tb testing.TB, cn string) certAndKey {
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {
@@ -386,5 +390,156 @@ func TestVerifyEKCertificateIgnoresTPMCriticalExtensions(t *testing.T) {
 	})
 	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
 		t.Fatalf("rejected EK cert with a critical TPM extension: %v", err)
+	}
+}
+
+// writeEKCRL emits a PEM CRL signed by root covering revokedSerials.
+// nextUpdate is honored so tests can construct stale feeds.
+func writeEKCRL(tb testing.TB, dir string, root certAndKey,
+	nextUpdate time.Time, revokedSerials ...*big.Int) string {
+	tb.Helper()
+	var entries []x509.RevocationListEntry
+	for _, s := range revokedSerials {
+		entries = append(entries, x509.RevocationListEntry{
+			SerialNumber:   s,
+			RevocationTime: time.Now().Add(-time.Minute),
+		})
+	}
+	tmpl := &x509.RevocationList{
+		SignatureAlgorithm:        x509.ECDSAWithSHA256,
+		Number:                    big.NewInt(1),
+		ThisUpdate:                time.Now().Add(-time.Hour),
+		NextUpdate:                nextUpdate,
+		RevokedCertificateEntries: entries,
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, tmpl, root.cert, root.key)
+	if err != nil {
+		tb.Fatalf("CreateRevocationList: %v", err)
+	}
+	path := filepath.Join(dir, "ek.crl")
+	buf := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		tb.Fatalf("write CRL: %v", err)
+	}
+	return path
+}
+
+func newTestIssuerWithCRLs(tb testing.TB, root certAndKey, crlPaths []string) *Issuer {
+	tb.Helper()
+	caCertPEM, caKeyPEM := makeLOTACAPEM(tb)
+	is, err := NewIssuer(IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CAKeyPEM:   caKeyPEM,
+		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
+		EKCRLPaths: crlPaths,
+	})
+	if err != nil {
+		tb.Fatalf("NewIssuer: %v", err)
+	}
+	return is
+}
+
+func TestVerifyEKCertificateRejectsRevokedEK(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-manufacturer")
+	ekDER, _ := makeEKCert(t, root, nil)
+	ekCert, err := x509.ParseCertificate(ekDER)
+	if err != nil {
+		t.Fatalf("parse EK: %v", err)
+	}
+
+	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), ekCert.SerialNumber)
+	is := newTestIssuerWithCRLs(t, root, []string{path})
+
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+		t.Fatalf("expected crl.ErrCertificateRevoked, got %v", err)
+	}
+}
+
+func TestVerifyEKCertificateAcceptsUnrevokedEK(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-manufacturer")
+	ekDER, _ := makeEKCert(t, root, nil)
+
+	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), mustSerial(t))
+	is := newTestIssuerWithCRLs(t, root, []string{path})
+
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+		t.Fatalf("unrevoked EK must verify, got %v", err)
+	}
+}
+
+func TestVerifyEKCertificateStaleCRLFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-manufacturer")
+	ekDER, _ := makeEKCert(t, root, nil)
+
+	path := writeEKCRL(t, dir, root, time.Now().Add(-time.Minute), mustSerial(t))
+	is := newTestIssuerWithCRLs(t, root, []string{path})
+
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCRLStale) {
+		t.Fatalf("expected crl.ErrCRLStale, got %v", err)
+	}
+}
+
+func TestNewIssuerRejectsCRLFromUnknownIssuer(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-manufacturer")
+	other := makeRoot(t, "unrelated-ca")
+
+	// CRL signed by a CA outside the EK trust bundle must be refused at
+	// startup so a misconfigured feed surfaces immediately
+	path := writeEKCRL(t, dir, other, time.Now().Add(time.Hour))
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	_, err := NewIssuer(IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CAKeyPEM:   caKeyPEM,
+		EKRootPEMs: [][]byte{pemBlock("CERTIFICATE", root.der)},
+		EKCRLPaths: []string{path},
+	})
+	if err == nil {
+		t.Fatal("expected NewIssuer to reject CRL signed outside the EK bundle")
+	}
+}
+
+// TestReloadEKCRLsHotSwap covers the SIGHUP path:
+// CRL file is rewritten in place with a different revoked serial,
+// ReloadEKCRLs() swaps the feed, and a bad refresh keeps the previous set.
+func TestReloadEKCRLsHotSwap(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-manufacturer")
+	ekDER, _ := makeEKCert(t, root, nil)
+	ekCert, err := x509.ParseCertificate(ekDER)
+	if err != nil {
+		t.Fatalf("parse EK: %v", err)
+	}
+
+	// initial feed does not list the EK
+	path := writeEKCRL(t, dir, root, time.Now().Add(time.Hour), mustSerial(t))
+	is := newTestIssuerWithCRLs(t, root, []string{path})
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+		t.Fatalf("pre-reload: EK must verify, got %v", err)
+	}
+
+	// refreshed feed revokes it (writeEKCRL reuses the same file name)
+	_ = writeEKCRL(t, dir, root, time.Now().Add(time.Hour), ekCert.SerialNumber)
+	if err := is.ReloadEKCRLs(); err != nil {
+		t.Fatalf("ReloadEKCRLs: %v", err)
+	}
+	if is.EKCRLCount() != 1 {
+		t.Fatalf("expected 1 CRL after reload, got %d", is.EKCRLCount())
+	}
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+		t.Fatalf("post-reload: expected crl.ErrCertificateRevoked, got %v", err)
+	}
+
+	// refresh signed by an untrusted CA must fail and keep the revoking set active
+	other := makeRoot(t, "unrelated-ca")
+	_ = writeEKCRL(t, dir, other, time.Now().Add(time.Hour))
+	if err := is.ReloadEKCRLs(); err == nil {
+		t.Fatal("expected ReloadEKCRLs to reject feed signed outside the EK bundle")
+	}
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+		t.Fatalf("after failed reload: expected preserved revocation, got %v", err)
 	}
 }

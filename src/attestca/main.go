@@ -56,6 +56,8 @@ func main() {
 	)
 	var ekRoots stringList
 	flag.Var(&ekRoots, "ek-root", "PEM file of trusted TPM manufacturer roots (repeatable)")
+	var ekCRLs stringList
+	flag.Var(&ekCRLs, "ek-crl", "TPM manufacturer CRL file (PEM or DER, repeatable). Each CRL must be signed by a certificate in the EK trust bundle; enrollment rejects a revoked EK. Refresh by rewriting the file and sending SIGHUP.")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -75,6 +77,7 @@ func main() {
 		pseudonymKey: *pseudonymKey,
 		ekRootBundle: *ekRootBundle,
 		ekRoots:      ekRoots,
+		ekCRLs:       ekCRLs,
 		aikCertTTL:   *aikCertTTL,
 		sessionTTL:   *sessionTTL,
 		maxPending:   *maxPending,
@@ -93,6 +96,7 @@ type runConfig struct {
 	pseudonymKey string
 	ekRootBundle string
 	ekRoots      []string
+	ekCRLs       []string
 	aikCertTTL   time.Duration
 	sessionTTL   time.Duration
 	maxPending   int
@@ -190,6 +194,7 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 		CAKeyPEM:   caKeyPEM,
 		CASigner:   caSigner,
 		EKRootPEMs: ekRootPEMs,
+		EKCRLPaths: cfg.ekCRLs,
 		AIKCertTTL: cfg.aikCertTTL,
 	})
 	if err != nil {
@@ -229,8 +234,31 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// SIGHUP refreshes the manufacturer EK CRL feed in place:
+	// operator rewrites the configured file(s) atomically and signals
+	// the daemon.
+	// Failed reload keeps the previous set active.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				if err := issuer.ReloadEKCRLs(); err != nil {
+					log.Error("SIGHUP: EK CRL reload failed; keeping previous set", "error", err)
+					continue
+				}
+				log.Info("SIGHUP: EK CRL feed reloaded", "loaded_crls", issuer.EKCRLCount())
+			}
+		}
+	}()
+
 	log.Info("lota-attest-ca listening", "address", ln.Addr().String(),
-		"ek_roots", len(ekRootPEMs), "aik_cert_ttl", cfg.aikCertTTL.String())
+		"ek_roots", len(ekRootPEMs), "ek_crls", issuer.EKCRLCount(),
+		"aik_cert_ttl", cfg.aikCertTTL.String())
 	return srv.Serve(ctx, ln)
 }
 

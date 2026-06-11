@@ -187,6 +187,12 @@ lota-attest-ca -listen :8444 \
 example a swtpm CA in the enrollment demo) on top of the bundle; pass
 either or both.
 
+Pair the bundle with the manufacturers' EK revocation feeds:
+`-ek-crl <file>` (repeatable) loads a manufacturer CRL, enrollment rejects
+a revoked EK, and SIGHUP reloads a rewritten feed in place. See the
+"Manufacturer CRLs" section of
+[`configs/ek-roots/README.md`](../configs/ek-roots/README.md).
+
 #### CA signing key
 
 CA signing key is the anchor every issued AIK certificate chains to,
