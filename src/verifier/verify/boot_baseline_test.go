@@ -250,3 +250,76 @@ func TestPCRVerifier_ActivePolicyDeclaresBootPCRs(t *testing.T) {
 		t.Fatal("expected false when no boot PCR is pinned")
 	}
 }
+
+func TestPCRVerifier_ActivePolicyRequiresSecureBoot(t *testing.T) {
+	v := NewPCRVerifier()
+
+	// no active policy
+	if v.ActivePolicyRequiresSecureBoot() {
+		t.Fatal("expected false with no active policy")
+	}
+
+	sbOn := &PCRPolicy{
+		Name:              "sb-on",
+		RequireSecureBoot: true,
+		AgentHashes:       []string{"de"},
+	}
+	if err := v.AddPolicy(sbOn); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.SetActivePolicy("sb-on"); err != nil {
+		t.Fatalf("SetActivePolicy: %v", err)
+	}
+	if !v.ActivePolicyRequiresSecureBoot() {
+		t.Fatal("expected true when require_secureboot is set")
+	}
+
+	sbOff := &PCRPolicy{
+		Name:        "sb-off",
+		AgentHashes: []string{"de"},
+	}
+	if err := v.AddPolicy(sbOff); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.SetActivePolicy("sb-off"); err != nil {
+		t.Fatalf("SetActivePolicy: %v", err)
+	}
+	if v.ActivePolicyRequiresSecureBoot() {
+		t.Fatal("expected false when require_secureboot is unset")
+	}
+}
+
+// Boot enrollment gate may treat a TOFU first-use as anchored only
+// when every leg holds:
+// PCR 7 replay-authenticated AND a SecureBoot measurement found AND enabled.
+// Any missing leg must fail closed.
+func TestSecureBootAnchored(t *testing.T) {
+	cases := []struct {
+		name  string
+		facts *BootFacts
+		want  bool
+	}{
+		{"nil facts", nil, false},
+		{"trusted enabled", &BootFacts{
+			SecureBoot:        SecureBootState{Found: true, Enabled: true},
+			SecureBootTrusted: true,
+		}, true},
+		{"replay not authenticated", &BootFacts{
+			SecureBoot:        SecureBootState{Found: true, Enabled: true},
+			SecureBootTrusted: false,
+		}, false},
+		{"no SecureBoot measurement", &BootFacts{
+			SecureBoot:        SecureBootState{Found: false, Enabled: false},
+			SecureBootTrusted: true,
+		}, false},
+		{"SecureBoot disabled", &BootFacts{
+			SecureBoot:        SecureBootState{Found: true, Enabled: false},
+			SecureBootTrusted: true,
+		}, false},
+	}
+	for _, tc := range cases {
+		if got := SecureBootAnchored(tc.facts); got != tc.want {
+			t.Errorf("%s: SecureBootAnchored = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

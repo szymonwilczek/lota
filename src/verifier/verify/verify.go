@@ -839,13 +839,26 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		// values as the canonical baseline; later attestations
 		// would then "match" the poisoned baseline. Refuse that
 		// branch when the operator has not authenticated the
-		// initial PCR0/1/7 values through either:
+		// initial PCR0/1/7 values through one of:
 		//   - the active signed policy (PCR0+PCR1+PCR7 hex
 		//     entries that the existing PCRVerifier compares
-		//     against the report), or
+		//     against the report),
 		//   - an out-of-band baseline row that is already
-		//     present in the store for this client.
-		// The check runs only when the verifier is about to write
+		//     present in the store for this client, or
+		//   - the event-log Secure Boot anchor: the active policy
+		//     enforces RequireSecureBoot and this report's
+		//     quote-authenticated event log proves Secure Boot
+		//     enabled
+		//     Policy gate above already rejected the report otherwise;
+		//     re-derived from bootFacts so this branch cannot silently
+		//     widen if the gates move).
+		//     Raw PCR0/1/7 differ per machine, so a diverse fleet
+		//     cannot pin them in policy; with the firmware
+		//     boot-with-Secure-Boot-off path already rejected
+		//     machine-independently, the TOFU row serves as a
+		//     per-device rollback/consistency anchor rather than
+		//     the firmware trust control itself.
+		// Check runs only when the verifier is about to write
 		// boot columns (bootPtr non-nil) so PCR14-only legacy
 		// flows are unaffected.
 		if v.requireBootEnrollment && bootPtr != nil {
@@ -855,12 +868,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				enrolled = true
 			}
 			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
-				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-					"active_policy", v.pcrVerifier.GetActivePolicy(),
-					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or disable RequireBootEnrollment for legacy hosts")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+				if v.pcrVerifier.ActivePolicyRequiresSecureBoot() && SecureBootAnchored(bootFacts) {
+					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
+						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
+				} else {
+					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
+					v.metrics.Rejections.Inc("baseline_error")
+					result.Result = types.VerifyIntegrityMismatch
+					return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+				}
 			}
 		}
 

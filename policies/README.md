@@ -103,6 +103,9 @@ two knobs below are the machine-independent alternative. Both read the
 TPM event log the agent already ships and trust an extracted value only
 after the log replay reproduces the TPM-quoted value of the PCR it came
 from, so a client cannot fabricate or strip the underlying events.
+`require_secureboot` also unlocks the diverse-fleet enrollment path:
+see "Boot enrollment ceremony" below for how it lifts the per-machine
+PCR 0/1/7 pinning requirement.
 
 `require_secureboot` requires the firmware-measured `SecureBoot` EFI
 variable (PCR 7, `EV_EFI_VARIABLE_DRIVER_CONFIG`) to be present and
@@ -144,25 +147,46 @@ truncated log and rejected);
 The production verifier defaults to
 `VerifierConfig.RequireBootEnrollment = true`. Under that default the
 verifier rejects any client whose PCR 0, PCR 1, or PCR 7 cannot be
-matched against a known-good baseline. Two paths satisfy that contract:
+matched against a known-good baseline. Three paths satisfy that
+contract:
 
-1. **Pinned policy (recommended).** The operator commits real PCR 0/1/7
-   values into the YAML policy (production.yaml or strict.yaml) before
-   the first attestation. New clients are accepted only when their
-   live PCR 0/1/7 match those pins. This is the path the production
-   template above is wired for.
+1. **Pinned policy (homogeneous fleet).** The operator commits real
+   PCR 0/1/7 values into the YAML policy (production.yaml or
+   strict.yaml) before the first attestation. New clients are accepted
+   only when their live PCR 0/1/7 match those pins. This is the path
+   the production template above is wired for.
 2. **Out-of-band boot enrollment.** The operator runs
    `lota-agent --export-policy` on a single known-good host, signs the
    resulting policy, and ships it to the fleet; subsequent clients
    inherit the PCR 0/1/7 baseline from the signed policy without
    contacting the verifier first.
+3. **Event-log-anchored enrollment (diverse fleet).** Raw PCR 0/1/7
+   differ per machine, so a diverse single-machine population (the
+   gamer deployment) can satisfy neither path above. When the active
+   policy sets `require_secureboot: true` and the report's
+   quote-authenticated event log proves Secure Boot enabled, the
+   verifier accepts the first attestation and TOFU-establishes the
+   per-device PCR 0/1/7 row without any extra switch. This is a
+   production-supported mode, not a weakened test path: the
+   boot-with-Secure-Boot-off cheat is already rejected
+   machine-independently by the event-log gate, so the TOFU row serves
+   as a per-device rollback/consistency anchor (later drift in PCR
+   0/1/7 still rejects), not as the firmware trust control. The
+   verifier logs a security-level line on every such first-use accept.
+   Residual trust: firmware tampering that keeps Secure Boot enabled
+   and reaches the device before its first attestation is not caught
+   at first use; pair with `require_cmdline_policy` (production
+   default) for the kernel command line, and see
+   docs/THREAT_MODEL.md for the full residual-risk statement.
 
 A short-lived `--allow-tofu-boot-baseline` switch on the verifier exists
 for closed test fixtures. It explicitly weakens the contract above by
-accepting whatever PCR 0/1/7 the first attestation reports; the verifier
-emits a warning-level log line on every accept under that switch and the
-operator must turn it back off before the deployment is considered
-production.
+accepting whatever PCR 0/1/7 the first attestation reports regardless
+of policy or event-log state; the verifier emits a warning-level log
+line on every accept under that switch and the operator must turn it
+back off before the deployment is considered production. A diverse
+fleet does not need it - path 3 covers that case with the Secure Boot
+anchor intact.
 
 PCR 14 (LOTA agent self-measurement) is not TOFU. It is derived
 deterministically from the boot-commitment chain
