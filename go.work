@@ -3,6 +3,7 @@ go 1.25.8
 use (
 	./examples/demo_server
 	./src/attestca
+	./src/crl
 	./src/sdk/server
 	./src/verifier
 )

@@ -379,7 +379,7 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@echo "Signed: $(BPF_OBJ).sig"
 
 # Go verifier
-$(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
+$(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
 
