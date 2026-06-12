@@ -33,6 +33,27 @@ stage without changing anything.
 - `--yes` skips the per-stage prompts,
 - `--plain` disables the TUI for logs and scripting.
 
+On an interactive terminal `lota-install` is a full-screen application
+(alternate screen, like lazygit): a stage list on the left, a details
+pane explaining the selected stage, and an output pane streaming what
+every command actually does. Nothing scrolls away and the layout
+follows terminal resizes. Keys:
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` or `j`/`k` | select a stage |
+| `Enter` | run the selected stage (after an explain + confirm step) |
+| `a` | run every pending stage in order |
+| `y` / `n` | answer the confirmation |
+| `r` | re-probe all stages |
+| `PgUp`/`PgDn` | scroll the output pane |
+| `q`, `Ctrl-C`, double `Ctrl-D` | quit (`Ctrl-C` first aborts a running command) |
+
+The original scrollback is restored on exit and a one-line result
+(complete / reboot required / re-run to continue) is printed to the
+normal screen. Without a TTY, or with `--plain`, the same stages run
+as a sequential prompted flow suitable for logs and scripts.
+
 Exit codes: `0` complete, `1` failed or blocked on missing input, `2`
 usage, `10` reboot required - reboot and re-run the same command, the
 installer detects the finished stages from live system state and
