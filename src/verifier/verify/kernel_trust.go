@@ -191,6 +191,18 @@ type BootFacts struct {
 	PCR8EventsSeen bool
 }
 
+// SecureBootAnchored reports whether the event-log facts prove Secure
+// Boot enabled through a quote-authenticated PCR 7 replay.
+// Boot enrollment gate uses this as the machine-independent anchor
+// that permits per-device TOFU of the PCR 0/1/7 baseline:
+// the boot-with-Secure-Boot-off cheat path is already rejected here,
+// so the TOFU row degrades to a per-device rollback/consistency anchor
+// rather than the sole firmware trust control.
+func SecureBootAnchored(facts *BootFacts) bool {
+	return facts != nil && facts.SecureBootTrusted &&
+		facts.SecureBoot.Found && facts.SecureBoot.Enabled
+}
+
 // reports whether the PCR's quoted value is independently authenticated
 // by the event log: the quote covers it and the replay reproduces it
 func pcrReplayAuthenticated(report *types.AttestationReport, replay *ReplayResult, pcr int) bool {

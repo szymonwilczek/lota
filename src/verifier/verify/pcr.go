@@ -419,6 +419,16 @@ func (v *PCRVerifier) ActivePolicyDeclaresBootPCRs() bool {
 	return true
 }
 
+// reports whether the active policy enforces event-log Secure Boot;
+// drives the event-log-anchored TOFU branch of the boot enrollment
+// gate in Verify()
+func (v *PCRVerifier) ActivePolicyRequiresSecureBoot() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	return ok && policy != nil && policy.RequireSecureBoot
+}
+
 // reports whether the active policy gates on the measured kernel
 // cmdline; drives PCR 8 consistency enforcement in the event-log check
 func (v *PCRVerifier) ActivePolicyRequiresCmdline() bool {
