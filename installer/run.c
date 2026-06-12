@@ -75,8 +75,8 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 {
 	char buf[1024];
 	struct pollfd pfd;
-	pid_t pid;
-	int fd;
+	pid_t pid = -1;
+	int fd = -1;
 	int ret;
 	int code;
 
