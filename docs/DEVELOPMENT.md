@@ -61,14 +61,22 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
 
-BPF coding rule: an event pointer that is conditionally assigned (for
-example only when the telemetry budget admits a `bpf_ringbuf_reserve`)
-must be initialized to `NULL` at declaration. The in-kernel verifier
-tracks pointer liveness per path, so a read of a conditionally-assigned
-pointer can reject the whole program depending on how clang laid out the
-branches - and a rejected object means the LSM never loads. `veristat`
-in CI catches acceptance regressions, but only for the kernel it runs
-on; the NULL-init rule keeps acceptance independent of compiler layout.
+### BPF coding rules
+
+An event pointer that is conditionally assigned (for example only when the
+telemetry budget admits a `bpf_ringbuf_reserve`) must be initialized to `NULL`
+at declaration. The in-kernel verifier tracks pointer liveness per path, so a
+read of a conditionally-assigned pointer can reject the whole program depending
+on how clang laid out the branches - and a rejected object means the LSM never
+loads. `veristat` in CI catches acceptance regressions, but only for the kernel
+it runs on. The NULL-init rule keeps acceptance independent of compiler layout.
+
+State shared across CPUs through a plain (non-PERCPU) map must be updated with
+BPF atomics (`__sync_fetch_and_add`, `__sync_val_compare_and_swap`, ...),
+never with read-modify-write C - each hook can run concurrently on every CPU,
+and a torn counter or window flip silently corrupts whatever the value gates.
+The fetch/CMPXCHG forms need kernel 5.12+ verifier support, which the BPF LSM
+floor already exceeds.
 
 ### Postgres-backed tests and the coverage ratchet
 

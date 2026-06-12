@@ -370,7 +370,7 @@ static __always_inline u32 get_config(u32 key)
 static __always_inline int should_emit_event(u32 mode, int blocked)
 {
 	struct event_budget_state *state;
-	u64 now_ns;
+	u64 now_ns, window;
 	u32 key = 0;
 
 	if (blocked)
@@ -383,20 +383,31 @@ static __always_inline int should_emit_event(u32 mode, int blocked)
 	if (!state)
 		return 0;
 
+	/*
+	 * Map is a shared single-entry ARRAY, so the window rotation
+	 * and the counter must be atomic across CPUs.
+	 * One CPU wins the CMPXCHG and zeroes the counter; every caller
+	 * then claims a slot with fetch-and-add and emits only when the
+	 * old value was under the budget.
+	 * Caller racing the rotation may charge the outgoing window and be
+	 * discarded by the XCHG reset, so the budget can overshoot by at most
+	 * the callers in flight during the flip - bounded by the CPU count,
+	 * once per second.
+	 */
 	now_ns = bpf_ktime_get_ns();
-	if (now_ns < state->window_start_ns ||
-	    now_ns - state->window_start_ns >= 1000000000ULL) {
-		state->window_start_ns = now_ns;
-		state->emitted = 1;
-		return 1;
+	window = state->window_start_ns;
+	if (now_ns < window || now_ns - window >= 1000000000ULL) {
+		if (__sync_val_compare_and_swap(&state->window_start_ns, window,
+						now_ns) == window)
+			(void)__sync_lock_test_and_set(&state->emitted, 0);
 	}
 
-	if (state->emitted >= ALLOW_EVENT_BUDGET_PER_SEC) {
+	if (__sync_fetch_and_add(&state->emitted, 1) >=
+	    ALLOW_EVENT_BUDGET_PER_SEC) {
 		inc_stat(STAT_ALLOW_EVENTS_SUPPRESSED);
 		return 0;
 	}
 
-	state->emitted++;
 	return 1;
 }
 

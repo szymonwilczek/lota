@@ -124,7 +124,9 @@ endif
 # -target bpf: Generate BPF bytecode
 # -g: Include debug info
 # -O2: Optimization level (for BPF verifier)
-BPF_CFLAGS := -target bpf -g -O2
+# -mcpu=v3: Enable the atomic xchg/cmpxchg instructions used by the
+# allow-event budget counter.
+BPF_CFLAGS := -target bpf -g -O2 -mcpu=v3
 BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
