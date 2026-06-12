@@ -56,7 +56,7 @@ the new CA key, then a re-enrollment pass within one certificate lifetime.
 A *compromised* CA key is a faster path: stop the CA, drop the old CA
 certificate from verifiers immediately (every AIK it signed is now
 untrusted), and re-enroll the fleet against a new key. Individual
-compromised AIK certificates are revoked out of band with `--ek-crl`
+compromised AIK certificates are revoked out of band with `--aik-crl`
 without a full CA rotation.
 
 ## Offline root, online intermediate

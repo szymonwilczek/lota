@@ -71,7 +71,7 @@ storage configuration.
   startup under a Postgres advisory lock, so the schema is created exactly
   once regardless of start order.
 - **AIK certificate roots and PCR policy are configuration, not shared
-  state.** Distribute the same `--aik-ca-cert`, `--ek-crl`, `--policy` and
+  state.** Distribute the same `--aik-ca-cert`, `--aik-crl`, `--policy` and
   `--policy-pubkey` material to every instance through the usual configuration
   channel; they are not stored in the database.
 - **CA signing key.** The attestation CA is a separate service; its key
