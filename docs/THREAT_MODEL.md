@@ -37,6 +37,13 @@ The host runs a TPM 2.0 device, Linux with BPF LSM support, SELinux enforcing
 mode for the packaged policy, kernel lockdown, module signature enforcement,
 IMA appraisal, fs-verity, and the LOTA agent.
 
+The IMA appraisal requirement pins the kernel's appraisal *mode*
+(`ima_appraise=enforce|fix` on the command line); the appraisal *content* -
+file signatures and the rule set - is distribution- or operator-supplied
+(see [`PRODUCTION_BRINGUP.md`](PRODUCTION_BRINGUP.md)). LOTA ships no
+xattr-signing pipeline, and its own binaries are integrity-bound through
+fs-verity and the PCR14 boot commitment independent of IMA.
+
 The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
 measurement, local IPC, D-Bus status, and attestation report construction.
 
