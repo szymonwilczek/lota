@@ -189,7 +189,7 @@ int probe_booted_ima_ok(void)
 
 int probe_module_sig_enforced(void)
 {
-	char buf[16];
+	char buf[16] = {0};
 	int ret = probe_read_text("/sys/module/module/parameters/sig_enforce",
 				  buf, sizeof(buf));
 
