@@ -13,6 +13,12 @@ Production hosts run the equivalent steps through their distro integrity
 tooling (signed RPMs, kernel cmdline provisioned at install, IMA policy
 from `/etc/sysconfig/integrity`, operator key in a sealed store).
 
+This document is the operator/fleet reference. A player installing the
+agent on a single machine uses the guided, reboot-resumable
+`lota-install` instead - same gates, consent prompts and live-state
+probes - see [`PLAYER_INSTALL.md`](PLAYER_INSTALL.md), including the
+list of inputs the operator must ship for it.
+
 ## Startup gate matrix
 
 The agent's startup chain refuses to load BPF / attach LSM programs
