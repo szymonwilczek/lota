@@ -297,7 +297,7 @@ int probe_pcr14_state(void)
 	uint8_t live[PROBE_HASH_SIZE];
 	uint8_t lock[PROBE_HASH_SIZE];
 	uint8_t zero[PROBE_HASH_SIZE] = {0};
-	char buf[2 * PROBE_HASH_SIZE + 8];
+	char buf[2 * PROBE_HASH_SIZE + 8] = {0};
 	int ret = probe_read_text("/sys/class/tpm/tpm0/pcr-sha256/14", buf,
 				  sizeof(buf));
 
