@@ -1,0 +1,291 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * lota-install - Guided, reboot-resumable Player Install
+ */
+
+#include "install.h"
+
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#ifndef LOTA_INSTALL_VERSION
+#define LOTA_INSTALL_VERSION "dev"
+#endif
+
+static void usage(FILE *out)
+{
+	fprintf(out,
+		"Usage: lota-install [options]\n"
+		"\n"
+		"Guided, reboot-resumable install of the LOTA player agent.\n"
+		"Each stage probes live system state, explains what it is\n"
+		"about to change and why, and asks before changing it.\n"
+		"Re-running after the mid-install reboot resumes at the\n"
+		"first unmet stage.\n"
+		"\n"
+		"Operator-provided inputs (from the install instructions):\n"
+		"  --ca-server HOST       Attestation CA for enrollment\n"
+		"  --ca-port PORT         Attestation CA port\n"
+		"  --ca-cert FILE         CA TLS certificate (PEM)\n"
+		"  --verifier HOST        Verifier for the final self-check\n"
+		"  --verifier-port PORT   Verifier port\n"
+		"  --policy-pubkey FILE   Operator BPF signing public key\n"
+		"                         (default %s)\n"
+		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
+		"                         (default %s)\n"
+		"\n"
+		"Behaviour:\n"
+		"  --status               Probe and report every stage,\n"
+		"                         change nothing\n"
+		"  --yes                  Do not ask for confirmation\n"
+		"  --plain                Plain log output (no TUI)\n"
+		"  --help, --version\n"
+		"\n"
+		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
+		"            10 reboot required (re-run to resume).\n",
+		PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
+}
+
+static int parse_args(int argc, char **argv, struct install_opts *opts)
+{
+	static const struct option longopts[] = {
+	    {"ca-server", required_argument, 0, 1},
+	    {"ca-port", required_argument, 0, 2},
+	    {"ca-cert", required_argument, 0, 3},
+	    {"verifier", required_argument, 0, 4},
+	    {"verifier-port", required_argument, 0, 5},
+	    {"policy-pubkey", required_argument, 0, 6},
+	    {"selinux-module", required_argument, 0, 7},
+	    {"status", no_argument, 0, 8},
+	    {"yes", no_argument, 0, 'y'},
+	    {"plain", no_argument, 0, 9},
+	    {"help", no_argument, 0, 'h'},
+	    {"version", no_argument, 0, 10},
+	    {0, 0, 0, 0},
+	};
+	int c;
+
+	memset(opts, 0, sizeof(*opts));
+	opts->policy_pubkey = PATH_POLICY_PUB_DEFAULT;
+	opts->selinux_module = PATH_SELINUX_PP_DEFAULT;
+
+	while ((c = getopt_long(argc, argv, "yh", longopts, NULL)) != -1) {
+		switch (c) {
+		case 1:
+			opts->ca_server = optarg;
+			break;
+		case 2:
+			opts->ca_port = optarg;
+			break;
+		case 3:
+			opts->ca_cert = optarg;
+			break;
+		case 4:
+			opts->verifier = optarg;
+			break;
+		case 5:
+			opts->verifier_port = optarg;
+			break;
+		case 6:
+			opts->policy_pubkey = optarg;
+			break;
+		case 7:
+			opts->selinux_module = optarg;
+			break;
+		case 8:
+			opts->status_only = 1;
+			break;
+		case 'y':
+			opts->yes = 1;
+			break;
+		case 9:
+			opts->plain = 1;
+			break;
+		case 'h':
+			usage(stdout);
+			exit(EXIT_INSTALL_OK);
+		case 10:
+			printf("lota-install %s\n", LOTA_INSTALL_VERSION);
+			exit(EXIT_INSTALL_OK);
+		default:
+			usage(stderr);
+			exit(EXIT_INSTALL_USAGE);
+		}
+	}
+	if (optind < argc) {
+		fprintf(stderr, "lota-install: Unexpected argument '%s'\n",
+			argv[optind]);
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	return 0;
+}
+
+static enum ui_result state_result(enum stage_state st)
+{
+	switch (st) {
+	case STAGE_DONE:
+		return UI_DONE;
+	case STAGE_REBOOT:
+		return UI_REBOOT;
+	case STAGE_SKIP:
+		return UI_SKIP;
+	case STAGE_PENDING:
+	case STAGE_BLOCKED:
+		return UI_PENDING;
+	case STAGE_ERROR:
+	default:
+		return UI_FAIL;
+	}
+}
+
+/* Probe-only report.
+ * Never mutates, usable before deciding to run */
+static int run_status(struct install_ctx *ctx)
+{
+	char note[STAGE_NOTE_CAP];
+	int pending = 0;
+	int i;
+
+	if (geteuid() != 0)
+		ui_text(&ctx->ui, "Running unprivileged: some probes "
+				  "(initramfs content, journal) may report "
+				  "errors. Run as root for a reliable "
+				  "report.");
+
+	for (i = 0; i < install_stage_count; i++) {
+		const struct stage *s = &install_stages[i];
+		enum stage_state st = s->probe(ctx, note, sizeof(note));
+
+		ui_stage_begin(&ctx->ui, i + 1, install_stage_count, s->title);
+		ui_stage_result(&ctx->ui, state_result(st), s->title, note);
+		if (st != STAGE_DONE && st != STAGE_SKIP)
+			pending++;
+		/* let later probes account for boot-chain stages */
+		if (st == STAGE_REBOOT)
+			ctx->reboot_needed = 1;
+	}
+
+	ui_text(&ctx->ui, "\n%d of %d stages need work.", pending,
+		install_stage_count);
+	return pending == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
+}
+
+static void print_reboot_box(struct install_ctx *ctx, const char *note)
+{
+	ui_text(&ctx->ui,
+		"\nReboot is required before the install can "
+		"continue: %s.",
+		note);
+	ui_text(&ctx->ui, "PCR 14 - the TPM slot LOTA measures itself into - "
+			  "only resets on a hardware reset, so this cannot "
+			  "be skipped or faked in software.");
+	ui_text(&ctx->ui, "Reboot, run the same lota-install command again, "
+			  "and it resumes exactly where it left off.");
+}
+
+int main(int argc, char **argv)
+{
+	struct install_ctx ctx;
+	char note[STAGE_NOTE_CAP];
+	int i;
+
+	memset(&ctx, 0, sizeof(ctx));
+	parse_args(argc, argv, &ctx.opts);
+	ui_init(&ctx.ui, ctx.opts.plain);
+
+	ui_banner(&ctx.ui, "LOTA Guided Install", LOTA_INSTALL_VERSION,
+		  "Hardware-rooted Attestation for the player host");
+
+	if (ctx.opts.status_only)
+		return run_status(&ctx);
+
+	if (geteuid() != 0) {
+		ui_error(&ctx.ui, "lota-install changes system state and "
+				  "must run as root (use --status for a "
+				  "read-only report)");
+		return EXIT_INSTALL_USAGE;
+	}
+	if (!ctx.opts.yes && !isatty(STDIN_FILENO)) {
+		ui_error(&ctx.ui, "No terminal to confirm stages on. Re-run "
+				  "interactively or pass --yes");
+		return EXIT_INSTALL_USAGE;
+	}
+
+	for (i = 0; i < install_stage_count; i++) {
+		const struct stage *s = &install_stages[i];
+		enum stage_state st = s->probe(&ctx, note, sizeof(note));
+
+		ui_stage_begin(&ctx.ui, i + 1, install_stage_count, s->title);
+
+		if (st == STAGE_PENDING && s->apply) {
+			ui_explain(&ctx.ui, s->explain);
+			ui_text(&ctx.ui, "Current state: %s.", note);
+			if (!ui_confirm(&ctx.ui, "Apply this stage?",
+					ctx.opts.yes)) {
+				ui_text(&ctx.ui, "Aborted at your request. "
+						 "Nothing further was "
+						 "changed. Re-run to "
+						 "continue.");
+				return EXIT_INSTALL_FAIL;
+			}
+			if (s->apply(&ctx) != 0) {
+				ui_stage_result(&ctx.ui, UI_FAIL, s->title,
+						"Change failed. See the "
+						"output above");
+				return EXIT_INSTALL_FAIL;
+			}
+			st = s->probe(&ctx, note, sizeof(note));
+			/* boot-chain stages stay un-probeable until the reboot
+			 * reboot_needed records their success */
+			if (st == STAGE_PENDING && ctx.reboot_needed)
+				st = STAGE_REBOOT;
+		}
+
+		switch (st) {
+		case STAGE_DONE:
+		case STAGE_SKIP:
+			ui_stage_result(&ctx.ui, state_result(st), s->title,
+					note);
+			break;
+		case STAGE_REBOOT:
+			ui_stage_result(&ctx.ui, UI_REBOOT, s->title, note);
+			if (s->barrier) {
+				print_reboot_box(&ctx, note);
+				return EXIT_INSTALL_REBOOT;
+			}
+			ctx.reboot_needed = 1;
+			break;
+		case STAGE_BLOCKED:
+			ui_stage_result(&ctx.ui, UI_FAIL, s->title, NULL);
+			ui_text(&ctx.ui, "%s.", note);
+			return EXIT_INSTALL_FAIL;
+		case STAGE_ERROR:
+			ui_stage_result(&ctx.ui, UI_FAIL, s->title, note);
+			return EXIT_INSTALL_FAIL;
+		case STAGE_PENDING:
+			ui_stage_result(&ctx.ui, UI_FAIL, s->title,
+					"still unmet after applying");
+			return EXIT_INSTALL_FAIL;
+		}
+	}
+
+	if (install_self_check(&ctx) != 0) {
+		ui_error(&ctx.ui, "Self-check failed. Install is laid "
+				  "down but the host is not attesting yet. "
+				  "Inspect 'journalctl -u lota-agent -b' and "
+				  "re-run lota-install.");
+		return EXIT_INSTALL_FAIL;
+	}
+
+	ui_text(&ctx.ui, "\nLOTA install complete. The agent attests this "
+			 "host to the operator's verifier. Games request "
+			 "tokens through the local socket.");
+	ui_text(&ctx.ui, "Pause any time with 'sudo lota-agent --shutdown' "
+			 "(resuming requires a reboot - the agent burns its "
+			 "boot measurement on shutdown by design).");
+	return EXIT_INSTALL_OK;
+}
