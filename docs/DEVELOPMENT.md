@@ -61,6 +61,15 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
 
+BPF coding rule: an event pointer that is conditionally assigned (for
+example only when the telemetry budget admits a `bpf_ringbuf_reserve`)
+must be initialized to `NULL` at declaration. The in-kernel verifier
+tracks pointer liveness per path, so a read of a conditionally-assigned
+pointer can reject the whole program depending on how clang laid out the
+branches - and a rejected object means the LSM never loads. `veristat`
+in CI catches acceptance regressions, but only for the kernel it runs
+on; the NULL-init rule keeps acceptance independent of compiler layout.
+
 ### Postgres-backed tests and the coverage ratchet
 
 Multi-instance verifier ships a Postgres backend (`jackc/pgx/v5`,
