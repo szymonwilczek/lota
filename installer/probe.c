@@ -132,12 +132,14 @@ int probe_cmdline_ima_ok(const char *cmdline)
 	char buf[4096];
 	char *save = NULL;
 	char *tok;
+	size_t len;
 
 	if (!cmdline)
 		return -EINVAL;
-	if (strlen(cmdline) >= sizeof(buf))
+	len = strlen(cmdline);
+	if (len >= sizeof(buf))
 		return -E2BIG;
-	strcpy(buf, cmdline);
+	memcpy(buf, cmdline, len + 1);
 
 	for (tok = strtok_r(buf, " \t", &save); tok;
 	     tok = strtok_r(NULL, " \t", &save)) {
