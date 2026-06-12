@@ -153,8 +153,9 @@ contract:
 1. **Pinned policy (homogeneous fleet).** The operator commits real
    PCR 0/1/7 values into the YAML policy (production.yaml or
    strict.yaml) before the first attestation. New clients are accepted
-   only when their live PCR 0/1/7 match those pins. This is the path
-   the production template above is wired for.
+   only when their live PCR 0/1/7 match those pins. production.yaml
+   ships its `pcrs:` block commented out; uncomment and fill it to
+   pick this path.
 2. **Out-of-band boot enrollment.** The operator runs
    `lota-agent --export-policy` on a single known-good host, signs the
    resulting policy, and ships it to the fleet; subsequent clients
