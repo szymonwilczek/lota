@@ -1115,8 +1115,26 @@ int tui_run(struct install_ctx *ctx)
 		t.n = TUI_MAX_STAGES;
 
 	bound.ud = &t;
-	ctx->ui.sink = &bound;
 
+	/* initial probe runs before the screen takeover and logs to
+	 * the normal terminal:
+	 * the slower probes (lsinitrd, grubby) would otherwise look like
+	 * a frozen TUI, and the result stays in the scrollback after exit.
+	 * In-TUI re-probes ('r') are user-driven and render live instead. */
+	printf("lota-install: probing system state\n");
+	fflush(stdout);
+	{
+		int i;
+
+		for (i = 0; i < t.n; i++) {
+			probe_stage(&t, i);
+			printf("  %-52s %s\n", install_stages[i].title,
+			       state_word(t.st[i]));
+			fflush(stdout);
+		}
+	}
+
+	ctx->ui.sink = &bound;
 	if (term_enter() != 0) {
 		ctx->ui.sink = NULL;
 		fprintf(stderr, "lota-install: Cannot switch the terminal "
@@ -1125,10 +1143,17 @@ int tui_run(struct install_ctx *ctx)
 	}
 	grid_resize(&t);
 
-	out_push(&t, "Probing system state...");
-	render(&t);
-	probe_all(&t);
-	out_push(&t, "Probe complete.");
+	/* mirror the probe results into the Output pane for reference */
+	{
+		char buf[OUT_CAP];
+		int i;
+
+		for (i = 0; i < t.n; i++) {
+			snprintf(buf, sizeof(buf), "probe: %s - %s",
+				 install_stages[i].title, state_word(t.st[i]));
+			out_push(&t, buf);
+		}
+	}
 	t.sel = first_unmet(&t) >= 0 ? first_unmet(&t) : t.n;
 
 	while (!t.quit) {
