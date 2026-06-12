@@ -71,6 +71,13 @@ gate changes, change the matching probe in `installer/probe.c` and the
 pinned parser tests in `tests/test_installer_probe.c` (part of
 `make test-unit`).
 
+On an interactive terminal the binary runs the full-screen frontend in
+`installer/tui.c` (alternate screen, raw keys). The sequential flow in
+`installer/main.c` is the `--plain` / non-TTY path, and both drive the
+same stage table through the ui sink in `installer/ui.h` - new output must
+go through the `ui_*` API, never straight to stdout, or it will corrupt
+the alternate screen.
+
 ### BPF coding rules
 
 An event pointer that is conditionally assigned (for example only when the

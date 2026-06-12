@@ -230,15 +230,15 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
 
-# build the guided player installer
+# build the guided player installer.
 # Self-contained TUI binary that links only libcrypto
 # (PCR14 lock-constant derivation + AIK certificate expiry)
-# Every privileged action shells out to the same tooling
-# the documentation names (dracut, grubby, systemctl, ...)
-INSTALLER_SRCS := installer/main.c installer/stages.c installer/ui.c \
-	installer/run.c installer/probe.c
+# Every privileged action shells out to the same tooling the documentation names
+# (dracut, grubby, systemctl, ...)
+INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
+	installer/ui.c installer/run.c installer/probe.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
-		installer/run.h installer/ui.h | $(BUILD_DIR)
+		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
 	@echo "Built: $@"

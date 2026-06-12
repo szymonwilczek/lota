@@ -4,6 +4,7 @@
  */
 
 #include "install.h"
+#include "tui.h"
 
 #include <getopt.h>
 #include <stdio.h>
@@ -213,6 +214,20 @@ int main(int argc, char **argv)
 		ui_error(&ctx.ui, "No terminal to confirm stages on. Re-run "
 				  "interactively or pass --yes");
 		return EXIT_INSTALL_USAGE;
+	}
+
+	/* interactive terminal:
+	 * full-screen frontend drives the same stage table
+	 * sequential flow below stays for --plain and non-TTY runs */
+	if (ctx.ui.tty && isatty(STDIN_FILENO)) {
+		int rc = tui_run(&ctx);
+
+		if (rc >= 0)
+			return rc;
+		/* raw mode unavailable
+		 * degrade to the plain flow */
+		ctx.ui.tty = 0;
+		ctx.ui.color = 0;
 	}
 
 	for (i = 0; i < install_stage_count; i++) {
