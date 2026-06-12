@@ -93,7 +93,8 @@ var (
 	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	aikCACerts           stringSliceFlag
-	ekCRLs               stringSliceFlag
+	aikCRLs              stringSliceFlag
+	ekCRLsDeprecated     stringSliceFlag
 	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
@@ -101,7 +102,8 @@ var (
 
 func main() {
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
-	flag.Var(&ekCRLs, "ek-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.Var(&ekCRLsDeprecated, "ek-crl", "DEPRECATED alias for --aik-crl. The CRLs loaded here revoke AIK certificates issued by the deployment's attestation CA, not endorsement keys; the TPM-manufacturer EK revocation feed is the attestation CA's -ek-crl flag.")
 	flag.Parse()
 
 	// initialize structured logger
@@ -110,6 +112,12 @@ func main() {
 		Format: *logFormat,
 		Output: os.Stderr,
 	})
+
+	if len(ekCRLsDeprecated) > 0 {
+		logger.Warn("--ek-crl is deprecated and will be removed; use --aik-crl",
+			"reason", "the flag revokes AIK certificates, not endorsement keys; the EK-manufacturer CRL feed lives on lota-attest-ca (-ek-crl)")
+		aikCRLs = append(aikCRLs, ekCRLsDeprecated...)
+	}
 
 	// shared metrics registry
 	m := metrics.New()
@@ -220,11 +228,11 @@ func main() {
 					"hint", "provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)")
 				os.Exit(1)
 			}
-			if len(ekCRLs) > 0 && len(aikCACerts) == 0 {
-				logger.Error("--ek-crl requires at least one --aik-ca-cert to verify CRL signatures")
+			if len(aikCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 				os.Exit(1)
 			}
-			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(ekCRLs), *requireCert)
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(aikCRLs), *requireCert)
 			if err != nil {
 				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
 				os.Exit(1)
@@ -313,11 +321,11 @@ func main() {
 		}
 
 		if len(aikCACerts) > 0 || *requireCert {
-			if len(ekCRLs) > 0 && len(aikCACerts) == 0 {
-				logger.Error("--ek-crl requires at least one --aik-ca-cert to verify CRL signatures")
+			if len(aikCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 				os.Exit(1)
 			}
-			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(ekCRLs), *requireCert)
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(aikCRLs), *requireCert)
 			if err != nil {
 				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
 				os.Exit(1)
