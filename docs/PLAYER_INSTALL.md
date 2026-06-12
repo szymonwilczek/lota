@@ -36,15 +36,16 @@ stage without changing anything.
 On an interactive terminal `lota-install` is a full-screen application
 (alternate screen, like lazygit): a stage list on the left, a details
 pane explaining the selected stage, and an output pane streaming what
-every command actually does. Nothing scrolls away and the layout
-follows terminal resizes. Keys:
+every command actually does. The initial system probe runs before the
+screen takeover and its per-stage results stay in the scrollback.
+Nothing scrolls away and the layout follows terminal resizes. Keys:
 
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | select a stage |
-| `Enter` | run the selected stage (after an explain + confirm step) |
+| `Enter` | run the selected stage (centered dialog explains the change and asks first) |
 | `a` | run every pending stage in order |
-| `y` / `n` | answer the confirmation |
+| `y` / `n` | answer the confirmation dialog |
 | `r` | re-probe all stages |
 | `PgUp`/`PgDn` | scroll the output pane |
 | `q`, `Ctrl-C`, double `Ctrl-D` | quit (`Ctrl-C` first aborts a running command) |

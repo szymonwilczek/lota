@@ -715,22 +715,54 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 
 	if (t->st[t->sel] == STAGE_PENDING && install_stages[t->sel].apply &&
 	    used < h) {
-		if (t->mode == M_CONFIRM) {
-			used +=
-			    draw_wrapped(t, x, y + used, w, h - used - 2, A_DIM,
-					 install_stages[t->sel].explain);
-			used++;
-			put_text(t, x, y + used, C_YELLOW | A_BOLD,
-				 "Apply this stage?  [y] yes   [n] no");
-		} else {
-			used += draw_wrapped(t, x, y + used, w, h - used, A_DIM,
-					     install_stages[t->sel].explain);
-			used++;
-			if (used < h)
-				put_text(t, x, y + used, C_CYAN,
-					 "[Enter] apply this stage");
-		}
+		used += draw_wrapped(t, x, y + used, w, h - used, A_DIM,
+				     install_stages[t->sel].explain);
+		used++;
+		if (used < h)
+			put_clip(t, x, y + used, w, C_CYAN,
+				 "[Enter] apply this stage");
 	}
+}
+
+/* lines `text` needs when wrapped to `w` columns;
+ * draws off-grid so the counting loop stays the one draw_wrapped uses */
+static int wrap_count(struct tui *t, int w, const char *text)
+{
+	return draw_wrapped(t, 0, t->rows, w, 9999, 0, text);
+}
+
+/* centered confirmation dialog: nothing is applied without an explicit yes,
+ * and the consent step cannot be missed in a side pane */
+static void render_confirm_modal(struct tui *t)
+{
+	const struct stage *s = &install_stages[t->sel];
+	int w = t->cols - 12;
+	int body;
+	int mh;
+	int x, y, i;
+
+	if (w > 66)
+		w = 66;
+	if (w < 32)
+		w = t->cols - 4;
+	body = wrap_count(t, w - 4, s->explain);
+	mh = body + 6;
+	if (mh > t->rows - 2) {
+		mh = t->rows - 2;
+		body = mh - 6;
+	}
+	x = (t->cols - w) / 2;
+	y = (t->rows - mh) / 2;
+
+	/* blank the area so panes underneath do not show through */
+	for (i = 0; i < mh; i++)
+		put_run(t, x, y + i, w, 0, " ");
+	put_box(t, x, y, w, mh, C_YELLOW, "Confirm");
+
+	put_clip(t, x + 2, y + 1, w - 4, A_BOLD, s->title);
+	draw_wrapped(t, x + 2, y + 3, w - 4, body, 0, s->explain);
+	put_clip(t, x + 2, y + mh - 2, w - 4, C_YELLOW | A_BOLD,
+		 "[y / Enter] apply      [n / Esc] cancel");
 }
 
 static void render_output(struct tui *t, int x, int y, int w, int h)
@@ -763,7 +795,7 @@ static const char *keybar_text(const struct tui *t)
 {
 	switch (t->mode) {
 	case M_CONFIRM:
-		return " y apply   n cancel   q quit ";
+		return " y / Enter apply   n / Esc cancel   q quit ";
 	case M_RUNNING:
 		return " Ctrl-C abort ";
 	case M_BARRIER:
@@ -833,6 +865,9 @@ static void render(struct tui *t)
 		put_clip(t, fx, t->rows - 1, t->cols - fx, A_INV | A_BOLD,
 			 t->flash);
 	}
+
+	if (t->mode == M_CONFIRM)
+		render_confirm_modal(t);
 
 	flush_grid(t);
 }
