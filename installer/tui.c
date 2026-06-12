@@ -15,7 +15,7 @@
  *   - Enter ->		runs the selected stage
  *   - a -> 		runs every pending stage in order
  *   - r ->		re-probes
- *   - PgUp/PgDn ->	scroll the output
+ *   - PgUp/PgDn, Ctrl-U/Ctrl-D ->	scroll the output
  *   - q -> 		quit
  */
 
@@ -90,7 +90,6 @@ struct tui {
 	int sel;
 	int auto_run;
 	int quit;
-	int ctrld; /* consecutive Ctrl-D presses */
 	char flash[OUT_CAP];
 
 	/* Output pane ring buffer;
@@ -806,7 +805,7 @@ static const char *keybar_text(const struct tui *t)
 	case M_NAV:
 	default:
 		return " ↑/↓ Select   Enter Run   a Run all   r Re-probe   "
-		       "PgUp/PgDn Output   q Quit ";
+		       "PgUp/PgDn Ctrl-U/D Output   q Quit ";
 	}
 }
 
@@ -832,7 +831,7 @@ static void render(struct tui *t)
 	/* title bar */
 	put_run(t, 0, 0, t->cols, A_INV, " ");
 	put_text(t, 1, 0, A_INV | A_BOLD, "LOTA Guided Install");
-	put_text(t, t->cols - 24, 0, A_INV, "Ctrl-C / 2x Ctrl-D to quit");
+	put_text(t, t->cols - 16, 0, A_INV, "Ctrl-C to quit");
 
 	/* panes: the stage list gets whatever its longest title needs
 	 * (clipped to half the screen as the floor for the right column) */
@@ -883,7 +882,6 @@ enum tui_key {
 	K_ENTER,
 	K_ESC,
 	K_CTRL_C,
-	K_CTRL_D,
 	K_CHAR, /* in *ch */
 };
 
@@ -902,8 +900,10 @@ static enum tui_key read_key(int timeout_ms, char *ch)
 	switch (b) {
 	case 0x03:
 		return K_CTRL_C;
-	case 0x04:
-		return K_CTRL_D;
+	case 0x04: /* Ctrl-D scrolls the output down, like PgDn */
+		return K_PGDN;
+	case 0x15: /* Ctrl-U scrolls the output up, like PgUp */
+		return K_PGUP;
 	case '\r':
 	case '\n':
 		return K_ENTER;
@@ -1251,19 +1251,11 @@ int tui_run(struct install_ctx *ctx)
 		k = read_key(250, &ch);
 		if (k == K_NONE)
 			continue;
-		if (k != K_CTRL_D)
-			t.ctrld = 0;
 		t.flash[0] = '\0';
 
 		switch (k) {
 		case K_CTRL_C:
 			t.quit = 1;
-			break;
-		case K_CTRL_D:
-			if (++t.ctrld >= 2)
-				t.quit = 1;
-			else
-				flashf(&t, "Ctrl-D again to quit");
 			break;
 		case K_UP:
 			if (t.mode == M_NAV && t.sel > 0)

@@ -47,8 +47,8 @@ Nothing scrolls away and the layout follows terminal resizes. Keys:
 | `a` | run every pending stage in order |
 | `y` / `n` | answer the confirmation dialog |
 | `r` | re-probe all stages |
-| `PgUp`/`PgDn` | scroll the output pane |
-| `q`, `Ctrl-C`, double `Ctrl-D` | quit (`Ctrl-C` first aborts a running command) |
+| `PgUp`/`PgDn` or `Ctrl-U`/`Ctrl-D` | scroll the output pane |
+| `q`, `Ctrl-C` | quit (`Ctrl-C` first aborts a running command) |
 
 The original scrollback is restored on exit and a one-line result
 (complete / reboot required / re-run to continue) is printed to the
