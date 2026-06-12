@@ -67,10 +67,9 @@ int ui_term_width(struct ui *ui)
 	return ws.ws_col;
 }
 
-/* Display columns of a UTF-8 string:
- * Every glyph the installer emits is single-width,
- * so counting codepoints is exact here. */
-static int disp_len(const char *s)
+/* counting codepoints is exact here:
+ * every glyph the installer emits is single-width */
+int ui_disp_len(const char *s)
 {
 	int n = 0;
 
@@ -80,7 +79,28 @@ static int disp_len(const char *s)
 	return n;
 }
 
-/* Copies at most `cols` display columns, never splitting a UTF-8 sequence.
+/* feeds a possibly multi-line text to the sink, one line per call */
+static void sink_emit_lines(struct ui *ui, const char *text)
+{
+	char line[UI_LIVE_LINE_CAP];
+
+	while (*text) {
+		const char *nl = strchr(text, '\n');
+		size_t seg = nl ? (size_t)(nl - text) : strlen(text);
+
+		if (seg >= sizeof(line))
+			seg = sizeof(line) - 1;
+		memcpy(line, text, seg);
+		line[seg] = '\0';
+		ui->sink->line(ui->sink->ud, line);
+		text += seg;
+		if (*text == '\n')
+			text++;
+	}
+}
+
+/* Copies at most `cols` display columns, never splitting a UTF-8
+ * sequence.
  * `out` must hold UI_LIVE_LINE_CAP bytes. */
 static void disp_trunc(char *out, const char *s, int cols)
 {
@@ -111,7 +131,7 @@ static void disp_trunc(char *out, const char *s, int cols)
 static void wrap_print(struct ui *ui, const char *prefix, const char *text)
 {
 	int width = ui_term_width(ui);
-	int body = width - disp_len(prefix) - 1;
+	int body = width - ui_disp_len(prefix) - 1;
 	const char *p = text;
 
 	if (body < 20)
@@ -163,6 +183,10 @@ void ui_banner(struct ui *ui, const char *title, const char *version,
 	int pad;
 	int i;
 
+	/* full-screen frontend draws its own chrome */
+	if (ui->sink)
+		return;
+
 	if (!ui->tty) {
 		printf("[lota-install] %s %s\n", title, version);
 		printf("[lota-install] %s\n", subtitle);
@@ -178,7 +202,7 @@ void ui_banner(struct ui *ui, const char *title, const char *version,
 		printf("─");
 	printf("╮%s\n", col(ui, SGR_RESET));
 
-	pad = inner - 2 - disp_len(title) - disp_len(version) - 2;
+	pad = inner - 2 - ui_disp_len(title) - ui_disp_len(version) - 2;
 	if (pad < 1)
 		pad = 1;
 	printf("%s│%s  %s%s%s%*s%s%s  %s│%s\n", col(ui, SGR_DIM),
@@ -186,7 +210,7 @@ void ui_banner(struct ui *ui, const char *title, const char *version,
 	       pad, "", col(ui, SGR_DIM), version, col(ui, SGR_DIM),
 	       col(ui, SGR_RESET));
 
-	pad = inner - 2 - disp_len(subtitle);
+	pad = inner - 2 - ui_disp_len(subtitle);
 	if (pad < 0)
 		pad = 0;
 	printf("%s│%s  %s%s%s%*s%s│%s\n", col(ui, SGR_DIM), col(ui, SGR_RESET),
@@ -202,6 +226,14 @@ void ui_banner(struct ui *ui, const char *title, const char *version,
 
 void ui_stage_begin(struct ui *ui, int idx, int total, const char *title)
 {
+	if (ui->sink) {
+		char buf[UI_LIVE_LINE_CAP];
+
+		snprintf(buf, sizeof(buf), "== %s (%d/%d) ==", title, idx,
+			 total);
+		ui->sink->line(ui->sink->ud, buf);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install] stage %d/%d: %s\n", idx, total, title);
 		fflush(stdout);
@@ -264,6 +296,14 @@ void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 	const char *sgr;
 	const char *glyph;
 
+	if (ui->sink) {
+		char buf[UI_LIVE_LINE_CAP];
+
+		snprintf(buf, sizeof(buf), "%s: %s%s%s", result_word(r), title,
+			 note ? " - " : "", note ? note : "");
+		ui->sink->line(ui->sink->ud, buf);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install]   %s: %s%s%s\n", result_word(r), title,
 		       note ? " - " : "", note ? note : "");
@@ -274,9 +314,9 @@ void ui_stage_result(struct ui *ui, enum ui_result r, const char *title,
 	if (!note)
 		note = result_word(r);
 
-	/* short notes ride the title line
+	/* short notes ride the title line,
 	 * long ones wrap below it */
-	if (disp_len(title) + disp_len(note) + 9 <= ui_term_width(ui)) {
+	if (ui_disp_len(title) + ui_disp_len(note) + 9 <= ui_term_width(ui)) {
 		printf("  %s%s%s %s%s — %s%s\n", sgr, glyph, col(ui, SGR_RESET),
 		       title, col(ui, SGR_DIM), note, col(ui, SGR_RESET));
 	} else {
@@ -294,6 +334,10 @@ void ui_explain(struct ui *ui, const char *body)
 {
 	char prefix[32];
 
+	if (ui->sink) {
+		sink_emit_lines(ui, body);
+		return;
+	}
 	if (!ui->tty) {
 		wrap_print(ui, "[lota-install]   ", body);
 		fflush(stdout);
@@ -313,6 +357,17 @@ static void vtext(struct ui *ui, const char *sgr, const char *tag,
 	char buf[2048];
 
 	vsnprintf(buf, sizeof(buf), fmt, ap);
+	if (ui->sink) {
+		if (tag[0]) {
+			char tagged[2048];
+
+			snprintf(tagged, sizeof(tagged), "%s%s", tag, buf);
+			sink_emit_lines(ui, tagged);
+		} else {
+			sink_emit_lines(ui, buf);
+		}
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install] %s%s\n", tag, buf);
 		fflush(stdout);
@@ -353,6 +408,13 @@ void ui_error(struct ui *ui, const char *fmt, ...)
 
 void ui_kv(struct ui *ui, const char *key, const char *val)
 {
+	if (ui->sink) {
+		char buf[UI_LIVE_LINE_CAP];
+
+		snprintf(buf, sizeof(buf), "%-28s %s", key, val);
+		ui->sink->line(ui->sink->ud, buf);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install]   %-28s %s\n", key, val);
 		fflush(stdout);
@@ -368,6 +430,11 @@ int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
 	char line[64];
 
 	if (assume_yes)
+		return 1;
+	/* Full-screen frontend confirms through its own modal before
+	 * calling into a stage.
+	 * Nothing on the ui_* path asks again. */
+	if (ui->sink)
 		return 1;
 
 	if (ui->tty)
@@ -445,6 +512,10 @@ void ui_live_begin(struct ui *ui, const char *label)
 	ui->spin = 0;
 	clock_gettime(CLOCK_MONOTONIC, &ui->live_start);
 
+	if (ui->sink) {
+		ui->sink->status(ui->sink->ud, label, 1, UI_OK, 0.0);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install]   run: %s\n", label);
 		fflush(stdout);
@@ -456,6 +527,10 @@ void ui_live_begin(struct ui *ui, const char *label)
 /* Appends one complete output line to the rolling tail. */
 static void live_push_line(struct ui *ui, const char *s)
 {
+	if (ui->sink) {
+		ui->sink->line(ui->sink->ud, s);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install]   | %s\n", s);
 		fflush(stdout);
@@ -491,15 +566,21 @@ void ui_live_feed(struct ui *ui, const char *chunk, size_t len)
 			ui->carry[ui->carry_len++] = c;
 		}
 	}
-	if (ui->tty)
+	if (ui->tty && !ui->sink)
 		live_redraw(ui);
 }
 
 void ui_live_tick(struct ui *ui)
 {
-	if (!ui->live_active || !ui->tty)
+	if (!ui->live_active)
 		return;
 	ui->spin++;
+	if (ui->sink) {
+		ui->sink->tick(ui->sink->ud);
+		return;
+	}
+	if (!ui->tty)
+		return;
 	live_redraw(ui);
 }
 
@@ -521,6 +602,10 @@ void ui_live_end(struct ui *ui, enum ui_result r)
 	secs = live_elapsed(ui);
 	ui->live_active = 0;
 
+	if (ui->sink) {
+		ui->sink->status(ui->sink->ud, ui->live_label, 0, r, secs);
+		return;
+	}
 	if (!ui->tty) {
 		printf("[lota-install]   %s: %s (%.1fs)\n", result_word(r),
 		       ui->live_label, secs);

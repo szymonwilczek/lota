@@ -35,9 +35,31 @@ enum ui_result {
 	UI_PENDING, /* Yellow dot: work or input still needed */
 };
 
+/* Output sink:
+ * When set on a struct ui, every ui_* call routes through these callbacks
+ * instead of writing to stdout.
+ * Full-screen TUI installs one so stage applies and the self-check
+ * (which talk to the ui_* API) render into its panes instead of corrupting
+ * the alternate screen. */
+struct ui_sink {
+	/* one finished line of output or commentary */
+	void (*line)(void *ud, const char *text);
+	/* a live action started (running=1) or finished (running=0) */
+	void (*status)(void *ud, const char *label, int running,
+		       enum ui_result r, double secs);
+	/* spinner cadence while a child process runs */
+	void (*tick)(void *ud);
+	/* nonzero = terminate the running child (user abort) */
+	int (*abort)(void *ud);
+	void *ud;
+};
+
 struct ui {
 	int tty;   /* 1 = full TUI, 0 = plain log lines */
 	int color; /* SGR sequences allowed */
+
+	/* non-NULL = redirect every ui_* call (see struct ui_sink) */
+	const struct ui_sink *sink;
 
 	/* Live region state */
 	int live_active;
@@ -56,6 +78,10 @@ void ui_init(struct ui *ui, int force_plain);
 
 /* current terminal width (re-queried; plain mode returns 80) */
 int ui_term_width(struct ui *ui);
+
+/* display columns of a UTF-8 string (every glyph the installer emits
+ * is single-width) */
+int ui_disp_len(const char *s);
 
 /* product banner: rounded box with title and right-aligned version */
 void ui_banner(struct ui *ui, const char *title, const char *version,

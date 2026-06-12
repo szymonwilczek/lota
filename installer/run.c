@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -88,8 +89,16 @@ int run_cmd(struct ui *ui, const char *label, const char *const argv[])
 	pfd.fd = fd;
 	pfd.events = POLLIN;
 	while (1) {
-		int ready = poll(&pfd, 1, RUN_TICK_MS);
+		int ready;
 
+		/* user abort from the full-screen frontend:
+		 * terminate the child and keep draining the pipe until EOF
+		 * so the exit status below reflects the signal */
+		if (ui->sink && ui->sink->abort &&
+		    ui->sink->abort(ui->sink->ud))
+			kill(pid, SIGTERM);
+
+		ready = poll(&pfd, 1, RUN_TICK_MS);
 		if (ready < 0) {
 			if (errno == EINTR)
 				continue;
