@@ -99,21 +99,43 @@ sudo reboot
 ```
 
 The cmdline only sets the appraisal mode; the kernel still needs a
-loaded IMA policy with `appraise` rules for any path to be checked.
-On Fedora the built-in `ima_policy=appraise_tcb` covers the TCB
-ranges, but on a rootfs without IMA xattrs it bricks the host at
-the next boot. Pre-populate xattrs with `ima_appraise=fix` for one
-boot (the kernel writes missing signatures from `evmctl ima_sign`
-output as it walks the matched paths) before switching to
-`enforce`, or ship a narrow policy that only appraises the LOTA
-binary closure (`/usr/bin/lota-agent`, `/usr/lib/lota/*.bpf.o`):
+loaded IMA policy with `appraise` rules for anything to be checked.
+**The appraisal content - the signatures on disk and the rule set -
+is distribution- or operator-supplied. LOTA ships neither an
+xattr-signing pipeline nor a production appraisal policy**, and the
+kernel-floor check in the agent pins only the mode; LOTA's own
+binaries are integrity-bound through fs-verity and the PCR14 boot
+commitment independent of IMA appraisal. Two supported routes for
+the content:
 
-```sh
-sudo cat configs/ima/lota-ima-policy >/sys/kernel/security/ima/policy
-```
+1. **Distribution signatures.** On Fedora/RHEL, packages can carry
+   IMA file signatures applied at install time (`rpm-plugin-ima`,
+   with the distribution's IMA certificate loaded onto the `.ima`
+   keyring) and the built-in `ima_policy=appraise_tcb` cmdline
+   policy appraises the TCB ranges against them. Verify the
+   signatures actually exist (`getfattr -m security.ima -d
+   /usr/bin/lota-agent`) before enabling `enforce`.
+2. **Operator image pipeline.** Deployments that build their own
+   images sign executables at image-build time (`evmctl ima_sign
+   --key <operator key>` over the executable closure) and load the
+   matching certificate onto the `.ima` keyring (on a Secure Boot
+   host, via a MOK-enrolled certificate). The policy and key
+   lifecycle are owned by the image pipeline, not by LOTA.
 
-Production should ship its own IMA policy file with the matching
-signature pipeline (`evmctl ima_sign`).
+Sequencing either route: `ima_appraise=enforce` with `appraise`
+rules loaded blocks every execution the rules match that lacks a
+valid signature - on a rootfs without signatures that bricks the
+host at the next boot. Stage with `ima_appraise=fix` for one boot
+(the kernel writes missing xattrs as it walks matched files)
+before switching to `enforce`.
+
+The shipped `configs/ima/lota-ima-policy` is the **developer
+baseline** that `scripts/lota-dev-bringup.sh` loads on a dev host
+running `ima_appraise=log`: it measures every exec/mmap for the
+IMA log and its `appraise_type=imasig` rules verify signatures
+where they exist. IMA rules cannot match by path, so it is not a
+"LOTA-only" policy - do not load it under `enforce` on a host
+without signatures.
 
 ### 4. SELinux label on /dev/tpm
 
