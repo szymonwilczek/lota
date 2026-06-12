@@ -41,6 +41,7 @@ endif
 # Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
 INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
+INSTALLER_BIN := $(BUILD_DIR)/lota-install
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
@@ -207,7 +208,7 @@ ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -227,6 +228,19 @@ $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
+	@echo "Built: $@"
+
+# build the guided player installer
+# Self-contained TUI binary that links only libcrypto
+# (PCR14 lock-constant derivation + AIK certificate expiry)
+# Every privileged action shells out to the same tooling
+# the documentation names (dracut, grubby, systemctl, ...)
+INSTALLER_SRCS := installer/main.c installer/stages.c installer/ui.c \
+	installer/run.c installer/probe.c
+$(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
+		installer/run.h installer/ui.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
+		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
 	@echo "Built: $@"
 
 # auto-generated header dependencies. -MMD writes a sibling
@@ -293,13 +307,15 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
 agent: $(AGENT_BIN)
 
 initramfs-lock: $(INITRAMFS_LOCK_BIN)
+
+installer: $(INSTALLER_BIN)
 
 verifier: $(VERIFIER_BIN)
 
@@ -435,6 +451,7 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
+	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(ATTESTCA_BIN) $(DESTDIR)/usr/bin/
@@ -521,6 +538,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
+	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
@@ -528,6 +546,10 @@ $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
@@ -705,6 +727,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_initramfs_lock
+	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
@@ -782,6 +805,7 @@ VALGRIND_UNIT_BINS := \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
+	test_installer_probe \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
 
 valgrind-unit: $(TEST_BINS)
