@@ -1183,6 +1183,53 @@ static int quit_code(struct tui *t)
 	return EXIT_INSTALL_FAIL;
 }
 
+/* navigation/apply bound to a printable key in M_NAV / M_CONFIRM */
+static void handle_char(struct tui *t, char ch)
+{
+	switch (ch) {
+	case 'q':
+		t->quit = 1;
+		break;
+	case 'j':
+		if (t->mode == M_NAV && t->sel < t->n)
+			t->sel++;
+		break;
+	case 'k':
+		if (t->mode == M_NAV && t->sel > 0)
+			t->sel--;
+		break;
+	case 'y':
+		if (t->mode == M_CONFIRM) {
+			t->mode = M_NAV;
+			if (do_apply(t, t->sel))
+				advance(t);
+		}
+		break;
+	case 'n':
+		if (t->mode == M_CONFIRM) {
+			t->mode = M_NAV;
+			t->auto_run = 0;
+		}
+		break;
+	case 'a':
+		if (t->mode == M_NAV) {
+			t->auto_run = 1;
+			advance(t);
+		}
+		break;
+	case 'r':
+		if (t->mode == M_NAV) {
+			out_push(t, "Re-probing...");
+			render(t);
+			probe_all(t);
+			out_push(t, "Probe complete.");
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 int tui_run(struct install_ctx *ctx)
 {
 	static const struct ui_sink sink = {
@@ -1290,48 +1337,7 @@ int tui_run(struct install_ctx *ctx)
 			}
 			break;
 		case K_CHAR:
-			switch (ch) {
-			case 'q':
-				t.quit = 1;
-				break;
-			case 'j':
-				if (t.mode == M_NAV && t.sel < t.n)
-					t.sel++;
-				break;
-			case 'k':
-				if (t.mode == M_NAV && t.sel > 0)
-					t.sel--;
-				break;
-			case 'y':
-				if (t.mode == M_CONFIRM) {
-					t.mode = M_NAV;
-					if (do_apply(&t, t.sel))
-						advance(&t);
-				}
-				break;
-			case 'n':
-				if (t.mode == M_CONFIRM) {
-					t.mode = M_NAV;
-					t.auto_run = 0;
-				}
-				break;
-			case 'a':
-				if (t.mode == M_NAV) {
-					t.auto_run = 1;
-					advance(&t);
-				}
-				break;
-			case 'r':
-				if (t.mode == M_NAV) {
-					out_push(&t, "Re-probing...");
-					render(&t);
-					probe_all(&t);
-					out_push(&t, "Probe complete.");
-				}
-				break;
-			default:
-				break;
-			}
+			handle_char(&t, ch);
 			break;
 		case K_NONE:
 			break;
