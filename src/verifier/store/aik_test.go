@@ -1087,3 +1087,66 @@ func TestFileStore_PathTraversal(t *testing.T) {
 		}
 	}
 }
+
+// TestCertificateStore_DelegatesToFileStore exercises the thin
+// CertificateStore pass-throughs around the embedded FileStore so the
+// cert-backed store keeps the same observable contract as the plain
+// file store for key, hardware-ID and lifecycle lookups.
+func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
+	dir := t.TempDir()
+
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	key := generateTestKey(t)
+	if err := cs.RegisterAIK("client-a", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
+
+	got, err := cs.GetAIK("client-a")
+	if err != nil {
+		t.Fatalf("GetAIK: %v", err)
+	}
+	if got.N.Cmp(key.PublicKey.N) != 0 {
+		t.Fatal("GetAIK returned a different key")
+	}
+
+	hwid := [32]byte{0x42}
+	if err := cs.RegisterHardwareID("client-a", hwid); err != nil {
+		t.Fatalf("RegisterHardwareID: %v", err)
+	}
+	gotHwid, err := cs.GetHardwareID("client-a")
+	if err != nil {
+		t.Fatalf("GetHardwareID: %v", err)
+	}
+	if gotHwid != hwid {
+		t.Fatal("GetHardwareID returned a different value")
+	}
+
+	if clients := cs.ListClients(); len(clients) != 1 || clients[0] != "client-a" {
+		t.Fatalf("ListClients: %v", clients)
+	}
+	if page := cs.ListClientsPage(10, 0); len(page) != 1 || page[0] != "client-a" {
+		t.Fatalf("ListClientsPage: %v", page)
+	}
+	if n := cs.CountClients(); n != 1 {
+		t.Fatalf("CountClients: %d", n)
+	}
+	if _, err := cs.GetRegisteredAt("client-a"); err != nil {
+		t.Fatalf("GetRegisteredAt: %v", err)
+	}
+
+	newKey := generateTestKey(t)
+	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err != nil {
+		t.Fatalf("RotateAIK: %v", err)
+	}
+	rotated, err := cs.GetAIK("client-a")
+	if err != nil {
+		t.Fatalf("GetAIK after rotation: %v", err)
+	}
+	if rotated.N.Cmp(newKey.PublicKey.N) != 0 {
+		t.Fatal("RotateAIK did not replace the stored key")
+	}
+}

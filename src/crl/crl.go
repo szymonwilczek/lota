@@ -1,23 +1,30 @@
 // SPDX-License-Identifier: MIT
-// LOTA Verifier - Certificate Revocation List (CRL) support
+// LOTA - Certificate Revocation List (CRL) verification
 //
-// Loads operator-supplied CRLs (RFC 5280) at verifier startup, verifies
-// each CRL signature against the trusted CA roots configured on the
-// CertificateStore, and exposes a lookup by (issuer, serial) that the
-// EK/AIK verification paths consult before accepting a certificate.
+// Shared CRL engine for the LOTA services that consume operator-supplied
+// revocation feeds: the verifier checks AIK certificates against the
+// deployment CA's CRLs and the attestation CA checks endorsement-key
+// certificates against TPM manufacturer CRLs.
+//
+// Both load RFC 5280 CRLs at startup, verify each CRL signature against
+// their configured trust anchors, and consult a lookup by (issuer, serial)
+// before accepting a certificate.
 //
 // Production deployments refresh a CRL feed by writing the new file
-// atomically onto the configured --ek-crl path and sending the verifier
-// SIGHUP: the signal handler in src/verifier/main.go calls
-// CertificateStore.ReloadCRLs(), which re-validates every CRL against
-// the trusted CAs and atomically swaps the active set on success. A
-// failed reload leaves the previous set in place so a malformed update
-// cannot drop revocations on the floor. Stale CRLs (NextUpdate < now)
-// fail closed. CRLs without a NextUpdate field are rejected at load
-// time (RFC 5280 p5.1.2.5): without an upper bound on freshness the
-// staleness check has no semantic meaning.
+// atomically onto the configured path and sending the daemon SIGHUP:
+// the signal handler rebuilds the set via BuildSet, which re-validates
+// every CRL against the trusted CAs, and atomically swaps the active set
+// on success.
+//
+// Failed reload leaves the previous set in place so a malformed update cannot
+// drop revocations on the floor.
+//
+// Stale CRLs (NextUpdate < now) fail closed.
+//
+// CRLs without a NextUpdate field are rejected at load time (RFC 5280 p5.1.2.5):
+// without an upper bound on freshness the staleness check has no semantic meaning.
 
-package store
+package crl
 
 import (
 	"crypto/x509"
@@ -41,13 +48,14 @@ var (
 	ErrCRLNoIssuer          = errors.New("CRL issuer is not among trusted CAs")
 	ErrCRLMissingNextUpdate = errors.New("CRL is missing NextUpdate; RFC 5280 §5.1.2.5 requires it for production use")
 	ErrCRLWeakSignature     = errors.New("CRL signature algorithm is not on the production allow-list")
+	ErrNoTrustedCAs         = errors.New("no trusted CAs configured for CRL verification")
 )
 
-// crlAllowedSignatureAlgorithms enumerates the signature algorithms a
-// CRL signature MUST use to be honored. Go's x509.CheckSignatureFrom
-// already refuses MD5 and RSA-SHA1, but it still accepts ECDSA-SHA1
-// and other legacy combinations.
-var crlAllowedSignatureAlgorithms = map[x509.SignatureAlgorithm]struct{}{
+// allowedSignatureAlgorithms enumerates the signature algorithms a CRL
+// signature MUST use to be honored.
+// Go's x509.CheckSignatureFrom already refuses MD5 and RSA-SHA1, but it
+// still accepts ECDSA-SHA1 and other legacy combinations.
+var allowedSignatureAlgorithms = map[x509.SignatureAlgorithm]struct{}{
 	x509.SHA256WithRSA:    {},
 	x509.SHA384WithRSA:    {},
 	x509.SHA512WithRSA:    {},
@@ -60,29 +68,45 @@ var crlAllowedSignatureAlgorithms = map[x509.SignatureAlgorithm]struct{}{
 	x509.PureEd25519:      {},
 }
 
-// revocationListSet holds CRLs grouped by issuer subject DN.
+// Set holds CRLs grouped by issuer subject DN.
 //
-// A single set may contain multiple CRLs. Lookups iterate every list
+// Single set may contain multiple CRLs. Lookups iterate every list
 // whose Issuer matches the certificate Issuer; the cert is revoked if
 // any matching list contains its serial number, and the issuer is
 // flagged stale if every matching list is past NextUpdate.
-type revocationListSet struct {
+type Set struct {
 	byIssuer map[string][]*x509.RevocationList
 }
 
-func newRevocationListSet() *revocationListSet {
-	return &revocationListSet{
+func NewSet() *Set {
+	return &Set{
 		byIssuer: make(map[string][]*x509.RevocationList),
 	}
 }
 
+// BuildSet parses every CRL path against the supplied trust anchors and
+// returns a fully-validated set.
+// Callers use it for both the initial startup build and the SIGHUP hot-swap
+// path so the two apply identical gates.
+// On any error the caller keeps its previous set.
+func BuildSet(paths []string, cas []*x509.Certificate) (*Set, error) {
+	set := NewSet()
+	for _, path := range paths {
+		if err := set.loadAndVerify(path, cas); err != nil {
+			return nil, fmt.Errorf("failed to load CRL %s: %w", path, err)
+		}
+	}
+	return set, nil
+}
+
 // loadAndVerify parses a CRL file, verifies every CRL it contains
 // against the supplied CA pool, and adds each accepted CRL to the set.
-// A file may carry multiple concatenated PEM "X509 CRL" blocks and each
-// block is validated independently. A CRL whose signature does not chain
-// to any configured CA, or whose NextUpdate is absent, is rejected up
-// front so misconfiguration surfaces at startup rather than at attestation time.
-func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) error {
+// File may carry multiple concatenated PEM "X509 CRL" blocks and each
+// block is validated independently.
+// CRL whose signature does not chain to any configured CA, or whose NextUpdate
+// is absent, is rejected up front so misconfiguration surfaces at startup rather
+// than at attestation time.
+func (s *Set) loadAndVerify(path string, cas []*x509.Certificate) error {
 	if len(cas) == 0 {
 		return ErrNoTrustedCAs
 	}
@@ -110,40 +134,40 @@ func (s *revocationListSet) loadAndVerify(path string, cas []*x509.Certificate) 
 // Errors are wrapped with the source path and the zero-based index of
 // the CRL inside the file so operators can tell which block in a
 // multi-CRL bundle was rejected.
-func (s *revocationListSet) verifyAndAdd(path string, idx int,
+func (s *Set) verifyAndAdd(path string, idx int,
 	crl *x509.RevocationList, cas []*x509.Certificate) error {
 
 	// RFC 5280 p5.1.2.5 marks NextUpdate as OPTIONAL at the ASN.1 level
-	// but mandates it for production profiles. Without NextUpdate the
-	// staleness check in check() has no upper bound, so a CRL that omits
-	// the field would silently be honored forever - defeating the
-	// fail-closed contract documented at the top of this file. Reject
-	// at load time so operators see the misconfiguration at startup
-	// rather than at the first attestation.
+	// but mandates it for production profiles.
+	// Without NextUpdate the staleness check in Check() has no upper bound,
+	// so a CRL that omits the field would silently be honored forever -
+	// defeating the fail-closed contract documented at the top of this file.
+	// Reject at load time so operators see the misconfiguration at startup
+	// instead at the first attestation.
 	if crl.NextUpdate.IsZero() {
 		return fmt.Errorf("%w: %s (block %d)",
 			ErrCRLMissingNextUpdate, path, idx)
 	}
 
-	if _, ok := crlAllowedSignatureAlgorithms[crl.SignatureAlgorithm]; !ok {
+	if _, ok := allowedSignatureAlgorithms[crl.SignatureAlgorithm]; !ok {
 		return fmt.Errorf("%w: %s (block %d): %s",
 			ErrCRLWeakSignature, path, idx, crl.SignatureAlgorithm)
 	}
 
 	// Signature must verify against one of the trusted CA certificates
-	// whose Subject matches the CRL Issuer DN. The match runs against
-	// canonicalIssuerKey() on both sides instead of bytes.Equal on
-	// RawSubject / RawIssuer: a CA that re-encoded its DN between
-	// issuing its own cert and signing the CRL (PrintableString vs
-	// UTF8String for the same ASCII text, swapped AVA order inside a
-	// multi-AVA RDN, whitespace / case drift in non-CN attributes - all
-	// permitted by RFC 5280 p4.1.2.4) would otherwise fail the
+	// whose Subject matches the CRL Issuer DN.
+	// Match runs against canonicalIssuerKey() on both sides instead of
+	// bytes.Equal on RawSubject / RawIssuer: a CA that re-encoded its DN
+	// between issuing its own cert and signing the CRL (PrintableString
+	// vs UTF8String for the same ASCII text, swapped AVA order inside
+	// a multi-AVA RDN, whitespace / case drift in non-CN attributes -
+	// all permitted by RFC 5280 p4.1.2.4) would otherwise fail the
 	// byte-equal gate, drop the CRL at load time, and silently land in
 	// the "no CRL configured for this issuer" fail-open branch at
-	// lookup time. Anchoring both sides to canonicalIssuerKey() keeps
-	// the same canonicalisation invariant the runtime lookup path
-	// already uses, so a load-time accept implies a lookup-time hit
-	// for the same DN.
+	// lookup time.
+	// Anchoring both sides to canonicalIssuerKey() keeps the same
+	// canonicalisation invariant the runtime lookup path already uses,
+	// so a load-time accept implies a lookup-time hit for the same DN.
 	crlKey, err := canonicalIssuerKey(crl.RawIssuer)
 	if err != nil {
 		return fmt.Errorf("%s (block %d): canonicalise CRL issuer DN: %w",
@@ -155,9 +179,9 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 	for _, ca := range cas {
 		caKey, err := canonicalIssuerKey(ca.RawSubject)
 		if err != nil {
-			// A CA whose Subject DN cannot be parsed should never
-			// have made it into the trust store; skip it rather
-			// than letting one malformed CA mask other roots.
+			// CA whose Subject DN cannot be parsed should never
+			// have made it into the trust store; skip it instead
+			// of letting one malformed CA mask other roots
 			sigErr = fmt.Errorf("canonicalise CA subject DN: %w", err)
 			continue
 		}
@@ -184,21 +208,21 @@ func (s *revocationListSet) verifyAndAdd(path string, idx int,
 }
 
 // canonicalIssuerKey produces a deterministic lookup key for an
-// X.500 Name encoded as DER bytes. Production TPM manufacturer CAs
-// re-encode the same logical issuer DN in subtly different ways
-// across CRL refreshes (PrintableString vs UTF8String for the same
-// ASCII value, swapped order of AVAs inside a multi-AVA RDN,
-// leading/trailing whitespace, case in non-CN attributes), and the
-// raw byte-equal key the original implementation used would index
-// each variation under a separate bucket so a cert.Issuer that
-// matched one variation would miss the others. Anchor the key to
-// the parsed RDN sequence with per-RDN AVA sorting + case+
-// whitespace folding of DirectoryString-shaped values.
+// X.500 Name encoded as DER bytes.
+// Production TPM manufacturer CAs re-encode the same logical issuer
+// DN in subtly different ways across CRL refreshes (PrintableString
+// vs UTF8String for the same ASCII value, swapped order of AVAs inside
+// a multi-AVA RDN, leading/trailing whitespace, case in non-CN
+// attributes), and the raw byte-equal key the original implementation
+// used would index each variation under a separate bucket so a cert.Issuer
+// that matched one variation would miss the others.
+// Anchor the key to the parsed RDN sequence with per-RDN AVA sorting + case
+// + whitespace folding of DirectoryString-shaped values.
 //
-// The function intentionally preserves the RDN order itself: RFC
+// This function intentionally preserves the RDN order itself: RFC
 // 5280 Names are hierarchical (C, O, OU, CN ...) and reordering
-// RDNs would change identity. Only the unordered multi-AVA SET
-// inside one RDN gets sorted.
+// RDNs would change identity.
+// Only the unordered multi-AVA SET inside one RDN gets sorted.
 func canonicalIssuerKey(rawIssuer []byte) (string, error) {
 	var seq pkix.RDNSequence
 	if _, err := asn1.Unmarshal(rawIssuer, &seq); err != nil {
@@ -233,11 +257,11 @@ func canonicalIssuerKey(rawIssuer []byte) (string, error) {
 
 // foldDirectoryString applies RFC 4518 string-prep style folding for
 // caseIgnoreMatch attribute matching: trim surrounding whitespace,
-// collapse internal whitespace to single SPACE, lowercase. This is
-// the minimal set that handles the common variations seen across CA
-// re-encodes and is intentionally narrower than the full RFC 4518
-// machinery (no Unicode normalisation, no character mapping table)
-// to keep the code reviewable.
+// collapse internal whitespace to single SPACE, lowercase.
+// This is the minimal set that handles the common variations seen
+// across CA re-encodes and is intentionally narrower than the full
+// RFC 4518 machinery (no Unicode normalisation, no character mapping
+// table) to keep the code readable.
 func foldDirectoryString(s string) string {
 	fields := strings.Fields(s) // collapses any run of whitespace
 	return strings.ToLower(strings.Join(fields, " "))
@@ -267,10 +291,10 @@ func cmpOID(a, b asn1.ObjectIdentifier) int {
 
 // parseCRL accepts a CRL file in PEM (-----BEGIN X509 CRL-----) form,
 // including bundles that concatenate multiple PEM blocks in one file
-// (one CRL per BEGIN/END pair). Non-CRL PEM blocks are skipped so a
-// bundle interleaved with informational headers or trust-anchor copies
-// still loads cleanly. A single DER-encoded CRL is also accepted for
-// tooling convenience.
+// (one CRL per BEGIN/END pair).
+// Non-CRL PEM blocks are skipped so a bundle interleaved with informational
+// headers or trust-anchor copies still loads cleanly.
+// Single DER-encoded CRL is also accepted for tooling convenience.
 func parseCRL(data []byte) ([]*x509.RevocationList, error) {
 	block, rest := pem.Decode(data)
 	if block == nil {
@@ -298,20 +322,21 @@ func parseCRL(data []byte) ([]*x509.RevocationList, error) {
 	return out, nil
 }
 
-// check returns nil if cert is not present in any matching CRL. The
-// caller is expected to invoke this only after chain verification has
+// Check returns nil if cert is not present in any matching CRL.
+// Caller is expected to invoke this only after chain verification has
 // already established the certificate's issuer is trusted.
-func (s *revocationListSet) check(cert *x509.Certificate, now time.Time) error {
+func (s *Set) Check(cert *x509.Certificate, now time.Time) error {
 	if s == nil || len(s.byIssuer) == 0 {
 		return nil
 	}
 
 	// Match the certificate's issuer DN against the canonicalised key
-	// the load path used. A failure to parse the cert's RawIssuer is
-	// treated as "no CRL configured for this issuer": x509.ParseCertificate
-	// already accepted the cert, so the RawIssuer bytes are well-formed
-	// ASN.1, but if a future codepath feeds in a malformed DER we lean
-	// fail-open rather than fail-noisy here - the caller has already
+	// the load path used.
+	// Failure to parse the cert's RawIssuer is treated as
+	// "no CRL configured for this issuer": x509.ParseCertificate already
+	// accepted the cert, so the RawIssuer bytes are well-formed ASN.1,
+	// but if a future codepath feeds in a malformed DER, leans
+	// fail-open instead fail-noisy here - the caller has already
 	// gated on chain verification.
 	key, err := canonicalIssuerKey(cert.RawIssuer)
 	if err != nil {
@@ -327,7 +352,7 @@ func (s *revocationListSet) check(cert *x509.Certificate, now time.Time) error {
 	for _, crl := range crls {
 		// loadAndVerify rejects CRLs without NextUpdate, but defend in
 		// depth: any zero NextUpdate that reaches this path is treated
-		// as immediately stale rather than as "never expires".
+		// as immediately stale
 		if crl.NextUpdate.IsZero() || now.After(crl.NextUpdate) {
 			continue
 		}
@@ -352,9 +377,9 @@ func (s *revocationListSet) check(cert *x509.Certificate, now time.Time) error {
 	return nil
 }
 
-// size returns the total number of CRLs held; useful for startup logs
-// and unit-test assertions.
-func (s *revocationListSet) size() int {
+// Size returns the total number of CRLs held
+// Useful for startup logs and unit-test assertions
+func (s *Set) Size() int {
 	if s == nil {
 		return 0
 	}

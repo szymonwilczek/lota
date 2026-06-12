@@ -10,6 +10,9 @@ require (
 require (
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/szymonwilczek/lota/crl v0.0.0
 	github.com/thales-e-security/pool v0.0.2 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
+
+replace github.com/szymonwilczek/lota/crl => ../crl
