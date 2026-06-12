@@ -419,7 +419,7 @@ int probe_conf_buf_has_key(const char *buf, const char *key)
 
 int probe_conf_has_key(const char *conf_path, const char *key)
 {
-	char buf[16384];
+	char buf[16384] = {0};
 	int ret = probe_read_text(conf_path, buf, sizeof(buf));
 
 	if (ret < 0)
