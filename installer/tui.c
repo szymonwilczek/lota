@@ -233,6 +233,33 @@ static void put_text(struct tui *t, int x, int y, uint8_t attr, const char *s)
 	}
 }
 
+/* like put_text but never paints past maxw display columns, so pane
+ * content cannot bleed across a pane border */
+static void put_clip(struct tui *t, int x, int y, int maxw, uint8_t attr,
+		     const char *s)
+{
+	int used = 0;
+
+	while (*s && used < maxw) {
+		struct cell *c;
+		size_t step = 1;
+
+		while (((unsigned char)s[step] & 0xC0) == 0x80)
+			step++;
+		c = cell_at(t, x, y);
+		if (!c)
+			break;
+		if (step > 4)
+			step = 4;
+		memcpy(c->ch, s, step);
+		c->ch[step] = '\0';
+		c->attr = attr;
+		s += step;
+		x++;
+		used++;
+	}
+}
+
 static void put_textf(struct tui *t, int x, int y, uint8_t attr,
 		      const char *fmt, ...)
     __attribute__((format(printf, 5, 6)));
@@ -594,8 +621,29 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 		if (i == t->sel)
 			put_run(t, x, y + i, w, A_INV, " ");
 		put_text(t, x + 1, y + i, lattr | gattr, glyph);
-		put_textf(t, x + 3, y + i, lattr, "%2d %s", i + 1, label);
+		{
+			char row[160];
+
+			snprintf(row, sizeof(row), "%2d %s", i + 1, label);
+			put_clip(t, x + 3, y + i, w - 3, lattr, row);
+		}
 	}
+}
+
+/* columns the stage list needs so no title ever wraps or clips:
+ * border+pad (4) + glyph cell (2) + "NN " (3) + longest title + pad */
+static int stage_list_width(struct tui *t)
+{
+	int max = ui_disp_len("Self-check & summary");
+	int i;
+
+	for (i = 0; i < t->n; i++) {
+		int l = ui_disp_len(install_stages[i].title);
+
+		if (l > max)
+			max = l;
+	}
+	return max + 10;
 }
 
 static void render_details(struct tui *t, int x, int y, int w, int h)
@@ -614,10 +662,10 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 	case M_RUNNING:
 		put_textf(t, x, y, C_CYAN | A_BOLD, "%s",
 			  spin_frames[t->spin % 10]);
-		put_textf(t, x + 2, y, A_BOLD, "%s", t->run_label);
+		put_clip(t, x + 2, y, w - 2, A_BOLD, t->run_label);
 		put_textf(t, x, y + 1, A_DIM, "%.0fs elapsed",
 			  elapsed_since(&t->run_start));
-		put_text(t, x, y + 3, A_DIM,
+		put_clip(t, x, y + 3, w, A_DIM,
 			 "Ctrl-C aborts the running command");
 		return;
 	default:
@@ -625,7 +673,7 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 	}
 
 	if (t->sel == t->n) {
-		put_text(t, x, y, A_BOLD, "Self-check & summary");
+		put_clip(t, x, y, w, A_BOLD, "Self-check & summary");
 		used = 2;
 		if (t->selfcheck_done) {
 			draw_wrapped(t, x, y + used, w, h - used, 0,
@@ -654,12 +702,12 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 		return;
 	}
 
-	put_text(t, x, y, A_BOLD, install_stages[t->sel].title);
+	put_clip(t, x, y, w, A_BOLD, install_stages[t->sel].title);
 	{
 		uint8_t a;
 
 		state_glyph(t->st[t->sel], &a);
-		put_textf(t, x, y + 1, a, "%s", state_word(t->st[t->sel]));
+		put_clip(t, x, y + 1, w, a, state_word(t->st[t->sel]));
 	}
 	used = 3;
 	used += draw_wrapped(t, x, y + used, w, h - used, 0, t->note[t->sel]);
@@ -754,12 +802,11 @@ static void render(struct tui *t)
 	put_text(t, 1, 0, A_INV | A_BOLD, "LOTA Guided Install");
 	put_text(t, t->cols - 24, 0, A_INV, "Ctrl-C / 2x Ctrl-D to quit");
 
-	/* panes */
-	lw = t->cols * 2 / 5;
-	if (lw < 30)
-		lw = 30;
-	if (lw > 46)
-		lw = 46;
+	/* panes: the stage list gets whatever its longest title needs
+	 * (clipped to half the screen as the floor for the right column) */
+	lw = stage_list_width(t);
+	if (lw > t->cols / 2 + 8)
+		lw = t->cols / 2 + 8;
 	dh = (t->rows - 2) / 2;
 	if (dh < 9)
 		dh = 9;
@@ -777,10 +824,15 @@ static void render(struct tui *t)
 
 	/* key bar + flash */
 	put_run(t, 0, t->rows - 1, t->cols, A_INV, " ");
-	put_text(t, 0, t->rows - 1, A_INV, keybar_text(t));
-	if (t->flash[0])
-		put_textf(t, t->cols - 1 - ui_disp_len(t->flash), t->rows - 1,
-			  A_INV | A_BOLD, "%s", t->flash);
+	put_clip(t, 0, t->rows - 1, t->cols, A_INV, keybar_text(t));
+	if (t->flash[0]) {
+		int fx = t->cols - 1 - ui_disp_len(t->flash);
+
+		if (fx < 1)
+			fx = 1;
+		put_clip(t, fx, t->rows - 1, t->cols - fx, A_INV | A_BOLD,
+			 t->flash);
+	}
 
 	flush_grid(t);
 }
