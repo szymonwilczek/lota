@@ -12,6 +12,7 @@
 package ca
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -87,6 +88,16 @@ type Issuer struct {
 	caKey   crypto.Signer
 	ekRoots *x509.CertPool
 	certTTL time.Duration
+
+	// ekIntermediates holds the non-self-signed certificates from the
+	// operator bundle.
+	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert),
+	// so chain material for a leaf -> intermediate -> root manufacturer PKI
+	// has to come from the bundle.
+	// Every cert still stays an anchor in ekRoots.
+	// Intermediates are additionally offered here so cert.Verify can build
+	// through them.
+	ekIntermediates *x509.CertPool
 
 	// ekRootCerts mirrors ekRoots as a slice:
 	// CRL engine verifies each manufacturer CRL signature against the
@@ -174,6 +185,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		return nil, ErrNoEKRoots
 	}
 	ekRoots := x509.NewCertPool()
+	ekIntermediates := x509.NewCertPool()
 	var ekRootCerts []*x509.Certificate
 	for i, rootPEM := range cfg.EKRootPEMs {
 		root, err := parseCertPEM(rootPEM)
@@ -182,6 +194,12 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		}
 		ekRoots.AddCert(root)
 		ekRootCerts = append(ekRootCerts, root)
+		// non-self-signed bundle entry is a manufacturer intermediate:
+		// also offer it as chain material so a leaf issued under it can
+		// build up to a bundled root
+		if !bytes.Equal(root.RawSubject, root.RawIssuer) {
+			ekIntermediates.AddCert(root)
+		}
 	}
 
 	ttl := cfg.AIKCertTTL
@@ -190,12 +208,13 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	}
 
 	is := &Issuer{
-		caCert:      caCert,
-		caKey:       caKey,
-		ekRoots:     ekRoots,
-		certTTL:     ttl,
-		ekRootCerts: ekRootCerts,
-		ekCRLPaths:  append([]string(nil), cfg.EKCRLPaths...),
+		caCert:          caCert,
+		caKey:           caKey,
+		ekRoots:         ekRoots,
+		ekIntermediates: ekIntermediates,
+		certTTL:         ttl,
+		ekRootCerts:     ekRootCerts,
+		ekCRLPaths:      append([]string(nil), cfg.EKCRLPaths...),
 	}
 	set, err := crl.BuildSet(is.ekCRLPaths, is.ekRootCerts)
 	if err != nil {
@@ -257,9 +276,10 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 	// EK certificates are leaf certificates that may omit the TLS server
 	// EKU, so verify with ExtKeyUsageAny
 	if _, err := cert.Verify(x509.VerifyOptions{
-		Roots:       is.ekRoots,
-		CurrentTime: now,
-		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		Roots:         is.ekRoots,
+		Intermediates: is.ekIntermediates,
+		CurrentTime:   now,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEKChain, err)
 	}

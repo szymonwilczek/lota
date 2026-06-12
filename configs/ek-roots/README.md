@@ -114,6 +114,29 @@ the value the download alone hands you.
    lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots ...
    ```
 
+## Intermediate CAs
+
+Real manufacturer EK PKIs are commonly three-level: the EK leaf is issued
+by an intermediate CA which in turn chains to the self-signed root. The
+enroll wire carries only the leaf (a TPM NV index holds a single
+certificate, so the agent has nothing else to send), which means the CA
+can only build that chain from material the operator loaded: **the bundle
+must include every intermediate that issues your fleet's EK
+certificates**, pinned in the manifest exactly like a root. Loaded
+intermediates serve both as path material (a leaf issued by a bundled
+intermediate verifies up to the bundled root) and as trust anchors in
+their own right -- pinning only the intermediate is a deliberate
+narrowing that trusts one manufacturer branch instead of everything under
+the root.
+
+The AIA walk that finds the root passes through each intermediate on the
+way (`lota-ek-root-pin.sh` follows the same chain); record a manifest
+line for every CA certificate on the path, not just the final self-signed
+one. A missing intermediate surfaces as an `ErrEKChain` rejection on
+genuine hardware. The manufacturer CRL feed (below) has the same
+dependency: CRLs covering EK leaves are signed by the issuing
+intermediate, so the feed loads only when that intermediate is bundled.
+
 ## Updating
 
 Adding, removing, or rotating a vendor root is a manifest edit: change the
