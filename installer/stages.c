@@ -199,15 +199,23 @@ static int st_trust_apply(struct install_ctx *ctx)
 {
 	struct stat sb;
 	int fresh;
+	int fd;
 	FILE *f;
 
 	if (mkdir("/etc/lota", 0755) != 0 && errno != EEXIST)
 		return -errno;
 
 	fresh = stat(PATH_LOTA_CONF, &sb) != 0 || sb.st_size == 0;
-	f = fopen(PATH_LOTA_CONF, "a");
-	if (!f)
+	/* explicit 0644: fopen("a") would create world-writable (0666) */
+	fd = open(PATH_LOTA_CONF, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+		  0644);
+	if (fd < 0)
 		return -errno;
+	f = fdopen(fd, "a");
+	if (!f) {
+		close(fd);
+		return -errno;
+	}
 	if (fresh)
 		fprintf(f, "# LOTA agent configuration (created by "
 			   "lota-install)\n");
