@@ -406,6 +406,9 @@ static void flush_grid(struct tui *t)
 	int last_attr = -1;
 	int y;
 
+	if (!t->grid)
+		return;
+
 	t->fblen = 0;
 	fb_put(t, "\033[H", 3);
 	for (y = 0; y < t->rows; y++) {
