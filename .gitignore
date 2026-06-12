@@ -29,3 +29,8 @@ selinux/lota_gaming.fc
 # Committed baseline lives in docs/PERF.md.
 benchmarks/results/*
 !benchmarks/results/.gitkeep
+
+# Editor/clangd index: host-specific paths, regenerate with `bear -- make`.
+compile_commands.json
+.clangd
+.cache/

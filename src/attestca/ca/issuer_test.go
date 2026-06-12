@@ -543,3 +543,106 @@ func TestReloadEKCRLsHotSwap(t *testing.T) {
 		t.Fatalf("after failed reload: expected preserved revocation, got %v", err)
 	}
 }
+
+// makeIntermediate mints a CA certificate signed by parent, standing in
+// for a manufacturer's EK-issuing intermediate.
+func makeIntermediate(tb testing.TB, parent certAndKey, cn string) certAndKey {
+	tb.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatalf("intermediate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          mustSerial(tb),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent.cert, key.Public(), parent.key)
+	if err != nil {
+		tb.Fatalf("intermediate cert: %v", err)
+	}
+	cert, _ := x509.ParseCertificate(der)
+	return certAndKey{cert: cert, der: der, key: key}
+}
+
+// TestVerifyEKCertificateChainsThroughBundledIntermediate covers the
+// common manufacturer shape leaf -> intermediate -> root:
+// With both CA certificates in the bundle the leaf must verify.
+// With the root alone the chain cannot build and the leaf must be refused.
+func TestVerifyEKCertificateChainsThroughBundledIntermediate(t *testing.T) {
+	root := makeRoot(t, "tpm-vendor-root")
+	inter := makeIntermediate(t, root, "tpm-vendor-ek-intermediate")
+	ekDER, _ := makeEKCert(t, inter, nil)
+
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	full, err := NewIssuer(IssuerConfig{
+		CACertPEM: caCertPEM,
+		CAKeyPEM:  caKeyPEM,
+		EKRootPEMs: [][]byte{
+			pemBlock("CERTIFICATE", root.der),
+			pemBlock("CERTIFICATE", inter.der),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer (root+intermediate): %v", err)
+	}
+	if _, err := full.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+		t.Fatalf("two-level chain with bundled intermediate must verify, got %v", err)
+	}
+
+	rootOnly := newTestIssuer(t, root)
+	if _, err := rootOnly.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, ErrEKChain) {
+		t.Fatalf("missing intermediate must fail the chain, got %v", err)
+	}
+}
+
+// TestVerifyEKCertificateAcceptsIntermediateOnlyAnchor pins only the
+// issuing intermediate:
+// deliberate trust narrowing (trust this manufacturer branch, not
+// everything under the root) that the anchor semantics must keep working.
+func TestVerifyEKCertificateAcceptsIntermediateOnlyAnchor(t *testing.T) {
+	root := makeRoot(t, "tpm-vendor-root")
+	inter := makeIntermediate(t, root, "tpm-vendor-ek-intermediate")
+	ekDER, _ := makeEKCert(t, inter, nil)
+
+	is := newTestIssuer(t, inter)
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+		t.Fatalf("intermediate-only anchor must verify the leaf, got %v", err)
+	}
+}
+
+// TestVerifyEKCertificateIntermediateSignedCRL revokes the leaf through
+// a CRL signed by the bundled intermediate - the shape real
+// manufacturer feeds take, since the intermediate issues the EKs.
+func TestVerifyEKCertificateIntermediateSignedCRL(t *testing.T) {
+	dir := t.TempDir()
+	root := makeRoot(t, "tpm-vendor-root")
+	inter := makeIntermediate(t, root, "tpm-vendor-ek-intermediate")
+	ekDER, _ := makeEKCert(t, inter, nil)
+	ekCert, err := x509.ParseCertificate(ekDER)
+	if err != nil {
+		t.Fatalf("parse EK: %v", err)
+	}
+
+	path := writeEKCRL(t, dir, inter, time.Now().Add(time.Hour), ekCert.SerialNumber)
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	is, err := NewIssuer(IssuerConfig{
+		CACertPEM: caCertPEM,
+		CAKeyPEM:  caKeyPEM,
+		EKRootPEMs: [][]byte{
+			pemBlock("CERTIFICATE", root.der),
+			pemBlock("CERTIFICATE", inter.der),
+		},
+		EKCRLPaths: []string{path},
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); !errors.Is(err, crl.ErrCertificateRevoked) {
+		t.Fatalf("expected crl.ErrCertificateRevoked via intermediate-signed CRL, got %v", err)
+	}
+}
