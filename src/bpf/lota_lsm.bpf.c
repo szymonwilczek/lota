@@ -1302,7 +1302,9 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 		mode = get_mode();
 
-		struct lota_exec_event *event;
+		/* must be NULL: read below even when the event budget
+		 * skips the reserve */
+		struct lota_exec_event *event = NULL;
 
 		if (mode == LOTA_MODE_ENFORCE &&
 		    get_config(LOTA_CFG_BLOCK_ANON_EXEC) &&
