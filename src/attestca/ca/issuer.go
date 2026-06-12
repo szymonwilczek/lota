@@ -75,6 +75,7 @@ var (
 	ErrEKMissingOID     = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
 	ErrEKKeyType        = errors.New("EK certificate public key is not RSA; enrollment requires an RSA endorsement key (TCG EK template H-1)")
 	ErrEKKeySize        = errors.New("EK certificate RSA key too small")
+	ErrEKWeakKey        = errors.New("EK RSA modulus matches the ROCA (CVE-2017-15361) fingerprint; the private key is recoverable from the public modulus")
 	ErrCANotCA          = errors.New("CA certificate is not a certificate authority")
 	ErrCAKeyMismatch    = errors.New("CA private key does not match CA certificate")
 	ErrUnsupportedCAKey = errors.New("unsupported CA signing key type")
@@ -289,6 +290,14 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 	}
 	if rsaPub.N.BitLen() < MinEKKeyBits {
 		return nil, fmt.Errorf("%w: %d bits", ErrEKKeySize, rsaPub.N.BitLen())
+	}
+
+	// ROCA-weak EK is rejected regardless of CRL coverage:
+	// fingerprint is intrinsic to the modulus and a factorable EK makes
+	// the activation secret recoverable in software, so the chain and
+	// OID checks above prove nothing about TPM residency for such a key.
+	if IsROCAWeak(rsaPub.N) {
+		return nil, ErrEKWeakKey
 	}
 
 	return cert, nil

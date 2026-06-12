@@ -152,6 +152,10 @@ past `NextUpdate` is refused at enrollment time.
 An issuer with no configured CRL is accepted (standard RFC 5280 semantics) --
 ship the feed for every manufacturer that publishes one.
 
+Independently of any CRL, the CA rejects an EK whose RSA modulus carries
+the ROCA fingerprint itself -- the weakness is intrinsic to the key, so a
+lagging or unconfigured feed does not reopen that hole.
+
 Refresh a feed by rewriting the file atomically and sending the daemon
 SIGHUP; a refresh that fails validation keeps the previous set active.
 The CRL distribution point is usually listed in the EK certificate's
