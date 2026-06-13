@@ -70,6 +70,18 @@ follows that pattern.
 
 Keep the C serializer and the Go parser in lockstep when the layout changes.
 
+### Baseline store schema
+Verifier's per-client baseline lives in the `baselines` table
+(`src/verifier/store/db.go`), evolved through append-only migrations - never
+edit a shipped migration, add a new one. Migration 5 adds the re-anchor columns
+(event-log baseline, ESRT firmware version, the sticky `esrt_capable` bit,
+assurance/rate-limit state) and a `baseline_archive` table that keeps a superseded
+baseline rather than overwriting it.
+
+The `ReanchorStorer` interface (`verify/baseline.go`) has three backends
+(in-memory, SQLite, Postgres) that must stay behaviourally identical;
+the in-memory store is the contract reference exercised by `boot_baseline_test.go`.
+
 ### Guided installation
 Guided player installer lives in `installer/` as a standalone C
 binary (`make installer` -> `lota-install`, also part of `make all` and

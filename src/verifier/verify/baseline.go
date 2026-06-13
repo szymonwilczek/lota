@@ -338,11 +338,45 @@ type AtomicBaselineStorer interface {
 		boot *BootBaseline) AttestationOutcome
 }
 
+// ReanchorState is the persisted re-anchor bookkeeping for a client:
+// event log captured when the boot baseline was pinned (for PCR 7 replay-diff),
+// the firmware version at that time (ESRT anti-rollback), the sticky ESRT-capability
+// bit (device that ever reported an ESRT and later stops is suspicious), the last
+// assurance tier, and the rate-limit counter.
+// Present is false when no baseline row exists for the client.
+type ReanchorState struct {
+	Present          bool
+	EventLogBaseline []byte
+	ESRTVersion      uint32
+	ESRTCapable      bool
+	LFA              bool
+	ReanchorCount    int
+	LastReanchorAt   time.Time
+}
+
+// ReanchorStorer is optionally implemented by baseline stores that support
+// self-service re-anchor after a legitimate firmware drift.
+//
+//   - GetReanchorState returns the bookkeeping for a client (Present == false
+//     when the client has no baseline row, which the verifier treats as
+//     fail-closed: no event-log baseline means no replay-diff is possible).
+//   - ArchiveAndReanchor atomically copies the current PCR0/1/7 row into the
+//     archive table and replaces it with boot, recording the new event-log
+//     baseline, ESRT version and assurance tier, setting esrt_capable sticky,
+//     and bumping reanchor_count / last_reanchor_at. reason labels the archive
+//     row ("strong" or "lfa").
+type ReanchorStorer interface {
+	GetReanchorState(clientID string) ReanchorState
+	ArchiveAndReanchor(clientID string, boot BootBaseline, eventLog []byte,
+		esrtVersion uint32, esrtCapable, lfa bool, reason string) error
+}
+
 // manages per-client PCR baselines (TOFU)
 type BaselineStore struct {
 	mu            sync.RWMutex
 	baselines     map[string]*ClientBaseline // clientID -> PCR14 baseline
 	bootBaselines map[string]*BootBaseline   // clientID -> PCR0/1/7 baseline
+	reanchor      map[string]*ReanchorState  // clientID -> re-anchor state
 }
 
 // creates a new baseline store
@@ -350,6 +384,7 @@ func NewBaselineStore() *BaselineStore {
 	return &BaselineStore{
 		baselines:     make(map[string]*ClientBaseline),
 		bootBaselines: make(map[string]*BootBaseline),
+		reanchor:      make(map[string]*ReanchorState),
 	}
 }
 
@@ -434,6 +469,58 @@ func (s *BaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	}
 	out := *b
 	return &out
+}
+
+// GetReanchorState returns the in-memory re-anchor bookkeeping for a
+// client. Present is false when the client has no boot baseline yet.
+func (s *BaselineStore) GetReanchorState(clientID string) ReanchorState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.bootBaselines[clientID]; !ok {
+		return ReanchorState{}
+	}
+	st := ReanchorState{Present: true}
+	if r, ok := s.reanchor[clientID]; ok {
+		st = *r
+		st.Present = true
+		if r.EventLogBaseline != nil {
+			st.EventLogBaseline = append([]byte(nil), r.EventLogBaseline...)
+		}
+	}
+	return st
+}
+
+// ArchiveAndReanchor replaces the stored boot baseline with boot and records
+// the new re-anchor state.
+// In-memory store keeps no archive table; the previous values are simply overwritten
+// (durable backends persist the archive).
+// esrtCapable is sticky: once true it stays true.
+func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
+	eventLog []byte, esrtVersion uint32, esrtCapable, lfa bool,
+	reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	nb := boot
+	nb.FirstSeen = now
+	nb.LastSeen = now
+	s.bootBaselines[clientID] = &nb
+
+	prev := s.reanchor[clientID]
+	st := &ReanchorState{Present: true}
+	if prev != nil {
+		*st = *prev
+		st.Present = true
+	}
+	st.EventLogBaseline = append([]byte(nil), eventLog...)
+	st.ESRTVersion = esrtVersion
+	st.ESRTCapable = st.ESRTCapable || esrtCapable
+	st.LFA = lfa
+	st.ReanchorCount++
+	st.LastReanchorAt = now
+	s.reanchor[clientID] = st
+	return nil
 }
 
 // removes stored baseline for a client

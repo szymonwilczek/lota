@@ -323,3 +323,58 @@ func TestSecureBootAnchored(t *testing.T) {
 		}
 	}
 }
+
+func TestReanchor_MemoryStateAndArchive(t *testing.T) {
+	bs := NewBaselineStore()
+
+	// no baseline row -> not present
+	if st := bs.GetReanchorState("dev"); st.Present {
+		t.Fatal("no baseline -> Present should be false")
+	}
+
+	// pin the boot baseline first
+	bs.CheckAndUpdateBootPCRs("dev", boot(0x10, 0x11, 0x17))
+	st := bs.GetReanchorState("dev")
+	if !st.Present {
+		t.Fatal("after pin -> Present should be true")
+	}
+	if st.ReanchorCount != 0 || st.ESRTCapable || st.LFA {
+		t.Errorf("fresh re-anchor state should be zero: %+v", st)
+	}
+
+	// strong re-anchor: records event log + ESRT version, sets capable
+	log1 := []byte("eventlog-v1")
+	if err := bs.ArchiveAndReanchor("dev", boot(0x20, 0x21, 0x17), log1,
+		785, true, false, "strong"); err != nil {
+		t.Fatalf("ArchiveAndReanchor: %v", err)
+	}
+	st = bs.GetReanchorState("dev")
+	if st.ReanchorCount != 1 {
+		t.Errorf("ReanchorCount: got %d, want 1", st.ReanchorCount)
+	}
+	if !st.ESRTCapable || st.ESRTVersion != 785 || st.LFA {
+		t.Errorf("strong re-anchor state wrong: %+v", st)
+	}
+	if !bytes.Equal(st.EventLogBaseline, log1) {
+		t.Error("event-log baseline not stored")
+	}
+	if r, _ := bs.CheckAndUpdateBootPCRs("dev", boot(0x20, 0x21, 0x17)); r != TOFUMatch {
+		t.Errorf("re-anchored baseline should match, got %v", r)
+	}
+
+	// LFA re-anchor: esrt_capable stays sticky-true, count bumps, LFA set
+	if err := bs.ArchiveAndReanchor("dev", boot(0x30, 0x31, 0x17),
+		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
+	}
+	st = bs.GetReanchorState("dev")
+	if st.ReanchorCount != 2 {
+		t.Errorf("ReanchorCount: got %d, want 2", st.ReanchorCount)
+	}
+	if !st.ESRTCapable {
+		t.Error("esrt_capable must stay sticky true once set")
+	}
+	if !st.LFA {
+		t.Error("LFA should be true after an lfa re-anchor")
+	}
+}
