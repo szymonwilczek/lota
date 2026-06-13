@@ -937,6 +937,23 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 					"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
 					"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+
+				// capture the event log + firmware version alongside the boot
+				// baseline so a later self-service re-anchor can replay-diff
+				// PCR 7 and apply the firmware anti-rollback check
+				if rs, ok := v.baselineStore.(ReanchorStorer); ok {
+					var esrtVer uint32
+					esrtPresent := false
+					if report.ESRT != nil && report.ESRT.Present {
+						esrtVer = report.ESRT.FWVersion
+						esrtPresent = true
+					}
+					if err := rs.RecordBootEvidence(clientID, report.EventLog,
+						esrtVer, esrtPresent); err != nil {
+						clog.Warn("failed to record boot evidence for re-anchor",
+							"error", err)
+					}
+				}
 			case TOFUMatch:
 				clog.Debug("boot PCRs match baseline")
 			case TOFUMismatch:

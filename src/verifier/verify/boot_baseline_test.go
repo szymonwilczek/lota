@@ -440,3 +440,47 @@ func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
 		t.Errorf("archive rows after two re-anchors: got %d, want 2", n)
 	}
 }
+
+func TestRecordBootEvidence_MemoryAndSQLite(t *testing.T) {
+	// in-memory
+	bs := NewBaselineStore()
+	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := bs.RecordBootEvidence("c", []byte("log"), 785, true); err != nil {
+		t.Fatalf("RecordBootEvidence: %v", err)
+	}
+	st := bs.GetReanchorState("c")
+	if !bytes.Equal(st.EventLogBaseline, []byte("log")) || st.ESRTVersion != 785 || !st.ESRTCapable {
+		t.Fatalf("in-memory evidence: %+v", st)
+	}
+	// esrt_capable stays sticky even if a later record reports not-present
+	if err := bs.RecordBootEvidence("c", []byte("log2"), 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if st = bs.GetReanchorState("c"); !st.ESRTCapable {
+		t.Error("in-memory esrt_capable must stay sticky")
+	}
+
+	// SQLite
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	sq := NewSQLiteBaselineStore(db)
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	sq.CheckAndUpdate("c", pcr14)
+	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := sq.RecordBootEvidence("c", []byte("evlog"), 900, true); err != nil {
+		t.Fatalf("sqlite RecordBootEvidence: %v", err)
+	}
+	st = sq.GetReanchorState("c")
+	if !bytes.Equal(st.EventLogBaseline, []byte("evlog")) || st.ESRTVersion != 900 || !st.ESRTCapable {
+		t.Fatalf("sqlite evidence: %+v", st)
+	}
+	// re-anchor count untouched by evidence recording
+	if st.ReanchorCount != 0 {
+		t.Errorf("RecordBootEvidence must not bump reanchor_count, got %d", st.ReanchorCount)
+	}
+}

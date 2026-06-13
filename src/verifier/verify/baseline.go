@@ -369,6 +369,16 @@ type ReanchorStorer interface {
 	GetReanchorState(clientID string) ReanchorState
 	ArchiveAndReanchor(clientID string, boot BootBaseline, eventLog []byte,
 		esrtVersion uint32, esrtCapable, lfa bool, reason string) error
+
+	// RecordBootEvidence captures the event log and firmware version that
+	// accompanied a first-use boot baseline, so a later re-anchor has a
+	// reference to replay-diff PCR 7 against.
+	// It is an idempotent update on the existing baseline row (no archive,
+	// no counter bump) and sets esrt_capable sticky when esrtPresent.
+	// Missing call simply leaves the event-log baseline empty, which the
+	// verifier treats as fail-closed (operator re-baseline) at re-anchor time.
+	RecordBootEvidence(clientID string, eventLog []byte, esrtVersion uint32,
+		esrtPresent bool) error
 }
 
 // manages per-client PCR baselines (TOFU)
@@ -519,6 +529,26 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.LFA = lfa
 	st.ReanchorCount++
 	st.LastReanchorAt = now
+	s.reanchor[clientID] = st
+	return nil
+}
+
+// RecordBootEvidence stores the event log + ESRT version that accompanied a
+// first-use boot baseline (in-memory).
+// esrt_capable is sticky.
+func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
+	esrtVersion uint32, esrtPresent bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st := s.reanchor[clientID]
+	if st == nil {
+		st = &ReanchorState{Present: true}
+	}
+	st.Present = true
+	st.EventLogBaseline = append([]byte(nil), eventLog...)
+	st.ESRTVersion = esrtVersion
+	st.ESRTCapable = st.ESRTCapable || esrtPresent
 	s.reanchor[clientID] = st
 	return nil
 }

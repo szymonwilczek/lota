@@ -816,3 +816,24 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	}
 	return tx.Commit()
 }
+
+// RecordBootEvidence stores the event log + ESRT version for a first-use
+// boot baseline (SQLite).
+// Idempotent UPDATE; esrt_capable kept sticky.
+func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
+	eventLog []byte, esrtVersion uint32, esrtPresent bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	capVal := 0
+	if esrtPresent {
+		capVal = 1
+	}
+	_, err := s.db.Exec(
+		`UPDATE baselines SET eventlog_baseline = ?, esrt_version = ?,
+		   esrt_capable = MAX(COALESCE(esrt_capable, 0), ?)
+		 WHERE client_id = ?`,
+		eventLog, esrtVersion, capVal, clientID,
+	)
+	return err
+}

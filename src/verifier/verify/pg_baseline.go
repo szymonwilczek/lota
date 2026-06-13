@@ -903,3 +903,21 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	committed = true
 	return nil
 }
+
+// RecordBootEvidence stores the event log + ESRT version for a first-use
+// boot baseline (Postgres).
+// Idempotent UPDATE; esrt_capable kept sticky.
+func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
+	eventLog []byte, esrtVersion uint32, esrtPresent bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE baselines SET eventlog_baseline = $1, esrt_version = $2,
+		   esrt_capable = (esrt_capable OR $3)
+		 WHERE client_id = $4`,
+		eventLog, int64(esrtVersion), esrtPresent, clientID,
+	)
+	return err
+}
