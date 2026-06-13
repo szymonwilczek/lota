@@ -26,9 +26,13 @@ func FuzzReanchorDecision(f *testing.F) {
 		if esrtPresent {
 			cur = &types.ESRTInfo{Present: true, FWVersion: esrtVer}
 		}
+		// current is parsed upstream in production;
+		// malformed log yields a nil parse here, which the decision
+		// must also handle without panic
+		parsedCur, _ := ParseEventLog(current)
 		v, _ := reanchorDecision(ReanchorInputs{
 			BaselineEventLog:    baseline,
-			CurrentEventLog:     current,
+			CurrentParsed:       parsedCur,
 			BaselineESRTVersion: esrtVer,
 			CurrentESRT:         cur,
 			ESRTCapable:         capable,

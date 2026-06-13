@@ -1295,7 +1295,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	st := rs.GetReanchorState(clientID)
 	verdict, reason := reanchorDecision(ReanchorInputs{
 		BaselineEventLog:    st.EventLogBaseline,
-		CurrentEventLog:     report.EventLog,
+		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
 		BaselineESRTVersion: st.ESRTVersion,
 		CurrentESRT:         report.ESRT,
 		ESRTCapable:         st.ESRTCapable,

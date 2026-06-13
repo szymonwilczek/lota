@@ -71,6 +71,16 @@ func varsWith(name string, data []byte) []pcrVar {
 
 func esrt(v uint32) *types.ESRTInfo { return &types.ESRTInfo{Present: true, FWVersion: v} }
 
+// mustParse parses a synthetic event log for the table tests;
+// fixtures are always well-formed, so a parse error is a test bug
+func mustParse(b []byte) *ParsedEventLog {
+	p, err := ParseEventLog(b)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
 func TestReanchorDecision(t *testing.T) {
 	base := pcr7Log(baseVars())
 
@@ -83,7 +93,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "dbx append + firmware forward = strong allow",
 			in: ReanchorInputs{
 				BaselineEventLog:    base,
-				CurrentEventLog:     pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:       mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				BaselineESRTVersion: 700, CurrentESRT: esrt(785), ESRTCapable: true,
 			},
 			want: ReanchorAllow,
@@ -92,7 +102,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "dbx append + firmware version unchanged = LFA",
 			in: ReanchorInputs{
 				BaselineEventLog:    base,
-				CurrentEventLog:     pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:       mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				BaselineESRTVersion: 785, CurrentESRT: esrt(785), ESRTCapable: true,
 			},
 			want: ReanchorLFA,
@@ -101,7 +111,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "no ESRT and never capable = LFA",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				CurrentESRT:      nil, ESRTCapable: false,
 			},
 			want: ReanchorLFA,
@@ -110,7 +120,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "ESRT disappeared after being capable = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				CurrentESRT:      nil, ESRTCapable: true,
 			},
 			want: ReanchorEscalate,
@@ -119,7 +129,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "db changed = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("db", []byte("db-new"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("db", []byte("db-new")))),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -128,7 +138,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "KEK changed = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("KEK", []byte("kek-new"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("KEK", []byte("kek-new")))),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -137,7 +147,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "dbx shrank = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("dbx", []byte("db"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("dbx", []byte("db")))),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -146,7 +156,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "dbx non-append change = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("dbx", []byte("XXXX-different"))),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("dbx", []byte("XXXX-different")))),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -155,7 +165,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "firmware rollback = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog:    base,
-				CurrentEventLog:     pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:       mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				BaselineESRTVersion: 785, CurrentESRT: esrt(700), ESRTCapable: true,
 			},
 			want: ReanchorEscalate,
@@ -164,7 +174,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "Secure Boot disabled in current = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog: base,
-				CurrentEventLog:  pcr7Log(varsWith("SecureBoot", []byte{0})),
+				CurrentParsed:    mustParse(pcr7Log(varsWith("SecureBoot", []byte{0}))),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -173,7 +183,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "no baseline event log = escalate (fail-closed)",
 			in: ReanchorInputs{
 				BaselineEventLog: nil,
-				CurrentEventLog:  base,
+				CurrentParsed:    mustParse(base),
 				CurrentESRT:      esrt(785),
 			},
 			want: ReanchorEscalate,
@@ -182,7 +192,7 @@ func TestReanchorDecision(t *testing.T) {
 			name: "strong but within rate limit = escalate",
 			in: ReanchorInputs{
 				BaselineEventLog:    base,
-				CurrentEventLog:     pcr7Log(varsWith("dbx", []byte("dbx0+more"))),
+				CurrentParsed:       mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more")))),
 				BaselineESRTVersion: 700, CurrentESRT: esrt(785), ESRTCapable: true,
 				LastReanchorAt: time.Now().Add(-24 * time.Hour),
 				Now:            time.Now(),

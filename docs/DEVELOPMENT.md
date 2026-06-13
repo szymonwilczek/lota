@@ -60,6 +60,12 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
 
+The re-anchor discriminator reuses the event log already parsed and
+quote-verified during report verification (`BootFacts.Parsed`) instead of
+parsing it again, and decides the cheap ESRT tier / rate limit before the
+baseline parse + PCR 7 replay, so a client cannot force the expensive path on
+every drift report.
+
 ### Attestation report sections
 Attestation report (`include/attestation.h`, serialized by `src/agent/report.c`,
 parsed by `src/verifier/types/report.go`) ends with optional variable-length sections.

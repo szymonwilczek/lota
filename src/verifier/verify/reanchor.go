@@ -69,11 +69,12 @@ func pcr7Variables(parsed *ParsedEventLog) map[string][]byte {
 }
 
 // ReanchorInputs are the facts the discriminator weighs:
-// the event log captured when the baseline was pinned vs the current one,
+// the event log captured when the baseline was pinned (raw bytes, parsed here once)
+// vs the current one (already parsed and quote-verified upstream, reused as-is),
 // the firmware versions, the sticky ESRT-capability bit, and the rate-limit clock.
 type ReanchorInputs struct {
 	BaselineEventLog    []byte
-	CurrentEventLog     []byte
+	CurrentParsed       *ParsedEventLog
 	BaselineESRTVersion uint32
 	CurrentESRT         *types.ESRTInfo
 	ESRTCapable         bool
@@ -96,16 +97,54 @@ func reanchorDecision(in ReanchorInputs) (ReanchorVerdict, string) {
 	if len(in.BaselineEventLog) == 0 {
 		return ReanchorEscalate, "no baseline event log on record (operator re-baseline required)"
 	}
+	if in.CurrentParsed == nil {
+		return ReanchorEscalate, "current event log unavailable"
+	}
+
+	// cheap checks first, so a client cannot force the expensive baseline
+	// parse + PCR 7 replay-diff on every drift report
+	// assurance tier and the anti-rollback / disappeared-ESRT escalations
+	// are decided from the ESRT alone, then the rate limit short-circuits
+	// before any parsing.
+	verdict := ReanchorAllow
+	if in.CurrentESRT != nil && in.CurrentESRT.Present {
+		switch {
+		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
+			verdict = ReanchorAllow // forward update -> strong
+		case in.CurrentESRT.FWVersion == in.BaselineESRTVersion:
+			verdict = ReanchorLFA // unchanged version despite drift (DIY flash)
+		default:
+			return ReanchorEscalate, "firmware version rolled back"
+		}
+	} else {
+		// no ESRT now:
+		// ESRT that was present before and is gone is suspicious
+		// (a downgrade to the weaker path);
+		// device that never had one falls onto LFA
+		if in.ESRTCapable {
+			return ReanchorEscalate, "ESRT disappeared (was present before)"
+		}
+		verdict = ReanchorLFA
+	}
+
+	interval := ReanchorMinIntervalStrong
+	if verdict == ReanchorLFA {
+		interval = ReanchorMinIntervalLFA
+	}
+	if !in.LastReanchorAt.IsZero() && in.Now.Sub(in.LastReanchorAt) < interval {
+		return ReanchorEscalate, "re-anchor rate limit not elapsed"
+	}
+
+	// expensive checks:
+	// current log was already parsed and quote-verified upstream (reused here);
+	// only the baseline is parsed, and only once the cheap gates above admitted
+	// the report
 	bl, err := ParseEventLog(in.BaselineEventLog)
 	if err != nil {
 		return ReanchorEscalate, "baseline event log unparseable"
 	}
-	cur, err := ParseEventLog(in.CurrentEventLog)
-	if err != nil {
-		return ReanchorEscalate, "current event log unparseable"
-	}
 	bv := pcr7Variables(bl)
-	cv := pcr7Variables(cur)
+	cv := pcr7Variables(in.CurrentParsed)
 
 	// Secure Boot must still be enabled in the current log
 	if sb, ok := cv["SecureBoot"]; !ok || len(sb) == 0 || sb[0] != 1 {
@@ -130,37 +169,6 @@ func reanchorDecision(in ReanchorInputs) (ReanchorVerdict, string) {
 	// no PCR 7 variable may appear or vanish
 	if len(bv) != len(cv) {
 		return ReanchorEscalate, "PCR 7 variable set changed"
-	}
-
-	// ESRT firmware version: assurance tier + anti-rollback
-	verdict := ReanchorAllow
-	if in.CurrentESRT != nil && in.CurrentESRT.Present {
-		switch {
-		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
-			verdict = ReanchorAllow // forward update -> strong
-		case in.CurrentESRT.FWVersion == in.BaselineESRTVersion:
-			verdict = ReanchorLFA // unchanged version despite drift (DIY flash)
-		default:
-			return ReanchorEscalate, "firmware version rolled back"
-		}
-	} else {
-		// No ESRT now:
-		// ESRT that was present before and is gone is suspicious
-		// (a downgrade to the weaker path);
-		// device that never had one falls onto LFA
-		if in.ESRTCapable {
-			return ReanchorEscalate, "ESRT disappeared (was present before)"
-		}
-		verdict = ReanchorLFA
-	}
-
-	// rate limit per tier
-	interval := ReanchorMinIntervalStrong
-	if verdict == ReanchorLFA {
-		interval = ReanchorMinIntervalLFA
-	}
-	if !in.LastReanchorAt.IsZero() && in.Now.Sub(in.LastReanchorAt) < interval {
-		return ReanchorEscalate, "re-anchor rate limit not elapsed"
 	}
 
 	if verdict == ReanchorLFA {
