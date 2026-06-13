@@ -802,15 +802,19 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	if lfa {
 		lfaVal = 1
 	}
+	// LFA re-anchor applies automatically but flags the client for
+	// post-fact operator review;
+	// strong re-anchor clears any prior flag
 	if _, err = tx.Exec(
 		`UPDATE baselines SET pcr0 = ?, pcr1 = ?, pcr7 = ?, boot_last_seen = ?,
 		   eventlog_baseline = ?, esrt_version = ?,
 		   esrt_capable = MAX(COALESCE(esrt_capable, 0), ?),
-		   lfa = ?, reanchor_count = COALESCE(reanchor_count, 0) + 1,
+		   lfa = ?, lfa_review_pending = ?,
+		   reanchor_count = COALESCE(reanchor_count, 0) + 1,
 		   last_reanchor_at = ?
 		 WHERE client_id = ?`,
 		boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now,
-		eventLog, esrtVersion, capVal, lfaVal, now, clientID,
+		eventLog, esrtVersion, capVal, lfaVal, lfaVal, now, clientID,
 	); err != nil {
 		return err
 	}
@@ -838,12 +842,32 @@ func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
 	return err
 }
 
-// ApproveLFA marks the client's LFA re-anchor path as operator-approved
-// (SQLite) by setting the lfa flag without touching the baseline.
-func (s *SQLiteBaselineStore) ApproveLFA(clientID string) error {
+// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
+// (SQLite).
+func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		"SELECT client_id FROM baselines WHERE lfa_review_pending = 1 ORDER BY client_id")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// AcknowledgeLFAReview clears a client's pending-review flag (SQLite).
+func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		"UPDATE baselines SET lfa = 1 WHERE client_id = ?", clientID)
+		"UPDATE baselines SET lfa_review_pending = 0 WHERE client_id = ?", clientID)
 	return err
 }

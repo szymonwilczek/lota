@@ -154,6 +154,7 @@ var migrations = []migration{
 			ALTER TABLE baselines ADD COLUMN esrt_version INTEGER;
 			ALTER TABLE baselines ADD COLUMN esrt_capable INTEGER DEFAULT 0;
 			ALTER TABLE baselines ADD COLUMN lfa INTEGER DEFAULT 0;
+			ALTER TABLE baselines ADD COLUMN lfa_review_pending INTEGER DEFAULT 0;
 			ALTER TABLE baselines ADD COLUMN reanchor_count INTEGER DEFAULT 0;
 			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMP;
 			CREATE TABLE baseline_archive (

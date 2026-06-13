@@ -187,10 +187,12 @@ contract:
    baseline itself when the drift preserves the Secure Boot root of
    trust (PK/KEK/db unchanged, `dbx` append-only, Secure Boot still on,
    firmware version not rolled back); a host with no ESRT firmware
-   version takes a Low-Firmware-Assurance path whose first re-anchor
-   needs an admin approval call. See PRODUCTION_BRINGUP.md. This is a
-   diverse-fleet convenience only; do not enable it where raw PCR
-   0/1/7 are pinned in policy.
+   version takes a Low-Firmware-Assurance path. The LFA re-anchor also
+   applies automatically -- the player is never blocked -- but flags the
+   device for post-fact operator review (`GET /api/v1/reanchor/review`,
+   cleared with `POST /api/v1/clients/{id}/reanchor-review-ack`). See
+   PRODUCTION_BRINGUP.md. This is a diverse-fleet convenience only; do
+   not enable it where raw PCR 0/1/7 are pinned in policy.
 
 A short-lived `--allow-tofu-boot-baseline` switch on the verifier exists
 for closed test fixtures. It explicitly weakens the contract above by

@@ -1505,7 +1505,7 @@ func assertMetric(t *testing.T, body, metric, expectedValue string) {
 	t.Errorf("Metric %s not found in output", metric)
 }
 
-func TestReanchorApproveEndpoint(t *testing.T) {
+func TestReanchorReviewEndpoints(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	bs := verify.NewBaselineStore()
@@ -1515,6 +1515,10 @@ func TestReanchorApproveEndpoint(t *testing.T) {
 	var b verify.BootBaseline
 	b.PCR0[0], b.PCR1[0], b.PCR7[0] = 1, 2, 7
 	bs.CheckAndUpdateBootPCRs("dev1", b)
+	// simulate an LFA re-anchor: flags dev1 for post-fact review
+	if err := bs.ArchiveAndReanchor("dev1", b, []byte("log"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("seed LFA re-anchor: %v", err)
+	}
 
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
@@ -1529,26 +1533,38 @@ func TestReanchorApproveEndpoint(t *testing.T) {
 	NewAPIHandler(mux, v, srv, store.NewMemoryAuditLog(), nil, m,
 		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
 
-	// without admin auth -> rejected
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-approve", nil)
+	// review list (reader) lists dev1
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/reanchor/review", nil)
+	req.Header.Set("Authorization", "Bearer reader-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized && rr.Code != http.StatusForbidden {
-		t.Fatalf("unauthenticated approve: got %d, want 401/403", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("review list: got %d, body %s", rr.Code, rr.Body.String())
 	}
-	if bs.GetReanchorState("dev1").LFA {
-		t.Fatal("LFA must not be set without admin auth")
+	if !strings.Contains(rr.Body.String(), "dev1") {
+		t.Errorf("review list should contain dev1, got %s", rr.Body.String())
 	}
 
-	// with admin auth -> approved, LFA flag set
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-approve", nil)
+	// acknowledge without admin auth -> rejected, still pending
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized && rr.Code != http.StatusForbidden {
+		t.Fatalf("unauthenticated ack: got %d, want 401/403", rr.Code)
+	}
+	if len(bs.ListLFAReviewPending()) != 1 {
+		t.Fatal("review must stay pending without admin auth")
+	}
+
+	// acknowledge with admin auth -> cleared
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-review-ack", nil)
 	req.Header.Set("Authorization", "Bearer admin-key")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("admin approve: got %d, body %s", rr.Code, rr.Body.String())
+		t.Fatalf("admin ack: got %d, body %s", rr.Code, rr.Body.String())
 	}
-	if !bs.GetReanchorState("dev1").LFA {
-		t.Error("LFA flag should be set after operator approval")
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after admin acknowledge")
 	}
 }

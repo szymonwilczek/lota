@@ -1320,20 +1320,17 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		v.metrics.Reanchors.Inc("strong")
 		return true
 	case ReanchorLFA:
-		// first LFA re-anchor needs operator approval (D4b);
-		// approval path sets the lfa flag, after which later LFA
-		// re-anchors apply automatically
-		if !st.LFA {
-			logging.Security(clog, "boot baseline LFA re-anchor pending operator approval", "reason", reason)
-			v.metrics.Reanchors.Inc("pending")
-			return false
-		}
+		// LFA re-anchor applies automatically (no approval gate):
+		// player keeps attesting after a firmware update.
+		// ArchiveAndReanchor flags the client for post-fact operator review;
+		// the alert below and the review list (GET /api/v1/reanchor/review)
+		// surface it so an operator can inspect and, if needed, revoke or ban.
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
 			esrtVer, esrtPresent, true, "lfa"); err != nil {
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
-		logging.Security(clog, "boot baseline re-anchored (low-firmware-assurance)", "reason", reason)
+		logging.Security(clog, "ALERT: boot baseline re-anchored on the low-firmware-assurance path (operator review recommended)", "reason", reason)
 		v.metrics.Reanchors.Inc("lfa")
 		return true
 	default:
@@ -1343,14 +1340,24 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	}
 }
 
-// ApproveReanchorLFA records operator approval for a client's
-// Low-Firmware-Assurance re-anchor path.
-// After approval the next qualifying LFA firmware drift re-anchors automatically.
-// Returns an error if the baseline store does not support re-anchor.
-func (v *Verifier) ApproveReanchorLFA(clientID string) error {
+// ListReanchorReview returns the clients that re-anchored on the
+// Low-Firmware-Assurance path and have not yet been reviewed by an operator.
+// List is informational (post-fact); LFA re-anchors are not blocked on it.
+func (v *Verifier) ListReanchorReview() ([]string, error) {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return nil, fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.ListLFAReviewPending(), nil
+}
+
+// AcknowledgeReanchorReview clears a client's pending-review flag once an
+// operator has inspected its LFA re-anchor.
+// It does not change the baseline.
+func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	rs, ok := v.baselineStore.(ReanchorStorer)
 	if !ok {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
-	return rs.ApproveLFA(clientID)
+	return rs.AcknowledgeLFAReview(clientID)
 }

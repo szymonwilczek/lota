@@ -331,13 +331,18 @@ host until an operator clears its baseline. `-enable-self-service-reanchor`
 lets the verifier re-pin the per-device baseline itself when the drift
 preserves the Secure Boot root of trust (PK/KEK/db unchanged, `dbx`
 append-only, Secure Boot still on, firmware version not rolled back); a
-hardware platform that reports no firmware version (`ESRT`) takes a
-Low-Firmware-Assurance path whose first re-anchor needs operator approval.
-That approval is a single admin call,
-`POST /api/v1/clients/{clientID}/reanchor-approve`; afterwards the next
-qualifying LFA drift for that device re-anchors on its own. Leave the flag
-off for the enterprise profile, where firmware drift is a feature and
-re-baselining stays a deliberate operator action.
+hardware platform that reports no firmware version (`ESRT`, common on DIY
+boards flashed with the vendor tool rather than a UEFI capsule) takes a
+Low-Firmware-Assurance path. The LFA re-anchor also applies automatically --
+the player is never blocked waiting on the operator -- but it flags the
+device for post-fact review: list flagged devices with
+`GET /api/v1/reanchor/review` and clear one after inspecting it with
+`POST /api/v1/clients/{clientID}/reanchor-review-ack` (each LFA re-anchor is
+also logged at security level and counted in the `lfa` re-anchor metric). If
+a reviewed re-anchor looks wrong, revoke or ban the device through the
+existing endpoints. Leave the flag off for the enterprise profile, where
+firmware drift is a feature and re-baselining stays a deliberate operator
+action.
 
 The agent rotates the AIK on its own schedule (`--aik-ttl`, default 30d).
 It surfaces the rotation state over D-Bus so an operator -- or a fleet

@@ -112,11 +112,15 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 
-	// approve a client's Low-Firmware-Assurance re-anchor (admin);
-	// more specific than the POST /clients/ pattern above,
-	// so Go's mux routes it here
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-approve",
-		h.requireAdmin(h.handleReanchorApprove))
+	// post-fact review of Low-Firmware-Assurance re-anchors.
+	// LFA re-anchors apply automatically; these endpoints let an operator see
+	// which clients took that path and acknowledge having reviewed them.
+	// Acknowledge route is more specific than the POST /clients/ pattern
+	// above, so Go's mux routes it here.
+	mux.HandleFunc("GET /api/v1/reanchor/review",
+		h.requireReader(h.handleReanchorReviewList))
+	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
+		h.requireAdmin(h.handleReanchorReviewAck))
 
 	// hardware ban management (admin auth required)
 	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
@@ -1243,19 +1247,32 @@ func validateJSONComplexity(body []byte) error {
 	return nil
 }
 
-// handleReanchorApprove records operator approval of a client's
-// Low-Firmware-Assurance re-anchor path (admin only).
-// Next qualifying LFA firmware drift then re-anchors automatically.
-func (h *APIHandler) handleReanchorApprove(w http.ResponseWriter, r *http.Request) {
+// handleReanchorReviewList returns the clients that re-anchored on the
+// Low-Firmware-Assurance path and have not yet been reviewed (reader).
+func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Request) {
+	clients, err := h.verifier.ListReanchorReview()
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	if clients == nil {
+		clients = []string{}
+	}
+	writeJSON(w, map[string]any{"pending_review": clients, "count": len(clients)})
+}
+
+// handleReanchorReviewAck clears a client's pending-review flag once an
+// operator has inspected its LFA re-anchor (admin only).
+func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
 		return
 	}
-	if err := h.verifier.ApproveReanchorLFA(clientID); err != nil {
+	if err := h.verifier.AcknowledgeReanchorReview(clientID); err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
 		return
 	}
-	h.log.Info("operator approved Low-Firmware-Assurance re-anchor", "client_id", clientID)
-	writeJSON(w, map[string]string{"status": "approved", "client_id": clientID})
+	h.log.Info("operator acknowledged LFA re-anchor review", "client_id", clientID)
+	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
 }

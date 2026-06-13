@@ -485,19 +485,35 @@ func TestRecordBootEvidence_MemoryAndSQLite(t *testing.T) {
 	}
 }
 
-func TestApproveLFA_MemoryAndSQLite(t *testing.T) {
+func TestLFAReview_MemoryAndSQLite(t *testing.T) {
+	// in-memory: an LFA re-anchor flags the client for review;
+	// strong re-anchor clears it; acknowledge clears it too
 	bs := NewBaselineStore()
 	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
-	if bs.GetReanchorState("c").LFA {
-		t.Fatal("LFA should be false before approval")
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Fatal("no review pending before any LFA re-anchor")
 	}
-	if err := bs.ApproveLFA("c"); err != nil {
-		t.Fatalf("ApproveLFA: %v", err)
+	if err := bs.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+		t.Fatal(err)
 	}
-	if !bs.GetReanchorState("c").LFA {
-		t.Error("LFA should be true after approval (in-memory)")
+	if got := bs.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("expected c pending review, got %v", got)
+	}
+	if err := bs.AcknowledgeLFAReview("c"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after acknowledge (in-memory)")
+	}
+	// strong re-anchor must not leave the client on the review list
+	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("strong re-anchor must not flag for review")
 	}
 
+	// SQLite: same contract
 	dir := t.TempDir()
 	db, err := store.OpenDB(dir + "/b.sqlite")
 	if err != nil {
@@ -509,10 +525,16 @@ func TestApproveLFA_MemoryAndSQLite(t *testing.T) {
 	pcr14[0] = 0xDE
 	sq.CheckAndUpdate("c", pcr14)
 	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
-	if err := sq.ApproveLFA("c"); err != nil {
-		t.Fatalf("sqlite ApproveLFA: %v", err)
+	if err := sq.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+		t.Fatal(err)
 	}
-	if !sq.GetReanchorState("c").LFA {
-		t.Error("LFA should be true after approval (SQLite)")
+	if got := sq.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("sqlite: expected c pending, got %v", got)
+	}
+	if err := sq.AcknowledgeLFAReview("c"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sq.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after acknowledge (SQLite)")
 	}
 }

@@ -886,11 +886,15 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	); err != nil {
 		return err
 	}
+	// LFA re-anchor applies automatically but flags the client for post-fact
+	// operator review;
+	// strong re-anchor clears any prior flag
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE baselines SET pcr0 = $1, pcr1 = $2, pcr7 = $3, boot_last_seen = $4,
 		   eventlog_baseline = $5, esrt_version = $6,
 		   esrt_capable = (esrt_capable OR $7),
-		   lfa = $8, reanchor_count = reanchor_count + 1, last_reanchor_at = $9
+		   lfa = $8, lfa_review_pending = $8,
+		   reanchor_count = reanchor_count + 1, last_reanchor_at = $9
 		 WHERE client_id = $10`,
 		boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now,
 		eventLog, int64(esrtVersion), esrtCapable, lfa, now, clientID,
@@ -922,12 +926,32 @@ func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	return err
 }
 
-// ApproveLFA marks the client's LFA re-anchor path as operator-approved
-// (Postgres) by setting the lfa flag without touching the baseline.
-func (s *PostgresBaselineStore) ApproveLFA(clientID string) error {
+// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
+// (Postgres).
+func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.QueryContext(context.Background(),
+		"SELECT client_id FROM baselines WHERE lfa_review_pending = TRUE ORDER BY client_id")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
+func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(context.Background(),
-		"UPDATE baselines SET lfa = TRUE WHERE client_id = $1", clientID)
+		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
 	return err
 }

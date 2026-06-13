@@ -128,6 +128,7 @@ var pgMigrations = []migration{
 			ALTER TABLE baselines ADD COLUMN esrt_version BIGINT;
 			ALTER TABLE baselines ADD COLUMN esrt_capable BOOLEAN NOT NULL DEFAULT FALSE;
 			ALTER TABLE baselines ADD COLUMN lfa BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE baselines ADD COLUMN lfa_review_pending BOOLEAN NOT NULL DEFAULT FALSE;
 			ALTER TABLE baselines ADD COLUMN reanchor_count BIGINT NOT NULL DEFAULT 0;
 			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMPTZ;
 

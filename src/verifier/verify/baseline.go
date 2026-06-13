@@ -350,6 +350,7 @@ type ReanchorState struct {
 	ESRTVersion      uint32
 	ESRTCapable      bool
 	LFA              bool
+	LFAReviewPending bool
 	ReanchorCount    int
 	LastReanchorAt   time.Time
 }
@@ -380,12 +381,18 @@ type ReanchorStorer interface {
 	RecordBootEvidence(clientID string, eventLog []byte, esrtVersion uint32,
 		esrtPresent bool) error
 
-	// ApproveLFA records operator approval for the Low-Firmware-Assurance
-	// re-anchor path of a client by setting its lfa flag.
-	// After approval the next qualifying LFA drift re-anchors automatically
-	// (the first one is held pending until then).
-	// It does not itself re-anchor or touch the baseline.
-	ApproveLFA(clientID string) error
+	// ListLFAReviewPending returns the clients that have re-anchored on the
+	// Low-Firmware-Assurance path and have not yet been reviewed by an
+	// operator.
+	// LFA re-anchors apply automatically (no approval gate);
+	// this is a post-fact review queue, not a blocking one.
+	ListLFAReviewPending() []string
+
+	// AcknowledgeLFAReview clears a client's pending-review flag once an
+	// operator has looked at its LFA re-anchor.
+	// It does not touch the baseline;
+	// it only takes the client off the review list.
+	AcknowledgeLFAReview(clientID string) error
 }
 
 // manages per-client PCR baselines (TOFU)
@@ -534,6 +541,10 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ESRTVersion = esrtVersion
 	st.ESRTCapable = st.ESRTCapable || esrtCapable
 	st.LFA = lfa
+	if lfa {
+		// auto re-anchor; flag for post-fact operator review
+		st.LFAReviewPending = true
+	}
 	st.ReanchorCount++
 	st.LastReanchorAt = now
 	s.reanchor[clientID] = st
@@ -560,22 +571,27 @@ func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 	return nil
 }
 
-// ApproveLFA marks the client's LFA re-anchor path as operator-approved
+// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
 // (in-memory).
-// Requires an existing baseline row.
-func (s *BaselineStore) ApproveLFA(clientID string) error {
+func (s *BaselineStore) ListLFAReviewPending() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []string
+	for id, st := range s.reanchor {
+		if st != nil && st.LFAReviewPending {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// AcknowledgeLFAReview clears a client's pending-review flag (in-memory).
+func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.bootBaselines[clientID]; !ok {
-		return nil
+	if st := s.reanchor[clientID]; st != nil {
+		st.LFAReviewPending = false
 	}
-	st := s.reanchor[clientID]
-	if st == nil {
-		st = &ReanchorState{Present: true}
-	}
-	st.Present = true
-	st.LFA = true
-	s.reanchor[clientID] = st
 	return nil
 }
 

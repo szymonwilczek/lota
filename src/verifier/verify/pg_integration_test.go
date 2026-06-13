@@ -403,4 +403,16 @@ func TestPostgresReanchor(t *testing.T) {
 	if st.ReanchorCount != 2 || !st.ESRTCapable || !st.LFA {
 		t.Fatalf("after lfa re-anchor: %+v", st)
 	}
+
+	// LFA re-anchor flagged the client for post-fact review
+	pending := bs.ListLFAReviewPending()
+	if len(pending) != 1 || pending[0] != cid {
+		t.Fatalf("expected %q pending review, got %v", cid, pending)
+	}
+	if err := bs.AcknowledgeLFAReview(cid); err != nil {
+		t.Fatalf("AcknowledgeLFAReview: %v", err)
+	}
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after acknowledge (Postgres)")
+	}
 }
