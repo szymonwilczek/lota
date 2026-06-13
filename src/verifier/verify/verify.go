@@ -1342,3 +1342,15 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		return false
 	}
 }
+
+// ApproveReanchorLFA records operator approval for a client's
+// Low-Firmware-Assurance re-anchor path.
+// After approval the next qualifying LFA firmware drift re-anchors automatically.
+// Returns an error if the baseline store does not support re-anchor.
+func (v *Verifier) ApproveReanchorLFA(clientID string) error {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.ApproveLFA(clientID)
+}

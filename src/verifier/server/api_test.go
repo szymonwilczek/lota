@@ -1504,3 +1504,51 @@ func assertMetric(t *testing.T, body, metric, expectedValue string) {
 	}
 	t.Errorf("Metric %s not found in output", metric)
 }
+
+func TestReanchorApproveEndpoint(t *testing.T) {
+	aikStore := newCertStore(t)
+
+	bs := verify.NewBaselineStore()
+	var pcr14 [32]byte
+	pcr14[0] = 0xDE
+	bs.CheckAndUpdate("dev1", pcr14)
+	var b verify.BootBaseline
+	b.PCR0[0], b.PCR1[0], b.PCR7[0] = 1, 2, 7
+	bs.CheckAndUpdateBootPCRs("dev1", b)
+
+	m := metrics.New()
+	cfg := verify.DefaultConfig()
+	cfg.RequireCert = false
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.BaselineStore = bs
+	cfg.Metrics = m
+	v := verify.NewVerifier(cfg, aikStore)
+	srv := &Server{verifier: v, addr: ":8443"}
+	mux := http.NewServeMux()
+	NewAPIHandler(mux, v, srv, store.NewMemoryAuditLog(), nil, m,
+		store.NewMemoryAttestationLog(), "admin-key", "reader-key")
+
+	// without admin auth -> rejected
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-approve", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized && rr.Code != http.StatusForbidden {
+		t.Fatalf("unauthenticated approve: got %d, want 401/403", rr.Code)
+	}
+	if bs.GetReanchorState("dev1").LFA {
+		t.Fatal("LFA must not be set without admin auth")
+	}
+
+	// with admin auth -> approved, LFA flag set
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/clients/dev1/reanchor-approve", nil)
+	req.Header.Set("Authorization", "Bearer admin-key")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("admin approve: got %d, body %s", rr.Code, rr.Body.String())
+	}
+	if !bs.GetReanchorState("dev1").LFA {
+		t.Error("LFA flag should be set after operator approval")
+	}
+}

@@ -379,6 +379,13 @@ type ReanchorStorer interface {
 	// verifier treats as fail-closed (operator re-baseline) at re-anchor time.
 	RecordBootEvidence(clientID string, eventLog []byte, esrtVersion uint32,
 		esrtPresent bool) error
+
+	// ApproveLFA records operator approval for the Low-Firmware-Assurance
+	// re-anchor path of a client by setting its lfa flag.
+	// After approval the next qualifying LFA drift re-anchors automatically
+	// (the first one is held pending until then).
+	// It does not itself re-anchor or touch the baseline.
+	ApproveLFA(clientID string) error
 }
 
 // manages per-client PCR baselines (TOFU)
@@ -549,6 +556,25 @@ func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
 	st.EventLogBaseline = append([]byte(nil), eventLog...)
 	st.ESRTVersion = esrtVersion
 	st.ESRTCapable = st.ESRTCapable || esrtPresent
+	s.reanchor[clientID] = st
+	return nil
+}
+
+// ApproveLFA marks the client's LFA re-anchor path as operator-approved
+// (in-memory).
+// Requires an existing baseline row.
+func (s *BaselineStore) ApproveLFA(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.bootBaselines[clientID]; !ok {
+		return nil
+	}
+	st := s.reanchor[clientID]
+	if st == nil {
+		st = &ReanchorState{Present: true}
+	}
+	st.Present = true
+	st.LFA = true
 	s.reanchor[clientID] = st
 	return nil
 }

@@ -333,8 +333,11 @@ preserves the Secure Boot root of trust (PK/KEK/db unchanged, `dbx`
 append-only, Secure Boot still on, firmware version not rolled back); a
 hardware platform that reports no firmware version (`ESRT`) takes a
 Low-Firmware-Assurance path whose first re-anchor needs operator approval.
-Leave the flag off for the enterprise profile, where firmware drift is a
-feature and re-baselining stays a deliberate operator action.
+That approval is a single admin call,
+`POST /api/v1/clients/{clientID}/reanchor-approve`; afterwards the next
+qualifying LFA drift for that device re-anchors on its own. Leave the flag
+off for the enterprise profile, where firmware drift is a feature and
+re-baselining stays a deliberate operator action.
 
 The agent rotates the AIK on its own schedule (`--aik-ttl`, default 30d).
 It surfaces the rotation state over D-Bus so an operator -- or a fleet

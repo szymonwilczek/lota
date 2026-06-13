@@ -921,3 +921,13 @@ func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	)
 	return err
 }
+
+// ApproveLFA marks the client's LFA re-anchor path as operator-approved
+// (Postgres) by setting the lfa flag without touching the baseline.
+func (s *PostgresBaselineStore) ApproveLFA(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(context.Background(),
+		"UPDATE baselines SET lfa = TRUE WHERE client_id = $1", clientID)
+	return err
+}

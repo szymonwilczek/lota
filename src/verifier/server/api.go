@@ -112,6 +112,12 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 
+	// approve a client's Low-Firmware-Assurance re-anchor (admin);
+	// more specific than the POST /clients/ pattern above,
+	// so Go's mux routes it here
+	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-approve",
+		h.requireAdmin(h.handleReanchorApprove))
+
 	// hardware ban management (admin auth required)
 	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
 	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
@@ -1235,4 +1241,21 @@ func validateJSONComplexity(body []byte) error {
 	}
 
 	return nil
+}
+
+// handleReanchorApprove records operator approval of a client's
+// Low-Firmware-Assurance re-anchor path (admin only).
+// Next qualifying LFA firmware drift then re-anchors automatically.
+func (h *APIHandler) handleReanchorApprove(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("clientID")
+	if clientID == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
+		return
+	}
+	if err := h.verifier.ApproveReanchorLFA(clientID); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	h.log.Info("operator approved Low-Firmware-Assurance re-anchor", "client_id", clientID)
+	writeJSON(w, map[string]string{"status": "approved", "client_id": clientID})
 }

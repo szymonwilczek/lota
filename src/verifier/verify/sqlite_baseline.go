@@ -837,3 +837,13 @@ func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
 	)
 	return err
 }
+
+// ApproveLFA marks the client's LFA re-anchor path as operator-approved
+// (SQLite) by setting the lfa flag without touching the baseline.
+func (s *SQLiteBaselineStore) ApproveLFA(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		"UPDATE baselines SET lfa = 1 WHERE client_id = ?", clientID)
+	return err
+}

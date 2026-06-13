@@ -484,3 +484,35 @@ func TestRecordBootEvidence_MemoryAndSQLite(t *testing.T) {
 		t.Errorf("RecordBootEvidence must not bump reanchor_count, got %d", st.ReanchorCount)
 	}
 }
+
+func TestApproveLFA_MemoryAndSQLite(t *testing.T) {
+	bs := NewBaselineStore()
+	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if bs.GetReanchorState("c").LFA {
+		t.Fatal("LFA should be false before approval")
+	}
+	if err := bs.ApproveLFA("c"); err != nil {
+		t.Fatalf("ApproveLFA: %v", err)
+	}
+	if !bs.GetReanchorState("c").LFA {
+		t.Error("LFA should be true after approval (in-memory)")
+	}
+
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	sq := NewSQLiteBaselineStore(db)
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	sq.CheckAndUpdate("c", pcr14)
+	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := sq.ApproveLFA("c"); err != nil {
+		t.Fatalf("sqlite ApproveLFA: %v", err)
+	}
+	if !sq.GetReanchorState("c").LFA {
+		t.Error("LFA should be true after approval (SQLite)")
+	}
+}
