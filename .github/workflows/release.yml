@@ -78,9 +78,9 @@ jobs:
         run: |
           set -eu
           mkdir -p release
-          artifacts="lota-agent lota-verifier lota-attest-ca lota-pcr14-lock \
-            liblotagaming.so liblotaserver.so liblota_wine_hook.so \
-            liblota_anticheat.so lota_lsm.bpf.o"
+          artifacts="lota-agent lota-install lota-verifier lota-attest-ca \
+            lota-pcr14-lock liblotagaming.so liblotaserver.so \
+            liblota_wine_hook.so liblota_anticheat.so lota_lsm.bpf.o"
           for a in $artifacts; do
             cp "build/$a" "release/$a"
           done
