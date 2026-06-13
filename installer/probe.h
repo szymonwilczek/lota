@@ -48,6 +48,13 @@ int probe_fsverity_enable(const char *path);
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
 int probe_secureboot(void);
 
+/* 1 when the platform exposes an ESRT System Firmware entry (fw_type == 1),
+ * 0 otherwise.
+ * Informational only: it tells the player whether a future self-service
+ * re-anchor takes the strong (firmware-version) path or the
+ * Low-Firmware-Assurance path. Many DIY boards expose no ESRT. */
+int probe_esrt_system_firmware_present(void);
+
 /* Pure parser:
  * 0 when the cmdline buffer carries ima_appraise=enforce|fix,
  * -EPERM otherwise.

@@ -5,9 +5,11 @@
 
 #include "probe.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -425,4 +427,35 @@ int probe_conf_has_key(const char *conf_path, const char *key)
 	if (ret < 0)
 		return ret;
 	return probe_conf_buf_has_key(buf, key);
+}
+
+/* 1 when an ESRT System Firmware entry (fw_type == 1) exists, else 0. */
+int probe_esrt_system_firmware_present(void)
+{
+	static const char *base = "/sys/firmware/efi/esrt/entries";
+	DIR *d;
+	struct dirent *de;
+	int present = 0;
+
+	d = opendir(base);
+	if (!d)
+		return 0;
+
+	while (!present && (de = readdir(d)) != NULL) {
+		char path[512];
+		char buf[32];
+
+		if (de->d_name[0] == '.')
+			continue;
+		if (snprintf(path, sizeof(path), "%s/%s/fw_type", base,
+			     de->d_name) >= (int)sizeof(path))
+			continue;
+		if (probe_read_text(path, buf, sizeof(buf)) != 0)
+			continue;
+		if (atoi(buf) == 1) /* ESRT_FW_TYPE_SYSTEM */
+			present = 1;
+	}
+
+	closedir(d);
+	return present;
 }

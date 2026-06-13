@@ -797,6 +797,16 @@ int install_self_check(struct install_ctx *ctx)
 		ok = 0;
 	}
 
+	/* Informational:
+	 * tells the player which firmware-update recovery path this machine
+	 * will take if the operator runs a self-service re-anchor verifier.
+	 * Not a pass/fail gate! */
+	ui_kv(&ctx->ui, "Firmware version reporting (ESRT)",
+	      probe_esrt_system_firmware_present()
+		  ? "present (firmware re-anchor uses the strong path)"
+		  : "absent (firmware re-anchor is low-assurance; the first "
+		    "one needs operator approval)");
+
 	if (ctx->opts.verifier) {
 		const char *argv[8];
 		int n = 0;
