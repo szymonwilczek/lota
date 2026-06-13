@@ -55,6 +55,10 @@ int probe_secureboot(void);
  * Low-Firmware-Assurance path. Many DIY boards expose no ESRT. */
 int probe_esrt_system_firmware_present(void);
 
+/* Path-parameterized variant behind the fixed-path wrapper above; base is
+ * the ESRT entries directory. Lets tests point at a fixture tree. */
+int probe_esrt_system_firmware_present_at(const char *base);
+
 /* Pure parser:
  * 0 when the cmdline buffer carries ima_appraise=enforce|fix,
  * -EPERM otherwise.
