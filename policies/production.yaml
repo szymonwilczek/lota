@@ -44,7 +44,13 @@ description: "Production policy - customize PCR values for your environment"
 #     hashes the per-machine root=UUID. Enrollment instead rides
 #     require_secureboot below (see policies/README.md, "Boot
 #     enrollment ceremony", path 3) and the cmdline is enforced
-#     machine-independently by require_cmdline_policy.
+#     machine-independently by require_cmdline_policy. A later firmware
+#     update shifts each device's PCR 0/1; start the verifier with
+#     -enable-self-service-reanchor so a drift that preserves the Secure
+#     Boot root of trust re-pins the baseline without operator action
+#     (see PRODUCTION_BRINGUP.md). Do NOT enable it for a homogeneous
+#     fleet that pins raw PCR 0/1/7 above - there a drift is a real
+#     mismatch the operator should review.
 pcrs:
   # 0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
   # 1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"

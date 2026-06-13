@@ -180,6 +180,18 @@ contract:
    default) for the kernel command line, and see
    docs/THREAT_MODEL.md for the full residual-risk statement.
 
+   Because the per-device PCR 0/1/7 row is a rollback anchor, a later
+   *legitimate* firmware update (BIOS) also shifts PCR 0/1 and would
+   reject the device until an operator clears its row. Start the
+   verifier with `-enable-self-service-reanchor` to let it re-pin the
+   baseline itself when the drift preserves the Secure Boot root of
+   trust (PK/KEK/db unchanged, `dbx` append-only, Secure Boot still on,
+   firmware version not rolled back); a host with no ESRT firmware
+   version takes a Low-Firmware-Assurance path whose first re-anchor
+   needs an admin approval call. See PRODUCTION_BRINGUP.md. This is a
+   diverse-fleet convenience only; do not enable it where raw PCR
+   0/1/7 are pinned in policy.
+
 A short-lived `--allow-tofu-boot-baseline` switch on the verifier exists
 for closed test fixtures. It explicitly weakens the contract above by
 accepting whatever PCR 0/1/7 the first attestation reports regardless
