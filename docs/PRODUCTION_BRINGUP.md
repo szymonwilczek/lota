@@ -296,8 +296,8 @@ line enters `sources`. See
 [`configs/ek-roots/README.md`](../configs/ek-roots/README.md) for the full
 flow.
 
-Enroll the agent once per host (repeat before the certificate TTL
-expires, default 24h):
+Enroll the agent once per host (the daemon then renews the certificate on its
+own before the TTL, default 24h, expires):
 
 ```sh
 sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
@@ -306,9 +306,13 @@ sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
 # also records the CA endpoint for guided re-enrollment
 ```
 
-The first enrollment records the CA endpoint, so a refresh -- before the
-certificate TTL expires, or after the agent rotates the AIK -- is a single
-guided command with no CA arguments and no manual CA steps:
+The first enrollment records the CA endpoint, so the running agent renews the
+certificate on its own against that endpoint as it nears expiry (it re-enrolls
+once the cert enters its final third of validity, backing off when the CA is
+unreachable). The renewal is automatic whenever an endpoint is on disk, so an
+enrolled host needs no scheduled `--reenroll`. The same guided command stays
+available as a manual override -- before the certificate TTL expires, or after
+the agent rotates the AIK -- with no CA arguments and no manual CA steps:
 
 ```sh
 sudo lota-agent --reenroll

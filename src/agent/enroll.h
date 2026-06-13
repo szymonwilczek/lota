@@ -113,4 +113,16 @@ int do_enroll(const char *server, int port, const char *ca_cert,
  */
 int do_reenroll(void);
 
+/*
+ * Daemon-side certificate renewal: reuse the recorded CA endpoint and run a
+ * fresh credential activation against the CA using the already-provisioned
+ * AIK in tpm, refreshing LOTA_AIK_CERT_PATH and the recorded generation.
+ * Caller owns TPM and network initialization (unlike do_reenroll, this does
+ * not bring up the TPM or the global net layer).
+ * Returns 0 on success, or a negative errno on failure:
+ * -ENOENT when no endpoint was recorded, so the caller can disable
+ * auto-renewal.
+ */
+int enroll_renew_cert(struct tpm_context *tpm);
+
 #endif /* LOTA_AGENT_ENROLL_H */

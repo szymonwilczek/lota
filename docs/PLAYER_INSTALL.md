@@ -101,8 +101,10 @@ installer cannot report green on a host the agent would refuse.
    socket.
 10. **Enrollment** - the TPM proves itself to the operator's
     attestation CA (credential activation) and receives a short-lived
-    AIK certificate. An expired certificate is refreshed with the
-    recorded endpoint (`lota-agent --reenroll`), no flags needed.
+    AIK certificate. The running agent renews that certificate on its
+    own against the recorded endpoint as it nears expiry, so no terminal
+    is needed after install; `lota-agent --reenroll` stays as a manual
+    fallback.
 
 Run ends with a self-check (integrity floor, fs-verity, service,
 certificate, and - when `--verifier` is given - a full attestation
