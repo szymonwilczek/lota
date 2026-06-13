@@ -37,7 +37,7 @@ bytes.
 git checkout vX.Y.Z          # the released tag
 make reproducible-build      # builds into ./build
 cd build && sha256sum -- \
-  lota-agent lota-verifier lota-attest-ca lota-pcr14-lock \
+  lota-agent lota-install lota-verifier lota-attest-ca lota-pcr14-lock \
   liblotagaming.so liblotaserver.so liblota_wine_hook.so \
   liblota_anticheat.so lota_lsm.bpf.o
 ```
