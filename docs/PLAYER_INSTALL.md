@@ -133,12 +133,15 @@ bundle.
 
 ## Pausing and removing
 
-- **Pause:** `sudo lota-agent --shutdown`. The agent deliberately
-  cannot be killed (the kill-block is the anti-tamper surface), and
-  the graceful shutdown poisons PCR 14 before unloading - so **resume
-  requires a reboot**. That is the security contract, not a bug:
-  same-boot re-attestation after a shutdown would let a tampered
-  session pose as the original one.
+- **Pause:** `sudo lota-install --pause` (a wrapper over `lota-agent
+  --shutdown`). The agent deliberately cannot be killed (the kill-block
+  is the anti-tamper surface), and the graceful shutdown poisons PCR 14
+  before unloading - so **resume requires a reboot**. That is the
+  security contract, not a bug: same-boot re-attestation after a
+  shutdown would let a tampered session pose as the original one.
+- **Resume:** `sudo lota-install --resume` explains that resuming is a
+  reboot and offers to reboot now; after it the socket-activated agent
+  starts on its own and re-measures into a fresh PCR 14.
 - **Remove:** take the host off the kernel floor (drop the cmdline
   parameters) and disable the service. The agent then refuses to run
   and the host simply stops attesting. The design degrades gracefully:

@@ -4,6 +4,7 @@
  */
 
 #include "install.h"
+#include "run.h"
 #include "tui.h"
 
 #include <getopt.h>
@@ -18,36 +19,43 @@
 
 static void usage(FILE *out)
 {
-	fprintf(out,
-		"Usage: lota-install [options]\n"
-		"\n"
-		"Guided, reboot-resumable install of the LOTA player agent.\n"
-		"Each stage probes live system state, explains what it is\n"
-		"about to change and why, and asks before changing it.\n"
-		"Re-running after the mid-install reboot resumes at the\n"
-		"first unmet stage.\n"
-		"\n"
-		"Operator-provided inputs (from the install instructions):\n"
-		"  --ca-server HOST       Attestation CA for enrollment\n"
-		"  --ca-port PORT         Attestation CA port\n"
-		"  --ca-cert FILE         CA TLS certificate (PEM)\n"
-		"  --verifier HOST        Verifier for the final self-check\n"
-		"  --verifier-port PORT   Verifier port\n"
-		"  --policy-pubkey FILE   Operator BPF signing public key\n"
-		"                         (default %s)\n"
-		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
-		"                         (default %s)\n"
-		"\n"
-		"Behaviour:\n"
-		"  --status               Probe and report every stage,\n"
-		"                         change nothing\n"
-		"  --yes                  Do not ask for confirmation\n"
-		"  --plain                Plain log output (no TUI)\n"
-		"  --help, --version\n"
-		"\n"
-		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
-		"            10 reboot required (re-run to resume).\n",
-		PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
+	fprintf(
+	    out,
+	    "Usage: lota-install [options]\n"
+	    "\n"
+	    "Guided, reboot-resumable install of the LOTA player agent.\n"
+	    "Each stage probes live system state, explains what it is\n"
+	    "about to change and why, and asks before changing it.\n"
+	    "Re-running after the mid-install reboot resumes at the\n"
+	    "first unmet stage.\n"
+	    "\n"
+	    "Operator-provided inputs (from the install instructions):\n"
+	    "  --ca-server HOST       Attestation CA for enrollment\n"
+	    "  --ca-port PORT         Attestation CA port\n"
+	    "  --ca-cert FILE         CA TLS certificate (PEM)\n"
+	    "  --verifier HOST        Verifier for the final self-check\n"
+	    "  --verifier-port PORT   Verifier port\n"
+	    "  --policy-pubkey FILE   Operator BPF signing public key\n"
+	    "                         (default %s)\n"
+	    "  --selinux-module FILE  Compiled LOTA SELinux module\n"
+	    "                         (default %s)\n"
+	    "\n"
+	    "Behaviour:\n"
+	    "  --status               Probe and report every stage,\n"
+	    "                         change nothing\n"
+	    "  --yes                  Do not ask for confirmation\n"
+	    "  --plain                Plain log output (no TUI)\n"
+	    "  --help, --version\n"
+	    "\n"
+	    "Lifecycle (after install):\n"
+	    "  --pause                Stop the agent gracefully\n"
+	    "                         ('lota-agent --shutdown')\n"
+	    "  --resume               Explain that resuming needs a reboot,\n"
+	    "                         and offer to reboot now\n"
+	    "\n"
+	    "Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
+	    "            10 reboot required (re-run to resume).\n",
+	    PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
 }
 
 static int parse_args(int argc, char **argv, struct install_opts *opts)
@@ -65,6 +73,8 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	    {"plain", no_argument, 0, 9},
 	    {"help", no_argument, 0, 'h'},
 	    {"version", no_argument, 0, 10},
+	    {"pause", no_argument, 0, 11},
+	    {"resume", no_argument, 0, 12},
 	    {0, 0, 0, 0},
 	};
 	int c;
@@ -111,6 +121,12 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		case 10:
 			printf("lota-install %s\n", LOTA_INSTALL_VERSION);
 			exit(EXIT_INSTALL_OK);
+		case 11:
+			opts->pause = 1;
+			break;
+		case 12:
+			opts->resume = 1;
+			break;
 		default:
 			usage(stderr);
 			exit(EXIT_INSTALL_USAGE);
@@ -119,6 +135,12 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	if (optind < argc) {
 		fprintf(stderr, "lota-install: Unexpected argument '%s'\n",
 			argv[optind]);
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	if (opts->pause + opts->resume + opts->status_only > 1) {
+		fprintf(stderr, "lota-install: --pause, --resume and --status "
+				"are mutually exclusive\n");
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
@@ -188,6 +210,79 @@ static void print_reboot_box(struct install_ctx *ctx, const char *note)
 			  "and it resumes exactly where it left off.");
 }
 
+/* Lifecycle veneer: stop the agent through its graceful path. */
+static int do_pause(struct install_ctx *ctx)
+{
+	const char *const argv[] = {PATH_AGENT_BIN, "--shutdown", NULL};
+	int rc;
+
+	if (geteuid() != 0) {
+		ui_error(&ctx->ui,
+			 "--pause stops the agent and must run as root");
+		return EXIT_INSTALL_USAGE;
+	}
+
+	ui_text(&ctx->ui,
+		"Pausing stops the agent through its own graceful path "
+		"('lota-agent --shutdown'). systemd cannot stop the agent - "
+		"the anti-tamper hook blocks that - so this dedicated path is "
+		"the only clean way down.");
+	ui_text(&ctx->ui,
+		"On the way down the agent poisons its TPM measurement slot "
+		"(PCR 14) on purpose, so this boot can no longer attest. That "
+		"is the security contract, not a fault: resuming therefore "
+		"needs a reboot (see --resume).");
+	if (!ui_confirm(&ctx->ui, "Pause the agent now?", ctx->opts.yes)) {
+		ui_text(&ctx->ui, "Left running. Nothing changed.");
+		return EXIT_INSTALL_OK;
+	}
+
+	rc = run_cmd(&ctx->ui, "lota-agent --shutdown", argv);
+	if (rc != 0) {
+		ui_error(&ctx->ui,
+			 "Could not pause the agent (it may already be "
+			 "stopped). See the output above.");
+		return EXIT_INSTALL_FAIL;
+	}
+	ui_text(&ctx->ui, "Agent paused. Resume with a reboot - "
+			  "'lota-install --resume' explains why.");
+	return EXIT_INSTALL_OK;
+}
+
+/* Lifecycle veneer: resuming after a pause is a reboot, by design. */
+static int do_resume(struct install_ctx *ctx)
+{
+	const char *const argv[] = {"systemctl", "reboot", NULL};
+
+	ui_text(&ctx->ui,
+		"Resuming LOTA means rebooting. When the agent paused it "
+		"poisoned PCR 14, and that slot only clears on a hardware "
+		"reset - so same-boot re-attestation is impossible by design, "
+		"not a limitation to work around.");
+	ui_text(&ctx->ui,
+		"After the reboot the agent starts on its own (socket-"
+		"activated), re-measures into a fresh PCR 14, and attests "
+		"again. Nothing else is needed.");
+	ui_text(&ctx->ui,
+		"A host left paused still boots normally; the agent simply "
+		"refuses to run until then (fail-closed), so pausing never "
+		"hands control of the machine to anything else.");
+
+	if (geteuid() != 0) {
+		ui_text(&ctx->ui,
+			"Reboot when ready: 'sudo systemctl reboot'.");
+		return EXIT_INSTALL_OK;
+	}
+	if (!ui_confirm(&ctx->ui, "Reboot now to resume?", ctx->opts.yes)) {
+		ui_text(&ctx->ui,
+			"Reboot when ready: 'sudo systemctl reboot'.");
+		return EXIT_INSTALL_OK;
+	}
+	return run_cmd(&ctx->ui, "systemctl reboot", argv) == 0
+		   ? EXIT_INSTALL_OK
+		   : EXIT_INSTALL_FAIL;
+}
+
 int main(int argc, char **argv)
 {
 	struct install_ctx ctx;
@@ -200,6 +295,11 @@ int main(int argc, char **argv)
 
 	ui_banner(&ctx.ui, "LOTA Guided Install", LOTA_INSTALL_VERSION,
 		  "Hardware-rooted Attestation for the player host");
+
+	if (ctx.opts.pause)
+		return do_pause(&ctx);
+	if (ctx.opts.resume)
+		return do_resume(&ctx);
 
 	if (ctx.opts.status_only)
 		return run_status(&ctx);
@@ -299,8 +399,10 @@ int main(int argc, char **argv)
 	ui_text(&ctx.ui, "\nLOTA install complete. The agent attests this "
 			 "host to the operator's verifier. Games request "
 			 "tokens through the local socket.");
-	ui_text(&ctx.ui, "Pause any time with 'sudo lota-agent --shutdown' "
-			 "(resuming requires a reboot - the agent burns its "
-			 "boot measurement on shutdown by design).");
+	ui_text(&ctx.ui, "Pause any time with 'sudo lota-install --pause' "
+			 "(a friendly wrapper over 'lota-agent --shutdown'); "
+			 "'sudo lota-install --resume' explains why resuming "
+			 "requires a reboot - the agent burns its boot "
+			 "measurement on shutdown by design.");
 	return EXIT_INSTALL_OK;
 }
