@@ -202,7 +202,26 @@ type AttestationReport struct {
 
 	// variable-length sections (not part of fixed wire format)
 	EventLog []byte // raw TCG binary event log from agent
+
+	// ESRT is nil when the agent sent no ESRT section (legacy agent).
+	// When non-nil but Present is false, the agent ran but the platform
+	// exposed no ESRT System Firmware entry (Low-Firmware-Assurance path).
+	ESRT *ESRTInfo
 }
+
+// ESRTInfo mirrors struct lota_esrt (include/attestation.h):
+// platform's ESRT System Firmware version, used by the verifier as a firmware
+// anti-rollback signal for self-service re-anchor.
+// Wire size of 28 bytes.
+type ESRTInfo struct {
+	Present         bool
+	FWVersion       uint32
+	LowestSupported uint32
+	FWClass         [16]byte
+}
+
+// ESRTWireSize is the fixed serialized length of the trailing ESRT section.
+const ESRTWireSize = 28
 
 // Challenge for attestation protocol (48 bytes)
 type Challenge struct {
@@ -380,6 +399,22 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	if eventLogSize > 0 {
 		report.EventLog = make([]byte, eventLogSize)
 		copy(report.EventLog, data[offset:offset+int(eventLogSize)])
+	}
+	offset += int(eventLogSize)
+
+	// Optional trailing ESRT section (28 bytes)
+	// Absent for legacy agents, which leaves report.ESRT nil;
+	// verifier treats that as no-ESRT
+	if len(data) >= offset+ESRTWireSize {
+		esrt := &ESRTInfo{}
+		esrt.Present = binary.LittleEndian.Uint32(data[offset:]) != 0
+		offset += 4
+		esrt.FWVersion = binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		esrt.LowestSupported = binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		copy(esrt.FWClass[:], data[offset:offset+16])
+		report.ESRT = esrt
 	}
 
 	return report, nil

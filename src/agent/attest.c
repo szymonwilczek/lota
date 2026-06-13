@@ -27,6 +27,7 @@
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "enroll.h"
+#include "esrt.h"
 #include "hardening.h"
 #include "iommu.h"
 #include "io_utils.h"
@@ -680,8 +681,15 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	/* serialize report with variable-length sections */
 	{
-		size_t total =
-		    calculate_report_size(0, (uint32_t)event_log_size);
+		struct lota_esrt esrt;
+		size_t total;
+
+		/* ESRT System Firmware version (anti-rollback signal for the
+		 * verifier's re-anchor)
+		 * Always sent, present=0 when absent */
+		esrt_read_system_firmware(&esrt);
+
+		total = calculate_report_size(0, (uint32_t)event_log_size, 1);
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
@@ -692,9 +700,9 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		}
 
 		report.header.report_size = (uint32_t)total;
-		wire_size =
-		    serialize_report(&report, NULL, 0, event_log,
-				     (uint32_t)event_log_size, wire_buf, total);
+		wire_size = serialize_report(&report, NULL, 0, event_log,
+					     (uint32_t)event_log_size, &esrt,
+					     wire_buf, total);
 		if (wire_size < 0) {
 			fprintf(stderr, "Failed to serialize report: %s\n",
 				strerror((int)-wire_size));

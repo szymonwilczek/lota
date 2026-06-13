@@ -21,7 +21,8 @@
 
 #include "../../include/attestation.h"
 
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
+size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
+			     int with_esrt)
 {
 	size_t size = sizeof(struct lota_attestation_report);
 	size_t events_size;
@@ -49,14 +50,21 @@ size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
 		return 0;
 	size += event_log_size;
 
+	/* Optional trailing ESRT section (fixed size) */
+	if (with_esrt) {
+		if (size + sizeof(struct lota_esrt) < size)
+			return 0;
+		size += sizeof(struct lota_esrt);
+	}
+
 	return size;
 }
 
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const struct lota_exec_event *events,
 			 uint32_t event_count, const uint8_t *event_log,
-			 uint32_t event_log_size, uint8_t *out_buf,
-			 size_t out_buf_size)
+			 uint32_t event_log_size, const struct lota_esrt *esrt,
+			 uint8_t *out_buf, size_t out_buf_size)
 {
 	size_t total;
 	size_t offset = 0;
@@ -70,7 +78,8 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (!event_log)
 		event_log_size = 0;
 
-	total = calculate_report_size(event_count, event_log_size);
+	total =
+	    calculate_report_size(event_count, event_log_size, esrt != NULL);
 	if (total == 0)
 		return -EOVERFLOW;
 
@@ -107,6 +116,23 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (event_log_size > 0 && event_log) {
 		memcpy(out_buf + offset, event_log, event_log_size);
 		offset += event_log_size;
+	}
+
+	/* Optional trailing ESRT section, little-endian fields */
+	if (esrt) {
+		uint32_t present_le = htole32(esrt->present);
+		uint32_t ver_le = htole32(esrt->fw_version);
+		uint32_t low_le = htole32(esrt->lowest_supported);
+
+		memcpy(out_buf + offset, &present_le, sizeof(present_le));
+		offset += sizeof(present_le);
+		memcpy(out_buf + offset, &ver_le, sizeof(ver_le));
+		offset += sizeof(ver_le);
+		memcpy(out_buf + offset, &low_le, sizeof(low_le));
+		offset += sizeof(low_le);
+		memcpy(out_buf + offset, esrt->fw_class,
+		       sizeof(esrt->fw_class));
+		offset += sizeof(esrt->fw_class);
 	}
 
 	return (ssize_t)offset;

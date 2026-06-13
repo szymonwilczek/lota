@@ -60,6 +60,16 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
 
+### Attestation report sections
+Attestation report (`include/attestation.h`, serialized by `src/agent/report.c`,
+parsed by `src/verifier/types/report.go`) ends with optional variable-length sections.
+New trailing sections must be appended after the existing ones and parsed defensively
+(absent for older agents), so a mixed-version fleet keeps interoperating without a
+wire-version bump - the ESRT firmware-version section (`src/agent/esrt.c`, `test_esrt`)
+follows that pattern.
+
+Keep the C serializer and the Go parser in lockstep when the layout changes.
+
 ### Guided installation
 Guided player installer lives in `installer/` as a standalone C
 binary (`make installer` -> `lota-install`, also part of `make all` and

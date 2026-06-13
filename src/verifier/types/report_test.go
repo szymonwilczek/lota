@@ -492,3 +492,65 @@ func BenchmarkParseReport(b *testing.B) {
 		ParseReport(data)
 	}
 }
+
+// report without the trailing ESRT section (legacy agent) must parse with
+// ESRT left nil, so the verifier treats it as no-ESRT (no failing)
+func TestParseReport_NoESRT_Legacy(t *testing.T) {
+	report, err := ParseReport(createTestReportBytes())
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if report.ESRT != nil {
+		t.Errorf("expected ESRT nil for legacy report, got %+v", report.ESRT)
+	}
+}
+
+// report with the trailing 28-byte ESRT section round-trips into ESRTInfo
+func TestParseReport_ESRT(t *testing.T) {
+	esrt := make([]byte, ESRTWireSize)
+	binary.LittleEndian.PutUint32(esrt[0:], 1)   // present
+	binary.LittleEndian.PutUint32(esrt[4:], 785) // fw_version
+	binary.LittleEndian.PutUint32(esrt[8:], 700) // lowest_supported
+	esrt[12] = 0xb5                              // fw_class[0]
+	esrt[13] = 0x3e                              // fw_class[1]
+
+	data := append(createTestReportBytes(), esrt...)
+	report, err := ParseReport(data)
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if report.ESRT == nil {
+		t.Fatal("expected ESRT non-nil")
+	}
+	if !report.ESRT.Present {
+		t.Error("expected ESRT.Present true")
+	}
+	if report.ESRT.FWVersion != 785 {
+		t.Errorf("FWVersion: got %d, want 785", report.ESRT.FWVersion)
+	}
+	if report.ESRT.LowestSupported != 700 {
+		t.Errorf("LowestSupported: got %d, want 700", report.ESRT.LowestSupported)
+	}
+	if report.ESRT.FWClass[0] != 0xb5 || report.ESRT.FWClass[1] != 0x3e {
+		t.Errorf("FWClass prefix: got %x %x, want b5 3e",
+			report.ESRT.FWClass[0], report.ESRT.FWClass[1])
+	}
+}
+
+// agent that ran but found no ESRT entry sends present=0
+// ESRT is non-nil (the section was sent) but Present is false
+// -> Low-Firmware-Assurance path
+func TestParseReport_ESRT_NotPresent(t *testing.T) {
+	esrt := make([]byte, ESRTWireSize) // all zero -> present=0
+	data := append(createTestReportBytes(), esrt...)
+	report, err := ParseReport(data)
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if report.ESRT == nil {
+		t.Fatal("expected ESRT non-nil (section was sent)")
+	}
+	if report.ESRT.Present {
+		t.Error("expected ESRT.Present false")
+	}
+}

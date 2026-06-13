@@ -167,6 +167,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
               $(AGENT_DIR)/report.c \
+              $(AGENT_DIR)/esrt.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
               $(AGENT_DIR)/shutdown.c \
@@ -519,6 +520,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
+	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
@@ -622,6 +624,10 @@ $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
