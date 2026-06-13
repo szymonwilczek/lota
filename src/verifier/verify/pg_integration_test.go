@@ -9,6 +9,7 @@
 package verify
 
 import (
+	"bytes"
 	"os"
 	"sync"
 	"testing"
@@ -361,5 +362,45 @@ func TestPostgresSessionTokenLifecycle(t *testing.T) {
 	}
 	if st = s.Validate(tok, true, now); !st.Exists || !st.Consumed {
 		t.Fatalf("second consume: %+v", st)
+	}
+}
+
+func TestPostgresReanchor(t *testing.T) {
+	bs := pgBaselineStore(t)
+	cid := "reanchor-pg"
+
+	bs.CheckAndUpdate(cid, fill(0xDE))
+	if r, _ := bs.CheckAndUpdateBootPCRs(cid, boot(0xB0, 0xB1, 0xB7)); r != TOFUFirstUse {
+		t.Fatalf("boot first use expected, got %v", r)
+	}
+
+	st := bs.GetReanchorState(cid)
+	if !st.Present || st.ReanchorCount != 0 || st.ESRTCapable {
+		t.Fatalf("fresh re-anchor state wrong: %+v", st)
+	}
+
+	if err := bs.ArchiveAndReanchor(cid, boot(0xC0, 0xC1, 0xB7),
+		[]byte("evlog"), 785, true, false, "strong"); err != nil {
+		t.Fatalf("ArchiveAndReanchor: %v", err)
+	}
+	st = bs.GetReanchorState(cid)
+	if st.ReanchorCount != 1 || !st.ESRTCapable || st.ESRTVersion != 785 || st.LFA {
+		t.Fatalf("after strong re-anchor: %+v", st)
+	}
+	if !bytes.Equal(st.EventLogBaseline, []byte("evlog")) {
+		t.Error("event-log baseline not persisted")
+	}
+	if r, _ := bs.CheckAndUpdateBootPCRs(cid, boot(0xC0, 0xC1, 0xB7)); r != TOFUMatch {
+		t.Errorf("re-anchored baseline should match, got %v", r)
+	}
+
+	// LFA re-anchor: esrt_capable stays sticky-true even though we pass false
+	if err := bs.ArchiveAndReanchor(cid, boot(0xD0, 0xD1, 0xB7),
+		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
+	}
+	st = bs.GetReanchorState(cid)
+	if st.ReanchorCount != 2 || !st.ESRTCapable || !st.LFA {
+		t.Fatalf("after lfa re-anchor: %+v", st)
 	}
 }

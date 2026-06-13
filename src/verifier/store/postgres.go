@@ -119,6 +119,32 @@ var pgMigrations = []migration{
 			CREATE INDEX idx_session_tokens_valid_until ON session_tokens(valid_until);
 		`,
 	},
+	{
+		version: 2,
+		description: "Self-service re-anchor: event-log baseline, ESRT " +
+			"firmware version, assurance/rate-limit state, archive table",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN eventlog_baseline BYTEA;
+			ALTER TABLE baselines ADD COLUMN esrt_version BIGINT;
+			ALTER TABLE baselines ADD COLUMN esrt_capable BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE baselines ADD COLUMN lfa BOOLEAN NOT NULL DEFAULT FALSE;
+			ALTER TABLE baselines ADD COLUMN reanchor_count BIGINT NOT NULL DEFAULT 0;
+			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMPTZ;
+
+			CREATE TABLE baseline_archive (
+				id           BIGSERIAL PRIMARY KEY,
+				client_id    TEXT NOT NULL,
+				archived_at  TIMESTAMPTZ NOT NULL,
+				pcr0         BYTEA,
+				pcr1         BYTEA,
+				pcr7         BYTEA,
+				esrt_version BIGINT,
+				reason       TEXT NOT NULL DEFAULT ''
+			);
+
+			CREATE INDEX idx_baseline_archive_client ON baseline_archive(client_id);
+		`,
+	},
 }
 
 // OpenPostgresDB opens a Postgres-backed store at the given DSN and applies

@@ -60,8 +60,8 @@ func TestPostgresMigrationsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 1 {
-		t.Fatalf("schema version = %d, want 1", v)
+	if v != len(pgMigrations) {
+		t.Fatalf("schema version = %d, want %d", v, len(pgMigrations))
 	}
 }
 
