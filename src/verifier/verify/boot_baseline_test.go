@@ -378,3 +378,65 @@ func TestReanchor_MemoryStateAndArchive(t *testing.T) {
 		t.Error("LFA should be true after an lfa re-anchor")
 	}
 }
+
+func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	bs := NewSQLiteBaselineStore(db)
+
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	bs.CheckAndUpdate("c", pcr14)
+	bs.CheckAndUpdateBootPCRs("c", boot(0xB0, 0xB1, 0xB7))
+
+	st := bs.GetReanchorState("c")
+	if !st.Present || st.ReanchorCount != 0 || st.ESRTCapable {
+		t.Fatalf("fresh re-anchor state wrong: %+v", st)
+	}
+
+	log := []byte("evlog-baseline")
+	if err := bs.ArchiveAndReanchor("c", boot(0xC0, 0xC1, 0xB7), log,
+		785, true, false, "strong"); err != nil {
+		t.Fatalf("ArchiveAndReanchor: %v", err)
+	}
+	st = bs.GetReanchorState("c")
+	if st.ReanchorCount != 1 || !st.ESRTCapable || st.ESRTVersion != 785 || st.LFA {
+		t.Fatalf("after strong re-anchor: %+v", st)
+	}
+	if !bytes.Equal(st.EventLogBaseline, log) {
+		t.Error("event-log baseline not persisted")
+	}
+	if r, _ := bs.CheckAndUpdateBootPCRs("c", boot(0xC0, 0xC1, 0xB7)); r != TOFUMatch {
+		t.Errorf("re-anchored baseline should match, got %v", r)
+	}
+
+	var n int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM baseline_archive WHERE client_id = 'c'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("archive rows after one re-anchor: got %d, want 1", n)
+	}
+
+	// LFA re-anchor: capability stays sticky, count bumps, second archive row
+	if err := bs.ArchiveAndReanchor("c", boot(0xD0, 0xD1, 0xB7),
+		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
+	}
+	st = bs.GetReanchorState("c")
+	if st.ReanchorCount != 2 || !st.ESRTCapable || !st.LFA {
+		t.Fatalf("after lfa re-anchor: %+v", st)
+	}
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM baseline_archive WHERE client_id = 'c'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("archive rows after two re-anchors: got %d, want 2", n)
+	}
+}
