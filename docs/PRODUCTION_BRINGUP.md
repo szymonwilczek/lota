@@ -325,6 +325,17 @@ production `--require-cert` default. See
 [`examples/enrollment/README.md`](../examples/enrollment/README.md) for
 the full end-to-end walk-through.
 
+On the diverse-fleet profile (a policy with `require_secureboot`), a
+legitimate firmware update shifts PCR 0/1 and would otherwise reject the
+host until an operator clears its baseline. `-enable-self-service-reanchor`
+lets the verifier re-pin the per-device baseline itself when the drift
+preserves the Secure Boot root of trust (PK/KEK/db unchanged, `dbx`
+append-only, Secure Boot still on, firmware version not rolled back); a
+hardware platform that reports no firmware version (`ESRT`) takes a
+Low-Firmware-Assurance path whose first re-anchor needs operator approval.
+Leave the flag off for the enterprise profile, where firmware drift is a
+feature and re-baselining stays a deliberate operator action.
+
 The agent rotates the AIK on its own schedule (`--aik-ttl`, default 30d).
 It surfaces the rotation state over D-Bus so an operator -- or a fleet
 monitor -- can see when a rotation is due and when a re-enrollment is

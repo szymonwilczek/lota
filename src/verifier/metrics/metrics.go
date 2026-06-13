@@ -28,6 +28,9 @@ type Metrics struct {
 	// rejection reason
 	Rejections *LabeledCounter
 
+	// self-service re-anchor outcomes (strong / lfa / pending / escalate)
+	Reanchors *LabeledCounter
+
 	// verification duration in seconds
 	VerifyDuration *Histogram
 
@@ -47,6 +50,7 @@ type Metrics struct {
 func New() *Metrics {
 	return &Metrics{
 		Rejections: NewLabeledCounter(),
+		Reanchors:  NewLabeledCounter(),
 		VerifyDuration: NewHistogram(
 			0.001, 0.005, 0.01, 0.025, 0.05,
 			0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,

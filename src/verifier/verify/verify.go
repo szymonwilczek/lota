@@ -134,6 +134,7 @@ type Verifier struct {
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
 	rejectLegacyBaselines bool
+	selfServiceReanchor   bool
 	maxRestartCountSkew   uint32
 }
 
@@ -265,6 +266,16 @@ type VerifierConfig struct {
 	// grace period should set it to true.
 	RejectLegacyBaselines bool
 
+	// EnableSelfServiceReanchor turns on self-service re-anchor:
+	// on a firmware/Secure Boot PCR drift the verifier may re-pin the
+	// per-device boot baseline itself when the drift preserves the Secure Boot
+	// root of trust (see reanchorDecision), instead of rejecting until
+	// operator clears the row.
+	// Only takes effect for the diverse-fleet profile (a policy with require_secureboot);
+	// off by default and intended to stay off for the enterprise profile,
+	// which treats drift as a feature.
+	EnableSelfServiceReanchor bool
+
 	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
 	// the verifier tolerates when matching the PCR14 boot-commitment
 	// digest. The agent extends PCR14 once at startup with the
@@ -348,6 +359,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
+		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
 		sessionTokenStore:     cfg.SessionTokenStore,
@@ -957,6 +969,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			case TOFUMatch:
 				clog.Debug("boot PCRs match baseline")
 			case TOFUMismatch:
+				// self-service re-anchor:
+				// if the drift preserves the Secure Boot root of trust,
+				// re-pin the baseline instead of rejecting.
+				// Returns true only on an actual re-pin.
+				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+					break
+				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
 				if outcome.BootBaseline != nil {
 					exp0, exp1, exp7 = outcome.BootBaseline.PCR0,
@@ -1248,4 +1267,78 @@ func (v *Verifier) AIKStore() store.AIKStore {
 // returns client IDs currently present in the nonce store
 func (v *Verifier) ListActiveClients() []string {
 	return v.nonceStore.ListActiveClients()
+}
+
+// tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.
+// It returns true only when the per-device boot baseline was actually re-pinned
+// (the strong path, or an operator-approved LFA path), in which case the caller
+// treats the attestation as a match instead of rejecting.
+// Pending or escalated outcome returns false and the caller rejects as before.
+// Decision itself lives in reanchorDecision.
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+	boot *BootBaseline, report *types.AttestationReport,
+	bootFacts *BootFacts) bool {
+	if !v.selfServiceReanchor {
+		return false
+	}
+	// diverse-fleet profile only:
+	// an active policy with require_secureboot and the event-log Secure Boot
+	// anchor proven for this boot
+	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+		return false
+	}
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return false
+	}
+
+	st := rs.GetReanchorState(clientID)
+	verdict, reason := reanchorDecision(ReanchorInputs{
+		BaselineEventLog:    st.EventLogBaseline,
+		CurrentEventLog:     report.EventLog,
+		BaselineESRTVersion: st.ESRTVersion,
+		CurrentESRT:         report.ESRT,
+		ESRTCapable:         st.ESRTCapable,
+		LastReanchorAt:      st.LastReanchorAt,
+		Now:                 time.Now(),
+	})
+
+	esrtPresent := report.ESRT != nil && report.ESRT.Present
+	var esrtVer uint32
+	if esrtPresent {
+		esrtVer = report.ESRT.FWVersion
+	}
+
+	switch verdict {
+	case ReanchorAllow:
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, false, "strong"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "boot baseline re-anchored (strong path)", "reason", reason)
+		v.metrics.Reanchors.Inc("strong")
+		return true
+	case ReanchorLFA:
+		// first LFA re-anchor needs operator approval (D4b);
+		// approval path sets the lfa flag, after which later LFA
+		// re-anchors apply automatically
+		if !st.LFA {
+			logging.Security(clog, "boot baseline LFA re-anchor pending operator approval", "reason", reason)
+			v.metrics.Reanchors.Inc("pending")
+			return false
+		}
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, true, "lfa"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "boot baseline re-anchored (low-firmware-assurance)", "reason", reason)
+		v.metrics.Reanchors.Inc("lfa")
+		return true
+	default:
+		logging.Security(clog, "boot baseline re-anchor escalated to operator", "reason", reason)
+		v.metrics.Reanchors.Inc("escalate")
+		return false
+	}
 }
