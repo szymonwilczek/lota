@@ -92,6 +92,7 @@ var (
 	maxRestartSkew       = flag.Uint("max-restart-count-skew", 64, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required. The default of 64 covers laptop suspend/resume cadences past any realistic operator interval; raising it grows the matcher's brute-force surface linearly without buying additional uptime.")
 	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
+	allowUnpinnedAgent   = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
 	aikCACerts           stringSliceFlag
 	aikCRLs              stringSliceFlag
 	ekCRLsDeprecated     stringSliceFlag
@@ -181,6 +182,10 @@ func main() {
 		logger.Info("rejecting legacy baseline agent_hash backfills")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
+	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
+	if *allowUnpinnedAgent {
+		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
+	}
 
 	// resolve the Postgres DSN from flag or environment
 	// the env form keeps connection credentials out of the process argument list

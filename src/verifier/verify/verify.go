@@ -289,6 +289,12 @@ type VerifierConfig struct {
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
 	AllowPermissivePolicy bool
+
+	// if true, allow a diverse-fleet policy (require_secureboot, no raw PCR
+	// pins) that does not pin agent_hashes.
+	// INSECURE: agent self-hash is then TOFU, so a modified non-enforcing
+	// agent can pin its own hash!
+	AllowUnpinnedAgent bool
 }
 
 // returns sensible defaults for verifier
@@ -329,6 +335,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 
 	pcrVerifier := NewPCRVerifier()
 	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
+	pcrVerifier.SetAllowUnpinnedAgent(cfg.AllowUnpinnedAgent)
 
 	v := &Verifier{
 		nonceStore:            NewNonceStoreFromConfig(nonceCfg),

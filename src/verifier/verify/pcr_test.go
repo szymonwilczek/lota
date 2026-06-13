@@ -112,6 +112,57 @@ require_lockdown: false
 	t.Log("Policy loaded and activated correctly from YAML")
 }
 
+func TestPCRVerifier_LoadPolicy_RequiresAgentHashPin(t *testing.T) {
+	tmpDir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// diverse-fleet:
+	// require_secureboot, no raw PCR pins, only an advisory kernel hash, no agent_hashes
+	// -> must be refused (advisory kernel hash does not substitute for the agent_hash pin)
+	diverseNoAgent := `
+name: diverse-no-agent
+require_secureboot: true
+kernel_hashes:
+  - "6da97dc5886e0da1d3ce0ac1a01c82c642564460d907cfc10db9af1ca8ad97d9"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("d1.yaml", diverseNoAgent)); err == nil {
+		t.Error("expected refusal: diverse-fleet policy without pinned agent_hashes")
+	}
+
+	// same, but with agent_hashes pinned -> accepted
+	diverseWithAgent := diverseNoAgent + `agent_hashes:
+  - "db457c14130c56c599bc56c2bb888b644e3b504aaeefe6dc6aaf6c665087cf46"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("d2.yaml", diverseWithAgent)); err != nil {
+		t.Errorf("agent-pinned diverse-fleet policy should load: %v", err)
+	}
+
+	// no agent_hashes but explicit opt-out -> accepted
+	v := NewPCRVerifier()
+	v.SetAllowUnpinnedAgent(true)
+	if err := v.LoadPolicy(write("d3.yaml", diverseNoAgent)); err != nil {
+		t.Errorf("--allow-unpinned-agent should permit unpinned agent: %v", err)
+	}
+
+	// homogeneous (raw PCR pins) is not covered by this gate even without
+	// agent_hashes because it does not take the TOFU path
+	homogeneous := `
+name: homo
+require_secureboot: true
+pcrs:
+  0: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("h.yaml", homogeneous)); err != nil {
+		t.Errorf("homogeneous policy with PCR pins should load without agent_hashes: %v", err)
+	}
+}
+
 func TestPCRVerifier_LoadPolicy_InvalidPCRIndexRejected(t *testing.T) {
 	t.Log("SECURITY TEST: Policy load rejects invalid PCR indices")
 

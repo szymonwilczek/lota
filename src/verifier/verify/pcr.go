@@ -85,6 +85,11 @@ type PCRVerifier struct {
 	// if false, LoadPolicy rejects policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	allowPermissivePolicy bool
+
+	// if false, LoadPolicy rejects a diverse-fleet policy (require_secureboot
+	// with no raw PCR pins) that does not pin agent_hashes.
+	// See RequiresAgentHashPin.
+	allowUnpinnedAgent bool
 }
 
 // creates a new PCR verifier
@@ -92,6 +97,7 @@ func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
 		policies:              make(map[string]*PCRPolicy),
 		allowPermissivePolicy: false,
+		allowUnpinnedAgent:    false,
 	}
 }
 
@@ -101,6 +107,35 @@ func (v *PCRVerifier) SetAllowPermissivePolicy(allow bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.allowPermissivePolicy = allow
+}
+
+// controls whether LoadPolicy accepts a diverse-fleet policy with no pinned
+// agent_hashes.
+// Intentionally false by default:
+// on the diverse-fleet path (require_secureboot, no raw PCR pins) the per-device
+// PCR 0/1/7 and the agent self-hash both go through TOFU, so without a pinned
+// agent_hash a modified, non-enforcing agent would pin its own hash on first use
+// and then attest "OK" while doing no enforcement.
+//
+// kernel_hashes do not count -- they are advisory and self-reported.
+// agent_hash allowlist is the only cryptographic gate on which agent binary ran.
+func (v *PCRVerifier) SetAllowUnpinnedAgent(allow bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.allowUnpinnedAgent = allow
+}
+
+// RequiresAgentHashPin reports whether a policy is a diverse-fleet policy
+// (require_secureboot with no raw PCR pins) that fails to pin agent_hashes.
+// Such a policy leaves the agent self-hash on TOFU, which a modified agent
+// can exploit, so LoadPolicy refuses it unless the operator opts out.
+func RequiresAgentHashPin(policy *PCRPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	return policy.RequireSecureBoot &&
+		len(policy.PCRs) == 0 &&
+		len(policy.AgentHashes) == 0
 }
 
 // sets the Ed25519 public key used to verify policy file signatures
@@ -195,9 +230,13 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 
 	v.mu.RLock()
 	allowPermissive := v.allowPermissivePolicy
+	allowUnpinnedAgent := v.allowUnpinnedAgent
 	v.mu.RUnlock()
 	if IsMeasurementEmptyPolicy(&policy) && !allowPermissive {
 		return fmt.Errorf("refusing to load measurement-empty PCR policy '%s' (no pcrs and no kernel_hashes/agent_hashes)", policy.Name)
+	}
+	if RequiresAgentHashPin(&policy) && !allowUnpinnedAgent {
+		return fmt.Errorf("refusing to load diverse-fleet policy '%s' (require_secureboot, no raw PCR pins) with empty agent_hashes: the agent self-hash would be TOFU and a modified non-enforcing agent could pin its own hash. Pin the official agent hash in agent_hashes (from the signed release), or pass --allow-unpinned-agent to accept the risk", policy.Name)
 	}
 
 	for _, w := range ValidatePolicy(&policy) {

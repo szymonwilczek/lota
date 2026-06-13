@@ -6,8 +6,16 @@
 # below and policies/README.md, "Boot enrollment ceremony"): pin real
 # PCR 0/1/7 values for a homogeneous fleet, or leave them unpinned for
 # a diverse fleet and let require_secureboot anchor the per-device
-# enrollment. Either way agent_hashes must be populated; the verifier
-# refuses to start on a policy with no measurement allowlist at all.
+# enrollment. On the diverse-fleet path (require_secureboot, no raw PCR
+# pins) the agent self-hash also goes through TOFU, so agent_hashes MUST
+# be pinned there - otherwise a modified, non-enforcing agent could pin
+# its own hash on first use and attest while doing nothing.
+#
+# Verifier refuses such a policy unless started with --allow-unpinned-agent
+# (INSECURE)!
+#
+# Pin the official hash from the signed release (see BUILD-REPRODUCIBLE.md).
+# Kernel_hashes are advisory and do not count.
 #
 # How to collect values:
 #   Full policy:   sudo lota-agent --export-policy > my-policy.yaml
