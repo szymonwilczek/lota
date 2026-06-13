@@ -85,6 +85,9 @@ When a client first pins its boot baseline the verifier calls
 `RecordBootEvidence` to capture the accompanying event log and ESRT firmware
 version, which a later re-anchor replay-diffs PCR 7 against; without that
 reference (older rows) the re-anchor fails closed to an operator re-baseline.
+The post-fact LFA review flag lands in its own trailing migration (SQLite 6,
+Postgres 3) rather than amending the re-anchor migration, keeping the set
+append-only so an intermediate-revision database still picks the column up.
 
 ### Guided installation
 Guided player installer lives in `installer/` as a standalone C
