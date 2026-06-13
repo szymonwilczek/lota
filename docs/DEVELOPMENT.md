@@ -8,8 +8,7 @@ full model and the release flow.
 
 - **Every pull request** (the `pull_request` trigger has no branch filter, so
   it covers PRs aimed at `lota-next`): build, unit tests, linters, Go static
-  analysis, cross-arch build, the reproducible-build gate, security analysis,
-  and the Go fuzz targets (short, seeded smoke run).
+  analysis, cross-arch build, the reproducible-build gate and security analysis.
 - **Cross-architecture build**: the arm64 workflow starts on every pull
   request, but skips QEMU and the arm64 container when the commit range does
   not change source, build, BPF, policy, or deployment inputs.
@@ -53,7 +52,7 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 | Unit | Go (`verifier`, `attestca`, `sdk/server`) and C (agent, SDK) | `make test-unit`, `go test ./...` |
 | Sanitizers | ASan / UBSan on the C side | `SANITIZE=address,undefined make test-unit` |
 | Memory | valgrind memcheck | `make valgrind-unit`, `make valgrind-smoke` |
-| Fuzz (Go) | verifier / SDK / attest-CA parsers of untrusted bytes | `go test -run x -fuzz=Fuzz... ./...`; CI runs every target per PR |
+| Fuzz (Go) | verifier / SDK / attest-CA parsers of untrusted bytes | `go test -run x -fuzz=Fuzz... ./...` |
 | Postgres | verifier store/session backends against a real server | `go test -tags pg_integration -p 1 ./store/ ./verify/` with `LOTA_TEST_PG_DSN`; CI job `postgres-integration` |
 | Fuzz (C) | IPC, config, TLS-pin, wire, enrollment-reply decoders, sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature verify, server SDK token verify, TPM2B response/credential unmarshal | `make fuzz-all` |
 | Kernel | BPF LSM live in a guest | Syzkaller harness `lota_bpf_fuzz` (see `syzkaller/README.md`) |
@@ -182,8 +181,7 @@ dependency refresh does not drag in a security-doc edit.
   bytes that arrive from an untrusted peer: attestation tokens, TPM
   quote/attest blobs, event logs, certificates, signed policies, and the
   enrollment wire protocol. Each target seeds from its own encoder and asserts
-  the real contract. CI discovers the targets and shards them across runners,
-  so wall-clock stays bounded as targets are added.
+  the real contract.
 - **C fuzzers** are libFuzzer harnesses under `fuzz/`, one `fuzz_<name>.c` per
   target, built by `make fuzz-*` (or all at once with `make fuzz-all`); they
   link the agent sources under `src/agent/` that they exercise.
