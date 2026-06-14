@@ -72,6 +72,15 @@ const (
 const (
 	tpmGeneratedValue uint32 = 0xff544347
 	tpmSTAttestQuote  uint16 = 0x8018
+
+	// MaxPCRSelectSize caps a TPMS_PCR_SELECTION sizeofSelect.
+	// PC Client TPM has 24 PCRs, so the bitmap is 3 bytes;
+	// 8 leaves slack for larger banks while keeping the allocation
+	// bounded by a constant.
+	MaxPCRSelectSize = 8
+	// MaxPCRDigestSize caps a TPM2B_DIGEST length.
+	// Widest TPM hash (SHA-512) is 64 bytes.
+	MaxPCRDigestSize = 64
 )
 
 // Errors returned by verification functions
@@ -717,6 +726,9 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 			if err := binary.Read(r, binary.BigEndian, &selectSize); err != nil {
 				return nil, 0, nil, fmt.Errorf("read pcr selection sizeofSelect: %w", err)
 			}
+			if selectSize > MaxPCRSelectSize {
+				return nil, 0, nil, fmt.Errorf("pcr selection too large: %d > %d", selectSize, MaxPCRSelectSize)
+			}
 			if int(selectSize) > r.Len() {
 				return nil, 0, nil, fmt.Errorf("pcr selection truncated: need %d bytes, have %d", selectSize, r.Len())
 			}
@@ -738,6 +750,9 @@ func parseTPMSAttest(data []byte) (extraData []byte, pcrMask uint32, pcrDigest [
 		var digestSize uint16
 		if err := binary.Read(r, binary.BigEndian, &digestSize); err != nil {
 			return nil, 0, nil, fmt.Errorf("read pcrDigest size: %w", err)
+		}
+		if digestSize > MaxPCRDigestSize {
+			return nil, 0, nil, fmt.Errorf("pcrDigest too large: %d > %d", digestSize, MaxPCRDigestSize)
 		}
 		if int(digestSize) > r.Len() {
 			return nil, 0, nil, fmt.Errorf("pcrDigest truncated: need %d bytes, have %d", digestSize, r.Len())
