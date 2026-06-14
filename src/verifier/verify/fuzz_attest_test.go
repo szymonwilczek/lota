@@ -50,6 +50,6 @@ func FuzzVerifyPCRDigest(f *testing.F) {
 	f.Add(validBlob, []byte("valid args"))
 
 	f.Fuzz(func(t *testing.T, attestData []byte, _ []byte) {
-		_ = VerifyPCRDigest(attestData, pcrValues, pcrMask)
+		_ = VerifyPCRDigest(attestData, &pcrValues, pcrMask)
 	})
 }

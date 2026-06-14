@@ -669,7 +669,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			result.Result = types.VerifyPCRFail
 			return result, fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
 		}
-		if err := VerifyPCRDigestParsed(parsedAttest, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
+		if err := VerifyPCRDigestParsed(parsedAttest, &report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail

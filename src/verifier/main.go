@@ -236,6 +236,7 @@ func main() {
 			if *requireCert && len(aikCACerts) == 0 {
 				logger.Error("--require-cert requires a trusted attestation-CA root for AIK verification",
 					"hint", "provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)")
+				//nolint:gocritic // startup abort before any DB write; the OS reclaims the handle
 				os.Exit(1)
 			}
 			if len(aikCRLs) > 0 && len(aikCACerts) == 0 {

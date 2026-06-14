@@ -790,7 +790,7 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 		oldPCR0, oldPCR1, oldPCR7 []byte
 		oldESRT                   sql.NullInt64
 	)
-	if err = tx.QueryRow(
+	if err := tx.QueryRow(
 		"SELECT pcr0, pcr1, pcr7, esrt_version FROM baselines WHERE client_id = ?",
 		clientID,
 	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT); err != nil {

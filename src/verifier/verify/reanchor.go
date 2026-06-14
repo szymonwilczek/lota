@@ -91,7 +91,7 @@ type ReanchorInputs struct {
 // an unchanged version or a never-present ESRT is LFA.
 // ESRT that disappeared after once being present escalates.
 // Everything else escalates to the operator.
-func reanchorDecision(in ReanchorInputs) (ReanchorVerdict, string) {
+func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string) {
 	// fail-closed: without the baseline event log there is no reference
 	// to replay-diff PCR 7 against
 	if len(in.BaselineEventLog) == 0 {
@@ -106,7 +106,7 @@ func reanchorDecision(in ReanchorInputs) (ReanchorVerdict, string) {
 	// assurance tier and the anti-rollback / disappeared-ESRT escalations
 	// are decided from the ESRT alone, then the rate limit short-circuits
 	// before any parsing.
-	verdict := ReanchorAllow
+	verdict = ReanchorAllow
 	if in.CurrentESRT != nil && in.CurrentESRT.Present {
 		switch {
 		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
