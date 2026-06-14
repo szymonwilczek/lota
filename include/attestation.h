@@ -205,6 +205,21 @@ struct lota_bpf_summary {
 } __attribute__((packed));
 
 /*
+ * ESRT System Firmware descriptor (EFI System Resource Table, fw_type == 1).
+ * Carries the firmware version the verifier uses as an anti-rollback signal
+ * for self-service re-anchor.
+ * present == 0 when the platform exposes no ESRT (common on DIY boards),
+ * which routes the host onto the verifier's Low-Firmware-Assurance path.
+ * Wire size is fixed at 28 bytes.
+ */
+struct lota_esrt {
+	uint32_t present;	   /* 1 if a System Firmware entry was found */
+	uint32_t fw_version;	   /* ESRT fw_version */
+	uint32_t lowest_supported; /* lowest_supported_fw_version */
+	uint8_t fw_class[16];	   /* fw_class GUID (raw 16 bytes) */
+} __attribute__((packed));
+
+/*
  * Complete attestation report
  *
  * Wire format:
@@ -216,6 +231,8 @@ struct lota_bpf_summary {
  *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
+ *   [lota_esrt: 28 bytes]   (optional trailing section; absent for legacy
+ *                            agents, which the verifier treats as no-ESRT)
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
@@ -233,6 +250,7 @@ struct lota_attestation_report {
  * @event_count: Number of events
  * @event_log: TPM event log (can be NULL)
  * @event_log_size: Size of event log
+ * @esrt: ESRT System Firmware descriptor (can be NULL to omit the section)
  * @out_buf: Output buffer (caller allocates)
  * @out_buf_size: Size of output buffer
  *
@@ -241,16 +259,18 @@ struct lota_attestation_report {
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const struct lota_exec_event *events,
 			 uint32_t event_count, const uint8_t *event_log,
-			 uint32_t event_log_size, uint8_t *out_buf,
-			 size_t out_buf_size);
+			 uint32_t event_log_size, const struct lota_esrt *esrt,
+			 uint8_t *out_buf, size_t out_buf_size);
 
 /*
  * calculate_report_size - Calculate serialized report size
  * @event_count: Number of BPF events
  * @event_log_size: Size of TPM event log
+ * @with_esrt: non-zero to include the trailing ESRT section
  *
  * Returns: Total size in bytes
  */
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size);
+size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
+			     int with_esrt);
 
 #endif /* LOTA_ATTESTATION_H */

@@ -443,6 +443,9 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 	if err != nil {
 		return nil, fmt.Errorf("event log semantic extraction failed: %w", err)
 	}
+	// hand the already-parsed log to downstream consumers (re-anchor) so
+	// they do not parse the same bytes a second time
+	facts.Parsed = parsed
 
 	slog.Info("event log verified",
 		"entries", replay.TotalEntries,

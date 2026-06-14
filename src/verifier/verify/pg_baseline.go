@@ -792,3 +792,168 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	committed = true
 	return outcome
 }
+
+// GetReanchorState implements ReanchorStorer for Postgres.
+// Present is true only when a boot baseline (PCR0/1/7) has been pinned for the client.
+func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ctx := context.Background()
+	var (
+		pcr0, pcr1, pcr7 []byte
+		evlog            []byte
+		esrtVersion      sql.NullInt64
+		esrtCapable      sql.NullBool
+		lfa              sql.NullBool
+		reCount          sql.NullInt64
+		lastReanchor     sql.NullTime
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT pcr0, pcr1, pcr7, eventlog_baseline, esrt_version,
+		   esrt_capable, lfa, reanchor_count, last_reanchor_at
+		 FROM baselines WHERE client_id = $1`,
+		clientID,
+	).Scan(&pcr0, &pcr1, &pcr7, &evlog, &esrtVersion, &esrtCapable,
+		&lfa, &reCount, &lastReanchor)
+	if err != nil {
+		return ReanchorState{}
+	}
+	if len(pcr0) == 0 && len(pcr1) == 0 && len(pcr7) == 0 {
+		return ReanchorState{}
+	}
+
+	st := ReanchorState{Present: true}
+	if len(evlog) > 0 {
+		st.EventLogBaseline = append([]byte(nil), evlog...)
+	}
+	if esrtVersion.Valid {
+		st.ESRTVersion = uint32(esrtVersion.Int64)
+	}
+	st.ESRTCapable = esrtCapable.Valid && esrtCapable.Bool
+	st.LFA = lfa.Valid && lfa.Bool
+	if reCount.Valid {
+		st.ReanchorCount = int(reCount.Int64)
+	}
+	if lastReanchor.Valid {
+		st.LastReanchorAt = lastReanchor.Time
+	}
+	return st
+}
+
+// ArchiveAndReanchor implements ReanchorStorer for Postgres:
+// it archives the current boot baseline and replaces it with boot
+// under the per-client advisory lock.
+// esrt_capable is kept sticky (OR), never cleared.
+func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
+	boot BootBaseline, eventLog []byte, esrtVersion uint32,
+	esrtCapable, lfa bool, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("reanchor tx rollback failed", "client_id", clientID, "error", err)
+			}
+		}
+	}()
+	if err := lockClient(ctx, tx, clientID); err != nil {
+		return err
+	}
+
+	var (
+		oldPCR0, oldPCR1, oldPCR7 []byte
+		oldESRT                   sql.NullInt64
+	)
+	if err := tx.QueryRowContext(ctx,
+		"SELECT pcr0, pcr1, pcr7, esrt_version FROM baselines WHERE client_id = $1 FOR UPDATE",
+		clientID,
+	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO baseline_archive
+		   (client_id, archived_at, pcr0, pcr1, pcr7, esrt_version, reason)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		clientID, now, oldPCR0, oldPCR1, oldPCR7, oldESRT, reason,
+	); err != nil {
+		return err
+	}
+	// LFA re-anchor applies automatically but flags the client for post-fact
+	// operator review;
+	// strong re-anchor clears any prior flag
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE baselines SET pcr0 = $1, pcr1 = $2, pcr7 = $3, boot_last_seen = $4,
+		   eventlog_baseline = $5, esrt_version = $6,
+		   esrt_capable = (esrt_capable OR $7),
+		   lfa = $8, lfa_review_pending = $8,
+		   reanchor_count = reanchor_count + 1, last_reanchor_at = $9
+		 WHERE client_id = $10`,
+		boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now,
+		eventLog, int64(esrtVersion), esrtCapable, lfa, now, clientID,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// RecordBootEvidence stores the event log + ESRT version for a first-use
+// boot baseline (Postgres).
+// Idempotent UPDATE; esrt_capable kept sticky.
+func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
+	eventLog []byte, esrtVersion uint32, esrtPresent bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE baselines SET eventlog_baseline = $1, esrt_version = $2,
+		   esrt_capable = (esrt_capable OR $3)
+		 WHERE client_id = $4`,
+		eventLog, int64(esrtVersion), esrtPresent, clientID,
+	)
+	return err
+}
+
+// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
+// (Postgres).
+func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.QueryContext(context.Background(),
+		"SELECT client_id FROM baselines WHERE lfa_review_pending = TRUE ORDER BY client_id")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
+func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(context.Background(),
+		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
+	return err
+}

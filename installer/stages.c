@@ -797,6 +797,16 @@ int install_self_check(struct install_ctx *ctx)
 		ok = 0;
 	}
 
+	/* Informational:
+	 * tells the player which firmware-update recovery path this machine
+	 * will take if the operator runs a self-service re-anchor verifier.
+	 * Not a pass/fail gate! */
+	ui_kv(&ctx->ui, "Firmware version reporting (ESRT)",
+	      probe_esrt_system_firmware_present()
+		  ? "present (firmware re-anchor uses the strong path)"
+		  : "absent (firmware re-anchor is low-assurance; the first "
+		    "one needs operator approval)");
+
 	if (ctx->opts.verifier) {
 		const char *argv[8];
 		int n = 0;
@@ -829,6 +839,34 @@ int install_self_check(struct install_ctx *ctx)
 }
 
 /* stage table */
+
+/*
+ * Informational stage:
+ * tell the player which firmware-update recovery path this machine qualifies
+ * for.
+ * Probe-only, changes nothing, always DONE.
+ */
+static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
+						    char *note, size_t cap)
+{
+	(void)ctx;
+
+	if (probe_esrt_system_firmware_present())
+		snprintf(note, cap,
+			 "This machine reports its firmware version (ESRT), so "
+			 "after a BIOS update the operator's verifier can "
+			 "re-establish the baseline automatically.");
+	else
+		snprintf(
+		    note, cap,
+		    "This machine does not report a firmware version "
+		    "(ESRT) - common on custom builds flashed from a USB "
+		    "tool. A BIOS update still re-establishes "
+		    "automatically, on the low-assurance path the operator "
+		    "reviews after the fact.");
+	return STAGE_DONE;
+}
+
 const struct stage install_stages[] = {
     {
 	.title = "Preflight: Hardware and Host Requirements",
@@ -931,6 +969,18 @@ const struct stage install_stages[] = {
 	    "The certificate lands in /var/lib/lota/aik_cert.der.",
 	.probe = st_enroll_probe,
 	.apply = st_enroll_apply,
+    },
+    {
+	.title = "Firmware-update readiness",
+	.explain =
+	    "After install, a later BIOS update changes this machine's "
+	    "firmware measurements. The operator's verifier can re-establish "
+	    "the trust baseline on its own when the update keeps Secure Boot "
+	    "intact (same keys, Secure Boot still on), so you keep playing "
+	    "without re-running this installer."
+	    "\nThis step only reports which recovery path your hardware "
+	    "qualifies for - it changes nothing on the system.",
+	.probe = st_firmware_readiness_probe,
     },
 };
 

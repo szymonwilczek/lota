@@ -189,6 +189,12 @@ type BootFacts struct {
 	PCR8Quoted     bool
 	PCR8Reported   [types.HashSize]byte
 	PCR8EventsSeen bool
+
+	// Parsed is the event log already parsed for this verification, so
+	// downstream consumers (re-anchor) reuse it instead of parsing the
+	// same bytes again.
+	// Set only after quote-consistency passed.
+	Parsed *ParsedEventLog
 }
 
 // SecureBootAnchored reports whether the event-log facts prove Secure

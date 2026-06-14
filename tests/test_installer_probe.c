@@ -10,9 +10,13 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "../installer/probe.h"
 
@@ -162,6 +166,69 @@ static void test_conf_key(void)
 	PASS();
 }
 
+static void write_text_file(const char *dir, const char *name, const char *val)
+{
+	char path[512];
+	int fd;
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return;
+	f = fdopen(fd, "w");
+	if (f) {
+		fputs(val, f);
+		fclose(f);
+	} else {
+		close(fd);
+	}
+}
+
+static void test_esrt_present(void)
+{
+	char base[256];
+	char dir[320];
+	char cmd[320];
+
+	snprintf(base, sizeof(base), "/tmp/lota-inst-esrt.%d", (int)getpid());
+
+	TEST("ESRT: absent entries dir reports not-present");
+	if (probe_esrt_system_firmware_present_at(base) != 0) {
+		FAIL("nonexistent base should be 0");
+		return;
+	}
+	PASS();
+
+	mkdir(base, 0755);
+	snprintf(dir, sizeof(dir), "%s/entry0", base);
+	mkdir(dir, 0755);
+	write_text_file(dir, "fw_type", "2\n"); /* device firmware */
+
+	TEST("ESRT: only device-firmware entries reports not-present");
+	if (probe_esrt_system_firmware_present_at(base) != 0) {
+		FAIL("device-only should be 0");
+		goto cleanup;
+	}
+	PASS();
+
+	snprintf(dir, sizeof(dir), "%s/entry1", base);
+	mkdir(dir, 0755);
+	write_text_file(dir, "fw_type", "1\n"); /* system firmware */
+
+	TEST("ESRT: a system-firmware entry reports present");
+	if (probe_esrt_system_firmware_present_at(base) != 1) {
+		FAIL("system fw entry should be 1");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", base);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -171,6 +238,7 @@ int main(void)
 	test_cmdline_ima();
 	test_cmdline_token();
 	test_conf_key();
+	test_esrt_present();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

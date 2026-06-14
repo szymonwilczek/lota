@@ -323,3 +323,218 @@ func TestSecureBootAnchored(t *testing.T) {
 		}
 	}
 }
+
+func TestReanchor_MemoryStateAndArchive(t *testing.T) {
+	bs := NewBaselineStore()
+
+	// no baseline row -> not present
+	if st := bs.GetReanchorState("dev"); st.Present {
+		t.Fatal("no baseline -> Present should be false")
+	}
+
+	// pin the boot baseline first
+	bs.CheckAndUpdateBootPCRs("dev", boot(0x10, 0x11, 0x17))
+	st := bs.GetReanchorState("dev")
+	if !st.Present {
+		t.Fatal("after pin -> Present should be true")
+	}
+	if st.ReanchorCount != 0 || st.ESRTCapable || st.LFA {
+		t.Errorf("fresh re-anchor state should be zero: %+v", st)
+	}
+
+	// strong re-anchor: records event log + ESRT version, sets capable
+	log1 := []byte("eventlog-v1")
+	if err := bs.ArchiveAndReanchor("dev", boot(0x20, 0x21, 0x17), log1,
+		785, true, false, "strong"); err != nil {
+		t.Fatalf("ArchiveAndReanchor: %v", err)
+	}
+	st = bs.GetReanchorState("dev")
+	if st.ReanchorCount != 1 {
+		t.Errorf("ReanchorCount: got %d, want 1", st.ReanchorCount)
+	}
+	if !st.ESRTCapable || st.ESRTVersion != 785 || st.LFA {
+		t.Errorf("strong re-anchor state wrong: %+v", st)
+	}
+	if !bytes.Equal(st.EventLogBaseline, log1) {
+		t.Error("event-log baseline not stored")
+	}
+	if r, _ := bs.CheckAndUpdateBootPCRs("dev", boot(0x20, 0x21, 0x17)); r != TOFUMatch {
+		t.Errorf("re-anchored baseline should match, got %v", r)
+	}
+
+	// LFA re-anchor: esrt_capable stays sticky-true, count bumps, LFA set
+	if err := bs.ArchiveAndReanchor("dev", boot(0x30, 0x31, 0x17),
+		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
+	}
+	st = bs.GetReanchorState("dev")
+	if st.ReanchorCount != 2 {
+		t.Errorf("ReanchorCount: got %d, want 2", st.ReanchorCount)
+	}
+	if !st.ESRTCapable {
+		t.Error("esrt_capable must stay sticky true once set")
+	}
+	if !st.LFA {
+		t.Error("LFA should be true after an lfa re-anchor")
+	}
+}
+
+func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	bs := NewSQLiteBaselineStore(db)
+
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	bs.CheckAndUpdate("c", pcr14)
+	bs.CheckAndUpdateBootPCRs("c", boot(0xB0, 0xB1, 0xB7))
+
+	st := bs.GetReanchorState("c")
+	if !st.Present || st.ReanchorCount != 0 || st.ESRTCapable {
+		t.Fatalf("fresh re-anchor state wrong: %+v", st)
+	}
+
+	log := []byte("evlog-baseline")
+	if err := bs.ArchiveAndReanchor("c", boot(0xC0, 0xC1, 0xB7), log,
+		785, true, false, "strong"); err != nil {
+		t.Fatalf("ArchiveAndReanchor: %v", err)
+	}
+	st = bs.GetReanchorState("c")
+	if st.ReanchorCount != 1 || !st.ESRTCapable || st.ESRTVersion != 785 || st.LFA {
+		t.Fatalf("after strong re-anchor: %+v", st)
+	}
+	if !bytes.Equal(st.EventLogBaseline, log) {
+		t.Error("event-log baseline not persisted")
+	}
+	if r, _ := bs.CheckAndUpdateBootPCRs("c", boot(0xC0, 0xC1, 0xB7)); r != TOFUMatch {
+		t.Errorf("re-anchored baseline should match, got %v", r)
+	}
+
+	var n int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM baseline_archive WHERE client_id = 'c'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("archive rows after one re-anchor: got %d, want 1", n)
+	}
+
+	// LFA re-anchor: capability stays sticky, count bumps, second archive row
+	if err := bs.ArchiveAndReanchor("c", boot(0xD0, 0xD1, 0xB7),
+		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
+	}
+	st = bs.GetReanchorState("c")
+	if st.ReanchorCount != 2 || !st.ESRTCapable || !st.LFA {
+		t.Fatalf("after lfa re-anchor: %+v", st)
+	}
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM baseline_archive WHERE client_id = 'c'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("archive rows after two re-anchors: got %d, want 2", n)
+	}
+}
+
+func TestRecordBootEvidence_MemoryAndSQLite(t *testing.T) {
+	// in-memory
+	bs := NewBaselineStore()
+	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := bs.RecordBootEvidence("c", []byte("log"), 785, true); err != nil {
+		t.Fatalf("RecordBootEvidence: %v", err)
+	}
+	st := bs.GetReanchorState("c")
+	if !bytes.Equal(st.EventLogBaseline, []byte("log")) || st.ESRTVersion != 785 || !st.ESRTCapable {
+		t.Fatalf("in-memory evidence: %+v", st)
+	}
+	// esrt_capable stays sticky even if a later record reports not-present
+	if err := bs.RecordBootEvidence("c", []byte("log2"), 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if st = bs.GetReanchorState("c"); !st.ESRTCapable {
+		t.Error("in-memory esrt_capable must stay sticky")
+	}
+
+	// SQLite
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	sq := NewSQLiteBaselineStore(db)
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	sq.CheckAndUpdate("c", pcr14)
+	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := sq.RecordBootEvidence("c", []byte("evlog"), 900, true); err != nil {
+		t.Fatalf("sqlite RecordBootEvidence: %v", err)
+	}
+	st = sq.GetReanchorState("c")
+	if !bytes.Equal(st.EventLogBaseline, []byte("evlog")) || st.ESRTVersion != 900 || !st.ESRTCapable {
+		t.Fatalf("sqlite evidence: %+v", st)
+	}
+	// re-anchor count untouched by evidence recording
+	if st.ReanchorCount != 0 {
+		t.Errorf("RecordBootEvidence must not bump reanchor_count, got %d", st.ReanchorCount)
+	}
+}
+
+func TestLFAReview_MemoryAndSQLite(t *testing.T) {
+	// in-memory: an LFA re-anchor flags the client for review;
+	// strong re-anchor clears it; acknowledge clears it too
+	bs := NewBaselineStore()
+	bs.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Fatal("no review pending before any LFA re-anchor")
+	}
+	if err := bs.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+		t.Fatal(err)
+	}
+	if got := bs.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("expected c pending review, got %v", got)
+	}
+	if err := bs.AcknowledgeLFAReview("c"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after acknowledge (in-memory)")
+	}
+	// strong re-anchor must not leave the client on the review list
+	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bs.ListLFAReviewPending()) != 0 {
+		t.Error("strong re-anchor must not flag for review")
+	}
+
+	// SQLite: same contract
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/b.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	sq := NewSQLiteBaselineStore(db)
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	sq.CheckAndUpdate("c", pcr14)
+	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
+	if err := sq.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sq.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("sqlite: expected c pending, got %v", got)
+	}
+	if err := sq.AcknowledgeLFAReview("c"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sq.ListLFAReviewPending()) != 0 {
+		t.Error("review should be cleared after acknowledge (SQLite)")
+	}
+}

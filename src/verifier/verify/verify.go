@@ -134,6 +134,7 @@ type Verifier struct {
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
 	rejectLegacyBaselines bool
+	selfServiceReanchor   bool
 	maxRestartCountSkew   uint32
 }
 
@@ -265,6 +266,16 @@ type VerifierConfig struct {
 	// grace period should set it to true.
 	RejectLegacyBaselines bool
 
+	// EnableSelfServiceReanchor turns on self-service re-anchor:
+	// on a firmware/Secure Boot PCR drift the verifier may re-pin the
+	// per-device boot baseline itself when the drift preserves the Secure Boot
+	// root of trust (see reanchorDecision), instead of rejecting until
+	// operator clears the row.
+	// Only takes effect for the diverse-fleet profile (a policy with require_secureboot);
+	// off by default and intended to stay off for the enterprise profile,
+	// which treats drift as a feature.
+	EnableSelfServiceReanchor bool
+
 	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
 	// the verifier tolerates when matching the PCR14 boot-commitment
 	// digest. The agent extends PCR14 once at startup with the
@@ -348,6 +359,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
+		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
 		sessionTokenStore:     cfg.SessionTokenStore,
@@ -937,9 +949,33 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 					"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
 					"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+
+				// capture the event log + firmware version alongside the boot
+				// baseline so a later self-service re-anchor can replay-diff
+				// PCR 7 and apply the firmware anti-rollback check
+				if rs, ok := v.baselineStore.(ReanchorStorer); ok {
+					var esrtVer uint32
+					esrtPresent := false
+					if report.ESRT != nil && report.ESRT.Present {
+						esrtVer = report.ESRT.FWVersion
+						esrtPresent = true
+					}
+					if err := rs.RecordBootEvidence(clientID, report.EventLog,
+						esrtVer, esrtPresent); err != nil {
+						clog.Warn("failed to record boot evidence for re-anchor",
+							"error", err)
+					}
+				}
 			case TOFUMatch:
 				clog.Debug("boot PCRs match baseline")
 			case TOFUMismatch:
+				// self-service re-anchor:
+				// if the drift preserves the Secure Boot root of trust,
+				// re-pin the baseline instead of rejecting.
+				// Returns true only on an actual re-pin.
+				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+					break
+				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
 				if outcome.BootBaseline != nil {
 					exp0, exp1, exp7 = outcome.BootBaseline.PCR0,
@@ -1231,4 +1267,97 @@ func (v *Verifier) AIKStore() store.AIKStore {
 // returns client IDs currently present in the nonce store
 func (v *Verifier) ListActiveClients() []string {
 	return v.nonceStore.ListActiveClients()
+}
+
+// tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.
+// It returns true only when the per-device boot baseline was actually re-pinned
+// (the strong path, or an operator-approved LFA path), in which case the caller
+// treats the attestation as a match instead of rejecting.
+// Pending or escalated outcome returns false and the caller rejects as before.
+// Decision itself lives in reanchorDecision.
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+	boot *BootBaseline, report *types.AttestationReport,
+	bootFacts *BootFacts) bool {
+	if !v.selfServiceReanchor {
+		return false
+	}
+	// diverse-fleet profile only:
+	// an active policy with require_secureboot and the event-log Secure Boot
+	// anchor proven for this boot
+	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+		return false
+	}
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return false
+	}
+
+	st := rs.GetReanchorState(clientID)
+	verdict, reason := reanchorDecision(ReanchorInputs{
+		BaselineEventLog:    st.EventLogBaseline,
+		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
+		BaselineESRTVersion: st.ESRTVersion,
+		CurrentESRT:         report.ESRT,
+		ESRTCapable:         st.ESRTCapable,
+		LastReanchorAt:      st.LastReanchorAt,
+		Now:                 time.Now(),
+	})
+
+	esrtPresent := report.ESRT != nil && report.ESRT.Present
+	var esrtVer uint32
+	if esrtPresent {
+		esrtVer = report.ESRT.FWVersion
+	}
+
+	switch verdict {
+	case ReanchorAllow:
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, false, "strong"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "boot baseline re-anchored (strong path)", "reason", reason)
+		v.metrics.Reanchors.Inc("strong")
+		return true
+	case ReanchorLFA:
+		// LFA re-anchor applies automatically (no approval gate):
+		// player keeps attesting after a firmware update.
+		// ArchiveAndReanchor flags the client for post-fact operator review;
+		// the alert below and the review list (GET /api/v1/reanchor/review)
+		// surface it so an operator can inspect and, if needed, revoke or ban.
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, true, "lfa"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "ALERT: boot baseline re-anchored on the low-firmware-assurance path (operator review recommended)", "reason", reason)
+		v.metrics.Reanchors.Inc("lfa")
+		return true
+	default:
+		logging.Security(clog, "boot baseline re-anchor escalated to operator", "reason", reason)
+		v.metrics.Reanchors.Inc("escalate")
+		return false
+	}
+}
+
+// ListReanchorReview returns the clients that re-anchored on the
+// Low-Firmware-Assurance path and have not yet been reviewed by an operator.
+// List is informational (post-fact); LFA re-anchors are not blocked on it.
+func (v *Verifier) ListReanchorReview() ([]string, error) {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return nil, fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.ListLFAReviewPending(), nil
+}
+
+// AcknowledgeReanchorReview clears a client's pending-review flag once an
+// operator has inspected its LFA re-anchor.
+// It does not change the baseline.
+func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.AcknowledgeLFAReview(clientID)
 }
