@@ -12,6 +12,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,7 +55,7 @@ static int write_test_cert(const char *path, long before, long after)
 	X509 *x = NULL;
 	X509_NAME *name;
 	uint8_t *der = NULL;
-	int len, ret = -1;
+	int len, fd, ret = -1;
 	FILE *f;
 
 	pkey = EVP_EC_gen("P-256");
@@ -83,9 +84,14 @@ static int write_test_cert(const char *path, long before, long after)
 	if (len <= 0)
 		goto out;
 
-	f = fopen(path, "wb");
-	if (!f)
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
 		goto out;
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		goto out;
+	}
 	if (fwrite(der, 1, (size_t)len, f) == (size_t)len)
 		ret = 0;
 	fclose(f);
@@ -150,9 +156,12 @@ static void test_missing_is_enoent(void)
 static void test_garbage_is_einval(void)
 {
 	const char *path = tmp_path();
-	FILE *f = fopen(path, "wb");
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	FILE *f = fd < 0 ? NULL : fdopen(fd, "wb");
 	int64_t remaining = 0, total = 0;
 
+	if (fd >= 0 && !f)
+		close(fd);
 	CHECK(f != NULL, "open garbage file");
 	if (f) {
 		fwrite("not a certificate", 1, 17, f);
