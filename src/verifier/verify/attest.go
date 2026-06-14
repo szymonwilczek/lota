@@ -193,7 +193,7 @@ func parseQuoteInfo(r *bytes.Reader) (*QuoteInfo, error) {
 }
 
 // verifies that extraData in TPMS_ATTEST matches expected nonce
-func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
+func VerifyNonceInAttest(attestData, expectedNonce []byte) error {
 	attest, err := ParseTPMSAttest(attestData)
 	if err != nil {
 		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
@@ -225,7 +225,7 @@ func VerifyNonceInAttest(attestData []byte, expectedNonce []byte) error {
 // entirely; reject the quote with an explicit error so an operator
 // upgrading the PCR bank notices the wire-format gap instead of
 // silently passing or silently failing.
-func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
 	if attest == nil {
 		return errors.New("nil TPMS_ATTEST")
 	}
@@ -262,7 +262,7 @@ func VerifyPCRDigestParsed(attest *TPMSAttest, pcrValues [types.PCRCount][types.
 // not consume the parsed TPMS_ATTEST themselves. Internally it parses
 // and delegates to VerifyPCRDigestParsed; new code should prefer the
 // parsed form to avoid re-parsing.
-func VerifyPCRDigest(attestData []byte, pcrValues [types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
+func VerifyPCRDigest(attestData []byte, pcrValues *[types.PCRCount][types.HashSize]byte, pcrMask uint32) error {
 	attest, err := ParseTPMSAttest(attestData)
 	if err != nil {
 		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)

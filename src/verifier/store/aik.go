@@ -826,7 +826,7 @@ func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bo
 // roots at load time; a CRL whose signature does not chain or whose
 // issuer is unknown is rejected up front. Lookups during certificate
 // verification consult these lists in addition to the chain check.
-func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
+func NewCertificateStoreWithCRL(storePath string, caCertPaths, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
 	if requireCerts && len(caCertPaths) == 0 {
 		return nil, ErrNoTrustedCAs
 	}

@@ -72,7 +72,7 @@ func LoadPolicyPublicKey(path string) (ed25519.PublicKey, error) {
 // checks an Ed25519 signature over raw policy data
 // sig must be exactly 64 bytes!
 // returns nil if valid, ErrInvalidSignature if not
-func VerifyPolicySignature(data []byte, sig []byte, pubKey ed25519.PublicKey) error {
+func VerifyPolicySignature(data, sig []byte, pubKey ed25519.PublicKey) error {
 	if len(sig) != PolicySigSize {
 		return ErrBadSigSize
 	}

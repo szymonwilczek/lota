@@ -309,7 +309,7 @@ func (ns *NonceStore) generateUniqueNonceLocked() ([types.NonceSize]byte, error)
 // monotonic counters. It is supplied by the caller after the AIK
 // certificate has been verified, so the limit cannot be evaded by
 // rotating an agent-asserted hardware_id.
-func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID string, identityID string) error {
+func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, identityID string) error {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 

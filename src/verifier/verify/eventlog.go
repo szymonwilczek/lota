@@ -172,7 +172,6 @@ func parseSpecIDEvent(data []byte) ([]uint16, error) {
 			return nil, errors.New("truncated algorithm list")
 		}
 		algID := binary.LittleEndian.Uint16(data[offset:])
-		// digestSize := binary.LittleEndian.Uint16(data[offset+2:])
 		offset += 4
 		algs = append(algs, algID)
 	}
