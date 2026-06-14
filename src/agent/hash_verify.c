@@ -19,12 +19,12 @@
 #include <fcntl.h>
 #include <linux/fsverity.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
+
+#include "lota.h"
 
 int hash_verify_init(struct hash_verify_ctx *ctx)
 {

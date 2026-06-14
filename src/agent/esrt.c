@@ -10,10 +10,11 @@
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "esrt.h"
+#include "attestation.h"
 
 #define ESRT_DEFAULT_BASE "/sys/firmware/efi/esrt/entries"
 

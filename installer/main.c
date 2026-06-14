@@ -3,15 +3,16 @@
  * lota-install - Guided, reboot-resumable Player Install
  */
 
-#include "install.h"
-#include "run.h"
-#include "tui.h"
-
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "install.h"
+#include "run.h"
+#include "tui.h"
+#include "ui.h"
 
 #ifndef LOTA_INSTALL_VERSION
 #define LOTA_INSTALL_VERSION "dev"

@@ -18,6 +18,8 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../../include/lota_endian.h"
 #include "../../include/lota_gaming.h"

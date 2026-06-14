@@ -6,15 +6,17 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <dirent.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/klog.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "iommu.h"
+#include "iommu_types.h"
 
 /* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"

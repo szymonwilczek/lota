@@ -9,10 +9,12 @@
 #ifndef LOTA_ATTESTATION_H
 #define LOTA_ATTESTATION_H
 
-#include "iommu_types.h"
-#include "lota.h"
 #include <stdint.h>
 #include <sys/types.h>
+#include <stddef.h>
+
+#include "iommu_types.h"
+#include "lota.h"
 
 /*
  * Attestation report header

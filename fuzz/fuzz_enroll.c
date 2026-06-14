@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "../src/agent/enroll.c"
+#include "../src/agent/enroll.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 

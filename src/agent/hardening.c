@@ -6,17 +6,16 @@
  */
 
 #include "hardening.h"
-#include "journal.h"
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <unistd.h>
-
 #include <seccomp.h>
+#include <sys/types.h>
+
+#include "journal.h"
 
 /*
  * hardening_parse_tracer_pid - inspect a /proc/<pid>/status payload

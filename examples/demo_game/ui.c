@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <SDL.h>
+
 enum text_role {
 	TEXT_SMALL = 0,
 	TEXT_STATUS,

@@ -11,8 +11,6 @@
 #ifndef LOTA_ENROLL_H
 #define LOTA_ENROLL_H
 
-#include <stdint.h>
-
 /* "LCAE", matched against the big-endian preamble of every frame. */
 #define LOTA_ENROLL_MAGIC 0x4C434145u
 #define LOTA_ENROLL_VERSION 1u

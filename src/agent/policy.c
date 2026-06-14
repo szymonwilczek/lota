@@ -30,6 +30,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lota.h"
+
 static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE])
 {
 	for (int i = 0; i < LOTA_HASH_SIZE; i++)

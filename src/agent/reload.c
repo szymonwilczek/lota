@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <syslog.h>
 
 #include "agent.h"
 #include "bpf_loader.h"
@@ -15,6 +18,7 @@
 #include "main_utils.h"
 #include "policy_sign.h"
 #include "sdnotify.h"
+#include "lota.h"
 
 #ifndef EAUTH
 #define EAUTH 80

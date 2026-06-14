@@ -13,8 +13,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "../src/agent/enroll.h"
+#include "lota_enroll.h"
 
 static int g_failures;
 

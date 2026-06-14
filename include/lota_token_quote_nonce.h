@@ -27,11 +27,11 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "lota_endian.h"
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+
+#include "lota_endian.h"
 
 #ifndef LOTA_TOKEN_NONCE_SIZE
 #define LOTA_TOKEN_NONCE_SIZE 32

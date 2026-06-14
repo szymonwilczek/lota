@@ -20,8 +20,15 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <openssl/types.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <tss2/tss2_common.h>
+#include <tss2/tss2_tpm2_types.h>
 
-#include "../src/agent/agent_internal.h"
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
+#include "lota.h"
 
 static uint32_t tpm_ascii4(char a, char b, char c, char d)
 {

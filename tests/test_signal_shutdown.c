@@ -18,11 +18,17 @@
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../src/agent/agent.h"
 #include "../src/agent/daemon.h"
 #include "../src/agent/journal.h"
 #include "../src/agent/shutdown.h"
+#include "../src/agent/bpf_loader.h"
+#include "../src/agent/tpm.h"
+#include "lota.h"
 
 static int tests_run;
 static int tests_passed;

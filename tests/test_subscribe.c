@@ -21,6 +21,8 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../include/lota_gaming.h"
 #include "../include/lota_ipc.h"

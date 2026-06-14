@@ -32,7 +32,6 @@
 #define LOTA_ENVELOPE_H
 
 #include <errno.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 

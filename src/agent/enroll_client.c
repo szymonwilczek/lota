@@ -14,11 +14,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "agent.h"
 #include "enroll.h"
 #include "net.h"
 #include "tpm.h"
+#include "lota_enroll.h"
 
 /* Outer frame: u32 big-endian body length followed by the body. */
 static int send_frame(struct net_context *net, const uint8_t *body, size_t len)

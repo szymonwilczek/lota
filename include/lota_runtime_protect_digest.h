@@ -21,11 +21,11 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "lota_endian.h"
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+
+#include "lota_endian.h"
 
 #define LOTA_RUNTIME_PROTECT_DIGEST_SIZE 32
 

@@ -10,8 +10,9 @@
 #include <string.h>
 #include <sys/random.h>
 #include <unistd.h>
-
 #include <stdlib.h>
+#include <sys/types.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_envelope.h"
@@ -21,6 +22,7 @@
 #include "quote.h"
 #include "selftest.h"
 #include "tpm.h"
+#include "iommu_types.h"
 
 void print_hex(const char *label, const uint8_t *data, size_t len)
 {

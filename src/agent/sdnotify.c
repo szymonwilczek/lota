@@ -12,7 +12,6 @@
 #include "sdnotify.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -20,10 +19,9 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/un.h>
 #include <unistd.h>
-
 #include <systemd/sd-daemon.h>
+#include <sys/types.h>
 
 /*
  * systemd creates the notify socket mode 0777 by design so any process

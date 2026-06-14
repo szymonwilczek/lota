@@ -11,11 +11,10 @@
 
 #include <errno.h>
 #include <limits.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
 #include <openssl/evp.h>
+#include <openssl/types.h>
 
 #include "../../include/lota_envelope.h"
 

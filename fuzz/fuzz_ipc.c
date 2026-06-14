@@ -23,7 +23,6 @@
 #include "../src/agent/test_servers.h"
 #include "../include/lota_ipc.h"
 #include <errno.h>
-#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>

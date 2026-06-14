@@ -17,17 +17,15 @@
  */
 
 #include <errno.h>
-#include <fcntl.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/un.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #include "../src/agent/ipc.h"
 #include "../src/agent/journal.h"

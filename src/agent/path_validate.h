@@ -4,7 +4,6 @@
 
 #include <ctype.h>
 #include <stdbool.h>
-#include <stddef.h>
 
 static inline bool lota_path_is_abs(const char *p)
 {

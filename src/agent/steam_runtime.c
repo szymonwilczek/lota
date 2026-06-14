@@ -16,7 +16,6 @@
  */
 
 #include "steam_runtime.h"
-#include "journal.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -26,6 +25,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/types.h>
+
+#include "journal.h"
 
 #define LOTA_GROUP_NAME "lota"
 

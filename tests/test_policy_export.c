@@ -10,10 +10,11 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "../src/agent/policy.h"
+#include "lota.h"
 
 static int tests_run;
 static int tests_passed;

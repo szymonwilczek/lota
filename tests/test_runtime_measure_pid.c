@@ -13,8 +13,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #include "../src/agent/runtime_image_measure.h"
+#include "lota.h"
 
 static int tests_run;
 static int tests_passed;

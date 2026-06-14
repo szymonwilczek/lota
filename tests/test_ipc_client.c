@@ -5,13 +5,13 @@
  * Usage: ./lota-ipc-test [ping|status|token|badlen]
  */
 
-#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../include/lota_ipc.h"
 

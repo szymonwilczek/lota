@@ -12,14 +12,13 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
-
 #include <openssl/asn1.h>
 #include <openssl/x509.h>
+#include <openssl/types.h>
 
 #include "aik_cert.h"
 #include "enroll.h"
 #include "io_utils.h"
-
 #include "../../include/lota_enroll.h"
 
 bool aik_cert_renew_due(int64_t remaining_sec, int64_t total_sec)

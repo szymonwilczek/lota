@@ -15,6 +15,8 @@
 #ifndef LOTA_INSTALL_H
 #define LOTA_INSTALL_H
 
+#include <stddef.h>
+
 #include "ui.h"
 
 /* Exit codes */

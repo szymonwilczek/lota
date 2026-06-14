@@ -20,11 +20,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <openssl/types.h>
+#include <stdint.h>
 
 #include "lota_gaming.h"
 #include "lota_runtime_protect_digest.h"
 #include "lota_server.h"
 #include "lota_token_quote_nonce.h"
+#include "lota_token.h"
 
 #define GREEN "\033[32m"
 #define RED "\033[31m"

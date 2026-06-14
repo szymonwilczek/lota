@@ -14,11 +14,13 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
 #include <openssl/evp.h>
+#include <errno.h>
+#include <openssl/types.h>
 
 #include "lota_endian.h"
 #include "lota_runtime_image_measure.h"
+#include "lota.h"
 
 static int tests_run;
 static int tests_passed;

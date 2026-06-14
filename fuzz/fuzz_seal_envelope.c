@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "../include/lota_envelope.h"
+#include "lota_seal.h"
 
 /*
  * Mirror tpm_unseal_secret_envelope()'s open path: rebuild the AAD exactly

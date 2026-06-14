@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "lota_envelope.h"
+#include "lota_seal.h"
 
 static int tests_run;
 static int tests_passed;

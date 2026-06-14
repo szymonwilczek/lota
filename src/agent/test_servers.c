@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -14,6 +16,7 @@
 #include "main_utils.h"
 #include "sdnotify.h"
 #include "tpm.h"
+#include "config.h"
 
 int run_ipc_test_server(const struct lota_config *cfg)
 {

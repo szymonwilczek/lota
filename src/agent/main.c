@@ -23,6 +23,7 @@
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -38,7 +39,6 @@
 #include "event.h"
 #include "hardening.h"
 #include "hash_verify.h"
-#include "iommu.h"
 #include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"

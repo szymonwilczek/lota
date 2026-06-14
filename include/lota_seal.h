@@ -21,7 +21,6 @@
 #define LOTA_SEAL_H
 
 #include <errno.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 

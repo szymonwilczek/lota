@@ -27,12 +27,12 @@
 //
 // Copyright (C) 2026 Szymon Wilczek
 
-#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <tss2/tss2_mu.h>
+#include <tss2/tss2_common.h>
+#include <tss2/tss2_tpm2_types.h>
 
 /* TPM2_GENERATED magic the structure must lead with ("TCG", big-endian) */
 static const uint8_t kAttestMagic[4] = {0xff, 0x54, 0x43, 0x47};

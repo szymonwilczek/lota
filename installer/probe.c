@@ -12,11 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
-#include <time.h>
 #include <unistd.h>
+#include <openssl/asn1.h>
+#include <openssl/types.h>
 
 #include <linux/fsverity.h>
 

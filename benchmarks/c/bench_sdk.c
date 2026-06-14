@@ -12,15 +12,15 @@
  * round-trip are measured by the L2 macro suite (hyperfine over the swtpm
  * sandbox); see benchmarks/README.md.
  */
-#include "cbench.h"
-
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
 
-#include "lota.h"
+#include "cbench.h"
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
@@ -73,7 +73,8 @@ static int make_exe_file(struct sdk_ctx *x)
 	size_t kib = cbench_envu("BENCH_EXE_KIB", 1024); /* 1 MiB default */
 	x->exe_bytes = kib * 1024;
 
-	snprintf(x->exe_path, sizeof(x->exe_path), "/tmp/lota_bench_exe.XXXXXX");
+	snprintf(x->exe_path, sizeof(x->exe_path),
+		 "/tmp/lota_bench_exe.XXXXXX");
 	int fd = mkstemp(x->exe_path);
 	if (fd < 0)
 		return -1;
@@ -84,7 +85,8 @@ static int make_exe_file(struct sdk_ctx *x)
 
 	size_t remaining = x->exe_bytes;
 	while (remaining > 0) {
-		size_t n = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
+		size_t n =
+		    remaining < sizeof(chunk) ? remaining : sizeof(chunk);
 		if (write(fd, chunk, n) != (ssize_t)n) {
 			close(fd);
 			return -1;

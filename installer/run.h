@@ -13,6 +13,8 @@
 #ifndef LOTA_INSTALL_RUN_H
 #define LOTA_INSTALL_RUN_H
 
+#include <stddef.h>
+
 #include "ui.h"
 
 /* Runs argv (NULL-terminated) with output streamed to the live

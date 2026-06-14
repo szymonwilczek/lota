@@ -15,10 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
+#include <stdbool.h>
+#include <stdint.h>
 
-#include "../src/agent/agent_internal.h"
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
 static int tests_run;
 static int tests_passed;

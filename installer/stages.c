@@ -9,18 +9,19 @@
  * Installer therefore cannot finish green on a host the agent refuses.
  */
 
-#include "install.h"
-#include "probe.h"
-#include "run.h"
-
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+#include <sys/types.h>
+
+#include "install.h"
+#include "probe.h"
+#include "run.h"
+#include "ui.h"
 
 static int file_exists(const char *path)
 {

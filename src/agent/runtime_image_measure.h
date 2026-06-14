@@ -22,6 +22,7 @@
 #include <sys/types.h>
 
 #include "lota_runtime_image_measure.h"
+#include "lota.h"
 
 /*
  * One file-backed executable mapping selected for measurement.

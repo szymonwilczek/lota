@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include "../../include/lota_ipc.h"
 #include "agent.h"
@@ -22,6 +23,7 @@
 #include "main_utils.h"
 #include "selftest.h"
 #include "test_servers.h"
+#include "tpm.h"
 
 static int ipc_request_shutdown(void)
 {

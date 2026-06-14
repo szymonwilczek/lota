@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 int lota_write_full(int fd, const void *buf, size_t len)
 {

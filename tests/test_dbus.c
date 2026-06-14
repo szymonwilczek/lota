@@ -16,9 +16,10 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "../src/agent/dbus.h"
 #include "../src/agent/ipc.h"

@@ -17,27 +17,28 @@
 #include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
 #include <openssl/crypto.h>
-#include <openssl/encoder.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
 #include <openssl/rand.h>
-#include <openssl/rsa.h>
 #include <openssl/x509.h>
-
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tcti.h>
 #include <tss2/tss2_tcti_device.h>
 #include <tss2/tss2_tctildr.h>
+#include <openssl/params.h>
+#include <openssl/types.h>
+#include <sys/types.h>
 
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "quote.h"
 #include "tpm.h"
+#include "attestation.h"
+#include "lota.h"
 
 /*
  * Single-bank PCR selection bitmap is three bytes (24 bits), so a PCR

@@ -19,11 +19,19 @@
 #ifndef LOTA_HOOK_TESTING
 #define LOTA_HOOK_TESTING
 #endif
-#include "../src/sdk/lota_wine_hook.c"
-
-#include <assert.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "../src/sdk/lota_wine_hook.c"
+#include "lota_gaming.h"
 
 static int tests_run;
 static int tests_passed;

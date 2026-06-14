@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 /* Spinner cadence while a child is running */
 #define RUN_TICK_MS 90
