@@ -47,6 +47,8 @@ struct install_opts {
 	int yes;		    /* Skip confirmations */
 	int plain;		    /* Force non-TUI output */
 	int status_only;	    /* Probe + report, change nothing */
+	int pause;		    /* Graceful agent shutdown, then stop */
+	int resume;		    /* Explain that resume means a reboot */
 };
 
 struct install_ctx {

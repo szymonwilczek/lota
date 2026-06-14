@@ -112,6 +112,19 @@ same stage table through the ui sink in `installer/ui.h` - new output must
 go through the `ui_*` API, never straight to stdout, or it will corrupt
 the alternate screen.
 
+### Certificate renewal
+CA issues AIK certificates with a short TTL (24h by default), far shorter
+than the AIK key rotation interval (`--aik-ttl`, 30d), so the daemon renews
+the certificate from inside the attestation loop (`src/agent/attest.c`)
+driven by cert expiry, not key rotation.
+
+`src/agent/aik_cert.c` reads the stored certificate's validity via OpenSSL
+and reports when renewal is due (final third of validity); the loop then
+re-runs enrollment against the recorded CA endpoint through
+`enroll_renew_cert()` in `src/agent/enroll_client.c`, backing off when the
+CA is unreachable. The expiry probe and the renewal-due decision are
+pinned by `tests/test_aik_cert_renew.c` (part of `make test-unit`).
+
 ### BPF coding rules
 
 An event pointer that is conditionally assigned (for example only when the

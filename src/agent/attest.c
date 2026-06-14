@@ -23,6 +23,7 @@
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "agent.h"
+#include "aik_cert.h"
 #include "attest.h"
 #include "bpf_loader.h"
 #include "dbus.h"
@@ -933,6 +934,9 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	uint64_t valid_until = 0;
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
+	bool auto_renew = false;
+	int renew_backoff = 0;
+	uint64_t next_renew_ms = 0;
 
 	lota_info("Continuous attestation starting");
 	lota_info("Server: %s:%d, interval: %d seconds", server, port,
@@ -1044,6 +1048,25 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 			  0);
 	publish_rotation_state(aik_ttl);
 
+	/*
+	 * Auto-renew the CA-issued AIK certificate:
+	 * it is short-lived (24h by default) and would otherwise lapse a day
+	 * after install.
+	 * Enabled whenever a CA endpoint was recorded at enroll time.
+	 * Manual -reenroll stays the fallback when no endpoint is on disk.
+	 */
+	{
+		struct enroll_state est;
+
+		auto_renew = enroll_state_load(&est) == 0;
+		if (auto_renew)
+			lota_info("AIK certificate auto-renewal enabled");
+		else
+			lota_info(
+			    "AIK certificate auto-renewal off: no recorded "
+			    "CA endpoint (run --enroll to record one)");
+	}
+
 	sdnotify_ready();
 	sdnotify_status("Attesting to %s:%d", server, port);
 	lota_info("Starting attestation loop");
@@ -1077,6 +1100,64 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 				 * over D-Bus immediately
 				 */
 				publish_rotation_state(aik_ttl);
+			}
+		}
+
+		/*
+		 * Renew the CA-issued AIK certificate before it expires.
+		 * Cert lives far less than the AIK key (24h vs 30d), so renewal
+		 * is driven by cert expiry, not by key rotation.
+		 * Re-enroll once the cert enters its final third.
+		 * Back off when the CA is unreachable so a momentary outage
+		 * does not hammer it.
+		 * Renewal that keeps failing past notAfter surfaces through the
+		 * attestation-failure path below:
+		 */
+		if (auto_renew) {
+			int64_t remaining = 0, total = 0;
+			struct timespec mono;
+			uint64_t mono_ms;
+
+			clock_gettime(CLOCK_MONOTONIC, &mono);
+			mono_ms = (uint64_t)mono.tv_sec * 1000 +
+				  (uint64_t)mono.tv_nsec / 1000000;
+
+			if (mono_ms >= next_renew_ms &&
+			    aik_cert_lifetime(&remaining, &total) == 0 &&
+			    aik_cert_renew_due(remaining, total)) {
+				lota_info("AIK certificate renewal due "
+					  "(%lld s left of %lld s)",
+					  (long long)remaining,
+					  (long long)total);
+				ret = enroll_renew_cert(&g_agent.tpm_ctx);
+				if (ret == 0) {
+					renew_backoff = 0;
+					lota_info("AIK certificate renewed");
+					publish_rotation_state(aik_ttl);
+				} else {
+					int shift = renew_backoff;
+					int delay;
+
+					if (shift > 5)
+						shift = 5;
+					renew_backoff++;
+					delay =
+					    MIN_ATTEST_INTERVAL * (1 << shift);
+					if (delay > MAX_BACKOFF_SECONDS)
+						delay = MAX_BACKOFF_SECONDS;
+					next_renew_ms =
+					    mono_ms + (uint64_t)delay * 1000;
+					lota_warn("AIK certificate renewal "
+						  "failed (%s); "
+						  "retry in %ds, cert expires "
+						  "in %lld s",
+						  strerror(-ret), delay,
+						  (long long)remaining);
+					sdnotify_status(
+					    "AIK cert renewal failing, "
+					    "expires in %lld s",
+					    (long long)remaining);
+				}
 			}
 		}
 

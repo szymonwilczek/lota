@@ -367,3 +367,26 @@ int do_reenroll(void)
 	       ret == 0 ? "Successful" : "Failed");
 	return ret == 0 ? 0 : 1;
 }
+
+int enroll_renew_cert(struct tpm_context *tpm)
+{
+	struct enroll_state st;
+	int ret;
+
+	if (!tpm)
+		return -EINVAL;
+
+	ret = enroll_state_load(&st);
+	if (ret < 0)
+		return ret; /* -ENOENT: never enrolled, caller disables renew */
+
+	ret =
+	    enroll_to_ca(tpm, st.ca_server, st.ca_port,
+			 st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
+			 st.has_pin ? st.pin_sha256 : NULL, LOTA_AIK_CERT_PATH);
+	if (ret == 0)
+		persist_enroll_state(
+		    st.ca_server, st.ca_port, st.ca_cert[0] ? st.ca_cert : NULL,
+		    st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL);
+	return ret;
+}
