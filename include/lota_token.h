@@ -66,8 +66,8 @@ extern "C" {
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 
 /* runtime_protect_version values */
-#define LOTA_RUNTIME_PROTECT_V1                                                \
-	1			  /* PID set identity only (0 also accepted)   \
+#define LOTA_RUNTIME_PROTECT_V1 \
+	1 /* PID set identity only (0 also accepted)   \
 				   */
 #define LOTA_RUNTIME_PROTECT_V2 2 /* PID set + per-PID kernel image digest */
 
@@ -76,7 +76,7 @@ extern "C" {
  * pid count, not folded into this compile-time maximum; an oversized token
  * is rejected during parsing.
  */
-#define LOTA_TOKEN_MAX_SIZE                                                    \
+#define LOTA_TOKEN_MAX_SIZE \
 	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + 1024 + 512)
 
 /*

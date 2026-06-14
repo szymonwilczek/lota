@@ -85,8 +85,8 @@ static int make_exe_file(struct sdk_ctx *x)
 
 	size_t remaining = x->exe_bytes;
 	while (remaining > 0) {
-		size_t n =
-		    remaining < sizeof(chunk) ? remaining : sizeof(chunk);
+		size_t n = remaining < sizeof(chunk) ? remaining :
+						       sizeof(chunk);
 		if (write(fd, chunk, n) != (ssize_t)n) {
 			close(fd);
 			return -1;
@@ -104,7 +104,7 @@ static int build_token(struct sdk_ctx *x)
 	x->tok.flags = 0x07;
 	for (size_t i = 0; i < sizeof(x->tok.nonce); i++)
 		x->tok.nonce[i] = (uint8_t)(i + 1);
-	x->tok.sig_alg = 0x0014;  /* TPM2_ALG_RSASSA */
+	x->tok.sig_alg = 0x0014; /* TPM2_ALG_RSASSA */
 	x->tok.hash_alg = 0x000B; /* TPM2_ALG_SHA256 */
 	x->tok.pcr_mask = 0x4001; /* PCR0 + PCR14 */
 	for (size_t i = 0; i < sizeof(x->tok.policy_digest); i++)

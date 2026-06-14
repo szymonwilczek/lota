@@ -71,21 +71,21 @@ static int mock_prop_reader_swtpm(struct tpm_context *ctx, TPM2_PT prop,
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 static char tmp_dir[128];
@@ -756,10 +756,10 @@ static void test_rc_lockout_resmgr_layer(void)
 static void test_rc_transient_codes(void)
 {
 	TPM2_RC transient[] = {
-	    TPM2_RC_RETRY,	    TPM2_RC_YIELDED,
-	    TPM2_RC_TESTING,	    TPM2_RC_NV_RATE,
-	    TPM2_RC_NV_UNAVAILABLE, TPM2_RC_SESSION_MEMORY,
-	    TPM2_RC_OBJECT_MEMORY,  TPM2_RC_MEMORY,
+		TPM2_RC_RETRY,		TPM2_RC_YIELDED,
+		TPM2_RC_TESTING,	TPM2_RC_NV_RATE,
+		TPM2_RC_NV_UNAVAILABLE, TPM2_RC_SESSION_MEMORY,
+		TPM2_RC_OBJECT_MEMORY,	TPM2_RC_MEMORY,
 	};
 
 	TEST("tpm_test_rc_is_transient: WARN codes -> EAGAIN");
@@ -1210,8 +1210,7 @@ static void test_self_hash_pin_round_trip(void)
 	uint8_t out[LOTA_HASH_SIZE];
 	int ret;
 
-	TEST(
-	    "tpm_get_self_hash gates on self_hash_ready and round-trips bytes");
+	TEST("tpm_get_self_hash gates on self_hash_ready and round-trips bytes");
 	make_ctx(&ctx);
 
 	ret = tpm_get_self_hash(&ctx, out);
@@ -1292,12 +1291,12 @@ static void test_call_with_backoff_no_leak_on_retry(void)
 	TEST("tpm_call_with_backoff frees output between transient retries");
 	void *slot = NULL;
 	struct backoff_thunk_state state = {
-	    .calls = 0,
-	    .fail_attempts = 3, /* succeed on call #4 */
-	    .saw_dirty_slot = 0,
-	    .slot = &slot,
+		.calls = 0,
+		.fail_attempts = 3, /* succeed on call #4 */
+		.saw_dirty_slot = 0,
+		.slot = &slot,
 	};
-	void **slots[1] = {&slot};
+	void **slots[1] = { &slot };
 	uint32_t rc = 0;
 	int ret = tpm_test_call_with_backoff_array(NULL, backoff_test_thunk,
 						   &state, &rc, slots, 1);
@@ -1347,12 +1346,12 @@ static void test_call_with_backoff_respects_wallclock_budget(void)
 	     "budget");
 	void *slot = NULL;
 	struct backoff_thunk_state state = {
-	    .calls = 0,
-	    .fail_attempts = 100,
-	    .saw_dirty_slot = 0,
-	    .slot = &slot,
+		.calls = 0,
+		.fail_attempts = 100,
+		.saw_dirty_slot = 0,
+		.slot = &slot,
 	};
-	void **slots[1] = {&slot};
+	void **slots[1] = { &slot };
 	uint32_t rc = 0;
 
 	struct timespec t0, t1;
@@ -1369,8 +1368,8 @@ static void test_call_with_backoff_respects_wallclock_budget(void)
 
 	int64_t elapsed_ns = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000000000LL +
 			     ((int64_t)t1.tv_nsec - (int64_t)t0.tv_nsec);
-	uint64_t elapsed_ms =
-	    elapsed_ns < 0 ? 0 : (uint64_t)(elapsed_ns / 1000000);
+	uint64_t elapsed_ms = elapsed_ns < 0 ? 0 :
+					       (uint64_t)(elapsed_ns / 1000000);
 
 	/*
 	 * Budget is 2000 ms inside tpm.c. Allow a generous 500 ms slack
@@ -1408,12 +1407,13 @@ static void test_call_with_backoff_gives_up_without_leak(void)
 	TEST("tpm_call_with_backoff exhausts retry budget without leaking");
 	void *slot = NULL;
 	struct backoff_thunk_state state = {
-	    .calls = 0,
-	    .fail_attempts = 100, /* much larger than TPM_RETRY_MAX_ATTEMPTS */
-	    .saw_dirty_slot = 0,
-	    .slot = &slot,
+		.calls = 0,
+		.fail_attempts =
+			100, /* much larger than TPM_RETRY_MAX_ATTEMPTS */
+		.saw_dirty_slot = 0,
+		.slot = &slot,
 	};
-	void **slots[1] = {&slot};
+	void **slots[1] = { &slot };
 	uint32_t rc = 0;
 	int ret = tpm_test_call_with_backoff_array(NULL, backoff_test_thunk,
 						   &state, &rc, slots, 1);

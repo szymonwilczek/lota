@@ -17,21 +17,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-55s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /*
@@ -74,8 +74,7 @@ static void test_packaged_unit_does_not_set_mode(void)
 		return;
 	}
 	if (saw_mode_flag) {
-		FAIL(
-		    "ExecStart must not pass --mode (would override cfg.mode)");
+		FAIL("ExecStart must not pass --mode (would override cfg.mode)");
 		return;
 	}
 	PASS();

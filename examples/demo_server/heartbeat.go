@@ -387,7 +387,8 @@ func (s *demoServer) recordVerdictWithLicense(sessionHex, gameHashHex, verdict, 
 // non-nil the per-session row also advances lastSeq + lastTimestamp
 // so a subsequent replay of the same packet trips the freshness gate.
 func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license string,
-	hdr *lachHeader) {
+	hdr *lachHeader,
+) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()

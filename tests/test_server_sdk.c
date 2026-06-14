@@ -39,22 +39,22 @@ static int tests_run = 0;
 static int tests_pass = 0;
 static int tests_fail = 0;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-50s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_pass++;                                                  \
-		printf(GREEN "PASS" RESET "\n");                               \
+#define PASS()                                   \
+	do {                                     \
+		tests_pass++;                    \
+		printf(GREEN "PASS" RESET "\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		tests_fail++;                                                  \
-		printf(RED "FAIL" RESET " — %s\n", reason);                    \
+#define FAIL(reason)                                        \
+	do {                                                \
+		tests_fail++;                               \
+		printf(RED "FAIL" RESET " — %s\n", reason); \
 	} while (0)
 
 #define TPM_GENERATED_VALUE 0xff544347
@@ -180,7 +180,7 @@ build_fake_tpms_attest_mixed_banks(const uint8_t *extra_data, size_t extra_len,
 	off += extra_len;
 
 	off += 17; /* clockInfo */
-	off += 8;  /* firmwareVersion */
+	off += 8; /* firmwareVersion */
 
 	write_be32(buf + off, 2); /* two PCR selections */
 	off += 4;
@@ -219,9 +219,10 @@ static int compute_expected_nonce(uint64_t valid_until, uint32_t flags,
 				  uint64_t runtime_protect_epoch,
 				  uint8_t out[32])
 {
-	return lota_compute_token_quote_nonce(
-	    valid_until, flags, pcr_mask, nonce, policy_digest,
-	    runtime_protect_digest, runtime_protect_epoch, out);
+	return lota_compute_token_quote_nonce(valid_until, flags, pcr_mask,
+					      nonce, policy_digest,
+					      runtime_protect_digest,
+					      runtime_protect_epoch, out);
 }
 
 /*
@@ -287,7 +288,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 	uint8_t exp_nonce[32];
 	uint8_t runtime_digest[32];
 	uint32_t pcr_mask = 0x4001;
-	uint8_t policy_digest[32] = {0x11, 0x22, 0x33};
+	uint8_t policy_digest[32] = { 0x11, 0x22, 0x33 };
 	if (lota_compute_runtime_protect_digest(NULL, 0, runtime_digest) != 0)
 		return LOTA_ERR_INVALID_ARG;
 	if (compute_expected_nonce(valid_until, flags, pcr_mask, nonce,
@@ -297,14 +298,15 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 	}
 
 	/* build TPMS_ATTEST with expected_nonce as extraData */
-	uint8_t pcr_digest[64] = {0};
+	uint8_t pcr_digest[64] = { 0 };
 	size_t pcr_digest_len = tpm_hash_digest_len(hash_alg);
 	if (pcr_digest_len == 0)
 		return LOTA_ERR_INVALID_ARG;
 	memset(pcr_digest, 0xDD, pcr_digest_len);
 	size_t attest_len = 0;
-	uint8_t *attest = build_fake_tpms_attest(
-	    exp_nonce, 32, pcr_mask, pcr_digest, pcr_digest_len, &attest_len);
+	uint8_t *attest = build_fake_tpms_attest(exp_nonce, 32, pcr_mask,
+						 pcr_digest, pcr_digest_len,
+						 &attest_len);
 
 	/* sign attest_data */
 	size_t sig_len = 0;
@@ -331,7 +333,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 
 	/* serialize */
 	int ret =
-	    lota_token_serialize(&token, tokbuf, tokbuf_size, tok_written);
+		lota_token_serialize(&token, tokbuf, tokbuf_size, tok_written);
 
 	free(attest);
 	free(sig);
@@ -360,8 +362,8 @@ static void test_serialize_basic(void)
 	token.hash_alg = 0x000B;
 	token.pcr_mask = 0x4001;
 
-	uint8_t fake_attest[64] = {0xAA};
-	uint8_t fake_sig[32] = {0xBB};
+	uint8_t fake_attest[64] = { 0xAA };
+	uint8_t fake_sig[32] = { 0xBB };
 	token.attest_data = fake_attest;
 	token.attest_size = sizeof(fake_attest);
 	token.signature = fake_sig;
@@ -400,7 +402,7 @@ static void test_serialize_buffer_too_small(void)
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
-	uint8_t fake[16] = {0};
+	uint8_t fake[16] = { 0 };
 	token.attest_data = fake;
 	token.attest_size = 16;
 	token.signature = fake;
@@ -417,8 +419,7 @@ static void test_serialize_buffer_too_small(void)
 
 static void test_serialize_total_size_within_u16(void)
 {
-	TEST(
-	    "lota_token_serialize - total_size stays within uint16 wire field");
+	TEST("lota_token_serialize - total_size stays within uint16 wire field");
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
@@ -428,8 +429,8 @@ static void test_serialize_total_size_within_u16(void)
 	token.hash_alg = 0x000B;
 	token.pcr_mask = 0x4001;
 
-	uint8_t max_attest[1024] = {0};
-	uint8_t max_sig[512] = {0};
+	uint8_t max_attest[1024] = { 0 };
+	uint8_t max_sig[512] = { 0 };
 	token.attest_data = max_attest;
 	token.attest_size = sizeof(max_attest);
 	token.signature = max_sig;
@@ -450,8 +451,8 @@ static void test_serialize_total_size_within_u16(void)
 	}
 
 	{
-		uint16_t wire_total =
-		    (uint16_t)buf[6] | ((uint16_t)buf[7] << 8);
+		uint16_t wire_total = (uint16_t)buf[6] |
+				      ((uint16_t)buf[7] << 8);
 		if ((size_t)wire_total != expected) {
 			FAIL("wire total_size mismatch");
 			return;
@@ -474,10 +475,10 @@ static void test_parse_untrusted(void)
 	token.hash_alg = 0x000B;
 	token.pcr_mask = 0x4001;
 
-	uint8_t fake_attest[32] = {0};
+	uint8_t fake_attest[32] = { 0 };
 	token.attest_data = fake_attest;
 	token.attest_size = sizeof(fake_attest);
-	uint8_t fake_sig[32] = {0};
+	uint8_t fake_sig[32] = { 0 };
 	token.signature = fake_sig;
 	token.signature_len = sizeof(fake_sig);
 
@@ -515,7 +516,7 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
 	TEST("lota_server_verify_token - full success");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0xDE, 0xAD, 0xBE, 0xEF};
+	uint8_t nonce[32] = { 0xDE, 0xAD, 0xBE, 0xEF };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
@@ -563,7 +564,7 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
 	TEST("lota_server_verify_token - SHA-384 hash_alg");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0xDE, 0xAD, 0xBE, 0xEF};
+	uint8_t nonce[32] = { 0xDE, 0xAD, 0xBE, 0xEF };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
@@ -603,7 +604,7 @@ static void test_verify_full_success_sha512(EVP_PKEY *key,
 	TEST("lota_server_verify_token - SHA-512 hash_alg");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0xDE, 0xAD, 0xBE, 0xEF};
+	uint8_t nonce[32] = { 0xDE, 0xAD, 0xBE, 0xEF };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
@@ -643,7 +644,7 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 	TEST("lota_server_verify_token — correct expected_nonce");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0x01, 0x02, 0x03};
+	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -671,7 +672,7 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 	TEST("lota_server_verify_token — wrong expected_nonce → NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0x01, 0x02, 0x03};
+	uint8_t nonce[32] = { 0x01, 0x02, 0x03 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -682,7 +683,7 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 		return;
 	}
 
-	uint8_t wrong_nonce[32] = {0xFF, 0xFF, 0xFF};
+	uint8_t wrong_nonce[32] = { 0xFF, 0xFF, 0xFF };
 	struct lota_server_claims claims;
 	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
 				       wrong_nonce, &claims);
@@ -705,7 +706,7 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 	EVP_PKEY *wrong_key = generate_rsa_key();
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -738,7 +739,7 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 	TEST("lota_server_verify_token - tampered flags → NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -770,7 +771,7 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 	TEST("lota_server_verify_token - tampered pcr_mask → NONCE_FAIL");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -810,8 +811,8 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	uint64_t valid_until = now + 3600;
 	uint32_t flags = 0x07;
 	uint32_t pcr_mask_union = 0x0007; /* SHA-1: PCR0, SHA-256: PCR1|PCR2 */
-	uint8_t nonce[32] = {0};
-	uint8_t policy_digest[32] = {0x11, 0x22, 0x33};
+	uint8_t nonce[32] = { 0 };
+	uint8_t policy_digest[32] = { 0x11, 0x22, 0x33 };
 	uint8_t runtime_digest[32];
 	uint8_t expected_nonce[32];
 	uint8_t pcr_digest[32];
@@ -837,9 +838,10 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 		return;
 	}
 
-	attest = build_fake_tpms_attest_mixed_banks(
-	    expected_nonce, 32, 0x0001, 0x0006, pcr_digest, sizeof(pcr_digest),
-	    &attest_len);
+	attest = build_fake_tpms_attest_mixed_banks(expected_nonce, 32, 0x0001,
+						    0x0006, pcr_digest,
+						    sizeof(pcr_digest),
+						    &attest_len);
 	if (!attest) {
 		FAIL("attest build failed");
 		return;
@@ -857,7 +859,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	token.valid_until = valid_until;
 	token.flags = flags;
 	memcpy(token.nonce, nonce, sizeof(token.nonce));
-	token.sig_alg = 0x0014;	 /* RSASSA */
+	token.sig_alg = 0x0014; /* RSASSA */
 	token.hash_alg = 0x000B; /* SHA-256 */
 	token.pcr_mask = pcr_mask_union;
 	memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
@@ -900,7 +902,7 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
 	TEST("lota_server_verify_token - expired token -> ERR_EXPIRED");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
@@ -935,15 +937,15 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 	TEST("lota_server_verify_token - far-future valid_until -> ERR_FUTURE");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
 	int ret = build_full_token_sha256(
-	    key,
-	    now + (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC +
-		24ULL * 3600ULL,
-	    0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
+		key,
+		now + (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC +
+			24ULL * 3600ULL,
+		0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -995,12 +997,12 @@ static void test_malformed_inputs(void)
 	}
 
 	TEST("lota_server_verify_token - too short token");
-	uint8_t tiny[10] = {0};
-	uint8_t fake_key[16] = {0};
-	uint8_t expected_nonce[32] = {0};
-	ret =
-	    lota_server_verify_token(tiny, sizeof(tiny), fake_key,
-				     sizeof(fake_key), expected_nonce, &claims);
+	uint8_t tiny[10] = { 0 };
+	uint8_t fake_key[16] = { 0 };
+	uint8_t expected_nonce[32] = { 0 };
+	ret = lota_server_verify_token(tiny, sizeof(tiny), fake_key,
+				       sizeof(fake_key), expected_nonce,
+				       &claims);
 	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
 		PASS();
 	} else {
@@ -1010,12 +1012,12 @@ static void test_malformed_inputs(void)
 	}
 
 	TEST("lota_server_verify_token - bad magic");
-	uint8_t bad_magic[128] = {0};
+	uint8_t bad_magic[128] = { 0 };
 	bad_magic[0] = 0xDE;
 	bad_magic[1] = 0xAD;
-	ret =
-	    lota_server_verify_token(bad_magic, sizeof(bad_magic), fake_key,
-				     sizeof(fake_key), expected_nonce, &claims);
+	ret = lota_server_verify_token(bad_magic, sizeof(bad_magic), fake_key,
+				       sizeof(fake_key), expected_nonce,
+				       &claims);
 	if (ret == LOTA_SERVER_ERR_BAD_TOKEN) {
 		PASS();
 	} else {
@@ -1029,7 +1031,7 @@ static void test_unknown_hash_alg_rejected(EVP_PKEY *key,
 {
 	TEST("lota_server_verify_token - unknown hash_alg rejected");
 
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
 	struct lota_server_claims claims;
@@ -1144,9 +1146,8 @@ int main(void)
 	printf(BOLD "\nParsing (Server SDK - untrusted):\n" RESET);
 	test_parse_untrusted();
 
-	printf(
-	    BOLD
-	    "\nFull Verification (Server SDK - RSA + nonce binding):\n" RESET);
+	printf(BOLD
+	       "\nFull Verification (Server SDK - RSA + nonce binding):\n" RESET);
 	test_verify_full_success(key, aik_der, aik_len);
 	test_verify_full_success_sha384(key, aik_der, aik_len);
 	test_verify_full_success_sha512(key, aik_der, aik_len);

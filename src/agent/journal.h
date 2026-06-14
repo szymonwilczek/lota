@@ -60,23 +60,23 @@ int journal_get_level(void);
  */
 _Bool journal_use_journal(void);
 
-#define lota_err(fmt, ...)                                                     \
+#define lota_err(fmt, ...) \
 	journal_print(__FILE__, __LINE__, __func__, LOG_ERR, fmt, ##__VA_ARGS__)
 
-#define lota_warn(fmt, ...)                                                    \
-	journal_print(__FILE__, __LINE__, __func__, LOG_WARNING, fmt,          \
+#define lota_warn(fmt, ...)                                           \
+	journal_print(__FILE__, __LINE__, __func__, LOG_WARNING, fmt, \
 		      ##__VA_ARGS__)
 
-#define lota_info(fmt, ...)                                                    \
-	journal_print(__FILE__, __LINE__, __func__, LOG_INFO, fmt,             \
+#define lota_info(fmt, ...)                                        \
+	journal_print(__FILE__, __LINE__, __func__, LOG_INFO, fmt, \
 		      ##__VA_ARGS__)
 
-#define lota_notice(fmt, ...)                                                  \
-	journal_print(__FILE__, __LINE__, __func__, LOG_NOTICE, fmt,           \
+#define lota_notice(fmt, ...)                                        \
+	journal_print(__FILE__, __LINE__, __func__, LOG_NOTICE, fmt, \
 		      ##__VA_ARGS__)
 
-#define lota_dbg(fmt, ...)                                                     \
-	journal_print(__FILE__, __LINE__, __func__, LOG_DEBUG, fmt,            \
+#define lota_dbg(fmt, ...)                                          \
+	journal_print(__FILE__, __LINE__, __func__, LOG_DEBUG, fmt, \
 		      ##__VA_ARGS__)
 
 #endif /* LOTA_AGENT_JOURNAL_H */

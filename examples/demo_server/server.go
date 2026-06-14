@@ -66,7 +66,8 @@ type demoServer struct {
 }
 
 func newServer(aik *rsa.PublicKey, games map[string]gameBinding,
-	maxAge time.Duration) (*demoServer, error) {
+	maxAge time.Duration,
+) (*demoServer, error) {
 	if len(games) == 0 {
 		return nil, errors.New("no expected games configured")
 	}
@@ -204,7 +205,8 @@ func logf(format string, args ...any) {
 // SHA-256 (passed as anticheatExeDigest) so the verdict map keys
 // reproduce lota_ac_compute_game_binding_hash() byte for byte.
 func parseExpectedGames(spec string, anticheatExeDigest [32]byte,
-	runtimeMeasure [32]byte) (map[string]gameBinding, error) {
+	runtimeMeasure [32]byte,
+) (map[string]gameBinding, error) {
 	out := make(map[string]gameBinding)
 	for raw := range strings.SplitSeq(spec, ",") {
 		entry := strings.TrimSpace(raw)

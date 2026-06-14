@@ -144,7 +144,7 @@ type FileStore struct {
 
 // creates a new file-based AIK store
 func NewFileStore(storePath string) (*FileStore, error) {
-	if err := os.MkdirAll(storePath, 0700); err != nil {
+	if err := os.MkdirAll(storePath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 
@@ -286,7 +286,7 @@ func (fs *FileStore) saveMeta(clientID string, regTime time.Time) error {
 	}
 
 	path := filepath.Join(fs.storePath, clientID+".meta")
-	return os.WriteFile(path, data, 0600)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
@@ -472,7 +472,7 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 // failure is not lost. When removeOnError is set, any failure unlinks path
 // so a partial key file is not left behind.
 func writeKeyPEM(path string, flag int, block *pem.Block, removeOnError bool) (err error) {
-	f, err := os.OpenFile(path, flag, 0600)
+	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
 		return err
 	}
@@ -521,7 +521,7 @@ func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) er
 
 	// store new hardware ID to file
 	path := filepath.Join(fs.storePath, clientID+".hwid")
-	if err := os.WriteFile(path, hardwareID[:], 0600); err != nil {
+	if err := os.WriteFile(path, hardwareID[:], 0o600); err != nil {
 		return fmt.Errorf("failed to store hardware ID: %w", err)
 	}
 

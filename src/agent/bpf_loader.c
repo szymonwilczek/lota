@@ -192,7 +192,7 @@ static int read_pid_start_time_ticks(uint32_t pid, uint64_t *start_time_ticks)
 static int set_task_auth_flags(int task_auth_fd, pid_t pid, uint32_t flags)
 {
 	int pidfd;
-	struct lota_task_auth_entry value = {0};
+	struct lota_task_auth_entry value = { 0 };
 
 	if (task_auth_fd < 0 || pid <= 0 || flags == 0)
 		return -EINVAL;
@@ -414,8 +414,8 @@ int bpf_loader_kernel_module_sig_enforced(void)
 int bpf_loader_secure_boot_enabled(void)
 {
 	static const char path[] =
-	    "/sys/firmware/efi/efivars/"
-	    "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+		"/sys/firmware/efi/efivars/"
+		"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
 	uint8_t buf[5];
 	int fd;
 	ssize_t n;
@@ -462,7 +462,7 @@ int bpf_loader_secure_boot_enabled(void)
  */
 static int tpm_device_selinux_label_ok(void)
 {
-	static const char *const tpm_paths[] = {"/dev/tpmrm0", "/dev/tpm0"};
+	static const char *const tpm_paths[] = { "/dev/tpmrm0", "/dev/tpm0" };
 	const char *expected = "lota_tpm_device_t";
 	bool any_present = false;
 
@@ -571,9 +571,9 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	ret = bpf_loader_kernel_module_sig_enforced();
 	if (ret < 0) {
 		lota_err(
-		    "Kernel module signature enforcement is not active "
-		    "(module.sig_enforce=1 required to close the boot -> agent "
-		    "module-load window)");
+			"Kernel module signature enforcement is not active "
+			"(module.sig_enforce=1 required to close the boot -> agent "
+			"module-load window)");
 		return ret;
 	}
 
@@ -619,20 +619,20 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	if (ret < 0) {
 		if (allow_mutable_rootfs) {
 			lota_warn(
-			    "INSECURE: agent binary (/proc/self/exe) is not "
-			    "fs-verity protected, and "
-			    "--insecure-allow-mutable-rootfs "
-			    "was set. Dirty shutdown "
-			    "(panic/power-loss/SIGKILL) on "
-			    "this host cannot detect a swapped agent binary, "
-			    "library "
-			    "closure, or policy file across a hard reset; the "
-			    "verifier "
-			    "will accept the same PCR14 boot commitment after "
-			    "the "
-			    "next boot even if those inputs were tampered "
-			    "while the "
-			    "host was offline.");
+				"INSECURE: agent binary (/proc/self/exe) is not "
+				"fs-verity protected, and "
+				"--insecure-allow-mutable-rootfs "
+				"was set. Dirty shutdown "
+				"(panic/power-loss/SIGKILL) on "
+				"this host cannot detect a swapped agent binary, "
+				"library "
+				"closure, or policy file across a hard reset; the "
+				"verifier "
+				"will accept the same PCR14 boot commitment after "
+				"the "
+				"next boot even if those inputs were tampered "
+				"while the "
+				"host was offline.");
 		} else {
 			lota_err("Agent binary (/proc/self/exe) is not "
 				 "fs-verity protected "
@@ -786,8 +786,8 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	}
 
 	struct bpf_object_open_opts opts = {
-	    .sz = sizeof(struct bpf_object_open_opts),
-	    .kernel_log_level = 1,
+		.sz = sizeof(struct bpf_object_open_opts),
+		.kernel_log_level = 1,
 	};
 
 	ctx->obj = bpf_object__open_file(bpf_obj_path, &opts);
@@ -797,8 +797,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		return -errno;
 	}
 
-	bpf_object__for_each_program(prog, ctx->obj)
-	{
+	bpf_object__for_each_program(prog, ctx->obj) {
 		bpf_program__set_log_level(prog, 2);
 	}
 
@@ -845,7 +844,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	}
 
 	ctx->config_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
+		bpf_object__find_map_fd_by_name(ctx->obj, "lota_config");
 	if (ctx->config_fd < 0) {
 		ctx->config_fd = -1;
 	} else {
@@ -858,7 +857,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	}
 
 	ctx->task_auth_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "lota_task_auth");
+		bpf_object__find_map_fd_by_name(ctx->obj, "lota_task_auth");
 	if (ctx->task_auth_fd < 0) {
 		err = ctx->task_auth_fd;
 		lota_err("Failed to find lota_task_auth map");
@@ -901,12 +900,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		lota_info("Early BPF map lock enabled during loader init");
 	} else {
 		lota_err(
-		    "lota_config map unavailable, early LOCK_BPF not applied");
+			"lota_config map unavailable, early LOCK_BPF not applied");
 	}
 
 	/* Integrity config map */
 	ctx->integrity_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "integrity_cfg");
+		bpf_object__find_map_fd_by_name(ctx->obj, "integrity_cfg");
 	if (ctx->integrity_fd >= 0) {
 		err = harden_fd_cloexec(ctx->integrity_fd,
 					"integrity_config map");
@@ -916,7 +915,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 			goto err_close;
 		}
 
-		struct integrity_data cfg = {0};
+		struct integrity_data cfg = { 0 };
 
 		build_expected_integrity_config(&cfg);
 
@@ -937,12 +936,12 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Get trusted libraries map fd */
 	ctx->trusted_libs_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
+		bpf_object__find_map_fd_by_name(ctx->obj, "trusted_libs");
 	if (ctx->trusted_libs_fd < 0) {
 		ctx->trusted_libs_fd = -1; /* optional map */
 	} else {
-		err =
-		    harden_fd_cloexec(ctx->trusted_libs_fd, "trusted_libs map");
+		err = harden_fd_cloexec(ctx->trusted_libs_fd,
+					"trusted_libs map");
 		if (err < 0) {
 			lota_err("Failed to harden trusted_libs map fd: %s",
 				 strerror(-err));
@@ -952,7 +951,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Get trusted parent mountpoint map fd */
 	ctx->trusted_lib_mnt_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
+		bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
 	if (ctx->trusted_lib_mnt_fd < 0) {
 		ctx->trusted_lib_mnt_fd = -1; /* optional map */
 	} else {
@@ -967,7 +966,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Get protected PIDs map fd */
 	ctx->protected_pids_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
+		bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
 	if (ctx->protected_pids_fd < 0) {
 		ctx->protected_pids_fd = -1; /* optional map */
 	} else {
@@ -982,7 +981,7 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
-	    bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
+		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
 	if (ctx->allow_verity_digest_fd < 0) {
 		ctx->allow_verity_digest_fd = -1; /* optional map */
 	} else {
@@ -990,8 +989,8 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 					"allow_verity_digest map");
 		if (err < 0) {
 			lota_err(
-			    "Failed to harden allow_verity_digest map fd: %s",
-			    strerror(-err));
+				"Failed to harden allow_verity_digest map fd: %s",
+				strerror(-err));
 			goto err_close;
 		}
 	}
@@ -1041,15 +1040,14 @@ int bpf_loader_attach(struct bpf_loader_ctx *ctx)
 	 * exits before sd_notify(READY=1).
 	 */
 	static const char *const required_programs[] = {
-	    "lota_ptrace_access_check",
+		"lota_ptrace_access_check",
 	};
 	const size_t required_count =
-	    sizeof(required_programs) / sizeof(required_programs[0]);
+		sizeof(required_programs) / sizeof(required_programs[0]);
 	bool required_attached[sizeof(required_programs) /
-			       sizeof(required_programs[0])] = {false};
+			       sizeof(required_programs[0])] = { false };
 
-	bpf_object__for_each_program(prog, ctx->obj)
-	{
+	bpf_object__for_each_program(prog, ctx->obj) {
 		enum bpf_prog_type prog_type = bpf_program__type(prog);
 
 		if (prog_type != BPF_PROG_TYPE_LSM &&
@@ -1121,8 +1119,9 @@ int bpf_loader_setup_ringbuf(struct bpf_loader_ctx *ctx,
 	 * Create ring buffer manager.
 	 * The handler will be called for each event.
 	 */
-	ctx->ringbuf = ring_buffer__new(
-	    ctx->ringbuf_fd, (ring_buffer_sample_fn)handler, handler_ctx, NULL);
+	ctx->ringbuf = ring_buffer__new(ctx->ringbuf_fd,
+					(ring_buffer_sample_fn)handler,
+					handler_ctx, NULL);
 	if (!ctx->ringbuf) {
 		lota_err("Failed to create ring buffer");
 		return -errno;
@@ -1264,8 +1263,8 @@ static int open_regular_file_nofollow(const char *path)
 
 	{
 		struct open_how how = {
-		    .flags = O_RDONLY | O_CLOEXEC,
-		    .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+			.flags = O_RDONLY | O_CLOEXEC,
+			.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
 		};
 
 		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
@@ -1306,7 +1305,7 @@ static int open_regular_file_nofollow(const char *path)
 			if (slash) {
 				nextfd = openat(dirfd, name,
 						O_PATH | O_DIRECTORY |
-						    O_NOFOLLOW | O_CLOEXEC);
+							O_NOFOLLOW | O_CLOEXEC);
 				close(dirfd);
 				if (nextfd < 0)
 					return -errno;
@@ -1338,7 +1337,7 @@ static int measure_fsverity_digest(const char *path,
 				   struct lota_verity_digest_key *out)
 {
 	int fd;
-	struct stat st = {0};
+	struct stat st = { 0 };
 	int ret = 0;
 
 	if (!path || !out)
@@ -1398,7 +1397,7 @@ int bpf_loader_measure_verity_digest(const char *path,
 
 int bpf_loader_allow_verity_path(struct bpf_loader_ctx *ctx, const char *path)
 {
-	struct lota_verity_digest_key key = {0};
+	struct lota_verity_digest_key key = { 0 };
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path)
@@ -1474,8 +1473,8 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
 int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 {
 	uint32_t key = 0;
-	struct integrity_data current = {0};
-	struct integrity_data expected = {0};
+	struct integrity_data current = { 0 };
+	struct integrity_data expected = { 0 };
 
 	if (!ctx || !ctx->loaded)
 		return -EINVAL;
@@ -1505,7 +1504,7 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
-	struct protected_pid_entry value = {0};
+	struct protected_pid_entry value = { 0 };
 	int ret;
 
 	if (!ctx || !ctx->loaded)
@@ -1583,8 +1582,8 @@ static int stat_dir_nofollow(const char *path, struct stat *st)
 
 	{
 		struct open_how how = {
-		    .flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
-		    .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+			.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+			.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
 		};
 
 		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
@@ -1629,7 +1628,7 @@ static int stat_dir_nofollow(const char *path, struct stat *st)
 
 			nextfd = openat(dirfd, name,
 					O_PATH | O_DIRECTORY | O_NOFOLLOW |
-					    O_CLOEXEC);
+						O_CLOEXEC);
 			close(dirfd);
 			if (nextfd < 0)
 				return -errno;
@@ -1669,8 +1668,8 @@ static int stat_dir_nofollow(const char *path, struct stat *st)
 static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
 					 const char *dir_path, int add)
 {
-	struct trusted_lib_key key = {0};
-	struct stat st = {0};
+	struct trusted_lib_key key = { 0 };
+	struct stat st = { 0 };
 	uint32_t refcnt = 0;
 	int ret;
 
@@ -1794,9 +1793,9 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 
 				while (remaining > 0 && *rp != '\0') {
 					const char *rnext = strchr(rp, '/');
-					size_t rlen = rnext
-							  ? (size_t)(rnext - rp)
-							  : strlen(rp);
+					size_t rlen =
+						rnext ? (size_t)(rnext - rp) :
+							strlen(rp);
 
 					if (rlen == 0) {
 						rp++;
@@ -1810,18 +1809,19 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 						rollback_prefix_len = 1 + rlen;
 					} else {
 						rollback_prefix
-						    [rollback_prefix_len] = '/';
+							[rollback_prefix_len] =
+								'/';
 						memcpy(rollback_prefix +
-							   rollback_prefix_len +
-							   1,
+							       rollback_prefix_len +
+							       1,
 						       rp, rlen);
 						rollback_prefix_len += 1 + rlen;
 					}
 
 					rollback_prefix[rollback_prefix_len] =
-					    '\0';
+						'\0';
 					(void)update_trusted_mountpoint_ref(
-					    ctx, rollback_prefix, 0);
+						ctx, rollback_prefix, 0);
 					remaining--;
 
 					if (!rnext)
@@ -1844,8 +1844,8 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
-	struct trusted_lib_key key = {0};
-	struct stat st = {0};
+	struct trusted_lib_key key = { 0 };
+	struct stat st = { 0 };
 	uint32_t value = 1;
 	int ret;
 
@@ -1879,8 +1879,8 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
-	struct trusted_lib_key key = {0};
-	struct stat st = {0};
+	struct trusted_lib_key key = { 0 };
+	struct stat st = { 0 };
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path)

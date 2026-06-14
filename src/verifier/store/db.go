@@ -193,7 +193,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	if path != "" && path != ":memory:" {
 		dir := filepath.Dir(path)
 		if dir != "." {
-			if err := os.MkdirAll(dir, 0700); err != nil {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, fmt.Errorf("failed to create database directory %q: %w", dir, err)
 			}
 		}

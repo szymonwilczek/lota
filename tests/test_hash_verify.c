@@ -27,29 +27,29 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-50s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
-#define ASSERT(cond, msg)                                                      \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			FAIL(msg);                                             \
-			return;                                                \
-		}                                                              \
+#define ASSERT(cond, msg)          \
+	do {                       \
+		if (!(cond)) {     \
+			FAIL(msg); \
+			return;    \
+		}                  \
 	} while (0)
 
 /* create a temporary file with given content */
@@ -175,8 +175,7 @@ static void test_event_no_caching(void)
 	/* second call */
 	ret = hash_verify_event(&ctx, &event, hash2);
 	if (ret >= 0) {
-		FAIL(
-		    "expected second hash_verify_event failure without verity");
+		FAIL("expected second hash_verify_event failure without verity");
 		goto out;
 	}
 

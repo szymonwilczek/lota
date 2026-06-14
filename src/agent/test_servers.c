@@ -36,7 +36,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	valid_until = (uint64_t)(time(NULL) + 3600);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-			      LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
 			  valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
@@ -114,7 +114,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	valid_until = (uint64_t)(time(NULL) + 3600);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-			      LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
 			  valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);

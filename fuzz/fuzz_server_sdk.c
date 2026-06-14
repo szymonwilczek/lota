@@ -73,7 +73,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	struct lota_server_claims claims;
-	uint8_t nonce[32] = {0};
+	uint8_t nonce[32] = { 0 };
 
 	/* bound the input the way a real caller would (token buff is small) */
 	if (size > 16 * 1024)

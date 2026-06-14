@@ -309,7 +309,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag check-includes reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -449,6 +449,36 @@ check-version-tag:
 # See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
 check-includes:
 	@scripts/check-includes.sh
+
+# Combined lint:
+# clang-format style check on the C sources and headers plus golangci-lint
+# on every Go module.
+# Read-only -- it reports, it never rewrites.
+# Use `clang-format -i` / `golangci-lint fmt` to apply fixes.
+CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
+	command -v clang-format 2>/dev/null)
+GOLANGCI_LINT ?= golangci-lint
+LINT_GO_MODULES := src/verifier src/attestca src/crl
+
+lint: lint-c lint-go
+
+lint-c:
+	@test -n "$(CLANG_FORMAT)" || { \
+		echo "lint-c: clang-format not found (install clang-tools / clang-format-22)" >&2; \
+		exit 1; }
+	@files=$$(git ls-files '*.c' '*.h' | grep -v '^include/vmlinux.h$$'); \
+		$(CLANG_FORMAT) --dry-run --Werror $$files
+	@echo "lint-c: clean"
+
+lint-go:
+	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
+		echo "lint-go: golangci-lint not found" >&2; exit 1; }
+	@for m in $(LINT_GO_MODULES); do \
+		echo "==> golangci-lint $$m"; \
+		( cd $$m && $(GOLANGCI_LINT) run --config $(CURDIR)/.golangci.yml ./... ) \
+			|| exit $$?; \
+	done
+	@echo "lint-go: clean"
 
 # Install to system (requires root)
 install: check-version-tag all
@@ -1001,6 +1031,7 @@ help:
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
+	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""

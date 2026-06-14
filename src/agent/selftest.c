@@ -93,7 +93,7 @@ int test_tpm(void)
 	printf("\nFinding current kernel...\n");
 	{
 		int k_err = tpm_get_current_kernel_path(
-		    &g_agent.tpm_ctx, kernel_path, sizeof(kernel_path));
+			&g_agent.tpm_ctx, kernel_path, sizeof(kernel_path));
 		if (k_err < 0) {
 			fprintf(stderr, "Failed to find kernel: %s\n",
 				strerror(-k_err));
@@ -369,8 +369,8 @@ int do_seal(const char *pcr_str)
 	ret = read_all_stdin(secret, LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read secret from stdin: %s\n",
-			ret == -E2BIG ? "too large (max 65536 bytes)"
-				      : strerror(-ret));
+			ret == -E2BIG ? "too large (max 65536 bytes)" :
+					strerror(-ret));
 		goto out;
 	}
 	if (secret_len == 0) {
@@ -401,9 +401,10 @@ int do_seal(const char *pcr_str)
 				      pcr_mask, blob, LOTA_ENVELOPE_MAX_BLOB,
 				      &blob_len);
 	else
-		ret = tpm_seal_secret_envelope(
-		    &g_agent.tpm_ctx, secret, secret_len, pcr_mask, blob,
-		    LOTA_ENVELOPE_MAX_BLOB, &blob_len);
+		ret = tpm_seal_secret_envelope(&g_agent.tpm_ctx, secret,
+					       secret_len, pcr_mask, blob,
+					       LOTA_ENVELOPE_MAX_BLOB,
+					       &blob_len);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Seal failed: %s\n", tpm_strerror(ret));
@@ -475,13 +476,14 @@ int do_unseal(void)
 	}
 
 	if (envelope)
-		ret = tpm_unseal_secret_envelope(
-		    &g_agent.tpm_ctx, blob, blob_len, secret,
-		    LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
+		ret = tpm_unseal_secret_envelope(&g_agent.tpm_ctx, blob,
+						 blob_len, secret,
+						 LOTA_ENVELOPE_MAX_PAYLOAD,
+						 &secret_len);
 	else
-		ret =
-		    tpm_unseal_secret(&g_agent.tpm_ctx, blob, blob_len, secret,
-				      LOTA_ENVELOPE_MAX_PAYLOAD, &secret_len);
+		ret = tpm_unseal_secret(&g_agent.tpm_ctx, blob, blob_len,
+					secret, LOTA_ENVELOPE_MAX_PAYLOAD,
+					&secret_len);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Unseal failed: %s\n", tpm_strerror(ret));
@@ -542,10 +544,9 @@ int do_seal_aik_auth(void)
 			"AIK auth sealed to the current boot state; plaintext "
 			"sidecar removed (strict).\n");
 	else
-		fprintf(
-		    stderr,
-		    "AIK auth sealed to the current boot state (plaintext "
-		    "sidecar kept; set seal_aik_auth_strict to drop it).\n");
+		fprintf(stderr,
+			"AIK auth sealed to the current boot state (plaintext "
+			"sidecar kept; set seal_aik_auth_strict to drop it).\n");
 	return 0;
 }
 

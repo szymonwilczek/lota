@@ -21,21 +21,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-55s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static int digest_is_zero(const uint8_t d[32])

@@ -139,7 +139,7 @@ static int set_cfg(int fd, uint32_t key, uint32_t val)
 
 static int protect_pid(int fd, uint32_t pid)
 {
-	struct protected_pid_entry e = {0};
+	struct protected_pid_entry e = { 0 };
 
 	if (read_start_ticks(pid, &e.start_time_ticks) < 0) {
 		fprintf(stderr, "start_time for pid %u failed\n", pid);
@@ -155,8 +155,8 @@ static int protect_pid(int fd, uint32_t pid)
 
 int main(int argc, char *argv[])
 {
-	const char *obj_path =
-	    (argc > 1) ? argv[1] : "/usr/lib/lota/lota_lsm.bpf.o";
+	const char *obj_path = (argc > 1) ? argv[1] :
+					    "/usr/lib/lota/lota_lsm.bpf.o";
 	struct bpf_object *obj;
 	struct bpf_program *prog;
 	struct bpf_link *links[MAX_LINKS];
@@ -233,8 +233,7 @@ int main(int argc, char *argv[])
 		protect_pid(pp_fd, (uint32_t)pid);
 	}
 
-	bpf_object__for_each_program(prog, obj)
-	{
+	bpf_object__for_each_program(prog, obj) {
 		struct bpf_link *link = bpf_program__attach(prog);
 		long err = libbpf_get_error(link);
 

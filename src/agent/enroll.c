@@ -131,7 +131,7 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len)
 {
-	struct wr w = {.buf = out, .max = out_max, .pos = 0};
+	struct wr w = { .buf = out, .max = out_max, .pos = 0 };
 	int ret;
 
 	if (!out || !ek_cert || !aik_public)
@@ -156,7 +156,7 @@ ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 			       const char *session_id, const uint8_t *secret,
 			       size_t secret_len)
 {
-	struct wr w = {.buf = out, .max = out_max, .pos = 0};
+	struct wr w = { .buf = out, .max = out_max, .pos = 0 };
 	size_t sid_len;
 	int ret;
 
@@ -182,7 +182,7 @@ ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 int enroll_decode_challenge(const uint8_t *body, size_t len,
 			    struct enroll_challenge *out)
 {
-	struct rd r = {.buf = body, .len = len, .pos = 0};
+	struct rd r = { .buf = body, .len = len, .pos = 0 };
 	size_t sid_len = 0;
 	int ret;
 
@@ -215,7 +215,7 @@ int enroll_decode_challenge(const uint8_t *body, size_t len,
 int enroll_decode_result(const uint8_t *body, size_t len,
 			 struct enroll_result *out)
 {
-	struct rd r = {.buf = body, .len = len, .pos = 0};
+	struct rd r = { .buf = body, .len = len, .pos = 0 };
 	size_t dev_len = 0;
 	int ret;
 

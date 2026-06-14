@@ -26,21 +26,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-55s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static char test_dir[256];
@@ -132,7 +132,7 @@ static void write_mock_snapshot_no_token(const char *dir, uint32_t flags)
 static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags,
 			       const uint8_t nonce[32])
 {
-	struct lota_token tok = {0};
+	struct lota_token tok = { 0 };
 	tok.valid_until = (uint64_t)time(NULL) + 3600;
 	tok.flags = flags;
 	if (nonce)
@@ -141,8 +141,8 @@ static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags,
 	tok.hash_alg = 0x000B;
 	tok.pcr_mask = 0x4001;
 
-	uint8_t attest[16] = {0xAA};
-	uint8_t sig[8] = {0xCC};
+	uint8_t attest[16] = { 0xAA };
+	uint8_t sig[8] = { 0xCC };
 	tok.attest_data = attest;
 	tok.attest_size = sizeof(attest);
 	tok.signature = sig;
@@ -227,7 +227,7 @@ static int rt_path_collect_cb(const char *path, void *user)
 
 static int expected_runtime_measure_test(uint8_t out[32])
 {
-	struct rt_path_collect c = {0};
+	struct rt_path_collect c = { 0 };
 	const char **vec;
 	int ret;
 
@@ -330,8 +330,8 @@ static void test_init_empty_game_id(void)
 {
 	TEST("init: empty game_id -> NULL");
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "",
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "",
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (s) {
@@ -346,8 +346,8 @@ static void test_init_null_game_id(void)
 {
 	TEST("init: NULL game_id -> NULL");
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = NULL,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = NULL,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (s) {
@@ -365,8 +365,8 @@ static void test_init_game_id_too_long(void)
 	memset(long_id, 'A', sizeof(long_id) - 1);
 	long_id[sizeof(long_id) - 1] = '\0';
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = long_id,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = long_id,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (s) {
@@ -381,9 +381,9 @@ static void test_init_invalid_provider(void)
 {
 	TEST("init: provider=99 -> NULL");
 	struct lota_ac_config cfg = {
-	    .provider = 99,
-	    .game_id = "test-game",
-	    .token_dir = test_dir,
+		.provider = 99,
+		.game_id = "test-game",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (s) {
@@ -400,9 +400,9 @@ static void test_init_eac_file_mode(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-game-eac",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game-eac",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -426,9 +426,9 @@ static void test_init_eac_file_mode_snapshot_only(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-game-eac-snap",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game-eac-snap",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -451,9 +451,9 @@ static void test_init_battleye_file_mode(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_BATTLEYE,
-	    .game_id = "test-game-be",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_BATTLEYE,
+		.game_id = "test-game-be",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -503,9 +503,9 @@ static void test_get_info_null_info(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-game",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -527,9 +527,9 @@ static void test_get_info_fields(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-game-info",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game-info",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -582,9 +582,9 @@ static void test_state_untrusted_zero_flags(void)
 	write_mock_snapshot(test_dir, 0x00);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-untrusted",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-untrusted",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -608,10 +608,10 @@ static void test_state_required_flags(void)
 			    0x03); /* ATTESTED + TPM_OK but no IOMMU */
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_BATTLEYE,
-	    .game_id = "test-required",
-	    .token_dir = test_dir,
-	    .required_flags = 0x07, /* need ATTESTED + TPM + IOMMU */
+		.provider = LOTA_AC_PROVIDER_BATTLEYE,
+		.game_id = "test-required",
+		.token_dir = test_dir,
+		.required_flags = 0x07, /* need ATTESTED + TPM + IOMMU */
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -633,10 +633,10 @@ static void test_state_required_flags_met(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-met",
-	    .token_dir = test_dir,
-	    .required_flags = 0x07,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-met",
+		.token_dir = test_dir,
+		.required_flags = 0x07,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -661,9 +661,9 @@ static void test_state_no_files(void)
 	mkdir(empty_dir, 0700);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-nofiles",
-	    .token_dir = empty_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-nofiles",
+		.token_dir = empty_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -695,9 +695,9 @@ static void test_heartbeat_generation(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-heartbeat",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-heartbeat",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -721,9 +721,9 @@ static void test_heartbeat_sequence_increments(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-seq",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-seq",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -734,7 +734,7 @@ static void test_heartbeat_sequence_increments(void)
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	size_t written;
 	const struct lota_ac_heartbeat_wire *hdr =
-	    (const struct lota_ac_heartbeat_wire *)buf;
+		(const struct lota_ac_heartbeat_wire *)buf;
 
 	int r0 = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
 	int r1 = lota_ac_heartbeat(s, buf, sizeof(buf), &written);
@@ -755,9 +755,9 @@ static void test_heartbeat_session_id_stable(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_BATTLEYE,
-	    .game_id = "test-stable",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_BATTLEYE,
+		.game_id = "test-stable",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -787,18 +787,18 @@ static void test_heartbeat_game_id_hash(void)
 	size_t w1, w2;
 
 	struct lota_ac_config cfg1 = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "game-alpha",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "game-alpha",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s1 = lota_ac_init(&cfg1);
 	int r1 = lota_ac_heartbeat(s1, buf1, sizeof(buf1), &w1);
 	lota_ac_shutdown(s1);
 
 	struct lota_ac_config cfg2 = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "game-beta",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "game-beta",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s2 = lota_ac_init(&cfg2);
 	int r2 = lota_ac_heartbeat(s2, buf2, sizeof(buf2), &w2);
@@ -853,9 +853,9 @@ static void test_heartbeat_buf_too_small(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-small",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-small",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -884,9 +884,9 @@ static void test_heartbeat_no_token(void)
 	write_mock_snapshot_no_token(empty_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-notoken",
-	    .token_dir = empty_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-notoken",
+		.token_dir = empty_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -916,9 +916,9 @@ static void test_heartbeat_null_args(void)
 
 	write_mock_snapshot(test_dir, 0x07);
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-null",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-null",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (s) {
@@ -959,8 +959,9 @@ static void test_verify_roundtrip(void)
 
 	/* fail closed: cryptographic verification key is mandatory */
 	struct lota_ac_info verified;
-	ret = lota_ac_verify_heartbeat(
-	    buf, written, NULL, 0, expected_game_hash, expected_rm, &verified);
+	ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
+				       expected_game_hash, expected_rm,
+				       &verified);
 	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
 		return;
@@ -994,7 +995,7 @@ static void test_verify_battleye_roundtrip(void)
 
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(
-	    buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
+		buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
 	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
 		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
 		return;
@@ -1006,17 +1007,17 @@ static void test_verify_rejects_game_hash_mismatch(void)
 {
 	TEST("verify: wrong expected game hash -> BAD_TOKEN");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
-	uint8_t wrong_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
+	uint8_t wrong_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	size_t written = 0;
 
 	if (build_bound_heartbeat_packet(
-		buf, sizeof(buf), &written, LOTA_AC_PROVIDER_EAC,
-		"test-verify-mismatch", 0x07, 0) != 0) {
+		    buf, sizeof(buf), &written, LOTA_AC_PROVIDER_EAC,
+		    "test-verify-mismatch", 0x07, 0) != 0) {
 		FAIL("packet build failed");
 		return;
 	}
 
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash,
 					   any_rm, &info);
@@ -1031,8 +1032,8 @@ static void test_verify_rejects_game_hash_mismatch(void)
 static void test_verify_null_data(void)
 {
 	TEST("verify: NULL data -> INVALID_ARG");
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(NULL, 100, NULL, 0, expected_game_hash,
 				     any_rm,
@@ -1046,9 +1047,9 @@ static void test_verify_null_data(void)
 static void test_verify_null_info(void)
 {
 	TEST("verify: NULL info -> INVALID_ARG");
-	uint8_t data[128] = {0};
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t data[128] = { 0 };
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
 				     NULL) != LOTA_AC_ERR_INVALID_ARG) {
@@ -1061,9 +1062,9 @@ static void test_verify_null_info(void)
 static void test_verify_truncated(void)
 {
 	TEST("verify: truncated data -> BAD_TOKEN");
-	uint8_t data[32] = {0};
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t data[32] = { 0 };
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
@@ -1081,15 +1082,15 @@ static void test_verify_bad_magic(void)
 	memset(data, 0, sizeof(data));
 
 	struct lota_ac_heartbeat_wire *hdr =
-	    (struct lota_ac_heartbeat_wire *)data;
+		(struct lota_ac_heartbeat_wire *)data;
 	hdr->magic = 0xDEADBEEF;
 	hdr->version = LOTA_AC_VERSION;
 	hdr->provider = LOTA_AC_PROVIDER_EAC;
 	hdr->total_size = sizeof(data);
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
@@ -1107,15 +1108,15 @@ static void test_verify_bad_version(void)
 	memset(data, 0, sizeof(data));
 
 	struct lota_ac_heartbeat_wire *hdr =
-	    (struct lota_ac_heartbeat_wire *)data;
+		(struct lota_ac_heartbeat_wire *)data;
 	hdr->magic = LOTA_AC_MAGIC;
 	hdr->version = 99;
 	hdr->provider = LOTA_AC_PROVIDER_EAC;
 	hdr->total_size = sizeof(data);
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
@@ -1133,15 +1134,15 @@ static void test_verify_bad_provider(void)
 	memset(data, 0, sizeof(data));
 
 	struct lota_ac_heartbeat_wire *hdr =
-	    (struct lota_ac_heartbeat_wire *)data;
+		(struct lota_ac_heartbeat_wire *)data;
 	hdr->magic = LOTA_AC_MAGIC;
 	hdr->version = LOTA_AC_VERSION;
 	hdr->provider = 42;
 	hdr->total_size = sizeof(data);
 	hdr->token_size = sizeof(data) - LOTA_AC_HEADER_SIZE;
 
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
@@ -1159,15 +1160,15 @@ static void test_verify_size_mismatch(void)
 	memset(data, 0, sizeof(data));
 
 	struct lota_ac_heartbeat_wire *hdr =
-	    (struct lota_ac_heartbeat_wire *)data;
+		(struct lota_ac_heartbeat_wire *)data;
 	hdr->magic = LOTA_AC_MAGIC;
 	hdr->version = LOTA_AC_VERSION;
 	hdr->provider = LOTA_AC_PROVIDER_EAC;
 	hdr->total_size = 9999; /* way bigger than actual data */
 	hdr->token_size = 128;
 
-	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = {0};
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
@@ -1238,7 +1239,7 @@ static void test_verify_rejects_unknown_domain_version(void)
 	/* stamp a domain version that is not in the accepted table */
 	write_le32(buf + 74, 0xdeadbeefU);
 
-	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = {0};
+	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     any_rm,
@@ -1326,10 +1327,10 @@ static void test_direct_mode_no_agent(void)
 {
 	TEST("direct mode: no agent -> ERROR state (graceful)");
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-direct",
-	    .direct = 1,
-	    .socket_path = "/tmp/lota_nonexistent_socket_for_test",
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -1413,17 +1414,17 @@ static void write_wine_status_file(const char *dir, uint32_t flags,
 				   uint64_t valid_until)
 {
 	char buf[512];
-	int len =
-	    snprintf(buf, sizeof(buf),
-		     "LOTA_ATTESTED=%d\n"
-		     "LOTA_FLAGS=0x%08x\n"
-		     "LOTA_VALID_UNTIL=%lu\n"
-		     "LOTA_ATTEST_COUNT=%u\n"
-		     "LOTA_FAIL_COUNT=%u\n"
-		     "LOTA_UPDATED=%lu\n"
-		     "LOTA_PID=%d\n",
-		     (flags & 0x01) ? 1 : 0, flags, (unsigned long)valid_until,
-		     1u, 0u, (unsigned long)time(NULL), (int)getpid());
+	int len = snprintf(buf, sizeof(buf),
+			   "LOTA_ATTESTED=%d\n"
+			   "LOTA_FLAGS=0x%08x\n"
+			   "LOTA_VALID_UNTIL=%lu\n"
+			   "LOTA_ATTEST_COUNT=%u\n"
+			   "LOTA_FAIL_COUNT=%u\n"
+			   "LOTA_UPDATED=%lu\n"
+			   "LOTA_PID=%d\n",
+			   (flags & 0x01) ? 1 : 0, flags,
+			   (unsigned long)valid_until, 1u, 0u,
+			   (unsigned long)time(NULL), (int)getpid());
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return;
 	write_test_file(dir, "lota-status", buf, (size_t)len);
@@ -1451,9 +1452,9 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
 	write_mock_snapshot(dir, attested_flags);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "wine-to-eac",
-	    .token_dir = dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "wine-to-eac",
+		.token_dir = dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -1488,9 +1489,9 @@ static void test_integration_eac_detects_agent_death(void)
 	write_mock_snapshot(dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "agent-death",
-	    .token_dir = dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "agent-death",
+		.token_dir = dir,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -1542,10 +1543,10 @@ static void test_integration_eac_detects_attestation_loss(void)
 	write_mock_snapshot(dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "attestation-loss",
-	    .token_dir = dir,
-	    .required_flags = 0x07,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "attestation-loss",
+		.token_dir = dir,
+		.required_flags = 0x07,
 	};
 	struct lota_ac_session *s = lota_ac_init(&cfg);
 	if (!s) {
@@ -1582,9 +1583,9 @@ static void test_session_id_unique(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
-	    .provider = LOTA_AC_PROVIDER_EAC,
-	    .game_id = "test-unique",
-	    .token_dir = test_dir,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-unique",
+		.token_dir = test_dir,
 	};
 	struct lota_ac_session *s1 = lota_ac_init(&cfg);
 	struct lota_ac_session *s2 = lota_ac_init(&cfg);

@@ -22,14 +22,14 @@
 
 static int g_failures;
 
-#define CHECK(cond, msg)                                                       \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			fprintf(stderr, "FAIL: %s\n", msg);                    \
-			g_failures++;                                          \
-		} else {                                                       \
-			printf("PASS: %s\n", msg);                             \
-		}                                                              \
+#define CHECK(cond, msg)                                    \
+	do {                                                \
+		if (!(cond)) {                              \
+			fprintf(stderr, "FAIL: %s\n", msg); \
+			g_failures++;                       \
+		} else {                                    \
+			printf("PASS: %s\n", msg);          \
+		}                                           \
 	} while (0)
 
 static void write_file(const char *dir, const char *name, const char *val)

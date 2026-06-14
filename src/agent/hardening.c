@@ -50,9 +50,9 @@ int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer)
 	 * whose value happens to contain "TracerPid:" from being mistaken
 	 * for the real one.
 	 */
-	const char *p = (buf[0] == 'T' && strncmp(buf, "TracerPid:", 10) == 0)
-			    ? buf
-			    : strstr(buf, "\nTracerPid:");
+	const char *p = (buf[0] == 'T' && strncmp(buf, "TracerPid:", 10) == 0) ?
+				buf :
+				strstr(buf, "\nTracerPid:");
 	if (!p)
 		return -ENOTSUP;
 	if (*p == '\n')
@@ -192,32 +192,32 @@ int hardening_apply_no_dumpable(void)
  *     (READ_IMPLIES_EXEC) on x86.
  */
 static const int hardening_denied_syscalls[] = {
-    SCMP_SYS(ptrace),
-    SCMP_SYS(process_vm_readv),
-    SCMP_SYS(process_vm_writev),
-    SCMP_SYS(kexec_load),
-    SCMP_SYS(kexec_file_load),
-    SCMP_SYS(init_module),
-    SCMP_SYS(finit_module),
-    SCMP_SYS(delete_module),
-    SCMP_SYS(create_module),
-    SCMP_SYS(query_module),
-    SCMP_SYS(get_kernel_syms),
-    SCMP_SYS(pivot_root),
-    SCMP_SYS(swapon),
-    SCMP_SYS(swapoff),
-    SCMP_SYS(reboot),
-    SCMP_SYS(mount),
-    SCMP_SYS(umount2),
-    SCMP_SYS(setns),
-    SCMP_SYS(unshare),
-    SCMP_SYS(io_uring_setup),
-    SCMP_SYS(io_uring_enter),
-    SCMP_SYS(io_uring_register),
-    SCMP_SYS(userfaultfd),
-    SCMP_SYS(pidfd_send_signal),
-    SCMP_SYS(modify_ldt),
-    SCMP_SYS(personality),
+	SCMP_SYS(ptrace),
+	SCMP_SYS(process_vm_readv),
+	SCMP_SYS(process_vm_writev),
+	SCMP_SYS(kexec_load),
+	SCMP_SYS(kexec_file_load),
+	SCMP_SYS(init_module),
+	SCMP_SYS(finit_module),
+	SCMP_SYS(delete_module),
+	SCMP_SYS(create_module),
+	SCMP_SYS(query_module),
+	SCMP_SYS(get_kernel_syms),
+	SCMP_SYS(pivot_root),
+	SCMP_SYS(swapon),
+	SCMP_SYS(swapoff),
+	SCMP_SYS(reboot),
+	SCMP_SYS(mount),
+	SCMP_SYS(umount2),
+	SCMP_SYS(setns),
+	SCMP_SYS(unshare),
+	SCMP_SYS(io_uring_setup),
+	SCMP_SYS(io_uring_enter),
+	SCMP_SYS(io_uring_register),
+	SCMP_SYS(userfaultfd),
+	SCMP_SYS(pidfd_send_signal),
+	SCMP_SYS(modify_ldt),
+	SCMP_SYS(personality),
 };
 
 int hardening_apply_seccomp(void)

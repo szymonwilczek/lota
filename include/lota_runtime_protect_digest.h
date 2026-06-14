@@ -115,8 +115,8 @@ out:
  * quote attests.
  */
 static inline int lota_compute_runtime_protect_digest_v2(
-    const uint32_t *pids, const uint8_t (*image_digests)[32],
-    uint32_t pid_count, uint8_t out_digest[32])
+	const uint32_t *pids, const uint8_t (*image_digests)[32],
+	uint32_t pid_count, uint8_t out_digest[32])
 {
 	static const uint8_t domain[] = "lota-runtime-protect-pids:v2\0";
 	EVP_MD_CTX *mdctx = NULL;

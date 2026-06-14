@@ -6,6 +6,7 @@ linters:
   default: none
   enable:
     - errcheck
+    - gocritic
     - gosec
     - govet
     - revive
@@ -15,6 +16,22 @@ linters:
     errcheck:
       check-type-assertions: true
       check-blank: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # rewriting long if/else config chains to switch is not clearly
+        # an improvement here;
+        # keep the rest of the style tag
+        - ifElseChain
+      settings:
+        hugeParam:
+          # only flag genuinely large by-value copies (the default 80 is
+          # noisy for the config structs passed once at startup);
+          # 256-byte cutoff still catches the big per-request structs
+          sizeThreshold: 256
     revive:
       rules:
         - name: exported
@@ -39,6 +56,13 @@ linters:
       - builtin$
       - examples$
 formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/szymonwilczek/lota
   exclusions:
     generated: lax
     paths:

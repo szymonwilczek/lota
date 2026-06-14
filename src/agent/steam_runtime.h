@@ -42,10 +42,10 @@ enum steam_runtime_type {
  * Container environment detection flags.
  */
 #define STEAM_ENV_PRESSURE_VESSEL (1U << 0) /* inside pressure-vessel */
-#define STEAM_ENV_FLATPAK (1U << 1)	    /* inside Flatpak sandbox */
-#define STEAM_ENV_STEAM_ACTIVE (1U << 2)    /* Steam client is running */
-#define STEAM_ENV_XDG_AVAILABLE (1U << 3)   /* XDG_RUNTIME_DIR exists */
-#define STEAM_ENV_PROTON (1U << 4)	    /* Proton/Wine detected */
+#define STEAM_ENV_FLATPAK (1U << 1) /* inside Flatpak sandbox */
+#define STEAM_ENV_STEAM_ACTIVE (1U << 2) /* Steam client is running */
+#define STEAM_ENV_XDG_AVAILABLE (1U << 3) /* XDG_RUNTIME_DIR exists */
+#define STEAM_ENV_PROTON (1U << 4) /* Proton/Wine detected */
 
 /*
  * Maximum number of extra socket paths the agent can manage.

@@ -89,7 +89,7 @@ require_module_sig: false
 require_secureboot: false
 require_lockdown: false
 `
-	if err := os.WriteFile(policyPath, []byte(policyContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test policy file: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestPCRVerifier_LoadPolicy_RequiresAgentHashPin(t *testing.T) {
 	tmpDir := t.TempDir()
 	write := func(name, content string) string {
 		p := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return p
@@ -175,7 +175,7 @@ description: "invalid PCR index"
 pcrs:
   -1: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61"
 `
-	if err := os.WriteFile(policyPath, []byte(policyContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test policy file: %v", err)
 	}
 
@@ -514,7 +514,7 @@ pcrs:
   - this is not a map
   [invalid yaml
 `
-	if err := os.WriteFile(policyPath, []byte(invalidContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(invalidContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
@@ -542,7 +542,7 @@ require_enforce: true
 require_module_sig: true
 require_iommu: true
 `
-	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -570,7 +570,7 @@ pcrs:
   14: "0000000000000000000000000000000000000000000000000000000000000000"
 require_enforce: true
 `
-	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

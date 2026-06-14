@@ -50,9 +50,9 @@
 
 /* Global state */
 struct agent_globals g_agent = {
-    .running = 1,
-    .dbus_ctx = NULL,
-    .mode = LOTA_MODE_MONITOR,
+	.running = 1,
+	.dbus_ctx = NULL,
+	.mode = LOTA_MODE_MONITOR,
 };
 
 static volatile sig_atomic_t g_reload = 0;
@@ -173,7 +173,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 	lota_info(
-	    "Hash verification ready (fs-verity backed, no userspace cache)");
+		"Hash verification ready (fs-verity backed, no userspace cache)");
 
 	lota_info("Starting IPC server");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
@@ -253,17 +253,17 @@ static int run_daemon(const struct run_daemon_params *params)
 			lota_info("AIK ready, signed tokens enabled");
 
 			int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
-			lota_info(
-			    "AIK generation: %lu, age: %ld seconds",
-			    (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
-			    (long)age);
+			lota_info("AIK generation: %lu, age: %ld seconds",
+				  (unsigned long)
+					  g_agent.tpm_ctx.aik_meta.generation,
+				  (long)age);
 
 			/*
 			 * surface the rotation state over D-Bus from
 			 * the loaded metadata
 			 */
 			publish_rotation_state(
-			    params->cfg ? params->cfg->aik_ttl : 0);
+				params->cfg ? params->cfg->aik_ttl : 0);
 		}
 
 		lota_info("Performing self-measurement");
@@ -295,19 +295,19 @@ static int run_daemon(const struct run_daemon_params *params)
 	status_flags |= LOTA_STATUS_BPF_LOADED;
 
 	struct agent_startup_policy startup_policy = {
-	    .mode = g_agent.mode,
-	    .strict_mmap = strict_mmap,
-	    .strict_exec = strict_exec,
-	    .block_ptrace = block_ptrace,
-	    .strict_modules = strict_modules,
-	    .block_anon_exec = block_anon_exec,
-	    .protect_pids = *cli_runtime_protect_pids(),
-	    .protect_pid_count = *cli_runtime_protect_pid_count(),
-	    .trust_libs = cli_runtime_trust_libs(),
-	    .trust_lib_count = *cli_runtime_trust_lib_count(),
-	    .allow_verity = cli_runtime_allow_verity(),
-	    .allow_verity_count = *cli_runtime_allow_verity_count(),
-	    .allow_mutable_rootfs = params->allow_mutable_rootfs,
+		.mode = g_agent.mode,
+		.strict_mmap = strict_mmap,
+		.strict_exec = strict_exec,
+		.block_ptrace = block_ptrace,
+		.strict_modules = strict_modules,
+		.block_anon_exec = block_anon_exec,
+		.protect_pids = *cli_runtime_protect_pids(),
+		.protect_pid_count = *cli_runtime_protect_pid_count(),
+		.trust_libs = cli_runtime_trust_libs(),
+		.trust_lib_count = *cli_runtime_trust_lib_count(),
+		.allow_verity = cli_runtime_allow_verity(),
+		.allow_verity_count = *cli_runtime_allow_verity_count(),
+		.allow_mutable_rootfs = params->allow_mutable_rootfs,
 	};
 
 	/*
@@ -331,8 +331,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 	lota_info("BPF programs attached under full enforcement policy");
 
-	ret =
-	    bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event, NULL);
+	ret = bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event,
+				       NULL);
 	if (ret < 0) {
 		lota_err("Failed to setup ring buffer: %s", strerror(-ret));
 		goto cleanup_bpf;
@@ -354,26 +354,26 @@ static int run_daemon(const struct run_daemon_params *params)
 	lota_info("Monitoring binary executions (event-driven)");
 
 	struct agent_loop_ctx loop_ctx = {
-	    .epoll_fd = epoll_fd,
-	    .sfd = sfd,
-	    .wd_enabled = wd_enabled,
-	    .wd_usec = wd_usec,
-	    .config_path = config_path,
-	    .cfg = cfg,
-	    .mode = &g_agent.mode,
-	    .strict_mmap = &strict_mmap,
-	    .strict_exec = &strict_exec,
-	    .block_ptrace = &block_ptrace,
-	    .strict_modules = &strict_modules,
-	    .block_anon_exec = &block_anon_exec,
-	    .protect_pids = cli_runtime_protect_pids(),
-	    .protect_pid_count = cli_runtime_protect_pid_count(),
-	    .trust_libs = cli_runtime_trust_libs(),
-	    .trust_lib_count = cli_runtime_trust_lib_count(),
-	    .ipc_ctx = &g_agent.ipc_ctx,
-	    .dbus_ctx = g_agent.dbus_ctx,
-	    .bpf_ctx = &g_agent.bpf_ctx,
-	    .running = &g_agent.running,
+		.epoll_fd = epoll_fd,
+		.sfd = sfd,
+		.wd_enabled = wd_enabled,
+		.wd_usec = wd_usec,
+		.config_path = config_path,
+		.cfg = cfg,
+		.mode = &g_agent.mode,
+		.strict_mmap = &strict_mmap,
+		.strict_exec = &strict_exec,
+		.block_ptrace = &block_ptrace,
+		.strict_modules = &strict_modules,
+		.block_anon_exec = &block_anon_exec,
+		.protect_pids = cli_runtime_protect_pids(),
+		.protect_pid_count = cli_runtime_protect_pid_count(),
+		.trust_libs = cli_runtime_trust_libs(),
+		.trust_lib_count = cli_runtime_trust_lib_count(),
+		.ipc_ctx = &g_agent.ipc_ctx,
+		.dbus_ctx = g_agent.dbus_ctx,
+		.bpf_ctx = &g_agent.bpf_ctx,
+		.running = &g_agent.running,
 	};
 	ret = agent_run_event_loop(&loop_ctx);
 
@@ -386,14 +386,14 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct bpf_extended_stats stats;
 	if (bpf_loader_get_extended_stats(&g_agent.bpf_ctx, &stats) == 0) {
 		lota_info(
-		    "Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
-		    "mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
-		    "ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu",
-		    stats.total_execs, stats.events_sent, stats.errors,
-		    stats.drops, stats.modules_blocked, stats.mmap_execs,
-		    stats.mmap_blocked, stats.ptrace_attempts,
-		    stats.ptrace_blocked, stats.setuid_events,
-		    stats.bpf_syscall_blocked);
+			"Shutdown statistics: exec=%lu sent=%lu err=%lu drops=%lu "
+			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
+			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu",
+			stats.total_execs, stats.events_sent, stats.errors,
+			stats.drops, stats.modules_blocked, stats.mmap_execs,
+			stats.mmap_blocked, stats.ptrace_attempts,
+			stats.ptrace_blocked, stats.setuid_events,
+			stats.bpf_syscall_blocked);
 	}
 
 	{
@@ -502,15 +502,14 @@ int main(int argc, char *argv[])
 	if (opts.cli_mode_set && opts.config_file_mode == LOTA_MODE_ENFORCE &&
 	    g_agent.mode != LOTA_MODE_ENFORCE &&
 	    !opts.insecure_allow_mode_downgrade) {
-		fprintf(
-		    stderr,
-		    "ERROR: CLI --mode %s weakens configured mode 'enforce'.\n"
-		    "Either remove --mode from the invocation (config drives "
-		    "mode)\n"
-		    "or pass --insecure-allow-mode-downgrade to acknowledge "
-		    "the\n"
-		    "downgrade explicitly.\n",
-		    mode_to_string(g_agent.mode));
+		fprintf(stderr,
+			"ERROR: CLI --mode %s weakens configured mode 'enforce'.\n"
+			"Either remove --mode from the invocation (config drives "
+			"mode)\n"
+			"or pass --insecure-allow-mode-downgrade to acknowledge "
+			"the\n"
+			"downgrade explicitly.\n",
+			mode_to_string(g_agent.mode));
 		return 1;
 	}
 
@@ -525,9 +524,8 @@ int main(int argc, char *argv[])
 
 	int pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
-		fprintf(
-		    stderr,
-		    "Another instance is already running (PID file locked)\n");
+		fprintf(stderr,
+			"Another instance is already running (PID file locked)\n");
 		return 1;
 	}
 	if (pid_fd < 0) {
@@ -546,17 +544,17 @@ int main(int argc, char *argv[])
 	}
 
 	struct run_daemon_params run_params = {
-	    .bpf_path = opts.bpf_path,
-	    .bpf_pubkey_path = opts.policy_pubkey_path,
-	    .mode = g_agent.mode,
-	    .strict_mmap = opts.strict_mmap,
-	    .strict_exec = opts.strict_exec,
-	    .block_ptrace = opts.block_ptrace,
-	    .strict_modules = opts.strict_modules,
-	    .block_anon_exec = opts.block_anon_exec,
-	    .allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
-	    .config_path = opts.config_path,
-	    .cfg = &cfg,
+		.bpf_path = opts.bpf_path,
+		.bpf_pubkey_path = opts.policy_pubkey_path,
+		.mode = g_agent.mode,
+		.strict_mmap = opts.strict_mmap,
+		.strict_exec = opts.strict_exec,
+		.block_ptrace = opts.block_ptrace,
+		.strict_modules = opts.strict_modules,
+		.block_anon_exec = opts.block_anon_exec,
+		.allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
+		.config_path = opts.config_path,
+		.cfg = &cfg,
 	};
 	rc = run_daemon(&run_params);
 	pidfile_remove(opts.pid_file_path, pid_fd);

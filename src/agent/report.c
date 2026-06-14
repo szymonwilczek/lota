@@ -79,8 +79,8 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (!event_log)
 		event_log_size = 0;
 
-	total =
-	    calculate_report_size(event_count, event_log_size, esrt != NULL);
+	total = calculate_report_size(event_count, event_log_size,
+				      esrt != NULL);
 	if (total == 0)
 		return -EOVERFLOW;
 
@@ -100,7 +100,7 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 
 	if (event_count > 0 && events) {
 		size_t events_size =
-		    (size_t)event_count * sizeof(struct lota_exec_event);
+			(size_t)event_count * sizeof(struct lota_exec_event);
 		if (events_size / event_count != sizeof(struct lota_exec_event))
 			return -EOVERFLOW;
 		memcpy(out_buf + offset, events, events_size);

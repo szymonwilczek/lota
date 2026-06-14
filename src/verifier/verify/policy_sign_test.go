@@ -34,7 +34,7 @@ func writeKeyPair(t *testing.T, dir string) (privPath, pubPath string) {
 	}
 	privPath = filepath.Join(dir, "test.key")
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER})
-	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
+	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
 		t.Fatalf("write private key: %v", err)
 	}
 
@@ -45,7 +45,7 @@ func writeKeyPair(t *testing.T, dir string) (privPath, pubPath string) {
 	}
 	pubPath = filepath.Join(dir, "test.pub")
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
-	if err := os.WriteFile(pubPath, pubPEM, 0600); err != nil {
+	if err := os.WriteFile(pubPath, pubPEM, 0o600); err != nil {
 		t.Fatalf("write public key: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestLoadPolicyPublicKey_NotFound(t *testing.T) {
 func TestLoadPolicyPublicKey_BadPEM(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.pub")
-	os.WriteFile(path, []byte("not a pem file"), 0644)
+	os.WriteFile(path, []byte("not a pem file"), 0o644)
 
 	_, err := LoadPolicyPublicKey(path)
 	if err == nil {
@@ -201,11 +201,11 @@ func TestVerifyPolicyFile_Valid(t *testing.T) {
 
 	content := []byte("name: file-test\npcrs:\n  0: deadbeef\n")
 	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, content, 0644)
+	os.WriteFile(yamlPath, content, 0o644)
 
 	sig := signData(t, content, privPath)
 	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, sig, 0644)
+	os.WriteFile(sigPath, sig, 0o644)
 
 	pub, _ := LoadPolicyPublicKey(pubPath)
 	if err := VerifyPolicyFile(yamlPath, pub); err != nil {
@@ -219,14 +219,14 @@ func TestVerifyPolicyFile_Tampered(t *testing.T) {
 
 	content := []byte("name: tamper-test\n")
 	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, content, 0644)
+	os.WriteFile(yamlPath, content, 0o644)
 
 	sig := signData(t, content, privPath)
 	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, sig, 0644)
+	os.WriteFile(sigPath, sig, 0o644)
 
 	// tamper
-	os.WriteFile(yamlPath, []byte("name: TAMPERED\n"), 0644)
+	os.WriteFile(yamlPath, []byte("name: TAMPERED\n"), 0o644)
 
 	pub, _ := LoadPolicyPublicKey(pubPath)
 	err := VerifyPolicyFile(yamlPath, pub)
@@ -240,7 +240,7 @@ func TestVerifyPolicyFile_MissingSig(t *testing.T) {
 	_, pubPath := writeKeyPair(t, dir)
 
 	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, []byte("name: no-sig\n"), 0644)
+	os.WriteFile(yamlPath, []byte("name: no-sig\n"), 0o644)
 	// no .sig file
 
 	pub, _ := LoadPolicyPublicKey(pubPath)
@@ -255,10 +255,10 @@ func TestVerifyPolicyFile_TruncatedSig(t *testing.T) {
 	_, pubPath := writeKeyPair(t, dir)
 
 	yamlPath := filepath.Join(dir, "policy.yaml")
-	os.WriteFile(yamlPath, []byte("name: short-sig\n"), 0644)
+	os.WriteFile(yamlPath, []byte("name: short-sig\n"), 0o644)
 
 	sigPath := yamlPath + ".sig"
-	os.WriteFile(sigPath, []byte("short"), 0644)
+	os.WriteFile(sigPath, []byte("short"), 0o644)
 
 	pub, _ := LoadPolicyPublicKey(pubPath)
 	err := VerifyPolicyFile(yamlPath, pub)

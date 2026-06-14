@@ -106,8 +106,8 @@ int probe_fsverity_enable(const char *path)
  * EFI global variable GUID
  * 4-byte attribute header precedes the payload in efivarfs
  */
-#define SECUREBOOT_EFIVAR                                                      \
-	"/sys/firmware/efi/efivars/"                                           \
+#define SECUREBOOT_EFIVAR            \
+	"/sys/firmware/efi/efivars/" \
 	"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 
 int probe_secureboot(void)
@@ -191,7 +191,7 @@ int probe_booted_ima_ok(void)
 
 int probe_module_sig_enforced(void)
 {
-	char buf[16] = {0};
+	char buf[16] = { 0 };
 	int ret = probe_read_text("/sys/module/module/parameters/sig_enforce",
 				  buf, sizeof(buf));
 
@@ -209,8 +209,8 @@ int probe_lockdown_restrictive(void)
 	char buf[256];
 	char *lb;
 	char *rb;
-	int ret =
-	    probe_read_text("/sys/kernel/security/lockdown", buf, sizeof(buf));
+	int ret = probe_read_text("/sys/kernel/security/lockdown", buf,
+				  sizeof(buf));
 
 	if (ret < 0)
 		return ret;
@@ -239,7 +239,7 @@ int probe_lockdown_restrictive(void)
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 {
 	uint8_t commit[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = {0};
+	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
 	unsigned int len = 0;
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 
@@ -298,8 +298,8 @@ int probe_pcr14_state(void)
 {
 	uint8_t live[PROBE_HASH_SIZE];
 	uint8_t lock[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = {0};
-	char buf[2 * PROBE_HASH_SIZE + 8] = {0};
+	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
+	char buf[2 * PROBE_HASH_SIZE + 8] = { 0 };
 	int ret = probe_read_text("/sys/class/tpm/tpm0/pcr-sha256/14", buf,
 				  sizeof(buf));
 
@@ -319,7 +319,7 @@ int probe_pcr14_state(void)
 
 int probe_selinux_tpm_label(void)
 {
-	static const char *const tpm_paths[] = {"/dev/tpmrm0", "/dev/tpm0"};
+	static const char *const tpm_paths[] = { "/dev/tpmrm0", "/dev/tpm0" };
 	const char *expected = "lota_tpm_device_t";
 	int any_present = 0;
 	size_t i;
@@ -421,7 +421,7 @@ int probe_conf_buf_has_key(const char *buf, const char *key)
 
 int probe_conf_has_key(const char *conf_path, const char *key)
 {
-	char buf[16384] = {0};
+	char buf[16384] = { 0 };
 	int ret = probe_read_text(conf_path, buf, sizeof(buf));
 
 	if (ret < 0)
@@ -466,5 +466,5 @@ int probe_esrt_system_firmware_present_at(const char *base)
 int probe_esrt_system_firmware_present(void)
 {
 	return probe_esrt_system_firmware_present_at(
-	    "/sys/firmware/efi/esrt/entries");
+		"/sys/firmware/efi/esrt/entries");
 }

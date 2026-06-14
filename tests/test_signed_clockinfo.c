@@ -31,32 +31,32 @@
 static int g_failures;
 static const char *g_current_test;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		g_current_test = name;                                         \
-		printf("[ RUN      ] %s\n", name);                             \
+#define TEST(name)                                 \
+	do {                                       \
+		g_current_test = name;             \
+		printf("[ RUN      ] %s\n", name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		printf("[       OK ] %s\n", g_current_test);                   \
+#define PASS()                                               \
+	do {                                                 \
+		printf("[       OK ] %s\n", g_current_test); \
 	} while (0)
 
-#define FAIL(fmt, ...)                                                         \
-	do {                                                                   \
-		fprintf(stderr, "[  FAILED  ] %s: " fmt "\n", g_current_test,  \
-			##__VA_ARGS__);                                        \
-		g_failures++;                                                  \
-		return;                                                        \
+#define FAIL(fmt, ...)                                                        \
+	do {                                                                  \
+		fprintf(stderr, "[  FAILED  ] %s: " fmt "\n", g_current_test, \
+			##__VA_ARGS__);                                       \
+		g_failures++;                                                 \
+		return;                                                       \
 	} while (0)
 
-#define EXPECT_EQ(got, want)                                                   \
-	do {                                                                   \
-		if ((got) != (want)) {                                         \
-			FAIL("expected %llu, got %llu",                        \
-			     (unsigned long long)(want),                       \
-			     (unsigned long long)(got));                       \
-		}                                                              \
+#define EXPECT_EQ(got, want)                             \
+	do {                                             \
+		if ((got) != (want)) {                   \
+			FAIL("expected %llu, got %llu",  \
+			     (unsigned long long)(want), \
+			     (unsigned long long)(got)); \
+		}                                        \
 	} while (0)
 
 /*
@@ -92,7 +92,7 @@ static int marshal_attest(uint32_t reset_count, uint32_t restart_count,
 	attest.attested.quote.pcrSelect.pcrSelections[0].hash = TPM2_ALG_SHA256;
 	attest.attested.quote.pcrSelect.pcrSelections[0].sizeofSelect = 3;
 	attest.attested.quote.pcrSelect.pcrSelections[0].pcrSelect[1] =
-	    (uint8_t)(1U << (14 % 8));
+		(uint8_t)(1U << (14 % 8));
 
 	attest.attested.quote.pcrDigest.size = 32;
 	for (uint16_t i = 0; i < attest.attested.quote.pcrDigest.size; i++)
@@ -121,8 +121,8 @@ static void test_round_trip_small_counters(void)
 	if (marshal_attest(9, 0, buf, sizeof(buf), &buf_used) != 0)
 		FAIL("failed to marshal TPMS_ATTEST");
 
-	int ret =
-	    tpm_test_parse_signed_clockinfo(buf, buf_used, &reset, &restart);
+	int ret = tpm_test_parse_signed_clockinfo(buf, buf_used, &reset,
+						  &restart);
 	if (ret != 0)
 		FAIL("parser returned %d", ret);
 	EXPECT_EQ(reset, 9);
@@ -150,8 +150,8 @@ static void test_round_trip_swtpm_observed_counters(void)
 			   &buf_used) != 0)
 		FAIL("failed to marshal TPMS_ATTEST");
 
-	int ret =
-	    tpm_test_parse_signed_clockinfo(buf, buf_used, &reset, &restart);
+	int ret = tpm_test_parse_signed_clockinfo(buf, buf_used, &reset,
+						  &restart);
 	if (ret != 0)
 		FAIL("parser returned %d", ret);
 	EXPECT_EQ(reset, 1973039075U);
@@ -176,8 +176,8 @@ static void test_round_trip_max_counters(void)
 			   &buf_used) != 0)
 		FAIL("failed to marshal TPMS_ATTEST");
 
-	int ret =
-	    tpm_test_parse_signed_clockinfo(buf, buf_used, &reset, &restart);
+	int ret = tpm_test_parse_signed_clockinfo(buf, buf_used, &reset,
+						  &restart);
 	if (ret != 0)
 		FAIL("parser returned %d", ret);
 	EXPECT_EQ(reset, 0xFFFFFFFFU);
@@ -203,8 +203,8 @@ static void test_round_trip_distinct_counters(void)
 			   &buf_used) != 0)
 		FAIL("failed to marshal TPMS_ATTEST");
 
-	int ret =
-	    tpm_test_parse_signed_clockinfo(buf, buf_used, &reset, &restart);
+	int ret = tpm_test_parse_signed_clockinfo(buf, buf_used, &reset,
+						  &restart);
 	if (ret != 0)
 		FAIL("parser returned %d", ret);
 	EXPECT_EQ(reset, 0xA5A5A5A5U);
@@ -219,7 +219,7 @@ static void test_round_trip_distinct_counters(void)
  */
 static void test_rejects_null_arguments(void)
 {
-	uint8_t buf[8] = {0};
+	uint8_t buf[8] = { 0 };
 	uint32_t reset = 0xDEAD;
 	uint32_t restart = 0xBEEF;
 
@@ -282,8 +282,8 @@ static void test_rejects_garbage_input(void)
 	for (size_t i = 0; i < sizeof(buf); i++)
 		buf[i] = (uint8_t)i;
 
-	int ret =
-	    tpm_test_parse_signed_clockinfo(buf, sizeof(buf), &reset, &restart);
+	int ret = tpm_test_parse_signed_clockinfo(buf, sizeof(buf), &reset,
+						  &restart);
 	if (ret == 0)
 		FAIL("garbage input must fail");
 	PASS();

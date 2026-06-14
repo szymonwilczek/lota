@@ -537,11 +537,11 @@ func generateTestCert() error {
 	}
 
 	// write certificate (world-readable) and private key (owner-only)
-	if err := writePEMFile("lota-verifier.crt", 0644,
+	if err := writePEMFile("lota-verifier.crt", 0o644,
 		&pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
 		return fmt.Errorf("failed to write certificate: %w", err)
 	}
-	if err := writePEMFile("lota-verifier.key", 0600,
+	if err := writePEMFile("lota-verifier.key", 0o600,
 		&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}

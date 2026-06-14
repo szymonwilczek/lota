@@ -39,18 +39,18 @@
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 
 struct install_opts {
-	const char *ca_server;	    /* Attestation CA host (enrollment) */
-	const char *ca_port;	    /* Attestation CA port */
-	const char *ca_cert;	    /* CA TLS certificate (PEM) */
-	const char *verifier;	    /* Verifier host for the self-check */
-	const char *verifier_port;  /* Verifier port */
-	const char *policy_pubkey;  /* Operator BPF signing public key */
+	const char *ca_server; /* Attestation CA host (enrollment) */
+	const char *ca_port; /* Attestation CA port */
+	const char *ca_cert; /* CA TLS certificate (PEM) */
+	const char *verifier; /* Verifier host for the self-check */
+	const char *verifier_port; /* Verifier port */
+	const char *policy_pubkey; /* Operator BPF signing public key */
 	const char *selinux_module; /* Compiled lota.pp policy package */
-	int yes;		    /* Skip confirmations */
-	int plain;		    /* Force non-TUI output */
-	int status_only;	    /* Probe + report, change nothing */
-	int pause;		    /* Graceful agent shutdown, then stop */
-	int resume;		    /* Explain that resume means a reboot */
+	int yes; /* Skip confirmations */
+	int plain; /* Force non-TUI output */
+	int status_only; /* Probe + report, change nothing */
+	int pause; /* Graceful agent shutdown, then stop */
+	int resume; /* Explain that resume means a reboot */
 };
 
 struct install_ctx {
@@ -62,11 +62,11 @@ struct install_ctx {
 /* Probe verdict for one stage */
 enum stage_state {
 	STAGE_DONE = 0, /* satisfied, nothing to do */
-	STAGE_PENDING,	/* apply() can satisfy it now */
-	STAGE_REBOOT,	/* satisfied only after a reboot */
-	STAGE_BLOCKED,	/* needs an action the installer must not take */
-	STAGE_SKIP,	/* not applicable on this host */
-	STAGE_ERROR,	/* the probe itself failed */
+	STAGE_PENDING, /* apply() can satisfy it now */
+	STAGE_REBOOT, /* satisfied only after a reboot */
+	STAGE_BLOCKED, /* needs an action the installer must not take */
+	STAGE_SKIP, /* not applicable on this host */
+	STAGE_ERROR, /* the probe itself failed */
 };
 
 #define STAGE_NOTE_CAP 512

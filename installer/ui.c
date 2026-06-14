@@ -454,8 +454,8 @@ int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
 	return 1;
 }
 
-static const char *const spin_frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼",
-					  "⠴", "⠦", "⠧", "⠇", "⠏"};
+static const char *const spin_frames[] = { "⠋", "⠙", "⠹", "⠸", "⠼",
+					   "⠴", "⠦", "⠧", "⠇", "⠏" };
 
 static double live_elapsed(const struct ui *ui)
 {

@@ -23,21 +23,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-55s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 /* independent reference fold mirroring the documented v2 byte layout */
@@ -74,7 +74,7 @@ fail:
 
 int main(void)
 {
-	uint32_t pids[2] = {1234, 5678};
+	uint32_t pids[2] = { 1234, 5678 };
 	uint8_t images[2][32];
 	uint8_t a[32], b[32], ref[32];
 
@@ -124,7 +124,7 @@ int main(void)
 
 	TEST("v2 rejects unsorted PID list");
 	{
-		uint32_t bad[2] = {5678, 1234};
+		uint32_t bad[2] = { 5678, 1234 };
 		if (lota_compute_runtime_protect_digest_v2(bad, images, 2, b) ==
 		    -EINVAL)
 			PASS();
@@ -147,11 +147,11 @@ int main(void)
 
 	TEST("v2 is domain-separated from v1");
 	{
-		uint8_t zero[2][32] = {{0}, {0}};
+		uint8_t zero[2][32] = { { 0 }, { 0 } };
 		uint8_t v1[32], v2[32];
 		if (lota_compute_runtime_protect_digest(pids, 2, v1) == 0 &&
 		    lota_compute_runtime_protect_digest_v2(pids, zero, 2, v2) ==
-			0 &&
+			    0 &&
 		    memcmp(v1, v2, 32) != 0)
 			PASS();
 		else
@@ -166,11 +166,12 @@ int main(void)
 		 * Mirror in the Go verifier's TestRuntimeProtectDigestV2_KAT.
 		 */
 		static const uint8_t kat[32] = {
-		    0x8d, 0x45, 0x1c, 0x6d, 0x0e, 0x1e, 0xa5, 0x11,
-		    0xdf, 0xc0, 0xa0, 0x5c, 0x8b, 0xe3, 0x7f, 0x35,
-		    0x02, 0xc7, 0x3f, 0xfd, 0x7a, 0x06, 0x73, 0x6a,
-		    0x0a, 0xff, 0xbc, 0xe3, 0xdb, 0xd5, 0x1e, 0x9d};
-		uint32_t kp[2] = {1, 2};
+			0x8d, 0x45, 0x1c, 0x6d, 0x0e, 0x1e, 0xa5, 0x11,
+			0xdf, 0xc0, 0xa0, 0x5c, 0x8b, 0xe3, 0x7f, 0x35,
+			0x02, 0xc7, 0x3f, 0xfd, 0x7a, 0x06, 0x73, 0x6a,
+			0x0a, 0xff, 0xbc, 0xe3, 0xdb, 0xd5, 0x1e, 0x9d
+		};
+		uint32_t kp[2] = { 1, 2 };
 		uint8_t ki[2][32];
 		memset(ki[0], 0xAA, 32);
 		memset(ki[1], 0xBB, 32);

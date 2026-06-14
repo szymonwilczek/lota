@@ -33,21 +33,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(fmt, ...)                                                         \
-	do {                                                                   \
-		printf("FAIL: " fmt "\n", ##__VA_ARGS__);                      \
+#define FAIL(fmt, ...)                                    \
+	do {                                              \
+		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
 	} while (0)
 
 static volatile sig_atomic_t sig_running = 1;
@@ -91,8 +91,8 @@ void journal_print(const char *file, int line, const char *func, int priority,
 static int wait_for_running_clear(void)
 {
 	struct timespec ts = {
-	    .tv_sec = 0,
-	    .tv_nsec = 1000 * 1000,
+		.tv_sec = 0,
+		.tv_nsec = 1000 * 1000,
 	};
 
 	for (int i = 0; i < 1000; i++) {

@@ -41,7 +41,7 @@
 static void open_parsed(const uint8_t *blob, const struct lota_envelope_meta *m,
 			size_t body_off)
 {
-	static const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = {0};
+	static const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = { 0 };
 	uint8_t aad[LOTA_ENVELOPE_HEADER_SIZE + LOTA_SEAL_MAX_BLOB];
 	const uint8_t *ct = blob + body_off + m->kek_blob_len;
 	size_t aad_len = body_off + m->kek_blob_len;
@@ -68,7 +68,7 @@ static void open_parsed(const uint8_t *blob, const struct lota_envelope_meta *m,
  */
 static void roundtrip(const uint8_t *data, size_t size)
 {
-	static const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = {0};
+	static const uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = { 0 };
 	uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE];
 	uint8_t tag[LOTA_ENVELOPE_TAG_SIZE];
 	const uint8_t *aad;

@@ -71,8 +71,8 @@ func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]b
 // FlagInitramfsLockV1 alongside FlagBootCommitment; a report with
 // only FlagBootCommitment falls back to DeriveBootCommitmentPCR14.
 func DeriveLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
-	resetCount, restartCount uint32) [types.HashSize]byte {
-
+	resetCount, restartCount uint32,
+) [types.HashSize]byte {
 	lockValue := DeriveInitramfsLockPCR14(resetCount, restartCount)
 
 	var counters [8]byte
@@ -102,8 +102,8 @@ func DeriveLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
 // resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo
 // of the quote.
 func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
-	resetCount, restartCount uint32) [types.HashSize]byte {
-
+	resetCount, restartCount uint32,
+) [types.HashSize]byte {
 	var counters [8]byte
 	binary.BigEndian.PutUint32(counters[0:4], resetCount)
 	binary.BigEndian.PutUint32(counters[4:8], restartCount)
@@ -155,7 +155,6 @@ func MatchBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	target [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-
 	return matchPCR14(DeriveBootCommitmentPCR14, agentHash, resetCount,
 		quoteRestartCount, target, maxRestartSkew)
 }
@@ -170,7 +169,6 @@ func MatchLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	target [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-
 	return matchPCR14(DeriveLockedBootCommitmentPCR14, agentHash, resetCount,
 		quoteRestartCount, target, maxRestartSkew)
 }
@@ -185,7 +183,6 @@ func matchPCR14(
 	target [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-
 	expected = derive(agentHash, resetCount, quoteRestartCount)
 	if expected == target {
 		return expected, 0, true
@@ -521,7 +518,8 @@ func (s *BaselineStore) GetReanchorState(clientID string) ReanchorState {
 // esrtCapable is sticky: once true it stays true.
 func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	eventLog []byte, esrtVersion uint32, esrtCapable, lfa bool,
-	reason string) error {
+	reason string,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -555,7 +553,8 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 // first-use boot baseline (in-memory).
 // esrt_capable is sticky.
 func (s *BaselineStore) RecordBootEvidence(clientID string, eventLog []byte,
-	esrtVersion uint32, esrtPresent bool) error {
+	esrtVersion uint32, esrtPresent bool,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -650,7 +649,8 @@ func FormatPCR14(pcr14 [types.HashSize]byte) string {
 // in-memory baseline store; currentPCR14 is captured on first use so
 // operators retain a forensic snapshot of the runtime PCR value.
 func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
-	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	currentPCR14, agentHash [types.HashSize]byte,
+) (TOFUResult, *ClientBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -735,7 +735,8 @@ func (s *BaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaselin
 // untouched, mirroring the SQLite implementation.
 func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline) AttestationOutcome {
+	boot *BootBaseline,
+) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

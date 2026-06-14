@@ -94,7 +94,7 @@ static inline void cbench_run(const char *suite, const char *name, cbench_fn fn,
 	const size_t reps = cbench_envu("BENCH_REPS", 50);
 	const size_t warmup = cbench_envu("BENCH_WARMUP", 5);
 	const uint64_t target_ns =
-	    cbench_envu("BENCH_TARGET_MS", 5) * 1000000ull;
+		cbench_envu("BENCH_TARGET_MS", 5) * 1000000ull;
 
 	/* Calibrate: grow the batch until one run reaches the target time. */
 	size_t batch = 1;

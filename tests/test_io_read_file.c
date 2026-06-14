@@ -18,14 +18,14 @@
 
 static int g_failures;
 
-#define CHECK(cond, msg)                                                       \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			fprintf(stderr, "FAIL: %s\n", msg);                    \
-			g_failures++;                                          \
-		} else {                                                       \
-			printf("PASS: %s\n", msg);                             \
-		}                                                              \
+#define CHECK(cond, msg)                                    \
+	do {                                                \
+		if (!(cond)) {                              \
+			fprintf(stderr, "FAIL: %s\n", msg); \
+			g_failures++;                       \
+		} else {                                    \
+			printf("PASS: %s\n", msg);          \
+		}                                           \
 	} while (0)
 
 static int write_tmp(char *path, size_t path_sz, const void *data, size_t len)
@@ -47,7 +47,7 @@ static int write_tmp(char *path, size_t path_sz, const void *data, size_t len)
 static void test_reads_full_file(void)
 {
 	char path[64];
-	const uint8_t data[] = {0x30, 0x82, 0x01, 0x02, 0xAA, 0xBB};
+	const uint8_t data[] = { 0x30, 0x82, 0x01, 0x02, 0xAA, 0xBB };
 	uint8_t buf[64];
 	size_t out = 0;
 
@@ -106,10 +106,10 @@ static void test_argument_validation(void)
 	CHECK(lota_read_file_bounded(NULL, buf, sizeof(buf), &out) == -EINVAL,
 	      "read_file_bounded rejects a nil path");
 	CHECK(lota_read_file_bounded("/tmp/x", NULL, sizeof(buf), &out) ==
-		  -EINVAL,
+		      -EINVAL,
 	      "read_file_bounded rejects a nil buffer");
 	CHECK(lota_read_file_bounded("/tmp/x", buf, sizeof(buf), NULL) ==
-		  -EINVAL,
+		      -EINVAL,
 	      "read_file_bounded rejects a nil out_len");
 }
 

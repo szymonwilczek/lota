@@ -43,9 +43,9 @@ struct cli_options {
 	int seal_flag;
 	int unseal_flag;
 	int seal_aik_auth_migrate_flag; /* --seal-aik-auth: adopt sealing */
-	int reprovision_aik_flag;	/* --reprovision-aik: strict recovery */
-	int seal_persist_primary_flag;	/* --seal-persist-primary */
-	int seal_evict_primary_flag;	/* --seal-evict-primary */
+	int reprovision_aik_flag; /* --reprovision-aik: strict recovery */
+	int seal_persist_primary_flag; /* --seal-persist-primary */
+	int seal_evict_primary_flag; /* --seal-evict-primary */
 	const char *seal_pcrs; /* PCR mask string for --seal; NULL = default */
 	const char *gen_signing_key_prefix;
 	const char *sign_policy_file;

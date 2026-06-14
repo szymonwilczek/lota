@@ -317,7 +317,7 @@ static int verify_rsa_signature(const uint8_t *attest_data, size_t attest_len,
 			goto out;
 
 		if (EVP_PKEY_CTX_set_rsa_pss_saltlen(
-			pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
+			    pkey_ctx, RSA_PSS_SALTLEN_DIGEST) != 1)
 			goto out;
 	} else if (sig_alg == TPM_ALG_RSASSA) {
 		/* RSASSA-PKCS1-v1_5 */
@@ -425,13 +425,14 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 	const uint8_t *pid_list_bytes = token_data + LOTA_TOKEN_HEADER_SIZE;
 	size_t image_list_size =
-	    (hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
-		? (size_t)hdr.protect_pid_count * LOTA_TOKEN_IMAGE_DIGEST_SIZE
-		: 0;
+		(hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2) ?
+			(size_t)hdr.protect_pid_count *
+				LOTA_TOKEN_IMAGE_DIGEST_SIZE :
+			0;
 	const uint8_t (*image_digests)[32] =
-	    (const uint8_t (*)[32])(pid_list_bytes + hdr.pid_list_size);
+		(const uint8_t (*)[32])(pid_list_bytes + hdr.pid_list_size);
 	const uint8_t *attest_data =
-	    pid_list_bytes + hdr.pid_list_size + image_list_size;
+		pid_list_bytes + hdr.pid_list_size + image_list_size;
 	const uint8_t *signature = attest_data + hdr.attest_size;
 	uint8_t runtime_protect_digest[32];
 	uint32_t *pid_list = NULL;
@@ -468,11 +469,11 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 
 	if (hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
 		ret = lota_compute_runtime_protect_digest_v2(
-		    pid_list, pid_count ? image_digests : NULL, pid_count,
-		    runtime_protect_digest);
+			pid_list, pid_count ? image_digests : NULL, pid_count,
+			runtime_protect_digest);
 	else
 		ret = lota_compute_runtime_protect_digest(
-		    pid_list, pid_count, runtime_protect_digest);
+			pid_list, pid_count, runtime_protect_digest);
 	if (ret != 0) {
 		if (pid_list) {
 			OPENSSL_cleanse(pid_list, pid_count * sizeof(uint32_t));
@@ -520,9 +521,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	 * runtime_protect_digest||runtime_protect_epoch) */
 	uint8_t computed_nonce[32];
 	if (lota_compute_token_quote_nonce(
-		hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
-		hdr.policy_digest, hdr.runtime_protect_digest,
-		hdr.runtime_protect_epoch, computed_nonce) != 0) {
+		    hdr.valid_until, hdr.flags, hdr.pcr_mask, hdr.nonce,
+		    hdr.policy_digest, hdr.runtime_protect_digest,
+		    hdr.runtime_protect_epoch, computed_nonce) != 0) {
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 	}
 
@@ -564,9 +565,9 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		uint64_t future_cutoff = now;
 		if (future_cutoff <=
 		    UINT64_MAX -
-			(uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
-			future_cutoff +=
-			    (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
+			    (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
+			future_cutoff += (uint64_t)
+				LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
 		else
 			future_cutoff = UINT64_MAX;
 
@@ -574,8 +575,8 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 			return LOTA_SERVER_ERR_FUTURE;
 	}
 
-	claims->expired =
-	    (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
+	claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 :
+									   0;
 
 	if (claims->expired)
 		return LOTA_SERVER_ERR_EXPIRED;
@@ -610,17 +611,18 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 	/* try to extract PCR digest from TPMS_ATTEST */
 	if (hdr.attest_size > 0) {
 		size_t image_list_size =
-		    (hdr.runtime_protect_version == LOTA_RUNTIME_PROTECT_V2)
-			? (size_t)hdr.protect_pid_count *
-			      LOTA_TOKEN_IMAGE_DIGEST_SIZE
-			: 0;
+			(hdr.runtime_protect_version ==
+			 LOTA_RUNTIME_PROTECT_V2) ?
+				(size_t)hdr.protect_pid_count *
+					LOTA_TOKEN_IMAGE_DIGEST_SIZE :
+				0;
 		const uint8_t *attest_data =
-		    token_data + LOTA_TOKEN_HEADER_SIZE + hdr.pid_list_size +
-		    image_list_size;
+			token_data + LOTA_TOKEN_HEADER_SIZE +
+			hdr.pid_list_size + image_list_size;
 		const uint8_t *pcr_digest = NULL;
 		size_t pcr_digest_len = 0;
 		size_t expected_pcr_digest_len =
-		    hash_alg_digest_len(hdr.hash_alg);
+			hash_alg_digest_len(hdr.hash_alg);
 
 		if (parse_tpms_attest(attest_data, hdr.attest_size, NULL, NULL,
 				      &pcr_digest, &pcr_digest_len,
@@ -636,8 +638,8 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 	}
 
 	uint64_t now = (uint64_t)time(NULL);
-	claims->expired =
-	    (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 : 0;
+	claims->expired = (hdr.valid_until > 0 && now > hdr.valid_until) ? 1 :
+									   0;
 
 	return LOTA_SERVER_OK;
 }

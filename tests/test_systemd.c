@@ -40,21 +40,21 @@ void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-55s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 static void test_not_under_systemd(void)
@@ -266,8 +266,8 @@ static void test_is_unix_socket_real(void)
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "/tmp/lota-test-%d.sock",
 		 getpid());
 	unlink(addr.sun_path);
-	socklen_t addr_len =
-	    offsetof(struct sockaddr_un, sun_path) + strlen(addr.sun_path) + 1;
+	socklen_t addr_len = offsetof(struct sockaddr_un, sun_path) +
+			     strlen(addr.sun_path) + 1;
 
 	if (bind(fd, (struct sockaddr *)&addr, addr_len) < 0 ||
 	    listen(fd, 1) < 0) {

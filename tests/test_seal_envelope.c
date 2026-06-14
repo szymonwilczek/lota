@@ -21,21 +21,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-58s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-58s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static void fill_meta(struct lota_envelope_meta *m)
@@ -255,8 +255,8 @@ static void test_aead_roundtrip(void)
 
 static void test_aead_rejects_tamper(void)
 {
-	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = {0};
-	uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE] = {0};
+	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = { 0 };
+	uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE] = { 0 };
 	uint8_t aad[16];
 	uint8_t pt[64];
 	uint8_t ct[64];
@@ -319,10 +319,10 @@ static void test_aead_rejects_tamper(void)
 
 static void test_aead_rejects_bad_args(void)
 {
-	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = {0};
-	uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE] = {0};
-	uint8_t buf[16] = {0};
-	uint8_t tag[LOTA_ENVELOPE_TAG_SIZE] = {0};
+	uint8_t kek[LOTA_ENVELOPE_KEK_SIZE] = { 0 };
+	uint8_t nonce[LOTA_ENVELOPE_NONCE_SIZE] = { 0 };
+	uint8_t buf[16] = { 0 };
+	uint8_t tag[LOTA_ENVELOPE_TAG_SIZE] = { 0 };
 
 	TEST("AEAD helpers reject NULL and out-of-range lengths");
 	if (lota_envelope_aead_seal(NULL, nonce, NULL, 0, buf, sizeof(buf), buf,

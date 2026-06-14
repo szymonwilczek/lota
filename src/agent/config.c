@@ -114,10 +114,9 @@ static int validate_path_value(const char *key, const char *value,
 	}
 
 	if (lota_path_has_dotdot_segment(value)) {
-		fprintf(
-		    stderr,
-		    "%s:%d: invalid %s: '..' path traversal is not allowed\n",
-		    filepath, lineno, key);
+		fprintf(stderr,
+			"%s:%d: invalid %s: '..' path traversal is not allowed\n",
+			filepath, lineno, key);
 		return -1;
 	}
 
@@ -166,10 +165,9 @@ static int config_validate_file_security(int fd, const char *filepath)
 	 */
 	if (euid == 0) {
 		if (st.st_uid != 0) {
-			fprintf(
-			    stderr,
-			    "%s: refusing to load config not owned by root\n",
-			    filepath);
+			fprintf(stderr,
+				"%s: refusing to load config not owned by root\n",
+				filepath);
 			return -EPERM;
 		}
 	} else {
@@ -283,10 +281,9 @@ static int apply_key(struct lota_config *cfg, const char *key,
 	if (strcmp(key, "allow_verity") == 0 ||
 	    strcmp(key, "allow-verity") == 0) {
 		if (cfg->allow_verity_count >= LOTA_CONFIG_MAX_VERITY) {
-			fprintf(
-			    stderr,
-			    "%s:%d: too many allow_verity entries (max %d)\n",
-			    filepath, lineno, LOTA_CONFIG_MAX_VERITY);
+			fprintf(stderr,
+				"%s:%d: too many allow_verity entries (max %d)\n",
+				filepath, lineno, LOTA_CONFIG_MAX_VERITY);
 			return -1;
 		}
 
@@ -532,10 +529,9 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		}
 
 		if (cfg->protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
-			fprintf(
-			    stderr,
-			    "%s:%d: too many protect_pid entries (max %d)\n",
-			    filepath, lineno, LOTA_MAX_PROTECTED_PIDS);
+			fprintf(stderr,
+				"%s:%d: too many protect_pid entries (max %d)\n",
+				filepath, lineno, LOTA_MAX_PROTECTED_PIDS);
 			return -1;
 		}
 
@@ -571,8 +567,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				return -1;
 			}
 		}
-		cfg->container_listener_uids
-		    [cfg->container_listener_uid_count++] = (uint32_t)v;
+		cfg->container_listener_uids[cfg->container_listener_uid_count++] =
+			(uint32_t)v;
 		return 0;
 	}
 

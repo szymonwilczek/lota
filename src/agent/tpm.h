@@ -126,7 +126,7 @@ const char *tpm_strerror(int err);
  * alongside the new one for continuity verification.
  */
 #define TPM_AIK_DEFAULT_TTL_SEC (30 * 24 * 3600) /* 30 days */
-#define TPM_AIK_GRACE_PERIOD_SEC 3600		 /* 1 hour */
+#define TPM_AIK_GRACE_PERIOD_SEC 3600 /* 1 hour */
 
 /* AIK metadata file magic and version */
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
@@ -186,11 +186,10 @@ const char *tpm_strerror(int err);
 struct lota_clock_state {
 	uint32_t magic;
 	uint32_t version;
-	uint32_t reset_count;	/* TPM clockInfo.resetCount at last extend */
+	uint32_t reset_count; /* TPM clockInfo.resetCount at last extend */
 	uint32_t restart_count; /* TPM clockInfo.restartCount at last extend */
 	uint8_t pcr14[LOTA_HASH_SIZE]; /* PCR14 value AFTER the extend */
-	uint8_t
-	    self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
+	uint8_t self_hash[LOTA_HASH_SIZE]; /* agent self_hash used for the extend */
 	int64_t saved_at; /* time_t when the snapshot was written */
 	uint8_t flags;
 	uint8_t _reserved[31];
@@ -221,8 +220,8 @@ struct aik_auth_record {
 struct aik_metadata {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t generation;	 /* monotonic rotation counter */
-	int64_t provisioned_at;	 /* time_t: current AIK creation */
+	uint64_t generation; /* monotonic rotation counter */
+	int64_t provisioned_at; /* time_t: current AIK creation */
 	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
 	uint8_t _reserved[64];
 } __attribute__((packed));
@@ -776,9 +775,9 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
 /*
  * TPM Event Log paths (tried in order)
  */
-#define TPM_EVENTLOG_PATH_BIOS                                                 \
+#define TPM_EVENTLOG_PATH_BIOS \
 	"/sys/kernel/security/tpm0/binary_bios_measurements"
-#define TPM_EVENTLOG_PATH_IMA                                                  \
+#define TPM_EVENTLOG_PATH_IMA \
 	"/sys/kernel/security/ima/binary_runtime_measurements"
 
 /* Maximum event log size (512 KB) */

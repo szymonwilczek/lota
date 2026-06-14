@@ -27,14 +27,14 @@
 
 static int g_failures;
 
-#define CHECK(cond, msg)                                                       \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			fprintf(stderr, "FAIL: %s\n", msg);                    \
-			g_failures++;                                          \
-		} else {                                                       \
-			printf("PASS: %s\n", msg);                             \
-		}                                                              \
+#define CHECK(cond, msg)                                    \
+	do {                                                \
+		if (!(cond)) {                              \
+			fprintf(stderr, "FAIL: %s\n", msg); \
+			g_failures++;                       \
+		} else {                                    \
+			printf("PASS: %s\n", msg);          \
+		}                                           \
 	} while (0)
 
 static const char *tmp_path(void)

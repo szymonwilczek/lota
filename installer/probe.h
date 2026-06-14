@@ -27,8 +27,8 @@ enum probe_verity {
 /* PCR14 state relative to the initramfs lock */
 enum probe_pcr14 {
 	PROBE_PCR14_LOCK_ONLY = 0, /* lock ran, agent not yet extended */
-	PROBE_PCR14_ZERO,	   /* lock did not run this boot */
-	PROBE_PCR14_OTHER,	   /* extended past the lock (agent or stale) */
+	PROBE_PCR14_ZERO, /* lock did not run this boot */
+	PROBE_PCR14_OTHER, /* extended past the lock (agent or stale) */
 };
 
 /* Reads a small text file, NUL-terminates, strips one trailing

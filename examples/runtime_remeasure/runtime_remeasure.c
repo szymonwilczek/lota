@@ -50,7 +50,7 @@ static void print_digest(const char *label,
 /* Sleep helper that tolerates signal interruption. */
 static void sleep_seconds(unsigned seconds)
 {
-	struct timespec ts = {.tv_sec = (time_t)seconds, .tv_nsec = 0};
+	struct timespec ts = { .tv_sec = (time_t)seconds, .tv_nsec = 0 };
 	while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
 		;
 }
@@ -156,7 +156,7 @@ static int run_default(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	struct obj_table t = {0};
+	struct obj_table t = { 0 };
 	const char **vec = NULL;
 	int rc;
 	int ret = 1;
@@ -170,8 +170,8 @@ static int run_default(void)
 	rc = lota_ac_list_runtime_objects(obj_collect_cb, &t);
 	if (rc < 0 || t.overflow || t.count == 0) {
 		fprintf(stderr, "object enumeration failed (%s)\n",
-			t.overflow ? "too many objects"
-				   : strerror(rc ? -rc : 0));
+			t.overflow ? "too many objects" :
+				     strerror(rc ? -rc : 0));
 		goto out;
 	}
 
@@ -375,8 +375,7 @@ static int run_patch_demo(const char *exe_path)
 	print_digest("after 1-byte patch:", after);
 
 	if (memcmp(before, after, sizeof(before)) == 0) {
-		printf(
-		    "RESULT: UNDETECTED - patch did not change the digest\n");
+		printf("RESULT: UNDETECTED - patch did not change the digest\n");
 		goto done;
 	}
 	printf("RESULT: DETECTED - code patch flipped the runtime digest\n");

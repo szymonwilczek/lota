@@ -117,7 +117,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 // meaning for boot-commitment clients - the verifier derives the
 // expected PCR14 dynamically from agent_hash + ClockInfo.
 func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
-	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	currentPCR14, agentHash [types.HashSize]byte,
+) (TOFUResult, *ClientBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -438,7 +439,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 // methods' semantics.
 func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline) AttestationOutcome {
+	boot *BootBaseline,
+) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -766,7 +768,8 @@ func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 // can never silently lose the capability.
 func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
-	esrtCapable, lfa bool, reason string) error {
+	esrtCapable, lfa bool, reason string,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -832,7 +835,8 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 // boot baseline (SQLite).
 // Idempotent UPDATE; esrt_capable kept sticky.
 func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
-	eventLog []byte, esrtVersion uint32, esrtPresent bool) error {
+	eventLog []byte, esrtVersion uint32, esrtPresent bool,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

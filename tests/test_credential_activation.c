@@ -21,14 +21,14 @@
 
 static int g_failures;
 
-#define CHECK(cond, msg)                                                       \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			fprintf(stderr, "FAIL: %s\n", msg);                    \
-			g_failures++;                                          \
-		} else {                                                       \
-			printf("PASS: %s\n", msg);                             \
-		}                                                              \
+#define CHECK(cond, msg)                                    \
+	do {                                                \
+		if (!(cond)) {                              \
+			fprintf(stderr, "FAIL: %s\n", msg); \
+			g_failures++;                       \
+		} else {                                    \
+			printf("PASS: %s\n", msg);          \
+		}                                           \
 	} while (0)
 
 static void test_aik_tpmt_public_validation(void)
@@ -58,8 +58,8 @@ static void test_activate_credential_validation(void)
 	struct tpm_context ctx;
 	uint8_t out_secret[64];
 	size_t out_len = 0;
-	const uint8_t cred[] = {0x00, 0x10};
-	const uint8_t secret[] = {0x00, 0x10};
+	const uint8_t cred[] = { 0x00, 0x10 };
+	const uint8_t secret[] = { 0x00, 0x10 };
 
 	memset(&ctx, 0, sizeof(ctx));
 
@@ -94,10 +94,10 @@ static void test_activate_credential_malformed_blobs(void)
 	 * rejected by the unmarshal guard before any Esys call, so this is safe
 	 * to run with a NULL esys context
 	 */
-	const uint8_t bad_cred[] = {0xFF, 0xFF};
-	const uint8_t ok_cred[] = {0x00, 0x00};
-	const uint8_t bad_secret[] = {0xFF, 0xFF};
-	const uint8_t ok_secret[] = {0x00, 0x00};
+	const uint8_t bad_cred[] = { 0xFF, 0xFF };
+	const uint8_t ok_cred[] = { 0x00, 0x00 };
+	const uint8_t bad_secret[] = { 0xFF, 0xFF };
+	const uint8_t ok_secret[] = { 0x00, 0x00 };
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.initialized = true;

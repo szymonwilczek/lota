@@ -127,7 +127,7 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 static int expected_post_extend(const uint8_t commit[HASH_SIZE],
 				uint8_t out[HASH_SIZE])
 {
-	uint8_t zero[HASH_SIZE] = {0};
+	uint8_t zero[HASH_SIZE] = { 0 };
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
 		return -ENOMEM;
@@ -147,14 +147,14 @@ static int read_pcr14(ESYS_CONTEXT *esys, uint8_t out[HASH_SIZE])
 	sel.pcrSelections[0].hash = PCR14_HASH_ALG;
 	sel.pcrSelections[0].sizeofSelect = 3;
 	sel.pcrSelections[0].pcrSelect[INITRAMFS_LOCK_PCR / 8] =
-	    (uint8_t)(1U << (INITRAMFS_LOCK_PCR % 8));
+		(uint8_t)(1U << (INITRAMFS_LOCK_PCR % 8));
 
 	uint32_t update_counter = 0;
 	TPML_PCR_SELECTION *sel_out = NULL;
 	TPML_DIGEST *values = NULL;
-	TSS2_RC rc =
-	    Esys_PCR_Read(esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, &sel,
-			  &update_counter, &sel_out, &values);
+	TSS2_RC rc = Esys_PCR_Read(esys, ESYS_TR_NONE, ESYS_TR_NONE,
+				   ESYS_TR_NONE, &sel, &update_counter,
+				   &sel_out, &values);
 	if (rc != TSS2_RC_SUCCESS) {
 		fprintf(stderr,
 			"lota-pcr14-lock: Esys_PCR_Read failed: 0x%08x\n", rc);
@@ -205,10 +205,9 @@ int main(int argc, char **argv)
 
 	TSS2_RC rc = Tss2_Tcti_Device_Init(NULL, &tcti_size, dev);
 	if (rc != TSS2_RC_SUCCESS) {
-		fprintf(
-		    stderr,
-		    "lota-pcr14-lock: Tss2_Tcti_Device_Init sizing: 0x%08x\n",
-		    rc);
+		fprintf(stderr,
+			"lota-pcr14-lock: Tss2_Tcti_Device_Init sizing: 0x%08x\n",
+			rc);
 		return 2;
 	}
 	tcti = calloc(1, tcti_size);
@@ -254,12 +253,11 @@ int main(int argc, char **argv)
 
 	uint8_t commit[HASH_SIZE];
 	int crc =
-	    lota_initramfs_lock_commit(reset_count, restart_count, commit);
+		lota_initramfs_lock_commit(reset_count, restart_count, commit);
 	if (crc < 0) {
-		fprintf(
-		    stderr,
-		    "lota-pcr14-lock: digest derivation failed (errno %d)\n",
-		    -crc);
+		fprintf(stderr,
+			"lota-pcr14-lock: digest derivation failed (errno %d)\n",
+			-crc);
 		Esys_Finalize(&esys);
 		Tss2_Tcti_Finalize(tcti);
 		free(tcti);
@@ -291,7 +289,7 @@ int main(int argc, char **argv)
 		return 9;
 	}
 
-	uint8_t zero[HASH_SIZE] = {0};
+	uint8_t zero[HASH_SIZE] = { 0 };
 	int exit_code = 0;
 
 	if (memcmp(current, zero, HASH_SIZE) == 0) {
@@ -309,9 +307,8 @@ int main(int argc, char **argv)
 		}
 	} else if (memcmp(current, expected, HASH_SIZE) == 0) {
 		/* helper already ran this boot session: no-op, exit success */
-		fprintf(
-		    stderr,
-		    "lota-pcr14-lock: PCR14 already locked, skipping extend\n");
+		fprintf(stderr,
+			"lota-pcr14-lock: PCR14 already locked, skipping extend\n");
 	} else {
 		/*
 		 * PCR14 holds something else - boot loader or a non-LOTA
