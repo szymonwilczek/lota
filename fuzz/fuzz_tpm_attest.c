@@ -35,7 +35,7 @@
 #include <tss2/tss2_tpm2_types.h>
 
 /* TPM2_GENERATED magic the structure must lead with ("TCG", big-endian) */
-static const uint8_t kAttestMagic[4] = {0xff, 0x54, 0x43, 0x47};
+static const uint8_t kAttestMagic[4] = { 0xff, 0x54, 0x43, 0x47 };
 
 #define ATTEST_FUZZ_MAX 4096
 
@@ -90,7 +90,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (attest.type == TPM2_ST_ATTEST_QUOTE) {
 		volatile uint16_t count = attest.attested.quote.pcrSelect.count;
 		volatile uint16_t digest_size =
-		    attest.attested.quote.pcrDigest.size;
+			attest.attested.quote.pcrDigest.size;
 		(void)count;
 		(void)digest_size;
 	}

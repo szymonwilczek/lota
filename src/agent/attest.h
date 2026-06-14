@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#define MIN_ATTEST_INTERVAL 10	/* 10 seconds */
+#define MIN_ATTEST_INTERVAL 10 /* 10 seconds */
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 int export_policy(int mode);

@@ -70,7 +70,7 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	unsigned long start, end, off;
 	unsigned int maj, min;
 	unsigned long long ino;
-	char perms[5] = {0};
+	char perms[5] = { 0 };
 	char path[LOTA_RUNTIME_IMAGE_SONAME_MAX + 64];
 	const char *p;
 	const char *soname;
@@ -180,7 +180,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 {
 	char map_files_dir[64];
 	char map_files_leaf[40];
-	struct stat st = {0};
+	struct stat st = { 0 };
 	int dirfd = -1;
 	int fd = -1;
 	int ret = 0;

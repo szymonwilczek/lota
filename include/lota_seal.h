@@ -62,7 +62,7 @@ extern "C" {
 /* Upper bounds on the marshalled TPM2B bodies and the whole blob. */
 #define LOTA_SEAL_MAX_PUB 1024u
 #define LOTA_SEAL_MAX_PRIV 1024u
-#define LOTA_SEAL_MAX_BLOB                                                     \
+#define LOTA_SEAL_MAX_BLOB \
 	(LOTA_SEAL_HEADER_SIZE + LOTA_SEAL_MAX_PUB + LOTA_SEAL_MAX_PRIV)
 
 /*
@@ -201,8 +201,8 @@ static inline int lota_seal_parse_header(const uint8_t *buf, size_t len,
 		return -EINVAL;
 
 	/* bodies must fit exactly: no trailing slack, no overflow */
-	size_t need =
-	    (size_t)LOTA_SEAL_HEADER_SIZE + (size_t)pub_len + (size_t)priv_len;
+	size_t need = (size_t)LOTA_SEAL_HEADER_SIZE + (size_t)pub_len +
+		      (size_t)priv_len;
 	if (need != len)
 		return -EMSGSIZE;
 

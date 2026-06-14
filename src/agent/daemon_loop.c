@@ -81,8 +81,8 @@ static void poll_ringbuf_drops(struct agent_loop_ctx *ctx, uint64_t *last_drops,
 		 (unsigned long)delta, (unsigned long)stats.drops);
 
 	ipc_update_status(
-	    ctx->ipc_ctx,
-	    ctx->ipc_ctx->status_flags | LOTA_STATUS_RINGBUF_DROPS, 0);
+		ctx->ipc_ctx,
+		ctx->ipc_ctx->status_flags | LOTA_STATUS_RINGBUF_DROPS, 0);
 }
 
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
@@ -116,15 +116,15 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			if (events[i].data.fd == ctx->sfd) {
 				struct signalfd_siginfo fdsi;
 				ssize_t got =
-				    read(ctx->sfd, &fdsi,
-					 sizeof(struct signalfd_siginfo));
+					read(ctx->sfd, &fdsi,
+					     sizeof(struct signalfd_siginfo));
 				if (got != sizeof(struct signalfd_siginfo))
 					continue;
 
 				if (fdsi.ssi_signo == SIGTERM ||
 				    fdsi.ssi_signo == SIGINT) {
 					lota_info(
-					    "Signal received, stopping...");
+						"Signal received, stopping...");
 					*ctx->running = 0;
 				} else if (fdsi.ssi_signo == SIGHUP) {
 					sdnotify_reloading();
@@ -132,22 +132,23 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 						  "configuration");
 
 					(void)agent_reload_config(
-					    ctx->config_path, ctx->cfg,
-					    ctx->mode, ctx->strict_mmap,
-					    ctx->strict_exec, ctx->block_ptrace,
-					    ctx->strict_modules,
-					    ctx->block_anon_exec,
-					    ctx->protect_pids,
-					    ctx->protect_pid_count,
-					    ctx->trust_libs,
-					    ctx->trust_lib_count);
+						ctx->config_path, ctx->cfg,
+						ctx->mode, ctx->strict_mmap,
+						ctx->strict_exec,
+						ctx->block_ptrace,
+						ctx->strict_modules,
+						ctx->block_anon_exec,
+						ctx->protect_pids,
+						ctx->protect_pid_count,
+						ctx->trust_libs,
+						ctx->trust_lib_count);
 				}
 			} else if (events[i].data.fd ==
 				   ipc_get_fd(ctx->ipc_ctx)) {
 				ipc_process(ctx->ipc_ctx, 0);
 			} else if (ctx->dbus_ctx &&
 				   events[i].data.fd ==
-				       dbus_get_fd(ctx->dbus_ctx)) {
+					   dbus_get_fd(ctx->dbus_ctx)) {
 				dbus_process(ctx->dbus_ctx, 0);
 			} else if (events[i].data.fd ==
 				   bpf_loader_get_event_fd(ctx->bpf_ctx)) {

@@ -84,9 +84,9 @@ static int fuzz_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 #define epoll_ctl fuzz_epoll_ctl
 
 struct agent_globals g_agent = {
-    .running = 1,
-    .dbus_ctx = NULL,
-    .mode = 0,
+	.running = 1,
+	.dbus_ctx = NULL,
+	.mode = 0,
 };
 
 /* self_measure, setup_dbus, setup_container_listener and
@@ -122,19 +122,19 @@ static size_t build_frames(const uint8_t *data, size_t size, uint8_t *out,
 			   size_t out_cap)
 {
 	static const uint32_t cmds[] = {
-	    LOTA_IPC_CMD_PING,	      LOTA_IPC_CMD_GET_STATUS,
-	    LOTA_IPC_CMD_GET_TOKEN,   LOTA_IPC_CMD_SUBSCRIBE,
-	    LOTA_IPC_CMD_PROTECT_PID, LOTA_IPC_CMD_UNPROTECT_PID,
-	    LOTA_IPC_CMD_SHUTDOWN,    0xDEADBEEF /* unknown cmd path */
+		LOTA_IPC_CMD_PING,	  LOTA_IPC_CMD_GET_STATUS,
+		LOTA_IPC_CMD_GET_TOKEN,	  LOTA_IPC_CMD_SUBSCRIBE,
+		LOTA_IPC_CMD_PROTECT_PID, LOTA_IPC_CMD_UNPROTECT_PID,
+		LOTA_IPC_CMD_SHUTDOWN,	  0xDEADBEEF /* unknown cmd path */
 	};
 	size_t in = 0;
 	size_t off = 0;
 
 	while (in + 3 <= size && off + LOTA_IPC_REQUEST_SIZE < out_cap) {
 		uint32_t cmd =
-		    cmds[data[in] % (sizeof(cmds) / sizeof(cmds[0]))];
-		uint32_t plen =
-		    (uint32_t)data[in + 1] | ((uint32_t)data[in + 2] << 8);
+			cmds[data[in] % (sizeof(cmds) / sizeof(cmds[0]))];
+		uint32_t plen = (uint32_t)data[in + 1] |
+				((uint32_t)data[in + 2] << 8);
 		in += 3;
 
 		if (plen > LOTA_IPC_MAX_PAYLOAD)
@@ -145,10 +145,10 @@ static size_t build_frames(const uint8_t *data, size_t size, uint8_t *out,
 			break;
 
 		struct lota_ipc_request req = {
-		    .magic = LOTA_IPC_MAGIC,
-		    .version = LOTA_IPC_VERSION,
-		    .cmd = cmd,
-		    .payload_len = plen,
+			.magic = LOTA_IPC_MAGIC,
+			.version = LOTA_IPC_VERSION,
+			.cmd = cmd,
+			.payload_len = plen,
 		};
 		memcpy(out + off, &req, sizeof(req));
 		off += sizeof(req);
@@ -164,8 +164,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-	static uint8_t
-	    feed[4 * (sizeof(struct lota_ipc_request) + LOTA_IPC_MAX_PAYLOAD)];
+	static uint8_t feed[4 * (sizeof(struct lota_ipc_request) +
+				 LOTA_IPC_MAX_PAYLOAD)];
 	struct ipc_context ctx;
 	struct ipc_client *client;
 	size_t feed_len;

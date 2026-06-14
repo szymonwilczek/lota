@@ -202,8 +202,8 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 	/*
 	 * Probe XDG_RUNTIME_DIR.
 	 */
-	env =
-	    get_env_safe("XDG_RUNTIME_DIR", sizeof(info->xdg_runtime_dir) - 1);
+	env = get_env_safe("XDG_RUNTIME_DIR",
+			   sizeof(info->xdg_runtime_dir) - 1);
 	if (env && is_directory(env)) {
 		info->env_flags |= STEAM_ENV_XDG_AVAILABLE;
 		snprintf(info->xdg_runtime_dir, sizeof(info->xdg_runtime_dir),
@@ -218,8 +218,8 @@ int steam_runtime_detect(struct steam_runtime_info *info)
 	 */
 	if (info->env_flags & STEAM_ENV_XDG_AVAILABLE) {
 		(void)steam_runtime_container_socket_path(
-		    info->container_socket_path,
-		    sizeof(info->container_socket_path));
+			info->container_socket_path,
+			sizeof(info->container_socket_path));
 	}
 
 	/*
@@ -356,6 +356,6 @@ void steam_runtime_log_info(const struct steam_runtime_info *info)
 		  steam_runtime_type_str(info->type), info->env_flags,
 		  info->app_id,
 		  info->container_id[0] ? info->container_id : "(none)",
-		  info->container_socket_path[0] ? info->container_socket_path
-						 : "(none)");
+		  info->container_socket_path[0] ? info->container_socket_path :
+						   "(none)");
 }

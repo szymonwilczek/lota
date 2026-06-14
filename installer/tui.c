@@ -73,8 +73,8 @@ struct tui {
 	/* terminal */
 	int cols, rows;
 	struct cell *grid;
-	int gcap;     /* cells allocated */
-	char *fb;     /* compose buffer for one flush */
+	int gcap; /* cells allocated */
+	char *fb; /* compose buffer for one flush */
 	size_t fbcap; /* bytes allocated */
 	size_t fblen;
 
@@ -262,7 +262,7 @@ static void put_clip(struct tui *t, int x, int y, int maxw, uint8_t attr,
 
 static void put_textf(struct tui *t, int x, int y, uint8_t attr,
 		      const char *fmt, ...)
-    __attribute__((format(printf, 5, 6)));
+	__attribute__((format(printf, 5, 6)));
 
 static void put_textf(struct tui *t, int x, int y, uint8_t attr,
 		      const char *fmt, ...)
@@ -385,7 +385,7 @@ static void fb_put(struct tui *t, const char *s, size_t len)
 
 static void attr_sgr(uint8_t attr, char *buf, size_t cap)
 {
-	static const int fg[] = {0, 31, 32, 33, 36, 35, 0, 0};
+	static const int fg[] = { 0, 31, 32, 33, 36, 35, 0, 0 };
 	size_t off;
 
 	snprintf(buf, cap, "\033[0");
@@ -397,8 +397,8 @@ static void attr_sgr(uint8_t attr, char *buf, size_t cap)
 	if (attr & A_INV)
 		off += (size_t)snprintf(buf + off, cap - off, ";7");
 	if (fg[attr & 7])
-		off +=
-		    (size_t)snprintf(buf + off, cap - off, ";%d", fg[attr & 7]);
+		off += (size_t)snprintf(buf + off, cap - off, ";%d",
+					fg[attr & 7]);
 	snprintf(buf + off, cap - off, "m");
 }
 
@@ -460,7 +460,7 @@ static void out_push(struct tui *t, const char *line)
 static void probe_stage(struct tui *t, int i)
 {
 	t->st[i] =
-	    install_stages[i].probe(t->ctx, t->note[i], sizeof(t->note[i]));
+		install_stages[i].probe(t->ctx, t->note[i], sizeof(t->note[i]));
 }
 
 static void probe_all(struct tui *t)
@@ -518,8 +518,8 @@ static int ready_for_reboot(struct tui *t)
 
 /* rendering */
 
-static const char *const spin_frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼",
-					  "⠴", "⠦", "⠧", "⠇", "⠏"};
+static const char *const spin_frames[] = { "⠋", "⠙", "⠹", "⠸", "⠼",
+					   "⠴", "⠦", "⠧", "⠇", "⠏" };
 
 static double elapsed_since(const struct timespec *start)
 {
@@ -575,28 +575,28 @@ static const char *state_word(enum stage_state st)
 }
 
 static const char barrier_text[] =
-    "Reboot is required before the install can continue.\n"
-    "\n"
-    "PCR 14 - the TPM slot LOTA measures itself into - only resets on "
-    "a hardware reset, so this step cannot be skipped or faked in "
-    "software.\n"
-    "\n"
-    "Reboot, run the same lota-install command again, and it resumes "
-    "exactly where it left off: every finished stage is detected from "
-    "live system state, not from a state file.";
+	"Reboot is required before the install can continue.\n"
+	"\n"
+	"PCR 14 - the TPM slot LOTA measures itself into - only resets on "
+	"a hardware reset, so this step cannot be skipped or faked in "
+	"software.\n"
+	"\n"
+	"Reboot, run the same lota-install command again, and it resumes "
+	"exactly where it left off: every finished stage is detected from "
+	"live system state, not from a state file.";
 
 static const char done_text[] =
-    "LOTA install complete.\n"
-    "\n"
-    "The agent now attests this host to the operator's verifier. Games "
-    "request tokens through the local socket.\n"
-    "\n"
-    "Pause any time with 'sudo lota-agent --shutdown'. Resuming "
-    "requires a reboot - the agent burns its boot measurement on "
-    "shutdown by design.\n"
-    "\n"
-    "Telemetry summary is in the Output pane (PgUp/PgDn to "
-    "scroll).";
+	"LOTA install complete.\n"
+	"\n"
+	"The agent now attests this host to the operator's verifier. Games "
+	"request tokens through the local socket.\n"
+	"\n"
+	"Pause any time with 'sudo lota-agent --shutdown'. Resuming "
+	"requires a reboot - the agent burns its boot measurement on "
+	"shutdown by design.\n"
+	"\n"
+	"Telemetry summary is in the Output pane (PgUp/PgDn to "
+	"scroll).";
 
 static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 {
@@ -611,9 +611,9 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 		if (i == t->n) {
 			/* virtual self-check row */
 			glyph = t->selfcheck_done ? "✔" : "▸";
-			gattr = t->selfcheck_done
-				    ? C_GREEN
-				    : (first_unmet(t) < 0 ? C_CYAN : A_DIM);
+			gattr = t->selfcheck_done ?
+					C_GREEN :
+					(first_unmet(t) < 0 ? C_CYAN : A_DIM);
 			snprintf(label, sizeof(label), "Self-check & summary");
 		} else {
 			glyph = state_glyph(t->st[i], &gattr);
@@ -680,14 +680,14 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 		used = 2;
 		if (t->selfcheck_done) {
 			draw_wrapped(t, x, y + used, w, h - used, 0,
-				     t->selfcheck_ok
-					 ? "Self-check passed. See the "
-					   "Output pane for the details and "
-					   "the telemetry summary."
-					 : "Self-check FAILED - see the "
-					   "Output pane. Fix the reported "
-					   "item and press Enter to run it "
-					   "again.");
+				     t->selfcheck_ok ?
+					     "Self-check passed. See the "
+					     "Output pane for the details and "
+					     "the telemetry summary." :
+					     "Self-check FAILED - see the "
+					     "Output pane. Fix the reported "
+					     "item and press Enter to run it "
+					     "again.");
 		} else if (first_unmet(t) < 0) {
 			draw_wrapped(t, x, y + used, w, h - used, 0,
 				     "All stages are satisfied. Press Enter "
@@ -781,7 +781,7 @@ static void render_output(struct tui *t, int x, int y, int w, int h)
 		start = 0;
 	for (i = 0; i < h && start + i < total; i++) {
 		const char *line =
-		    t->out[(t->out_head + start + i) % OUT_LINES];
+			t->out[(t->out_head + start + i) % OUT_LINES];
 		uint8_t attr = A_DIM;
 
 		if (strncmp(line, "==", 2) == 0 ||
@@ -891,7 +891,7 @@ enum tui_key {
 
 static enum tui_key read_key(int timeout_ms, char *ch)
 {
-	struct pollfd pfd = {.fd = STDIN_FILENO, .events = POLLIN};
+	struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
 	unsigned char b;
 	ssize_t got;
 
@@ -1008,7 +1008,7 @@ static int snk_abort(void *ud)
 /* actions */
 
 static void flashf(struct tui *t, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 
 static void flashf(struct tui *t, const char *fmt, ...)
 {
@@ -1237,10 +1237,10 @@ static void handle_char(struct tui *t, char ch)
 int tui_run(struct install_ctx *ctx)
 {
 	static const struct ui_sink sink = {
-	    .line = snk_line,
-	    .status = snk_status,
-	    .tick = snk_tick,
-	    .abort = snk_abort,
+		.line = snk_line,
+		.status = snk_status,
+		.tick = snk_tick,
+		.abort = snk_abort,
 	};
 	struct tui t;
 	struct ui_sink bound = sink;

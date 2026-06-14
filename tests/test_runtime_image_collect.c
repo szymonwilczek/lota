@@ -21,21 +21,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-55s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static const char *self_basename(char *buf, size_t len)
@@ -63,9 +63,9 @@ int main(void)
 
 	TEST("file-backed executable mapping is selected");
 	rc = lota_rt_parse_maps_line(
-	    "55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
-	    "/usr/bin/foo\n",
-	    &e);
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/usr/bin/foo\n",
+		&e);
 	if (rc == 1 && strcmp(e.soname, "foo") == 0 && e.ino == 1234567ULL &&
 	    e.dev_major == 0xfd && e.dev_minor == 0x01 &&
 	    e.start == 0x55a3c0e00000UL && e.end == 0x55a3c0e21000UL)
@@ -75,9 +75,9 @@ int main(void)
 
 	TEST("read-only mapping is skipped");
 	rc = lota_rt_parse_maps_line(
-	    "7f0000000000-7f0000001000 r--p 00000000 fd:01 2222 "
-	    "/usr/lib/libc.so.6\n",
-	    &e);
+		"7f0000000000-7f0000001000 r--p 00000000 fd:01 2222 "
+		"/usr/lib/libc.so.6\n",
+		&e);
 	if (rc == 0)
 		PASS();
 	else
@@ -85,9 +85,9 @@ int main(void)
 
 	TEST("writable data mapping is skipped");
 	rc = lota_rt_parse_maps_line(
-	    "7f0000002000-7f0000003000 rw-p 00002000 fd:01 2222 "
-	    "/usr/lib/libc.so.6\n",
-	    &e);
+		"7f0000002000-7f0000003000 rw-p 00002000 fd:01 2222 "
+		"/usr/lib/libc.so.6\n",
+		&e);
 	if (rc == 0)
 		PASS();
 	else
@@ -95,7 +95,7 @@ int main(void)
 
 	TEST("anonymous executable mapping is skipped");
 	rc = lota_rt_parse_maps_line(
-	    "7f0000004000-7f0000005000 r-xp 00000000 00:00 0 \n", &e);
+		"7f0000004000-7f0000005000 r-xp 00000000 00:00 0 \n", &e);
 	if (rc == 0)
 		PASS();
 	else
@@ -103,7 +103,7 @@ int main(void)
 
 	TEST("vDSO region is skipped");
 	rc = lota_rt_parse_maps_line(
-	    "7ffff7fc1000-7ffff7fc3000 r-xp 00000000 00:00 0 [vdso]\n", &e);
+		"7ffff7fc1000-7ffff7fc3000 r-xp 00000000 00:00 0 [vdso]\n", &e);
 	if (rc == 0)
 		PASS();
 	else
@@ -111,7 +111,8 @@ int main(void)
 
 	TEST("special bracketed region is skipped");
 	rc = lota_rt_parse_maps_line(
-	    "7f0000006000-7f0000007000 r-xp 00000000 fd:01 55 [heap]\n", &e);
+		"7f0000006000-7f0000007000 r-xp 00000000 fd:01 55 [heap]\n",
+		&e);
 	if (rc == 0)
 		PASS();
 	else
@@ -119,9 +120,9 @@ int main(void)
 
 	TEST("deleted suffix is stripped from soname");
 	rc = lota_rt_parse_maps_line(
-	    "55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
-	    "/tmp/game.bin (deleted)\n",
-	    &e);
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/tmp/game.bin (deleted)\n",
+		&e);
 	if (rc == 1 && strcmp(e.soname, "game.bin") == 0)
 		PASS();
 	else
@@ -129,9 +130,9 @@ int main(void)
 
 	TEST("basename keeps embedded spaces");
 	rc = lota_rt_parse_maps_line(
-	    "55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
-	    "/opt/game dir/game bin\n",
-	    &e);
+		"55a3c0e00000-55a3c0e21000 r-xp 00001000 fd:01 1234567 "
+		"/opt/game dir/game bin\n",
+		&e);
 	if (rc == 1 && strcmp(e.soname, "game bin") == 0)
 		PASS();
 	else
@@ -168,9 +169,9 @@ int main(void)
 		for (size_t i = 0; i < n; i++) {
 			for (size_t j = i + 1; j < n; j++) {
 				if (entries[i].dev_major ==
-					entries[j].dev_major &&
+					    entries[j].dev_major &&
 				    entries[i].dev_minor ==
-					entries[j].dev_minor &&
+					    entries[j].dev_minor &&
 				    entries[i].ino == entries[j].ino)
 					dup = 1;
 			}

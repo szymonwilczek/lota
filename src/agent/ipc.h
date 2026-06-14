@@ -35,7 +35,7 @@ struct ipc_client_map_entry {
  * Extra listener socket.
  */
 struct ipc_listener {
-	int fd;		     /* Listening fd (-1 if unused) */
+	int fd; /* Listening fd (-1 if unused) */
 	char path[PATH_MAX]; /* Socket path for cleanup */
 };
 
@@ -44,7 +44,7 @@ struct ipc_listener {
  */
 struct ipc_context {
 	int listen_fd; /* Primary listening socket */
-	int epoll_fd;  /* epoll instance */
+	int epoll_fd; /* epoll instance */
 	bool running;
 	uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
 
@@ -85,14 +85,11 @@ struct ipc_context {
 	uint8_t mode;
 
 	/* AIK rotation state, surfaced read-only over D-Bus */
-	uint64_t aik_generation;     /* monotonic rotation counter */
+	uint64_t aik_generation; /* monotonic rotation counter */
 	uint64_t aik_provisioned_at; /* current AIK creation (Unix time) */
-	uint64_t
-	    aik_last_rotated_at; /* last rotation (Unix time, 0 if never) */
-	uint64_t
-	    aik_rotation_deadline; /* provisioned_at + TTL (0 if unknown) */
-	uint64_t
-	    aik_grace_deadline;	    /* end of post-rotation grace (0 if none) */
+	uint64_t aik_last_rotated_at; /* last rotation (Unix time, 0 if never) */
+	uint64_t aik_rotation_deadline; /* provisioned_at + TTL (0 if unknown) */
+	uint64_t aik_grace_deadline; /* end of post-rotation grace (0 if none) */
 	bool aik_reenroll_required; /* stored cert outdated by a rotation */
 
 	/* true when using socket activation (do not unlink socket) */

@@ -83,8 +83,8 @@ static uint8_t *read_file_contents(const char *path, size_t *out_len,
 	}
 
 	while (total_read < expected_size) {
-		size_t nread =
-		    fread(buf + total_read, 1, expected_size - total_read, f);
+		size_t nread = fread(buf + total_read, 1,
+				     expected_size - total_read, f);
 		if (nread == 0)
 			break;
 		total_read += nread;
@@ -197,8 +197,8 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 
 	/* write private key (PKCS#8 PEM, no encryption) */
 	{
-		int pk_fd =
-		    open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		int pk_fd = open(privkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+				 0600);
 		if (pk_fd < 0) {
 			ret = -errno;
 			goto out;
@@ -221,8 +221,8 @@ int policy_sign_generate_keypair(const char *privkey_pem_path,
 	/* write public key (SPKI PEM); public artifact, not group/other
 	 * writable */
 	{
-		int pub_fd =
-		    open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		int pub_fd = open(pubkey_pem_path, O_WRONLY | O_CREAT | O_TRUNC,
+				  0644);
 		if (pub_fd < 0) {
 			ret = -errno;
 			goto out;

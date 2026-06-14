@@ -29,10 +29,10 @@ static int ipc_request_shutdown(void)
 {
 	struct sockaddr_un addr;
 	struct lota_ipc_request req = {
-	    .magic = LOTA_IPC_MAGIC,
-	    .version = LOTA_IPC_VERSION,
-	    .cmd = LOTA_IPC_CMD_SHUTDOWN,
-	    .payload_len = 0,
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.cmd = LOTA_IPC_CMD_SHUTDOWN,
+		.payload_len = 0,
 	};
 	struct lota_ipc_response resp;
 	int fd;
@@ -108,11 +108,11 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 
 	{
 		struct policy_ops_args policy_ops = {
-		    .gen_signing_key_prefix = opts->gen_signing_key_prefix,
-		    .sign_policy_file = opts->sign_policy_file,
-		    .verify_policy_file = opts->verify_policy_file,
-		    .signing_key_path = opts->signing_key_path,
-		    .policy_pubkey_path = opts->policy_pubkey_path,
+			.gen_signing_key_prefix = opts->gen_signing_key_prefix,
+			.sign_policy_file = opts->sign_policy_file,
+			.verify_policy_file = opts->verify_policy_file,
+			.signing_key_path = opts->signing_key_path,
+			.policy_pubkey_path = opts->policy_pubkey_path,
 		};
 		int ret = handle_policy_ops(&policy_ops);
 		if (ret != -1)
@@ -171,9 +171,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			return 1;
 		}
 		return diagnostic_exit_code(
-		    do_enroll(opts->ca_server, opts->ca_port,
-			      opts->ca_cert_path, opts->no_verify_tls,
-			      opts->has_pin ? opts->pin_sha256_bin : NULL));
+			do_enroll(opts->ca_server, opts->ca_port,
+				  opts->ca_cert_path, opts->no_verify_tls,
+				  opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
 	if (opts->attest_flag) {
@@ -192,14 +192,14 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		}
 		if (opts->attest_interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
-			    opts->server_addr, opts->server_port,
-			    opts->ca_cert_path, opts->no_verify_tls,
-			    opts->has_pin ? opts->pin_sha256_bin : NULL,
-			    opts->attest_interval, opts->aik_ttl));
+				opts->server_addr, opts->server_port,
+				opts->ca_cert_path, opts->no_verify_tls,
+				opts->has_pin ? opts->pin_sha256_bin : NULL,
+				opts->attest_interval, opts->aik_ttl));
 		return diagnostic_exit_code(
-		    do_attest(opts->server_addr, opts->server_port,
-			      opts->ca_cert_path, opts->no_verify_tls,
-			      opts->has_pin ? opts->pin_sha256_bin : NULL));
+			do_attest(opts->server_addr, opts->server_port,
+				  opts->ca_cert_path, opts->no_verify_tls,
+				  opts->has_pin ? opts->pin_sha256_bin : NULL));
 	}
 
 	/* No one-shot matched: the caller will start the daemon.

@@ -27,21 +27,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-55s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /* temp directory for test artifacts */
@@ -98,9 +98,9 @@ static void clear_steam_env(void)
 {
 	saved.pressure_vessel_runtime = save_env("PRESSURE_VESSEL_RUNTIME");
 	saved.pressure_vessel_runtime_base =
-	    save_env("PRESSURE_VESSEL_RUNTIME_BASE");
+		save_env("PRESSURE_VESSEL_RUNTIME_BASE");
 	saved.pressure_vessel_instance_id =
-	    save_env("PRESSURE_VESSEL_INSTANCE_ID");
+		save_env("PRESSURE_VESSEL_INSTANCE_ID");
 	saved.xdg_runtime_dir = save_env("XDG_RUNTIME_DIR");
 	saved.steam_app_id = save_env("SteamAppId");
 	saved.steam_compat_data_path = save_env("STEAM_COMPAT_DATA_PATH");

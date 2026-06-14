@@ -27,11 +27,11 @@
 
 /* Outcome glyph for a finished stage or live action */
 enum ui_result {
-	UI_OK = 0,  /* Green check */
-	UI_DONE,    /* Dim check: already satisfied, nothing ran */
-	UI_FAIL,    /* Red cross */
-	UI_REBOOT,  /* Yellow: needs a reboot to take effect */
-	UI_SKIP,    /* Dim circle: not applicable on this host */
+	UI_OK = 0, /* Green check */
+	UI_DONE, /* Dim check: already satisfied, nothing ran */
+	UI_FAIL, /* Red cross */
+	UI_REBOOT, /* Yellow: needs a reboot to take effect */
+	UI_SKIP, /* Dim circle: not applicable on this host */
 	UI_PENDING, /* Yellow dot: work or input still needed */
 };
 
@@ -55,7 +55,7 @@ struct ui_sink {
 };
 
 struct ui {
-	int tty;   /* 1 = full TUI, 0 = plain log lines */
+	int tty; /* 1 = full TUI, 0 = plain log lines */
 	int color; /* SGR sequences allowed */
 
 	/* non-NULL = redirect every ui_* call (see struct ui_sink) */
@@ -102,11 +102,11 @@ void ui_explain(struct ui *ui, const char *body);
 
 /* word-wrapped paragraph / warning / error */
 void ui_text(struct ui *ui, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 void ui_warn(struct ui *ui, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 void ui_error(struct ui *ui, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 
 /* aligned "key  value" detail line */
 void ui_kv(struct ui *ui, const char *key, const char *val);

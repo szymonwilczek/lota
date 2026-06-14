@@ -45,9 +45,9 @@ extern "C" {
 #define LOTA_ENVELOPE_VERSION 1u
 
 /* AES-256-GCM parameters. */
-#define LOTA_ENVELOPE_KEK_SIZE 32u   /* AES-256 key sealed to the PCR state */
+#define LOTA_ENVELOPE_KEK_SIZE 32u /* AES-256 key sealed to the PCR state */
 #define LOTA_ENVELOPE_NONCE_SIZE 12u /* 96-bit GCM nonce */
-#define LOTA_ENVELOPE_TAG_SIZE 16u   /* 128-bit GCM tag */
+#define LOTA_ENVELOPE_TAG_SIZE 16u /* 128-bit GCM tag */
 
 /* Fixed header size on disk (little-endian, packed). */
 #define LOTA_ENVELOPE_HEADER_SIZE 48u
@@ -61,8 +61,8 @@ extern "C" {
 #define LOTA_ENVELOPE_MAX_PAYLOAD 65536u
 
 /* Upper bound on a whole envelope blob: header + sealed KEK + ciphertext. */
-#define LOTA_ENVELOPE_MAX_BLOB                                                 \
-	((size_t)LOTA_ENVELOPE_HEADER_SIZE + (size_t)LOTA_SEAL_MAX_BLOB +      \
+#define LOTA_ENVELOPE_MAX_BLOB                                            \
+	((size_t)LOTA_ENVELOPE_HEADER_SIZE + (size_t)LOTA_SEAL_MAX_BLOB + \
 	 (size_t)LOTA_ENVELOPE_MAX_PAYLOAD)
 
 /*

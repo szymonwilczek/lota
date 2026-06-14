@@ -34,7 +34,7 @@
  * Without PCR7 the SDK server cannot reproduce the verifier's
  * Secure Boot gate against the same digest.
  */
-#define LOTA_TOKEN_QUOTE_PCR_MASK                                              \
+#define LOTA_TOKEN_QUOTE_PCR_MASK \
 	((1U << 0) | (1U << 1) | (1U << 7) | (1U << LOTA_PCR_SELF))
 
 /*
@@ -87,8 +87,7 @@ struct agent_globals {
 
 	uint32_t *policy_protect_pids; /* sorted unique */
 	int policy_protect_pid_count;
-	uint64_t
-	    policy_protect_epoch; /* monotonic runtime PID set mutation id */
+	uint64_t policy_protect_epoch; /* monotonic runtime PID set mutation id */
 
 	char (*policy_trust_libs)[PATH_MAX]; /* sorted unique */
 	int policy_trust_lib_count;

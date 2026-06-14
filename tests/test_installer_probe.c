@@ -23,21 +23,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /* Known answer for SHA256(0^32 || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")),
@@ -45,7 +45,7 @@ static int tests_passed;
  * Must stay in sync with src/initramfs/lota-pcr14-lock.c and the verifier's
  * DeriveInitramfsLockPCR14 */
 static const char lock_kat_hex[] =
-    "d550fa44ab2d1ee9227a3502fcf44698681ab13dfb6cd468da488f01fbbda8bb";
+	"d550fa44ab2d1ee9227a3502fcf44698681ab13dfb6cd468da488f01fbbda8bb";
 
 static void test_pcr14_lock_constant_kat(void)
 {
@@ -156,7 +156,7 @@ static void test_conf_key(void)
 
 	TEST("conf scan ignores comments, prefixes and bare words");
 	if (probe_conf_buf_has_key("# policy_pubkey = /x\n", "policy_pubkey") !=
-		0 ||
+		    0 ||
 	    probe_conf_buf_has_key("policy_pubkey_extra = /x\n",
 				   "policy_pubkey") != 0 ||
 	    probe_conf_buf_has_key("policy_pubkey\n", "policy_pubkey") != 0) {

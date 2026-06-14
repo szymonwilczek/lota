@@ -362,9 +362,10 @@ int do_reenroll(void)
 
 	printf("=== Re-enrolling with %s:%d ===\n\n", st.ca_server, st.ca_port);
 
-	ret = run_enrollment(
-	    st.ca_server, st.ca_port, st.ca_cert[0] ? st.ca_cert : NULL,
-	    st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL);
+	ret = run_enrollment(st.ca_server, st.ca_port,
+			     st.ca_cert[0] ? st.ca_cert : NULL,
+			     st.no_verify_tls,
+			     st.has_pin ? st.pin_sha256 : NULL);
 
 	printf("\n=== Re-enrollment %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
@@ -383,13 +384,14 @@ int enroll_renew_cert(struct tpm_context *tpm)
 	if (ret < 0)
 		return ret; /* -ENOENT: never enrolled, caller disables renew */
 
-	ret =
-	    enroll_to_ca(tpm, st.ca_server, st.ca_port,
-			 st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
-			 st.has_pin ? st.pin_sha256 : NULL, LOTA_AIK_CERT_PATH);
+	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port,
+			   st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
+			   st.has_pin ? st.pin_sha256 : NULL,
+			   LOTA_AIK_CERT_PATH);
 	if (ret == 0)
-		persist_enroll_state(
-		    st.ca_server, st.ca_port, st.ca_cert[0] ? st.ca_cert : NULL,
-		    st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL);
+		persist_enroll_state(st.ca_server, st.ca_port,
+				     st.ca_cert[0] ? st.ca_cert : NULL,
+				     st.no_verify_tls,
+				     st.has_pin ? st.pin_sha256 : NULL);
 	return ret;
 }

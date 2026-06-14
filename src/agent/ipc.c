@@ -44,11 +44,11 @@
 #define LOTA_GROUP_NAME "lota"
 
 /* Rate limiting: max GET_TOKEN requests per UID per window */
-#define TOKEN_RATE_LIMIT 10	 /* requests */
+#define TOKEN_RATE_LIMIT 10 /* requests */
 #define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
 
 /* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
-#define PROTECT_PID_RATE_LIMIT 60      /* requests */
+#define PROTECT_PID_RATE_LIMIT 60 /* requests */
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
 
 struct uid_rate {
@@ -108,7 +108,7 @@ static int check_rate_limit(struct uid_rate *table, int *entry_count,
 			/* reset window if expired */
 			if (now < table[i].window_start_sec ||
 			    now - table[i].window_start_sec >=
-				(uint64_t)window_sec) {
+				    (uint64_t)window_sec) {
 				table[i].count = 1;
 				table[i].window_start_sec = now;
 				return 0;
@@ -166,10 +166,11 @@ static int check_get_token_rate_limit(uid_t uid)
 
 static int check_protect_pid_rate_limit(uid_t uid)
 {
-	return check_rate_limit(
-	    protect_pid_rate_table, &protect_pid_rate_count,
-	    PROTECT_PID_RATE_LIMIT, PROTECT_PID_RATE_WINDOW_SEC,
-	    &protect_pid_last_table_full_warn_sec, uid, "IPC PROTECT_PID");
+	return check_rate_limit(protect_pid_rate_table, &protect_pid_rate_count,
+				PROTECT_PID_RATE_LIMIT,
+				PROTECT_PID_RATE_WINDOW_SEC,
+				&protect_pid_last_table_full_warn_sec, uid,
+				"IPC PROTECT_PID");
 }
 
 /*
@@ -190,11 +191,11 @@ struct ipc_client {
 	uint8_t send_buf[LOTA_IPC_RESPONSE_SIZE + LOTA_IPC_MAX_PAYLOAD];
 	size_t send_len;
 	size_t send_offset;
-	bool subscribed;	 /* client subscribed to notifications */
-	uint32_t event_mask;	 /* LOTA_IPC_EVENT_* subscription mask */
-	bool notify_pending;	 /* notification queued behind current send */
+	bool subscribed; /* client subscribed to notifications */
+	uint32_t event_mask; /* LOTA_IPC_EVENT_* subscription mask */
+	bool notify_pending; /* notification queued behind current send */
 	uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
-	bool shutdown_on_flush;	 /* trigger graceful daemon stop after reply */
+	bool shutdown_on_flush; /* trigger graceful daemon stop after reply */
 	struct ipc_client *next;
 };
 
@@ -288,7 +289,7 @@ static int is_allowed_verity_digest(const struct lota_verity_digest_key *key)
 
 	for (int i = 0; i < g_agent.policy_verity_digest_count; i++) {
 		const struct lota_verity_digest_key *allowed =
-		    &g_agent.policy_verity_digests[i];
+			&g_agent.policy_verity_digests[i];
 		if (!allowed || allowed->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
 			continue;
 		if (CRYPTO_memcmp(allowed->digest, key->digest,
@@ -302,7 +303,7 @@ static int is_allowed_verity_digest(const struct lota_verity_digest_key *key)
 static int ipc_client_has_trusted_executable(const struct ipc_client *client)
 {
 	char exe_path[PATH_MAX];
-	struct lota_verity_digest_key digest = {0};
+	struct lota_verity_digest_key digest = { 0 };
 	int ret;
 
 	if (!client)
@@ -438,8 +439,8 @@ static int ensure_socket_dir(void)
 	if (mkdir(SOCKET_DIR, 0750) < 0 && errno != EEXIST)
 		return -errno;
 
-	dirfd =
-	    open(SOCKET_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	dirfd = open(SOCKET_DIR,
+		     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 	if (dirfd < 0)
 		return -errno;
 
@@ -676,9 +677,9 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
 	ping = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	{
 		uint64_t now = monotonic_now_sec();
-		ping->uptime_sec = (now >= ctx->start_time_sec)
-				       ? (now - ctx->start_time_sec)
-				       : 0;
+		ping->uptime_sec = (now >= ctx->start_time_sec) ?
+					   (now - ctx->start_time_sec) :
+					   0;
 	}
 	ping->pid = (uint32_t)getpid();
 
@@ -728,8 +729,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	struct lota_ipc_token *token;
 	struct lota_ipc_token_request req_local;
 	bool has_req = false;
-	uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
-	uint8_t runtime_protect_digest[32] = {0};
+	uint8_t binding_nonce[LOTA_NONCE_SIZE] = { 0 };
+	uint8_t runtime_protect_digest[32] = { 0 };
 	struct tpm_quote_response quote;
 	uint8_t *data_ptr;
 	uint32_t *runtime_pids = NULL;
@@ -791,8 +792,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	memcpy(token->policy_digest, g_agent.policy_digest,
 	       sizeof(token->policy_digest));
 
-	ret =
-	    build_canonical_runtime_pid_list(&runtime_pids, &runtime_pid_count);
+	ret = build_canonical_runtime_pid_list(&runtime_pids,
+					       &runtime_pid_count);
 	if (ret < 0) {
 		lota_err("failed to canonicalize protected PID set: %s",
 			 strerror(-ret));
@@ -832,7 +833,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		image_list_size = (size_t)runtime_pid_count *
 				  LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
 		image_digests =
-		    calloc(runtime_pid_count, sizeof(*image_digests));
+			calloc(runtime_pid_count, sizeof(*image_digests));
 		if (!image_digests) {
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
@@ -852,9 +853,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		}
 	}
 
-	ret = lota_compute_runtime_protect_digest_v2(
-	    runtime_pids, image_digests, runtime_pid_count,
-	    runtime_protect_digest);
+	ret = lota_compute_runtime_protect_digest_v2(runtime_pids,
+						     image_digests,
+						     runtime_pid_count,
+						     runtime_protect_digest);
 	if (ret < 0) {
 		lota_err("runtime protected PID digest computation failed: %s",
 			 strerror(-ret));
@@ -883,10 +885,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	ret = lota_compute_token_quote_nonce(
-	    token->valid_until, token->flags, token->pcr_mask,
-	    token->client_nonce, token->policy_digest,
-	    token->runtime_protect_digest, token->runtime_protect_epoch,
-	    binding_nonce);
+		token->valid_until, token->flags, token->pcr_mask,
+		token->client_nonce, token->policy_digest,
+		token->runtime_protect_digest, token->runtime_protect_epoch,
+		binding_nonce);
 	if (ret < 0) {
 		lota_err("token quote nonce computation failed: %s",
 			 strerror(-ret));
@@ -911,9 +913,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		 */
 		if (tpm_is_locked_out(ctx->tpm)) {
 			fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
-			ipc_update_status(
-			    ctx, ctx->status_flags | LOTA_STATUS_TPM_LOCKOUT,
-			    ctx->valid_until);
+			ipc_update_status(ctx,
+					  ctx->status_flags |
+						  LOTA_STATUS_TPM_LOCKOUT,
+					  ctx->valid_until);
 		} else {
 			fail_code = LOTA_IPC_ERR_TPM_FAILURE;
 		}
@@ -1254,8 +1257,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	if (add && check_protect_pid_rate_limit(client->peer_uid) < 0) {
 		lota_warn(
-		    "rate limited PROTECT_PID for uid=%d pid=%d target=%u",
-		    client->peer_uid, client->peer_pid, pid);
+			"rate limited PROTECT_PID for uid=%d pid=%d target=%u",
+			client->peer_uid, client->peer_pid, pid);
 		build_error_response(client, LOTA_IPC_ERR_RATE_LIMITED);
 		return;
 	}
@@ -1278,7 +1281,7 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		memcpy(out->policy_digest, g_agent.policy_digest,
 		       sizeof(out->policy_digest));
 		out->protect_pid_count =
-		    (uint32_t)g_agent.policy_protect_pid_count;
+			(uint32_t)g_agent.policy_protect_pid_count;
 		out->_reserved1 = 0;
 		client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
 		client->send_offset = 0;
@@ -1294,8 +1297,8 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 
 	if (add) {
 		uint32_t required_slots =
-		    (uint32_t)g_agent.policy_protect_pid_count +
-		    (had ? 0u : 1u);
+			(uint32_t)g_agent.policy_protect_pid_count +
+			(had ? 0u : 1u);
 
 		if (required_slots > LOTA_MAX_PROTECTED_PIDS) {
 			lota_warn("Refusing PROTECT_PID %u: protected PID map "
@@ -1348,9 +1351,9 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		agent_globals_lock(&g_agent);
 		if (g_agent.policy_protect_pids) {
 			OPENSSL_cleanse(
-			    g_agent.policy_protect_pids,
-			    (size_t)g_agent.policy_protect_pid_count *
-				sizeof(uint32_t));
+				g_agent.policy_protect_pids,
+				(size_t)g_agent.policy_protect_pid_count *
+					sizeof(uint32_t));
 			free(g_agent.policy_protect_pids);
 		}
 		g_agent.policy_protect_pids = new_pids;
@@ -1665,7 +1668,7 @@ static int handle_client_write(struct ipc_context *ctx,
 			g_agent.running = 0;
 			agent_globals_unlock(&g_agent);
 			lota_info(
-			    "Graceful shutdown initiated via IPC command");
+				"Graceful shutdown initiated via IPC command");
 		}
 	}
 
@@ -1711,8 +1714,8 @@ static int accept_client(struct ipc_context *ctx, int listen_fd)
 		return -ENOMEM;
 	}
 
-	ret =
-	    read_pid_start_time_ticks(cred.pid, &client->peer_start_time_ticks);
+	ret = read_pid_start_time_ticks(cred.pid,
+					&client->peer_start_time_ticks);
 	if (ret < 0) {
 		lota_warn("failed to read peer start_time_ticks for pid=%d: %s",
 			  cred.pid, strerror(-ret));

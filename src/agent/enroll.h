@@ -38,8 +38,7 @@ struct tpm_context;
 struct enroll_state {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t
-	    aik_generation; /* AIK generation the stored cert was issued for */
+	uint64_t aik_generation; /* AIK generation the stored cert was issued for */
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;

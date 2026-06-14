@@ -29,21 +29,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-55s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /*
@@ -162,8 +162,8 @@ static void test_tracer_pid_parser_finds_field_after_dense_prefix(void)
 	off += (size_t)snprintf(buf + off, sizeof(buf) - off, "Name:\tagent\n");
 	while (off < sizeof(buf) - 256) {
 		off += (size_t)snprintf(
-		    buf + off, sizeof(buf) - off,
-		    "Cpus_allowed:\tffffffff,ffffffff,ffffffff\n");
+			buf + off, sizeof(buf) - off,
+			"Cpus_allowed:\tffffffff,ffffffff,ffffffff\n");
 	}
 	snprintf(buf + off, sizeof(buf) - off, "TracerPid:\t0\n");
 	long tracer = 0xDEAD;
@@ -449,8 +449,7 @@ static void run_kill_case(const char *name, int (*body)(void))
 	}
 	if (pid == 0) {
 		body();
-		_exit(
-		    77); /* sentinel: reached only when seccomp did NOT kill */
+		_exit(77); /* sentinel: reached only when seccomp did NOT kill */
 	}
 
 	int status = 0;
@@ -465,9 +464,9 @@ static void run_kill_case(const char *name, int (*body)(void))
 	if (WIFEXITED(status)) {
 		char buf[80];
 		snprintf(
-		    buf, sizeof(buf),
-		    "seccomp did NOT kill on denied syscall (child exit=%d)",
-		    WEXITSTATUS(status));
+			buf, sizeof(buf),
+			"seccomp did NOT kill on denied syscall (child exit=%d)",
+			WEXITSTATUS(status));
 		FAIL(buf);
 		return;
 	}
@@ -490,11 +489,12 @@ static bool seccomp_filter_supported(void)
 		return true; /* cannot tell; let the tests run and decide */
 	if (pid == 0) {
 		struct sock_filter insns[] = {
-		    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+			BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 		};
 		struct sock_fprog prog = {
-		    .len = (unsigned short)(sizeof(insns) / sizeof(insns[0])),
-		    .filter = insns,
+			.len = (unsigned short)(sizeof(insns) /
+						sizeof(insns[0])),
+			.filter = insns,
 		};
 		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
 			_exit(1);
@@ -545,18 +545,18 @@ int main(void)
 		run_kill_case("seccomp kills on personality with SIGSYS",
 			      child_seccomp_kills_on_personality);
 		run_kill_case(
-		    "seccomp TSYNC kills denied syscall in spawned thread",
-		    child_seccomp_tsync_kills_spawned_thread);
+			"seccomp TSYNC kills denied syscall in spawned thread",
+			child_seccomp_tsync_kills_spawned_thread);
 		run_child_case("seccomp keeps getpid/write available",
 			       child_seccomp_allows_benign_syscalls);
 		run_child_case("apply_all returns 0 in a clean child",
 			       child_apply_all_succeeds);
 		run_child_case(
-		    "apply_basics: prctl guards set, seccomp mode unchanged",
-		    child_apply_basics_no_seccomp);
+			"apply_basics: prctl guards set, seccomp mode unchanged",
+			child_apply_basics_no_seccomp);
 		run_child_case(
-		    "apply_daemon after basics installs seccomp filter",
-		    child_apply_daemon_installs_seccomp);
+			"apply_daemon after basics installs seccomp filter",
+			child_apply_daemon_installs_seccomp);
 	} else {
 		printf("  SKIP: seccomp enforcement tests -- filter load is "
 		       "unsupported in this environment (e.g. QEMU user-mode "

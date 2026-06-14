@@ -168,9 +168,8 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	/*
 	 * Measured-boot digest from a kernel-relevant PCR.
 	 */
-	fprintf(
-	    out,
-	    "# Allowed measured-boot digests (kernel-relevant PCR, SHA-256)\n");
+	fprintf(out,
+		"# Allowed measured-boot digests (kernel-relevant PCR, SHA-256)\n");
 	if (snap->kernel_path[0])
 		emit_yaml_comment(out, "Source", snap->kernel_path);
 

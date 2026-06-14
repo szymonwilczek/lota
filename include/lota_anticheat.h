@@ -66,11 +66,11 @@ enum lota_ac_provider {
 };
 
 enum lota_ac_state {
-	LOTA_AC_STATE_IDLE = 0,	     /* not initialised */
-	LOTA_AC_STATE_RUNNING = 1,   /* active, agent reachable */
-	LOTA_AC_STATE_TRUSTED = 2,   /* attested: all required flags set */
+	LOTA_AC_STATE_IDLE = 0, /* not initialised */
+	LOTA_AC_STATE_RUNNING = 1, /* active, agent reachable */
+	LOTA_AC_STATE_TRUSTED = 2, /* attested: all required flags set */
 	LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
-	LOTA_AC_STATE_ERROR = 4,     /* cannot reach agent / internal fault */
+	LOTA_AC_STATE_ERROR = 4, /* cannot reach agent / internal fault */
 };
 
 /* error codes */
@@ -164,12 +164,12 @@ struct lota_ac_heartbeat_wire {
 struct lota_ac_info {
 	enum lota_ac_provider provider;
 	enum lota_ac_state
-	    state; /* authoritative only for verify_heartbeat output */
+		state; /* authoritative only for verify_heartbeat output */
 	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
-	uint64_t session_start;	 /* epoch */
+	uint64_t session_start; /* epoch */
 	uint64_t last_heartbeat; /* epoch */
-	uint32_t heartbeat_seq;	 /* current counter */
-	uint32_t lota_flags;	 /* last known attestation flags */
+	uint32_t heartbeat_seq; /* current counter */
+	uint32_t lota_flags; /* last known attestation flags */
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
 	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from
@@ -344,8 +344,8 @@ int lota_ac_list_runtime_objects(lota_ac_runtime_object_fn fn, void *user);
  * negative errno on an I/O or parse failure of any file.
  */
 int lota_ac_compute_expected_runtime_measure_set(
-    const char *const *paths, size_t count,
-    uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+	const char *const *paths, size_t count,
+	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /*
  * Convenience wrapper: the expected runtime measurement for an image made
@@ -354,7 +354,7 @@ int lota_ac_compute_expected_runtime_measure_set(
  * lota_ac_compute_expected_runtime_measure_set(&exe_path, 1, out).
  */
 int lota_ac_compute_expected_runtime_measure(
-    const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
+	const char *exe_path, uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE]);
 
 /*
  * Verify a heartbeat packet.
@@ -382,11 +382,11 @@ int lota_ac_compute_expected_runtime_measure(
  * Returns 0 on success, negative error code on failure.
  */
 int lota_ac_verify_heartbeat(
-    const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
-    size_t aik_pub_len,
-    const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
-    const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
-    struct lota_ac_info *info);
+	const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
+	size_t aik_pub_len,
+	const uint8_t expected_game_id_hash[LOTA_AC_GAME_HASH_SIZE],
+	const uint8_t expected_runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE],
+	struct lota_ac_info *info);
 
 const char *lota_ac_state_str(enum lota_ac_state state);
 const char *lota_ac_provider_str(enum lota_ac_provider provider);

@@ -61,7 +61,7 @@ static struct {
 	int log_level;
 	int refresh_sec;
 	char token_dir[PATH_MAX - 64]; /* leave room for filename suffix */
-	char socket_path[PATH_MAX];    /* empty -> default */
+	char socket_path[PATH_MAX]; /* empty -> default */
 	char status_path[PATH_MAX];
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
@@ -71,11 +71,11 @@ static struct {
 
 #define HOOK_PREFIX "lota-hook"
 
-#define HOOK_LOG(level, fmt, ...)                                              \
-	do {                                                                   \
-		if ((level) >= g_hook.log_level)                               \
-			fprintf(stderr, HOOK_PREFIX ": " fmt "\n",             \
-				##__VA_ARGS__);                                \
+#define HOOK_LOG(level, fmt, ...)                                  \
+	do {                                                       \
+		if ((level) >= g_hook.log_level)                   \
+			fprintf(stderr, HOOK_PREFIX ": " fmt "\n", \
+				##__VA_ARGS__);                    \
 	} while (0)
 
 #define LOG_DBG(fmt, ...) HOOK_LOG(HOOK_LOG_DEBUG, fmt, ##__VA_ARGS__)
@@ -157,9 +157,9 @@ static bool path_has_prefix_in(const char *path, const char *list)
  * outside FHS are an operator concern and reach the policy through
  * LOTA_HOOK_SKIP_PATH.
  */
-#define LOTA_HOOK_FHS_SYSTEM_PREFIXES                                          \
-	"/usr/,/bin/,/sbin/,/lib/,/lib64/,"                                    \
-	"/run/host/usr/,/run/host/bin/,/run/host/sbin/,"                       \
+#define LOTA_HOOK_FHS_SYSTEM_PREFIXES                    \
+	"/usr/,/bin/,/sbin/,/lib/,/lib64/,"              \
+	"/run/host/usr/,/run/host/bin/,/run/host/sbin/," \
 	"/run/host/lib/,/run/host/lib64/"
 
 /*
@@ -562,7 +562,7 @@ static struct lota_client *hook_connect(void)
  */
 static void publish_offline_status(void)
 {
-	struct lota_status offline = {0};
+	struct lota_status offline = { 0 };
 	int ret;
 
 	ret = write_status_payload(&offline, 1);
@@ -774,8 +774,9 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 			 env);
 
 	env = getenv(LOTA_HOOK_ENV_REFRESH_SEC);
-	g_hook.refresh_sec =
-	    (env && atoi(env) > 0) ? atoi(env) : LOTA_HOOK_DEFAULT_REFRESH_SEC;
+	g_hook.refresh_sec = (env && atoi(env) > 0) ?
+				     atoi(env) :
+				     LOTA_HOOK_DEFAULT_REFRESH_SEC;
 
 	/* resolve and create token directory */
 	resolve_token_dir();

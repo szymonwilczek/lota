@@ -20,63 +20,62 @@
 
 static void usage(FILE *out)
 {
-	fprintf(
-	    out,
-	    "Usage: lota-install [options]\n"
-	    "\n"
-	    "Guided, reboot-resumable install of the LOTA player agent.\n"
-	    "Each stage probes live system state, explains what it is\n"
-	    "about to change and why, and asks before changing it.\n"
-	    "Re-running after the mid-install reboot resumes at the\n"
-	    "first unmet stage.\n"
-	    "\n"
-	    "Operator-provided inputs (from the install instructions):\n"
-	    "  --ca-server HOST       Attestation CA for enrollment\n"
-	    "  --ca-port PORT         Attestation CA port\n"
-	    "  --ca-cert FILE         CA TLS certificate (PEM)\n"
-	    "  --verifier HOST        Verifier for the final self-check\n"
-	    "  --verifier-port PORT   Verifier port\n"
-	    "  --policy-pubkey FILE   Operator BPF signing public key\n"
-	    "                         (default %s)\n"
-	    "  --selinux-module FILE  Compiled LOTA SELinux module\n"
-	    "                         (default %s)\n"
-	    "\n"
-	    "Behaviour:\n"
-	    "  --status               Probe and report every stage,\n"
-	    "                         change nothing\n"
-	    "  --yes                  Do not ask for confirmation\n"
-	    "  --plain                Plain log output (no TUI)\n"
-	    "  --help, --version\n"
-	    "\n"
-	    "Lifecycle (after install):\n"
-	    "  --pause                Stop the agent gracefully\n"
-	    "                         ('lota-agent --shutdown')\n"
-	    "  --resume               Explain that resuming needs a reboot,\n"
-	    "                         and offer to reboot now\n"
-	    "\n"
-	    "Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
-	    "            10 reboot required (re-run to resume).\n",
-	    PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
+	fprintf(out,
+		"Usage: lota-install [options]\n"
+		"\n"
+		"Guided, reboot-resumable install of the LOTA player agent.\n"
+		"Each stage probes live system state, explains what it is\n"
+		"about to change and why, and asks before changing it.\n"
+		"Re-running after the mid-install reboot resumes at the\n"
+		"first unmet stage.\n"
+		"\n"
+		"Operator-provided inputs (from the install instructions):\n"
+		"  --ca-server HOST       Attestation CA for enrollment\n"
+		"  --ca-port PORT         Attestation CA port\n"
+		"  --ca-cert FILE         CA TLS certificate (PEM)\n"
+		"  --verifier HOST        Verifier for the final self-check\n"
+		"  --verifier-port PORT   Verifier port\n"
+		"  --policy-pubkey FILE   Operator BPF signing public key\n"
+		"                         (default %s)\n"
+		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
+		"                         (default %s)\n"
+		"\n"
+		"Behaviour:\n"
+		"  --status               Probe and report every stage,\n"
+		"                         change nothing\n"
+		"  --yes                  Do not ask for confirmation\n"
+		"  --plain                Plain log output (no TUI)\n"
+		"  --help, --version\n"
+		"\n"
+		"Lifecycle (after install):\n"
+		"  --pause                Stop the agent gracefully\n"
+		"                         ('lota-agent --shutdown')\n"
+		"  --resume               Explain that resuming needs a reboot,\n"
+		"                         and offer to reboot now\n"
+		"\n"
+		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
+		"            10 reboot required (re-run to resume).\n",
+		PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
 }
 
 static int parse_args(int argc, char **argv, struct install_opts *opts)
 {
 	static const struct option longopts[] = {
-	    {"ca-server", required_argument, 0, 1},
-	    {"ca-port", required_argument, 0, 2},
-	    {"ca-cert", required_argument, 0, 3},
-	    {"verifier", required_argument, 0, 4},
-	    {"verifier-port", required_argument, 0, 5},
-	    {"policy-pubkey", required_argument, 0, 6},
-	    {"selinux-module", required_argument, 0, 7},
-	    {"status", no_argument, 0, 8},
-	    {"yes", no_argument, 0, 'y'},
-	    {"plain", no_argument, 0, 9},
-	    {"help", no_argument, 0, 'h'},
-	    {"version", no_argument, 0, 10},
-	    {"pause", no_argument, 0, 11},
-	    {"resume", no_argument, 0, 12},
-	    {0, 0, 0, 0},
+		{ "ca-server", required_argument, 0, 1 },
+		{ "ca-port", required_argument, 0, 2 },
+		{ "ca-cert", required_argument, 0, 3 },
+		{ "verifier", required_argument, 0, 4 },
+		{ "verifier-port", required_argument, 0, 5 },
+		{ "policy-pubkey", required_argument, 0, 6 },
+		{ "selinux-module", required_argument, 0, 7 },
+		{ "status", no_argument, 0, 8 },
+		{ "yes", no_argument, 0, 'y' },
+		{ "plain", no_argument, 0, 9 },
+		{ "help", no_argument, 0, 'h' },
+		{ "version", no_argument, 0, 10 },
+		{ "pause", no_argument, 0, 11 },
+		{ "resume", no_argument, 0, 12 },
+		{ 0, 0, 0, 0 },
 	};
 	int c;
 
@@ -214,7 +213,7 @@ static void print_reboot_box(struct install_ctx *ctx, const char *note)
 /* Lifecycle veneer: stop the agent through its graceful path. */
 static int do_pause(struct install_ctx *ctx)
 {
-	const char *const argv[] = {PATH_AGENT_BIN, "--shutdown", NULL};
+	const char *const argv[] = { PATH_AGENT_BIN, "--shutdown", NULL };
 	int rc;
 
 	if (geteuid() != 0) {
@@ -253,7 +252,7 @@ static int do_pause(struct install_ctx *ctx)
 /* Lifecycle veneer: resuming after a pause is a reboot, by design. */
 static int do_resume(struct install_ctx *ctx)
 {
-	const char *const argv[] = {"systemctl", "reboot", NULL};
+	const char *const argv[] = { "systemctl", "reboot", NULL };
 
 	ui_text(&ctx->ui,
 		"Resuming LOTA means rebooting. When the agent paused it "
@@ -279,9 +278,9 @@ static int do_resume(struct install_ctx *ctx)
 			"Reboot when ready: 'sudo systemctl reboot'.");
 		return EXIT_INSTALL_OK;
 	}
-	return run_cmd(&ctx->ui, "systemctl reboot", argv) == 0
-		   ? EXIT_INSTALL_OK
-		   : EXIT_INSTALL_FAIL;
+	return run_cmd(&ctx->ui, "systemctl reboot", argv) == 0 ?
+		       EXIT_INSTALL_OK :
+		       EXIT_INSTALL_FAIL;
 }
 
 int main(int argc, char **argv)

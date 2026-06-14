@@ -21,14 +21,14 @@
 
 static int g_failures;
 
-#define CHECK(cond, msg)                                                       \
-	do {                                                                   \
-		if (!(cond)) {                                                 \
-			fprintf(stderr, "FAIL: %s\n", msg);                    \
-			g_failures++;                                          \
-		} else {                                                       \
-			printf("PASS: %s\n", msg);                             \
-		}                                                              \
+#define CHECK(cond, msg)                                    \
+	do {                                                \
+		if (!(cond)) {                              \
+			fprintf(stderr, "FAIL: %s\n", msg); \
+			g_failures++;                       \
+		} else {                                    \
+			printf("PASS: %s\n", msg);          \
+		}                                           \
 	} while (0)
 
 static const char *tmp_path(void)
@@ -111,7 +111,7 @@ static void test_rejects_truncated(void)
 
 	CHECK(fd >= 0, "open truncated");
 	if (fd >= 0) {
-		uint8_t half[8] = {0};
+		uint8_t half[8] = { 0 };
 		CHECK(write(fd, half, sizeof(half)) == (ssize_t)sizeof(half),
 		      "write truncated");
 		close(fd);

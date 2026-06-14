@@ -20,24 +20,24 @@
  * Attestation report header
  */
 struct lota_report_header {
-	uint32_t magic;	  /* LOTA_MAGIC */
+	uint32_t magic; /* LOTA_MAGIC */
 	uint32_t version; /* LOTA_VERSION */
 
 	uint32_t report_size; /* Total size including variable data */
-	uint32_t flags;	      /* Report flags */
+	uint32_t flags; /* Report flags */
 } __attribute__((packed));
 
 /* Report flags */
-#define LOTA_REPORT_FLAG_IOMMU_OK (1U << 0)	/* IOMMU verification passed */
+#define LOTA_REPORT_FLAG_IOMMU_OK (1U << 0) /* IOMMU verification passed */
 #define LOTA_REPORT_FLAG_TPM_QUOTE_OK (1U << 1) /* TPM quote succeeded */
-#define LOTA_REPORT_FLAG_KERNEL_HASH_OK                                        \
+#define LOTA_REPORT_FLAG_KERNEL_HASH_OK \
 	(1U << 2) /* Boot measurement digest captured (kernel-relevant PCR) */
 #define LOTA_REPORT_FLAG_BPF_ACTIVE (1U << 3) /* eBPF LSM is loaded */
 #define LOTA_REPORT_FLAG_MODULE_SIG (1U << 4) /* Kernel enforces module sigs*/
-#define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
+#define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5) /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
-#define LOTA_REPORT_FLAG_ENFORCE (1U << 7)    /* LSM enforce mode active */
-#define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1                                    \
+#define LOTA_REPORT_FLAG_ENFORCE (1U << 7) /* LSM enforce mode active */
+#define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 \
 	(1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
 /*
  * Source-compatible alias for pre-negotiation code. The bit is not a
@@ -201,9 +201,9 @@ struct lota_system_measurement {
  */
 struct lota_bpf_summary {
 	uint32_t total_exec_events; /* Total exec events since agent start */
-	uint32_t unique_binaries;   /* Unique binary hashes seen */
-	uint64_t first_event_ts;    /* Timestamp of first event */
-	uint64_t last_event_ts;	    /* Timestamp of last event */
+	uint32_t unique_binaries; /* Unique binary hashes seen */
+	uint64_t first_event_ts; /* Timestamp of first event */
+	uint64_t last_event_ts; /* Timestamp of last event */
 } __attribute__((packed));
 
 /*
@@ -215,10 +215,10 @@ struct lota_bpf_summary {
  * Wire size is fixed at 28 bytes.
  */
 struct lota_esrt {
-	uint32_t present;	   /* 1 if a System Firmware entry was found */
-	uint32_t fw_version;	   /* ESRT fw_version */
+	uint32_t present; /* 1 if a System Firmware entry was found */
+	uint32_t fw_version; /* ESRT fw_version */
 	uint32_t lowest_supported; /* lowest_supported_fw_version */
-	uint8_t fw_class[16];	   /* fw_class GUID (raw 16 bytes) */
+	uint8_t fw_class[16]; /* fw_class GUID (raw 16 bytes) */
 } __attribute__((packed));
 
 /*

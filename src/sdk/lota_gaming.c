@@ -87,8 +87,8 @@ static int clear_nonblock(int fd)
 static int wait_for_socket(int fd, int events, int timeout_ms)
 {
 	struct pollfd pfd = {
-	    .fd = fd,
-	    .events = (short)events,
+		.fd = fd,
+		.events = (short)events,
 	};
 	int ret;
 
@@ -212,9 +212,9 @@ static int recv_response(struct lota_client *client,
 
 		if (resp->result == LOTA_IPC_NOTIFY && resp->payload_len > 0) {
 			uint8_t nbuf[sizeof(struct lota_ipc_notify)];
-			size_t nlen = resp->payload_len < sizeof(nbuf)
-					  ? resp->payload_len
-					  : sizeof(nbuf);
+			size_t nlen = resp->payload_len < sizeof(nbuf) ?
+					      resp->payload_len :
+					      sizeof(nbuf);
 
 			memset(nbuf, 0, sizeof(nbuf));
 
@@ -317,8 +317,8 @@ static int drain_payload(int fd, size_t remaining, int timeout_ms)
 	deadline_ms = monotonic_ms() + timeout_ms;
 
 	while (remaining > 0) {
-		size_t chunk =
-		    remaining < sizeof(discard) ? remaining : sizeof(discard);
+		size_t chunk = remaining < sizeof(discard) ? remaining :
+							     sizeof(discard);
 		ssize_t n = recv(fd, discard, chunk, MSG_DONTWAIT);
 
 		if (n > 0) {
@@ -447,8 +447,8 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	int timeout_ms;
 	int fd = -1;
 
-	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms
-						    : DEFAULT_TIMEOUT_MS;
+	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms :
+						      DEFAULT_TIMEOUT_MS;
 
 	/*
 	 * if the caller provided an explicit socket path, use only that
@@ -458,7 +458,7 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		fd = try_connect_path(opts->socket_path, timeout_ms);
 	} else {
 		int count =
-		    build_discovery_paths(discovery, MAX_DISCOVERY_PATHS);
+			build_discovery_paths(discovery, MAX_DISCOVERY_PATHS);
 
 		for (int i = 0; i < count; i++) {
 			/* quick existence check to avoid blocking connect on
@@ -526,13 +526,13 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec)
 
 	ret = send_request(client, &req, NULL, 0);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	ret = recv_response(client, &resp, &ping, sizeof(ping), &payload_len);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
@@ -566,14 +566,14 @@ int lota_protect_self(struct lota_client *client)
 
 	ret = send_request(client, &req, &body, sizeof(body));
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
-	ret =
-	    recv_response(client, &resp, &update, sizeof(update), &payload_len);
+	ret = recv_response(client, &resp, &update, sizeof(update),
+			    &payload_len);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
@@ -603,14 +603,14 @@ int lota_get_status(struct lota_client *client, struct lota_status *status)
 
 	ret = send_request(client, &req, NULL, 0);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	ret = recv_response(client, &resp, &ipc_status, sizeof(ipc_status),
 			    &payload_len);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
@@ -678,13 +678,13 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	ret = send_request(client, &req, nonce ? &token_req : NULL,
 			   nonce ? sizeof(token_req) : 0);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	ret = recv_response(client, &resp, buf, sizeof(buf), &payload_len);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
@@ -747,10 +747,10 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 
 		for (uint32_t i = 0; i < token->protect_pid_count; i++) {
 			token->protected_pids[i] =
-			    (uint32_t)data_ptr[0] |
-			    ((uint32_t)data_ptr[1] << 8) |
-			    ((uint32_t)data_ptr[2] << 16) |
-			    ((uint32_t)data_ptr[3] << 24);
+				(uint32_t)data_ptr[0] |
+				((uint32_t)data_ptr[1] << 8) |
+				((uint32_t)data_ptr[2] << 16) |
+				((uint32_t)data_ptr[3] << 24);
 			data_ptr += sizeof(uint32_t);
 		}
 	}
@@ -758,8 +758,8 @@ int lota_get_token(struct lota_client *client, const uint8_t *nonce,
 	/* copy the v2 per-PID kernel image digests if present */
 	if (image_list_size > 0) {
 		token->protected_image_digests =
-		    calloc(token->protect_pid_count,
-			   sizeof(*token->protected_image_digests));
+			calloc(token->protect_pid_count,
+			       sizeof(*token->protected_image_digests));
 		if (!token->protected_image_digests)
 			goto oom;
 
@@ -886,8 +886,8 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	       sizeof(wire.runtime_protect_digest));
 	wire.runtime_protect_epoch = htole64(token->runtime_protect_epoch);
 	wire.protect_pid_count = htole32(token->protect_pid_count);
-	wire.pid_list_size =
-	    htole16((uint16_t)(token->protect_pid_count * sizeof(uint32_t)));
+	wire.pid_list_size = htole16(
+		(uint16_t)(token->protect_pid_count * sizeof(uint32_t)));
 	wire.attest_size = htole16((uint16_t)token->attest_size);
 	wire.sig_size = htole16((uint16_t)token->signature_len);
 	wire.runtime_protect_version = htole16(token->runtime_protect_version);
@@ -956,13 +956,13 @@ int lota_subscribe(struct lota_client *client, uint32_t event_mask,
 
 	ret = send_request(client, &req, &sub, sizeof(sub));
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	ret = recv_response(client, &resp, NULL, 0, &payload_len);
 	if (ret < 0)
-		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT
-					   : LOTA_ERR_PROTOCOL;
+		return (ret == -ETIMEDOUT) ? LOTA_ERR_TIMEOUT :
+					     LOTA_ERR_PROTOCOL;
 
 	if (resp.result != LOTA_IPC_OK)
 		return ipc_result_to_error(resp.result);
@@ -1024,21 +1024,21 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 		if (ret == -ETIMEDOUT)
 			break;
 		if (ret == -ECONNRESET)
-			return dispatched > 0 ? dispatched
-					      : LOTA_ERR_NOT_CONNECTED;
+			return dispatched > 0 ? dispatched :
+						LOTA_ERR_NOT_CONNECTED;
 		if (ret < 0)
 			return LOTA_ERR_PROTOCOL;
 
 		/* drain all currently queued frames without blocking */
 		for (;;) {
-			ret =
-			    recv_exact_timeout(client->fd, &resp, sizeof(resp),
-					       DRAIN_READ_TIMEOUT_MS);
+			ret = recv_exact_timeout(client->fd, &resp,
+						 sizeof(resp),
+						 DRAIN_READ_TIMEOUT_MS);
 			if (ret == -ETIMEDOUT)
 				break;
 			if (ret == -ECONNRESET)
-				return dispatched > 0 ? dispatched
-						      : LOTA_ERR_NOT_CONNECTED;
+				return dispatched > 0 ? dispatched :
+							LOTA_ERR_NOT_CONNECTED;
 			if (ret < 0)
 				return LOTA_ERR_PROTOCOL;
 
@@ -1056,41 +1056,41 @@ int lota_poll_events(struct lota_client *client, int timeout_ms)
 			}
 
 			if (resp.payload_len > 0) {
-				size_t nlen = resp.payload_len < sizeof(buf)
-						  ? resp.payload_len
-						  : sizeof(buf);
+				size_t nlen = resp.payload_len < sizeof(buf) ?
+						      resp.payload_len :
+						      sizeof(buf);
 
 				memset(buf, 0, sizeof(buf));
 
 				ret = recv_exact_timeout(client->fd, buf, nlen,
 							 DRAIN_READ_TIMEOUT_MS);
 				if (ret == -ECONNRESET)
-					return dispatched > 0
-						   ? dispatched
-						   : LOTA_ERR_NOT_CONNECTED;
+					return dispatched > 0 ?
+						       dispatched :
+						       LOTA_ERR_NOT_CONNECTED;
 				if (ret < 0)
 					return LOTA_ERR_PROTOCOL;
 
 				if (resp.payload_len > sizeof(buf))
 					drain_payload(client->fd,
 						      resp.payload_len -
-							  sizeof(buf),
+							      sizeof(buf),
 						      DRAIN_READ_TIMEOUT_MS);
 
-				dispatched +=
-				    dispatch_notification(client, buf, nlen);
+				dispatched += dispatch_notification(client, buf,
+								    nlen);
 			}
 
 			/* see if more data is queued right now */
 			{
 				int more =
-				    wait_for_socket(client->fd, POLLIN, 0);
+					wait_for_socket(client->fd, POLLIN, 0);
 				if (more == -ETIMEDOUT)
 					break;
 				if (more == -ECONNRESET)
-					return dispatched > 0
-						   ? dispatched
-						   : LOTA_ERR_NOT_CONNECTED;
+					return dispatched > 0 ?
+						       dispatched :
+						       LOTA_ERR_NOT_CONNECTED;
 			}
 		}
 
@@ -1151,11 +1151,11 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		uint32_t flag;
 		const char *name;
 	} flag_names[] = {
-	    {LOTA_FLAG_ATTESTED, "ATTESTED"},
-	    {LOTA_FLAG_TPM_OK, "TPM_OK"},
-	    {LOTA_FLAG_IOMMU_OK, "IOMMU_OK"},
-	    {LOTA_FLAG_BPF_LOADED, "BPF_LOADED"},
-	    {LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT"},
+		{ LOTA_FLAG_ATTESTED, "ATTESTED" },
+		{ LOTA_FLAG_TPM_OK, "TPM_OK" },
+		{ LOTA_FLAG_IOMMU_OK, "IOMMU_OK" },
+		{ LOTA_FLAG_BPF_LOADED, "BPF_LOADED" },
+		{ LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT" },
 	};
 	size_t pos = 0;
 	int first = 1;

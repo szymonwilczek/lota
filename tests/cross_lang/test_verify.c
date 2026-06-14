@@ -62,9 +62,8 @@ int main(void)
 	size_t nonce_len = 0;
 	uint8_t *nonce = read_file("/tmp/lota_cross_nonce.bin", &nonce_len);
 	if (!nonce || nonce_len != 32) {
-		fprintf(
-		    stderr,
-		    "Cannot read /tmp/lota_cross_nonce.bin (or wrong size)\n");
+		fprintf(stderr,
+			"Cannot read /tmp/lota_cross_nonce.bin (or wrong size)\n");
 		return 1;
 	}
 	printf("[C] Nonce: %02x%02x%02x%02x...\n", nonce[0], nonce[1], nonce[2],

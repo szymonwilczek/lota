@@ -21,21 +21,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-58s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-58s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static void test_mask_selection_default(void)
@@ -114,8 +114,8 @@ static void test_mask_selection_null_args(void)
 
 static void test_seal_arg_validation(void)
 {
-	uint8_t secret[16] = {0};
-	uint8_t big[LOTA_SEAL_MAX_SECRET + 1] = {0};
+	uint8_t secret[16] = { 0 };
+	uint8_t big[LOTA_SEAL_MAX_SECRET + 1] = { 0 };
 	uint8_t out[LOTA_SEAL_MAX_BLOB];
 	size_t out_len = 0;
 
@@ -157,7 +157,7 @@ static void test_seal_arg_validation(void)
 
 static void test_unseal_arg_validation(void)
 {
-	uint8_t blob[LOTA_SEAL_MAX_BLOB] = {0};
+	uint8_t blob[LOTA_SEAL_MAX_BLOB] = { 0 };
 	uint8_t out[LOTA_SEAL_MAX_SECRET];
 	size_t out_len = 0;
 
