@@ -6,9 +6,15 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ping:
+    name: Notify the fuzz host
     runs-on: ubuntu-24.04
+    environment: fuzz-notify
     steps:
       - name: Ping the fuzz host relay
         env:
