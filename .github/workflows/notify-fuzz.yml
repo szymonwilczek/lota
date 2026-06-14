@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   ping:
+    name: Notify the fuzz host
     runs-on: ubuntu-24.04
     steps:
       - name: Ping the fuzz host relay
