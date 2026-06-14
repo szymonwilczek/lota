@@ -57,8 +57,43 @@ build and the standard binary are unaffected. The `pkcs11-softhsm` job in
 | Fuzz (C) | IPC, config, TLS-pin, wire, enrollment-reply decoders, sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature verify, server SDK token verify, TPM2B response/credential unmarshal | `make fuzz-all` |
 | Kernel | BPF LSM live in a guest | Syzkaller harness `lota_bpf_fuzz` (see `syzkaller/README.md`) |
 | Repro | bit-for-bit build | `make reproducible-build`; gated in CI |
+| Includes | every header used directly, no transitive deps | `make check-includes` |
 
 A fuzz crash leaves a reproducer under `testdata/fuzz/<Target>/`. Commit it so the regression is locked in.
+
+### Include hygiene
+
+Every translation unit must include the headers it uses directly and no
+others; a header reached only transitively through another include is a
+defect. `make check-includes` enforces this. It builds a compile database
+with `bear` and runs `clang-include-cleaner` -- the same engine clangd's
+editor diagnostic uses -- over every C source the build knows about
+(`all`, `examples`, `test-bins`, `fuzz-all`, `bench-c`,
+`syzkaller-fuzz-loader`). The gate fails on any header pulled in but not
+used directly.
+
+`scripts/fix-includes.sh [file.c ...]` rewrites the include lists
+automatically with `include-what-you-use`; with no arguments it processes
+the whole database. Always review the diff and rebuild: the tools cannot
+see symbols reached only through a macro or behind conditional
+compilation, so an include needed only that way must carry an
+`// IWYU pragma: keep` comment (see `tests/test_seal_tpm.c`).
+
+A few exemptions live in both `scripts/check-includes.sh` and the local
+`.clangd`, and must stay in sync:
+
+- The C/POSIX headers `clang-include-cleaner` mis-attributes to the glibc
+  / kernel-uapi implementation headers (`bits/`, `asm-generic/`) -- it
+  reports the public `<errno.h>`, `<sys/types.h>` and friends as unused.
+  The idiomatic public headers are kept and that fixed set is exempted.
+- Library umbrellas (`<SDL.h>`, the TSS2 ESYS headers) whose granular
+  sub-headers are implementation detail; the umbrella the code includes is
+  kept via the mapping files under `scripts/iwyu/`.
+- The generated `include/vmlinux.h` and the BPF program (`src/bpf/`) are
+  skipped: the host analyzer cannot model a `-target bpf` unit.
+
+Requires `clang-include-cleaner` (clang-tools-extra), `bear`, and -- for
+the fixer -- `include-what-you-use`.
 
 The re-anchor discriminator reuses the event log already parsed and
 quote-verified during report verification (`BootFacts.Parsed`) instead of

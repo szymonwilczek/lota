@@ -1,0 +1,10 @@
+# IWYU mapping:
+# TSS2 ESYS/TCTI API is consumed through its umbrella headers.
+# Granular tss2_*_types.h are implementation detail.
+# Map the common symbol-owning sub-headers back to the umbrellas the code includes.
+[
+  { include: ["@[\"<]tss2/tss2_esys.*[\">]", "private", "<tss2/tss2_esys.h>", "public"] },
+  { include: ["@[\"<]tss2/tss2_tpm2_types.h[\">]", "private", "<tss2/tss2_esys.h>", "public"] },
+  { include: ["@[\"<]tss2/tss2_common.h[\">]", "private", "<tss2/tss2_esys.h>", "public"] },
+  { include: ["@[\"<]tss2/tss2_tcti_device.h[\">]", "private", "<tss2/tss2_tcti_device.h>", "public"] }
+]
