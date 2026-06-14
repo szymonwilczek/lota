@@ -310,7 +310,8 @@ func writeCRLNoNextUpdate(t *testing.T, dir string, ca *x509.Certificate) string
 // after the first one.
 func writeBundledCRL(t *testing.T, dir string, ca *x509.Certificate,
 	caKey *rsa.PrivateKey, nextUpdate time.Time,
-	firstSerials, secondSerials []int64) string {
+	firstSerials, secondSerials []int64,
+) string {
 	t.Helper()
 
 	encodeOne := func(number int64, entries []int64) []byte {
@@ -385,7 +386,8 @@ func TestCRL_LoadAcceptsMultiBlockPEMBundle(t *testing.T) {
 // honored so the staleness gate does not short-circuit the algorithm
 // check.
 func writeCRLWithSigAlgOID(t *testing.T, dir string, ca *x509.Certificate,
-	sigAlgOID asn1.ObjectIdentifier, name string) string {
+	sigAlgOID asn1.ObjectIdentifier, name string,
+) string {
 	t.Helper()
 
 	algID := pkix.AlgorithmIdentifier{

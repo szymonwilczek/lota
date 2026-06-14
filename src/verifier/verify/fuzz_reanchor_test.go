@@ -21,7 +21,8 @@ func FuzzReanchorDecision(f *testing.F) {
 	f.Add([]byte("garbage"), []byte("more garbage"), uint32(1), true, false)
 
 	f.Fuzz(func(t *testing.T, baseline, current []byte, esrtVer uint32,
-		esrtPresent, capable bool) {
+		esrtPresent, capable bool,
+	) {
 		var cur *types.ESRTInfo
 		if esrtPresent {
 			cur = &types.ESRTInfo{Present: true, FWVersion: esrtVer}

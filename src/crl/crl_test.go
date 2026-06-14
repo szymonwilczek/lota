@@ -92,7 +92,8 @@ func buildLeaf(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey, serial
 
 // makeCRL builds and parses a CRL covering revokedSerials, signed by ca.
 func makeCRL(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey,
-	nextUpdate time.Time, revokedSerials ...int64) *x509.RevocationList {
+	nextUpdate time.Time, revokedSerials ...int64,
+) *x509.RevocationList {
 	t.Helper()
 	var entries []x509.RevocationListEntry
 	for _, s := range revokedSerials {
@@ -358,7 +359,8 @@ func TestBuildSet_EmptyPathsYieldsEmptySet(t *testing.T) {
 // by ca.
 // nextUpdate is honored so callers can construct stale CRLs.
 func writeCRLFile(t *testing.T, dir string, ca *x509.Certificate, caKey *rsa.PrivateKey,
-	nextUpdate time.Time, revokedSerials ...int64) string {
+	nextUpdate time.Time, revokedSerials ...int64,
+) string {
 	t.Helper()
 	var entries []x509.RevocationListEntry
 	for _, s := range revokedSerials {
@@ -505,7 +507,8 @@ func TestBuildSet_AcceptsDEREncodedFile(t *testing.T) {
 // Signature is a placeholder: the load gates under test reject before
 // reaching signature verification.
 func writeRawCRL(t *testing.T, dir, name string, ca *x509.Certificate,
-	sigAlgOID asn1.ObjectIdentifier, withNextUpdate bool) string {
+	sigAlgOID asn1.ObjectIdentifier, withNextUpdate bool,
+) string {
 	t.Helper()
 
 	algID := pkix.AlgorithmIdentifier{

@@ -794,7 +794,7 @@ func TestCertificateStore_VerifyAIKCertificate(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 	storePath := filepath.Join(tempDir, "store")
-	if err := os.Mkdir(storePath, 0700); err != nil {
+	if err := os.Mkdir(storePath, 0o700); err != nil {
 		t.Fatalf("store dir: %v", err)
 	}
 
@@ -898,7 +898,7 @@ func TestCertificateStore_ValidEKCertificate(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	storePath := filepath.Join(tempDir, "store")
-	if err := os.Mkdir(storePath, 0700); err != nil {
+	if err := os.Mkdir(storePath, 0o700); err != nil {
 		t.Fatalf("Failed to create store dir: %v", err)
 	}
 
@@ -934,7 +934,7 @@ func TestCertificateStore_EKCertificateMissingOID(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	storePath := filepath.Join(tempDir, "store")
-	if err := os.Mkdir(storePath, 0700); err != nil {
+	if err := os.Mkdir(storePath, 0o700); err != nil {
 		t.Fatalf("Failed to create store dir: %v", err)
 	}
 
@@ -1007,7 +1007,7 @@ func TestCertificateStore_EKCertificatePolicyOID(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	storePath := filepath.Join(tempDir, "store")
-	if err := os.Mkdir(storePath, 0700); err != nil {
+	if err := os.Mkdir(storePath, 0o700); err != nil {
 		t.Fatalf("Failed to create store dir: %v", err)
 	}
 

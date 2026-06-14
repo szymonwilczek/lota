@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ThalesGroup/crypto11"
+
 	"github.com/szymonwilczek/lota/attestca/ca"
 )
 

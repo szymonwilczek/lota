@@ -1284,7 +1284,8 @@ func (v *Verifier) ListActiveClients() []string {
 // Decision itself lives in reanchorDecision.
 func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	boot *BootBaseline, report *types.AttestationReport,
-	bootFacts *BootFacts) bool {
+	bootFacts *BootFacts,
+) bool {
 	if !v.selfServiceReanchor {
 		return false
 	}

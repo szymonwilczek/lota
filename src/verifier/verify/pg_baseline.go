@@ -154,7 +154,8 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 // boot-commitment clients (the verifier derives the expected PCR14
 // dynamically from agent_hash + ClockInfo)
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
-	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	currentPCR14, agentHash [types.HashSize]byte,
+) (TOFUResult, *ClientBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -526,7 +527,8 @@ func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot Boo
 // A non-success branch rolls back and leaves persistent state untouched.
 func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline) AttestationOutcome {
+	boot *BootBaseline,
+) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -847,7 +849,8 @@ func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState 
 // esrt_capable is kept sticky (OR), never cleared.
 func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
-	esrtCapable, lfa bool, reason string) error {
+	esrtCapable, lfa bool, reason string,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -914,7 +917,8 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 // boot baseline (Postgres).
 // Idempotent UPDATE; esrt_capable kept sticky.
 func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
-	eventLog []byte, esrtVersion uint32, esrtPresent bool) error {
+	eventLog []byte, esrtVersion uint32, esrtPresent bool,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

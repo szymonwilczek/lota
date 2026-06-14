@@ -16,8 +16,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/szymonwilczek/lota/verifier/types"
 	"gopkg.in/yaml.v3"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // defines expected PCR values for verification

@@ -135,8 +135,8 @@ func (s *Set) loadAndVerify(path string, cas []*x509.Certificate) error {
 // the CRL inside the file so operators can tell which block in a
 // multi-CRL bundle was rejected.
 func (s *Set) verifyAndAdd(path string, idx int,
-	crl *x509.RevocationList, cas []*x509.Certificate) error {
-
+	crl *x509.RevocationList, cas []*x509.Certificate,
+) error {
 	// RFC 5280 p5.1.2.5 marks NextUpdate as OPTIONAL at the ASN.1 level
 	// but mandates it for production profiles.
 	// Without NextUpdate the staleness check in Check() has no upper bound,

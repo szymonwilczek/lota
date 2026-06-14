@@ -396,7 +396,8 @@ func TestVerifyEKCertificateIgnoresTPMCriticalExtensions(t *testing.T) {
 // writeEKCRL emits a PEM CRL signed by root covering revokedSerials.
 // nextUpdate is honored so tests can construct stale feeds.
 func writeEKCRL(tb testing.TB, dir string, root certAndKey,
-	nextUpdate time.Time, revokedSerials ...*big.Int) string {
+	nextUpdate time.Time, revokedSerials ...*big.Int,
+) string {
 	tb.Helper()
 	var entries []x509.RevocationListEntry
 	for _, s := range revokedSerials {
