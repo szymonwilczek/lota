@@ -10,6 +10,7 @@ package verify
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -774,7 +775,13 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		// runs after a successful Commit too
+		// ErrTxDone is benign there
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.Warn("reanchor tx rollback failed", "client_id", clientID, "error", err)
+		}
+	}()
 
 	var (
 		oldPCR0, oldPCR1, oldPCR7 []byte

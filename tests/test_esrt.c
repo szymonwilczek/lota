@@ -11,6 +11,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -33,13 +34,19 @@ static int g_failures;
 static void write_file(const char *dir, const char *name, const char *val)
 {
 	char path[512];
+	int fd;
 	FILE *f;
 
 	snprintf(path, sizeof(path), "%s/%s", dir, name);
-	f = fopen(path, "we");
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return;
+	f = fdopen(fd, "w");
 	if (f) {
 		fputs(val, f);
 		fclose(f);
+	} else {
+		close(fd);
 	}
 }
 

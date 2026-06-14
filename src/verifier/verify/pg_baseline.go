@@ -861,7 +861,9 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("reanchor tx rollback failed", "client_id", clientID, "error", err)
+			}
 		}
 	}()
 	if err := lockClient(ctx, tx, clientID); err != nil {

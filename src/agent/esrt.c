@@ -56,8 +56,8 @@ static int parse_guid(const char *dir, uint8_t out[16])
 {
 	char path[512];
 	char text[64];
+	const char *p = text;
 	FILE *f;
-	size_t i;
 	int n = 0;
 
 	if (snprintf(path, sizeof(path), "%s/fw_class", dir) >=
@@ -72,15 +72,16 @@ static int parse_guid(const char *dir, uint8_t out[16])
 	}
 	fclose(f);
 
-	for (i = 0; text[i] && n < 16; i++) {
+	while (*p && n < 16) {
 		unsigned int byte;
-		if (text[i] == '-')
+		if (*p == '-') {
+			p++;
 			continue;
-		if (sscanf(text + i, "%2x", &byte) != 1)
+		}
+		if (sscanf(p, "%2x", &byte) != 1)
 			return -EINVAL;
 		out[n++] = (uint8_t)byte;
-		i++; /* consumed two hex chars
-			loop ++ advances past the second */
+		p += 2; /* one GUID byte = two hex chars */
 	}
 	return n == 16 ? 0 : -EINVAL;
 }
