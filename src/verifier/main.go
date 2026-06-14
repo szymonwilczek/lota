@@ -93,6 +93,7 @@ var (
 	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	selfServiceReanchor  = flag.Bool("enable-self-service-reanchor", false, "Diverse-fleet only: on a firmware/Secure Boot PCR drift, let the verifier re-pin the per-device boot baseline itself when the drift preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only takes effect under a policy with require_secureboot; leave off for the enterprise profile.")
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
+	allowUnpinnedAgent   = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
 	aikCACerts           stringSliceFlag
 	aikCRLs              stringSliceFlag
 	ekCRLsDeprecated     stringSliceFlag
@@ -186,6 +187,10 @@ func main() {
 		logger.Info("rejecting legacy baseline agent_hash backfills")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
+	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
+	if *allowUnpinnedAgent {
+		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
+	}
 
 	// resolve the Postgres DSN from flag or environment
 	// the env form keeps connection credentials out of the process argument list
