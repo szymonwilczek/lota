@@ -5,22 +5,21 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include <ctype.h>
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <link.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "lota.h"
 #include "lota_anticheat.h"

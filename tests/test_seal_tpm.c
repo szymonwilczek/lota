@@ -12,9 +12,10 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
+#include <stdint.h>
+#include <tss2/tss2_tpm2_types.h>
 
-#include "../src/agent/agent_internal.h"
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 #include "lota_seal.h"
 
 static int tests_run;

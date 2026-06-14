@@ -14,13 +14,12 @@
  */
 
 #include <errno.h>
-#include <fcntl.h>
-#include <linux/fsverity.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../include/lota.h"
 #include "../src/agent/hash_verify.h"

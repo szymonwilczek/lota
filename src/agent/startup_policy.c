@@ -4,12 +4,11 @@
 
 #include <errno.h>
 #include <string.h>
-
 #include <stdlib.h>
-#include <unistd.h>
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+#include <stdio.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_endian.h"

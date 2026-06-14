@@ -1,0 +1,8 @@
+# IWYU mapping:
+# SDL2 ships one public umbrella header <SDL.h>.
+# Every SDL_*.h is an implementation detail.
+# Map them back so include-cleaner keeps the documented umbrella
+# instead of splitting it.
+[
+  { include: ["@[\"<]SDL_.*[\">]", "private", "<SDL.h>", "public"] }
+]

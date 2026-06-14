@@ -8,12 +8,15 @@
 #include <sys/signalfd.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 #include "../../include/lota_ipc.h"
 #include "journal.h"
-#include "main_utils.h"
 #include "reload.h"
 #include "sdnotify.h"
+#include "bpf_loader.h"
+#include "dbus.h"
+#include "ipc.h"
 
 /*
  * Ringbuf drop telemetry.

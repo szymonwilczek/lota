@@ -13,9 +13,9 @@
 #include <openssl/pem.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <openssl/types.h>
 
 /*
  * EAUTH is not defined on all platforms ->

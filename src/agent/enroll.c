@@ -8,11 +8,11 @@
  * fields, each bounded before it is copied.
  */
 
-#include <endian.h>
 #include <errno.h>
 #include <string.h>
 
 #include "enroll.h"
+#include "lota_enroll.h"
 
 /* Bounded big-endian reader over a decoded frame body. */
 struct rd {

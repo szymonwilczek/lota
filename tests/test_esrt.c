@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "../src/agent/esrt.h"
+#include "attestation.h"
 
 static int g_failures;
 

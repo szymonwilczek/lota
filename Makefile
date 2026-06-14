@@ -309,7 +309,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag check-includes reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -442,6 +442,13 @@ check-version-tag:
 			fi; \
 		fi; \
 	fi
+
+# Include-hygiene gate
+# Fails on any header pulled in but not used directly (transitive dependency).
+# Drives clang-include-cleaner over a bear-built compile database.
+# See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
+check-includes:
+	@scripts/check-includes.sh
 
 # Install to system (requires root)
 install: check-version-tag all
@@ -711,6 +718,10 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 $(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 	@echo "Built: $@"
+
+# Build the unit/integration test binaries without running them. Used by
+# the include-hygiene gate so test sources are analyzed too.
+test-bins: $(TEST_BINS)
 
 # Full test suite (unit + integration + hardware)
 # Note: hardware tests require root. Run 'sudo make test-hardware' for them.
@@ -989,6 +1000,7 @@ help:
 	@echo "  sanitizer-build  Build CI-safe userspace artifacts under ASan/UBSan"
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
+	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""

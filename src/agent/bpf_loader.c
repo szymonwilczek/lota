@@ -16,11 +16,13 @@
 #include <sys/syscall.h>
 #include <sys/xattr.h>
 #include <unistd.h>
-
 #include <sys/ioctl.h>
-
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <bpf/libbpf_legacy.h>
+#include <linux/bpf.h>
+#include <stdarg.h>
+#include <sys/types.h>
 
 #include <linux/fsverity.h>
 #include <linux/openat2.h>

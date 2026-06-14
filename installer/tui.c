@@ -20,8 +20,6 @@
  */
 
 #include "tui.h"
-#include "probe.h"
-#include "run.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -35,6 +33,9 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+
+#include "ui.h"
 
 /* cell grid */
 

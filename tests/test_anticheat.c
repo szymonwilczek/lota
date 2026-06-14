@@ -13,8 +13,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <openssl/evp.h>
+#include <openssl/types.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "lota_anticheat.h"
 #include "lota_gaming.h"

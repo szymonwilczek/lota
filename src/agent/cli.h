@@ -15,6 +15,7 @@
 #define LOTA_AGENT_CLI_H
 
 #include <linux/limits.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 

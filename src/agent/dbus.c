@@ -6,17 +6,20 @@
  */
 
 #include "dbus.h"
-#include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
-#include "ipc.h"
-#include "journal.h"
 
 #include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <systemd/sd-bus.h>
 #include <unistd.h>
+#include <systemd/sd-bus-protocol.h>
+#include <systemd/sd-bus-vtable.h>
+#include <time.h>
+
+#include "../../include/lota.h"
+#include "../../include/lota_ipc.h"
+#include "ipc.h"
+#include "journal.h"
 
 struct dbus_context {
 	sd_bus *bus;

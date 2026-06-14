@@ -13,8 +13,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
 #include <openssl/evp.h>
+#include <errno.h>
+#include <openssl/types.h>
 
 #include "lota_endian.h"
 #include "lota_runtime_protect_digest.h"

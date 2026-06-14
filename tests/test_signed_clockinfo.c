@@ -20,11 +20,11 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
+#include <stdint.h>
+#include <tss2/tss2_common.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "../src/agent/tpm.h"
 

@@ -15,12 +15,13 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-
 #include <openssl/evp.h>
 #include <openssl/x509.h>
+#include <openssl/asn1.h>
+#include <openssl/crypto.h>
+#include <openssl/ec.h>
+#include <openssl/types.h>
 
 #include "../src/agent/aik_cert.h"
 

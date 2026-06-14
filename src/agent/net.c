@@ -8,9 +8,7 @@
  */
 
 #include "net.h"
-#include "journal.h"
 
-#include <arpa/inet.h>
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,13 +19,18 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
-
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
-#include <openssl/x509v3.h>
+#include <openssl/crypto.h>
+#include <openssl/prov_ssl.h>
+#include <openssl/types.h>
+#include <openssl/x509.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#include "../../include/attestation.h"
+#include "journal.h"
+#include "lota.h"
 
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30

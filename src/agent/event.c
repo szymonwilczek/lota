@@ -3,11 +3,11 @@
  * LOTA Agent - BPF ring buffer event handler
  */
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "../../include/lota.h"
 #include "agent.h"
@@ -15,6 +15,7 @@
 #include "hash_verify.h"
 #include "journal.h"
 #include "runtime_image_measure.h"
+#include "lota_runtime_image_measure.h"
 
 /*
  * Format SHA-256 hex string into buffer.

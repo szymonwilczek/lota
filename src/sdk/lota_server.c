@@ -14,14 +14,16 @@
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <openssl/types.h>
+#include <stdint.h>
 
 #include "../../include/lota_runtime_protect_digest.h"
 #include "../../include/lota_server.h"
 #include "../../include/lota_token_quote_nonce.h"
+#include "lota_token.h"
 
 #ifndef LOTA_SERVER_SDK_VERSION_STRING
 #define LOTA_SERVER_SDK_VERSION_STRING "unknown"

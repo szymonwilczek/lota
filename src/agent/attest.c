@@ -18,6 +18,9 @@
 #include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
+#include <openssl/types.h>
+#include <sys/types.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/attestation.h"
 #include "../../include/lota.h"
@@ -40,6 +43,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
+#include "iommu_types.h"
 
 /*
  * Select a boot measurement PCR that best represents the booted kernel path.

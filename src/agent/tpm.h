@@ -19,8 +19,12 @@
 #include <stdint.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tcti.h>
+#include <time.h>
+#include <tss2/tss2_common.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/lota.h"
+#include "quote.h"
 
 struct tpm_quote_response;
 

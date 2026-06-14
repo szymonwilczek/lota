@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <openssl/types.h>
 
 #define HASH_SIZE 32
 

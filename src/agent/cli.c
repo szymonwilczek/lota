@@ -10,10 +10,10 @@
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
-#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../include/lota.h"
 #include "agent.h"

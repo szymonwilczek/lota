@@ -31,12 +31,11 @@
 //
 // Copyright (C) 2026 Szymon Wilczek
 
-#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <tss2/tss2_mu.h>
+#include <tss2/tss2_tpm2_types.h>
 
 int LLVMFuzzerInitialize(int *argc, char ***argv);
 

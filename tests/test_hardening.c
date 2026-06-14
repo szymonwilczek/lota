@@ -9,20 +9,17 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include "../src/agent/hardening.h"
-
 #include <errno.h>
-#include <linux/audit.h>
+#include <linux/bpf_common.h>
+
+#include "../src/agent/hardening.h"
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/types.h>

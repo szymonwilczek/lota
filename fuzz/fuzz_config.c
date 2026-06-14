@@ -15,13 +15,12 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include "../src/agent/config.h"
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
+
+#include "../src/agent/config.h"
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 

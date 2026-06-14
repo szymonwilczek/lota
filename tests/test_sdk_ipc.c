@@ -8,8 +8,8 @@
  *   2. Run test:    ./build/test_sdk_ipc
  */
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "../include/lota_gaming.h"
 

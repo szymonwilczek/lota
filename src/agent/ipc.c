@@ -5,25 +5,11 @@
  */
 
 #include "ipc.h"
-#include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
-#include "dbus.h"
-#include "journal.h"
-#include "quote.h"
-#include "tpm.h"
-
-#include "agent.h"
-#include "runtime_image_measure.h"
-#include "startup_policy.h"
-
-#include "../../include/lota_runtime_protect_digest.h"
-#include "../../include/lota_token_quote_nonce.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <openssl/crypto.h>
-#include <openssl/evp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +20,20 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+
+#include "../../include/lota.h"
+#include "../../include/lota_ipc.h"
+#include "dbus.h"
+#include "journal.h"
+#include "quote.h"
+#include "tpm.h"
+#include "agent.h"
+#include "runtime_image_measure.h"
+#include "../../include/lota_runtime_protect_digest.h"
+#include "../../include/lota_token_quote_nonce.h"
+#include "bpf_loader.h"
+#include "lota_endian.h"
 
 #define MAX_EVENTS 64
 #define MAX_CONNECTED_CLIENTS 2048

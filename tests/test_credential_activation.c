@@ -17,7 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../src/agent/agent_internal.h"
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
 static int g_failures;
 

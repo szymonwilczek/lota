@@ -20,6 +20,7 @@
 #include <sys/types.h>
 
 #include "../../include/attestation.h"
+#include "lota.h"
 
 size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
 			     int with_esrt)
