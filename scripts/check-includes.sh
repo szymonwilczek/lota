@@ -23,8 +23,10 @@ cd "$(dirname "$0")/.."
 # public umbrella, so it wrongly reports the public header as unused.
 # Keep the idiomatic public headers and exempt that fixed set.
 # SDL ships one public <SDL.h>; its SDL_*.h are implementation detail.
+# systemd shuffles symbols between <systemd/sd-bus.h> and its sub-headers
+# across releases. exempt it.
 # This list mirrors the .clangd IgnoreHeader so the gate and the editor agree.
-IGNORE_HEADERS='SDL.*\.h,sys/types\.h,errno\.h,getopt\.h,unistd\.h,termios\.h,sys/time\.h,sys/socket\.h'
+IGNORE_HEADERS='SDL.*\.h,sys/types\.h,errno\.h,getopt\.h,unistd\.h,termios\.h,sys/time\.h,sys/socket\.h,systemd/sd-bus-protocol\.h'
 DB_DIR="build"
 DB="$DB_DIR/compile_commands.json"
 

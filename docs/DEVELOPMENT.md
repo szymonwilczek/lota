@@ -89,6 +89,11 @@ A few exemptions live in both `scripts/check-includes.sh` and the local
 - Library umbrellas (`<SDL.h>`, the TSS2 ESYS headers) whose granular
   sub-headers are implementation detail; the umbrella the code includes is
   kept via the mapping files under `scripts/iwyu/`.
+- `<systemd/sd-bus-protocol.h>`, whose symbols systemd relocates between
+  releases: `SD_BUS_NAME_REPLACE_EXISTING` sits in `<systemd/sd-bus.h>` on
+  systemd 255 (Ubuntu 24.04) but in `sd-bus-protocol.h` on 259 (Fedora 44),
+  so the header reads as used on one and unused on the other. It is exempted
+  instead of churned per systemd version.
 - The generated `include/vmlinux.h` and the BPF program (`src/bpf/`) are
   skipped: the host analyzer cannot model a `-target bpf` unit.
 
