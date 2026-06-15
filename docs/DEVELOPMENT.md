@@ -182,6 +182,24 @@ and a torn counter or window flip silently corrupts whatever the value gates.
 The fetch/CMPXCHG forms need kernel 5.12+ verifier support, which the BPF LSM
 floor already exceeds.
 
+### Device and inode identity
+
+The BPF programs identify a file by its `(device, inode)` pair and a device
+node by its `(major, minor)` numbers. Both come from kernel structures read in
+the hook: a regular file's filesystem device is `super_block->s_dev`, its inode
+number is `inode->i_ino`, and a character device's identity is
+`inode->i_rdev`. The kernel stores every `dev_t` in these fields in its MKDEV
+layout - a 20-bit minor with the major above it (`major = dev >> 20`,
+`minor = dev & 0xFFFFF`). `include/lota_devt.h` defines this layout once
+(`LOTA_DEVT_MAJOR`, `LOTA_DEVT_MINOR`, `LOTA_DEVT_MKDEV`) and the programs use
+it for both jobs:
+
+- The kernel-memory-device guard decodes `i_rdev` with `LOTA_DEVT_MAJOR` /
+  `LOTA_DEVT_MINOR` and blocks opening character major 1, minor 1/2/4
+  (`/dev/mem`, `/dev/kmem`, `/dev/port`).
+- The trusted-library maps are keyed by `(s_dev, i_ino)` taken verbatim from
+  the inode, so the key is already in the kernel MKDEV layout.
+
 ### Postgres-backed tests and the coverage ratchet
 
 Multi-instance verifier ships a Postgres backend (`jackc/pgx/v5`,
