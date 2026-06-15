@@ -22,8 +22,7 @@ one blank line.
 
 The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
 same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
-workflow. This keeps local contributor feedback aligned with the server-side
-gate.
+workflow.
 
 Use ``scripts/format-patch [<base> [<head>]]`` only to normalize local commit
 messages before pushing. It rewrites commits in ``base..head`` to remove
@@ -58,10 +57,5 @@ Scripts are split by audience: developer-workflow tooling (``check-*``,
 ``format-patch``, the CI gate scripts) maps to the contributor docs above,
 while operator provisioning and host bring-up scripts (``lota-*``,
 ``setup-fsverity.sh``) are deployment steps and map to the operator-facing
-`production bring-up <../../operator/production-bringup/index.rst>`_ and the
+:doc:`production bring-up <../../operator/production-bringup/index>` and the
 relevant example READMEs instead.
-
-Module and workspace manifests (``go.mod``, ``go.sum``, ``go.work``) map to
-this file rather than a runtime surface: a dependency or Go-directive change is
-a contributor concern, not a trust-model or integrator-contract change, so a
-dependency refresh does not drag in a security-doc edit.

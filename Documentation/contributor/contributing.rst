@@ -6,10 +6,8 @@ Contributing
 ============
 
 LOTA development happens on the ``lota-next`` integration branch. ``main``
-carries only stable released code.
-
-Open pull requests against ``lota-next`` - the branch model is documented in
-`branching.rst <branching.rst>`_.
+carries only stable released code. Open pull requests against ``lota-next``;
+the branch model is documented in :doc:`branching <branching>`.
 
 Security first
 ==============
@@ -88,7 +86,7 @@ Broaden validation when the change touches a wider surface:
 * SELinux policy: rebuild the module and inspect the resulting AVC behavior on
   an enforcing system.
 
-The full testing policy is in `development/index.rst <development/index.rst>`_.
+The full testing policy is in :doc:`development/index <development/index>`.
 
 Pull request expectations
 =========================

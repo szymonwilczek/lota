@@ -47,11 +47,11 @@ IMA appraisal, fs-verity, and the LOTA agent.
 
 The IMA appraisal requirement pins the kernel's appraisal *mode*
 (``ima_appraise=enforce|fix`` on the command line); the appraisal *content* --
-file signatures and the rule set -- is distribution- or operator-supplied (see
-`../operator/production-bringup/index.rst
-<../operator/production-bringup/index.rst>`_). LOTA ships no xattr-signing
-pipeline, and its own binaries are integrity-bound through fs-verity and the
-PCR14 boot commitment independent of IMA.
+file signatures and the rule set -- is distribution or operator-supplied (see
+:doc:`../operator/production-bringup/index <../operator/production-bringup/index>`).
+
+LOTA ships no xattr-signing pipeline, and its own binaries are integrity-bound through
+fs-verity and the PCR14 boot commitment independent of IMA.
 
 The agent is privileged. It owns TPM interaction, BPF LSM loading, runtime
 measurement, local IPC, D-Bus status, and attestation report construction.
@@ -67,7 +67,7 @@ The CA key is a high-value fleet secret. It is loaded as a ``crypto.Signer``,
 so both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11
 token (HSM or SoftHSM, built with the ``pkcs11`` tag) are supported. Production
 deployments hold the key in an HSM; the on-disk path is logged loudly and is
-never the production default. See `ca-key.rst <ca-key.rst>`_.
+never the production default. See :doc:`ca-key <ca-key>`.
 
 Verifier
 --------
@@ -81,7 +81,7 @@ The default store is SQLite for single-node deployments. A Postgres backend
 audit, attestation and session-token state in a shared database, so several
 verifier instances behind a load balancer share enforcement state and any
 instance validates a session token issued by any peer. See
-`../operator/ha-deployment.rst <../operator/ha-deployment.rst>`_ for the
+:doc:`../operator/ha-deployment <../operator/ha-deployment>` for the
 supported topologies.
 
 SDK consumer
@@ -102,13 +102,14 @@ Active threats
      - LOTA control
      - Residual risk
    * - Software-only fake attester
-     - Enrollment requires TPM 2.0 credential activation. The CA issues an AIK
-       certificate only after proving the AIK and EK live in the same TPM.
+     - | Enrollment requires TPM 2.0 credential activation.
+       | The CA issues an AIK certificate only after proving the AIK and EK live in the same TPM.
      - A verifier must run with the production CA trust root and certificate
        requirement enabled.
    * - Replayed attestation
-     - Verifier challenges are one-time nonces with expiry and used-nonce
-       tracking. The TPM quote covers a binding nonce.
+     - | Verifier challenges are one-time nonces with expiry and used-nonce
+         tracking.
+       | The TPM quote covers a binding nonce.
      - Clock and storage availability are operational dependencies for replay
        tracking.
    * - Agent-asserted report metadata
@@ -118,74 +119,76 @@ Active threats
      - Metadata outside that binding must not be promoted to security decisions
        without extending the binding.
    * - Firmware or Secure Boot drift
-     - Production policy pins PCR 0, PCR 1, and PCR 7 for homogeneous fleets.
-       Diverse fleets enroll each device's PCR 0/1/7 on first use, but only when
-       the event-log Secure Boot gate is active and the report proves Secure
-       Boot enabled; the per-device row then anchors rollback/consistency and
-       any later drift rejects.
-     - Firmware updates require deliberate policy rotation. Raw pins do not
-       scale to diverse single-machine populations; the event-log checks below
-       cover those. On the diverse-fleet path, firmware tampering that keeps
-       Secure Boot enabled and predates the device's first attestation is not
-       caught at first use -- firmware trust there rests on the Secure Boot and
-       command-line gates, not on the PCR 0/1 values. The agent additionally
-       reports the ESRT System Firmware version (telemetry) so a future
-       self-service re-anchor can use it as a firmware anti-rollback signal;
-       being firmware-reported it is meaningful only in combination with an
-       unchanged PCR 7 keyset, not as an independent control. A re-anchor
-       archives the superseded PCR 0/1/7 row rather than overwriting it, so a
-       re-baseline is auditable after the fact; on an HA deployment the archive
-       and the re-anchor bookkeeping live in the shared Postgres store so every
-       verifier instance sees the same history. The re-anchor discriminator
-       admits a drift only when it preserves the Secure Boot root of trust:
-       PK/KEK/db byte-identical by event-log replay, dbx append-only (revocation
-       can grow, never shrink), Secure Boot still enabled, and the firmware
-       version not rolled back; anything touching PK/KEK/db escalates to the
-       operator.
+     - | Production policy pins PCR 0, PCR 1, and PCR 7 for homogeneous fleets.
+       | Diverse fleets enroll each device's PCR 0/1/7 on first use, but only when
+         the event-log Secure Boot gate is active and the report proves Secure
+         Boot enabled.
+       | The per-device row then anchors rollback/consistency and any later drift
+        rejects.
+     - | Firmware updates require deliberate policy rotation.
+       | Raw pins do not scale to diverse single-machine populations; the event-log
+         checks below cover those.
+       | On the diverse-fleet path, firmware tampering that keeps Secure Boot enabled
+         and predates the device's first attestation is not caught at first use --
+         firmware trust there rests on the Secure Boot and command-line gates, not on
+         the PCR 0/1 values.
+       | The agent additionally reports the ESRT System Firmware version (telemetry) so
+         a future self-service re-anchor can use it as a firmware anti-rollback signal;
+         being firmware-reported it is meaningful only in combination with an unchanged
+         PCR 7 keyset, not as an independent control.
+       | A re-anchor archives the superseded PCR 0/1/7 row, so a re-baseline is auditable
+         after the fact; on an HA deployment the archive and the re-anchor bookkeeping
+         live in the shared Postgres store so every verifier instance sees the same history.
+       | The re-anchor discriminator admits a drift only when it preserves the Secure Boot
+         root of trust: PK/KEK/db byte-identical by event-log replay, dbx append-only
+         (revocation can grow, never shrink), Secure Boot still enabled, and the firmware
+         version not rolled back; anything touching PK/KEK/db escalates to the operator.
    * - Secure Boot disabled to boot a tampered kernel
-     - The verifier reads the firmware-measured ``SecureBoot`` variable from the
-       event log (PCR 7) and accepts it only when the log replay reproduces the
-       TPM-quoted PCR, so the value cannot be fabricated or stripped. The
-       agent-reported Secure Boot flag is telemetry only.
-     - Kernels signed for Secure Boot (including operator/MOK-signed) pass; the
-       control rejects unsigned boots, not signed-but-malicious kernels.
+     - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
+         event log (PCR 7) and accepts it only when the log replay reproduces the
+         TPM-quoted PCR, so the value cannot be fabricated or stripped.
+       | The agent-reported Secure Boot flag is telemetry only.
+     - | Kernels signed for Secure Boot (including operator/MOK-signed) pass.
+       | Control rejects unsigned boots, not signed-but-malicious kernels.
    * - Signed kernel sabotaged via command line (``init=``, ``rd.break``,
        ``lockdown=none``, ...)
-     - The verifier checks the GRUB-measured kernel command line (PCR 8 event
-       log, quote-bound) against a machine-independent parameter denylist; a
-       non-zero quoted PCR 8 with no measured command line is rejected as a
-       truncated log.
-     - GRUB-only today: systemd-boot/UKI hosts measure the command line into PCR
-       12 and skip this check (Secure Boot enforcement still applies). Denylist
-       coverage is enumerative, not semantic.
+     - | The verifier checks the GRUB-measured kernel command line (PCR 8 event
+         log, quote-bound) against a machine-independent parameter denylist.
+       | Non-zero quoted PCR 8 with no measured command line is rejected as a
+         truncated log.
+     - | GRUB-only today: systemd-boot/UKI hosts measure the command line into PCR
+         12 and skip this check (Secure Boot enforcement still applies).
+       | Denylist coverage is enumerative, not semantic.
    * - Agent binary drift
-     - PCR14 boot commitment and agent hash policy bind the agent image.
-       fs-verity protects the installed binary.
+     - | PCR14 boot commitment and agent hash policy bind the agent image.
+       | fs-verity protects the installed binary.
      - Replacing the agent binary requires cold reboot, fs-verity re-enable,
        policy update, and re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)
-     - Agent self-hash is bound into PCR 14, and ``agent_hashes`` in the policy
-       pins the official hash so a verifier rederives PCR 14 only for that
-       binary. Different hash fails the match. On the diverse-fleet path PCR 14
-       is dynamic and TOFU'd, so the verifier refuses a ``require_secureboot``
-       policy with empty ``agent_hashes`` (advisory ``kernel_hashes`` do not
-       substitute) unless ``--allow-unpinned-agent`` is set. Official hash comes
-       from the reproducible signed release.
+     - | Agent self-hash is bound into PCR 14, and ``agent_hashes`` in the policy
+         pins the official hash so a verifier rederives PCR 14 only for that
+         binary.
+       | Different hash fails the match.
+       | On the diverse-fleet path PCR 14 is dynamic and TOFU'd, so the verifier
+         refuses a ``require_secureboot`` policy with empty ``agent_hashes``
+         (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
+         is set.
+       | Official hash comes from the reproducible signed release.
      - Without a pinned ``agent_hash``, a first-use modified agent would TOFU its
        own hash and attest while skipping enforcement. Operator must populate
        ``agent_hashes`` (the default refuses the unpinned diverse-fleet policy).
    * - Early PCR14 tamper
-     - Initramfs PCR14 lock runs before normal userspace; udev and SELinux
-       restrict TPM device access; systemd ordering starts the agent before
-       login-capable targets.
-     - PCR14 is OS-writable by the PC Client Profile. Userspace cannot make that
-       race impossible on every platform.
+     - | Initramfs PCR14 lock runs before normal userspace.
+       | udev and SELinux restrict TPM device access.
+       | systemd ordering starts the agent before login-capable targets.
+     - | PCR14 is OS-writable by the PC Client Profile.
+       | Userspace cannot make that race impossible on every platform.
    * - Runtime image substitution
-     - BPF LSM gates executable mmap and mprotect for protected processes
-       against the fs-verity allow-list. The agent re-measures file-backed
-       executable mappings from the kernel side.
-     - Anonymous executable memory and JIT code are not measured as modules. The
-       intended bound is W^X plus policy enforcement.
+     - | BPF LSM gates executable mmap and mprotect for protected processes
+         against the fs-verity allow-list.
+       | The agent re-measures file-backed executable mappings from the kernel side.
+     - | Anonymous executable memory and JIT code are not measured as modules.
+       | Intended bound is W^X plus policy enforcement.
    * - ptrace or process mutation
      - BPF LSM hooks protect the agent and protected PIDs, including
        ``__ptrace_may_access`` where available.
@@ -194,7 +197,7 @@ Active threats
    * - Kernel module or memory-only load
      - Kernel lockdown, module signature enforcement, and BPF LSM gates reject
        unsafe load paths.
-     - A kernel vulnerability or disabled production gate is outside LOTA's
+     - Kernel vulnerability or disabled production gate is outside LOTA's
        software boundary.
    * - DMA attack
      - The agent reports IOMMU state and production policy can require it.
@@ -206,15 +209,16 @@ Active threats
      - A deployment must ship verified roots and the issuing intermediates for
        the supported TPM vendors or narrow supported hardware accordingly.
    * - Revoked or factorable endorsement key
-     - Enrollment checks the EK certificate against operator-loaded manufacturer
-       CRLs (SIGHUP-refreshable); a revoked EK, or one whose issuer has only
-       stale CRLs, is refused before credential activation. An EK whose RSA
-       modulus carries the ROCA (CVE-2017-15361) fingerprint is rejected
-       outright, independent of CRL coverage.
-     - An issuer with no configured CRL is not CRL-checked; operators must load
-       the feed for every manufacturer that publishes one. The
-       intrinsic-weakness check covers only ROCA; other key-generation flaws
-       need their manufacturer revocation feed.
+     - | Enrollment checks the EK certificate against operator-loaded manufacturer
+         CRLs (SIGHUP-refreshable).
+       | Revoked EK, or one whose issuer has only stale CRLs, is refused before
+         credential activation.
+       | An EK whose RSA modulus carries the ROCA (CVE-2017-15361) fingerprint is
+         rejected outright, independent of CRL coverage.
+     - | Issuer with no configured CRL is not CRL-checked:
+       | Operators must load the feed for every manufacturer that publishes one.
+       | The intrinsic-weakness check covers only ROCA; other key-generation flaws
+         need their manufacturer revocation feed.
    * - Supply-chain artifact swap
      - Reproducible builds and cosign-signed ``SHA256SUMS`` bind released
        artifacts to the source tag and release workflow identity.
@@ -241,18 +245,19 @@ STRIDE mapping
      - PCR policy, PCR14 boot commitment, fs-verity, signed BPF objects, BPF
        LSM gates, SELinux confinement.
    * - Repudiation
-     - Verifier logs attestation decisions, nonce use, baseline changes, and AIK
-       state. Release artifacts are signed through Sigstore.
+     - | Verifier logs attestation decisions, nonce use, baseline changes, and AIK
+         state.
+       | Release artifacts are signed through Sigstore.
    * - Information disclosure
-     - Verifiers receive CA-issued pseudonyms rather than EK certificates.
-       Reports should not expose EK material after enrollment.
+     - | Verifiers receive CA-issued pseudonyms rather than EK certificates.
+       | Reports should not expose EK material after enrollment.
    * - Denial of service
-     - Rate limits and nonce limits bound challenge pressure. Local enforcement
-       may intentionally fail closed when production gates are missing.
+     - | Rate limits and nonce limits bound challenge pressure.
+       | Local enforcement may intentionally fail closed when production gates are missing.
    * - Elevation of privilege
-     - LOTA reduces post-boot tamper paths through lockdown, module signing, BPF
-       LSM, SELinux, and ptrace restrictions. It does not replace the kernel's
-       own privilege boundary.
+     - | LOTA reduces post-boot tamper paths through lockdown, module signing, BPF
+         LSM, SELinux, and ptrace restrictions.
+       | It does not replace the kernel's own privilege boundary.
 
 Explicit non-goals
 ==================
@@ -317,8 +322,7 @@ Validation status
 =================
 
 The software paths are covered by local build, unit, fuzz, and integration
-tests as documented in `../contributor/development/index.rst
-<../contributor/development/index.rst>`_.
+tests as documented in :doc:`../contributor/development/index <../contributor/development/index>`.
 
 Hardware TPM validation remains required for release claims that depend on
 physical TPM behavior. swtpm validation is useful for protocol and regression
@@ -342,6 +346,5 @@ Production deployments must:
 * document operator recovery for AIK rotation, policy rotation, and legitimate
   binary updates.
 
-See `../operator/production-bringup/index.rst
-<../operator/production-bringup/index.rst>`_, ``policies/README.rst``, and
+See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, ``policies/README.rst``, and
 ``selinux/README.rst`` for the deployment details.

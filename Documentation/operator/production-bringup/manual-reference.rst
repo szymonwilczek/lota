@@ -8,8 +8,8 @@ Manual reference: host gates
 This is the manual equivalent of the developer bring-up script: the host-side
 gates an operator provisions before the agent will start. Attestation CA
 enrollment and sealed keys are covered in their own documents
-(`ca-enrollment.rst <ca-enrollment.rst>`_,
-`sealed-keys.rst <sealed-keys.rst>`_).
+(:doc:`ca-enrollment <ca-enrollment>`,
+:doc:`sealed-keys <sealed-keys>`).
 
 1. Operator key + signed BPF object
 ===================================
@@ -35,9 +35,10 @@ call into the build system for CI / packaging.
 
 .. code-block:: sh
 
-    # Filesystem must support fs-verity. ext4 needs the feature enabled at
-    # mkfs time or via `sudo tune2fs -O verity /dev/sdX` on an unmounted
-    # device. btrfs / f2fs ship verity in 5.15+.
+    # Filesystem must support fs-verity.
+    # ext4 needs the feature enabled at mkfs time
+    # or via `sudo tune2fs -O verity /dev/sdX` on an unmounted device.
+    # btrfs / f2fs ship verity in 5.15+.
     sudo fsverity enable /usr/bin/lota-agent
     sudo fsverity measure /usr/bin/lota-agent
 
@@ -62,7 +63,7 @@ built without ``CONFIG_IMA_READ_POLICY`` (Fedora 44's default).
 
 The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
-content -- the signatures on disk and the rule set -- is distribution- or
+content -- the signatures on disk and the rule set -- is distribution or
 operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
 appraisal policy**, and the kernel-floor check in the agent pins only the mode;
 LOTA's own binaries are integrity-bound through fs-verity and the PCR14 boot
@@ -104,7 +105,7 @@ device-add. After ``make install``:
 
     sudo udevadm control --reload-rules
     sudo udevadm trigger /dev/tpmrm0 /dev/tpm0
-    ls -lZ /dev/tpm0 /dev/tpmrm0           # expect lota_tpm_device_t
+    ls -lZ /dev/tpm0 /dev/tpmrm0                # expect lota_tpm_device_t
 
 5. AIK + PCR14 reset
 ====================

@@ -18,4 +18,4 @@ How the fuzzers work
   the code it covers, sharing the same ``fuzz_`` prefix as the C harnesses.
 * **Syzkaller** loads the production BPF LSM object and attaches every hook in
   enforce mode inside a guest, so ``syz-executor``'s syscalls actually traverse
-  the LOTA kernel surface (MODE A). It runs against ``lota-next``.
+  the LOTA kernel surface. It runs against ``lota-next``.

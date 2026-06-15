@@ -27,8 +27,8 @@ Baseline host
    * - Date
      - 2026-06-02
 
-All L1 figures are **single-threaded** (one core). Throughput is per-core; see
-the scaling note at the end.
+| All L1 figures are **single-threaded** (one core).
+| Throughput is per-core: see the scaling note at the end.
 
 L1 -- micro-benchmarks
 ======================

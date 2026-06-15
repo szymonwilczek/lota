@@ -22,10 +22,10 @@ New contributor or automated assistant
 Development happens on ``lota-next``. Open pull requests there, not against
 ``main``.
 
-* `Contribution rules <contributor/contributing.rst>`_
-* `Development and testing policy <contributor/development/index.rst>`_
-* `Branch and release flow <contributor/branching.rst>`_
-* `Code of Conduct <contributor/code-of-conduct.rst>`_
+* :doc:`Contribution rules <contributor/contributing>`
+* :doc:`Development and testing policy <contributor/development/index>`
+* :doc:`Branch and release flow <contributor/branching>`
+* :doc:`Code of Conduct <contributor/code-of-conduct>`
 
 Operator
 --------
@@ -33,9 +33,9 @@ Operator
 Production operation starts with the bring-up document. The agent
 intentionally fails closed when required gates are missing.
 
-* `Production bring-up <operator/production-bringup/index.rst>`_
-* `Player install (lota-install) <operator/player-install.rst>`_
-* `Verifier deployment topologies (HA) <operator/ha-deployment.rst>`_
+* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Player install (lota-install) <operator/player-install>`
+* :doc:`Verifier deployment topologies (HA) <operator/ha-deployment>`
 * PCR policy templates: ``policies/README.rst``
 * SELinux policy: ``selinux/README.rst``
 * EK root bundles: ``configs/ek-roots/README.rst``
@@ -46,12 +46,12 @@ Security reviewer or academic reviewer
 Start with the threat model and the reporting policy. Do not file public
 issues for exploitable vulnerabilities.
 
-* `Threat model <security/threat-model.rst>`_
-* `Security reporting <security/reporting.rst>`_
-* `Reproducible release verification <security/reproducible-builds.rst>`_
-* `Attestation CA signing key <security/ca-key.rst>`_
-* `Production bring-up <operator/production-bringup/index.rst>`_
-* `Performance evaluation <performance/evaluation.rst>`_
+* :doc:`Threat model <security/threat-model>`
+* :doc:`Security reporting <security/reporting>`
+* :doc:`Reproducible release verification <security/reproducible-builds>`
+* :doc:`Attestation CA signing key <security/ca-key>`
+* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Performance evaluation <performance/evaluation>`
 
 TPM or attestation engineer
 ---------------------------
@@ -60,9 +60,9 @@ The hardware trust contract centres on EK root validation, credential
 activation, AIK certificates, TPM quotes, PCR policy, and PCR14 boot
 commitment.
 
-* `Threat model <security/threat-model.rst>`_
-* `Attestation CA signing key <security/ca-key.rst>`_
-* `Production bring-up <operator/production-bringup/index.rst>`_
+* :doc:`Threat model <security/threat-model>`
+* :doc:`Attestation CA signing key <security/ca-key>`
+* :doc:`Production bring-up <operator/production-bringup/index>`
 * Enrollment example: ``examples/enrollment/README.rst``
 * EK root bundles: ``configs/ek-roots/README.rst``
 * PCR policy documentation: ``policies/README.rst``
@@ -74,8 +74,8 @@ The kernel-facing surface lives in the BPF LSM object, loader, runtime
 measurement path, initramfs PCR14 lock, SELinux policy, and the Syzkaller
 harness.
 
-* `Production bring-up <operator/production-bringup/index.rst>`_
-* `Kernel test policy <contributor/development/index.rst>`_
+* :doc:`Production bring-up <operator/production-bringup/index>`
+* :doc:`Kernel test policy <contributor/development/index>`
 * SELinux policy: ``selinux/README.rst``
 * Syzkaller harness: ``syzkaller/README.rst``
 * Runtime remeasurement example: ``examples/runtime_remeasure/README.rst``
@@ -100,7 +100,15 @@ Distribution maintainer
 Packaging must preserve the security contract. Release artifacts are
 reproducible and verified against signed manifests.
 
-* `Reproducible builds <security/reproducible-builds.rst>`_
-* `Release and branch flow <contributor/branching.rst>`_
-* `Production install gates <operator/production-bringup/index.rst>`_
+* :doc:`Reproducible builds <security/reproducible-builds>`
+* :doc:`Release and branch flow <contributor/branching>`
+* :doc:`Production install gates <operator/production-bringup/index>`
 * SELinux policy: ``selinux/README.rst``
+
+.. toctree::
+   :hidden:
+
+   contributor/index
+   operator/index
+   security/index
+   performance/index

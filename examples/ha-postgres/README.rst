@@ -11,9 +11,9 @@ state: a token issued by one instance validates on another, and a revocation or
 ban on one is enforced by all. This example stands two instances up against one
 Postgres so the shared-state behaviour can be observed without a full fleet.
 
-See ```Documentation/operator/ha-deployment.rst`` <../../Documentation/operator/ha-deployment.rst>`__ for the
+See `Documentation/operator/ha-deployment.rst <../../Documentation/operator/ha-deployment.rst>`_ for the
 topology and the shared-state requirements, and
-```examples/enrollment/`` <../enrollment>`__ for the CA + attestation ceremony
+`examples/enrollment/ <../enrollment>`__ for the CA + attestation ceremony
 this example reuses.
 
 .. _1-start-a-shared-postgres:
@@ -108,4 +108,4 @@ connection so it runs on one host. A production tier additionally:
 - uses real TLS material and ``sslmode=verify-full`` to a least-privilege
   Postgres role;
 - keeps the CA signing key in an HSM (see
-  ```Documentation/security/ca-key.rst`` <../../Documentation/security/ca-key.rst>`__).
+  `Documentation/security/ca-key.rst <../../Documentation/security/ca-key.rst>`_).

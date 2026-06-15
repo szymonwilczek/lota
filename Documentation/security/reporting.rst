@@ -63,7 +63,7 @@ publishing exploit details before the advisory date.
 
 When the issue affects a released artifact, the maintainer (Szymon Wilczek)
 publishes a GitHub Security Advisory and a signed release artifact manifest.
-See `reproducible-builds.rst <reproducible-builds.rst>`_ for release artifact
+See :doc:`reproducible-builds <reproducible-builds>` for release artifact
 verification.
 
 Security scope

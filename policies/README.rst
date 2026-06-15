@@ -236,8 +236,8 @@ against a known-good baseline. Three paths satisfy that contract:
    blocked -- but flags the device for post-fact operator review
    (``GET /api/v1/reanchor/review``, cleared with
    ``POST /api/v1/clients/{id}/reanchor-review-ack``). See
-   Documentation/operator/production-bringup/index.rst. This is a diverse-fleet convenience only; do not
-   enable it where raw PCR 0/1/7 are pinned in policy.
+   `Production Bringup <../Documentation/operator/production-bringup/index.rst>`_.
+   This is a diverse-fleet convenience only; do not enable it where raw PCR 0/1/7 are pinned in policy.
 
 A short-lived ``--allow-tofu-boot-baseline`` switch on the verifier exists for
 closed test fixtures. It explicitly weakens the contract above by accepting
@@ -271,7 +271,7 @@ the agent reports about itself:
   ``module.sig_enforce=0``). The cmdline rarely changes, so this stays
   low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
   pin 12 there instead of 8.
-- **``kernel_hashes`` is advisory only, not a trust control.** The value is the
+- **kernel_hashes is advisory only, not a trust control.** The value is the
   agent's userspace ``sha256(/boot/vmlinuz)``, self-reported by code running on
   the kernel, so a compromised kernel can spoof it. Leave it empty and rely on
   PCR 7 + PCR 8. A mismatch is at most a weak cross-check, never the boundary.

@@ -309,7 +309,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -430,6 +430,19 @@ reproducible-build: all
 clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
+
+# Documentation (Sphinx
+# Config and sources live under Documentation/
+# htmldocs builds strictly (-W)
+# docs-lint runs the reStructuredText linter
+htmldocs:
+	$(MAKE) -C Documentation html
+docs-lint:
+	$(MAKE) -C Documentation lint
+docs-linkcheck:
+	$(MAKE) -C Documentation linkcheck
+cleandocs:
+	$(MAKE) -C Documentation clean
 
 check-version-tag:
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
@@ -1064,6 +1077,12 @@ help:
 	@echo ""
 	@echo "Release targets:"
 	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see Documentation/security/reproducible-builds.rst)"
+	@echo ""
+	@echo "Documentation targets (Sphinx, see Documentation/conf.py):"
+	@echo "  htmldocs         Build HTML docs strictly (-W) into Documentation/_build"
+	@echo "  docs-lint        Lint reStructuredText sources (sphinx-lint)"
+	@echo "  docs-linkcheck   Verify documentation links resolve"
+	@echo "  cleandocs        Remove built documentation"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"

@@ -85,7 +85,7 @@ around them.
 * **swTPM persists state across guest reboots.** The TPM resource manager runs
   as a host process backed by an NV state file. A ``sudo reboot`` inside the
   guest does **not** reset the TPM and even
-  ``sudo virsh destroy fedora-lota && sudo virsh start fedora-lota`` from the
+  ``sudo virsh destroy <machine> && sudo virsh start <machine>`` from the
   host keeps the same ``resetCount`` unless the libvirt XML carries
   ``<backend ... persistent_state='no'/>`` or swTPM is started with
   ``--flags startup-clear``. The guest's PCR14 resets to all-zero on each
@@ -103,7 +103,7 @@ around them.
           sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true
       done
 
-* **The repo is virtiofs-mounted read-only at** ``/mnt/lota``. ``sudo make
+* **The repo is virtiofs-mounted read-only at** ``/mnt/<dir>``. ``sudo make
   install`` recurses into the ``all`` target through the
   ``install: check-version-tag all`` prerequisite, so ``make`` will try to write
   dependency files to ``build/`` in the current working directory and fail with
@@ -114,7 +114,7 @@ around them.
 
       sudo make BUILD_DIR=/var/tmp/lota-build install
 
-* **``sudo make install`` does not load the SELinux module.** The install rule
+* ``sudo make install`` **does not load the SELinux module.** The install rule
   lands ``lota.pp`` under the source tree but does not call ``semodule -i``.
   After any change to ``selinux/lota.te``, rebuild the module on the host (the
   in-tree ``selinux/Makefile`` writes to ``tmp/`` in the cwd, which the
@@ -125,7 +125,7 @@ around them.
       # [host]
       cd selinux && make && sha256sum lota.pp
       # [guest]
-      sudo semodule -i /mnt/lota/selinux/lota.pp
+      sudo semodule -i /mnt/<dir>/selinux/lota.pp
 
   Verify the rule landed with ``sesearch -A -s lota_agent_t ...`` before
   retrying the agent. The stock policy ``dontaudit``\ s many reads that the
@@ -133,7 +133,7 @@ around them.
   silent: run ``sudo semodule -DB`` before reproducing to surface them, then
   ``sudo semodule -B`` to re-enable.
 
-* **``/usr/bin/lota-agent`` must carry ``lota_agent_exec_t``.** A fresh
+* ``/usr/bin/lota-agent`` **must carry** ``lota_agent_exec_t``. A fresh
   ``make install`` writes the file with the default ``bin_t`` label on systems
   where the in-tree ``lota.fc`` has not been loaded yet; without the executable
   type, ``init_t`` does not transition to ``lota_agent_t`` at exec and the daemon

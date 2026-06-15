@@ -25,7 +25,7 @@ One verifier process owns its state. Two equivalent storage layouts exist:
   (``--nonce-db``); revocation, ban, audit and attestation state are in-memory.
   This is what a ``--require-cert`` deployment runs today without ``--db`` or
   ``--pg-dsn``.
-* **SQLite (``--db``).** All of the above persist to one SQLite file. This path
+* **SQLite** (``--db``). All of the above persist to one SQLite file. This path
   does not verify AIK certificate chains (``--require-cert`` is refused), so it
   suits TOFU-only test fleets, not production.
 
@@ -84,7 +84,7 @@ Shared-state requirements
   channel; they are not stored in the database.
 * **CA signing key.** The attestation CA is a separate service; its key handling
   (HSM/PKCS#11 or the dev-only PEM) is covered in
-  `../security/ca-key.rst <../security/ca-key.rst>`_.
+  :doc:`../security/ca-key <../security/ca-key>`.
 
 Scaling the read path
 ---------------------

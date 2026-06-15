@@ -7,7 +7,7 @@ LOTA player install (``lota-install``)
 
 ``lota-install`` is the player-side path onto a LOTA-attested host: one guided,
 reboot-resumable command instead of the operator checklist in
-`production-bringup/index.rst <production-bringup/index.rst>`_. It drives the
+:doc:`production-bringup/index <production-bringup/index>`. It drives the
 same hard requirements the agent enforces at startup, but it explains every
 change before making it, asks for consent, and survives the reboot the install
 inherently needs.
@@ -24,7 +24,7 @@ The three install surfaces and their audiences:
    * - ``lota-install``
      - Player on a single machine
      - Guided stages, consent prompts, reboot resume
-   * - `production bring-up <production-bringup/index.rst>`_
+   * - :doc:`production bring-up <production-bringup/index>`
      - Operator bringing up fleet hosts, CA and verifier
      - Full manual reference
    * - ``scripts/lota-dev-bringup.sh``
@@ -50,9 +50,9 @@ changing anything.
 * ``--plain`` disables the TUI for logs and scripting.
 
 On an interactive terminal ``lota-install`` is a full-screen application
-(alternate screen, like lazygit): a stage list on the left, a details pane
-explaining the selected stage, and an output pane streaming what every command
-actually does. The initial system probe runs before the screen takeover and its
+(alternate screen): a stage list on the left, a details pane explaining the selected
+stage, and an output pane streaming what every command actually does.
+The initial system probe runs before the screen takeover and its
 per-stage results stay in the scrollback. Nothing scrolls away and the layout
 follows terminal resizes. Keys:
 
@@ -63,20 +63,19 @@ follows terminal resizes. Keys:
    * - Key
      - Action
    * - ``up``/``down`` or ``j``/``k``
-     - select a stage
+     - Select a stage
    * - ``Enter``
-     - run the selected stage (centered dialog explains the change and asks
-       first)
+     - Run the selected stage (dialog explains the change and asks first)
    * - ``a``
-     - run every pending stage in order
+     - Run every pending stage in order
    * - ``y`` / ``n``
-     - answer the confirmation dialog
+     - Answer the confirmation dialog
    * - ``r``
-     - re-probe all stages
+     - Re-probe all stages
    * - ``PgUp``/``PgDn`` or ``Ctrl-U``/``Ctrl-D``
-     - scroll the output pane
+     - Scroll the output pane
    * - ``q``, ``Ctrl-C``
-     - quit (``Ctrl-C`` first aborts a running command)
+     - Quit (``Ctrl-C`` first aborts a running command)
 
 The original scrollback is restored on exit and a one-line result (complete /
 reboot required / re-run to continue) is printed to the normal screen. Without a
@@ -116,7 +115,7 @@ What the stages do
 #. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
    ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
    lacks them) to the boot entries via grubby. The floor pins the appraisal
-   *mode*. Signature content stays distribution- or operator-supplied (see the
+   *mode*. Signature content stays distribution or operator-supplied (see the
    production bring-up guide). Requires a reboot.
 #. **SELinux fence** -- loads the LOTA policy module if needed and re-triggers
    udev so ``/dev/tpm*`` carries the LOTA-only label.

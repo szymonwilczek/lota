@@ -65,7 +65,7 @@ contract. A few consequences worth stating plainly:
 
 * **Replaying a recurring good state is by design.** Rebooting into the same
   expected state releases the key every time. For offline DRM and at-rest
-  storage that is the whole point, not a rollback hole.
+  storage that is the whole point.
 * **A different (tampered) state fails closed.** A firmware, kernel, or agent
   change moves the bound PCRs and the unseal is denied.
 * **What PCR binding does** *not* **cover:** revoking an *old* secret version
@@ -77,5 +77,6 @@ monotonic-counter machinery (NV counters are a scarce, global TPM resource, and
 a compound PolicyPCR+PolicyNV path cannot be validated on the target hardware
 until the hardware bring-up above). If your use case *does* need downgrade
 protection, bind the secret to a TPM NV monotonic counter in addition to the
-PCRs and bump the counter to revoke. A complete, tested tpm2-tools recipe is in
-``examples/sealed-key/anti-rollback-recipe.sh``.
+PCRs and bump the counter to revoke.
+
+Complete, tested tpm2-tools recipe is in ``examples/sealed-key/anti-rollback-recipe.sh``.

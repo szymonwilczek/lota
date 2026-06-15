@@ -23,7 +23,7 @@ object - and binding the digest into the TPM-signed heartbeat nonce, so a
 verifier can tell when the running code of any module no longer matches the
 registered binaries.
 
-The canonical digest (see ``include/lota_anticheat.h``) measures every
+The canonical digest (see `include/lota_anticheat.h <../../include/lota_anticheat.h>`_) measures every
 file-backed object, excluding the kernel vDSO. Each object yields a
 content-only digest over its executable segments:
 

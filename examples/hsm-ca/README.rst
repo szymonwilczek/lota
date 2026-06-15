@@ -58,7 +58,7 @@ by the HSM key itself, through OpenSSL's PKCS#11 provider (``pkcs11-provider``
 
 A real HSM follows the same step against its own module and a key generated or
 imported under the operator's key ceremony (see
-```Documentation/operator/production-bringup/index.rst`` <../../Documentation/operator/production-bringup/index.rst>`__, "CA
+`Documentation/operator/production-bringup/index.rst <../../Documentation/operator/production-bringup/index.rst>`_, "CA
 signing key in an HSM").
 
 .. _3-run-the-ca-against-the-token:

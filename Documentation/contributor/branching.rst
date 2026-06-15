@@ -24,7 +24,7 @@ LOTA uses a two-branch model: a stable storefront and an integration branch.
   integration history is preserved. Done only by maintainers.
 * Stable releases are tagged here.
 
-See `reproducible-builds.rst <../security/reproducible-builds.rst>`_ for how a
+See :doc:`reproducible-builds <../security/reproducible-builds>` for how a
 tag is built and signed.
 
 ``lota-next`` as the integration branch
@@ -37,9 +37,9 @@ tag is built and signed.
 * The fuzzers and long-running CI (Syzkaller, configured separately) run
   against this branch.
 * The developer and testing policy lives in
-  `development/index.rst <development/index.rst>`_. ``README-NEXT.rst`` is a
-  short pointer to it, MUST be identical on both branches, so an integration
-  merge never touches it.
+  :doc:`development/index <development/index>`; ``README-NEXT.rst`` is a
+  short pointer to it, identical on both branches, so an integration merge
+  never touches it.
 
 Contributing
 ============

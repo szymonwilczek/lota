@@ -126,7 +126,7 @@ monotonic-counter machinery - NV counters are a scarce global TPM resource and
 add a compound-policy path with no consumer in the core. If your use case
 genuinely needs downgrade protection, bind the secret to a TPM NV monotonic
 counter *in addition* to the PCRs and bump the counter to revoke.
-```anti-rollback-recipe.sh`` <anti-rollback-recipe.sh>`__ is a complete, tested
+`anti-rollback-recipe.sh <anti-rollback-recipe.sh>`_ is a complete, tested
 tpm2-tools recipe that seals under ``PolicyPCR AND PolicyNV(counter <= now)``
 and shows the secret failing closed after the counter advances:
 
@@ -149,5 +149,5 @@ Hardening the agent's AIK auth
 The same primitive backs an opt-in at-rest hardening of the agent's own AIK
 userAuth. Enabling ``seal_aik_auth_strict`` in ``lota.conf`` stores the auth
 only sealed to the boot state, so a captured disk no longer yields it even to
-an attacker holding the same TPM. See the "Sealed keys" section of
-```Documentation/operator/production-bringup/index.rst`` <../../Documentation/operator/production-bringup/index.rst>`__.
+an attacker holding the same TPM. See the "Sealed keys" -
+`Documentation/operator/production-bringup/sealed-keys.rst <../../Documentation/operator/production-bringup/sealed-keys.rst>`_.

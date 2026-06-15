@@ -9,7 +9,7 @@ Startup gate matrix
 ===================
 
 The agent's startup chain refuses to load BPF / attach LSM programs unless
-every entry below is satisfied. Source references are file:line into the
+every entry below is satisfied. Source references are ``file::line`` into the
 current tree.
 
 .. list-table::
@@ -62,9 +62,9 @@ Automated developer bring-up
 
 .. code-block:: sh
 
-    sudo make install                                  # land agent + BPF + units
-    sudo scripts/lota-dev-bringup.sh                   # gate the host
-    sudo reboot                                        # PCR14 baseline rebind
+    sudo make install                                           # land agent + BPF + units
+    sudo scripts/lota-dev-bringup.sh                            # gate the host
+    sudo reboot                                                 # PCR14 baseline rebind
     sudo systemctl start lota-agent.socket lota-agent.service
     sudo systemctl status lota-agent.service --no-pager
 

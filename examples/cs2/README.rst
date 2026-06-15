@@ -52,7 +52,7 @@ Prerequisites
 One-time host setup
 -------------------
 
-1. **Create the ``lota`` group** and add the operator user to it. The agent
+1. **Create the** ``lota`` **group** and add the operator user to it. The agent
    socket is owned ``root:lota mode 0660``, and the Steam pressure-vessel
    container inherits the launching user's supplementary group set, so the hook
    can only ``connect()`` to the socket when the user is in the ``lota`` group:
@@ -61,11 +61,10 @@ One-time host setup
 
       sudo groupadd --system lota
       sudo usermod -aG lota "$USER"
-      # `newgrp lota` activates the group in the current shell
-      # without a full re-login; restart Steam from that shell so
-      # CS2 inherits the new group.
+      # newgrp lota - activates the group in the current shell without a full re-login
+      # restart Steam from that shell so CS2 inherits the new group
 
-2. **Pin ``XDG_RUNTIME_DIR`` for ``lota-agent.service``** so the agent's
+2. **Pin** ``XDG_RUNTIME_DIR`` for ``lota-agent.service`` so the agent's
    container-accessible secondary listener at
    ``$XDG_RUNTIME_DIR/lota/lota.sock`` comes up on boot. The systemd unit runs
    as root and inherits no ``XDG_RUNTIME_DIR``, so without the override only
@@ -141,7 +140,7 @@ One-time host setup
    entries, fs-verity on the agent binary, and the rest of the boot-time chain.
    Not yet implemented.
 
-3. **Run ``lota-steam-setup``** under the operator account (not root) to
+3. **Run** ``lota-steam-setup`` under the operator account (not root) to
    confirm the runtime preconditions:
 
    .. code:: sh
@@ -156,7 +155,7 @@ One-time host setup
 Wire it into CS2
 ----------------
 
-1. Open Steam, right-click ``Counter-Strike 2`` -> ``Properties...``.
+1. Open Steam, right-click ``Counter-Strike 2`` -> ``Properties``.
 
 2. Under **General -> Launch options**, paste:
 

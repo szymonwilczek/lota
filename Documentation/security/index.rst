@@ -8,10 +8,18 @@ Security
 Start with the threat model and the reporting policy. Do not file public
 issues for exploitable vulnerabilities.
 
-* `Threat model <threat-model.rst>`_ -- what LOTA protects, what it enforces,
+* :doc:`Threat model <threat-model>` -- what LOTA protects, what it enforces,
   and what is out of scope.
-* `Security reporting <reporting.rst>`_ -- how to report a vulnerability.
-* `Reproducible builds <reproducible-builds.rst>`_ -- rebuild a release and
+* :doc:`Security reporting <reporting>` -- how to report a vulnerability.
+* :doc:`Reproducible builds <reproducible-builds>` -- rebuild a release and
   verify its signature.
-* `Attestation CA signing key <ca-key.rst>`_ -- key ceremony, rotation, and
+* :doc:`Attestation CA signing key <ca-key>` -- key ceremony, rotation, and
   topology.
+
+.. toctree::
+   :hidden:
+
+   threat-model
+   reporting
+   reproducible-builds
+   ca-key

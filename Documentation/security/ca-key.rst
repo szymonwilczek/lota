@@ -9,8 +9,7 @@ The attestation CA's signing key is the trust anchor every issued AIK
 certificate chains to, and every verifier pins it (``--aik-ca-cert``). It is
 the highest-value secret in a LOTA deployment: whoever can sign with it can mint
 an AIK certificate the whole fleet trusts. Treat it accordingly -- keep it in an
-HSM (see `../operator/production-bringup/index.rst
-<../operator/production-bringup/index.rst>`_, "CA signing key in an HSM"), never
+HSM (see :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, "CA signing key in an HSM"), never
 on a daily-driver host, and gate access to it.
 
 How ``lota-attest-ca`` loads the key is covered in the bring-up guide; this

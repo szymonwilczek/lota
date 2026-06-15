@@ -20,19 +20,28 @@ kernel cmdline provisioned at install, IMA policy from
 This document is the operator/fleet reference. A player installing the agent on
 a single machine uses the guided, reboot-resumable ``lota-install`` instead --
 same gates, consent prompts and live-state probes -- see
-`../player-install.rst <../player-install.rst>`_, including the list of inputs
+:doc:`../player-install <../player-install>`, including the list of inputs
 the operator must ship for it.
 
 Contents
 ========
 
-* `Startup gate matrix and automated bring-up <gate-matrix.rst>`_ -- the gates
+* :doc:`Startup gate matrix and automated bring-up <gate-matrix>` -- the gates
   the agent enforces and the developer bring-up script.
-* `Manual reference: host gates <manual-reference.rst>`_ -- operator key, signed
+* :doc:`Manual reference: host gates <manual-reference>` -- operator key, signed
   BPF object, fs-verity, IMA, the TPM SELinux label, and the AIK / PCR14 reset.
-* `Attestation CA enrollment <ca-enrollment.rst>`_ -- standing up the CA,
+* :doc:`Attestation CA enrollment <ca-enrollment>` -- standing up the CA,
   enrolling a host, and the re-anchor and rotation surfaces.
-* `Sealed keys (offline local attestation) <sealed-keys.rst>`_ -- sealing
+* :doc:`Sealed keys (offline local attestation) <sealed-keys>` -- sealing
   secrets to boot state and anti-rollback.
-* `What still fails, and operational constraints <post-bringup.rst>`_ --
+* :doc:`What still fails, and operational constraints <post-bringup>` --
   post-bring-up failures, the dev-path threat model, and restart/VM caveats.
+
+.. toctree::
+   :hidden:
+
+   gate-matrix
+   manual-reference
+   ca-enrollment
+   sealed-keys
+   post-bringup

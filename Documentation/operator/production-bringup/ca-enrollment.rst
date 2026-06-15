@@ -88,8 +88,7 @@ key, so a wrong token or label cannot sign under the CA identity. ``-ca-key``
 and the ``-ca-key-pkcs11-*`` flags are mutually exclusive.
 
 The CA key ceremony, rotation, and the offline-root / online-intermediate
-topology are covered in `../../security/ca-key.rst
-<../../security/ca-key.rst>`_.
+topology are covered in :doc:`../../security/ca-key <../../security/ca-key>`.
 
 Materializing the EK root bundle
 --------------------------------
@@ -112,7 +111,9 @@ then materialize the bundle:
 
 ``lota-ek-root-pin.sh`` prints a fingerprint over what the network returned; it
 does not vouch for it, so confirm the pin against the vendor before the line
-enters ``sources``. See ``configs/ek-roots/README.rst`` for the full flow.
+enters ``sources``.
+
+See ``configs/ek-roots/README.rst`` for the full flow.
 
 Enrolling a host
 ================
@@ -146,8 +147,9 @@ Point every verifier at the CA root:
     lota-verifier -aik-ca-cert ca.crt ...
 
 A host that has not enrolled (no AIK certificate) is refused under the
-production ``--require-cert`` default. See ``examples/enrollment/README.rst`` for
-the full end-to-end walk-through.
+production ``--require-cert`` default.
+
+See ``examples/enrollment/README.rst`` for the full end-to-end walk-through.
 
 Self-service re-anchor (diverse-fleet profile)
 ==============================================

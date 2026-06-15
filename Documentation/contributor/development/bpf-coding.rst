@@ -23,10 +23,12 @@ NULL-init rule keeps acceptance independent of compiler layout.
 Cross-CPU map updates
 =====================
 
-State shared across CPUs through a plain (non-PERCPU) map must be updated with
-BPF atomics (``__sync_fetch_and_add``, ``__sync_val_compare_and_swap``, ...),
-never with read-modify-write C: each hook can run concurrently on every CPU,
-and a torn counter or window flip silently corrupts whatever the value gates.
+| State shared across CPUs through a plain (non-PERCPU) map must be updated with
+  BPF atomics (``__sync_fetch_and_add``, ``__sync_val_compare_and_swap``, ...),
+  never with read-modify-write C:
+| Each hook can run concurrently on every CPU, and a torn counter or window flip
+  silently corrupts whatever the value gates.
+
 The fetch/CMPXCHG forms need kernel 5.12+ verifier support, which the BPF LSM
 floor already exceeds.
 
@@ -35,9 +37,13 @@ Device and inode identity
 
 The BPF programs identify a file by its ``(device, inode)`` pair and a device
 node by its ``(major, minor)`` numbers. Both come from kernel structures read
-in the hook: a regular file's filesystem device is ``super_block->s_dev``, its
-inode number is ``inode->i_ino``, and a character device's identity is
-``inode->i_rdev``. The kernel stores every ``dev_t`` in these fields in its
+in the hook:
+
+* a regular file's filesystem device is ``super_block->s_dev``,
+* its inode number is ``inode->i_ino``,
+* and a character device's identity is ``inode->i_rdev``.
+
+The kernel stores every ``dev_t`` in these fields in its
 MKDEV layout -- a 20-bit minor with the major above it (``major = dev >> 20``,
 ``minor = dev & 0xFFFFF``). ``include/lota_devt.h`` defines this layout once
 (``LOTA_DEVT_MAJOR``, ``LOTA_DEVT_MINOR``, ``LOTA_DEVT_MKDEV``) and the programs
@@ -54,6 +60,3 @@ reports ``st_dev`` in the glibc encoding rather than the kernel MKDEV layout.
 The loader converts it with ``lota_devt_from_st()`` before writing a map key,
 so the user-space key and the kernel-side key built from ``s_dev`` are the same
 value and the lookup matches.
-
-``tests/test_devt`` pins both layouts: the MKDEV round-trip, the ``/dev/mem``
-major/minor decode and the ``st_dev`` conversion for a non-zero major.

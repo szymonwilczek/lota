@@ -39,7 +39,6 @@ Reporting
 
 Conduct issues can be reported to ``swilczek.lx@gmail.com``.
 
-Security vulnerabilities should follow `../security/reporting.rst
-<../security/reporting.rst>`_, not this process.
+Security vulnerabilities should follow :doc:`../security/reporting <../security/reporting>`, not this process.
 
 Reports are handled privately. Retaliation against a reporter is unacceptable.

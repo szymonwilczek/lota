@@ -84,7 +84,7 @@ bundle from the platforms you actually attest:
 
 The CA fails closed if any pinned manufacturer root is missing, mismatched, or
 unpinned, and requires at least one root source to start at all. See
-```configs/ek-roots/README.rst`` <../../configs/ek-roots/README.rst>`__ for the
+`configs/ek-roots/README.rst <../../configs/ek-roots/README.rst>`__ for the
 full discovery and verification flow.
 
 The script starts ``lota-verifier`` from a writable runtime directory
@@ -102,8 +102,9 @@ Notes for production
   ``--allow-permissive-policy``, ``--allow-tofu-boot-baseline`` and
   ``--allow-no-initramfs-lock`` so a fresh host passes without a pinned
   production policy. A real deployment loads a signed policy that pins PCR
-  0/1/7 and ships the 90lota dracut module; see ``Documentation/operator/production-bringup/index.rst``
-  and ``policies/``.
+  0/1/7 and ships the 90lota dracut module; see `Production Bringup
+  <../../Documentation/operator/production-bringup/index.rst>`_
+  and `policies/ <../../policies/README.rst>`_.
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should
   trust it gets ``--aik-ca-cert ca.crt``.

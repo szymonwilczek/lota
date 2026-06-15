@@ -9,19 +9,32 @@ All new work lands on the ``lota-next`` integration branch first.
 
 ``main`` carries only stable, released code.
 
-See `../branching.rst <../branching.rst>`_ for the full model and the release flow.
+See :doc:`../branching <../branching>` for the full model and the release flow.
 
 Contents
 ========
 
-* `Where the checks run <where-checks-run.rst>`_ -- CI triggers, Go toolchain, and dependency rules.
-* `Testing policy <testing-policy.rst>`_ -- test layers and the surface-specific contracts they pin.
-* `Local patch checks and the PR quality gate <patch-checks.rst>`_ --
+* :doc:`Where the checks run <where-checks-run>` -- CI triggers, the Go
+  toolchain, and dependency rules.
+* :doc:`Testing policy <testing-policy>` -- test layers and the
+  surface-specific contracts they pin.
+* :doc:`Local patch checks and the PR quality gate <patch-checks>` --
   ``check-patch``, ``format-patch``, and the hotpath documentation contract.
-* `How the fuzzers work <fuzzing.rst>`_ -- Go, C, and Syzkaller fuzzing.
-* `Release candidates and promotion <release-flow.rst>`_ -- cutting ``-rc``
+* :doc:`How the fuzzers work <fuzzing>` -- Go, C, and Syzkaller fuzzing.
+* :doc:`Release candidates and promotion <release-flow>` -- cutting ``-rc``
   tags and promoting to ``main``.
-* `BPF LSM program coding <bpf-coding.rst>`_ -- verifier-acceptance rules and
+* :doc:`BPF LSM program coding <bpf-coding>` -- verifier-acceptance rules and
   device/inode identity in the kernel programs.
-* `Cross-component contracts <contracts.rst>`_ -- wire-format, store-migration,
+* :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
   and installer-probe surfaces two components must keep in sync.
+
+.. toctree::
+   :hidden:
+
+   where-checks-run
+   testing-policy
+   patch-checks
+   fuzzing
+   release-flow
+   bpf-coding
+   contracts
