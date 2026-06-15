@@ -200,6 +200,12 @@ it for both jobs:
 - The trusted-library maps are keyed by `(s_dev, i_ino)` taken verbatim from
   the inode, so the key is already in the kernel MKDEV layout.
 
+The agent populates the trusted-library maps from user space, where `stat(2)`
+reports `st_dev` in the glibc encoding rather than the kernel MKDEV layout. The
+loader converts it with `lota_devt_from_st()` before writing a map key, so the
+user-space key and the kernel-side key built from `s_dev` are the same value
+and the lookup matches.
+
 ### Postgres-backed tests and the coverage ratchet
 
 Multi-instance verifier ships a Postgres backend (`jackc/pgx/v5`,
