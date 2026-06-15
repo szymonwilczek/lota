@@ -3,7 +3,7 @@
 #
 # WARNING: This template ships with the raw PCR pins commented out.
 # Pick a deployment shape before going live (see the `pcrs:` block
-# below and policies/README.md, "Boot enrollment ceremony"): pin real
+# below and policies/README.rst, "Boot enrollment ceremony"): pin real
 # PCR 0/1/7 values for a homogeneous fleet, or leave them unpinned for
 # a diverse fleet and let require_secureboot anchor the per-device
 # enrollment. On the diverse-fleet path (require_secureboot, no raw PCR
@@ -14,7 +14,7 @@
 # Verifier refuses such a policy unless started with --allow-unpinned-agent
 # (INSECURE)!
 #
-# Pin the official hash from the signed release (see BUILD-REPRODUCIBLE.md).
+# Pin the official hash from the signed release (see Documentation/security/reproducible-builds.rst).
 # Kernel_hashes are advisory and do not count.
 #
 # How to collect values:
@@ -50,13 +50,13 @@ description: "Production policy - customize PCR values for your environment"
 #     leave the pins commented out. PCR 0/1/7 differ per machine, so a
 #     raw pin can never match more than one device, and a raw PCR 8 pin
 #     hashes the per-machine root=UUID. Enrollment instead rides
-#     require_secureboot below (see policies/README.md, "Boot
+#     require_secureboot below (see policies/README.rst, "Boot
 #     enrollment ceremony", path 3) and the cmdline is enforced
 #     machine-independently by require_cmdline_policy. A later firmware
 #     update shifts each device's PCR 0/1; start the verifier with
 #     -enable-self-service-reanchor so a drift that preserves the Secure
 #     Boot root of trust re-pins the baseline without operator action
-#     (see PRODUCTION_BRINGUP.md). Do NOT enable it for a homogeneous
+#     (see Documentation/operator/production-bringup/index.rst). Do NOT enable it for a homogeneous
 #     fleet that pins raw PCR 0/1/7 above - there a drift is a real
 #     mismatch the operator should review.
 pcrs:

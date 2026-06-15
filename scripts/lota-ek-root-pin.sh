@@ -18,7 +18,7 @@
 #   <ek-cert>    EK certificate in DER or PEM, or - to read from stdin.
 #   output-dir   optional; the root PEM is written here (default: stdout).
 #
-# See configs/ek-roots/README.md for how EK certificates are read from a TPM.
+# See configs/ek-roots/README.rst for how EK certificates are read from a TPM.
 
 set -euo pipefail
 

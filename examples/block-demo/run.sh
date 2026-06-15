@@ -6,7 +6,7 @@
 # Assumes the operator has already brought up a full lota-agent
 # instance with the BPF LSM programs attached and the enforcement
 # mode set to enforce. The diagnostic --test-* paths do NOT load
-# BPF and cannot drive this demo; see README.md for the supported
+# BPF and cannot drive this demo; see README.rst for the supported
 # bring-up sequence.
 #
 # Stages:
@@ -47,7 +47,7 @@ done
 if [[ ! -S "$SOCKET" ]]; then
 	echo "[block-demo] agent socket not found: $SOCKET" >&2
 	echo "[block-demo] start lota-agent in enforce mode first;" >&2
-	echo "[block-demo] see examples/block-demo/README.md" >&2
+	echo "[block-demo] see examples/block-demo/README.rst" >&2
 	exit 2
 fi
 

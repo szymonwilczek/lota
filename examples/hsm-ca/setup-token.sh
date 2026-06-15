@@ -75,5 +75,5 @@ Build the CA with PKCS#11 support and point it at the token:
       -ek-root-bundle /var/lib/lota/ek-roots
 
 ca.crt must be a CA certificate bound to this token key -- see
-examples/hsm-ca/README.md for issuing it from the HSM key.
+examples/hsm-ca/README.rst for issuing it from the HSM key.
 EOF

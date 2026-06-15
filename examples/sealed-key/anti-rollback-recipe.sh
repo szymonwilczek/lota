@@ -18,7 +18,7 @@
 #   when you version and revoke sealed secrets -- which LOTA core does not.
 #   So the mechanism lives here as an operator recipe instead of as
 #   speculative machinery in the agent. See the "Anti-rollback" section of
-#   examples/sealed-key/README.md.
+#   examples/sealed-key/README.rst.
 #
 # The recipe seals a secret under a compound policy: PolicyPCR AND
 # PolicyNV(counter <= seal-time value). While the counter has not advanced,

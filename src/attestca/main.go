@@ -163,7 +163,7 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 		// Warn loudly so it is never mistaken for a default.
 		log.Warn("using on-disk CA signing key -- development-only fallback; "+
 			"hold the CA key in an HSM in production",
-			"flag", "-ca-key", "doc", "docs/PRODUCTION_BRINGUP.md")
+			"flag", "-ca-key", "doc", "Documentation/operator/production-bringup/index.rst")
 	}
 
 	var ekRootPEMs [][]byte

@@ -35,7 +35,7 @@
 #   # follow each "CA Issuers" URL up until issuer == subject (the root),
 #   # then: sha256sum root.der  -> the pin (after out-of-band confirmation).
 #
-# See configs/ek-roots/README.md for the full discovery and verification flow.
+# See configs/ek-roots/README.rst for the full discovery and verification flow.
 #
 # Two manufacturers publish a root over a channel you can verify and pin
 # directly; the lines below are starting hints, not active entries -- fill

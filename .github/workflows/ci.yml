@@ -269,8 +269,9 @@ jobs:
         # Shared CI runners are noisy, so this is a correctness gate - it
         # proves the cbench.h harness and every C benchmark build and run
         # without crashing, not a performance measurement. Tiny reps and a
-        # 64 KiB image keep it fast; real numbers live in docs/PERF.md on
-        # pinned hardware (see benchmarks/README.md).
+        # 64 KiB image keep it fast;
+        # real numbers live in Documentation/performance/evaluation.rst on
+        # pinned hardware (see benchmarks/README.rst)
         env:
           BENCH_REPS: "3"
           BENCH_TARGET_MS: "1"

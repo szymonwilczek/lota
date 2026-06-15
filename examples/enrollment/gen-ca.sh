@@ -9,7 +9,7 @@
 # It does NOT generate the TPM manufacturer EK roots -- those come from
 # your hardware vendor (Infineon/Intel/STM/...) or, for swTPM, from the
 # local swtpm CA. Point lota-attest-ca --ek-root at that file (see
-# run.sh / README.md).
+# run.sh / README.rst).
 
 set -euo pipefail
 

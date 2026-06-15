@@ -12,7 +12,7 @@
 # Usage:
 #   scripts/lota-ek-roots-update.sh <sources-file> <output-dir>
 #
-# See configs/ek-roots/README.md for the provisioning flow.
+# See configs/ek-roots/README.rst for the provisioning flow.
 
 set -euo pipefail
 

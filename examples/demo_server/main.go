@@ -23,7 +23,7 @@
 // HTTP on 127.0.0.1 so the operator can curl every endpoint without
 // bringing in a CA. Pass -tls-cert/-tls-key to serve HTTPS, and add
 // -client-ca to require a provisioned anti-cheat producer to present a
-// certificate (mutual TLS); see examples/mtls/README.md.
+// certificate (mutual TLS); see examples/mtls/README.rst.
 
 package main
 

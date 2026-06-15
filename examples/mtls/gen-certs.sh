@@ -17,7 +17,7 @@
 #   producer.crt / producer.key  anti-cheat producer identity (clientAuth)
 #
 # Rotation: re-run with -server or -producer to reissue just that leaf
-# against the existing CA, then restart the reissued side. See README.md.
+# against the existing CA, then restart the reissued side. See README.rst.
 
 set -euo pipefail
 
