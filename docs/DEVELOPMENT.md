@@ -206,6 +206,9 @@ loader converts it with `lota_devt_from_st()` before writing a map key, so the
 user-space key and the kernel-side key built from `s_dev` are the same value
 and the lookup matches.
 
+`tests/test_devt` pins both layouts: the MKDEV round-trip, the /dev/mem
+major/minor decode and the `st_dev` conversion for a non-zero major.
+
 ### Postgres-backed tests and the coverage ratchet
 
 Multi-instance verifier ships a Postgres backend (`jackc/pgx/v5`,
