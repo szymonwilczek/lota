@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Shared test fixtures for the Privacy CA attestation model: a test
 // attestation CA that issues AIK certificates whose subject carries the
 // device pseudonym, and a certificate-verifying AIK store that trusts it.

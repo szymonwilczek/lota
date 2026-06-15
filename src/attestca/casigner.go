@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - CA signing key source selection
 //
 // CA key is loaded as a crypto.Signer.

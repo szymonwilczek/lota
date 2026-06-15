@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Provision the mutual-TLS material that authenticates the anti-cheat
 # heartbeat producer to the game server and the game server back to the

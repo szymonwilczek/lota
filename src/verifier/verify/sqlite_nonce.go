@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Used Nonce Backend
 //
 // Persistent used nonce storage backed by SQLite.

@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 ==========================================
 Local patch checks and the PR quality gate
 ==========================================

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA attest-CA - Fuzz tests for the enrollment wire decoders.
 
 package wire

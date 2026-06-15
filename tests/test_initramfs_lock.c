@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Unit tests for the initramfs PCR14 lock helper's pure derivation.
  * Hardware TPM behaviour is covered by the production helper and

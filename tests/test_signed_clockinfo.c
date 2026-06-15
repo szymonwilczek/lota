@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 /*
  * Unit tests for the signed-clock TPMS_ATTEST parser exposed via
  * tpm_test_parse_signed_clockinfo() (LOTA_TPM_TESTING).

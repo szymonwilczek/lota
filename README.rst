@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 ==============================
 Linux Open Trusted Attestation
 ==============================
@@ -300,6 +303,16 @@ Communication and support
 Licensing
 =========
 
-Source files carry SPDX license identifiers. The userspace components are
-primarily MIT-licensed. Kernel-facing BPF and shared kernel-contract headers
-use GPL-2.0-only where required by the Linux kernel interface.
+Copyright (C) 2026 Szymon Wilczek.
+
+LOTA is dual-licensed:
+
+* The userspace components are licensed under the **MIT** license; the full
+  text is in `LICENSE <LICENSE>`_.
+* Kernel-facing BPF programs and the shared kernel-contract headers are
+  licensed **GPL-2.0-only** where required by the Linux kernel interface; the
+  full text is in `LICENSE.GPL-2.0-only <LICENSE.GPL-2.0-only>`_.
+
+Every source file carries an ``SPDX-License-Identifier`` naming the license
+that applies to it, so the license of any individual file is unambiguous
+regardless of which component it belongs to.

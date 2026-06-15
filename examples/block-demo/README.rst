@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 block-demo: evidence that LOTA blocks unauthorised code loads
 =============================================================
 

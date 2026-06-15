@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 Scenario: hook reacts when the agent goes down
 ==============================================
 

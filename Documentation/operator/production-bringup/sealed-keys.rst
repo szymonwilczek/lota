@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 =======================================
 Sealed keys (offline local attestation)
 =======================================

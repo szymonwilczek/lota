@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - self-hosted enrollment service
 //
 // Each LOTA adopter runs their own lota-attest-ca with their own CA

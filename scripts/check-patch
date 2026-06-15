@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Local contributor-side patch quality checker.
 #
 # This script checks the local commit range before a branch is pushed. It reuses

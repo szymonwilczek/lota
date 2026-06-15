@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - CRL load and revocation tests
 //
 // These exercise the CertificateStore wiring around the shared crl

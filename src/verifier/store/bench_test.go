@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Benchmark for the verifier's per-attestation AIK lookup. The verifier
 // resolves the client's registered AIK on every report it processes, so
 // GetAIK throughput bounds steady-state attestations/sec on the store side.

@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 .. _cs2--proton-hook-integration:
 
 CS2 / Proton hook integration

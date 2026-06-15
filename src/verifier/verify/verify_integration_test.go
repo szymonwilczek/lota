@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Integration Tests
 //
 // End-to-end tests for the complete attestation verification pipeline.

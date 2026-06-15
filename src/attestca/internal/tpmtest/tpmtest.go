@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Package tpmtest provides hardware-free test fixtures for the
 // attestation CA: a manufacturer root, EK certificates, AIK templates,
 // the operator CA material, and a software model of

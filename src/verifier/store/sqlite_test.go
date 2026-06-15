@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite AIK Store Tests
 //
 // Tests for SQLiteAIKStore implementing the AIKStore interface.

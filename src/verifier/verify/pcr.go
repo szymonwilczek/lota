@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PCR baseline verification module
 //
 // Verifies that PCR values match expected "golden" measurements.

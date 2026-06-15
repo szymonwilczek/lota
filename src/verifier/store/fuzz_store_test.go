@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Fuzz Tests for store package (certificates, client ID, hardware ID)
 
 package store

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Canonical device-number (dev_t) encoding shared by the BPF programs
  * and the user-space loader.

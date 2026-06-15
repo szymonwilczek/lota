@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 #ifndef LOTA_PATH_VALIDATE_H
 #define LOTA_PATH_VALIDATE_H
 

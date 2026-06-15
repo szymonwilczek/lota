@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 #ifndef LOTA_DAEMON_LOOP_H
 #define LOTA_DAEMON_LOOP_H
 

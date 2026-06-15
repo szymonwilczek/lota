@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Session token store
 //
 // Session token is the 32-byte HMAC tag the verifier hands back after a

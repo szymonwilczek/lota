@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 //
 // Fuzz the agent-side decoders for the CA's enrollment replies.
 //

@@ -1,3 +1,6 @@
+.. SPDX-License-Identifier: MIT
+.. Copyright (C) 2026 Szymon Wilczek
+
 Multi-instance verifier on a shared Postgres backend
 ====================================================
 

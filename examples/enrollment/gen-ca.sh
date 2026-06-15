@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Generate the trust material an operator hosts for the LOTA attestation
 # CA: the CA signing key and certificate (it signs AIK certificates), a

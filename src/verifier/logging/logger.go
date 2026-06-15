@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Structured Logging
 //
 // Provides structured logging for the verifier based on log/slog.

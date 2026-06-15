@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - enrollment wire protocol
 //
 // Four length-prefixed, big-endian messages carry one enrollment over a

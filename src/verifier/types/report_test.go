@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Wire Format Unit Tests
 //
 // Tests for binary report parsing and encoding.

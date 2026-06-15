@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA enrollment state - persist the CA endpoint a host last enrolled
  * against and the AIK generation the issued certificate is bound to.

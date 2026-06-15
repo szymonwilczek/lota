@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Fuzz Tests for nonce verification in TPMS_ATTEST
 
 package verify

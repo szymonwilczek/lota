@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Boot baseline (PCR 0/1/7) TOFU tests
 
 package verify

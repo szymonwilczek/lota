@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite AIK Store
 //
 // Persistent Attestation Identity Key storage backed by SQLite.

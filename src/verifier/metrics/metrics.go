@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Prometheus Metrics
 //
 // Metrics registry with Prometheus text exposition output.

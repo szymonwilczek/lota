@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TPMS_ATTEST Parser Unit Tests
 //
 // These tests verify correct parsing of TPM 2.0 attestation

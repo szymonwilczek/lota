@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Run the L1 micro-benchmark suite (C + Go) and, when benchstat is present,
 # print a per-module statistical summary. Raw output lands in

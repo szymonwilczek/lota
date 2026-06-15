@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT
+ * Copyright (C) 2026 Szymon Wilczek
  *
  * lota-install - Guided, reboot-resumable Player Install
  */

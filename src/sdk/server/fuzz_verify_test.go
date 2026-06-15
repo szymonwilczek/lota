@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA SDK - Fuzz Tests for token parsing and TPMS_ATTEST parsing
 
 package server

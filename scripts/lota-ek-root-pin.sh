@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Turn a live EK certificate into a candidate sources line for the EK root
 # bundle. Given an Endorsement Key certificate, the tool walks the

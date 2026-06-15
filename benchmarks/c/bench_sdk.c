@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * bench_sdk.c - microbenchmarks for the pure-CPU LOTA SDK hot paths.
  *

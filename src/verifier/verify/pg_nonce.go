@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL Used Nonce Backend
 //
 // Postgres counterpart of SQLiteUsedNonceBackend.

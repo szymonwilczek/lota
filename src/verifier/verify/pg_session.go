@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL Session Token Store
 //
 // Shared SessionTokenStore over the session_tokens table.

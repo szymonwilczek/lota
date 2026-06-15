@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Signature Verification Unit Tests
 //
 // Tests for TPM quote signature verification using real RSA keys.

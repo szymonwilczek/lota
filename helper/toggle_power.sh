@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 
 # Usage: ./toggle_power.sh [ON|OFF]
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Fuzz Tests for PCR policy YAML parsing and PEM key loading
 
 package verify

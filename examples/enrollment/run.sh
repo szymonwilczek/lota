@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # End-to-end Privacy CA enrollment demo on one host with a TPM (real or
 # swTPM). It stands up the attestation CA, enrolls the agent's AIK

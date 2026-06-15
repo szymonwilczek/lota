@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Anti-rollback for *versioned* sealed secrets, via a TPM NV monotonic
 # counter. Reference recipe, built on tpm2-tools (not lota-agent).

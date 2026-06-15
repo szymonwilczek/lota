@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Set up a SoftHSM token holding an RSA CA signing key for lota-attest-ca,
 # then print the flags that point the CA at it.

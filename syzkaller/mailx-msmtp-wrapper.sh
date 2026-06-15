@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Minimal mailx-compatible frontend for syz-manager crash mail.
 set -eu
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Privacy CA test fixtures for the server package: a test attestation CA
 // that issues AIK certificates carrying the device pseudonym, and a
 // certificate-verifying AIK store that trusts it.

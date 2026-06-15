@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA attest-CA - Fuzz test for AIK public-area decoding.
 
 package credential

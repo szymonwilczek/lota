@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Nonce/freshness verification module
 //
 // Ensures attestation reports are fresh and not replays.
