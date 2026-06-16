@@ -22,6 +22,7 @@
 #include <sys/types.h>
 
 #include "lota_runtime_image_measure.h"
+#include "lota.h"
 
 /*
  * One file-backed executable mapping selected for measurement.
@@ -84,6 +85,6 @@ int lota_rt_measure_entry_verity(pid_t pid,
  * one. Returns 0 on success.
  */
 int lota_runtime_measure_pid(
-    pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE]);
+	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE]);
 
 #endif /* LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H */

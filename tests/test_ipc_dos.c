@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * IPC DoS / Concurrency Test
  *
@@ -9,14 +10,7 @@
  *   2. Run test: ./build/test_ipc_dos
  */
 
-#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <time.h>
-#include <unistd.h>
 
 #include "../include/lota_gaming.h"
 

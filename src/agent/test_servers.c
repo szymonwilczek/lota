@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 
 #include "test_servers.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -14,6 +17,7 @@
 #include "main_utils.h"
 #include "sdnotify.h"
 #include "tpm.h"
+#include "config.h"
 
 int run_ipc_test_server(const struct lota_config *cfg)
 {
@@ -33,7 +37,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	valid_until = (uint64_t)(time(NULL) + 3600);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-			      LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
 			  valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);
@@ -111,7 +115,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	valid_until = (uint64_t)(time(NULL) + 3600);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-			      LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
+				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
 			  valid_until);
 	ipc_set_mode(&g_agent.ipc_ctx, LOTA_MODE_MONITOR);
 	ipc_record_attestation(&g_agent.ipc_ctx, true);

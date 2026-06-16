@@ -14,7 +14,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -25,21 +24,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-50s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 static char tmp_dir[128];
@@ -265,8 +264,8 @@ static void test_pidfile_rejects_symlink_path(void)
 	char linkpath[256];
 	int tfd;
 	int fd;
-	char before[32] = {0};
-	char after[32] = {0};
+	char before[32] = { 0 };
+	char after[32] = { 0 };
 	ssize_t n;
 
 	TEST("pidfile_create rejects symlink path");

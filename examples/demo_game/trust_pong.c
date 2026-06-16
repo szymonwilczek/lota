@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * trust_pong - LOTA gaming SDK reference demo.
  *
@@ -22,13 +23,9 @@
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
-
 #include <curl/curl.h>
 #include <SDL.h>
 
@@ -144,9 +141,9 @@ static char *extract_string(const char *body, const char *key)
  */
 static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 {
-	struct response_buf body = {0};
+	struct response_buf body = { 0 };
 	struct curl_slist *headers =
-	    curl_slist_append(NULL, "Content-Type: application/json");
+		curl_slist_append(NULL, "Content-Type: application/json");
 	char url[256];
 	snprintf(url, sizeof(url), "%s/nonce", opts->server_base);
 	curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -176,9 +173,8 @@ static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 	char *session = extract_string(body.data, "session_id");
 	free(body.data);
 	if (!nonce_b64 || !session) {
-		fprintf(
-		    stderr,
-		    "trust_pong: nonce handshake returned no session/nonce\n");
+		fprintf(stderr,
+			"trust_pong: nonce handshake returned no session/nonce\n");
 		free(nonce_b64);
 		free(session);
 		return -EIO;
@@ -196,8 +192,8 @@ static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 	 * the agent is up before the SDL2 window opens.
 	 */
 	struct lota_connect_opts copts = {
-	    .socket_path = opts->socket_path,
-	    .timeout_ms = 1500,
+		.socket_path = opts->socket_path,
+		.timeout_ms = 1500,
 	};
 	struct lota_client *client = lota_connect_opts(&copts);
 	if (!client) {
@@ -270,7 +266,7 @@ static void *poll_thread(void *arg)
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
 	while (!atomic_load(&g_poll_stop)) {
-		struct response_buf body = {0};
+		struct response_buf body = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_writer);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
 		CURLcode rc = curl_easy_perform(curl);
@@ -371,13 +367,12 @@ static int parse_cli(int argc, char **argv, struct cli_opts *opts)
 		} else if (!strcmp(a, "--socket") && i + 1 < argc) {
 			opts->socket_path = argv[++i];
 		} else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
-			fprintf(
-			    stderr,
-			    "Usage: %s [--server BASE_URL] [--game-id ID] "
-			    "[--socket PATH]\n"
-			    "Default server base: %s (the demo server's listen "
-			    "address, without the /endpoint suffix)\n",
-			    argv[0], opts->server_base);
+			fprintf(stderr,
+				"Usage: %s [--server BASE_URL] [--game-id ID] "
+				"[--socket PATH]\n"
+				"Default server base: %s (the demo server's listen "
+				"address, without the /endpoint suffix)\n",
+				argv[0], opts->server_base);
 			return 1;
 		} else {
 			fprintf(stderr, "trust_pong: unknown arg %s\n", a);
@@ -406,8 +401,8 @@ int main(int argc, char **argv)
 	if (handshake) {
 		if (initial_handshake(&opts, handshake) != 0) {
 			publish_verdict(
-			    UI_VERDICT_OFFLINE,
-			    "handshake failed - check agent + server");
+				UI_VERDICT_OFFLINE,
+				"handshake failed - check agent + server");
 		} else {
 			publish_verdict(UI_VERDICT_CHECKING,
 					"awaiting first heartbeat verdict");
@@ -436,11 +431,11 @@ int main(int argc, char **argv)
 	}
 
 	struct game_state g = {
-	    .paddle_y = (UI_WINDOW_H - UI_PADDLE_H) / 2,
-	    .ball_x = UI_WINDOW_W / 2,
-	    .ball_y = UI_WINDOW_H / 2,
-	    .ball_vx = 5,
-	    .ball_vy = 3,
+		.paddle_y = (UI_WINDOW_H - UI_PADDLE_H) / 2,
+		.ball_x = UI_WINDOW_W / 2,
+		.ball_y = UI_WINDOW_H / 2,
+		.ball_vx = 5,
+		.ball_vy = 3,
 	};
 
 	bool quit = false;
@@ -466,8 +461,8 @@ int main(int argc, char **argv)
 
 		tick_game(&g);
 
-		enum ui_verdict draw =
-		    g.frozen ? UI_VERDICT_FROZEN : snap.verdict;
+		enum ui_verdict draw = g.frozen ? UI_VERDICT_FROZEN :
+						  snap.verdict;
 		ui_begin_frame(&ui, draw);
 		ui_draw_banner(&ui, draw, snap.reason);
 		ui_draw_back_wall(&ui);

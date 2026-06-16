@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - enrollment wire protocol
 //
 // Four length-prefixed, big-endian messages carry one enrollment over a
@@ -191,12 +192,12 @@ func (d *decoder) u16() (uint16, error) {
 	return v, nil
 }
 
-func (d *decoder) bytes16(max int) ([]byte, error) {
+func (d *decoder) bytes16(maxLen int) ([]byte, error) {
 	n, err := d.u16()
 	if err != nil {
 		return nil, err
 	}
-	if int(n) > max {
+	if int(n) > maxLen {
 		return nil, ErrTooLarge
 	}
 	if d.off+int(n) > len(d.buf) {

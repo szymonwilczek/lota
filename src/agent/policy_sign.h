@@ -19,8 +19,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define POLICY_SIG_SIZE 64     /* Ed25519 signature size */
-#define POLICY_PUBKEY_SIZE 32  /* Ed25519 public key size */
+#define POLICY_SIG_SIZE 64 /* Ed25519 signature size */
+#define POLICY_PUBKEY_SIZE 32 /* Ed25519 public key size */
 #define POLICY_PRIVKEY_SIZE 32 /* Ed25519 private key seed size */
 
 /*

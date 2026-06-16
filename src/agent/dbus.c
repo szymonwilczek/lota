@@ -6,17 +6,20 @@
  */
 
 #include "dbus.h"
-#include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
-#include "ipc.h"
-#include "journal.h"
 
 #include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <systemd/sd-bus.h>
 #include <unistd.h>
+#include <systemd/sd-bus-protocol.h>
+#include <systemd/sd-bus-vtable.h>
+#include <time.h>
+
+#include "../../include/lota.h"
+#include "../../include/lota_ipc.h"
+#include "ipc.h"
+#include "journal.h"
 
 struct dbus_context {
 	sd_bus *bus;
@@ -238,9 +241,9 @@ static int method_ping(sd_bus_message *msg, void *userdata, sd_bus_error *error)
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
 		now_sec = (uint64_t)ts.tv_sec;
 
-	uptime = (now_sec >= ctx->ipc->start_time_sec)
-		     ? (now_sec - ctx->ipc->start_time_sec)
-		     : 0;
+	uptime = (now_sec >= ctx->ipc->start_time_sec) ?
+			 (now_sec - ctx->ipc->start_time_sec) :
+			 0;
 	return sd_bus_reply_method_return(msg, "tu", uptime,
 					  (uint32_t)getpid());
 }
@@ -255,10 +258,12 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 	struct dbus_context *ctx = userdata;
 	(void)error;
 
-	return sd_bus_reply_method_return(
-	    msg, "usttuu", ctx->ipc->status_flags, mode_string(ctx->ipc->mode),
-	    ctx->ipc->last_attest_time, ctx->ipc->valid_until,
-	    ctx->ipc->attest_count, ctx->ipc->fail_count);
+	return sd_bus_reply_method_return(msg, "usttuu", ctx->ipc->status_flags,
+					  mode_string(ctx->ipc->mode),
+					  ctx->ipc->last_attest_time,
+					  ctx->ipc->valid_until,
+					  ctx->ipc->attest_count,
+					  ctx->ipc->fail_count);
 }
 
 /*
@@ -278,10 +283,10 @@ static int method_get_rotation_status(sd_bus_message *msg, void *userdata,
 	(void)error;
 
 	return sd_bus_reply_method_return(
-	    msg, "tttttb", ctx->ipc->aik_generation,
-	    ctx->ipc->aik_provisioned_at, ctx->ipc->aik_last_rotated_at,
-	    ctx->ipc->aik_rotation_deadline, ctx->ipc->aik_grace_deadline,
-	    (int)ctx->ipc->aik_reenroll_required);
+		msg, "tttttb", ctx->ipc->aik_generation,
+		ctx->ipc->aik_provisioned_at, ctx->ipc->aik_last_rotated_at,
+		ctx->ipc->aik_rotation_deadline, ctx->ipc->aik_grace_deadline,
+		(int)ctx->ipc->aik_reenroll_required);
 }
 
 /*
@@ -299,9 +304,10 @@ static int method_get_token(sd_bus_message *msg, void *userdata,
 	struct dbus_context *ctx = userdata;
 
 	if (!(ctx->ipc->status_flags & LOTA_STATUS_ATTESTED)) {
-		return sd_bus_reply_method_errorf(
-		    msg, LOTA_DBUS_INTERFACE ".NotAttested",
-		    "System is not attested");
+		return sd_bus_reply_method_errorf(msg,
+						  LOTA_DBUS_INTERFACE
+						  ".NotAttested",
+						  "System is not attested");
 	}
 
 	/*
@@ -313,52 +319,55 @@ static int method_get_token(sd_bus_message *msg, void *userdata,
 }
 
 static const sd_bus_vtable agent_vtable[] = {
-    SD_BUS_VTABLE_START(0),
+	SD_BUS_VTABLE_START(0),
 
-    /* properties (read-only, emits-change on signal) */
-    SD_BUS_PROPERTY("StatusFlags", "u", prop_get_status_flags, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("Mode", "s", prop_get_mode, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("AttestCount", "u", prop_get_attest_count, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("FailCount", "u", prop_get_fail_count, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("LastAttestTime", "t", prop_get_last_attest_time, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("ValidUntil", "t", prop_get_valid_until, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("Version", "s", prop_get_version, 0,
-		    SD_BUS_VTABLE_PROPERTY_CONST),
+	/* properties (read-only, emits-change on signal) */
+	SD_BUS_PROPERTY("StatusFlags", "u", prop_get_status_flags, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("Mode", "s", prop_get_mode, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("AttestCount", "u", prop_get_attest_count, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("FailCount", "u", prop_get_fail_count, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("LastAttestTime", "t", prop_get_last_attest_time, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("ValidUntil", "t", prop_get_valid_until, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("Version", "s", prop_get_version, 0,
+			SD_BUS_VTABLE_PROPERTY_CONST),
 
-    /* AIK rotation state (read-only, emits-change on rotation) */
-    SD_BUS_PROPERTY("AikGeneration", "t", prop_get_aik_generation, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("AikProvisionedAt", "t", prop_get_aik_provisioned_at, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("AikLastRotatedAt", "t", prop_get_aik_last_rotated_at, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("AikRotationDeadline", "t", prop_get_aik_rotation_deadline,
-		    0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("AikGraceDeadline", "t", prop_get_aik_grace_deadline, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
-    SD_BUS_PROPERTY("ReenrollRequired", "b", prop_get_reenroll_required, 0,
-		    SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	/* AIK rotation state (read-only, emits-change on rotation) */
+	SD_BUS_PROPERTY("AikGeneration", "t", prop_get_aik_generation, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("AikProvisionedAt", "t", prop_get_aik_provisioned_at, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("AikLastRotatedAt", "t", prop_get_aik_last_rotated_at,
+			0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("AikRotationDeadline", "t",
+			prop_get_aik_rotation_deadline, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("AikGraceDeadline", "t", prop_get_aik_grace_deadline, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("ReenrollRequired", "b", prop_get_reenroll_required, 0,
+			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 
-    /* methods */
-    SD_BUS_METHOD("Ping", "", "tu", method_ping, SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
-		  SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("GetRotationStatus", "", "tttttb", method_get_rotation_status,
-		  SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
+	/* methods */
+	SD_BUS_METHOD("Ping", "", "tu", method_ping,
+		      SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_METHOD("GetStatus", "", "usttuu", method_get_status,
+		      SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_METHOD("GetRotationStatus", "", "tttttb",
+		      method_get_rotation_status, SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_METHOD("GetToken", "", "u", method_get_token, 0),
 
-    /* signals */
-    SD_BUS_SIGNAL("StatusChanged", "u", 0),
-    SD_BUS_SIGNAL("AttestationResult", "b", 0),
-    SD_BUS_SIGNAL("ModeChanged", "s", 0),
+	/* signals */
+	SD_BUS_SIGNAL("StatusChanged", "u", 0),
+	SD_BUS_SIGNAL("AttestationResult", "b", 0),
+	SD_BUS_SIGNAL("ModeChanged", "s", 0),
 
-    SD_BUS_VTABLE_END};
+	SD_BUS_VTABLE_END
+};
 
 struct dbus_context *dbus_init(struct ipc_context *ipc)
 {
@@ -450,9 +459,10 @@ void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
 			   "StatusChanged", "u", flags);
 
-	sd_bus_emit_properties_changed(
-	    ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE, "StatusFlags",
-	    "LastAttestTime", "ValidUntil", "AttestCount", "FailCount", NULL);
+	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				       LOTA_DBUS_INTERFACE, "StatusFlags",
+				       "LastAttestTime", "ValidUntil",
+				       "AttestCount", "FailCount", NULL);
 }
 
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
@@ -485,11 +495,12 @@ void dbus_emit_rotation_changed(struct dbus_context *ctx)
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_properties_changed(
-	    ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-	    "AikGeneration", "AikProvisionedAt", "AikLastRotatedAt",
-	    "AikRotationDeadline", "AikGraceDeadline", "ReenrollRequired",
-	    NULL);
+	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				       LOTA_DBUS_INTERFACE, "AikGeneration",
+				       "AikProvisionedAt", "AikLastRotatedAt",
+				       "AikRotationDeadline",
+				       "AikGraceDeadline", "ReenrollRequired",
+				       NULL);
 }
 
 void dbus_cleanup(struct dbus_context *ctx)

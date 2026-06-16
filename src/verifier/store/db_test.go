@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Database Tests
 //
 // Tests for schema migration system and database lifecycle

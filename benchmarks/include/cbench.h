@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * cbench.h - header-only C microbenchmark harness for LOTA.
  *
@@ -32,7 +33,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -89,12 +89,13 @@ static inline int cbench_header_done(void)
 }
 
 /* Run one benchmark and print a result row. */
-static inline void cbench_run(const char *suite, const char *name,
-			      cbench_fn fn, void *ctx)
+static inline void cbench_run(const char *suite, const char *name, cbench_fn fn,
+			      void *ctx)
 {
 	const size_t reps = cbench_envu("BENCH_REPS", 50);
 	const size_t warmup = cbench_envu("BENCH_WARMUP", 5);
-	const uint64_t target_ns = cbench_envu("BENCH_TARGET_MS", 5) * 1000000ull;
+	const uint64_t target_ns =
+		cbench_envu("BENCH_TARGET_MS", 5) * 1000000ull;
 
 	/* Calibrate: grow the batch until one run reaches the target time. */
 	size_t batch = 1;
@@ -141,8 +142,8 @@ static inline void cbench_run(const char *suite, const char *name,
 	if (!cbench_header_done())
 		printf("%-28s %12s %12s %12s %12s %14s\n", "benchmark",
 		       "median_ns", "p99_ns", "min_ns", "stddev", "ops/sec");
-	printf("%-28s %12.1f %12.1f %12.1f %12.1f %14.0f\n", name, median,
-	       p99, min, stddev, ops);
+	printf("%-28s %12.1f %12.1f %12.1f %12.1f %14.0f\n", name, median, p99,
+	       min, stddev, ops);
 
 	const char *jpath = getenv("BENCH_JSON");
 	if (jpath && *jpath) {
@@ -156,9 +157,12 @@ static inline void cbench_run(const char *suite, const char *name,
 		}
 		if (jf) {
 			fprintf(jf,
-				"{\"suite\":\"%s\",\"name\":\"%s\",\"median_ns\":%.3f,"
-				"\"p99_ns\":%.3f,\"min_ns\":%.3f,\"stddev_ns\":%.3f,"
-				"\"ops_per_sec\":%.1f,\"samples\":%zu,\"batch\":%zu}\n",
+				"{\"suite\":\"%s\",\"name\":\"%s\",\"median_"
+				"ns\":%.3f,"
+				"\"p99_ns\":%.3f,\"min_ns\":%.3f,\"stddev_ns\":"
+				"%.3f,"
+				"\"ops_per_sec\":%.1f,\"samples\":%zu,"
+				"\"batch\":%zu}\n",
 				suite, name, median, p99, min, stddev, ops,
 				reps, batch);
 			fclose(jf);

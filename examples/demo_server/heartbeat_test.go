@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 
 package main
 
@@ -19,8 +20,10 @@ import (
 	verifysdk "github.com/szymonwilczek/lota/sdk/server"
 )
 
-const testGameID = "trust-pong"
-const testLicense = "lota-demo-CS2-clone"
+const (
+	testGameID  = "trust-pong"
+	testLicense = "lota-demo-CS2-clone"
+)
 
 // testAnticheatExeDigest is a deterministic synthetic exe digest the
 // heartbeat tests use in place of an actual demo_anticheat binary
@@ -68,7 +71,8 @@ func newTestServer(t *testing.T, key *rsa.PrivateKey) *demoServer {
 }
 
 func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
-	mutate func(h *lachHeader)) []byte {
+	mutate func(h *lachHeader),
+) []byte {
 	t.Helper()
 
 	hdr := &lachHeader{

@@ -15,29 +15,29 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
-#include <unistd.h>
+#include <stdbool.h>
+#include <stdint.h>
 
-#include "../src/agent/agent_internal.h"
+#include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-58s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-58s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static char test_dir[96];

@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - CRL load and revocation tests
+//
+// These exercise the CertificateStore wiring around the shared crl
+// module (load at construction, lookup in the verify paths, SIGHUP
+// hot-swap).
+//
+// Unit tests for the canonicalisation and per-CRL gates live in the
+// crl module itself.
 
 package store
 
@@ -303,7 +311,8 @@ func writeCRLNoNextUpdate(t *testing.T, dir string, ca *x509.Certificate) string
 // after the first one.
 func writeBundledCRL(t *testing.T, dir string, ca *x509.Certificate,
 	caKey *rsa.PrivateKey, nextUpdate time.Time,
-	firstSerials, secondSerials []int64) string {
+	firstSerials, secondSerials []int64,
+) string {
 	t.Helper()
 
 	encodeOne := func(number int64, entries []int64) []byte {
@@ -378,7 +387,8 @@ func TestCRL_LoadAcceptsMultiBlockPEMBundle(t *testing.T) {
 // honored so the staleness gate does not short-circuit the algorithm
 // check.
 func writeCRLWithSigAlgOID(t *testing.T, dir string, ca *x509.Certificate,
-	sigAlgOID asn1.ObjectIdentifier, name string) string {
+	sigAlgOID asn1.ObjectIdentifier, name string,
+) string {
 	t.Helper()
 
 	algID := pkix.AlgorithmIdentifier{
@@ -545,170 +555,27 @@ func TestCRL_ReloadRejectsBadFeedKeepsPreviousSet(t *testing.T) {
 	}
 }
 
-// buildIssuerDER hand-marshals a single-RDN DN with the given CN
-// string and Country, so tests can drive the canonical-key matcher
-// with synthetic byte sequences that x509.CreateCertificate would
-// silently normalise away.
-func buildIssuerDER(t *testing.T, country, commonName string) []byte {
-	t.Helper()
-	seq := pkix.RDNSequence{
-		{
-			pkix.AttributeTypeAndValue{
-				Type:  asn1.ObjectIdentifier{2, 5, 4, 6}, // C
-				Value: country,
-			},
-		},
-		{
-			pkix.AttributeTypeAndValue{
-				Type:  asn1.ObjectIdentifier{2, 5, 4, 3}, // CN
-				Value: commonName,
-			},
-		},
-	}
-	der, err := asn1.Marshal(seq)
+// TestCRL_ReloadWithoutPathsIsNoOp covers the SIGHUP handler contract:
+// store constructed without CRL paths must treat ReloadCRLs() as
+// a successful no-op so the handler can blanket-call it without
+// branching on startup configuration.
+func TestCRL_ReloadWithoutPathsIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, _ := buildCA(t)
+	caPath := writeCert(t, dir, ca)
+
+	cs, err := NewCertificateStoreWithCRL(filepath.Join(dir, "aiks"),
+		[]string{caPath}, nil, true)
 	if err != nil {
-		t.Fatalf("marshal RDNSequence: %v", err)
-	}
-	return der
-}
-
-func TestCanonicalIssuerKey_StableAcrossWhitespaceAndCase(t *testing.T) {
-	a := buildIssuerDER(t, "us", "  LOTA   Privacy CA  ")
-	b := buildIssuerDER(t, "US", "lota privacy ca")
-
-	ka, err := canonicalIssuerKey(a)
-	if err != nil {
-		t.Fatalf("canonicalIssuerKey(a): %v", err)
-	}
-	kb, err := canonicalIssuerKey(b)
-	if err != nil {
-		t.Fatalf("canonicalIssuerKey(b): %v", err)
-	}
-	if ka != kb {
-		t.Fatalf("expected matching keys for the same logical DN; got\n  a=%q\n  b=%q",
-			ka, kb)
-	}
-}
-
-func TestCanonicalIssuerKey_DistinguishesDifferentDNs(t *testing.T) {
-	a := buildIssuerDER(t, "US", "LOTA Privacy CA")
-	b := buildIssuerDER(t, "US", "Some Other CA")
-
-	ka, _ := canonicalIssuerKey(a)
-	kb, _ := canonicalIssuerKey(b)
-	if ka == kb {
-		t.Fatal("different CN must produce different keys")
-	}
-}
-
-// TestCanonicalIssuerKey_StableAcrossMultiAVAOrder asserts that an
-// RDN with multiple AttributeTypeAndValue entries serialises to the
-// same key regardless of source order: RFC 5280 p4.1.2.4 leaves AVAs
-// inside a single RDN unordered.
-func TestCanonicalIssuerKey_StableAcrossMultiAVAOrder(t *testing.T) {
-	make := func(reverse bool) []byte {
-		// Multi-AVA RDN: CN + OU
-		ava1 := pkix.AttributeTypeAndValue{
-			Type:  asn1.ObjectIdentifier{2, 5, 4, 3}, // CN
-			Value: "lota ca",
-		}
-		ava2 := pkix.AttributeTypeAndValue{
-			Type:  asn1.ObjectIdentifier{2, 5, 4, 11}, // OU
-			Value: "trust",
-		}
-		var rdn pkix.RelativeDistinguishedNameSET
-		if reverse {
-			rdn = pkix.RelativeDistinguishedNameSET{ava2, ava1}
-		} else {
-			rdn = pkix.RelativeDistinguishedNameSET{ava1, ava2}
-		}
-		der, err := asn1.Marshal(pkix.RDNSequence{rdn})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		return der
-	}
-	ka, err := canonicalIssuerKey(make(false))
-	if err != nil {
-		t.Fatalf("canonicalIssuerKey forward: %v", err)
-	}
-	kb, err := canonicalIssuerKey(make(true))
-	if err != nil {
-		t.Fatalf("canonicalIssuerKey reverse: %v", err)
-	}
-	if ka != kb {
-		t.Fatalf("multi-AVA order must not affect the key; got\n  forward=%q\n  reverse=%q",
-			ka, kb)
-	}
-}
-
-// TestCRL_LoadAcceptsCanonicalIssuerDriftFromCA covers the load-time
-// canonicalIssuerKey match path. A CA that re-encodes its Subject DN
-// between issuing its own certificate and signing a CRL refresh
-// produces byte-different RawSubject vs RawIssuer for the same logical
-// issuer. The previous byte-equal gate would have dropped the CRL at
-// load time and silently landed the leaf check on the "no CRL
-// configured for this issuer" fail-open branch. With the canonical
-// gate the load must accept and the revocation must take effect.
-func TestCRL_LoadAcceptsCanonicalIssuerDriftFromCA(t *testing.T) {
-	ca, caKey := buildCA(t)
-
-	// CRL is built and signed first so RawIssuer captures the
-	// canonical DER emitted by x509.CreateRevocationList. The CRL
-	// signature is computed over its own TBS using caKey, so
-	// CheckSignatureFrom() validates against ca.PublicKey
-	// regardless of any later mutation to ca.RawSubject.
-	const revokedSerial = 0x7E51
-	tmpl := &x509.RevocationList{
-		SignatureAlgorithm: x509.SHA256WithRSA,
-		Number:             big.NewInt(11),
-		ThisUpdate:         time.Now().Add(-time.Hour),
-		NextUpdate:         time.Now().Add(time.Hour),
-		RevokedCertificateEntries: []x509.RevocationListEntry{
-			{
-				SerialNumber:   big.NewInt(revokedSerial),
-				RevocationTime: time.Now().Add(-time.Minute),
-			},
-		},
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, tmpl, ca, caKey)
-	if err != nil {
-		t.Fatalf("CreateRevocationList: %v", err)
-	}
-	crl, err := x509.ParseRevocationList(crlDER)
-	if err != nil {
-		t.Fatalf("ParseRevocationList: %v", err)
+		t.Fatalf("store init: %v", err)
 	}
 
-	// Inject case drift into the CommonName string inside
-	// ca.RawSubject so it stays a valid DER encoding of the same
-	// logical DN but byte-differs from crl.RawIssuer. The mutation
-	// runs only over the printable value bytes of the embedded
-	// CN, never over tag/length headers or OID bytes, so the
-	// surrounding ASN.1 structure stays well-formed.
-	const cnNeedle = "LOTA CRL Test CA"
-	idx := bytes.Index(ca.RawSubject, []byte(cnNeedle))
-	if idx < 0 {
-		t.Fatalf("expected %q inside ca.RawSubject", cnNeedle)
+	if err := cs.ReloadCRLs(); err != nil {
+		t.Fatalf("ReloadCRLs without configured paths must no-op, got %v", err)
 	}
-	mutated := make([]byte, len(ca.RawSubject))
-	copy(mutated, ca.RawSubject)
-	// Lower-case the first letter of "LOTA" inside the CN value.
-	mutated[idx] = 'l'
-	if bytes.Equal(mutated, ca.RawSubject) {
-		t.Fatal("mutated RawSubject still byte-equal to original")
-	}
-	ca.RawSubject = mutated
-
-	set := newRevocationListSet()
-	if err := set.verifyAndAdd("synthetic.pem", 0, crl, []*x509.Certificate{ca}); err != nil {
-		t.Fatalf("verifyAndAdd: %v", err)
-	}
-
-	// Confirm the loaded CRL is indexed under the canonical key the
-	// lookup path computes from the leaf cert's Issuer.
-	if set.size() != 1 {
-		t.Fatalf("expected 1 CRL in set, got %d", set.size())
+	if cs.CRLCount() != 0 {
+		t.Fatalf("expected 0 CRLs after no-op reload, got %d", cs.CRLCount())
 	}
 }
 

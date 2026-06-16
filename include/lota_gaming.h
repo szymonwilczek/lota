@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Gaming SDK
  *
@@ -81,7 +82,7 @@ enum lota_error {
  */
 #define LOTA_EVENT_STATUS (1U << 0) /* Status flags changed */
 #define LOTA_EVENT_ATTEST (1U << 1) /* Attestation completed (pass/fail) */
-#define LOTA_EVENT_MODE (1U << 2)   /* Enforcement mode changed */
+#define LOTA_EVENT_MODE (1U << 2) /* Enforcement mode changed */
 #define LOTA_EVENT_ALL 0xFFFFFFFFU
 
 /*
@@ -93,12 +94,12 @@ struct lota_client;
  * Status information
  */
 struct lota_status {
-	uint32_t flags;		   /* LOTA_FLAG_* bitmask */
+	uint32_t flags; /* LOTA_FLAG_* bitmask */
 	uint64_t last_attest_time; /* Unix timestamp of last successful
 				      attestation */
-	uint64_t valid_until;  /* Token validity expiration (Unix timestamp) */
+	uint64_t valid_until; /* Token validity expiration (Unix timestamp) */
 	uint32_t attest_count; /* Total successful attestations */
-	uint32_t fail_count;   /* Total failed attestations */
+	uint32_t fail_count; /* Total failed attestations */
 };
 
 /*
@@ -114,11 +115,11 @@ struct lota_status {
  */
 struct lota_token {
 	uint64_t valid_until; /* Token expiration (Unix timestamp) */
-	uint32_t flags;	      /* Status flags at issue time */
-	uint8_t nonce[32];    /* Client nonce (if provided) */
+	uint32_t flags; /* Status flags at issue time */
+	uint8_t nonce[32]; /* Client nonce (if provided) */
 
 	/* TPM Quote data */
-	uint16_t sig_alg;  /* Signature algorithm (TPM2_ALG_RSASSA/RSAPSS) */
+	uint16_t sig_alg; /* Signature algorithm (TPM2_ALG_RSASSA/RSAPSS) */
 	uint16_t hash_alg; /* Hash algorithm (TPM2_ALG_SHA256) */
 	uint32_t pcr_mask; /* PCRs included in quote */
 
@@ -130,10 +131,8 @@ struct lota_token {
 
 	/* SHA-256 over canonical runtime protected PID set. */
 	uint8_t runtime_protect_digest[32];
-	uint64_t
-	    runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
-	uint16_t
-	    runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
+	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
 
@@ -144,8 +143,8 @@ struct lota_token {
 	uint8_t (*protected_image_digests)[32];
 
 	uint8_t *attest_data; /* TPMS_ATTEST blob (heap allocated) */
-	size_t attest_size;   /* Size of attest_data */
-	uint8_t *signature;   /* TPM signature (heap allocated) */
+	size_t attest_size; /* Size of attest_data */
+	uint8_t *signature; /* TPM signature (heap allocated) */
 	size_t signature_len; /* Signature length in bytes */
 };
 

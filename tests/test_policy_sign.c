@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
 
 #include "../src/agent/policy_sign.h"
 
@@ -25,21 +26,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-50s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /* temp directory for test artifacts */
@@ -482,8 +483,8 @@ static void test_sign_file_nonexistent(void)
 	snprintf(sig_path, sizeof(sig_path), "%s/nosrc.sig", tmpdir);
 	policy_sign_generate_keypair(priv, pub);
 
-	ret =
-	    policy_sign_file("/tmp/lota_nonexistent_xyz.yaml", priv, sig_path);
+	ret = policy_sign_file("/tmp/lota_nonexistent_xyz.yaml", priv,
+			       sig_path);
 	if (ret == 0) {
 		FAIL("expected failure for nonexistent file");
 		return;

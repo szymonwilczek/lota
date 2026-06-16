@@ -9,33 +9,35 @@
 #ifndef LOTA_ATTESTATION_H
 #define LOTA_ATTESTATION_H
 
-#include "iommu_types.h"
-#include "lota.h"
 #include <stdint.h>
 #include <sys/types.h>
+#include <stddef.h>
+
+#include "iommu_types.h"
+#include "lota.h"
 
 /*
  * Attestation report header
  */
 struct lota_report_header {
-	uint32_t magic;	  /* LOTA_MAGIC */
+	uint32_t magic; /* LOTA_MAGIC */
 	uint32_t version; /* LOTA_VERSION */
 
 	uint32_t report_size; /* Total size including variable data */
-	uint32_t flags;	      /* Report flags */
+	uint32_t flags; /* Report flags */
 } __attribute__((packed));
 
 /* Report flags */
-#define LOTA_REPORT_FLAG_IOMMU_OK (1U << 0)	/* IOMMU verification passed */
+#define LOTA_REPORT_FLAG_IOMMU_OK (1U << 0) /* IOMMU verification passed */
 #define LOTA_REPORT_FLAG_TPM_QUOTE_OK (1U << 1) /* TPM quote succeeded */
-#define LOTA_REPORT_FLAG_KERNEL_HASH_OK                                        \
+#define LOTA_REPORT_FLAG_KERNEL_HASH_OK \
 	(1U << 2) /* Boot measurement digest captured (kernel-relevant PCR) */
 #define LOTA_REPORT_FLAG_BPF_ACTIVE (1U << 3) /* eBPF LSM is loaded */
 #define LOTA_REPORT_FLAG_MODULE_SIG (1U << 4) /* Kernel enforces module sigs*/
-#define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5)   /* Kernel lockdown active */
+#define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5) /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
-#define LOTA_REPORT_FLAG_ENFORCE (1U << 7)    /* LSM enforce mode active */
-#define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1                                    \
+#define LOTA_REPORT_FLAG_ENFORCE (1U << 7) /* LSM enforce mode active */
+#define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 \
 	(1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
 /*
  * Source-compatible alias for pre-negotiation code. The bit is not a
@@ -199,9 +201,24 @@ struct lota_system_measurement {
  */
 struct lota_bpf_summary {
 	uint32_t total_exec_events; /* Total exec events since agent start */
-	uint32_t unique_binaries;   /* Unique binary hashes seen */
-	uint64_t first_event_ts;    /* Timestamp of first event */
-	uint64_t last_event_ts;	    /* Timestamp of last event */
+	uint32_t unique_binaries; /* Unique binary hashes seen */
+	uint64_t first_event_ts; /* Timestamp of first event */
+	uint64_t last_event_ts; /* Timestamp of last event */
+} __attribute__((packed));
+
+/*
+ * ESRT System Firmware descriptor (EFI System Resource Table, fw_type == 1).
+ * Carries the firmware version the verifier uses as an anti-rollback signal
+ * for self-service re-anchor.
+ * present == 0 when the platform exposes no ESRT (common on DIY boards),
+ * which routes the host onto the verifier's Low-Firmware-Assurance path.
+ * Wire size is fixed at 28 bytes.
+ */
+struct lota_esrt {
+	uint32_t present; /* 1 if a System Firmware entry was found */
+	uint32_t fw_version; /* ESRT fw_version */
+	uint32_t lowest_supported; /* lowest_supported_fw_version */
+	uint8_t fw_class[16]; /* fw_class GUID (raw 16 bytes) */
 } __attribute__((packed));
 
 /*
@@ -216,6 +233,8 @@ struct lota_bpf_summary {
  *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
+ *   [lota_esrt: 28 bytes]   (optional trailing section; absent for legacy
+ *                            agents, which the verifier treats as no-ESRT)
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
@@ -233,6 +252,7 @@ struct lota_attestation_report {
  * @event_count: Number of events
  * @event_log: TPM event log (can be NULL)
  * @event_log_size: Size of event log
+ * @esrt: ESRT System Firmware descriptor (can be NULL to omit the section)
  * @out_buf: Output buffer (caller allocates)
  * @out_buf_size: Size of output buffer
  *
@@ -241,16 +261,18 @@ struct lota_attestation_report {
 ssize_t serialize_report(const struct lota_attestation_report *report,
 			 const struct lota_exec_event *events,
 			 uint32_t event_count, const uint8_t *event_log,
-			 uint32_t event_log_size, uint8_t *out_buf,
-			 size_t out_buf_size);
+			 uint32_t event_log_size, const struct lota_esrt *esrt,
+			 uint8_t *out_buf, size_t out_buf_size);
 
 /*
  * calculate_report_size - Calculate serialized report size
  * @event_count: Number of BPF events
  * @event_log_size: Size of TPM event log
+ * @with_esrt: non-zero to include the trailing ESRT section
  *
  * Returns: Total size in bytes
  */
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size);
+size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
+			     int with_esrt);
 
 #endif /* LOTA_ATTESTATION_H */

@@ -12,27 +12,28 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "lota_seal.h"
 
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-58s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-58s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static void fill_meta(struct lota_seal_meta *m)
@@ -119,7 +120,7 @@ static void test_serialize_roundtrip(void)
 	if (out.pcr_mask != in.pcr_mask || out.pcr_alg != in.pcr_alg ||
 	    out.pub_len != in.pub_len || out.priv_len != in.priv_len ||
 	    memcmp(out.pcr_digest, in.pcr_digest, LOTA_SEAL_PCR_DIGEST_SIZE) !=
-		0) {
+		    0) {
 		FAIL("field mismatch");
 		return;
 	}

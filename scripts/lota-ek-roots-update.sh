@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Materialize a pinned EK manufacturer root bundle from a sources file.
 #
@@ -12,7 +13,7 @@
 # Usage:
 #   scripts/lota-ek-roots-update.sh <sources-file> <output-dir>
 #
-# See configs/ek-roots/README.md for the provisioning flow.
+# See configs/ek-roots/README.rst for the provisioning flow.
 
 set -euo pipefail
 

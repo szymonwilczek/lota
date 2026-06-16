@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 #ifndef LOTA_PATH_VALIDATE_H
 #define LOTA_PATH_VALIDATE_H
 
 #include <ctype.h>
 #include <stdbool.h>
-#include <stddef.h>
 
 static inline bool lota_path_is_abs(const char *p)
 {

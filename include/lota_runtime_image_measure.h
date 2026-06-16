@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Per-process runtime image measurement (kernel-anchored).
  *
@@ -85,7 +86,7 @@ lota_validate_runtime_image_modules(const struct lota_runtime_image_module *m,
 
 	for (uint32_t i = 0; i < count; i++) {
 		size_t slen =
-		    strnlen(m[i].soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
+			strnlen(m[i].soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
 		if (slen == 0 || slen >= LOTA_RUNTIME_IMAGE_SONAME_MAX)
 			return -EINVAL;
 		if (m[i].verity.len != LOTA_VERITY_DIGEST_SHA512_SIZE)
@@ -103,8 +104,8 @@ lota_validate_runtime_image_modules(const struct lota_runtime_image_module *m,
  * Returns 0 on success, or a negative errno-style value on failure.
  */
 static inline int lota_compute_runtime_image_digest(
-    const struct lota_runtime_image_module *modules, uint32_t count,
-    uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE])
+	const struct lota_runtime_image_module *modules, uint32_t count,
+	uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE])
 {
 	static const uint8_t domain[] = "lota-runtime-image-measure:v1\0";
 	EVP_MD_CTX *mdctx = NULL;
@@ -137,7 +138,7 @@ static inline int lota_compute_runtime_image_digest(
 
 	for (uint32_t i = 0; i < count; i++) {
 		uint32_t slen = (uint32_t)strnlen(
-		    modules[i].soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
+			modules[i].soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
 
 		lota__write_le32(le_u32, slen);
 		if (EVP_DigestUpdate(mdctx, le_u32, sizeof(le_u32)) != 1 ||

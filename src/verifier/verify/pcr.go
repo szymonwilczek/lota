@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PCR baseline verification module
 //
 // Verifies that PCR values match expected "golden" measurements.
@@ -16,8 +17,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/szymonwilczek/lota/verifier/types"
 	"gopkg.in/yaml.v3"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // defines expected PCR values for verification
@@ -52,6 +54,27 @@ type PCRPolicy struct {
 
 	// if true, fails if kernel lockdown not enabled
 	RequireLockdown bool `yaml:"require_lockdown"`
+
+	// if true, fails when the event-log-measured kernel command line
+	// carries a denylisted parameter (builtin denylist + cmdline_deny).
+	// GRUB-only in v1: hosts with no PCR 8 cmdline measurement and a
+	// zero quoted PCR 8 skip the check (systemd-boot/UKI measure the
+	// cmdline into PCR 12 instead)
+	RequireCmdlinePolicy bool `yaml:"require_cmdline_policy"`
+
+	// operator extensions to the builtin cmdline parameter denylist;
+	// entry forms: "param" (bare or any value), "param=" (any value),
+	// "param=value" (exact pair)
+	CmdlineDeny []string `yaml:"cmdline_deny"`
+}
+
+// returns the effective cmdline denylist: builtin rules plus operator
+// extensions from the policy file
+func (p *PCRPolicy) EffectiveCmdlineDeny() []string {
+	out := make([]string, 0, len(builtinCmdlineDeny)+len(p.CmdlineDeny))
+	out = append(out, builtinCmdlineDeny...)
+	out = append(out, p.CmdlineDeny...)
+	return out
 }
 
 // manages PCR policies and verification
@@ -64,6 +87,11 @@ type PCRVerifier struct {
 	// if false, LoadPolicy rejects policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	allowPermissivePolicy bool
+
+	// if false, LoadPolicy rejects a diverse-fleet policy (require_secureboot
+	// with no raw PCR pins) that does not pin agent_hashes.
+	// See RequiresAgentHashPin.
+	allowUnpinnedAgent bool
 }
 
 // creates a new PCR verifier
@@ -71,6 +99,7 @@ func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
 		policies:              make(map[string]*PCRPolicy),
 		allowPermissivePolicy: false,
+		allowUnpinnedAgent:    false,
 	}
 }
 
@@ -80,6 +109,35 @@ func (v *PCRVerifier) SetAllowPermissivePolicy(allow bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.allowPermissivePolicy = allow
+}
+
+// controls whether LoadPolicy accepts a diverse-fleet policy with no pinned
+// agent_hashes.
+// Intentionally false by default:
+// on the diverse-fleet path (require_secureboot, no raw PCR pins) the per-device
+// PCR 0/1/7 and the agent self-hash both go through TOFU, so without a pinned
+// agent_hash a modified, non-enforcing agent would pin its own hash on first use
+// and then attest "OK" while doing no enforcement.
+//
+// kernel_hashes do not count -- they are advisory and self-reported.
+// agent_hash allowlist is the only cryptographic gate on which agent binary ran.
+func (v *PCRVerifier) SetAllowUnpinnedAgent(allow bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.allowUnpinnedAgent = allow
+}
+
+// RequiresAgentHashPin reports whether a policy is a diverse-fleet policy
+// (require_secureboot with no raw PCR pins) that fails to pin agent_hashes.
+// Such a policy leaves the agent self-hash on TOFU, which a modified agent
+// can exploit, so LoadPolicy refuses it unless the operator opts out.
+func RequiresAgentHashPin(policy *PCRPolicy) bool {
+	if policy == nil {
+		return false
+	}
+	return policy.RequireSecureBoot &&
+		len(policy.PCRs) == 0 &&
+		len(policy.AgentHashes) == 0
 }
 
 // sets the Ed25519 public key used to verify policy file signatures
@@ -109,7 +167,8 @@ func ValidatePolicy(policy *PCRPolicy) []string {
 	}
 
 	hasAnyRequirement := policy.RequireIOMMU || policy.RequireEnforce ||
-		policy.RequireModuleSig || policy.RequireSecureBoot || policy.RequireLockdown
+		policy.RequireModuleSig || policy.RequireSecureBoot ||
+		policy.RequireLockdown || policy.RequireCmdlinePolicy
 	if !hasAnyRequirement && len(policy.PCRs) == 0 {
 		warnings = append(warnings, fmt.Sprintf(
 			"policy '%s': no security requirements enabled -> effectively permissive",
@@ -173,9 +232,13 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 
 	v.mu.RLock()
 	allowPermissive := v.allowPermissivePolicy
+	allowUnpinnedAgent := v.allowUnpinnedAgent
 	v.mu.RUnlock()
 	if IsMeasurementEmptyPolicy(&policy) && !allowPermissive {
 		return fmt.Errorf("refusing to load measurement-empty PCR policy '%s' (no pcrs and no kernel_hashes/agent_hashes)", policy.Name)
+	}
+	if RequiresAgentHashPin(&policy) && !allowUnpinnedAgent {
+		return fmt.Errorf("refusing to load diverse-fleet policy '%s' (require_secureboot, no raw PCR pins) with empty agent_hashes: the agent self-hash would be TOFU and a modified non-enforcing agent could pin its own hash. Pin the official agent hash in agent_hashes (from the signed release), or pass --allow-unpinned-agent to accept the risk", policy.Name)
 	}
 
 	for _, w := range ValidatePolicy(&policy) {
@@ -229,8 +292,15 @@ func (v *PCRVerifier) SetActivePolicy(name string) error {
 	return nil
 }
 
-// checks report against active policy
+// checks report against active policy without event-log boot facts;
+// policies that gate on Secure Boot or the cmdline fail closed here
 func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
+	return v.VerifyReportWithFacts(report, nil)
+}
+
+// checks report against active policy using the quote-authenticated
+// boot facts extracted from the event log
+func (v *PCRVerifier) VerifyReportWithFacts(report *types.AttestationReport, facts *BootFacts) error {
 	v.mu.RLock()
 	policy, exists := v.policies[v.active]
 	v.mu.RUnlock()
@@ -239,10 +309,10 @@ func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
 		return errors.New("no active policy configured")
 	}
 
-	return v.verifyAgainstPolicy(report, policy)
+	return v.verifyAgainstPolicy(report, policy, facts)
 }
 
-func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy) error {
+func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
@@ -317,10 +387,25 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 		}
 	}
 
-	// check secure boot
+	// check secure boot from the firmware-measured event log value;
+	// the agent-reported FlagSecureBoot is telemetry only (a
+	// compromised kernel sets it freely)
 	if policy.RequireSecureBoot {
-		if report.Header.Flags&types.FlagSecureBoot == 0 {
-			return errors.New("Secure Boot not enabled")
+		if facts == nil || !facts.SecureBootTrusted {
+			return errors.New("Secure Boot state not authenticated by event log")
+		}
+		if !facts.SecureBoot.Found {
+			return errors.New("event log carries no SecureBoot measurement")
+		}
+		if !facts.SecureBoot.Enabled {
+			return errors.New("Secure Boot disabled per firmware measurement")
+		}
+	}
+
+	// check the measured kernel cmdline against the parameter denylist
+	if policy.RequireCmdlinePolicy {
+		if err := verifyCmdlinePolicy(policy, facts); err != nil {
+			return err
 		}
 	}
 
@@ -375,6 +460,25 @@ func (v *PCRVerifier) ActivePolicyDeclaresBootPCRs() bool {
 	return true
 }
 
+// reports whether the active policy enforces event-log Secure Boot;
+// drives the event-log-anchored TOFU branch of the boot enrollment
+// gate in Verify()
+func (v *PCRVerifier) ActivePolicyRequiresSecureBoot() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	return ok && policy != nil && policy.RequireSecureBoot
+}
+
+// reports whether the active policy gates on the measured kernel
+// cmdline; drives PCR 8 consistency enforcement in the event-log check
+func (v *PCRVerifier) ActivePolicyRequiresCmdline() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	policy, ok := v.policies[v.active]
+	return ok && policy != nil && policy.RequireCmdlinePolicy
+}
+
 // returns names of all loaded policies
 func (v *PCRVerifier) ListPolicies() []string {
 	v.mu.RLock()
@@ -412,16 +516,17 @@ func DefaultPolicy() *PCRPolicy {
 // Requires all available security features to be enabled.
 func StrictPolicy() *PCRPolicy {
 	return &PCRPolicy{
-		Name:              "strict",
-		Description:       "High-security policy - requires all security features enabled",
-		PCRs:              map[int]string{}, // defined via TOFU or custom policy
-		KernelHashes:      []string{},
-		AgentHashes:       []string{},
-		RequireIOMMU:      true,
-		RequireEnforce:    true,
-		RequireModuleSig:  true,
-		RequireSecureBoot: true,
-		RequireLockdown:   true,
+		Name:                 "strict",
+		Description:          "High-security policy - requires all security features enabled",
+		PCRs:                 map[int]string{}, // defined via TOFU or custom policy
+		KernelHashes:         []string{},
+		AgentHashes:          []string{},
+		RequireIOMMU:         true,
+		RequireEnforce:       true,
+		RequireModuleSig:     true,
+		RequireSecureBoot:    true,
+		RequireLockdown:      true,
+		RequireCmdlinePolicy: true,
 	}
 }
 
@@ -443,6 +548,12 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 	// PCR 1:  host platform configuration (BIOS settings, boot order).
 	// PCR 7:  Secure Boot policy + authority chain.
 	mask |= (1 << 14) | (1 << 0) | (1 << 1) | (1 << 7)
+
+	// PCR 8: GRUB kernel cmdline; the cmdline gate can only trust the
+	// measured command line when the quote covers the PCR it extends
+	if p.RequireCmdlinePolicy {
+		mask |= 1 << 8
+	}
 
 	return mask
 }

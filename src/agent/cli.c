@@ -10,10 +10,10 @@
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
-#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../include/lota.h"
 #include "agent.h"
@@ -95,10 +95,9 @@ static int copy_string_checked(const char *field, char *dst, size_t dst_sz,
 		return -EIO;
 
 	if ((size_t)n >= dst_sz) {
-		fprintf(
-		    stderr,
-		    "Value for %s is too long (%d bytes), max allowed is %zu\n",
-		    field, n, dst_sz - 1);
+		fprintf(stderr,
+			"Value for %s is too long (%d bytes), max allowed is %zu\n",
+			field, n, dst_sz - 1);
 		return -EOVERFLOW;
 	}
 
@@ -117,8 +116,8 @@ static int load_config_into_options(struct cli_options *opts,
 		return 1;
 	} else if (cfg_ret < 0) {
 		fprintf(stderr, "Failed to load config %s: %s\n",
-			opts->config_path ? opts->config_path
-					  : LOTA_CONFIG_DEFAULT_PATH,
+			opts->config_path ? opts->config_path :
+					    LOTA_CONFIG_DEFAULT_PATH,
 			strerror(-cfg_ret));
 		return 1;
 	}
@@ -152,8 +151,9 @@ static int load_config_into_options(struct cli_options *opts,
 	g_agent.tpm_ctx.seal_persistent_primary = cfg->seal_persistent_primary;
 	agent_globals_unlock(&g_agent);
 
-	int kret = tpm_set_kernel_path(
-	    &g_agent.tpm_ctx, cfg->kernel_path[0] ? cfg->kernel_path : NULL);
+	int kret = tpm_set_kernel_path(&g_agent.tpm_ctx,
+				       cfg->kernel_path[0] ? cfg->kernel_path :
+							     NULL);
 	if (kret < 0) {
 		fprintf(stderr, "Invalid kernel_path in config: %s\n",
 			strerror(-kret));
@@ -163,13 +163,14 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
 	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
-	opts->policy_pubkey_path =
-	    cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL;
+	opts->policy_pubkey_path = cfg->policy_pubkey[0] ? cfg->policy_pubkey :
+							   NULL;
 
 	g_protect_pid_count = 0;
 	if (cfg->protect_pid_count > 0) {
-		uint32_t *new_pids = realloc(
-		    g_protect_pids, cfg->protect_pid_count * sizeof(uint32_t));
+		uint32_t *new_pids =
+			realloc(g_protect_pids,
+				cfg->protect_pid_count * sizeof(uint32_t));
 		if (!new_pids) {
 			fprintf(stderr, "Memory allocation failed while "
 					"loading protected PIDs "
@@ -209,55 +210,56 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	int opt;
 
 	static struct option long_options[] = {
-	    {"config", required_argument, 0, 'f'},
-	    {"dump-config", no_argument, 0, 'Z'},
-	    {"test-tpm", no_argument, 0, 't'},
-	    {"test-iommu", no_argument, 0, 'i'},
-	    {"test-ipc", no_argument, 0, 'c'},
-	    {"test-signed", no_argument, 0, 'S'},
-	    {"shutdown", no_argument, 0, 1001},
-	    {"export-policy", no_argument, 0, 'E'},
-	    {"attest", no_argument, 0, 'a'},
-	    {"attest-interval", required_argument, 0, 'I'},
-	    {"enroll", no_argument, 0, 1004},
-	    {"reenroll", no_argument, 0, 1014},
-	    {"seal", no_argument, 0, 1007},
-	    {"unseal", no_argument, 0, 1008},
-	    {"seal-pcrs", required_argument, 0, 1009},
-	    {"seal-aik-auth", no_argument, 0, 1010},
-	    {"reprovision-aik", no_argument, 0, 1011},
-	    {"seal-persist-primary", no_argument, 0, 1012},
-	    {"seal-evict-primary", no_argument, 0, 1013},
-	    {"ca-server", required_argument, 0, 1005},
-	    {"ca-port", required_argument, 0, 1006},
-	    {"server", required_argument, 0, 's'},
-	    {"port", required_argument, 0, 'p'},
-	    {"ca-cert", required_argument, 0, 'C'},
-	    {"no-verify-tls", no_argument, 0, 'K'},
-	    {"insecure-allow-no-verify-tls", no_argument, 0, 1000},
-	    {"insecure-allow-mode-downgrade", no_argument, 0, 1002},
-	    {"insecure-allow-mutable-rootfs", no_argument, 0, 1003},
-	    {"pin-sha256", required_argument, 0, 'F'},
-	    {"bpf", required_argument, 0, 'b'},
-	    {"mode", required_argument, 0, 'm'},
-	    {"strict-mmap", no_argument, 0, 'M'},
-	    {"strict-exec", no_argument, 0, 'Y'},
-	    {"block-ptrace", no_argument, 0, 'P'},
-	    {"strict-modules", no_argument, 0, 'J'},
-	    {"block-anon-exec", no_argument, 0, 'X'},
-	    {"protect-pid", required_argument, 0, 'R'},
-	    {"trust-lib", required_argument, 0, 'L'},
-	    {"allow-verity", required_argument, 0, 'A'},
-	    {"daemon", no_argument, 0, 'd'},
-	    {"pid-file", required_argument, 0, 'D'},
-	    {"aik-ttl", required_argument, 0, 'T'},
-	    {"gen-signing-key", required_argument, 0, 'G'},
-	    {"sign-policy", required_argument, 0, 'g'},
-	    {"verify-policy", required_argument, 0, 'V'},
-	    {"signing-key", required_argument, 0, 'k'},
-	    {"policy-pubkey", required_argument, 0, 'Q'},
-	    {"help", no_argument, 0, 'h'},
-	    {0, 0, 0, 0}};
+		{ "config", required_argument, 0, 'f' },
+		{ "dump-config", no_argument, 0, 'Z' },
+		{ "test-tpm", no_argument, 0, 't' },
+		{ "test-iommu", no_argument, 0, 'i' },
+		{ "test-ipc", no_argument, 0, 'c' },
+		{ "test-signed", no_argument, 0, 'S' },
+		{ "shutdown", no_argument, 0, 1001 },
+		{ "export-policy", no_argument, 0, 'E' },
+		{ "attest", no_argument, 0, 'a' },
+		{ "attest-interval", required_argument, 0, 'I' },
+		{ "enroll", no_argument, 0, 1004 },
+		{ "reenroll", no_argument, 0, 1014 },
+		{ "seal", no_argument, 0, 1007 },
+		{ "unseal", no_argument, 0, 1008 },
+		{ "seal-pcrs", required_argument, 0, 1009 },
+		{ "seal-aik-auth", no_argument, 0, 1010 },
+		{ "reprovision-aik", no_argument, 0, 1011 },
+		{ "seal-persist-primary", no_argument, 0, 1012 },
+		{ "seal-evict-primary", no_argument, 0, 1013 },
+		{ "ca-server", required_argument, 0, 1005 },
+		{ "ca-port", required_argument, 0, 1006 },
+		{ "server", required_argument, 0, 's' },
+		{ "port", required_argument, 0, 'p' },
+		{ "ca-cert", required_argument, 0, 'C' },
+		{ "no-verify-tls", no_argument, 0, 'K' },
+		{ "insecure-allow-no-verify-tls", no_argument, 0, 1000 },
+		{ "insecure-allow-mode-downgrade", no_argument, 0, 1002 },
+		{ "insecure-allow-mutable-rootfs", no_argument, 0, 1003 },
+		{ "pin-sha256", required_argument, 0, 'F' },
+		{ "bpf", required_argument, 0, 'b' },
+		{ "mode", required_argument, 0, 'm' },
+		{ "strict-mmap", no_argument, 0, 'M' },
+		{ "strict-exec", no_argument, 0, 'Y' },
+		{ "block-ptrace", no_argument, 0, 'P' },
+		{ "strict-modules", no_argument, 0, 'J' },
+		{ "block-anon-exec", no_argument, 0, 'X' },
+		{ "protect-pid", required_argument, 0, 'R' },
+		{ "trust-lib", required_argument, 0, 'L' },
+		{ "allow-verity", required_argument, 0, 'A' },
+		{ "daemon", no_argument, 0, 'd' },
+		{ "pid-file", required_argument, 0, 'D' },
+		{ "aik-ttl", required_argument, 0, 'T' },
+		{ "gen-signing-key", required_argument, 0, 'G' },
+		{ "sign-policy", required_argument, 0, 'g' },
+		{ "verify-policy", required_argument, 0, 'V' },
+		{ "signing-key", required_argument, 0, 'k' },
+		{ "policy-pubkey", required_argument, 0, 'Q' },
+		{ "help", no_argument, 0, 'h' },
+		{ 0, 0, 0, 0 }
+	};
 
 	memset(opts, 0, sizeof(*opts));
 	opts->bpf_path = LOTA_CLI_DEFAULT_BPF_PATH;
@@ -282,9 +284,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		return rc;
 
 	while ((opt = getopt_long(
-		    argc, argv,
-		    "f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:h",
-		    long_options, NULL)) != -1) {
+			argc, argv,
+			"f:ZticSEaI:s:p:C:KF:b:m:MPJYXR:L:A:dD:T:G:g:V:k:Q:h",
+			long_options, NULL)) != -1) {
 		switch (opt) {
 		case 't':
 			opts->test_tpm_flag = 1;
@@ -440,15 +442,14 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 				return 1;
 			}
 			if (g_protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
-				fprintf(
-				    stderr,
-				    "Too many --protect-pid entries (max %d)\n",
-				    LOTA_MAX_PROTECTED_PIDS);
+				fprintf(stderr,
+					"Too many --protect-pid entries (max %d)\n",
+					LOTA_MAX_PROTECTED_PIDS);
 				return 1;
 			}
-			uint32_t *new_pids =
-			    realloc(g_protect_pids, (g_protect_pid_count + 1) *
-							sizeof(uint32_t));
+			uint32_t *new_pids = realloc(g_protect_pids,
+						     (g_protect_pid_count + 1) *
+							     sizeof(uint32_t));
 			if (!new_pids) {
 				fprintf(stderr, "Memory allocation failed for "
 						"protected PID\n");
@@ -460,18 +461,18 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		case 'L':
 			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
 				if (copy_string_checked(
-					"trust-lib",
-					g_trust_libs[g_trust_lib_count],
-					sizeof(g_trust_libs[g_trust_lib_count]),
-					optarg) < 0) {
+					    "trust-lib",
+					    g_trust_libs[g_trust_lib_count],
+					    sizeof(g_trust_libs
+							   [g_trust_lib_count]),
+					    optarg) < 0) {
 					return 1;
 				}
 				g_trust_lib_count++;
 			} else {
-				fprintf(
-				    stderr,
-				    "Too many --trust-lib entries (max %d)\n",
-				    LOTA_CONFIG_MAX_LIBS);
+				fprintf(stderr,
+					"Too many --trust-lib entries (max %d)\n",
+					LOTA_CONFIG_MAX_LIBS);
 				return 1;
 			}
 			break;
@@ -486,10 +487,10 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			if (validate_path_arg("allow-verity", optarg) < 0)
 				return 1;
 			if (copy_string_checked(
-				"allow-verity",
-				g_allow_verity[g_allow_verity_count],
-				sizeof(g_allow_verity[g_allow_verity_count]),
-				optarg) < 0) {
+				    "allow-verity",
+				    g_allow_verity[g_allow_verity_count],
+				    sizeof(g_allow_verity[g_allow_verity_count]),
+				    optarg) < 0) {
 				return 1;
 			}
 			g_allow_verity_count++;

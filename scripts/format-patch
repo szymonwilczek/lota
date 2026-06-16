@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Normalize local commit messages without touching file trees.
 #
 # This script rewrites commits in base..head and changes commit messages only.

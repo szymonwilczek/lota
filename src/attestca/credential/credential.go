@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - TPM 2.0 credential-activation primitive
 //
 // Verifier side of the TCG credential-activation ceremony
@@ -47,7 +48,7 @@ const requiredAIKAttrs = tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
 	tpm2.FlagRestricted | tpm2.FlagSign
 
 var (
-	ErrEKKeyType   = errors.New("EK public key is not RSA")
+	ErrEKKeyType   = errors.New("EK public key is not RSA; credential activation requires an RSA endorsement key (TCG EK template H-1)")
 	ErrEKKeySize   = errors.New("EK RSA key too small")
 	ErrAIKDecode   = errors.New("failed to decode AIK TPMT_PUBLIC")
 	ErrAIKTemplate = errors.New("AIK template is not a restricted RSA signing key")
@@ -93,7 +94,10 @@ func ValidateAIK(tpmtPublic []byte) (tpm2.Public, tpm2.Name, error) {
 
 func validateAIKTemplate(pub tpm2.Public) error {
 	if pub.Type != tpm2.AlgRSA {
-		return fmt.Errorf("%w: type 0x%04x", ErrAIKTemplate, pub.Type)
+		// AIK must be an RSA key: the verifier authenticates quotes
+		// with an RSA public key and the AIK store holds *rsa.PublicKey
+		// ECC AIK is refused here instead failing later
+		return fmt.Errorf("%w: type 0x%04x (enrollment requires an RSA AIK)", ErrAIKTemplate, pub.Type)
 	}
 	if pub.NameAlg != tpm2.AlgSHA256 {
 		return fmt.Errorf("%w: name algorithm 0x%04x", ErrAIKTemplate, pub.NameAlg)

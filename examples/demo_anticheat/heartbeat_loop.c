@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA demo anti-cheat heartbeat producer.
  *
@@ -48,7 +49,7 @@ struct demo_options {
 	const char *tamper_marker;
 	const char *ca_cert; /* provisioning CA that signs the server cert */
 	const char *client_cert; /* producer mTLS certificate */
-	const char *client_key;	 /* producer mTLS private key */
+	const char *client_key; /* producer mTLS private key */
 	enum lota_ac_provider provider;
 	unsigned int interval_sec;
 	bool once;
@@ -70,36 +71,35 @@ static void on_signal(int signo)
 
 static void print_usage(const char *argv0)
 {
-	fprintf(
-	    stderr,
-	    "Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
-	    "          [--provider eac|battleye] [--interval SEC] [--once]\n"
-	    "          [--tamper-marker PATH] [--print-runtime-objects]\n"
-	    "          [--ca-cert PATH] [--client-cert PATH] [--client-key "
-	    "PATH]\n"
-	    "\n"
-	    "Opens an lota_ac_session against the local LOTA agent and\n"
-	    "POSTs heartbeats to the demo server. Exit code in --once mode\n"
-	    "matches the server verdict: 0=TRUSTED, 1=UNTRUSTED, 2=REJECT,\n"
-	    "3=transport error, 64=usage error.\n"
-	    "\n"
-	    "For a mutual-TLS server (https:// URL) pass --ca-cert to verify\n"
-	    "the server against the provisioning CA and --client-cert /\n"
-	    "--client-key to present the producer's certificate."
-	    "\n"
-	    "--print-runtime-objects prints, one path per line, the\n"
-	    "file-backed objects (main binary + shared libraries) this\n"
-	    "process maps and that the runtime measurement covers,\n"
-	    "then exits. Redirect it into a file to capture the trusted\n"
-	    "runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
-	    "\n"
-	    "When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
-	    "exported) and the named path exists at heartbeat time, the\n"
-	    "producer flips one byte inside the signed token before POSTing\n"
-	    "so the server's signature check fails and the verdict flips to\n"
-	    "UNTRUSTED. The wire format itself stays well-formed, so this\n"
-	    "exercises the integrity path rather than the parser.\n",
-	    argv0);
+	fprintf(stderr,
+		"Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
+		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
+		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
+		"          [--ca-cert PATH] [--client-cert PATH] [--client-key "
+		"PATH]\n"
+		"\n"
+		"Opens an lota_ac_session against the local LOTA agent and\n"
+		"POSTs heartbeats to the demo server. Exit code in --once mode\n"
+		"matches the server verdict: 0=TRUSTED, 1=UNTRUSTED, 2=REJECT,\n"
+		"3=transport error, 64=usage error.\n"
+		"\n"
+		"For a mutual-TLS server (https:// URL) pass --ca-cert to verify\n"
+		"the server against the provisioning CA and --client-cert /\n"
+		"--client-key to present the producer's certificate."
+		"\n"
+		"--print-runtime-objects prints, one path per line, the\n"
+		"file-backed objects (main binary + shared libraries) this\n"
+		"process maps and that the runtime measurement covers,\n"
+		"then exits. Redirect it into a file to capture the trusted\n"
+		"runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
+		"\n"
+		"When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
+		"exported) and the named path exists at heartbeat time, the\n"
+		"producer flips one byte inside the signed token before POSTing\n"
+		"so the server's signature check fails and the verdict flips to\n"
+		"UNTRUSTED. The wire format itself stays well-formed, so this\n"
+		"exercises the integrity path rather than the parser.\n",
+		argv0);
 }
 
 static int print_runtime_object_cb(const char *path, void *user)
@@ -119,10 +119,9 @@ static int print_runtime_objects(void)
 {
 	int rc = lota_ac_list_runtime_objects(print_runtime_object_cb, NULL);
 	if (rc < 0) {
-		fprintf(
-		    stderr,
-		    "demo_anticheat: cannot enumerate runtime objects: %s\n",
-		    strerror(-rc));
+		fprintf(stderr,
+			"demo_anticheat: cannot enumerate runtime objects: %s\n",
+			strerror(-rc));
 		return DEMO_EXIT_TRANSPORT;
 	}
 	return 0;
@@ -169,19 +168,19 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		opt->tamper_marker = env_marker;
 
 	static const struct option long_opts[] = {
-	    {"server", required_argument, NULL, 's'},
-	    {"game-id", required_argument, NULL, 'g'},
-	    {"socket", required_argument, NULL, 'S'},
-	    {"provider", required_argument, NULL, 'p'},
-	    {"interval", required_argument, NULL, 'i'},
-	    {"once", no_argument, NULL, '1'},
-	    {"tamper-marker", required_argument, NULL, 'T'},
-	    {"print-runtime-objects", no_argument, NULL, 'O'},
-	    {"ca-cert", required_argument, NULL, 'A'},
-	    {"client-cert", required_argument, NULL, 'E'},
-	    {"client-key", required_argument, NULL, 'K'},
-	    {"help", no_argument, NULL, 'h'},
-	    {0, 0, 0, 0},
+		{ "server", required_argument, NULL, 's' },
+		{ "game-id", required_argument, NULL, 'g' },
+		{ "socket", required_argument, NULL, 'S' },
+		{ "provider", required_argument, NULL, 'p' },
+		{ "interval", required_argument, NULL, 'i' },
+		{ "once", no_argument, NULL, '1' },
+		{ "tamper-marker", required_argument, NULL, 'T' },
+		{ "print-runtime-objects", no_argument, NULL, 'O' },
+		{ "ca-cert", required_argument, NULL, 'A' },
+		{ "client-cert", required_argument, NULL, 'E' },
+		{ "client-key", required_argument, NULL, 'K' },
+		{ "help", no_argument, NULL, 'h' },
+		{ 0, 0, 0, 0 },
 	};
 
 	int c;
@@ -244,9 +243,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	}
 
 	if ((opt->client_cert != NULL) != (opt->client_key != NULL)) {
-		fprintf(
-		    stderr,
-		    "--client-cert and --client-key must be set together\n");
+		fprintf(stderr,
+			"--client-cert and --client-key must be set together\n");
 		return -EINVAL;
 	}
 	return 0;
@@ -422,7 +420,7 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 			opt->tamper_marker, (unsigned int)LOTA_AC_HEADER_SIZE);
 	}
 
-	struct response_buf resp = {0};
+	struct response_buf resp = { 0 };
 	long http_status = 0;
 	double latency_ms = 0.0;
 	rc = post_heartbeat(curl, opt->server_url, buf, written, &resp,
@@ -464,7 +462,7 @@ int main(int argc, char **argv)
 	if (opt.print_runtime_objects)
 		return print_runtime_objects();
 
-	struct sigaction sa = {.sa_handler = on_signal};
+	struct sigaction sa = { .sa_handler = on_signal };
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
@@ -475,18 +473,18 @@ int main(int argc, char **argv)
 	}
 
 	struct lota_ac_config cfg = {
-	    .provider = opt.provider,
-	    .game_id = opt.game_id,
-	    .direct = 1,
-	    .socket_path = opt.socket_path,
+		.provider = opt.provider,
+		.game_id = opt.game_id,
+		.direct = 1,
+		.socket_path = opt.socket_path,
 	};
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {
 		fprintf(stderr,
 			"demo_anticheat: lota_ac_init failed (agent socket "
 			"unreachable at %s)\n",
-			opt.socket_path ? opt.socket_path
-					: "/run/lota/lota.sock");
+			opt.socket_path ? opt.socket_path :
+					  "/run/lota/lota.sock");
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
@@ -513,8 +511,8 @@ int main(int argc, char **argv)
 		uint32_t seq = 0;
 		rc = send_one_heartbeat(session, curl, &opt, &seq, &verdict);
 		if (opt.once) {
-			exit_code =
-			    (rc == 0) ? (int)verdict : DEMO_EXIT_TRANSPORT;
+			exit_code = (rc == 0) ? (int)verdict :
+						DEMO_EXIT_TRANSPORT;
 			break;
 		}
 		exit_code = (rc == 0) ? (int)verdict : DEMO_EXIT_TRANSPORT;
@@ -523,9 +521,8 @@ int main(int argc, char **argv)
 		     waited < opt.interval_sec && !demo_stop; waited++)
 			sleep(1);
 		if (demo_stop) {
-			fprintf(
-			    stderr,
-			    "demo_anticheat: shutdown requested, exiting\n");
+			fprintf(stderr,
+				"demo_anticheat: shutdown requested, exiting\n");
 			break;
 		}
 	}

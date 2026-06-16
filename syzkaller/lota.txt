@@ -1,4 +1,4 @@
-# LOTA IPC Syzlang profile -- MODE B (see syzkaller/README.md).
+# LOTA IPC Syzlang profile -- MODE B (see syzkaller/README.rst).
 #
 # This profile only does anything when the real lota-agent is running
 # in the guest and listening on /run/lota/lota.sock. The default

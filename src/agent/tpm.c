@@ -17,27 +17,28 @@
 #include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
 #include <openssl/crypto.h>
-#include <openssl/encoder.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
 #include <openssl/rand.h>
-#include <openssl/rsa.h>
 #include <openssl/x509.h>
-
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tcti.h>
 #include <tss2/tss2_tcti_device.h>
 #include <tss2/tss2_tctildr.h>
+#include <openssl/params.h>
+#include <openssl/types.h>
+#include <sys/types.h>
 
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "quote.h"
 #include "tpm.h"
+#include "attestation.h"
+#include "lota.h"
 
 /*
  * Single-bank PCR selection bitmap is three bytes (24 bits), so a PCR
@@ -318,34 +319,34 @@ static void tpm_clear_lockout(struct tpm_context *ctx)
  * retry frees the previous allocation instead of overwriting the
  * pointer and leaking it.
  */
-#define TPM_CALL_RETRY(ctx_, rc_var_, expr_)                                   \
-	do {                                                                   \
-		unsigned _tpm_attempt = 0;                                     \
-		unsigned _tpm_budget_ms = 0;                                   \
-		for (;;) {                                                     \
-			(rc_var_) = (expr_);                                   \
-			if ((rc_var_) == TSS2_RC_SUCCESS) {                    \
-				tpm_clear_lockout((ctx_));                     \
-				break;                                         \
-			}                                                      \
-			if (tss2_rc_is_lockout((rc_var_))) {                   \
-				tpm_record_lockout((ctx_));                    \
-				break;                                         \
-			}                                                      \
-			if (!tss2_rc_is_transient((rc_var_)) ||                \
-			    _tpm_attempt >= TPM_RETRY_MAX_ATTEMPTS)            \
-				break;                                         \
-			{                                                      \
-				unsigned _tpm_next_ms =                        \
-				    tpm_backoff_ms(_tpm_attempt);              \
-				if (_tpm_budget_ms + _tpm_next_ms >            \
-				    TPM_RETRY_BUDGET_MS)                       \
-					break;                                 \
-				tpm_sleep_ms(_tpm_next_ms);                    \
-				_tpm_budget_ms += _tpm_next_ms;                \
-			}                                                      \
-			_tpm_attempt++;                                        \
-		}                                                              \
+#define TPM_CALL_RETRY(ctx_, rc_var_, expr_)                          \
+	do {                                                          \
+		unsigned _tpm_attempt = 0;                            \
+		unsigned _tpm_budget_ms = 0;                          \
+		for (;;) {                                            \
+			(rc_var_) = (expr_);                          \
+			if ((rc_var_) == TSS2_RC_SUCCESS) {           \
+				tpm_clear_lockout((ctx_));            \
+				break;                                \
+			}                                             \
+			if (tss2_rc_is_lockout((rc_var_))) {          \
+				tpm_record_lockout((ctx_));           \
+				break;                                \
+			}                                             \
+			if (!tss2_rc_is_transient((rc_var_)) ||       \
+			    _tpm_attempt >= TPM_RETRY_MAX_ATTEMPTS)   \
+				break;                                \
+			{                                             \
+				unsigned _tpm_next_ms =               \
+					tpm_backoff_ms(_tpm_attempt); \
+				if (_tpm_budget_ms + _tpm_next_ms >   \
+				    TPM_RETRY_BUDGET_MS)              \
+					break;                        \
+				tpm_sleep_ms(_tpm_next_ms);           \
+				_tpm_budget_ms += _tpm_next_ms;       \
+			}                                             \
+			_tpm_attempt++;                               \
+		}                                                     \
 	} while (0)
 
 /*
@@ -530,11 +531,12 @@ struct esys_create_primary_args {
 static TSS2_RC esys_create_primary_thunk(void *u)
 {
 	struct esys_create_primary_args *a = u;
-	return Esys_CreatePrimary(
-	    a->esys_ctx, a->primary_handle, a->shandle1, ESYS_TR_NONE,
-	    ESYS_TR_NONE, a->in_sensitive, a->in_public, a->outside_info,
-	    a->creation_pcr, a->object_handle_out, a->out_public_out,
-	    a->creation_data_out, a->creation_hash_out, a->creation_ticket_out);
+	return Esys_CreatePrimary(a->esys_ctx, a->primary_handle, a->shandle1,
+				  ESYS_TR_NONE, ESYS_TR_NONE, a->in_sensitive,
+				  a->in_public, a->outside_info,
+				  a->creation_pcr, a->object_handle_out,
+				  a->out_public_out, a->creation_data_out,
+				  a->creation_hash_out, a->creation_ticket_out);
 }
 
 struct esys_quote_args {
@@ -716,8 +718,9 @@ int tpm_init(struct tpm_context *ctx)
 	 * false) so a stray environment cannot redirect the AIK key store or
 	 * the TPM endpoint. Interactive one-shots opt in.
 	 */
-	aik_meta_path =
-	    ctx->allow_env_tpm_overrides ? getenv("LOTA_AIK_META_PATH") : NULL;
+	aik_meta_path = ctx->allow_env_tpm_overrides ?
+				getenv("LOTA_AIK_META_PATH") :
+				NULL;
 	if (aik_meta_path && aik_meta_path[0]) {
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
@@ -881,19 +884,19 @@ int tpm_read_pcr(struct tpm_context *ctx, uint32_t pcr_index,
 
 	/* set bit for requested pcr */
 	pcr_selection.pcrSelections[0].pcrSelect[pcr_index / 8] =
-	    (1 << (pcr_index % 8));
+		(1 << (pcr_index % 8));
 
 	{
 		struct esys_pcr_read_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .pcr_selection_in = &pcr_selection,
-		    .pcr_update_counter_out = &pcr_update_counter,
-		    .pcr_selection_out = &pcr_selection_out,
-		    .pcr_values_out = &pcr_values,
+			.esys_ctx = ctx->esys_ctx,
+			.pcr_selection_in = &pcr_selection,
+			.pcr_update_counter_out = &pcr_update_counter,
+			.pcr_selection_out = &pcr_selection_out,
+			.pcr_values_out = &pcr_values,
 		};
 		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_pcr_read_thunk, &args, &rc, 2,
-		    (void **)&pcr_selection_out, (void **)&pcr_values);
+			ctx, esys_pcr_read_thunk, &args, &rc, 2,
+			(void **)&pcr_selection_out, (void **)&pcr_values);
 		if (call_ret < 0)
 			return call_ret;
 	}
@@ -944,23 +947,23 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 	pcr_selection.pcrSelections[0].sizeofSelect = 3; /* 24 PCRs = 3 bytes */
 
 	pcr_selection.pcrSelections[0].pcrSelect[0] =
-	    (uint8_t)(pcr_mask & 0xFF);
+		(uint8_t)(pcr_mask & 0xFF);
 	pcr_selection.pcrSelections[0].pcrSelect[1] =
-	    (uint8_t)((pcr_mask >> 8) & 0xFF);
+		(uint8_t)((pcr_mask >> 8) & 0xFF);
 	pcr_selection.pcrSelections[0].pcrSelect[2] =
-	    (uint8_t)((pcr_mask >> 16) & 0xFF);
+		(uint8_t)((pcr_mask >> 16) & 0xFF);
 
 	{
 		struct esys_pcr_read_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .pcr_selection_in = &pcr_selection,
-		    .pcr_update_counter_out = &pcr_update_counter,
-		    .pcr_selection_out = &pcr_selection_out,
-		    .pcr_values_out = &pcr_values,
+			.esys_ctx = ctx->esys_ctx,
+			.pcr_selection_in = &pcr_selection,
+			.pcr_update_counter_out = &pcr_update_counter,
+			.pcr_selection_out = &pcr_selection_out,
+			.pcr_values_out = &pcr_values,
 		};
 		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_pcr_read_thunk, &args, &rc, 2,
-		    (void **)&pcr_selection_out, (void **)&pcr_values);
+			ctx, esys_pcr_read_thunk, &args, &rc, 2,
+			(void **)&pcr_selection_out, (void **)&pcr_values);
 		if (call_ret < 0)
 			return call_ret;
 	}
@@ -975,7 +978,7 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 	/* map returned digests to PCR indices in increasing order */
 	for (i = 0; i < LOTA_PCR_COUNT; i++) {
 		uint8_t sel =
-		    pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
+			pcr_selection_out->pcrSelections[0].pcrSelect[i / 8];
 		if (!(sel & (1U << (i % 8))))
 			continue;
 
@@ -1016,16 +1019,16 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 
 	{
 		struct esys_get_capability_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .capability = TPM2_CAP_HANDLES,
-		    .property = ctx->aik_handle,
-		    .property_count = 1,
-		    .more_data_out = &more_data,
-		    .capability_data_out = &capability_data,
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_HANDLES,
+			.property = ctx->aik_handle,
+			.property_count = 1,
+			.more_data_out = &more_data,
+			.capability_data_out = &capability_data,
 		};
-		ret =
-		    tpm_call_with_backoff(ctx, esys_get_capability_thunk, &args,
-					  &rc, 1, (void **)&capability_data);
+		ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk,
+					    &args, &rc, 1,
+					    (void **)&capability_data);
 		if (ret < 0)
 			return ret;
 	}
@@ -1140,28 +1143,28 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
 	memcpy(in_sensitive.sensitive.userAuth.buffer, aik_auth,
 	       TPM_AIK_AUTH_SIZE);
 
-	TPM2B_DATA outside_info = {.size = 0};
-	TPML_PCR_SELECTION creation_pcr = {.count = 0};
+	TPM2B_DATA outside_info = { .size = 0 };
+	TPML_PCR_SELECTION creation_pcr = { .count = 0 };
 
 	{
 		struct esys_create_primary_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .primary_handle = ESYS_TR_RH_OWNER,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .in_sensitive = &in_sensitive,
-		    .in_public = &in_public,
-		    .outside_info = &outside_info,
-		    .creation_pcr = &creation_pcr,
-		    .object_handle_out = out_handle,
-		    .out_public_out = &out_public,
-		    .creation_data_out = &creation_data,
-		    .creation_hash_out = &creation_hash,
-		    .creation_ticket_out = &creation_ticket,
+			.esys_ctx = ctx->esys_ctx,
+			.primary_handle = ESYS_TR_RH_OWNER,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.in_sensitive = &in_sensitive,
+			.in_public = &in_public,
+			.outside_info = &outside_info,
+			.creation_pcr = &creation_pcr,
+			.object_handle_out = out_handle,
+			.out_public_out = &out_public,
+			.creation_data_out = &creation_data,
+			.creation_hash_out = &creation_hash,
+			.creation_ticket_out = &creation_ticket,
 		};
 		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_create_primary_thunk, &args, &rc, 4,
-		    (void **)&out_public, (void **)&creation_data,
-		    (void **)&creation_hash, (void **)&creation_ticket);
+			ctx, esys_create_primary_thunk, &args, &rc, 4,
+			(void **)&out_public, (void **)&creation_data,
+			(void **)&creation_hash, (void **)&creation_ticket);
 		Esys_Free(out_public);
 		Esys_Free(creation_data);
 		Esys_Free(creation_hash);
@@ -1186,9 +1189,9 @@ static int tpm_verify_device_identity(struct tpm_context *ctx)
 	uint32_t manufacturer = 0;
 	uint32_t fw1 = 0;
 	uint32_t fw2 = 0;
-	uint32_t vendor_parts[4] = {0};
-	char vendor[17] = {0};
-	char vendor_upper[17] = {0};
+	uint32_t vendor_parts[4] = { 0 };
+	char vendor[17] = { 0 };
+	char vendor_upper[17] = { 0 };
 	int ret;
 
 	ret = tpm_read_prop(ctx, TPM2_PT_MANUFACTURER, &manufacturer);
@@ -1384,11 +1387,11 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	}
 
 	{
-		TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
+		TPM2B_AUTH auth_value = { .size = TPM_AIK_AUTH_SIZE };
 		memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
-		TPM_CALL_RETRY(
-		    ctx, rc,
-		    Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value));
+		TPM_CALL_RETRY(ctx, rc,
+			       Esys_TR_SetAuth(ctx->esys_ctx, key_handle,
+					       &auth_value));
 		secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
 		if (rc != TSS2_RC_SUCCESS)
 			return tss2_rc_to_errno(rc);
@@ -1415,23 +1418,24 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
 	for (i = 0; i < LOTA_PCR_COUNT; i++) {
 		if (pcr_mask & (1U << i))
 			pcr_selection.pcrSelections[0].pcrSelect[i / 8] |=
-			    (1 << (i % 8));
+				(1 << (i % 8));
 	}
 
 	{
 		struct esys_quote_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .sign_handle = key_handle,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .qualifying_data = &qualifying_data,
-		    .in_scheme = &in_scheme,
-		    .pcr_selection = &pcr_selection,
-		    .quoted_out = &quoted,
-		    .signature_out = &signature,
+			.esys_ctx = ctx->esys_ctx,
+			.sign_handle = key_handle,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.qualifying_data = &qualifying_data,
+			.in_scheme = &in_scheme,
+			.pcr_selection = &pcr_selection,
+			.quoted_out = &quoted,
+			.signature_out = &signature,
 		};
-		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_quote_thunk, &args, &rc, 2, (void **)&quoted,
-		    (void **)&signature);
+		int call_ret = tpm_call_with_backoff(ctx, esys_quote_thunk,
+						     &args, &rc, 2,
+						     (void **)&quoted,
+						     (void **)&signature);
 		secure_bzero(qualifying_data.buffer,
 			     sizeof(qualifying_data.buffer));
 		if (call_ret < 0)
@@ -1809,8 +1813,8 @@ int tpm_clock_state_load(const struct tpm_context *ctx,
 	if (!ctx || !out)
 		return -EINVAL;
 
-	const char *path = ctx->clock_state_path[0] ? ctx->clock_state_path
-						    : TPM_CLOCK_STATE_PATH;
+	const char *path = ctx->clock_state_path[0] ? ctx->clock_state_path :
+						      TPM_CLOCK_STATE_PATH;
 
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
@@ -1854,8 +1858,8 @@ int tpm_clock_state_save(const struct tpm_context *ctx,
 	if (!ctx || !in)
 		return -EINVAL;
 
-	const char *path = ctx->clock_state_path[0] ? ctx->clock_state_path
-						    : TPM_CLOCK_STATE_PATH;
+	const char *path = ctx->clock_state_path[0] ? ctx->clock_state_path :
+						      TPM_CLOCK_STATE_PATH;
 
 	int ret = mkdirs(path, 0755);
 	if (ret < 0)
@@ -1940,7 +1944,7 @@ static int derive_expected_pcr14(const uint8_t self_hash[],
 				 uint8_t out_pcr14[LOTA_HASH_SIZE])
 {
 	uint8_t commit[LOTA_HASH_SIZE];
-	uint8_t zero[LOTA_HASH_SIZE] = {0};
+	uint8_t zero[LOTA_HASH_SIZE] = { 0 };
 	int ret = tpm_boot_commitment_digest(self_hash, reset_count,
 					     restart_count, commit);
 	if (ret < 0)
@@ -1957,9 +1961,9 @@ static int derive_lock_pcr14_value(uint32_t reset_count, uint32_t restart_count,
 				   uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_commit[LOTA_HASH_SIZE];
-	uint8_t zero[LOTA_HASH_SIZE] = {0};
-	int ret =
-	    tpm_initramfs_lock_digest(reset_count, restart_count, lock_commit);
+	uint8_t zero[LOTA_HASH_SIZE] = { 0 };
+	int ret = tpm_initramfs_lock_digest(reset_count, restart_count,
+					    lock_commit);
 	if (ret < 0)
 		return ret;
 	return sha256_two_block(zero, lock_commit, out);
@@ -1979,7 +1983,7 @@ static int derive_expected_locked_pcr14(const uint8_t self_hash[],
 	uint8_t lock_value[LOTA_HASH_SIZE];
 	uint8_t boot_commit[LOTA_HASH_SIZE];
 	int ret =
-	    derive_lock_pcr14_value(reset_count, restart_count, lock_value);
+		derive_lock_pcr14_value(reset_count, restart_count, lock_value);
 	if (ret < 0)
 		return ret;
 	ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
@@ -2078,11 +2082,11 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 	}
 
 	{
-		TPM2B_AUTH auth_value = {.size = TPM_AIK_AUTH_SIZE};
+		TPM2B_AUTH auth_value = { .size = TPM_AIK_AUTH_SIZE };
 		memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
-		TPM_CALL_RETRY(
-		    ctx, rc,
-		    Esys_TR_SetAuth(ctx->esys_ctx, key_handle, &auth_value));
+		TPM_CALL_RETRY(ctx, rc,
+			       Esys_TR_SetAuth(ctx->esys_ctx, key_handle,
+					       &auth_value));
 		secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
 		if (rc != TSS2_RC_SUCCESS)
 			return tss2_rc_to_errno(rc);
@@ -2100,18 +2104,19 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 
 	{
 		struct esys_quote_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .sign_handle = key_handle,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .qualifying_data = &qualifying_data,
-		    .in_scheme = &in_scheme,
-		    .pcr_selection = &pcr_selection,
-		    .quoted_out = &quoted,
-		    .signature_out = &signature,
+			.esys_ctx = ctx->esys_ctx,
+			.sign_handle = key_handle,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.qualifying_data = &qualifying_data,
+			.in_scheme = &in_scheme,
+			.pcr_selection = &pcr_selection,
+			.quoted_out = &quoted,
+			.signature_out = &signature,
 		};
-		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_quote_thunk, &args, &rc, 2, (void **)&quoted,
-		    (void **)&signature);
+		int call_ret = tpm_call_with_backoff(ctx, esys_quote_thunk,
+						     &args, &rc, 2,
+						     (void **)&quoted,
+						     (void **)&signature);
 		secure_bzero(qualifying_data.buffer,
 			     sizeof(qualifying_data.buffer));
 		if (call_ret < 0)
@@ -2137,7 +2142,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	uint8_t expected_pcr14[LOTA_HASH_SIZE];
 	uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
 	uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
-	uint8_t zero_pcr14[LOTA_HASH_SIZE] = {0};
+	uint8_t zero_pcr14[LOTA_HASH_SIZE] = { 0 };
 	uint32_t reset_count = 0;
 	uint32_t restart_count = 0;
 	int ret;
@@ -2164,12 +2169,12 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 */
 		TPMS_TIME_INFO *time_info = NULL;
 		struct esys_read_clock_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .time_info_out = &time_info,
+			.esys_ctx = ctx->esys_ctx,
+			.time_info_out = &time_info,
 		};
-		int call_ret =
-		    tpm_call_with_backoff(ctx, esys_read_clock_thunk, &args,
-					  &rc, 1, (void **)&time_info);
+		int call_ret = tpm_call_with_backoff(ctx, esys_read_clock_thunk,
+						     &args, &rc, 1,
+						     (void **)&time_info);
 		if (call_ret < 0)
 			return call_ret;
 		reset_count = time_info->clockInfo.resetCount;
@@ -2212,7 +2217,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	if (ret < 0)
 		return ret;
 	ret = derive_expected_locked_pcr14(
-	    self_hash, reset_count, restart_count, expected_locked_pcr14);
+		self_hash, reset_count, restart_count, expected_locked_pcr14);
 	if (ret < 0)
 		return ret;
 
@@ -2226,7 +2231,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * (no prior state on this host) is non-fatal: a first-run agent has
 	 * nothing to compare against but every later run does.
 	 */
-	struct lota_clock_state prev = {0};
+	struct lota_clock_state prev = { 0 };
 	int have_prev = 0;
 	ret = tpm_clock_state_load(ctx, &prev);
 	if (ret == 0)
@@ -2252,10 +2257,10 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		if (ret < 0)
 			return ret;
 		struct lota_clock_state snap = {
-		    .reset_count = reset_count,
-		    .restart_count = restart_count,
-		    .saved_at = (int64_t)time(NULL),
-		    .flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
+			.reset_count = reset_count,
+			.restart_count = restart_count,
+			.saved_at = (int64_t)time(NULL),
+			.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
 		};
 		memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
 		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
@@ -2273,10 +2278,10 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	if (memcmp(current_pcr14, expected_locked_pcr14, LOTA_HASH_SIZE) == 0) {
 		/* Warm restart on a locked host - both extends already done. */
 		struct lota_clock_state snap = {
-		    .reset_count = reset_count,
-		    .restart_count = restart_count,
-		    .saved_at = (int64_t)time(NULL),
-		    .flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
+			.reset_count = reset_count,
+			.restart_count = restart_count,
+			.saved_at = (int64_t)time(NULL),
+			.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
 		};
 		memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
 		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
@@ -2313,9 +2318,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		if (ret < 0)
 			return ret;
 		struct lota_clock_state snap = {
-		    .reset_count = reset_count,
-		    .restart_count = restart_count,
-		    .saved_at = (int64_t)time(NULL),
+			.reset_count = reset_count,
+			.restart_count = restart_count,
+			.saved_at = (int64_t)time(NULL),
 		};
 		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
 		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
@@ -2336,9 +2341,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 * stays current and a corrupted file gets healed.
 		 */
 		struct lota_clock_state snap = {
-		    .reset_count = reset_count,
-		    .restart_count = restart_count,
-		    .saved_at = (int64_t)time(NULL),
+			.reset_count = reset_count,
+			.restart_count = restart_count,
+			.saved_at = (int64_t)time(NULL),
 		};
 		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
 		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
@@ -2358,20 +2363,19 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * the responder which runbook to follow.
 	 */
 	if (!have_prev) {
-		fprintf(
-		    stderr,
-		    "SECURITY: PCR14 holds an unexpected value (resetCount=%u "
-		    "restartCount=%u) and no prior clock-state snapshot exists "
-		    "to attribute the cause. Possible explanations: "
-		    "(1) initramfs / boot loader extended PCR14 with a "
-		    "non-LOTA commitment; "
-		    "(2) local root extended PCR14 between cold boot and the "
-		    "agent reaching this code; "
-		    "(3) the clock-state file was deleted between runs. "
-		    "Cold reboot the host and consult systemd journal for "
-		    "tpm2_pcr_extend invocations before lota-agent's first "
-		    "quote\n",
-		    (unsigned)reset_count, (unsigned)restart_count);
+		fprintf(stderr,
+			"SECURITY: PCR14 holds an unexpected value (resetCount=%u "
+			"restartCount=%u) and no prior clock-state snapshot exists "
+			"to attribute the cause. Possible explanations: "
+			"(1) initramfs / boot loader extended PCR14 with a "
+			"non-LOTA commitment; "
+			"(2) local root extended PCR14 between cold boot and the "
+			"agent reaching this code; "
+			"(3) the clock-state file was deleted between runs. "
+			"Cold reboot the host and consult systemd journal for "
+			"tpm2_pcr_extend invocations before lota-agent's first "
+			"quote\n",
+			(unsigned)reset_count, (unsigned)restart_count);
 		return -EBADMSG;
 	}
 
@@ -2382,19 +2386,18 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 * could extend it. PCR14 should have been 0^32 at this point;
 		 * something touched it between TPM_INIT and lota-agent startup.
 		 */
-		fprintf(
-		    stderr,
-		    "SECURITY: PCR14 tampered between cold boot and agent "
-		    "start "
-		    "(resetCount advanced from %u to %u; last successful "
-		    "extend at %lld). A non-LOTA component extended PCR14 "
-		    "before lota-agent reached its self_measure() call. "
-		    "Cold reboot, then audit boot scripts and any tooling "
-		    "that touches /dev/tpmrm0 (tpm2-tools, IMA, integrity "
-		    "subsystem) and verify the udev rule labelling tpmrm0 "
-		    "with lota_tpm_device_t is loaded with SELinux enforcing\n",
-		    (unsigned)prev.reset_count, (unsigned)reset_count,
-		    (long long)prev.saved_at);
+		fprintf(stderr,
+			"SECURITY: PCR14 tampered between cold boot and agent "
+			"start "
+			"(resetCount advanced from %u to %u; last successful "
+			"extend at %lld). A non-LOTA component extended PCR14 "
+			"before lota-agent reached its self_measure() call. "
+			"Cold reboot, then audit boot scripts and any tooling "
+			"that touches /dev/tpmrm0 (tpm2-tools, IMA, integrity "
+			"subsystem) and verify the udev rule labelling tpmrm0 "
+			"with lota_tpm_device_t is loaded with SELinux enforcing\n",
+			(unsigned)prev.reset_count, (unsigned)reset_count,
+			(long long)prev.saved_at);
 		return -EBADMSG;
 	}
 
@@ -2414,9 +2417,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 *      successful extend.
 		 */
 		int pcr_matches_prev =
-		    memcmp(current_pcr14, prev.pcr14, LOTA_HASH_SIZE) == 0;
+			memcmp(current_pcr14, prev.pcr14, LOTA_HASH_SIZE) == 0;
 		int self_hash_changed =
-		    memcmp(prev.self_hash, self_hash, LOTA_HASH_SIZE) != 0;
+			memcmp(prev.self_hash, self_hash, LOTA_HASH_SIZE) != 0;
 
 		if (pcr_matches_prev && self_hash_changed) {
 			fprintf(stderr,
@@ -2435,18 +2438,17 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			return -EBADMSG;
 		}
 
-		fprintf(
-		    stderr,
-		    "SECURITY: PCR14 mutated during the current boot session "
-		    "(resetCount=%u; last successful extend at %lld). Another "
-		    "writer extended PCR14 after lota-agent's last "
-		    "self_measure() and outside its control. Possible causes: "
-		    "(1) local root invoked tpm2_pcr_extend on /dev/tpmrm0; "
-		    "(2) another integrity subsystem (IMA, integrity-init, "
-		    "...) extended PCR14 from the OS. Audit auditd and the "
-		    "process table for the writer; cold reboot to restore a "
-		    "clean baseline\n",
-		    (unsigned)reset_count, (long long)prev.saved_at);
+		fprintf(stderr,
+			"SECURITY: PCR14 mutated during the current boot session "
+			"(resetCount=%u; last successful extend at %lld). Another "
+			"writer extended PCR14 after lota-agent's last "
+			"self_measure() and outside its control. Possible causes: "
+			"(1) local root invoked tpm2_pcr_extend on /dev/tpmrm0; "
+			"(2) another integrity subsystem (IMA, integrity-init, "
+			"...) extended PCR14 from the OS. Audit auditd and the "
+			"process table for the writer; cold reboot to restore a "
+			"clean baseline\n",
+			(unsigned)reset_count, (long long)prev.saved_at);
 		return -EBADMSG;
 	}
 
@@ -2496,11 +2498,11 @@ int tpm_get_aik_public(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 	/* read public portion of AIK */
 	{
 		struct esys_read_public_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .object_handle = key_handle,
-		    .out_public_out = &out_public,
-		    .name_out = &name,
-		    .qualified_name_out = &qualified_name,
+			.esys_ctx = ctx->esys_ctx,
+			.object_handle = key_handle,
+			.out_public_out = &out_public,
+			.name_out = &name,
+			.qualified_name_out = &qualified_name,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args,
 					    &rc, 3, (void **)&out_public,
@@ -2678,11 +2680,11 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id)
 
 	{
 		struct esys_read_public_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .object_handle = ek_handle,
-		    .out_public_out = &ek_public,
-		    .name_out = &ek_name,
-		    .qualified_name_out = &ek_qualified_name,
+			.esys_ctx = ctx->esys_ctx,
+			.object_handle = ek_handle,
+			.out_public_out = &ek_public,
+			.name_out = &ek_name,
+			.qualified_name_out = &ek_qualified_name,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args,
 					    &rc, 3, (void **)&ek_public,
@@ -2709,19 +2711,19 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id)
 
 	if (ek_public->publicArea.type == TPM2_ALG_RSA) {
 		if (EVP_DigestUpdate(
-			md_ctx, ek_public->publicArea.unique.rsa.buffer,
-			ek_public->publicArea.unique.rsa.size) != 1) {
+			    md_ctx, ek_public->publicArea.unique.rsa.buffer,
+			    ek_public->publicArea.unique.rsa.size) != 1) {
 			ret = -EIO;
 			goto cleanup;
 		}
 	} else if (ek_public->publicArea.type == TPM2_ALG_ECC) {
 		/* ECC: hash both X and Y coordinates */
 		if (EVP_DigestUpdate(
-			md_ctx, ek_public->publicArea.unique.ecc.x.buffer,
-			ek_public->publicArea.unique.ecc.x.size) != 1 ||
+			    md_ctx, ek_public->publicArea.unique.ecc.x.buffer,
+			    ek_public->publicArea.unique.ecc.x.size) != 1 ||
 		    EVP_DigestUpdate(
-			md_ctx, ek_public->publicArea.unique.ecc.y.buffer,
-			ek_public->publicArea.unique.ecc.y.size) != 1) {
+			    md_ctx, ek_public->publicArea.unique.ecc.y.buffer,
+			    ek_public->publicArea.unique.ecc.y.size) != 1) {
 			ret = -EIO;
 			goto cleanup;
 		}
@@ -2780,11 +2782,11 @@ int tpm_get_aik_tpmt_public(struct tpm_context *ctx, uint8_t *buf,
 
 	{
 		struct esys_read_public_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .object_handle = key_handle,
-		    .out_public_out = &out_public,
-		    .name_out = &name,
-		    .qualified_name_out = &qualified_name,
+			.esys_ctx = ctx->esys_ctx,
+			.object_handle = key_handle,
+			.out_public_out = &out_public,
+			.name_out = &name,
+			.qualified_name_out = &qualified_name,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args,
 					    &rc, 3, (void **)&out_public,
@@ -2819,9 +2821,10 @@ cleanup:
  * through this policy, so ActivateCredential needs a matching policy session.
  */
 static const uint8_t ek_rsa_auth_policy[32] = {
-    0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
-    0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
-    0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa};
+	0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
+	0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
+	0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa
+};
 
 /*
  * Populate the standard TCG RSA 2048 EK template. Reproducing it exactly
@@ -2836,9 +2839,9 @@ static void ek_rsa_template(TPM2B_PUBLIC *tmpl)
 	tmpl->publicArea.type = TPM2_ALG_RSA;
 	tmpl->publicArea.nameAlg = TPM2_ALG_SHA256;
 	tmpl->publicArea.objectAttributes =
-	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
-	    TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_ADMINWITHPOLICY |
-	    TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
+		TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+		TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_ADMINWITHPOLICY |
+		TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
 	tmpl->publicArea.authPolicy.size = sizeof(ek_rsa_auth_policy);
 	memcpy(tmpl->publicArea.authPolicy.buffer, ek_rsa_auth_policy,
 	       sizeof(ek_rsa_auth_policy));
@@ -2880,9 +2883,9 @@ static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
 
 	{
 		TPM2B_PUBLIC ek_template;
-		TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
-		TPM2B_DATA outside = {.size = 0};
-		TPML_PCR_SELECTION pcr = {.count = 0};
+		TPM2B_SENSITIVE_CREATE in_sensitive = { .size = 0 };
+		TPM2B_DATA outside = { .size = 0 };
+		TPML_PCR_SELECTION pcr = { .count = 0 };
 		TPM2B_PUBLIC *out_public = NULL;
 		TPM2B_CREATION_DATA *creation_data = NULL;
 		TPM2B_DIGEST *creation_hash = NULL;
@@ -2891,23 +2894,24 @@ static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
 		ek_rsa_template(&ek_template);
 
 		struct esys_create_primary_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .primary_handle = ESYS_TR_RH_ENDORSEMENT,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .in_sensitive = &in_sensitive,
-		    .in_public = &ek_template,
-		    .outside_info = &outside,
-		    .creation_pcr = &pcr,
-		    .object_handle_out = &ek_handle,
-		    .out_public_out = &out_public,
-		    .creation_data_out = &creation_data,
-		    .creation_hash_out = &creation_hash,
-		    .creation_ticket_out = &creation_ticket,
+			.esys_ctx = ctx->esys_ctx,
+			.primary_handle = ESYS_TR_RH_ENDORSEMENT,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.in_sensitive = &in_sensitive,
+			.in_public = &ek_template,
+			.outside_info = &outside,
+			.creation_pcr = &pcr,
+			.object_handle_out = &ek_handle,
+			.out_public_out = &out_public,
+			.creation_data_out = &creation_data,
+			.creation_hash_out = &creation_hash,
+			.creation_ticket_out = &creation_ticket,
 		};
-		ret = tpm_call_with_backoff(
-		    ctx, esys_create_primary_thunk, &args, &rc, 4,
-		    (void **)&out_public, (void **)&creation_data,
-		    (void **)&creation_hash, (void **)&creation_ticket);
+		ret = tpm_call_with_backoff(ctx, esys_create_primary_thunk,
+					    &args, &rc, 4, (void **)&out_public,
+					    (void **)&creation_data,
+					    (void **)&creation_hash,
+					    (void **)&creation_ticket);
 		Esys_Free(out_public);
 		Esys_Free(creation_data);
 		Esys_Free(creation_hash);
@@ -2961,7 +2965,7 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 	TPM2B_ID_OBJECT id_object;
 	TPM2B_ENCRYPTED_SECRET secret_2b;
 	TPM2B_DIGEST *cert_info = NULL;
-	TPMT_SYM_DEF sym = {.algorithm = TPM2_ALG_NULL};
+	TPMT_SYM_DEF sym = { .algorithm = TPM2_ALG_NULL };
 	size_t off;
 
 	if (!ctx || !ctx->initialized || !cred_blob || !enc_secret ||
@@ -2980,7 +2984,7 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 
 	off = 0;
 	rc = Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(
-	    enc_secret, enc_secret_len, &off, &secret_2b);
+		enc_secret, enc_secret_len, &off, &secret_2b);
 	if (rc != TSS2_RC_SUCCESS)
 		return -EINVAL;
 
@@ -2996,10 +3000,11 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 			return ret;
 	}
 	{
-		TPM2B_AUTH auth = {.size = TPM_AIK_AUTH_SIZE};
+		TPM2B_AUTH auth = { .size = TPM_AIK_AUTH_SIZE };
 		memcpy(auth.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
-		TPM_CALL_RETRY(
-		    ctx, rc, Esys_TR_SetAuth(ctx->esys_ctx, aik_handle, &auth));
+		TPM_CALL_RETRY(ctx, rc,
+			       Esys_TR_SetAuth(ctx->esys_ctx, aik_handle,
+					       &auth));
 		secure_bzero(auth.buffer, sizeof(auth.buffer));
 		if (rc != TSS2_RC_SUCCESS)
 			return tss2_rc_to_errno(rc);
@@ -3032,14 +3037,14 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
 
 	{
 		struct esys_activate_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .activate_handle = aik_handle,
-		    .key_handle = ek_handle,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .shandle2 = policy_session,
-		    .credential_blob = &id_object,
-		    .secret = &secret_2b,
-		    .cert_info_out = &cert_info,
+			.esys_ctx = ctx->esys_ctx,
+			.activate_handle = aik_handle,
+			.key_handle = ek_handle,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.shandle2 = policy_session,
+			.credential_blob = &id_object,
+			.secret = &secret_2b,
+			.cert_info_out = &cert_info,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_activate_thunk, &args,
 					    &rc, 1, (void **)&cert_info);
@@ -3139,8 +3144,8 @@ static int tpm_aik_auth_path_for_ctx(struct tpm_context *ctx, char *buf,
 	if (!ctx || !buf || buf_len == 0)
 		return -EINVAL;
 
-	meta_path =
-	    ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+	meta_path = ctx->aik_meta_path[0] ? ctx->aik_meta_path :
+					    TPM_AIK_META_PATH;
 	slash = strrchr(meta_path, '/');
 	if (!slash)
 		return -EINVAL;
@@ -3330,8 +3335,8 @@ static int tpm_aik_auth_sealed_path_for_ctx(struct tpm_context *ctx, char *buf,
 	if (!ctx || !buf || buf_len == 0)
 		return -EINVAL;
 
-	meta_path =
-	    ctx->aik_meta_path[0] ? ctx->aik_meta_path : TPM_AIK_META_PATH;
+	meta_path = ctx->aik_meta_path[0] ? ctx->aik_meta_path :
+					    TPM_AIK_META_PATH;
 	slash = strrchr(meta_path, '/');
 	if (!slash)
 		return -EINVAL;
@@ -3599,12 +3604,13 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 			return ret;
 
 		if (ret == 1) {
-			TPM_CALL_RETRY(
-			    ctx, rc,
-			    Esys_EvictControl(
-				ctx->esys_ctx, ESYS_TR_RH_OWNER, old_handle,
-				ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-				ctx->aik_handle, &persistent_handle));
+			TPM_CALL_RETRY(ctx, rc,
+				       Esys_EvictControl(
+					       ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					       old_handle, ESYS_TR_PASSWORD,
+					       ESYS_TR_NONE, ESYS_TR_NONE,
+					       ctx->aik_handle,
+					       &persistent_handle));
 			if (rc != TSS2_RC_SUCCESS)
 				return tss2_rc_to_errno(rc);
 			Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
@@ -3744,9 +3750,9 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 	wire.version = htole32(ctx->aik_meta.version);
 	wire.generation = htole64(ctx->aik_meta.generation);
 	wire.provisioned_at =
-	    (int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
+		(int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
 	wire.last_rotated_at =
-	    (int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
+		(int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
 	memset(wire._reserved, 0, sizeof(wire._reserved));
 
 	n = write(fd, &wire, sizeof(wire));
@@ -3967,16 +3973,17 @@ static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
 
 	{
 		struct esys_get_capability_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .capability = TPM2_CAP_TPM_PROPERTIES,
-		    .property = prop,
-		    .property_count = 1,
-		    .more_data_out = &more,
-		    .capability_data_out = &cap_data,
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_TPM_PROPERTIES,
+			.property = prop,
+			.property_count = 1,
+			.more_data_out = &more,
+			.capability_data_out = &cap_data,
 		};
-		int call_ret =
-		    tpm_call_with_backoff(ctx, esys_get_capability_thunk, &args,
-					  &rc, 1, (void **)&cap_data);
+		int call_ret = tpm_call_with_backoff(ctx,
+						     esys_get_capability_thunk,
+						     &args, &rc, 1,
+						     (void **)&cap_data);
 		if (call_ret < 0)
 			return call_ret;
 	}
@@ -4027,14 +4034,14 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 	/* read NV public to get size */
 	{
 		struct esys_nv_read_public_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .nv_index = nv_handle,
-		    .nv_public_out = &nv_public,
-		    .nv_name_out = &nv_name,
+			.esys_ctx = ctx->esys_ctx,
+			.nv_index = nv_handle,
+			.nv_public_out = &nv_public,
+			.nv_name_out = &nv_name,
 		};
 		int call_ret = tpm_call_with_backoff(
-		    ctx, esys_nv_read_public_thunk, &args, &rc, 2,
-		    (void **)&nv_public, (void **)&nv_name);
+			ctx, esys_nv_read_public_thunk, &args, &rc, 2,
+			(void **)&nv_public, (void **)&nv_name);
 		if (call_ret < 0)
 			return call_ret;
 	}
@@ -4057,17 +4064,18 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 
 		{
 			struct esys_nv_read_args args = {
-			    .esys_ctx = ctx->esys_ctx,
-			    .auth_handle = ESYS_TR_RH_OWNER,
-			    .nv_index = nv_handle,
-			    .shandle1 = ESYS_TR_PASSWORD,
-			    .size = (uint16_t)size_to_read,
-			    .offset = offset,
-			    .nv_data_out = &nv_data,
+				.esys_ctx = ctx->esys_ctx,
+				.auth_handle = ESYS_TR_RH_OWNER,
+				.nv_index = nv_handle,
+				.shandle1 = ESYS_TR_PASSWORD,
+				.size = (uint16_t)size_to_read,
+				.offset = offset,
+				.nv_data_out = &nv_data,
 			};
-			int call_ret = tpm_call_with_backoff(
-			    ctx, esys_nv_read_thunk, &args, &rc, 1,
-			    (void **)&nv_data);
+			int call_ret = tpm_call_with_backoff(ctx,
+							     esys_nv_read_thunk,
+							     &args, &rc, 1,
+							     (void **)&nv_data);
 			if (call_ret < 0)
 				return call_ret;
 		}
@@ -4105,9 +4113,9 @@ static void seal_primary_template(TPM2B_PUBLIC *pub)
 	pub->publicArea.type = TPM2_ALG_RSA;
 	pub->publicArea.nameAlg = TPM2_ALG_SHA256;
 	pub->publicArea.objectAttributes =
-	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
-	    TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
-	    TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
+		TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
+		TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
+		TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT;
 	pub->publicArea.parameters.rsaDetail.symmetric.algorithm = TPM2_ALG_AES;
 	pub->publicArea.parameters.rsaDetail.symmetric.keyBits.aes = 128;
 	pub->publicArea.parameters.rsaDetail.symmetric.mode.aes = TPM2_ALG_CFB;
@@ -4121,9 +4129,9 @@ static int seal_create_primary_derive(struct tpm_context *ctx,
 				      ESYS_TR *out_handle)
 {
 	TPM2B_PUBLIC in_public;
-	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
-	TPM2B_DATA outside_info = {.size = 0};
-	TPML_PCR_SELECTION creation_pcr = {.count = 0};
+	TPM2B_SENSITIVE_CREATE in_sensitive = { .size = 0 };
+	TPM2B_DATA outside_info = { .size = 0 };
+	TPML_PCR_SELECTION creation_pcr = { .count = 0 };
 	TPM2B_PUBLIC *out_public = NULL;
 	TPM2B_CREATION_DATA *creation_data = NULL;
 	TPM2B_DIGEST *creation_hash = NULL;
@@ -4134,23 +4142,24 @@ static int seal_create_primary_derive(struct tpm_context *ctx,
 	seal_primary_template(&in_public);
 
 	struct esys_create_primary_args args = {
-	    .esys_ctx = ctx->esys_ctx,
-	    .primary_handle = ESYS_TR_RH_OWNER,
-	    .shandle1 = ESYS_TR_PASSWORD,
-	    .in_sensitive = &in_sensitive,
-	    .in_public = &in_public,
-	    .outside_info = &outside_info,
-	    .creation_pcr = &creation_pcr,
-	    .object_handle_out = out_handle,
-	    .out_public_out = &out_public,
-	    .creation_data_out = &creation_data,
-	    .creation_hash_out = &creation_hash,
-	    .creation_ticket_out = &creation_ticket,
+		.esys_ctx = ctx->esys_ctx,
+		.primary_handle = ESYS_TR_RH_OWNER,
+		.shandle1 = ESYS_TR_PASSWORD,
+		.in_sensitive = &in_sensitive,
+		.in_public = &in_public,
+		.outside_info = &outside_info,
+		.creation_pcr = &creation_pcr,
+		.object_handle_out = out_handle,
+		.out_public_out = &out_public,
+		.creation_data_out = &creation_data,
+		.creation_hash_out = &creation_hash,
+		.creation_ticket_out = &creation_ticket,
 	};
-	ret = tpm_call_with_backoff(
-	    ctx, esys_create_primary_thunk, &args, &rc, 4, (void **)&out_public,
-	    (void **)&creation_data, (void **)&creation_hash,
-	    (void **)&creation_ticket);
+	ret = tpm_call_with_backoff(ctx, esys_create_primary_thunk, &args, &rc,
+				    4, (void **)&out_public,
+				    (void **)&creation_data,
+				    (void **)&creation_hash,
+				    (void **)&creation_ticket);
 	Esys_Free(out_public);
 	Esys_Free(creation_data);
 	Esys_Free(creation_hash);
@@ -4170,9 +4179,10 @@ static int seal_primary_lookup_persistent(struct tpm_context *ctx,
 	TSS2_RC rc;
 
 	TPM_CALL_RETRY(ctx, rc,
-		       Esys_TR_FromTPMPublic(
-			   ctx->esys_ctx, TPM_SEAL_PRIMARY_HANDLE, ESYS_TR_NONE,
-			   ESYS_TR_NONE, ESYS_TR_NONE, &handle));
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx,
+					     TPM_SEAL_PRIMARY_HANDLE,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, &handle));
 	if (rc == TSS2_RC_SUCCESS) {
 		*out_handle = handle;
 		return 1;
@@ -4233,7 +4243,7 @@ static void seal_mask_to_selection(uint32_t pcr_mask, TPML_PCR_SELECTION *sel)
 	for (uint32_t i = 0; i < LOTA_PCR_COUNT; i++) {
 		if (pcr_mask & (1U << i))
 			sel->pcrSelections[0].pcrSelect[i / 8] |=
-			    (uint8_t)(1U << (i % 8));
+				(uint8_t)(1U << (i % 8));
 	}
 }
 
@@ -4299,7 +4309,7 @@ static int seal_compute_policy_digest(struct tpm_context *ctx,
 				      const TPML_PCR_SELECTION *sel,
 				      TPM2B_DIGEST *out_policy)
 {
-	TPMT_SYM_DEF sym = {.algorithm = TPM2_ALG_NULL};
+	TPMT_SYM_DEF sym = { .algorithm = TPM2_ALG_NULL };
 	ESYS_TR session = ESYS_TR_NONE;
 	TPM2B_DIGEST *policy = NULL;
 	TSS2_RC rc;
@@ -4307,9 +4317,9 @@ static int seal_compute_policy_digest(struct tpm_context *ctx,
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_StartAuthSession(
-			   ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-			   ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL,
-			   TPM2_SE_TRIAL, &sym, TPM2_ALG_SHA256, &session));
+			       ctx->esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+			       ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+			       TPM2_SE_TRIAL, &sym, TPM2_ALG_SHA256, &session));
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
@@ -4323,9 +4333,9 @@ static int seal_compute_policy_digest(struct tpm_context *ctx,
 
 	{
 		struct esys_policy_get_digest_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .session = session,
-		    .digest_out = &policy,
+			.esys_ctx = ctx->esys_ctx,
+			.session = session,
+			.digest_out = &policy,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_policy_get_digest_thunk,
 					    &args, &rc, 1, (void **)&policy);
@@ -4394,12 +4404,12 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 {
 	ESYS_TR primary = ESYS_TR_NONE;
 	bool primary_persistent = false;
-	TPM2B_PUBLIC in_public = {.size = 0};
-	TPM2B_SENSITIVE_CREATE in_sensitive = {.size = 0};
-	TPM2B_DATA outside_info = {.size = 0};
-	TPML_PCR_SELECTION creation_pcr = {.count = 0};
+	TPM2B_PUBLIC in_public = { .size = 0 };
+	TPM2B_SENSITIVE_CREATE in_sensitive = { .size = 0 };
+	TPM2B_DATA outside_info = { .size = 0 };
+	TPML_PCR_SELECTION creation_pcr = { .count = 0 };
 	TPML_PCR_SELECTION sel;
-	TPM2B_DIGEST policy = {.size = 0};
+	TPM2B_DIGEST policy = { .size = 0 };
 	TPM2B_PRIVATE *out_private = NULL;
 	TPM2B_PUBLIC *out_public = NULL;
 	TPM2B_CREATION_DATA *creation_data = NULL;
@@ -4435,13 +4445,13 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 	/* Sealed keyed-hash data object: no userAuth, policy-gated unseal. */
 	in_public.publicArea.type = TPM2_ALG_KEYEDHASH;
 	in_public.publicArea.nameAlg = TPM2_ALG_SHA256;
-	in_public.publicArea.objectAttributes =
-	    TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT;
+	in_public.publicArea.objectAttributes = TPMA_OBJECT_FIXEDTPM |
+						TPMA_OBJECT_FIXEDPARENT;
 	in_public.publicArea.authPolicy.size = policy.size;
 	memcpy(in_public.publicArea.authPolicy.buffer, policy.buffer,
 	       policy.size);
 	in_public.publicArea.parameters.keyedHashDetail.scheme.scheme =
-	    TPM2_ALG_NULL;
+		TPM2_ALG_NULL;
 
 	in_sensitive.sensitive.userAuth.size = 0;
 	in_sensitive.sensitive.data.size = (uint16_t)secret_len;
@@ -4449,24 +4459,25 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 
 	{
 		struct esys_create_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .parent = primary,
-		    .shandle1 = ESYS_TR_PASSWORD,
-		    .in_sensitive = &in_sensitive,
-		    .in_public = &in_public,
-		    .outside_info = &outside_info,
-		    .creation_pcr = &creation_pcr,
-		    .out_private_out = &out_private,
-		    .out_public_out = &out_public,
-		    .creation_data_out = &creation_data,
-		    .creation_hash_out = &creation_hash,
-		    .creation_ticket_out = &creation_ticket,
+			.esys_ctx = ctx->esys_ctx,
+			.parent = primary,
+			.shandle1 = ESYS_TR_PASSWORD,
+			.in_sensitive = &in_sensitive,
+			.in_public = &in_public,
+			.outside_info = &outside_info,
+			.creation_pcr = &creation_pcr,
+			.out_private_out = &out_private,
+			.out_public_out = &out_public,
+			.creation_data_out = &creation_data,
+			.creation_hash_out = &creation_hash,
+			.creation_ticket_out = &creation_ticket,
 		};
-		ret = tpm_call_with_backoff(
-		    ctx, esys_create_thunk, &args, &rc, 5,
-		    (void **)&out_private, (void **)&out_public,
-		    (void **)&creation_data, (void **)&creation_hash,
-		    (void **)&creation_ticket);
+		ret = tpm_call_with_backoff(ctx, esys_create_thunk, &args, &rc,
+					    5, (void **)&out_private,
+					    (void **)&out_public,
+					    (void **)&creation_data,
+					    (void **)&creation_hash,
+					    (void **)&creation_ticket);
 		if (ret < 0)
 			goto out;
 	}
@@ -4495,7 +4506,7 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 
 	{
 		size_t total =
-		    (size_t)LOTA_SEAL_HEADER_SIZE + pub_off + priv_off;
+			(size_t)LOTA_SEAL_HEADER_SIZE + pub_off + priv_off;
 		if (total > out_cap) {
 			ret = -ENOSPC;
 			goto out;
@@ -4529,8 +4540,8 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 {
 	struct lota_seal_meta meta;
 	size_t body_off = 0;
-	TPM2B_PUBLIC sealed_public = {.size = 0};
-	TPM2B_PRIVATE sealed_private = {.size = 0};
+	TPM2B_PUBLIC sealed_public = { .size = 0 };
+	TPM2B_PRIVATE sealed_private = { .size = 0 };
 	TPML_PCR_SELECTION sel;
 	ESYS_TR primary = ESYS_TR_NONE;
 	bool primary_persistent = false;
@@ -4538,9 +4549,9 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	ESYS_TR session = ESYS_TR_NONE;
 	TPM2B_SENSITIVE_DATA *data = NULL;
 	TPMT_SYM_DEF sym = {
-	    .algorithm = TPM2_ALG_AES,
-	    .keyBits.aes = 128,
-	    .mode.aes = TPM2_ALG_CFB,
+		.algorithm = TPM2_ALG_AES,
+		.keyBits.aes = 128,
+		.mode.aes = TPM2_ALG_CFB,
 	};
 	size_t off;
 	TSS2_RC rc;
@@ -4584,10 +4595,11 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	 * encryption, so the unsealed secret is encrypted on the TPM transport.
 	 */
 	TPM_CALL_RETRY(ctx, rc,
-		       Esys_StartAuthSession(
-			   ctx->esys_ctx, primary, ESYS_TR_NONE, ESYS_TR_NONE,
-			   ESYS_TR_NONE, ESYS_TR_NONE, NULL, TPM2_SE_POLICY,
-			   &sym, TPM2_ALG_SHA256, &session));
+		       Esys_StartAuthSession(ctx->esys_ctx, primary,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+					     TPM2_SE_POLICY, &sym,
+					     TPM2_ALG_SHA256, &session));
 	if (rc != TSS2_RC_SUCCESS) {
 		ret = tss2_rc_to_errno(rc);
 		goto out;
@@ -4596,9 +4608,9 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_TRSess_SetAttributes(ctx->esys_ctx, session,
 						 TPMA_SESSION_CONTINUESESSION |
-						     TPMA_SESSION_ENCRYPT,
+							 TPMA_SESSION_ENCRYPT,
 						 TPMA_SESSION_CONTINUESESSION |
-						     TPMA_SESSION_ENCRYPT));
+							 TPMA_SESSION_ENCRYPT));
 	if (rc != TSS2_RC_SUCCESS) {
 		ret = tss2_rc_to_errno(rc);
 		goto out;
@@ -4614,10 +4626,10 @@ int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 
 	{
 		struct esys_unseal_args args = {
-		    .esys_ctx = ctx->esys_ctx,
-		    .item = sealed,
-		    .session = session,
-		    .data_out = &data,
+			.esys_ctx = ctx->esys_ctx,
+			.item = sealed,
+			.session = session,
+			.data_out = &data,
 		};
 		ret = tpm_call_with_backoff(ctx, esys_unseal_thunk, &args, &rc,
 					    1, (void **)&data);
@@ -4706,8 +4718,8 @@ int tpm_seal_secret_envelope(struct tpm_context *ctx, const uint8_t *payload,
 	memcpy(out + header_off, kek_blob, kek_blob_len);
 
 	ret = lota_envelope_aead_seal(
-	    kek, meta.nonce, out, header_off + kek_blob_len, payload,
-	    payload_len, out + header_off + kek_blob_len, meta.tag);
+		kek, meta.nonce, out, header_off + kek_blob_len, payload,
+		payload_len, out + header_off + kek_blob_len, meta.tag);
 	if (ret < 0)
 		goto out_kek;
 

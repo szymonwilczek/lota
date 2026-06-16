@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/random.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../../include/lota.h"
 #include "agent.h"

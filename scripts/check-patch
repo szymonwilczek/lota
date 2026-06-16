@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Local contributor-side patch quality checker.
 #
 # This script checks the local commit range before a branch is pushed. It reuses
@@ -34,7 +36,9 @@ Checks:
   - body detail proportional to changed files and lines,
   - trailing whitespace in patches and commit messages,
   - clang-format and gofmt on changed C, header, and Go files,
-  - full project build.
+  - full project build,
+  - include hygiene when C changes (skipped if clang-include-cleaner or
+    bear is missing).
 USAGE
 }
 
@@ -50,6 +54,11 @@ fail() {
 
 note() {
 	printf 'INFO %s\n' "$1"
+}
+
+skip() {
+	printf 'SKIP %s\n' "$1"
+	printf '     %s\n' "$2"
 }
 
 short_commit() {
@@ -514,6 +523,44 @@ check_build() {
 	fi
 }
 
+# Include hygiene:
+# Every header used directly, no transitive deps.
+# Heavy (a full bear-built compile database), so it only runs when the patch
+# touches C, and skips when the tooling is absent rather than forcing every
+# contributor to install it
+check_includes() {
+	local path
+	local touches_c=0
+
+	for path in "$@"; do
+		case "$path" in
+		*.c | *.h)
+			touches_c=1
+			break
+			;;
+		esac
+	done
+
+	if ((touches_c == 0)); then
+		pass "include-hygiene"
+		return
+	fi
+
+	if ! command -v clang-include-cleaner >/dev/null 2>&1 ||
+		! command -v bear >/dev/null 2>&1; then
+		skip "include-hygiene" \
+			"install clang-include-cleaner (clang-tools-extra) and bear to run it."
+		return
+	fi
+
+	if scripts/check-includes.sh; then
+		pass "include-hygiene"
+	else
+		fail "include-hygiene" \
+			"remove transitive includes; auto-fix with scripts/fix-includes.sh."
+	fi
+}
+
 main() {
 	local base=""
 	local head="HEAD"
@@ -565,6 +612,7 @@ main() {
 	check_clang_format "${changed_files[@]}"
 	check_gofmt "${changed_files[@]}"
 	check_build
+	check_includes "${changed_files[@]}"
 
 	if ((FAILURES != 0)); then
 		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"

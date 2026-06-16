@@ -21,6 +21,8 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../include/lota_gaming.h"
 #include "../include/lota_ipc.h"
@@ -28,21 +30,21 @@
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-50s ", tests_run, name);                     \
+#define TEST(name)                                         \
+	do {                                               \
+		tests_run++;                               \
+		printf("  [%2d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 static char test_socket[64];
@@ -249,7 +251,7 @@ static void server_subscribe_and_notify(int client_fd)
 
 	if (send_notify(client_fd, LOTA_IPC_EVENT_ATTEST,
 			LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
-			    LOTA_STATUS_IOMMU_OK,
+				LOTA_STATUS_IOMMU_OK,
 			1001, 2001, 6, 1, 1) < 0)
 		_exit(5);
 
@@ -295,7 +297,7 @@ static void server_interleaved_notify(int client_fd)
 static void server_unsubscribe(int client_fd)
 {
 	struct lota_ipc_request req;
-	struct lota_ipc_subscribe_request sub = {0};
+	struct lota_ipc_subscribe_request sub = { 0 };
 
 	/* read SUBSCRIBE */
 	if (recv_request(client_fd, &req, &sub, sizeof(sub)) < 0)

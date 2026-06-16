@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Runtime protected PID digest helper.
  *
@@ -21,11 +22,11 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "lota_endian.h"
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+
+#include "lota_endian.h"
 
 #define LOTA_RUNTIME_PROTECT_DIGEST_SIZE 32
 
@@ -115,8 +116,8 @@ out:
  * quote attests.
  */
 static inline int lota_compute_runtime_protect_digest_v2(
-    const uint32_t *pids, const uint8_t (*image_digests)[32],
-    uint32_t pid_count, uint8_t out_digest[32])
+	const uint32_t *pids, const uint8_t (*image_digests)[32],
+	uint32_t pid_count, uint8_t out_digest[32])
 {
 	static const uint8_t domain[] = "lota-runtime-protect-pids:v2\0";
 	EVP_MD_CTX *mdctx = NULL;

@@ -1,0 +1,23 @@
+name: notify-fuzz
+
+on:
+  push:
+    branches: [lota-next]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ping:
+    name: Notify the fuzz host
+    runs-on: ubuntu-24.04
+    environment: fuzz-notify
+    steps:
+      - name: Ping the fuzz host relay
+        env:
+          TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TOKEN: ${{ secrets.NTFY_TOKEN }}
+        run: curl -fsS -d "push ${GITHUB_SHA} ${TOKEN}" "https://ntfy.sh/${TOPIC}"

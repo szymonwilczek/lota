@@ -37,7 +37,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -eu
-          for mod in src/verifier src/attestca src/sdk/server; do
+          for mod in src/verifier src/attestca src/sdk/server src/crl; do
             (cd "$mod" && go mod tidy)
           done
           if ! git diff --exit-code -- '**/go.mod' '**/go.sum'; then
@@ -52,23 +52,90 @@ jobs:
         working-directory: src/attestca
         run: go test ./...
 
+      - name: Run crl tests
+        working-directory: src/crl
+        run: go test ./...
+
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6.5.2
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
         with:
-          version: v1.64.8
+          version: v2.12.2
           working-directory: src/verifier
           args: --config ../../.golangci.yml ./...
 
       - name: Run golangci-lint (attestca)
-        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6.5.2
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
         with:
-          version: v1.64.8
+          version: v2.12.2
           working-directory: src/attestca
           args: --config ../../.golangci.yml ./...
+
+      - name: Run golangci-lint (crl)
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
+        with:
+          version: v2.12.2
+          working-directory: src/crl
+          args: --config ../../.golangci.yml ./...
+
+  pkcs11-softhsm:
+    name: pkcs11-softhsm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install SoftHSM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends softhsm2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/attestca/go.mod
+          cache-dependency-path: src/attestca/go.sum
+
+      - name: Initialise a SoftHSM token
+        run: |
+          set -eu
+          conf="$RUNNER_TEMP/softhsm2.conf"
+          tokens="$RUNNER_TEMP/softhsm-tokens"
+          mkdir -p "$tokens"
+          printf 'directories.tokendir = %s\nobjectstore.backend = file\n' \
+            "$tokens" >"$conf"
+          export SOFTHSM2_CONF="$conf"
+          softhsm2-util --init-token --free --label lota-ca \
+            --pin 1234 --so-pin 12345678
+          echo "SOFTHSM2_CONF=$conf" >>"$GITHUB_ENV"
+
+      - name: Exercise the PKCS#11 CA signer against SoftHSM
+        working-directory: src/attestca
+        env:
+          CGO_ENABLED: "1"
+          LOTA_TEST_PKCS11_MODULE: /usr/lib/softhsm/libsofthsm2.so
+          LOTA_TEST_PKCS11_TOKEN: lota-ca
+          LOTA_CA_PKCS11_PIN: "1234"
+        run: go test -tags pkcs11 -run TestPKCS11SignerIssuesAIK -count=1 -v .
 
   go-coverage:
     name: go-coverage-ratchet
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+        env:
+          POSTGRES_USER: lota
+          POSTGRES_PASSWORD: lota
+          POSTGRES_DB: lota
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lota"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,6 +152,11 @@ jobs:
         # Fails if any Go package drops below its recorded floor in
         # .github/go-coverage-baseline. Raise the floors as tests land;
         # the target is 100%.
+        # Postgres service lets the verifier module run its
+        # pg_integration-tagged tests so the Postgres
+        # store/session code counts toward the floors.
+        env:
+          LOTA_TEST_PG_DSN: postgres://lota:lota@127.0.0.1:5432/lota?sslmode=disable
         run: ./scripts/check-go-coverage.sh
 
   go-licenses:
@@ -135,63 +207,23 @@ jobs:
           done
           exit "$rc"
 
-  go-fuzz-discover:
-    name: go-fuzz (discover)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      SHARDS: 5
-    outputs:
-      matrix: ${{ steps.list.outputs.matrix }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: List and shard fuzz targets
-        id: list
-        run: |
-          set -eu
-          targets=()
-          for mod in src/verifier src/sdk/server src/attestca; do
-            while IFS= read -r file; do
-              pkg="./$(dirname "$file")"
-              while IFS= read -r fn; do
-                targets+=("$mod|$pkg|$fn")
-              done < <(grep -oE '^func Fuzz[A-Za-z0-9_]+' "$mod/$file" \
-                       | awk '{print $2}')
-            done < <(cd "$mod" \
-                     && grep -rlE '^func Fuzz' --include='*_test.go' . \
-                     | sed 's#^\./##')
-          done
-          n=${#targets[@]}
-          json='[]'
-          for ((s = 0; s < SHARDS; s++)); do
-            bucket=""
-            for ((i = s; i < n; i += SHARDS)); do
-              bucket="$bucket ${targets[i]}"
-            done
-            bucket="$(echo "$bucket" | xargs)"
-            [ -z "$bucket" ] && continue
-            json="$(jq -c --arg name "shard-$((s + 1))" --arg t "$bucket" \
-              '. + [{name: $name, targets: $t}]' <<<"$json")"
-          done
-          echo "discovered $n targets across $(jq length <<<"$json") shards"
-          echo "matrix=$json" >> "$GITHUB_OUTPUT"
-
-  go-fuzz:
-    name: go-fuzz
-    needs: go-fuzz-discover
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    strategy:
-      # a crash in one shard must not cancel the others
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJson(needs.go-fuzz-discover.outputs.matrix) }}
+  postgres-integration:
+    name: postgres-integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+        env:
+          POSTGRES_USER: lota
+          POSTGRES_PASSWORD: lota
+          POSTGRES_DB: lota
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lota"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -201,39 +233,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # every module is on the same go directive; one toolchain serves the
-          # whole shard regardless of which modules its targets come from
           go-version-file: src/verifier/go.mod
-          cache-dependency-path: |
-            src/verifier/go.sum
-            src/sdk/server/go.sum
-            src/attestca/go.sum
+          cache-dependency-path: src/verifier/go.sum
 
-      - name: Fuzz ${{ matrix.shard.name }}
-        # Runs each fuzz target in the shard for a bounded time against random
-        # input on top of its seed corpus. The targets cover the code that
-        # parses untrusted bytes -- attestation tokens, TPM quote/attest blobs,
-        # event logs, certificates, signed policies and the enrollment wire/AIK
-        # areas -- so a panic or unhandled input is shaken out before it reaches
-        # a live verifier or CA. Crash leaves a reproducer under testdata/fuzz
-        # and fails the shard.
-        # syzkaller fuzzes the BPF/kernel surface out of band;
-        # this is the in-tree parser coverage on every pull request.
-        # The shard's "module|pkg|fn" list is passed through env, not the shell.
+      # exercises the Postgres store backend against a real server: schema
+      # migration idempotency, the AIK/revocation/ban/audit/attestation
+      # stores, and the boot-baseline atomic pin contract (including the
+      # concurrent first-use race).
+      # -p 1 keeps the two packages from racing each other's TRUNCATE
+      # on the shared database
+      - name: Run Postgres integration tests
+        working-directory: src/verifier
         env:
-          FUZZTIME: 60s
-          SHARD_TARGETS: ${{ matrix.shard.targets }}
-        run: |
-          set -eu
-          rc=0
-          for entry in $SHARD_TARGETS; do
-            mod="${entry%%|*}"
-            rest="${entry#*|}"
-            pkg="${rest%%|*}"
-            fn="${rest##*|}"
-            echo "::group::fuzz $mod $pkg $fn"
-            (cd "$mod" && go test -run='^$' -fuzz="^${fn}\$" \
-              -fuzztime="$FUZZTIME" "$pkg") || rc=1
-            echo "::endgroup::"
-          done
-          exit "$rc"
+          LOTA_TEST_PG_DSN: postgres://lota:lota@127.0.0.1:5432/lota?sslmode=disable
+        run: go test -tags pg_integration -p 1 -count=1 -v ./store/ ./verify/

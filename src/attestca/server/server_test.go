@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 
 package server
 
@@ -73,21 +74,21 @@ func startServer(t *testing.T, svc *enroll.Service) (addr string, clientPool *x5
 	}
 }
 
-func newSvc(t *testing.T) (*enroll.Service, tpmtest.Root) {
-	t.Helper()
-	root := tpmtest.NewVendorRoot(t, "vendor-root")
-	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(t)
+func newSvc(tb testing.TB) (*enroll.Service, tpmtest.Root) {
+	tb.Helper()
+	root := tpmtest.NewVendorRoot(tb, "vendor-root")
+	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(tb)
 	issuer, err := ca.NewIssuer(ca.IssuerConfig{
 		CACertPEM:  caCertPEM,
 		CAKeyPEM:   caKeyPEM,
 		EKRootPEMs: [][]byte{tpmtest.PEM("CERTIFICATE", root.DER)},
 	})
 	if err != nil {
-		t.Fatalf("issuer: %v", err)
+		tb.Fatalf("issuer: %v", err)
 	}
 	svc, err := enroll.NewService(issuer, []byte("pseudonym-key-0123456789abcdef"))
 	if err != nil {
-		t.Fatalf("service: %v", err)
+		tb.Fatalf("service: %v", err)
 	}
 	return svc, root
 }

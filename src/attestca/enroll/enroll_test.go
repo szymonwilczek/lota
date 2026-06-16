@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 
 package enroll
 
@@ -12,21 +13,21 @@ import (
 	"github.com/szymonwilczek/lota/attestca/internal/tpmtest"
 )
 
-func newTestService(t *testing.T, opts ...Option) (*Service, tpmtest.Root) {
-	t.Helper()
-	root := tpmtest.NewVendorRoot(t, "tpm-vendor-root")
-	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(t)
+func newTestService(tb testing.TB, opts ...Option) (*Service, tpmtest.Root) {
+	tb.Helper()
+	root := tpmtest.NewVendorRoot(tb, "tpm-vendor-root")
+	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(tb)
 	issuer, err := ca.NewIssuer(ca.IssuerConfig{
 		CACertPEM:  caCertPEM,
 		CAKeyPEM:   caKeyPEM,
 		EKRootPEMs: [][]byte{tpmtest.PEM("CERTIFICATE", root.DER)},
 	})
 	if err != nil {
-		t.Fatalf("NewIssuer: %v", err)
+		tb.Fatalf("NewIssuer: %v", err)
 	}
 	svc, err := NewService(issuer, []byte("pseudonym-key-0123456789abcdef"), opts...)
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		tb.Fatalf("NewService: %v", err)
 	}
 	return svc, root
 }

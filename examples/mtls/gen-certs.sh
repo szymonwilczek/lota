@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Provision the mutual-TLS material that authenticates the anti-cheat
 # heartbeat producer to the game server and the game server back to the
@@ -17,7 +18,7 @@
 #   producer.crt / producer.key  anti-cheat producer identity (clientAuth)
 #
 # Rotation: re-run with -server or -producer to reissue just that leaf
-# against the existing CA, then restart the reissued side. See README.md.
+# against the existing CA, then restart the reissued side. See README.rst.
 
 set -euo pipefail
 

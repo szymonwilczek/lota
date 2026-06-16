@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # scripts/check-go-coverage.sh
 #
@@ -16,7 +17,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASELINE="${1:-$ROOT/.github/go-coverage-baseline}"
-MODULES=(src/verifier src/attestca src/sdk/server)
+MODULES=(src/verifier src/attestca src/sdk/server src/crl)
 
 if [[ ! -f "$BASELINE" ]]; then
 	echo "baseline file not found: $BASELINE" >&2
@@ -33,7 +34,15 @@ out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 
 for m in "${MODULES[@]}"; do
-	(cd "$ROOT/$m" && go test -cover ./...) | tee -a "$out"
+	extra=()
+	# Postgres-backed stores only run under the pg_integration tag
+	# against a live server; without them the store/verify floors
+	# cannot be met.
+	# -p 1 serializes the two packages sharing one database.
+	if [[ "$m" == src/verifier && -n "${LOTA_TEST_PG_DSN:-}" ]]; then
+		extra=(-tags pg_integration -p 1)
+	fi
+	(cd "$ROOT/$m" && go test "${extra[@]}" -cover ./...) | tee -a "$out"
 done
 
 rc=0

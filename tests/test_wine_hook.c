@@ -19,30 +19,38 @@
 #ifndef LOTA_HOOK_TESTING
 #define LOTA_HOOK_TESTING
 #endif
-#include "../src/sdk/lota_wine_hook.c"
-
-#include <assert.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "../src/sdk/lota_wine_hook.c"
+#include "lota_gaming.h"
 
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-50s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 /* temp directory for test artifacts */
@@ -550,8 +558,8 @@ static void test_write_status_attested(void)
 		 "%s/status_att", tmpdir);
 
 	memset(&status, 0, sizeof(status));
-	status.flags =
-	    LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK | LOTA_FLAG_BPF_LOADED;
+	status.flags = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK |
+		       LOTA_FLAG_BPF_LOADED;
 	status.valid_until = 1738957200;
 	status.attest_count = 42;
 	status.fail_count = 1;
@@ -693,8 +701,7 @@ static void test_policy_default_skips_legacy_bin(void)
 	    !policy_should_activate("/lib64/ld-linux-x86-64.so.2", NULL, NULL))
 		PASS();
 	else
-		FAIL(
-		    "legacy /bin /sbin /lib /lib64 must be skipped by default");
+		FAIL("legacy /bin /sbin /lib /lib64 must be skipped by default");
 }
 
 static void test_policy_default_skips_pressure_vessel_host(void)
@@ -714,9 +721,9 @@ static void test_policy_default_activates_steam_path(void)
 {
 	TEST("policy: default activates Steam install paths");
 	if (policy_should_activate(
-		"~/.local/share/Steam/steamapps/common/"
-		"Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2",
-		NULL, NULL) &&
+		    "~/.local/share/Steam/steamapps/common/"
+		    "Counter-Strike Global Offensive/game/bin/linuxsteamrt64/cs2",
+		    NULL, NULL) &&
 	    policy_should_activate("~/.local/share/Steam/ubuntu12_32/reaper",
 				   NULL, NULL))
 		PASS();
@@ -740,8 +747,8 @@ static void test_policy_default_activates_snap_and_flatpak(void)
 	TEST("policy: default activates /snap and Flatpak paths");
 	if (policy_should_activate("/snap/cs2/current/cs2", NULL, NULL) &&
 	    policy_should_activate(
-		"/var/lib/flatpak/app/com.valvesoftware.Steam/current/cs2",
-		NULL, NULL))
+		    "/var/lib/flatpak/app/com.valvesoftware.Steam/current/cs2",
+		    NULL, NULL))
 		PASS();
 	else
 		FAIL("Snap and Flatpak operator-installed paths must activate");
@@ -749,8 +756,7 @@ static void test_policy_default_activates_snap_and_flatpak(void)
 
 static void test_policy_empty_exe_defaults_to_activate(void)
 {
-	TEST(
-	    "policy: empty exe falls back to activate (read_self_exe failure)");
+	TEST("policy: empty exe falls back to activate (read_self_exe failure)");
 	if (policy_should_activate("", NULL, NULL) &&
 	    policy_should_activate(NULL, NULL, NULL))
 		PASS();
@@ -775,7 +781,8 @@ static void test_policy_activate_pin_is_positive(void)
 	TEST("policy: LOTA_HOOK_ACTIVATE_PATH is a positive pin");
 	const char *allow = "~/.local/share/Steam,/opt/games";
 	if (policy_should_activate(
-		"~/.local/share/Steam/steamapps/common/cs2/cs2", allow, NULL) &&
+		    "~/.local/share/Steam/steamapps/common/cs2/cs2", allow,
+		    NULL) &&
 	    policy_should_activate("/opt/games/foo", allow, NULL) &&
 	    !policy_should_activate("/usr/bin/bash", allow, NULL) &&
 	    !policy_should_activate("/tmp/random/binary", allow, NULL) &&

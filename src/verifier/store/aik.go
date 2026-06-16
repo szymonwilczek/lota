@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - AIK key store
 //
 // Manages Attestation Identity Keys. The production trust model is
@@ -36,6 +37,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/szymonwilczek/lota/crl"
 )
 
 var ErrAIKNotFound = errors.New("AIK not found")
@@ -142,7 +145,7 @@ type FileStore struct {
 
 // creates a new file-based AIK store
 func NewFileStore(storePath string) (*FileStore, error) {
-	if err := os.MkdirAll(storePath, 0700); err != nil {
+	if err := os.MkdirAll(storePath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 
@@ -284,7 +287,7 @@ func (fs *FileStore) saveMeta(clientID string, regTime time.Time) error {
 	}
 
 	path := filepath.Join(fs.storePath, clientID+".meta")
-	return os.WriteFile(path, data, 0600)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func (fs *FileStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
@@ -470,7 +473,7 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 // failure is not lost. When removeOnError is set, any failure unlinks path
 // so a partial key file is not left behind.
 func writeKeyPEM(path string, flag int, block *pem.Block, removeOnError bool) (err error) {
-	f, err := os.OpenFile(path, flag, 0600)
+	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
 		return err
 	}
@@ -519,7 +522,7 @@ func (fs *FileStore) RegisterHardwareID(clientID string, hardwareID [32]byte) er
 
 	// store new hardware ID to file
 	path := filepath.Join(fs.storePath, clientID+".hwid")
-	if err := os.WriteFile(path, hardwareID[:], 0600); err != nil {
+	if err := os.WriteFile(path, hardwareID[:], 0o600); err != nil {
 		return fmt.Errorf("failed to store hardware ID: %w", err)
 	}
 
@@ -739,8 +742,20 @@ type CertificateStore struct {
 	// set in via crls.Store so concurrent verify paths see the new feed
 	// without holding a long lock.
 	crlPaths []string
-	crls     atomic.Pointer[revocationListSet]
+	crls     atomic.Pointer[crl.Set]
 }
+
+// CRL sentinels re-exported from the shared crl module so existing
+// errors.Is callers keep matching against the store API after the
+// engine moved out of this package.
+var (
+	ErrCertificateRevoked   = crl.ErrCertificateRevoked
+	ErrCRLStale             = crl.ErrCRLStale
+	ErrCRLSignature         = crl.ErrCRLSignature
+	ErrCRLNoIssuer          = crl.ErrCRLNoIssuer
+	ErrCRLMissingNextUpdate = crl.ErrCRLMissingNextUpdate
+	ErrCRLWeakSignature     = crl.ErrCRLWeakSignature
+)
 
 // TCG EK Credential Profile OID for TPM 2.0
 var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
@@ -812,7 +827,7 @@ func NewCertificateStore(storePath string, caCertPaths []string, requireCerts bo
 // roots at load time; a CRL whose signature does not chain or whose
 // issuer is unknown is rejected up front. Lookups during certificate
 // verification consult these lists in addition to the chain check.
-func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
+func NewCertificateStoreWithCRL(storePath string, caCertPaths, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
 	if requireCerts && len(caCertPaths) == 0 {
 		return nil, ErrNoTrustedCAs
 	}
@@ -829,7 +844,7 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths
 		requireCerts: requireCerts,
 		crlPaths:     append([]string(nil), crlPaths...),
 	}
-	cs.crls.Store(newRevocationListSet())
+	cs.crls.Store(crl.NewSet())
 
 	// load ca certificates
 	for _, path := range caCertPaths {
@@ -842,7 +857,7 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths
 	}
 
 	if len(cs.crlPaths) > 0 {
-		set, err := buildRevocationListSet(cs.crlPaths, cs.trustedCAs)
+		set, err := crl.BuildSet(cs.crlPaths, cs.trustedCAs)
 		if err != nil {
 			return nil, err
 		}
@@ -850,20 +865,6 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths []string, crlPaths
 	}
 
 	return cs, nil
-}
-
-// buildRevocationListSet parses every CRL path against the supplied
-// trust anchor and returns a fully-validated set. Used by both the
-// initial NewCertificateStoreWithCRL() build and the ReloadCRLs()
-// hot-swap path so the two code paths apply identical gates.
-func buildRevocationListSet(paths []string, cas []*x509.Certificate) (*revocationListSet, error) {
-	set := newRevocationListSet()
-	for _, path := range paths {
-		if err := set.loadAndVerify(path, cas); err != nil {
-			return nil, fmt.Errorf("failed to load CRL %s: %w", path, err)
-		}
-	}
-	return set, nil
 }
 
 // ReloadCRLs re-parses every CRL path configured at construction time,
@@ -881,10 +882,10 @@ func (cs *CertificateStore) ReloadCRLs() error {
 		// nothing to refresh; treat as a successful no-op so the SIGHUP
 		// handler can blanket-call ReloadCRLs() without branching on
 		// whether the operator configured any CRLs at startup.
-		cs.crls.Store(newRevocationListSet())
+		cs.crls.Store(crl.NewSet())
 		return nil
 	}
-	set, err := buildRevocationListSet(cs.crlPaths, cs.trustedCAs)
+	set, err := crl.BuildSet(cs.crlPaths, cs.trustedCAs)
 	if err != nil {
 		return err
 	}
@@ -894,7 +895,7 @@ func (cs *CertificateStore) ReloadCRLs() error {
 
 // CRLCount returns the number of CRLs loaded into the store. Exported
 // for startup logging; the value is informational only.
-func (cs *CertificateStore) CRLCount() int { return cs.crls.Load().size() }
+func (cs *CertificateStore) CRLCount() int { return cs.crls.Load().Size() }
 
 func loadCertificate(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
@@ -1052,7 +1053,7 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 	}
 
 	// consult operator-supplied CRLs after chain + key checks pass
-	if err := cs.crls.Load().check(cert, now); err != nil {
+	if err := cs.crls.Load().Check(cert, now); err != nil {
 		return err
 	}
 
@@ -1100,7 +1101,7 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 	}
 
 	// consult operator-supplied CRLs (TPM manufacturer revocation feeds)
-	if err := cs.crls.Load().check(cert, now); err != nil {
+	if err := cs.crls.Load().Check(cert, now); err != nil {
 		return err
 	}
 

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 
 #include "main_utils.h"
 
@@ -6,9 +7,10 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
@@ -85,17 +87,13 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "re-enrolling)\n");
 	printf("  --reprovision-aik Rotate + re-seal the AIK auth after a "
 	       "boot-state\n");
-	printf(
-	    "                    change (strict recovery); then re-enroll\n");
+	printf("                    change (strict recovery); then re-enroll\n");
 	printf("  --seal-persist-primary\n");
-	printf(
-	    "                    Persist the seal storage primary at a handle "
-	    "so\n");
-	printf(
-	    "                    seal/unseal skip per-op CreatePrimary (needs "
-	    "\n");
-	printf(
-	    "                    seal_persistent_primary=true in lota.conf)\n");
+	printf("                    Persist the seal storage primary at a handle "
+	       "so\n");
+	printf("                    seal/unseal skip per-op CreatePrimary (needs "
+	       "\n");
+	printf("                    seal_persistent_primary=true in lota.conf)\n");
 	printf("  --seal-evict-primary\n");
 	printf("                    Remove the persistent seal storage primary "
 	       "(sealed\n");
@@ -112,13 +110,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "system\n");
 	printf("                    (verifier-ready, pipe to file)\n");
 	printf("  --attest          Perform remote attestation and exit\n");
-	printf(
-	    "  --enroll          Enroll the AIK with the attestation CA via\n");
-	printf(
-	    "                    credential activation and store the issued\n");
+	printf("  --enroll          Enroll the AIK with the attestation CA via\n");
+	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
-	printf(
-	    "  --reenroll        Re-enroll using the endpoint saved by the\n");
+	printf("  --reenroll        Re-enroll using the endpoint saved by the\n");
 	printf("                    last --enroll (no CA arguments needed), "
 	       "then exit\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
@@ -126,8 +121,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
 	       LOTA_CLI_DEFAULT_CA_PORT);
 	printf("  --attest-interval SECS\n");
-	printf(
-	    "                    Continuous attestation interval in seconds\n");
+	printf("                    Continuous attestation interval in seconds\n");
 	printf("                    (default: 0=one-shot, min: %d for "
 	       "continuous)\n",
 	       MIN_ATTEST_INTERVAL);
@@ -141,8 +135,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --no-verify-tls   Disable TLS certificate verification "
 	       "(INSECURE)\n");
 	printf("                    Only for development/testing!\n");
-	printf(
-	    "                    Requires: --insecure-allow-no-verify-tls\n");
+	printf("                    Requires: --insecure-allow-no-verify-tls\n");
 	printf("  --insecure-allow-no-verify-tls\n");
 	printf("                    Acknowledge the risk of --no-verify-tls\n");
 	printf("  --pin-sha256 HEX  Pin verifier certificate by SHA-256 "
@@ -154,10 +147,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                      enforce     - block unauthorized modules "
 	       "(default)\n");
 	printf("                      monitor     - log events only\n");
-	printf(
-	    "                      maintenance - allow all, minimal logging\n");
-	printf(
-	    "                    A CLI --mode that weakens the configured\n");
+	printf("                      maintenance - allow all, minimal logging\n");
+	printf("                    A CLI --mode that weakens the configured\n");
 	printf("                    'enforce' mode requires:\n");
 	printf("                      --insecure-allow-mode-downgrade\n");
 	printf("  --insecure-allow-mode-downgrade\n");
@@ -172,9 +163,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "
 	       "libraries\n");
 	printf("                    (requires --mode enforce)\n");
-	printf(
-	    "  --strict-exec     Enforce strict executable policy (fs-verity "
-	    "allowlist)\n");
+	printf("  --strict-exec     Enforce strict executable policy (fs-verity "
+	       "allowlist)\n");
 	printf("                    (requires --mode enforce and "
 	       "--allow-verity)\n");
 	printf("  --block-ptrace    Block all ptrace attach attempts\n");
@@ -184,12 +174,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (requires --mode enforce)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
 	printf("                    (requires --mode enforce)\n");
-	printf(
-	    "  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
+	printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
 	printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
 	printf("  --allow-verity PATH\n");
-	printf(
-	    "                    Allow a fs-verity protected file by digest\n");
+	printf("                    Allow a fs-verity protected file by digest\n");
 	printf("  --daemon          Fork to background (not needed under "
 	       "systemd)\n");
 	printf("  --pid-file PATH   PID file location\n");
@@ -202,20 +190,15 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    Generate Ed25519 keypair: PREFIX.key + "
 	       "PREFIX.pub\n");
 	printf("  --sign-policy FILE --signing-key KEY\n");
-	printf(
-	    "                    Sign policy YAML, write detached FILE.sig\n");
+	printf("                    Sign policy YAML, write detached FILE.sig\n");
 	printf("  --verify-policy FILE --policy-pubkey PUB\n");
-	printf(
-	    "                    Verify detached Ed25519 signature on FILE\n");
-	printf(
-	    "  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
+	printf("                    Verify detached Ed25519 signature on FILE\n");
+	printf("  --signing-key PATH   Ed25519 private key (PEM) for signing\n");
 	printf("  --policy-pubkey PATH Ed25519 public key (PEM) for "
 	       "verification\n");
-	printf(
-	    "                    Reused for BOTH policy YAML signatures and\n");
+	printf("                    Reused for BOTH policy YAML signatures and\n");
 	printf("                    BPF object signatures (.bpf.o.sig).\n");
-	printf(
-	    "                    Use a separate option/config if you want\n");
+	printf("                    Use a separate option/config if you want\n");
 	printf("                    distinct keypairs for policy vs BPF.\n");
 	printf("\n");
 	printf("  --help            Show this help\n");
@@ -373,7 +356,7 @@ void setup_container_listener(struct ipc_context *ctx,
 	if (cfg && cfg->container_listener_uid_count > 0) {
 		for (int i = 0; i < cfg->container_listener_uid_count; i++)
 			(void)add_listener_for_uid(
-			    ctx, cfg->container_listener_uids[i]);
+				ctx, cfg->container_listener_uids[i]);
 
 		ret = steam_runtime_detect(&rt_info);
 		if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))
@@ -465,8 +448,8 @@ int self_measure(struct tpm_context *ctx)
 	if (ret < 0) {
 		if (ret == -EBADMSG) {
 			lota_err(
-			    "PCR14 boot-commitment refused; see the preceding "
-			    "SECURITY log for the exact recovery path.");
+				"PCR14 boot-commitment refused; see the preceding "
+				"SECURITY log for the exact recovery path.");
 		}
 		return ret;
 	}

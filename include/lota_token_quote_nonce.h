@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA token quote nonce (token verification domain)
  *
@@ -27,11 +28,11 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "lota_endian.h"
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+
+#include "lota_endian.h"
 
 #ifndef LOTA_TOKEN_NONCE_SIZE
 #define LOTA_TOKEN_NONCE_SIZE 32
@@ -50,11 +51,12 @@ static inline void lota__secure_bzero(void *ptr, size_t len)
  * failure.
  */
 static inline int lota_compute_token_quote_nonce(
-    uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
-    const uint8_t client_nonce[LOTA_TOKEN_NONCE_SIZE],
-    const uint8_t policy_digest[LOTA_TOKEN_NONCE_SIZE],
-    const uint8_t runtime_protect_digest[LOTA_TOKEN_NONCE_SIZE],
-    uint64_t runtime_protect_epoch, uint8_t out_nonce[LOTA_TOKEN_NONCE_SIZE])
+	uint64_t valid_until, uint32_t flags, uint32_t pcr_mask,
+	const uint8_t client_nonce[LOTA_TOKEN_NONCE_SIZE],
+	const uint8_t policy_digest[LOTA_TOKEN_NONCE_SIZE],
+	const uint8_t runtime_protect_digest[LOTA_TOKEN_NONCE_SIZE],
+	uint64_t runtime_protect_epoch,
+	uint8_t out_nonce[LOTA_TOKEN_NONCE_SIZE])
 {
 	EVP_MD_CTX *mdctx = NULL;
 	unsigned int len = 0;
@@ -81,7 +83,7 @@ static inline int lota_compute_token_quote_nonce(
 	    EVP_DigestUpdate(mdctx, prefix_le, sizeof(prefix_le)) != 1 ||
 	    EVP_DigestUpdate(mdctx, client_nonce, LOTA_TOKEN_NONCE_SIZE) != 1 ||
 	    EVP_DigestUpdate(mdctx, policy_digest, LOTA_TOKEN_NONCE_SIZE) !=
-		1 ||
+		    1 ||
 	    EVP_DigestUpdate(mdctx, runtime_protect_digest,
 			     LOTA_TOKEN_NONCE_SIZE) != 1 ||
 	    EVP_DigestUpdate(mdctx, epoch_le, sizeof(epoch_le)) != 1 ||

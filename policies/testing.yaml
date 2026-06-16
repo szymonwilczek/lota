@@ -22,3 +22,4 @@ require_enforce: false
 require_module_sig: false
 require_secureboot: false
 require_lockdown: false
+require_cmdline_policy: false

@@ -6,7 +6,7 @@ name: Release
 # The signature proves the manifest -- and therefore every artifact whose
 # hash it lists -- was produced by this workflow at this tag, so a downstream
 # consumer can confirm "shipped lota-agent == tag".
-# See docs/BUILD-REPRODUCIBLE.md.
+# See Documentation/security/reproducible-builds.rst.
 
 on:
   push:
@@ -78,9 +78,9 @@ jobs:
         run: |
           set -eu
           mkdir -p release
-          artifacts="lota-agent lota-verifier lota-attest-ca lota-pcr14-lock \
-            liblotagaming.so liblotaserver.so liblota_wine_hook.so \
-            liblota_anticheat.so lota_lsm.bpf.o"
+          artifacts="lota-agent lota-install lota-verifier lota-attest-ca \
+            lota-pcr14-lock liblotagaming.so liblotaserver.so \
+            liblota_wine_hook.so liblota_anticheat.so lota_lsm.bpf.o"
           for a in $artifacts; do
             cp "build/$a" "release/$a"
           done
@@ -96,7 +96,7 @@ jobs:
         # bound to this workflow's identity and the signature is logged in Rekor.
         # The self-contained bundle carries the certificate and the transparency-log
         # proof, so verification needs no key distribution -- only the workflow
-        # identity and the OIDC issuer (documented in docs/BUILD-REPRODUCIBLE.md)
+        # identity and the OIDC issuer (documented in Documentation/security/reproducible-builds.rst)
         run: |
           cosign sign-blob --yes \
             --bundle SHA256SUMS.cosign.bundle \
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -eu
           notes="Reproducible build of $TAG. Verify the artifacts with cosign"
-          notes="$notes against SHA256SUMS.cosign.bundle; see docs/BUILD-REPRODUCIBLE.md."
+          notes="$notes against SHA256SUMS.cosign.bundle; see Documentation/security/reproducible-builds.rst."
           # marking anything that is not a final >=1.0.0 release as a pre-release:
           # 0.x version (no stability promise yet) or a semver pre-release
           # suffix (vX.Y.Z-rc.N).

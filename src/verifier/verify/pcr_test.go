@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PCR Policy Tests
 
 package verify
@@ -89,7 +90,7 @@ require_module_sig: false
 require_secureboot: false
 require_lockdown: false
 `
-	if err := os.WriteFile(policyPath, []byte(policyContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test policy file: %v", err)
 	}
 
@@ -112,6 +113,57 @@ require_lockdown: false
 	t.Log("Policy loaded and activated correctly from YAML")
 }
 
+func TestPCRVerifier_LoadPolicy_RequiresAgentHashPin(t *testing.T) {
+	tmpDir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// diverse-fleet:
+	// require_secureboot, no raw PCR pins, only an advisory kernel hash, no agent_hashes
+	// -> must be refused (advisory kernel hash does not substitute for the agent_hash pin)
+	diverseNoAgent := `
+name: diverse-no-agent
+require_secureboot: true
+kernel_hashes:
+  - "6da97dc5886e0da1d3ce0ac1a01c82c642564460d907cfc10db9af1ca8ad97d9"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("d1.yaml", diverseNoAgent)); err == nil {
+		t.Error("expected refusal: diverse-fleet policy without pinned agent_hashes")
+	}
+
+	// same, but with agent_hashes pinned -> accepted
+	diverseWithAgent := diverseNoAgent + `agent_hashes:
+  - "db457c14130c56c599bc56c2bb888b644e3b504aaeefe6dc6aaf6c665087cf46"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("d2.yaml", diverseWithAgent)); err != nil {
+		t.Errorf("agent-pinned diverse-fleet policy should load: %v", err)
+	}
+
+	// no agent_hashes but explicit opt-out -> accepted
+	v := NewPCRVerifier()
+	v.SetAllowUnpinnedAgent(true)
+	if err := v.LoadPolicy(write("d3.yaml", diverseNoAgent)); err != nil {
+		t.Errorf("--allow-unpinned-agent should permit unpinned agent: %v", err)
+	}
+
+	// homogeneous (raw PCR pins) is not covered by this gate even without
+	// agent_hashes because it does not take the TOFU path
+	homogeneous := `
+name: homo
+require_secureboot: true
+pcrs:
+  0: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61"
+`
+	if err := NewPCRVerifier().LoadPolicy(write("h.yaml", homogeneous)); err != nil {
+		t.Errorf("homogeneous policy with PCR pins should load without agent_hashes: %v", err)
+	}
+}
+
 func TestPCRVerifier_LoadPolicy_InvalidPCRIndexRejected(t *testing.T) {
 	t.Log("SECURITY TEST: Policy load rejects invalid PCR indices")
 
@@ -124,7 +176,7 @@ description: "invalid PCR index"
 pcrs:
   -1: "b6d107af0ef8a52065f6d3c344cfc811920fa81b28dd4c746ea1ad55464c5b61"
 `
-	if err := os.WriteFile(policyPath, []byte(policyContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test policy file: %v", err)
 	}
 
@@ -254,6 +306,59 @@ func TestPCRVerifier_VerifyReport_PCRNotInQuote(t *testing.T) {
 	}
 
 	t.Logf("Missing PCR in quote correctly detected: %v", err)
+}
+
+func TestPCRVerifier_VerifyReport_CmdlinePCR8(t *testing.T) {
+	t.Log("SECURITY TEST: kernel command-line PCR 8 pinning is enforced")
+
+	const pcr8Hex = "1111111111111111111111111111111111111111111111111111111111111111"
+
+	policy := &PCRPolicy{
+		Name: "pin-cmdline",
+		PCRs: map[int]string{8: pcr8Hex},
+	}
+
+	// required mask must request PCR 8, otherwise the challenge would
+	// never ask the agent to quote it and the pin could be silently skipped
+	if policy.GetRequiredMask()&(1<<8) == 0 {
+		t.Fatal("GetRequiredMask does not request PCR 8 for a policy that pins it")
+	}
+
+	pcr8 := make([]byte, types.HashSize)
+	for i := range pcr8 {
+		pcr8[i] = 0x11
+	}
+
+	newReport := func() *types.AttestationReport {
+		r := &types.AttestationReport{}
+		r.TPM.PCRMask = 1 << 8
+		copy(r.TPM.PCRValues[8][:], pcr8)
+		return r
+	}
+
+	// matching cmdline measurement passes the PCR check
+	v := NewPCRVerifier()
+	if err := v.AddPolicy(policy); err != nil {
+		t.Fatalf("AddPolicy: %v", err)
+	}
+	if err := v.verifyAgainstPolicy(newReport(), policy, nil); err != nil {
+		t.Fatalf("matching PCR 8 rejected: %v", err)
+	}
+
+	// tampered command line (different PCR 8) is rejected
+	bad := newReport()
+	bad.TPM.PCRValues[8][0] = 0x22
+	if err := v.verifyAgainstPolicy(bad, policy, nil); err == nil {
+		t.Error("expected rejection for mismatched PCR 8 (tampered cmdline)")
+	}
+
+	// report that omits PCR 8 from the quote is rejected, so the cmdline
+	// pin cannot be dropped by an agent that simply does not quote it
+	missing := newReport()
+	missing.TPM.PCRMask = 1 << 14 // only PCR 14
+	if err := v.verifyAgainstPolicy(missing, policy, nil); err == nil {
+		t.Error("expected rejection when PCR 8 is absent from the quote")
+	}
 }
 
 func TestPCRVerifier_VerifyReport_RequireIOMMU(t *testing.T) {
@@ -410,7 +515,7 @@ pcrs:
   - this is not a map
   [invalid yaml
 `
-	if err := os.WriteFile(policyPath, []byte(invalidContent), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(invalidContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
@@ -438,7 +543,7 @@ require_enforce: true
 require_module_sig: true
 require_iommu: true
 `
-	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -466,7 +571,7 @@ pcrs:
   14: "0000000000000000000000000000000000000000000000000000000000000000"
 require_enforce: true
 `
-	if err := os.WriteFile(policyPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

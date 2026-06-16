@@ -1,15 +1,15 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 
 #include "startup_policy.h"
 
 #include <errno.h>
 #include <string.h>
-
 #include <stdlib.h>
-#include <unistd.h>
-
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
+#include <openssl/types.h>
+#include <stdio.h>
 
 #include "../../include/lota.h"
 #include "../../include/lota_endian.h"
@@ -52,7 +52,7 @@ static void agent_policy_snapshot_clear(void)
 	if (g_agent.policy_verity_digests) {
 		OPENSSL_cleanse(g_agent.policy_verity_digests,
 				(size_t)g_agent.policy_verity_digest_count *
-				    sizeof(struct lota_verity_digest_key));
+					sizeof(struct lota_verity_digest_key));
 		free(g_agent.policy_verity_digests);
 		g_agent.policy_verity_digests = NULL;
 	}
@@ -61,7 +61,7 @@ static void agent_policy_snapshot_clear(void)
 	if (g_agent.policy_protect_pids) {
 		OPENSSL_cleanse(g_agent.policy_protect_pids,
 				(size_t)g_agent.policy_protect_pid_count *
-				    sizeof(uint32_t));
+					sizeof(uint32_t));
 		free(g_agent.policy_protect_pids);
 		g_agent.policy_protect_pids = NULL;
 	}
@@ -71,7 +71,7 @@ static void agent_policy_snapshot_clear(void)
 	if (g_agent.policy_trust_libs) {
 		OPENSSL_cleanse(g_agent.policy_trust_libs,
 				(size_t)g_agent.policy_trust_lib_count *
-				    PATH_MAX);
+					PATH_MAX);
 		free(g_agent.policy_trust_libs);
 		g_agent.policy_trust_libs = NULL;
 	}
@@ -223,9 +223,9 @@ int agent_compute_policy_digest_for_protect_pids(const uint32_t *protect_pids,
 static int verity_digest_key_cmp(const void *a, const void *b)
 {
 	const struct lota_verity_digest_key *ka =
-	    (const struct lota_verity_digest_key *)a;
+		(const struct lota_verity_digest_key *)a;
 	const struct lota_verity_digest_key *kb =
-	    (const struct lota_verity_digest_key *)b;
+		(const struct lota_verity_digest_key *)b;
 
 	if (ka->len < kb->len)
 		return -1;
@@ -359,8 +359,8 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 
 	/* protect_pids: treat as a set (order-independent) */
 	if (policy->protect_pid_count > 0) {
-		sorted_pids =
-		    calloc((size_t)policy->protect_pid_count, sizeof(uint32_t));
+		sorted_pids = calloc((size_t)policy->protect_pid_count,
+				     sizeof(uint32_t));
 		if (!sorted_pids) {
 			ret = -ENOMEM;
 			goto out;
@@ -402,7 +402,7 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 	/* trust_libs: treat as a set (order-independent) */
 	if (policy->trust_lib_count > 0) {
 		sorted_libs =
-		    calloc((size_t)policy->trust_lib_count, sizeof(char *));
+			calloc((size_t)policy->trust_lib_count, sizeof(char *));
 		if (!sorted_libs) {
 			ret = -ENOMEM;
 			goto out;
@@ -455,13 +455,13 @@ static int compute_policy_digest(const struct agent_startup_policy *policy,
 out:
 	if (sorted_pids) {
 		OPENSSL_cleanse(sorted_pids, (size_t)policy->protect_pid_count *
-						 sizeof(uint32_t));
+						     sizeof(uint32_t));
 		free(sorted_pids);
 		sorted_pids = NULL;
 	}
 	if (sorted_libs) {
 		OPENSSL_cleanse(sorted_libs, (size_t)policy->trust_lib_count *
-						 sizeof(char *));
+						     sizeof(char *));
 		free(sorted_libs);
 		sorted_libs = NULL;
 	}
@@ -501,11 +501,11 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 		return ret;
 
 	ret = bpf_loader_verify_kernel_runtime_hardening(
-	    policy->allow_mutable_rootfs);
+		policy->allow_mutable_rootfs);
 	if (ret < 0) {
 		lota_err(
-		    "Kernel anti-tamper prerequisites are not satisfied: %s",
-		    strerror(-ret));
+			"Kernel anti-tamper prerequisites are not satisfied: %s",
+			strerror(-ret));
 		return ret;
 	}
 
@@ -524,8 +524,8 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 	ret = bpf_loader_verify_integrity_config(&g_agent.bpf_ctx);
 	if (ret < 0) {
 		lota_err(
-		    "Failed integrity_config verification after LOCK_BPF: %s",
-		    strerror(-ret));
+			"Failed integrity_config verification after LOCK_BPF: %s",
+			strerror(-ret));
 		goto out_fail;
 	}
 
@@ -556,16 +556,17 @@ int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 			struct lota_verity_digest_key *d = &digests[i];
 
 			ret = bpf_loader_measure_verity_digest(
-			    policy->allow_verity[i], d);
+				policy->allow_verity[i], d);
 			if (ret < 0) {
 				lota_err(
-				    "Failed to measure fs-verity path %s: %s",
-				    policy->allow_verity[i], strerror(-ret));
+					"Failed to measure fs-verity path %s: %s",
+					policy->allow_verity[i],
+					strerror(-ret));
 				goto out_fail;
 			}
 
-			ret =
-			    bpf_loader_allow_verity_digest(&g_agent.bpf_ctx, d);
+			ret = bpf_loader_allow_verity_digest(&g_agent.bpf_ctx,
+							     d);
 			if (ret < 0) {
 				lota_err("Failed to allow fs-verity digest for "
 					 "%s: %s",
@@ -721,15 +722,15 @@ allowlist_done:
 
 		if (digest_count > 0) {
 			canon_digests =
-			    malloc((size_t)digest_count *
-				   sizeof(struct lota_verity_digest_key));
+				malloc((size_t)digest_count *
+				       sizeof(struct lota_verity_digest_key));
 			if (!canon_digests) {
 				ret = -ENOMEM;
 				goto out_fail;
 			}
 			memcpy(canon_digests, digests,
 			       (size_t)digest_count *
-				   sizeof(struct lota_verity_digest_key));
+				       sizeof(struct lota_verity_digest_key));
 		}
 
 		ret = canonicalize_u32_set(policy->protect_pids,
@@ -738,9 +739,9 @@ allowlist_done:
 		if (ret < 0) {
 			if (canon_digests) {
 				OPENSSL_cleanse(
-				    canon_digests,
-				    (size_t)digest_count *
-					sizeof(struct lota_verity_digest_key));
+					canon_digests,
+					(size_t)digest_count *
+						sizeof(struct lota_verity_digest_key));
 				free(canon_digests);
 			}
 			goto out_fail;
@@ -752,15 +753,15 @@ allowlist_done:
 		if (ret < 0) {
 			if (canon_digests) {
 				OPENSSL_cleanse(
-				    canon_digests,
-				    (size_t)digest_count *
-					sizeof(struct lota_verity_digest_key));
+					canon_digests,
+					(size_t)digest_count *
+						sizeof(struct lota_verity_digest_key));
 				free(canon_digests);
 			}
 			if (canon_pids) {
 				OPENSSL_cleanse(canon_pids,
 						(size_t)canon_pid_count *
-						    sizeof(uint32_t));
+							sizeof(uint32_t));
 				free(canon_pids);
 			}
 			goto out_fail;
@@ -803,7 +804,7 @@ allowlist_done:
 out_fail:
 	for (int k = applied_libs - 1; k >= 0; k--) {
 		int rollback_ret = bpf_loader_untrust_lib(
-		    &g_agent.bpf_ctx, policy->trust_libs[k]);
+			&g_agent.bpf_ctx, policy->trust_libs[k]);
 		if (rollback_ret < 0) {
 			lota_warn("Failed to rollback trusted lib %s: %s",
 				  policy->trust_libs[k],
@@ -813,7 +814,7 @@ out_fail:
 
 	for (int k = applied_pids - 1; k >= 0; k--) {
 		int rollback_ret = bpf_loader_unprotect_pid(
-		    &g_agent.bpf_ctx, policy->protect_pids[k]);
+			&g_agent.bpf_ctx, policy->protect_pids[k]);
 		if (rollback_ret < 0) {
 			lota_warn("Failed to rollback protected PID %u: %s",
 				  policy->protect_pids[k],
@@ -825,7 +826,7 @@ out_fail:
 		for (int k = 0; k < allowlist_applied; k++) {
 			struct lota_verity_digest_key *d = &digests[k];
 			(void)bpf_loader_disallow_verity_digest(
-			    &g_agent.bpf_ctx, d);
+				&g_agent.bpf_ctx, d);
 		}
 		OPENSSL_cleanse(digests,
 				(size_t)digest_count * sizeof(*digests));
@@ -835,9 +836,9 @@ out_fail:
 
 	if (mode_applied) {
 		uint32_t rollback_mode =
-		    have_prev_mode ? prev_mode : (uint32_t)g_agent.mode;
+			have_prev_mode ? prev_mode : (uint32_t)g_agent.mode;
 		int rollback_ret =
-		    bpf_loader_set_mode(&g_agent.bpf_ctx, rollback_mode);
+			bpf_loader_set_mode(&g_agent.bpf_ctx, rollback_mode);
 		if (rollback_ret < 0)
 			lota_warn("Failed to rollback mode to %u: %s",
 				  rollback_mode, strerror(-rollback_ret));
@@ -899,8 +900,8 @@ validate_protected_pid_capacity(const struct agent_startup_policy *policy)
 
 	if (ret < 0) {
 		lota_err(
-		    "protect_pid set exceeds protected_pids map capacity (%d)",
-		    LOTA_MAX_PROTECTED_PIDS);
+			"protect_pid set exceeds protected_pids map capacity (%d)",
+			LOTA_MAX_PROTECTED_PIDS);
 	}
 
 	return ret;

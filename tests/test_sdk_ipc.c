@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA SDK Integration Test
  * Tests SDK functions against running lota-agent IPC server.
@@ -8,8 +9,8 @@
  *   2. Run test:    ./build/test_sdk_ipc
  */
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "../include/lota_gaming.h"
 

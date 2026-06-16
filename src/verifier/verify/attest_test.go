@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TPMS_ATTEST Parser Unit Tests
 //
 // These tests verify correct parsing of TPM 2.0 attestation
@@ -392,7 +393,7 @@ func TestVerifyPCRDigest_Match(t *testing.T) {
 
 	blob := buildTestAttestBlob(expectedDigest)
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err != nil {
 		t.Fatalf("PCR digest should match: %v", err)
 	}
@@ -425,7 +426,7 @@ func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 	// tamper with PCR values (simulate malicious agent)
 	pcrValues[14][0] ^= 0xFF
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("Expected error for tampered PCR values, got nil")
 	}
@@ -438,7 +439,7 @@ func TestVerifyPCRDigest_Mismatch(t *testing.T) {
 // silently dereference and crash.
 func TestVerifyPCRDigestParsed_NilAttest(t *testing.T) {
 	var pcrValues [types.PCRCount][types.HashSize]byte
-	err := VerifyPCRDigestParsed(nil, pcrValues, 0)
+	err := VerifyPCRDigestParsed(nil, &pcrValues, 0)
 	if err == nil {
 		t.Fatal("expected error for nil *TPMSAttest")
 	}
@@ -471,19 +472,19 @@ func TestVerifyPCRDigestParsed_MatchesByteForm(t *testing.T) {
 		t.Fatalf("ParseTPMSAttest: %v", err)
 	}
 
-	if err := VerifyPCRDigestParsed(parsed, pcrValues, pcrMask); err != nil {
+	if err := VerifyPCRDigestParsed(parsed, &pcrValues, pcrMask); err != nil {
 		t.Fatalf("parsed-form unexpected mismatch: %v", err)
 	}
-	if err := VerifyPCRDigest(blob, pcrValues, pcrMask); err != nil {
+	if err := VerifyPCRDigest(blob, &pcrValues, pcrMask); err != nil {
 		t.Fatalf("byte-form unexpected mismatch: %v", err)
 	}
 
 	// tamper one PCR; both entry points must reject.
 	pcrValues[14][0] ^= 0xFF
-	if err := VerifyPCRDigestParsed(parsed, pcrValues, pcrMask); err == nil {
+	if err := VerifyPCRDigestParsed(parsed, &pcrValues, pcrMask); err == nil {
 		t.Fatal("parsed-form: tampered PCR must reject")
 	}
-	if err := VerifyPCRDigest(blob, pcrValues, pcrMask); err == nil {
+	if err := VerifyPCRDigest(blob, &pcrValues, pcrMask); err == nil {
 		t.Fatal("byte-form: tampered PCR must reject")
 	}
 }
@@ -537,7 +538,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA384PCRBank(t *testing.T) {
 	digest := make([]byte, 48)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA384, digest)
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-384 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -558,7 +559,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA512PCRBank(t *testing.T) {
 	digest := make([]byte, 64)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA512, digest)
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-512 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -575,7 +576,7 @@ func TestVerifyPCRDigestParsed_RejectsSHA1PCRBank(t *testing.T) {
 	digest := make([]byte, 20)
 	blob := buildAttestBlobWithHashAlg(t, types.TPMAlgSHA1, digest)
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("SHA-1 PCR bank must be rejected by VerifyPCRDigestParsed")
 	}
@@ -596,7 +597,7 @@ func TestVerifyPCRDigestParsed_RejectsUnknownPCRBank(t *testing.T) {
 	digest := make([]byte, 32)
 	blob := buildAttestBlobWithHashAlg(t, 0x0042, digest)
 
-	err := VerifyPCRDigest(blob, pcrValues, pcrMask)
+	err := VerifyPCRDigest(blob, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("unknown PCR bank hash must be rejected")
 	}
@@ -612,7 +613,7 @@ func TestVerifyPCRDigest_InvalidAttest(t *testing.T) {
 	pcrMask := uint32((1 << 0) | (1 << 1) | (1 << 14))
 	var pcrValues [types.PCRCount][types.HashSize]byte
 
-	err := VerifyPCRDigest([]byte{0x00, 0x01, 0x02}, pcrValues, pcrMask)
+	err := VerifyPCRDigest([]byte{0x00, 0x01, 0x02}, &pcrValues, pcrMask)
 	if err == nil {
 		t.Fatal("Expected error for invalid attestation data, got nil")
 	}

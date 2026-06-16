@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Baseline Store
 //
 // Persistent PCR baseline storage backed by SQLite.
@@ -10,6 +11,7 @@ package verify
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -116,7 +118,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 // meaning for boot-commitment clients - the verifier derives the
 // expected PCR14 dynamically from agent_hash + ClockInfo.
 func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
-	currentPCR14, agentHash [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
+	currentPCR14, agentHash [types.HashSize]byte,
+) (TOFUResult, *ClientBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -437,7 +440,8 @@ func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootB
 // methods' semantics.
 func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
-	boot *BootBaseline) AttestationOutcome {
+	boot *BootBaseline,
+) AttestationOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -709,4 +713,173 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 	committed = true
 	return outcome
+}
+
+// GetReanchorState implements ReanchorStorer for SQLite.
+// Present is true only when a boot baseline (PCR0/1/7) has been pinned for the client.
+func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var (
+		pcr0, pcr1, pcr7 []byte
+		evlog            []byte
+		esrtVersion      sql.NullInt64
+		esrtCapable      sql.NullInt64
+		lfa              sql.NullInt64
+		reCount          sql.NullInt64
+		lastReanchor     sql.NullTime
+	)
+	err := s.db.QueryRow(
+		`SELECT pcr0, pcr1, pcr7, eventlog_baseline, esrt_version,
+		   esrt_capable, lfa, reanchor_count, last_reanchor_at
+		 FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&pcr0, &pcr1, &pcr7, &evlog, &esrtVersion, &esrtCapable,
+		&lfa, &reCount, &lastReanchor)
+	if err != nil {
+		return ReanchorState{}
+	}
+	if len(pcr0) == 0 && len(pcr1) == 0 && len(pcr7) == 0 {
+		return ReanchorState{}
+	}
+
+	st := ReanchorState{Present: true}
+	if len(evlog) > 0 {
+		st.EventLogBaseline = append([]byte(nil), evlog...)
+	}
+	if esrtVersion.Valid {
+		st.ESRTVersion = uint32(esrtVersion.Int64)
+	}
+	st.ESRTCapable = esrtCapable.Valid && esrtCapable.Int64 != 0
+	st.LFA = lfa.Valid && lfa.Int64 != 0
+	if reCount.Valid {
+		st.ReanchorCount = int(reCount.Int64)
+	}
+	if lastReanchor.Valid {
+		st.LastReanchorAt = lastReanchor.Time
+	}
+	return st
+}
+
+// ArchiveAndReanchor implements ReanchorStorer for SQLite:
+// it copies the current boot baseline into baseline_archive and replaces it
+// with boot in one transaction.
+// esrt_capable is kept sticky via MAX so a device that ever reported an ESRT
+// can never silently lose the capability.
+func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
+	boot BootBaseline, eventLog []byte, esrtVersion uint32,
+	esrtCapable, lfa bool, reason string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// runs after a successful Commit too
+		// ErrTxDone is benign there
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.Warn("reanchor tx rollback failed", "client_id", clientID, "error", err)
+		}
+	}()
+
+	var (
+		oldPCR0, oldPCR1, oldPCR7 []byte
+		oldESRT                   sql.NullInt64
+	)
+	if err := tx.QueryRow(
+		"SELECT pcr0, pcr1, pcr7, esrt_version FROM baselines WHERE client_id = ?",
+		clientID,
+	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO baseline_archive
+		   (client_id, archived_at, pcr0, pcr1, pcr7, esrt_version, reason)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		clientID, now, oldPCR0, oldPCR1, oldPCR7, oldESRT, reason,
+	); err != nil {
+		return err
+	}
+
+	capVal, lfaVal := 0, 0
+	if esrtCapable {
+		capVal = 1
+	}
+	if lfa {
+		lfaVal = 1
+	}
+	// LFA re-anchor applies automatically but flags the client for
+	// post-fact operator review;
+	// strong re-anchor clears any prior flag
+	if _, err = tx.Exec(
+		`UPDATE baselines SET pcr0 = ?, pcr1 = ?, pcr7 = ?, boot_last_seen = ?,
+		   eventlog_baseline = ?, esrt_version = ?,
+		   esrt_capable = MAX(COALESCE(esrt_capable, 0), ?),
+		   lfa = ?, lfa_review_pending = ?,
+		   reanchor_count = COALESCE(reanchor_count, 0) + 1,
+		   last_reanchor_at = ?
+		 WHERE client_id = ?`,
+		boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now,
+		eventLog, esrtVersion, capVal, lfaVal, lfaVal, now, clientID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordBootEvidence stores the event log + ESRT version for a first-use
+// boot baseline (SQLite).
+// Idempotent UPDATE; esrt_capable kept sticky.
+func (s *SQLiteBaselineStore) RecordBootEvidence(clientID string,
+	eventLog []byte, esrtVersion uint32, esrtPresent bool,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	capVal := 0
+	if esrtPresent {
+		capVal = 1
+	}
+	_, err := s.db.Exec(
+		`UPDATE baselines SET eventlog_baseline = ?, esrt_version = ?,
+		   esrt_capable = MAX(COALESCE(esrt_capable, 0), ?)
+		 WHERE client_id = ?`,
+		eventLog, esrtVersion, capVal, clientID,
+	)
+	return err
+}
+
+// ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
+// (SQLite).
+func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		"SELECT client_id FROM baselines WHERE lfa_review_pending = 1 ORDER BY client_id")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// AcknowledgeLFAReview clears a client's pending-review flag (SQLite).
+func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		"UPDATE baselines SET lfa_review_pending = 0 WHERE client_id = ?", clientID)
+	return err
 }

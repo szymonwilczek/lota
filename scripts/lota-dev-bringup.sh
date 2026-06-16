@@ -1,5 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # lota-dev-bringup.sh
 #
@@ -119,18 +120,26 @@ fi
 #    /proc/cmdline and requires ima_appraise=enforce|fix; log and the
 #    default off do not block on integrity failures. The cmdline only
 #    sets the appraisal mode -- a loaded policy with appraise rules is
-#    still required for any path to actually be checked.
+#    still required for anything to actually be checked.
+#    Suggest fix, not enforce, on a dev host:
+#    developer baseline policy loaded below appraises every exec, and
+#    under enforce a rootfs without IMA signatures blocks every execution.
+#    fix satisfies the agent's kernel floor and writes the missing xattrs
+#    as files are matched; production routes to enforce are the operator's
+#    call (see Documentation/operator/production-bringup/index.rst, "IMA appraisal policy")
 if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
 	info "IMA appraisal already in an enforcing mode"
 else
 	warn "kernel cmdline lacks ima_appraise=enforce|fix; the agent will"
-	warn "refuse to start. Run:"
-	warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=enforce'"
+	warn "refuse to start. For a dev host run:"
+	warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=fix'"
 	warn "  sudo reboot"
+	warn "(enforce on a rootfs without IMA signatures blocks every exec;"
+	warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi
 
-if [[ -f "$IMA_POLICY_SRC" ]] && \
-   ! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
+if [[ -f "$IMA_POLICY_SRC" ]] &&
+	! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
 	info "loading IMA appraisal policy from $IMA_POLICY_SRC"
 	if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
 		warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
@@ -147,7 +156,7 @@ if [[ -d "$STATE_DIR" ]]; then
 	info "clearing stale agent state under $STATE_DIR"
 	find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
 		\( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
-		   -o -name 'snapshot*' \) -delete 2>/dev/null || true
+		-o -name 'snapshot*' \) -delete 2>/dev/null || true
 fi
 
 if command -v tpm2_evictcontrol >/dev/null 2>&1; then
@@ -177,4 +186,4 @@ info "     in 'journalctl -u lota-agent --no-pager | tail -20'."
 info ""
 info "If systemctl start still fails after reboot, inspect the journal for"
 info "the first ERR-level line; the bring-up gates report which check is"
-info "still unsatisfied. docs/PRODUCTION_BRINGUP.md has the full reference."
+info "still unsatisfied. Documentation/operator/production-bringup/index.rst has the full reference."

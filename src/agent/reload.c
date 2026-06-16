@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 
 #include "reload.h"
 
@@ -8,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <syslog.h>
 
 #include "agent.h"
 #include "bpf_loader.h"
@@ -15,6 +19,7 @@
 #include "main_utils.h"
 #include "policy_sign.h"
 #include "sdnotify.h"
+#include "lota.h"
 
 #ifndef EAUTH
 #define EAUTH 80
@@ -92,9 +97,9 @@ static int
 verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 					 const struct lota_config *cfg)
 {
-	const char *cfg_path = (config_path && config_path[0])
-				   ? config_path
-				   : LOTA_CONFIG_DEFAULT_PATH;
+	const char *cfg_path = (config_path && config_path[0]) ?
+				       config_path :
+				       LOTA_CONFIG_DEFAULT_PATH;
 	char *sig_path;
 	size_t sig_path_len;
 	uint8_t *cfg_data = NULL;
@@ -174,8 +179,8 @@ verify_reload_downgrade_authorization_fd(int config_fd, const char *config_path,
 }
 
 static void apply_runtime_flags_transactional(
-    const struct lota_config *new_cfg, bool *strict_mmap, bool *strict_exec,
-    bool *block_ptrace, bool *strict_modules, bool *block_anon_exec)
+	const struct lota_config *new_cfg, bool *strict_mmap, bool *strict_exec,
+	bool *block_ptrace, bool *strict_modules, bool *block_anon_exec)
 {
 	bool old_strict_mmap = *strict_mmap;
 	bool old_strict_exec = *strict_exec;
@@ -220,8 +225,8 @@ static void apply_runtime_flags_transactional(
 	if (!runtime_flags_failed &&
 	    new_cfg->strict_modules != *strict_modules) {
 		if (bpf_loader_set_config(
-			&g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
-			new_cfg->strict_modules ? 1 : 0) == 0) {
+			    &g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
+			    new_cfg->strict_modules ? 1 : 0) == 0) {
 			*strict_modules = new_cfg->strict_modules;
 		} else {
 			lota_err("Failed to apply strict modules on reload");
@@ -232,12 +237,12 @@ static void apply_runtime_flags_transactional(
 	if (!runtime_flags_failed &&
 	    new_cfg->block_anon_exec != *block_anon_exec) {
 		if (bpf_loader_set_config(
-			&g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
-			new_cfg->block_anon_exec ? 1 : 0) == 0) {
+			    &g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+			    new_cfg->block_anon_exec ? 1 : 0) == 0) {
 			*block_anon_exec = new_cfg->block_anon_exec;
 		} else {
 			lota_err(
-			    "Failed to apply block anonymous exec on reload");
+				"Failed to apply block anonymous exec on reload");
 			runtime_flags_failed = true;
 		}
 	}
@@ -245,8 +250,8 @@ static void apply_runtime_flags_transactional(
 	if (runtime_flags_failed) {
 		if (*strict_mmap != old_strict_mmap) {
 			if (bpf_loader_set_config(
-				&g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP,
-				old_strict_mmap ? 1 : 0) == 0) {
+				    &g_agent.bpf_ctx, LOTA_CFG_STRICT_MMAP,
+				    old_strict_mmap ? 1 : 0) == 0) {
 				*strict_mmap = old_strict_mmap;
 			} else {
 				lota_err("Failed to rollback strict mmap after "
@@ -255,8 +260,8 @@ static void apply_runtime_flags_transactional(
 		}
 		if (*block_ptrace != old_block_ptrace) {
 			if (bpf_loader_set_config(
-				&g_agent.bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
-				old_block_ptrace ? 1 : 0) == 0) {
+				    &g_agent.bpf_ctx, LOTA_CFG_BLOCK_PTRACE,
+				    old_block_ptrace ? 1 : 0) == 0) {
 				*block_ptrace = old_block_ptrace;
 			} else {
 				lota_err("Failed to rollback block ptrace "
@@ -265,8 +270,8 @@ static void apply_runtime_flags_transactional(
 		}
 		if (*strict_exec != old_strict_exec) {
 			if (bpf_loader_set_config(
-				&g_agent.bpf_ctx, LOTA_CFG_STRICT_EXEC,
-				old_strict_exec ? 1 : 0) == 0) {
+				    &g_agent.bpf_ctx, LOTA_CFG_STRICT_EXEC,
+				    old_strict_exec ? 1 : 0) == 0) {
 				*strict_exec = old_strict_exec;
 			} else {
 				lota_err("Failed to rollback strict exec after "
@@ -275,8 +280,8 @@ static void apply_runtime_flags_transactional(
 		}
 		if (*strict_modules != old_strict_modules) {
 			if (bpf_loader_set_config(
-				&g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
-				old_strict_modules ? 1 : 0) == 0) {
+				    &g_agent.bpf_ctx, LOTA_CFG_STRICT_MODULES,
+				    old_strict_modules ? 1 : 0) == 0) {
 				*strict_modules = old_strict_modules;
 			} else {
 				lota_err("Failed to rollback strict modules "
@@ -285,8 +290,8 @@ static void apply_runtime_flags_transactional(
 		}
 		if (*block_anon_exec != old_block_anon_exec) {
 			if (bpf_loader_set_config(
-				&g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
-				old_block_anon_exec ? 1 : 0) == 0) {
+				    &g_agent.bpf_ctx, LOTA_CFG_BLOCK_ANON_EXEC,
+				    old_block_anon_exec ? 1 : 0) == 0) {
 				*block_anon_exec = old_block_anon_exec;
 			} else {
 				lota_err("Failed to rollback block anonymous "
@@ -330,8 +335,8 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
 				 "restoring previous PID protection set");
 			for (int k = 0; k < old_protect_pid_count; k++) {
 				if (bpf_loader_protect_pid(
-					&g_agent.bpf_ctx, old_protect_pids[k]) <
-				    0) {
+					    &g_agent.bpf_ctx,
+					    old_protect_pids[k]) < 0) {
 					lota_err("Failed to restore protected "
 						 "PID %u after reload "
 						 "allocation failure",
@@ -360,8 +365,8 @@ static void reload_protected_pids(const struct lota_config *new_cfg,
 							 new_pids[k]);
 			for (int k = 0; k < old_protect_pid_count; k++) {
 				if (bpf_loader_protect_pid(
-					&g_agent.bpf_ctx, old_protect_pids[k]) <
-				    0) {
+					    &g_agent.bpf_ctx,
+					    old_protect_pids[k]) < 0) {
 					lota_err("Failed to restore protected "
 						 "PID %u after reload apply "
 						 "failure",
@@ -399,12 +404,12 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 	}
 
 	for (int k = 0; k < old_trust_lib_count; k++) {
-		int untrust_ret =
-		    bpf_loader_untrust_lib(&g_agent.bpf_ctx, old_trust_libs[k]);
+		int untrust_ret = bpf_loader_untrust_lib(&g_agent.bpf_ctx,
+							 old_trust_libs[k]);
 		if (untrust_ret < 0 && untrust_ret != -ENOENT) {
 			lota_err(
-			    "Failed to remove trusted lib %s on reload: %s",
-			    old_trust_libs[k], strerror(-untrust_ret));
+				"Failed to remove trusted lib %s on reload: %s",
+				old_trust_libs[k], strerror(-untrust_ret));
 			trust_reload_failed = true;
 			break;
 		}
@@ -431,7 +436,7 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 		int restored_libs = 0;
 		for (int k = 0; k < old_trust_lib_count; k++) {
 			int restore_ret = bpf_loader_trust_lib(
-			    &g_agent.bpf_ctx, old_trust_libs[k]);
+				&g_agent.bpf_ctx, old_trust_libs[k]);
 			if (restore_ret < 0) {
 				lota_err("Failed to restore trusted lib %s "
 					 "after reload error: %s",
@@ -444,7 +449,7 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 		}
 		*trust_lib_count = restored_libs;
 		lota_warn(
-		    "Keeping previous trusted library set after reload errors");
+			"Keeping previous trusted library set after reload errors");
 		return;
 	}
 
@@ -452,10 +457,11 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 }
 
 static void sync_config_snapshot(
-    struct lota_config *cfg, const struct lota_config *new_cfg, int mode,
-    bool strict_mmap, bool strict_exec, bool block_ptrace, bool strict_modules,
-    bool block_anon_exec, uint32_t *protect_pids, int protect_pid_count,
-    char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX], int trust_lib_count)
+	struct lota_config *cfg, const struct lota_config *new_cfg, int mode,
+	bool strict_mmap, bool strict_exec, bool block_ptrace,
+	bool strict_modules, bool block_anon_exec, uint32_t *protect_pids,
+	int protect_pid_count, char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
+	int trust_lib_count)
 {
 	memcpy(cfg->server, new_cfg->server, sizeof(cfg->server));
 	cfg->port = new_cfg->port;
@@ -512,9 +518,9 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			int *trust_lib_count)
 {
 	struct lota_config new_cfg;
-	const char *cfg_path = (config_path && config_path[0])
-				   ? config_path
-				   : LOTA_CONFIG_DEFAULT_PATH;
+	const char *cfg_path = (config_path && config_path[0]) ?
+				       config_path :
+				       LOTA_CONFIG_DEFAULT_PATH;
 	int cfg_fd;
 
 	{
@@ -553,7 +559,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 	if (*mode == LOTA_MODE_ENFORCE && (new_mode == LOTA_MODE_MONITOR ||
 					   new_mode == LOTA_MODE_MAINTENANCE)) {
 		int auth_ret = verify_reload_downgrade_authorization_fd(
-		    cfg_fd, cfg_path, cfg);
+			cfg_fd, cfg_path, cfg);
 		if (auth_ret < 0) {
 			lota_err("Unauthorized ENFORCE mode downgrade request "
 				 "ignored");
@@ -607,8 +613,8 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			if (strcmp(new_cfg.allow_verity[i],
 				   cfg->allow_verity[i]) != 0) {
 				lota_warn(
-				    "allow_verity changes require restart; "
-				    "keeping previous allowlist");
+					"allow_verity changes require restart; "
+					"keeping previous allowlist");
 				break;
 			}
 		}

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - REST Monitoring API
 //
 // HTTP endpoints for monitoring and health checking:
@@ -65,7 +66,7 @@ type APIHandler struct {
 //   - empty but admin key set: still requires Authorization: Bearer <admin-key>
 //   - both empty: sensitive read-only endpoints are public (loopback dev only;
 //     the server refuses a non-loopback bind in this state)
-func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey string, readerAPIKey string) *APIHandler {
+func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, auditLog store.AuditLog, logger *slog.Logger, m *metrics.Metrics, attestLog store.AttestationLog, adminAPIKey, readerAPIKey string) *APIHandler {
 	if logger == nil {
 		logger = logging.Nop()
 	}
@@ -111,6 +112,16 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	// revocation management (admin auth required)
 	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+
+	// post-fact review of Low-Firmware-Assurance re-anchors.
+	// LFA re-anchors apply automatically; these endpoints let an operator see
+	// which clients took that path and acknowledge having reviewed them.
+	// Acknowledge route is more specific than the POST /clients/ pattern
+	// above, so Go's mux routes it here.
+	mux.HandleFunc("GET /api/v1/reanchor/review",
+		h.requireReader(h.handleReanchorReviewList))
+	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
+		h.requireAdmin(h.handleReanchorReviewAck))
 
 	// hardware ban management (admin auth required)
 	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
@@ -355,23 +366,25 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		}
 
 		dbTotal := 0
-		if counterE, ok := aikStore.(store.ClientCounterWithError); ok {
+		switch counter := aikStore.(type) {
+		case store.ClientCounterWithError:
 			var err error
-			dbTotal, err = counterE.CountClientsE()
+			dbTotal, err = counter.CountClientsE()
 			if err != nil {
 				h.log.Error("failed to count clients", "error", err)
 				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
 				return
 			}
-		} else if counter, ok := aikStore.(store.ClientCounter); ok {
+		case store.ClientCounter:
 			dbTotal = counter.CountClients()
 		}
 
 		active := h.verifier.ListActiveClients()
 		activeOnly := make([]string, 0, len(active))
 
-		if batchChecker, ok := aikStore.(store.ClientExistenceBatchChecker); ok {
-			existing, err := batchChecker.ExistingClients(active)
+		switch checker := aikStore.(type) {
+		case store.ClientExistenceBatchChecker:
+			existing, err := checker.ExistingClients(active)
 			if err != nil {
 				h.log.Error("failed to check active client existence in batch", "error", err)
 				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
@@ -383,7 +396,7 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 					activeOnly = append(activeOnly, id)
 				}
 			}
-		} else if checker, ok := aikStore.(store.ClientExistenceChecker); ok {
+		case store.ClientExistenceChecker:
 			for _, id := range active {
 				exists, err := checker.HasClient(id)
 				if err != nil {
@@ -395,7 +408,7 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 					activeOnly = append(activeOnly, id)
 				}
 			}
-		} else {
+		default:
 			registered := make(map[string]struct{})
 			for _, id := range aikStore.ListClients() {
 				registered[id] = struct{}{}
@@ -753,9 +766,9 @@ type banListResponse struct {
 	NextID string        `json:"next_id,omitempty"`
 }
 
-func parsePagination(r *http.Request, defaultLimit, maxLimit int) (int, int, error) {
-	limit := defaultLimit
-	offset := 0
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset int, err error) {
+	limit = defaultLimit
+	offset = 0
 
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
@@ -910,7 +923,8 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 	var entries []store.BanEntry
 	total := 0
 
-	if lister, ok := banStr.(store.CursorBanLister); ok {
+	switch lister := banStr.(type) {
+	case store.CursorBanLister:
 		var err error
 		entries, err = lister.ListBansAfter(limit+1, nextID)
 		if err != nil {
@@ -918,17 +932,18 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if counterE, ok := banStr.(store.BanCounterWithError); ok {
-			total, err = counterE.CountBansE()
+		switch counter := banStr.(type) {
+		case store.BanCounterWithError:
+			total, err = counter.CountBansE()
 			if err != nil {
 				h.log.Error("failed to count bans", "error", err)
 				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
 				return
 			}
-		} else if counter, ok := banStr.(store.BanCounter); ok {
+		case store.BanCounter:
 			total = counter.CountBans()
 		}
-	} else if lister, ok := banStr.(store.PaginatedBanLister); ok {
+	case store.PaginatedBanLister:
 		if nextID != "" {
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "next_id pagination is not supported by configured ban store"})
 			return
@@ -945,18 +960,19 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 			entries = lister.ListBansPage(limit+1, 0)
 		}
 
-		if counterE, ok := banStr.(store.BanCounterWithError); ok {
+		switch counter := banStr.(type) {
+		case store.BanCounterWithError:
 			var err error
-			total, err = counterE.CountBansE()
+			total, err = counter.CountBansE()
 			if err != nil {
 				h.log.Error("failed to count bans", "error", err)
 				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
 				return
 			}
-		} else if counter, ok := banStr.(store.BanCounter); ok {
+		case store.BanCounter:
 			total = counter.CountBans()
 		}
-	} else {
+	default:
 		if nextID != "" {
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "next_id pagination is not supported by configured ban store"})
 			return
@@ -1083,7 +1099,8 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 
 	entries := h.attestationLog.QueryAttestations(limit)
 	resp := make([]attestationResponse, len(entries))
-	for i, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		resp[i] = attestationResponse{
 			ID:         e.ID,
 			Timestamp:  e.Timestamp.UTC().Format(time.RFC3339),
@@ -1235,4 +1252,34 @@ func validateJSONComplexity(body []byte) error {
 	}
 
 	return nil
+}
+
+// handleReanchorReviewList returns the clients that re-anchored on the
+// Low-Firmware-Assurance path and have not yet been reviewed (reader).
+func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Request) {
+	clients, err := h.verifier.ListReanchorReview()
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	if clients == nil {
+		clients = []string{}
+	}
+	writeJSON(w, map[string]any{"pending_review": clients, "count": len(clients)})
+}
+
+// handleReanchorReviewAck clears a client's pending-review flag once an
+// operator has inspected its LFA re-anchor (admin only).
+func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("clientID")
+	if clientID == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
+		return
+	}
+	if err := h.verifier.AcknowledgeReanchorReview(clientID); err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	h.log.Info("operator acknowledged LFA re-anchor review", "client_id", clientID)
+	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
 }

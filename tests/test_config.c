@@ -16,27 +16,28 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include "../src/agent/config.h"
 
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%d] %-50s ", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%d] %-50s ", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(msg)                                                              \
-	do {                                                                   \
-		printf("FAIL: %s\n", msg);                                     \
+#define FAIL(msg)                          \
+	do {                               \
+		printf("FAIL: %s\n", msg); \
 	} while (0)
 
 static char tmpdir[64];
@@ -1308,38 +1309,38 @@ int main(void)
 	 * pointer call keeps every test in its own frame.
 	 */
 	static void (*const tests[])(void) = {
-	    test_config_init_defaults,
-	    test_config_init_null,
-	    test_config_load_nonexistent,
-	    test_config_load_null_cfg,
-	    test_config_load_empty_file,
-	    test_config_load_comments_only,
-	    test_config_load_basic_values,
-	    test_config_load_string_fields,
-	    test_config_load_hyphen_keys,
-	    test_config_load_trust_libs_multiple,
-	    test_config_load_protect_pids_multiple,
-	    test_config_load_container_listener_uids_multiple,
-	    test_config_load_container_listener_uid_duplicate,
-	    test_config_load_container_listener_uid_overflow,
-	    test_config_load_container_listener_uid_invalid,
-	    test_config_load_boolean_variants,
-	    test_config_load_invalid_boolean,
-	    test_config_load_invalid_mode,
-	    test_config_load_whitespace_trimming,
-	    test_config_load_unknown_keys,
-	    test_config_load_malformed_lines,
-	    test_config_load_empty_key,
-	    test_config_load_empty_value,
-	    test_config_load_port_bounds,
-	    test_config_load_rejects_group_writable,
-	    test_config_load_rejects_symlink,
-	    test_config_dump_roundtrip,
-	    test_config_dump_null,
-	    test_config_load_all_known_keys,
-	    test_config_load_override_order,
-	    test_config_load_mixed_comments,
-	    test_config_load_from_fd,
+		test_config_init_defaults,
+		test_config_init_null,
+		test_config_load_nonexistent,
+		test_config_load_null_cfg,
+		test_config_load_empty_file,
+		test_config_load_comments_only,
+		test_config_load_basic_values,
+		test_config_load_string_fields,
+		test_config_load_hyphen_keys,
+		test_config_load_trust_libs_multiple,
+		test_config_load_protect_pids_multiple,
+		test_config_load_container_listener_uids_multiple,
+		test_config_load_container_listener_uid_duplicate,
+		test_config_load_container_listener_uid_overflow,
+		test_config_load_container_listener_uid_invalid,
+		test_config_load_boolean_variants,
+		test_config_load_invalid_boolean,
+		test_config_load_invalid_mode,
+		test_config_load_whitespace_trimming,
+		test_config_load_unknown_keys,
+		test_config_load_malformed_lines,
+		test_config_load_empty_key,
+		test_config_load_empty_value,
+		test_config_load_port_bounds,
+		test_config_load_rejects_group_writable,
+		test_config_load_rejects_symlink,
+		test_config_dump_roundtrip,
+		test_config_dump_null,
+		test_config_load_all_known_keys,
+		test_config_load_override_order,
+		test_config_load_mixed_comments,
+		test_config_load_from_fd,
 	};
 
 	for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)

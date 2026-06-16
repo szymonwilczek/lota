@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Remote attestation verification service
 //
 // Usage:
@@ -11,6 +12,8 @@
 //   --key FILE         TLS private key file
 //   --aik-store PATH   AIK key store directory (default: /var/lib/lota/aiks)
 //   --db PATH          SQLite database for persistent storage (default: disabled)
+//   --pg-dsn DSN       PostgreSQL DSN for shared multi-instance storage
+//                      (or LOTA_PG_DSN); mutually exclusive with --db
 //   --policy FILE      PCR policy file (YAML)
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
 
@@ -19,6 +22,8 @@
 //   LOTA_READER_API_KEY API key for sensitive read-only endpoints; if empty, the
 //                       read tier is public on a loopback bind and the server
 //                       refuses a non-loopback bind unless LOTA_ADMIN_API_KEY is set
+//   LOTA_PG_DSN         PostgreSQL DSN for the shared storage backend; keeps
+//                       connection credentials out of the process argument list
 //   --generate-cert    Generate self-signed certificate for testing
 //   --log-format FMT   Log output format: text or json (default: text)
 //   --log-level LVL    Minimum log level: debug, info, warn, error, security (default: info)
@@ -84,19 +89,24 @@ var (
 	requireCert          = flag.Bool("require-cert", true, "Require a Privacy CA-issued AIK certificate; reject reports without one (production default)")
 	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
-	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline. With the default (false), a first-attestation client must either be covered by a signed policy that pins PCR0/PCR1/PCR7 or be pre-enrolled in the baseline store; otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
+	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	maxRestartSkew       = flag.Uint("max-restart-count-skew", 64, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required. The default of 64 covers laptop suspend/resume cadences past any realistic operator interval; raising it grows the matcher's brute-force surface linearly without buying additional uptime.")
 	rejectLegacyBase     = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
+	selfServiceReanchor  = flag.Bool("enable-self-service-reanchor", false, "Diverse-fleet only: on a firmware/Secure Boot PCR drift, let the verifier re-pin the per-device boot baseline itself when the drift preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only takes effect under a policy with require_secureboot; leave off for the enterprise profile.")
 	allowPermissive      = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
+	allowUnpinnedAgent   = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
 	aikCACerts           stringSliceFlag
-	ekCRLs               stringSliceFlag
+	aikCRLs              stringSliceFlag
+	ekCRLsDeprecated     stringSliceFlag
+	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
 
 func main() {
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
-	flag.Var(&ekCRLs, "ek-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
+	flag.Var(&ekCRLsDeprecated, "ek-crl", "DEPRECATED alias for --aik-crl. The CRLs loaded here revoke AIK certificates issued by the deployment's attestation CA, not endorsement keys; the TPM-manufacturer EK revocation feed is the attestation CA's -ek-crl flag.")
 	flag.Parse()
 
 	// initialize structured logger
@@ -105,6 +115,12 @@ func main() {
 		Format: *logFormat,
 		Output: os.Stderr,
 	})
+
+	if len(ekCRLsDeprecated) > 0 {
+		logger.Warn("--ek-crl is deprecated and will be removed; use --aik-crl",
+			"reason", "the flag revokes AIK certificates, not endorsement keys; the EK-manufacturer CRL feed lives on lota-attest-ca (-ek-crl)")
+		aikCRLs = append(aikCRLs, ekCRLsDeprecated...)
+	}
 
 	// shared metrics registry
 	m := metrics.New()
@@ -157,6 +173,10 @@ func main() {
 	if *allowTOFUBoot {
 		logger.Warn("INSECURE: --allow-tofu-boot-baseline is set; a first-attestation client will TOFU-pin whatever PCR0/PCR1/PCR7 values it reports, including firmware/Secure Boot state that may already be compromised")
 	}
+	verifierCfg.EnableSelfServiceReanchor = *selfServiceReanchor
+	if *selfServiceReanchor {
+		logger.Info("self-service re-anchor enabled (diverse-fleet); a firmware/Secure Boot drift that preserves the Secure Boot root of trust will re-pin the per-device baseline automatically")
+	}
 	if *maxRestartSkew > math.MaxUint32 {
 		logger.Error("--max-restart-count-skew exceeds uint32 range",
 			"value", *maxRestartSkew, "max", uint64(math.MaxUint32))
@@ -168,8 +188,87 @@ func main() {
 		logger.Info("rejecting legacy baseline agent_hash backfills")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
+	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
+	if *allowUnpinnedAgent {
+		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
+	}
 
-	if *dbPath != "" {
+	// resolve the Postgres DSN from flag or environment
+	// the env form keeps connection credentials out of the process argument list
+	dsn := *pgDSN
+	if dsn == "" {
+		dsn = os.Getenv("LOTA_PG_DSN")
+	}
+	if dsn != "" && *dbPath != "" {
+		logger.Error("choose one storage backend: --pg-dsn (Postgres) or --db (SQLite), not both")
+		os.Exit(1)
+	}
+
+	if dsn != "" {
+		// Postgres backend: shared, multi-instance state for deployments
+		// behind a load balancer.
+		// Mutable enforcement, baseline and nonce state lives in Postgres
+		// so any instance sees writes made by any peer.
+		//
+		// Unlike the SQLite --db block, this path supports the
+		// certificate-backed AIK store, so a production --require-cert fleet
+		// can run several verifier instances against one database
+		db, err := store.OpenPostgresDB(dsn)
+		if err != nil {
+			logger.Error("failed to open Postgres database", "error", err)
+			os.Exit(1)
+		}
+		defer db.Close()
+
+		verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
+		verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
+		verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
+
+		auditLog = store.NewPostgresAuditLog(db)
+		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
+		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
+
+		attestLog = store.NewPostgresAttestationLog(db)
+		verifierCfg.AttestationLog = attestLog
+
+		// AIK store: certificate-backed when the deployment verifies chains
+		// (the production default), otherwise a shared TOFU store in Postgres
+		if *requireCert || len(aikCACerts) > 0 {
+			if *requireCert && len(aikCACerts) == 0 {
+				logger.Error("--require-cert requires a trusted attestation-CA root for AIK verification",
+					"hint", "provide one or more --aik-ca-cert PEM paths (the Privacy CA root), or disable --require-cert (INSECURE)")
+				//nolint:gocritic // startup abort before any DB write; the OS reclaims the handle
+				os.Exit(1)
+			}
+			if len(aikCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
+				os.Exit(1)
+			}
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(aikCRLs), *requireCert)
+			if err != nil {
+				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
+				os.Exit(1)
+			}
+			aikStore = cs
+			logger.Info("certificate-backed AIK store initialized",
+				"path", *aikStorePath,
+				"trusted_cas", len(aikCACerts),
+				"loaded_crls", cs.CRLCount(),
+				"require_cert", *requireCert,
+				"registered_clients", len(cs.ListClients()))
+		} else {
+			aikStore = store.NewPostgresAIKStore(db)
+			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
+		}
+
+		ver, err := store.SchemaVersion(db)
+		if err != nil {
+			logger.Warn("failed to read Postgres schema version", "error", err)
+		} else {
+			logger.Info("Postgres store initialized", "schema_version", ver)
+		}
+	} else if *dbPath != "" {
 		if *requireCert {
 			logger.Error("--require-cert is enabled but SQLite AIK store does not support certificate chain verification",
 				"hint", "run without --db and configure --aik-ca-cert to use CertificateStore, or disable --require-cert (INSECURE)")
@@ -234,11 +333,11 @@ func main() {
 		}
 
 		if len(aikCACerts) > 0 || *requireCert {
-			if len(ekCRLs) > 0 && len(aikCACerts) == 0 {
-				logger.Error("--ek-crl requires at least one --aik-ca-cert to verify CRL signatures")
+			if len(aikCRLs) > 0 && len(aikCACerts) == 0 {
+				logger.Error("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 				os.Exit(1)
 			}
-			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(ekCRLs), *requireCert)
+			cs, err := store.NewCertificateStoreWithCRL(*aikStorePath, []string(aikCACerts), []string(aikCRLs), *requireCert)
 			if err != nil {
 				logger.Error("failed to initialize certificate-backed AIK store", "path", *aikStorePath, "error", err)
 				os.Exit(1)
@@ -440,11 +539,11 @@ func generateTestCert() error {
 	}
 
 	// write certificate (world-readable) and private key (owner-only)
-	if err := writePEMFile("lota-verifier.crt", 0644,
+	if err := writePEMFile("lota-verifier.crt", 0o644,
 		&pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
 		return fmt.Errorf("failed to write certificate: %w", err)
 	}
-	if err := writePEMFile("lota-verifier.key", 0600,
+	if err := writePEMFile("lota-verifier.key", 0o600,
 		&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}

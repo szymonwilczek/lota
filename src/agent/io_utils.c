@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 
 #include "io_utils.h"
 
@@ -7,6 +8,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 int lota_write_full(int fd, const void *buf, size_t len)
 {

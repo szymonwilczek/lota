@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Revocation, Ban, and Audit Log Store Tests
 //
 // Tests for all RevocationStore, BanStore, and AuditLog

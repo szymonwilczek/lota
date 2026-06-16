@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Agent - Remote attestation and policy export
  *
@@ -18,15 +19,20 @@
 #include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
+#include <openssl/types.h>
+#include <sys/types.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/attestation.h"
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
 #include "agent.h"
+#include "aik_cert.h"
 #include "attest.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "enroll.h"
+#include "esrt.h"
 #include "hardening.h"
 #include "iommu.h"
 #include "io_utils.h"
@@ -38,6 +44,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
+#include "iommu_types.h"
 
 /*
  * Select a boot measurement PCR that best represents the booted kernel path.
@@ -51,15 +58,15 @@ static int read_kernel_measurement_digest(struct tpm_context *ctx,
 					  uint8_t out_hash[LOTA_HASH_SIZE],
 					  int *selected_pcr)
 {
-	static const int candidates[] = {11, 9, 8, 4};
+	static const int candidates[] = { 11, 9, 8, 4 };
 
 	if (!ctx || !out_hash)
 		return -EINVAL;
 
 	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]);
 	     i++) {
-		int ret =
-		    tpm_read_pcr(ctx, candidates[i], TPM2_ALG_SHA256, out_hash);
+		int ret = tpm_read_pcr(ctx, candidates[i], TPM2_ALG_SHA256,
+				       out_hash);
 		if (ret == 0) {
 			if (selected_pcr)
 				*selected_pcr = candidates[i];
@@ -122,9 +129,10 @@ int export_policy(int mode)
 	time_t now;
 	struct tm tm_buf;
 
-	static const int pcrs_to_export[] = {
-	    POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4,  POLICY_PCR_7,
-	    POLICY_PCR_8, POLICY_PCR_9, POLICY_PCR_11, POLICY_PCR_14};
+	static const int pcrs_to_export[] = { POLICY_PCR_0,  POLICY_PCR_1,
+					      POLICY_PCR_4,  POLICY_PCR_7,
+					      POLICY_PCR_8,  POLICY_PCR_9,
+					      POLICY_PCR_11, POLICY_PCR_14 };
 
 	memset(&snap, 0, sizeof(snap));
 
@@ -166,7 +174,7 @@ int export_policy(int mode)
 
 	/* PCR values */
 	snap.pcr_count =
-	    (int)(sizeof(pcrs_to_export) / sizeof(pcrs_to_export[0]));
+		(int)(sizeof(pcrs_to_export) / sizeof(pcrs_to_export[0]));
 	for (int i = 0; i < snap.pcr_count; i++) {
 		snap.pcrs[i].index = pcrs_to_export[i];
 		ret = tpm_read_pcr(&g_agent.tpm_ctx, pcrs_to_export[i],
@@ -191,7 +199,7 @@ int export_policy(int mode)
 	{
 		int selected_pcr = -1;
 		ret = read_kernel_measurement_digest(
-		    &g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
+			&g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
 		if (ret == 0) {
 			snap.kernel_hash_valid = true;
 			fprintf(stderr,
@@ -241,7 +249,7 @@ int export_policy(int mode)
 		snap.iommu_enabled = iommu_verify_full(&iommu_status);
 		snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
 		collect_kernel_security_features(
-		    &snap.module_sig, &snap.secureboot, &snap.lockdown);
+			&snap.module_sig, &snap.secureboot, &snap.lockdown);
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -262,7 +270,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	struct tpm_quote_response quote_resp;
 	struct iommu_status iommu_status;
 	char kernel_path[LOTA_MAX_PATH_LEN];
-	uint8_t binding_nonce[LOTA_NONCE_SIZE] = {0};
+	uint8_t binding_nonce[LOTA_NONCE_SIZE] = { 0 };
 	int ret;
 
 	memset(&quote_resp, 0, sizeof(quote_resp));
@@ -345,8 +353,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		if (ret == 0) {
 			report->header.flags |= LOTA_REPORT_FLAG_KERNEL_HASH_OK;
 			lota_dbg(
-			    "Kernel measurement digest captured from PCR %d",
-			    selected_pcr);
+				"Kernel measurement digest captured from PCR %d",
+				selected_pcr);
 		} else {
 			fprintf(stderr, "Warning: Failed to read "
 					"kernel-relevant measured boot PCR "
@@ -421,8 +429,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	{
 		EVP_MD_CTX *md = EVP_MD_CTX_new();
 		unsigned int md_len;
-		uint32_t signed_flags =
-		    report->header.flags & ~LOTA_REPORT_FLAG_TPM_QUOTE_OK;
+		uint32_t signed_flags = report->header.flags &
+					~LOTA_REPORT_FLAG_TPM_QUOTE_OK;
 		uint8_t flags_le[sizeof(signed_flags)];
 
 		flags_le[0] = (uint8_t)(signed_flags);
@@ -437,7 +445,7 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		}
 		if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1 ||
 		    EVP_DigestUpdate(md, challenge->nonce, LOTA_NONCE_SIZE) !=
-			1 ||
+			    1 ||
 		    EVP_DigestUpdate(md, report->tpm.hardware_id,
 				     LOTA_HARDWARE_ID_SIZE) != 1 ||
 		    EVP_DigestUpdate(md, flags_le, sizeof(flags_le)) != 1 ||
@@ -505,19 +513,18 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	 */
 	{
 		size_t aik_size = 0;
-		ret =
-		    tpm_get_aik_public(&g_agent.tpm_ctx, report->tpm.aik_public,
-				       LOTA_MAX_AIK_PUB_SIZE, &aik_size);
+		ret = tpm_get_aik_public(&g_agent.tpm_ctx,
+					 report->tpm.aik_public,
+					 LOTA_MAX_AIK_PUB_SIZE, &aik_size);
 		if (ret == 0) {
 			report->tpm.aik_public_size = (uint16_t)aik_size;
 			lota_dbg(
-			    "AIK public key exported (%zu bytes, DER SPKI)",
-			    aik_size);
+				"AIK public key exported (%zu bytes, DER SPKI)",
+				aik_size);
 		} else {
-			fprintf(
-			    stderr,
-			    "Warning: Failed to export AIK public key: %s\n",
-			    tpm_strerror(ret));
+			fprintf(stderr,
+				"Warning: Failed to export AIK public key: %s\n",
+				tpm_strerror(ret));
 			report->tpm.aik_public_size = 0;
 		}
 	}
@@ -539,9 +546,10 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	 */
 	{
 		size_t aik_cert_size = 0;
-		int aret = lota_read_file_bounded(
-		    LOTA_AIK_CERT_PATH, report->tpm.aik_certificate,
-		    LOTA_MAX_AIK_CERT_SIZE, &aik_cert_size);
+		int aret = lota_read_file_bounded(LOTA_AIK_CERT_PATH,
+						  report->tpm.aik_certificate,
+						  LOTA_MAX_AIK_CERT_SIZE,
+						  &aik_cert_size);
 		if (aret < 0) {
 			fprintf(stderr,
 				"Warning: Failed to read AIK certificate: %s\n",
@@ -550,8 +558,8 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		} else if (aik_cert_size > 0) {
 			report->tpm.aik_cert_size = (uint16_t)aik_cert_size;
 			lota_dbg(
-			    "AIK certificate included (%zu bytes, DER X.509)",
-			    aik_cert_size);
+				"AIK certificate included (%zu bytes, DER X.509)",
+				aik_cert_size);
 		} else {
 			report->tpm.aik_cert_size = 0;
 			lota_dbg("No AIK certificate on disk; run --enroll for "
@@ -562,16 +570,16 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	/* AIK rotation metadata */
 	if (g_agent.tpm_ctx.aik_meta_loaded) {
 		report->tpm.aik_generation =
-		    g_agent.tpm_ctx.aik_meta.generation;
+			g_agent.tpm_ctx.aik_meta.generation;
 
 		if (tpm_aik_in_grace_period(&g_agent.tpm_ctx)) {
 			size_t prev_size = 0;
 			ret = tpm_aik_get_prev_public(
-			    &g_agent.tpm_ctx, report->tpm.prev_aik_public,
-			    LOTA_MAX_AIK_PUB_SIZE, &prev_size);
+				&g_agent.tpm_ctx, report->tpm.prev_aik_public,
+				LOTA_MAX_AIK_PUB_SIZE, &prev_size);
 			if (ret == 0) {
 				report->tpm.prev_aik_public_size =
-				    (uint16_t)prev_size;
+					(uint16_t)prev_size;
 				lota_dbg("Previous AIK included (grace period, "
 					 "%zu bytes)",
 					 prev_size);
@@ -680,8 +688,15 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	/* serialize report with variable-length sections */
 	{
-		size_t total =
-		    calculate_report_size(0, (uint32_t)event_log_size);
+		struct lota_esrt esrt;
+		size_t total;
+
+		/* ESRT System Firmware version (anti-rollback signal for the
+		 * verifier's re-anchor)
+		 * Always sent, present=0 when absent */
+		esrt_read_system_firmware(&esrt);
+
+		total = calculate_report_size(0, (uint32_t)event_log_size, 1);
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
@@ -692,9 +707,9 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		}
 
 		report.header.report_size = (uint32_t)total;
-		wire_size =
-		    serialize_report(&report, NULL, 0, event_log,
-				     (uint32_t)event_log_size, wire_buf, total);
+		wire_size = serialize_report(&report, NULL, 0, event_log,
+					     (uint32_t)event_log_size, &esrt,
+					     wire_buf, total);
 		if (wire_size < 0) {
 			fprintf(stderr, "Failed to serialize report: %s\n",
 				strerror((int)-wire_size));
@@ -860,7 +875,7 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
 			 (long long)g_agent.tpm_ctx.lockout_first_seen);
 	} else if (!now && g_agent.tpm_lockout_last_known) {
 		lota_notice(
-		    "TPM DA lockout cleared after successful TPM operation");
+			"TPM DA lockout cleared after successful TPM operation");
 	}
 	agent_globals_lock(&g_agent);
 	g_agent.tpm_lockout_last_known = now;
@@ -899,8 +914,8 @@ void publish_rotation_state(uint32_t aik_ttl)
 	 * With no record there is no way to tell, so do not raise the flag
 	 */
 	if (enroll_state_load(&st) == 0)
-		reenroll_required =
-		    st.aik_generation != tpm->aik_meta.generation;
+		reenroll_required = st.aik_generation !=
+				    tpm->aik_meta.generation;
 
 	ipc_update_rotation(&g_agent.ipc_ctx, tpm->aik_meta.generation,
 			    (uint64_t)tpm->aik_meta.provisioned_at,
@@ -925,6 +940,9 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	uint64_t valid_until = 0;
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
+	bool auto_renew = false;
+	int renew_backoff = 0;
+	uint64_t next_renew_ms = 0;
 
 	lota_info("Continuous attestation starting");
 	lota_info("Server: %s:%d, interval: %d seconds", server, port,
@@ -1036,6 +1054,25 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 			  0);
 	publish_rotation_state(aik_ttl);
 
+	/*
+	 * Auto-renew the CA-issued AIK certificate:
+	 * it is short-lived (24h by default) and would otherwise lapse a day
+	 * after install.
+	 * Enabled whenever a CA endpoint was recorded at enroll time.
+	 * Manual -reenroll stays the fallback when no endpoint is on disk.
+	 */
+	{
+		struct enroll_state est;
+
+		auto_renew = enroll_state_load(&est) == 0;
+		if (auto_renew)
+			lota_info("AIK certificate auto-renewal enabled");
+		else
+			lota_info(
+				"AIK certificate auto-renewal off: no recorded "
+				"CA endpoint (run --enroll to record one)");
+	}
+
 	sdnotify_ready();
 	sdnotify_status("Attesting to %s:%d", server, port);
 	lota_info("Starting attestation loop");
@@ -1045,23 +1082,23 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 		/* check if AIK rotation is due */
 		if (g_agent.tpm_ctx.aik_meta_loaded) {
-			int needs =
-			    tpm_aik_needs_rotation(&g_agent.tpm_ctx, aik_ttl);
+			int needs = tpm_aik_needs_rotation(&g_agent.tpm_ctx,
+							   aik_ttl);
 			if (needs == 1) {
 				lota_info(
-				    "AIK rotation due (gen %lu, age %ld s)",
-				    (unsigned long)
-					g_agent.tpm_ctx.aik_meta.generation,
-				    (long)tpm_aik_age(&g_agent.tpm_ctx));
+					"AIK rotation due (gen %lu, age %ld s)",
+					(unsigned long)g_agent.tpm_ctx.aik_meta
+						.generation,
+					(long)tpm_aik_age(&g_agent.tpm_ctx));
 				ret = tpm_rotate_aik(&g_agent.tpm_ctx);
 				if (ret < 0) {
 					lota_err("AIK rotation failed: %s",
 						 tpm_strerror(ret));
 				} else {
 					lota_info(
-					    "AIK rotated -> generation %lu",
-					    (unsigned long)g_agent.tpm_ctx
-						.aik_meta.generation);
+						"AIK rotated -> generation %lu",
+						(unsigned long)g_agent.tpm_ctx
+							.aik_meta.generation);
 				}
 				/*
 				 * Republish so the rotation, its grace window,
@@ -1069,6 +1106,64 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 				 * over D-Bus immediately
 				 */
 				publish_rotation_state(aik_ttl);
+			}
+		}
+
+		/*
+		 * Renew the CA-issued AIK certificate before it expires.
+		 * Cert lives far less than the AIK key (24h vs 30d), so renewal
+		 * is driven by cert expiry, not by key rotation.
+		 * Re-enroll once the cert enters its final third.
+		 * Back off when the CA is unreachable so a momentary outage
+		 * does not hammer it.
+		 * Renewal that keeps failing past notAfter surfaces through the
+		 * attestation-failure path below:
+		 */
+		if (auto_renew) {
+			int64_t remaining = 0, total = 0;
+			struct timespec mono;
+			uint64_t mono_ms;
+
+			clock_gettime(CLOCK_MONOTONIC, &mono);
+			mono_ms = (uint64_t)mono.tv_sec * 1000 +
+				  (uint64_t)mono.tv_nsec / 1000000;
+
+			if (mono_ms >= next_renew_ms &&
+			    aik_cert_lifetime(&remaining, &total) == 0 &&
+			    aik_cert_renew_due(remaining, total)) {
+				lota_info("AIK certificate renewal due "
+					  "(%lld s left of %lld s)",
+					  (long long)remaining,
+					  (long long)total);
+				ret = enroll_renew_cert(&g_agent.tpm_ctx);
+				if (ret == 0) {
+					renew_backoff = 0;
+					lota_info("AIK certificate renewed");
+					publish_rotation_state(aik_ttl);
+				} else {
+					int shift = renew_backoff;
+					int delay;
+
+					if (shift > 5)
+						shift = 5;
+					renew_backoff++;
+					delay = MIN_ATTEST_INTERVAL *
+						(1 << shift);
+					if (delay > MAX_BACKOFF_SECONDS)
+						delay = MAX_BACKOFF_SECONDS;
+					next_renew_ms = mono_ms +
+							(uint64_t)delay * 1000;
+					lota_warn("AIK certificate renewal "
+						  "failed (%s); "
+						  "retry in %ds, cert expires "
+						  "in %lld s",
+						  strerror(-ret), delay,
+						  (long long)remaining);
+					sdnotify_status(
+						"AIK cert renewal failing, "
+						"expires in %lld s",
+						(long long)remaining);
+				}
 			}
 		}
 
@@ -1084,8 +1179,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 			/* update ipc: attestation successful */
 			status_flags |= LOTA_STATUS_ATTESTED;
-			valid_until =
-			    (uint64_t)(now + interval_sec + 60); /* buffer */
+			valid_until = (uint64_t)(now + interval_sec +
+						 60); /* buffer */
 			ipc_update_status(&g_agent.ipc_ctx,
 					  reconcile_tpm_lockout(status_flags),
 					  valid_until);
@@ -1101,7 +1196,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 					shift = 5; /* 10 * 2^5 = 320 >
 						      MAX_BACKOFF_SECONDS */
 				backoff_sec =
-				    MIN_ATTEST_INTERVAL * (1 << shift);
+					MIN_ATTEST_INTERVAL * (1 << shift);
 			}
 			if (backoff_sec > MAX_BACKOFF_SECONDS)
 				backoff_sec = MAX_BACKOFF_SECONDS;
@@ -1119,8 +1214,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 			if (consecutive_failures >= 3) {
 				status_flags &= ~LOTA_STATUS_ATTESTED;
 				ipc_update_status(
-				    &g_agent.ipc_ctx,
-				    reconcile_tpm_lockout(status_flags), 0);
+					&g_agent.ipc_ctx,
+					reconcile_tpm_lockout(status_flags), 0);
 			} else {
 				/*
 				 * Even when the attested bit is still asserted,
@@ -1130,7 +1225,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 				 * new tokens.
 				 */
 				uint32_t refreshed =
-				    reconcile_tpm_lockout(status_flags);
+					reconcile_tpm_lockout(status_flags);
 				if (refreshed != status_flags) {
 					status_flags = refreshed;
 					ipc_update_status(&g_agent.ipc_ctx,
@@ -1166,8 +1261,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		while (g_agent.running) {
 			clock_gettime(CLOCK_MONOTONIC, &now_ts);
 			uint64_t current_ms =
-			    (uint64_t)now_ts.tv_sec * 1000 +
-			    (uint64_t)now_ts.tv_nsec / 1000000;
+				(uint64_t)now_ts.tv_sec * 1000 +
+				(uint64_t)now_ts.tv_nsec / 1000000;
 
 			if (current_ms >= target_ms)
 				break;

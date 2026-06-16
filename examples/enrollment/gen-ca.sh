@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Generate the trust material an operator hosts for the LOTA attestation
 # CA: the CA signing key and certificate (it signs AIK certificates), a
@@ -9,7 +10,7 @@
 # It does NOT generate the TPM manufacturer EK roots -- those come from
 # your hardware vendor (Infineon/Intel/STM/...) or, for swTPM, from the
 # local swtpm CA. Point lota-attest-ca --ek-root at that file (see
-# run.sh / README.md).
+# run.sh / README.rst).
 
 set -euo pipefail
 

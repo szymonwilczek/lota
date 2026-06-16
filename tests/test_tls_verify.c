@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * TLS Certificate Verification Test
  *
@@ -13,8 +14,8 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "../src/agent/net.h"
 

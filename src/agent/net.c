@@ -8,9 +8,7 @@
  */
 
 #include "net.h"
-#include "journal.h"
 
-#include <arpa/inet.h>
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,13 +19,18 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
-
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
-#include <openssl/x509v3.h>
+#include <openssl/crypto.h>
+#include <openssl/prov_ssl.h>
+#include <openssl/types.h>
+#include <openssl/x509.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#include "../../include/attestation.h"
+#include "journal.h"
+#include "lota.h"
 
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
@@ -162,7 +165,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 		 * when the CA certificate is not available.
 		 */
 		lota_warn(
-		    "TLS certificate verification DISABLED (--no-verify-tls)");
+			"TLS certificate verification DISABLED (--no-verify-tls)");
 		lota_warn("Connection is vulnerable to MITM attacks!");
 		lota_warn("Do NOT use in production.");
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
@@ -309,8 +312,8 @@ int net_connect(struct net_context *ctx)
 	ctx->socket_fd = sock;
 
 	{
-		struct timeval tv = {.tv_sec = NET_IO_TIMEOUT_SEC,
-				     .tv_usec = 0};
+		struct timeval tv = { .tv_sec = NET_IO_TIMEOUT_SEC,
+				      .tv_usec = 0 };
 		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 	}
@@ -428,7 +431,7 @@ int net_connect(struct net_context *ctx)
 		unsigned int digest_len = 0;
 
 		if (X509_digest(peer_cert, EVP_sha256(), digest, &digest_len) !=
-			1 ||
+			    1 ||
 		    digest_len != NET_PIN_SHA256_LEN) {
 			lota_err("Certificate pinning failed: unable to "
 				 "compute SHA-256 fingerprint");
@@ -457,11 +460,11 @@ int net_connect(struct net_context *ctx)
 						 digest[i]);
 				}
 				lota_err(
-				    "SECURITY: Certificate pinning FAILED! "
-				    "Expected: %s Got: %s "
-				    "This may indicate a MITM attack or "
-				    "certificate rotation.",
-				    expected_hex, got_hex);
+					"SECURITY: Certificate pinning FAILED! "
+					"Expected: %s Got: %s "
+					"This may indicate a MITM attack or "
+					"certificate rotation.",
+					expected_hex, got_hex);
 			}
 			SSL_shutdown(ssl);
 			SSL_free(ssl);

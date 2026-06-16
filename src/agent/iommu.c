@@ -6,15 +6,17 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <dirent.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/klog.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "iommu.h"
+#include "iommu_types.h"
 
 /* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"
@@ -258,24 +260,24 @@ int iommu_status_to_string(const struct iommu_status *status, char *buf,
 		break;
 	}
 
-	written =
-	    snprintf(buf, buf_len,
-		     "IOMMU Status:\n"
-		     "  Vendor: %s\n"
-		     "  Units: %u\n"
-		     "  Flags: 0x%08x\n"
-		     "    Sysfs Present: %s\n"
-		     "    Cmdline Set: %s (%s)\n"
-		     "    DMA Remap: %s\n"
-		     "    IRQ Remap: %s\n"
-		     "    Strict Mode: %s\n",
-		     vendor_str, status->unit_count, status->flags,
-		     (status->flags & IOMMU_FLAG_SYSFS_PRESENT) ? "yes" : "no",
-		     (status->flags & IOMMU_FLAG_CMDLINE_SET) ? "yes" : "no",
-		     status->cmdline_param[0] ? status->cmdline_param : "none",
-		     (status->flags & IOMMU_FLAG_DMA_REMAP) ? "yes" : "no",
-		     (status->flags & IOMMU_FLAG_IRQ_REMAP) ? "yes" : "no",
-		     (status->flags & IOMMU_FLAG_STRICT) ? "yes" : "no");
+	written = snprintf(
+		buf, buf_len,
+		"IOMMU Status:\n"
+		"  Vendor: %s\n"
+		"  Units: %u\n"
+		"  Flags: 0x%08x\n"
+		"    Sysfs Present: %s\n"
+		"    Cmdline Set: %s (%s)\n"
+		"    DMA Remap: %s\n"
+		"    IRQ Remap: %s\n"
+		"    Strict Mode: %s\n",
+		vendor_str, status->unit_count, status->flags,
+		(status->flags & IOMMU_FLAG_SYSFS_PRESENT) ? "yes" : "no",
+		(status->flags & IOMMU_FLAG_CMDLINE_SET) ? "yes" : "no",
+		status->cmdline_param[0] ? status->cmdline_param : "none",
+		(status->flags & IOMMU_FLAG_DMA_REMAP) ? "yes" : "no",
+		(status->flags & IOMMU_FLAG_IRQ_REMAP) ? "yes" : "no",
+		(status->flags & IOMMU_FLAG_STRICT) ? "yes" : "no");
 
 	return written;
 }

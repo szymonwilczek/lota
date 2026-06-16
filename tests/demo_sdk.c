@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA SDK Demo - Example game integration
  *
@@ -16,8 +17,8 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <time.h>
+#include <stdint.h>
 
 #include "../include/lota_gaming.h"
 

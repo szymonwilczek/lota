@@ -17,29 +17,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "lota_anticheat.h"
 
 static int tests_run;
 static int tests_passed;
 
-#define TEST(name)                                                             \
-	do {                                                                   \
-		tests_run++;                                                   \
-		printf("  [%2d] %-55s", tests_run, name);                      \
+#define TEST(name)                                        \
+	do {                                              \
+		tests_run++;                              \
+		printf("  [%2d] %-55s", tests_run, name); \
 	} while (0)
 
-#define PASS()                                                                 \
-	do {                                                                   \
-		tests_passed++;                                                \
-		printf("PASS\n");                                              \
+#define PASS()                    \
+	do {                      \
+		tests_passed++;   \
+		printf("PASS\n"); \
 	} while (0)
 
-#define FAIL(reason)                                                           \
-	do {                                                                   \
-		printf("FAIL (%s)\n", reason);                                 \
+#define FAIL(reason)                           \
+	do {                                   \
+		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
 static char tmp_path[256];
@@ -181,7 +182,7 @@ static int collect_path_cb(const char *path, void *user)
 
 static void test_list_objects_self_first(void)
 {
-	struct path_collector c = {0};
+	struct path_collector c = { 0 };
 	char self[LOTA_AC_RUNTIME_PATH_MAX];
 	ssize_t n;
 
@@ -220,7 +221,7 @@ static void test_live_matches_object_set(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	struct path_collector c = {0};
+	struct path_collector c = { 0 };
 
 	TEST("live image equals the set measure of its loaded objects");
 	c.paths = calloc(COLLECT_MAX_OBJS, LOTA_AC_RUNTIME_PATH_MAX);
@@ -440,20 +441,20 @@ static void test_non_elf_rejected(void)
  * zero on purpose.
  */
 struct seg_spec {
-	uint32_t type;	 /* p_type */
-	uint32_t flags;	 /* p_flags */
-	uint64_t vaddr;	 /* p_vaddr */
+	uint32_t type; /* p_type */
+	uint32_t flags; /* p_flags */
+	uint64_t vaddr; /* p_vaddr */
 	uint64_t filesz; /* declared p_filesz */
-	uint8_t fill;	 /* byte the segment body is filled with */
+	uint8_t fill; /* byte the segment body is filled with */
 };
 
 struct elf_spec {
-	int ei_class;	/* default ELFCLASS64 */
-	int ei_data;	/* default ELFDATA2LSB */
-	int phentsize;	/* default sizeof(Elf64_Phdr) */
-	int phnum_set;	/* override e_phnum when non-zero */
+	int ei_class; /* default ELFCLASS64 */
+	int ei_data; /* default ELFDATA2LSB */
+	int phentsize; /* default sizeof(Elf64_Phdr) */
+	int phnum_set; /* override e_phnum when non-zero */
 	uint16_t phnum; /* value used when phnum_set */
-	int phoff_set;	/* override e_phoff when non-zero */
+	int phoff_set; /* override e_phoff when non-zero */
 	uint64_t phoff; /* value used when phoff_set */
 	const struct seg_spec *segs;
 	size_t nseg;
@@ -484,8 +485,8 @@ static int build_elf(const char *path, const struct elf_spec *spec)
 	eh.e_ident[EI_DATA] = spec->ei_data ? spec->ei_data : ELFDATA2LSB;
 	eh.e_ident[EI_VERSION] = EV_CURRENT;
 	eh.e_phoff = spec->phoff_set ? spec->phoff : phoff;
-	eh.e_phentsize = (uint16_t)(spec->phentsize ? spec->phentsize
-						    : (int)sizeof(Elf64_Phdr));
+	eh.e_phentsize = (uint16_t)(spec->phentsize ? spec->phentsize :
+						      (int)sizeof(Elf64_Phdr));
 	eh.e_phnum = spec->phnum_set ? spec->phnum : (uint16_t)spec->nseg;
 	memcpy(buf, &eh, sizeof(eh));
 
@@ -539,9 +540,10 @@ static void test_rejects_elfclass32(void)
 {
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC};
-	struct elf_spec spec = {
-	    .ei_class = ELFCLASS32, .segs = &seg, .nseg = 1};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC };
+	struct elf_spec spec = { .ei_class = ELFCLASS32,
+				 .segs = &seg,
+				 .nseg = 1 };
 
 	TEST("32-bit ELF class is rejected (-ENOTSUP)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -561,9 +563,10 @@ static void test_rejects_big_endian(void)
 {
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC};
-	struct elf_spec spec = {
-	    .ei_data = ELFDATA2MSB, .segs = &seg, .nseg = 1};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC };
+	struct elf_spec spec = { .ei_data = ELFDATA2MSB,
+				 .segs = &seg,
+				 .nseg = 1 };
 
 	TEST("big-endian ELF data is rejected (-ENOTSUP)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -583,8 +586,8 @@ static void test_rejects_bad_phentsize(void)
 {
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC};
-	struct elf_spec spec = {.phentsize = 32, .segs = &seg, .nseg = 1};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC };
+	struct elf_spec spec = { .phentsize = 32, .segs = &seg, .nseg = 1 };
 
 	TEST("wrong e_phentsize is rejected (-EINVAL)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -604,9 +607,11 @@ static void test_rejects_zero_phnum(void)
 {
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC};
-	struct elf_spec spec = {
-	    .phnum_set = 1, .phnum = 0, .segs = &seg, .nseg = 1};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC };
+	struct elf_spec spec = { .phnum_set = 1,
+				 .phnum = 0,
+				 .segs = &seg,
+				 .nseg = 1 };
 
 	TEST("e_phnum == 0 is rejected (-EINVAL)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -626,9 +631,11 @@ static void test_rejects_phoff_past_eof(void)
 {
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC};
-	struct elf_spec spec = {
-	    .phoff_set = 1, .phoff = 1u << 20, .segs = &seg, .nseg = 1};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xCC };
+	struct elf_spec spec = { .phoff_set = 1,
+				 .phoff = 1u << 20,
+				 .segs = &seg,
+				 .nseg = 1 };
 
 	TEST("e_phoff past EOF is rejected (truncated read)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -649,8 +656,9 @@ static void test_rejects_segment_past_eof(void)
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
 	/* declare 4096 bytes of code but chop the body off the file */
-	const struct seg_spec seg = {PT_LOAD, PF_R | PF_X, 0x1000, 4096, 0xCC};
-	struct elf_spec spec = {.segs = &seg, .nseg = 1, .drop_tail = 4096};
+	const struct seg_spec seg = { PT_LOAD, PF_R | PF_X, 0x1000, 4096,
+				      0xCC };
+	struct elf_spec spec = { .segs = &seg, .nseg = 1, .drop_tail = 4096 };
 
 	TEST("segment filesz past EOF is rejected (-EIO)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -672,10 +680,10 @@ static void test_rejects_no_exec_segment(void)
 	char path[256];
 	/* only readable/writable PT_LOAD, nothing executable */
 	const struct seg_spec segs[] = {
-	    {PT_LOAD, PF_R, 0x1000, 16, 0x11},
-	    {PT_LOAD, PF_R | PF_W, 0x2000, 16, 0x22},
+		{ PT_LOAD, PF_R, 0x1000, 16, 0x11 },
+		{ PT_LOAD, PF_R | PF_W, 0x2000, 16, 0x22 },
 	};
-	struct elf_spec spec = {.segs = segs, .nseg = 2};
+	struct elf_spec spec = { .segs = segs, .nseg = 2 };
 
 	TEST("no executable PT_LOAD is rejected (-ENOENT)");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -696,7 +704,7 @@ static void test_rejects_too_many_exec_segments(void)
 	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
 	struct seg_spec segs[17];
-	struct elf_spec spec = {.segs = segs, .nseg = 17};
+	struct elf_spec spec = { .segs = segs, .nseg = 17 };
 
 	TEST("more than 16 exec segments are rejected (-E2BIG)");
 	for (int i = 0; i < 17; i++) {
@@ -728,26 +736,26 @@ static void test_second_segment_fields_bound(void)
 	char p_base[256], p_single[256], p_bytes[256], p_vaddr[256];
 
 	const struct seg_spec base_segs[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1},
-	    {PT_LOAD, PF_R | PF_X, 0x2000, 16, 0xB2},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1 },
+		{ PT_LOAD, PF_R | PF_X, 0x2000, 16, 0xB2 },
 	};
 	const struct seg_spec one_seg[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1 },
 	};
 	/* second segment: body bytes differ */
 	const struct seg_spec bytes_segs[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1},
-	    {PT_LOAD, PF_R | PF_X, 0x2000, 16, 0xCC},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1 },
+		{ PT_LOAD, PF_R | PF_X, 0x2000, 16, 0xCC },
 	};
 	/* second segment: vaddr differs (bytes/offset identical) */
 	const struct seg_spec vaddr_segs[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1},
-	    {PT_LOAD, PF_R | PF_X, 0x3000, 16, 0xB2},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 16, 0xA1 },
+		{ PT_LOAD, PF_R | PF_X, 0x3000, 16, 0xB2 },
 	};
-	struct elf_spec b = {.segs = base_segs, .nseg = 2};
-	struct elf_spec s = {.segs = one_seg, .nseg = 1};
-	struct elf_spec yb = {.segs = bytes_segs, .nseg = 2};
-	struct elf_spec yv = {.segs = vaddr_segs, .nseg = 2};
+	struct elf_spec b = { .segs = base_segs, .nseg = 2 };
+	struct elf_spec s = { .segs = one_seg, .nseg = 1 };
+	struct elf_spec yb = { .segs = bytes_segs, .nseg = 2 };
+	struct elf_spec yv = { .segs = vaddr_segs, .nseg = 2 };
 
 	TEST("second exec segment's bytes and vaddr are bound");
 	if (build_elf_tmp(&b, p_base, sizeof(p_base)) != 0 ||
@@ -758,12 +766,13 @@ static void test_second_segment_fields_bound(void)
 		return;
 	}
 
-	int ok =
-	    lota_ac_compute_expected_runtime_measure(p_base, base) == 0 &&
-	    lota_ac_compute_expected_runtime_measure(p_single, single) == 0 &&
-	    lota_ac_compute_expected_runtime_measure(p_bytes, diff_bytes) ==
-		0 &&
-	    lota_ac_compute_expected_runtime_measure(p_vaddr, diff_vaddr) == 0;
+	int ok = lota_ac_compute_expected_runtime_measure(p_base, base) == 0 &&
+		 lota_ac_compute_expected_runtime_measure(p_single, single) ==
+			 0 &&
+		 lota_ac_compute_expected_runtime_measure(p_bytes,
+							  diff_bytes) == 0 &&
+		 lota_ac_compute_expected_runtime_measure(p_vaddr,
+							  diff_vaddr) == 0;
 	unlink(p_base);
 	unlink(p_single);
 	unlink(p_bytes);
@@ -796,10 +805,10 @@ static void test_synthetic_two_segments_stable(void)
 	uint8_t second[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char path[256];
 	const struct seg_spec segs[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 64, 0x5A},
-	    {PT_LOAD, PF_R | PF_X, 0x4000, 128, 0xA5},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 64, 0x5A },
+		{ PT_LOAD, PF_R | PF_X, 0x4000, 128, 0xA5 },
 	};
-	struct elf_spec spec = {.segs = segs, .nseg = 2};
+	struct elf_spec spec = { .segs = segs, .nseg = 2 };
 
 	TEST("a two-segment synthetic ELF measures deterministically");
 	if (build_elf_tmp(&spec, path, sizeof(path)) != 0) {
@@ -827,13 +836,13 @@ static void test_set_order_independent(void)
 	uint8_t one[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char pa[256], pb[256];
 	const struct seg_spec sa[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x11},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x11 },
 	};
 	const struct seg_spec sb[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 48, 0x22},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 48, 0x22 },
 	};
-	struct elf_spec ea = {.segs = sa, .nseg = 1};
-	struct elf_spec eb = {.segs = sb, .nseg = 1};
+	struct elf_spec ea = { .segs = sa, .nseg = 1 };
+	struct elf_spec eb = { .segs = sb, .nseg = 1 };
 
 	TEST("set measure is independent of object order");
 	if (build_elf_tmp(&ea, pa, sizeof(pa)) != 0 ||
@@ -841,8 +850,8 @@ static void test_set_order_independent(void)
 		FAIL("build");
 		return;
 	}
-	const char *order_ab[] = {pa, pb};
-	const char *order_ba[] = {pb, pa};
+	const char *order_ab[] = { pa, pb };
+	const char *order_ba[] = { pb, pa };
 	int ok = lota_ac_compute_expected_runtime_measure_set(order_ab, 2,
 							      ab) == 0 &&
 		 lota_ac_compute_expected_runtime_measure_set(order_ba, 2,
@@ -873,13 +882,13 @@ static void test_set_skips_non_exec_member(void)
 	uint8_t code_only[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	char p_code[256], p_data[256];
 	const struct seg_spec code[] = {
-	    {PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x33},
+		{ PT_LOAD, PF_R | PF_X, 0x1000, 32, 0x33 },
 	};
 	const struct seg_spec data[] = {
-	    {PT_LOAD, PF_R | PF_W, 0x1000, 32, 0x44},
+		{ PT_LOAD, PF_R | PF_W, 0x1000, 32, 0x44 },
 	};
-	struct elf_spec ec = {.segs = code, .nseg = 1};
-	struct elf_spec ed = {.segs = data, .nseg = 1};
+	struct elf_spec ec = { .segs = code, .nseg = 1 };
+	struct elf_spec ed = { .segs = data, .nseg = 1 };
 
 	TEST("set ignores a member with no executable segment");
 	if (build_elf_tmp(&ec, p_code, sizeof(p_code)) != 0 ||
@@ -887,11 +896,11 @@ static void test_set_skips_non_exec_member(void)
 		FAIL("build");
 		return;
 	}
-	const char *both[] = {p_code, p_data};
-	int ok =
-	    lota_ac_compute_expected_runtime_measure_set(both, 2, with_data) ==
-		0 &&
-	    lota_ac_compute_expected_runtime_measure(p_code, code_only) == 0;
+	const char *both[] = { p_code, p_data };
+	int ok = lota_ac_compute_expected_runtime_measure_set(both, 2,
+							      with_data) == 0 &&
+		 lota_ac_compute_expected_runtime_measure(p_code, code_only) ==
+			 0;
 	unlink(p_code);
 	unlink(p_data);
 	if (!ok) {

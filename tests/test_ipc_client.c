@@ -1,17 +1,18 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA IPC Test Client
  *
  * Usage: ./lota-ipc-test [ping|status|token|badlen]
  */
 
-#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 #include "../include/lota_ipc.h"
 
@@ -42,10 +43,10 @@ static int connect_to_agent(void)
 static int send_request(int fd, uint32_t cmd, const void *payload, uint32_t len)
 {
 	struct lota_ipc_request req = {
-	    .magic = LOTA_IPC_MAGIC,
-	    .version = LOTA_IPC_VERSION,
-	    .cmd = cmd,
-	    .payload_len = len,
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.cmd = cmd,
+		.payload_len = len,
 	};
 
 	if (send(fd, &req, sizeof(req), 0) != sizeof(req)) {
@@ -236,9 +237,8 @@ static void usage(const char *prog)
 	fprintf(stderr, "  ping   - Check if agent is alive\n");
 	fprintf(stderr, "  status - Get attestation status\n");
 	fprintf(stderr, "  token  - Get attestation token\n");
-	fprintf(
-	    stderr,
-	    "  badlen - Send malformed payload lengths (expect BAD_REQUEST)\n");
+	fprintf(stderr,
+		"  badlen - Send malformed payload lengths (expect BAD_REQUEST)\n");
 }
 
 int main(int argc, char *argv[])

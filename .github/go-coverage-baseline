@@ -7,9 +7,9 @@ github.com/szymonwilczek/lota/verifier 0
 github.com/szymonwilczek/lota/verifier/logging 96
 github.com/szymonwilczek/lota/verifier/metrics 94
 github.com/szymonwilczek/lota/verifier/server 53
-github.com/szymonwilczek/lota/verifier/store 62
+github.com/szymonwilczek/lota/verifier/store 67
 github.com/szymonwilczek/lota/verifier/types 79
-github.com/szymonwilczek/lota/verifier/verify 68
+github.com/szymonwilczek/lota/verifier/verify 71
 github.com/szymonwilczek/lota/sdk/server 81
 github.com/szymonwilczek/lota/attestca 0
 github.com/szymonwilczek/lota/attestca/ca 73
@@ -17,3 +17,4 @@ github.com/szymonwilczek/lota/attestca/credential 82
 github.com/szymonwilczek/lota/attestca/enroll 88
 github.com/szymonwilczek/lota/attestca/server 74
 github.com/szymonwilczek/lota/attestca/wire 84
+github.com/szymonwilczek/lota/crl 81

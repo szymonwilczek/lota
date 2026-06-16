@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Event Log Tests
 
 package verify
@@ -590,5 +591,98 @@ func TestParsePCREvent2_RejectsOversizeEventData(t *testing.T) {
 
 	if _, _, err := parsePCREvent2(data, nil); err == nil {
 		t.Fatal("expected oversize event data to be rejected")
+	}
+}
+
+// encodes a UEFI_VARIABLE_DATA payload for synthetic event logs
+func encodeUEFIVariableData(guid [16]byte, name string, varData []byte) []byte {
+	units := []uint16{}
+	for _, r := range name {
+		units = append(units, uint16(r))
+	}
+
+	buf := make([]byte, 0, 32+2*len(units)+len(varData))
+	buf = append(buf, guid[:]...)
+
+	lens := make([]byte, 16)
+	binary.LittleEndian.PutUint64(lens[0:8], uint64(len(units)))
+	binary.LittleEndian.PutUint64(lens[8:16], uint64(len(varData)))
+	buf = append(buf, lens...)
+
+	for _, u := range units {
+		var b [2]byte
+		binary.LittleEndian.PutUint16(b[:], u)
+		buf = append(buf, b[:]...)
+	}
+	buf = append(buf, varData...)
+	return buf
+}
+
+func TestParseUEFIVariableData_Valid(t *testing.T) {
+	t.Log("TEST: Decode a well-formed UEFI_VARIABLE_DATA payload")
+
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	v, err := parseUEFIVariableData(payload)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if v.VariableName != efiGlobalVariableGUID {
+		t.Errorf("GUID mismatch: %x", v.VariableName)
+	}
+	if v.UnicodeName != "SecureBoot" {
+		t.Errorf("name mismatch: %q", v.UnicodeName)
+	}
+	if len(v.VariableData) != 1 || v.VariableData[0] != 0x01 {
+		t.Errorf("variable data mismatch: %x", v.VariableData)
+	}
+}
+
+func TestParseUEFIVariableData_Truncated(t *testing.T) {
+	t.Log("TEST: Reject truncated UEFI_VARIABLE_DATA payloads")
+
+	full := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	for cut := 0; cut < len(full); cut++ {
+		if _, err := parseUEFIVariableData(full[:cut]); err == nil {
+			t.Errorf("truncation at %d bytes not rejected", cut)
+		}
+	}
+}
+
+func TestParseUEFIVariableData_OversizeName(t *testing.T) {
+	t.Log("TEST: Reject UEFI variable with an oversize name length")
+
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	binary.LittleEndian.PutUint64(payload[16:24], maxUEFIVarNameUnits+1)
+	if _, err := parseUEFIVariableData(payload); err == nil {
+		t.Error("oversize name length not rejected")
+	}
+}
+
+func TestParseUEFIVariableData_LengthOverflow(t *testing.T) {
+	t.Log("TEST: Reject UEFI variable with overflowing length fields")
+
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	binary.LittleEndian.PutUint64(payload[24:32], ^uint64(0))
+	if _, err := parseUEFIVariableData(payload); err == nil {
+		t.Error("overflowing data length not rejected")
+	}
+}
+
+func TestParseIPLEventString(t *testing.T) {
+	t.Log("TEST: EV_IPL strings are read up to the first NUL")
+
+	cases := []struct {
+		in   []byte
+		want string
+	}{
+		{[]byte("kernel_cmdline: /vmlinuz ro\x00"), "kernel_cmdline: /vmlinuz ro"},
+		{[]byte("no terminator"), "no terminator"},
+		{[]byte("trailing\x00garbage"), "trailing"},
+		{[]byte{}, ""},
+	}
+	for _, c := range cases {
+		if got := parseIPLEventString(c.in); got != c.want {
+			t.Errorf("parseIPLEventString(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

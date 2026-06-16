@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA atomic attestation snapshot (writer/reader shared constants)
  */
@@ -21,16 +22,16 @@
 #define LOTA_SNAPSHOT_HEADER_SIZE 16
 
 struct lota_snapshot_wire_hdr {
-	uint32_t magic;	     /* offset 0 */
-	uint16_t version;    /* offset 4 */
-	uint16_t reserved;   /* offset 6 (must be 0 for v1) */
-	uint32_t flags;	     /* offset 8 */
+	uint32_t magic; /* offset 0 */
+	uint16_t version; /* offset 4 */
+	uint16_t reserved; /* offset 6 (must be 0 for v1) */
+	uint32_t flags; /* offset 8 */
 	uint32_t token_size; /* offset 12 */
 } __attribute__((packed));
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 _Static_assert(sizeof(struct lota_snapshot_wire_hdr) ==
-		   LOTA_SNAPSHOT_HEADER_SIZE,
+		       LOTA_SNAPSHOT_HEADER_SIZE,
 	       "snapshot header size must be 16 bytes");
 #endif
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Package tpmtest provides hardware-free test fixtures for the
 // attestation CA: a manufacturer root, EK certificates, AIK templates,
 // the operator CA material, and a software model of
@@ -238,7 +239,7 @@ func SoftwareActivate(tb testing.TB, ekPriv *rsa.PrivateKey, aikName tpm2.Name,
 	cv := make([]byte, len(encIdentity))
 	// CFB is mandated by TPM 2.0 credential protection
 	// this oracle mirrors the TPM, it does not choose the cipher mode
-	cipher.NewCFBDecrypter(block, make([]byte, 16)).XORKeyStream(cv, encIdentity) //nolint:staticcheck
+	cipher.NewCFBDecrypter(block, make([]byte, 16)).XORKeyStream(cv, encIdentity) //nolint:staticcheck // CFB is mandated by TPM 2.0 credential protection
 
 	if len(cv) < 2 {
 		tb.Fatalf("decrypted credential too short")

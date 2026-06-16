@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Revocation & Ban API Integration Tests
 //
 // Tests the REST endpoints for revocation management, hardware banning,

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Main verification orchestrator
 //
 // Coordinates all verification steps:
@@ -21,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -116,9 +116,9 @@ type Verifier struct {
 	sessionTokenKey      [32]byte
 	sessionTokenKeyReady bool
 
-	// issued session tokens (ephemeral in-memory index for validation API)
-	tokenMu    sync.Mutex
-	tokenIndex map[[32]byte]sessionTokenRecord
+	// store for issued session tokens; in-memory by default (single node),
+	// Postgres for multi-instance validation behind a load balancer
+	sessionTokenStore SessionTokenStore
 
 	// monitoring
 	startTime      time.Time
@@ -135,6 +135,7 @@ type Verifier struct {
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
 	rejectLegacyBaselines bool
+	selfServiceReanchor   bool
 	maxRestartCountSkew   uint32
 }
 
@@ -195,6 +196,11 @@ type VerifierConfig struct {
 
 	// optional: persistent used nonce backend (nil = in-memory)
 	UsedNonceBackend UsedNonceBackend
+
+	// optional: shared session-token store (nil = in-memory, single node).
+	// Postgres-backed store lets several instances behind a load balancer
+	// validate each other's tokens.
+	SessionTokenStore SessionTokenStore
 
 	// optional: revocation enforcement (nil = no revocation checks)
 	RevocationStore store.RevocationStore
@@ -261,6 +267,16 @@ type VerifierConfig struct {
 	// grace period should set it to true.
 	RejectLegacyBaselines bool
 
+	// EnableSelfServiceReanchor turns on self-service re-anchor:
+	// on a firmware/Secure Boot PCR drift the verifier may re-pin the
+	// per-device boot baseline itself when the drift preserves the Secure Boot
+	// root of trust (see reanchorDecision), instead of rejecting until
+	// operator clears the row.
+	// Only takes effect for the diverse-fleet profile (a policy with require_secureboot);
+	// off by default and intended to stay off for the enterprise profile,
+	// which treats drift as a feature.
+	EnableSelfServiceReanchor bool
+
 	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
 	// the verifier tolerates when matching the PCR14 boot-commitment
 	// digest. The agent extends PCR14 once at startup with the
@@ -285,6 +301,12 @@ type VerifierConfig struct {
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
 	AllowPermissivePolicy bool
+
+	// if true, allow a diverse-fleet policy (require_secureboot, no raw PCR
+	// pins) that does not pin agent_hashes.
+	// INSECURE: agent self-hash is then TOFU, so a modified non-enforcing
+	// agent can pin its own hash!
+	AllowUnpinnedAgent bool
 }
 
 // returns sensible defaults for verifier
@@ -325,6 +347,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 
 	pcrVerifier := NewPCRVerifier()
 	pcrVerifier.SetAllowPermissivePolicy(cfg.AllowPermissivePolicy)
+	pcrVerifier.SetAllowUnpinnedAgent(cfg.AllowUnpinnedAgent)
 
 	v := &Verifier{
 		nonceStore:            NewNonceStoreFromConfig(nonceCfg),
@@ -344,9 +367,15 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
+		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
-		tokenIndex:            make(map[[32]byte]sessionTokenRecord),
+		sessionTokenStore:     cfg.SessionTokenStore,
+	}
+
+	// default to the in-memory store (single node) when none is configured
+	if v.sessionTokenStore == nil {
+		v.sessionTokenStore = newMemorySessionTokenStore()
 	}
 
 	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
@@ -366,17 +395,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 		return
 	}
 
-	now := unixTimestamp(time.Now())
-	v.tokenMu.Lock()
-	defer v.tokenMu.Unlock()
-
-	for k, rec := range v.tokenIndex {
-		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
-			delete(v.tokenIndex, k)
-		}
-	}
-
-	v.tokenIndex[token] = sessionTokenRecord{
+	v.sessionTokenStore.Remember(token, sessionTokenRecord{
 		ClientID:   clientID,
 		HardwareID: identity,
 		ValidUntil: validUntil,
@@ -384,54 +403,14 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 		Flags:      report.Header.Flags,
 		PCRMask:    report.TPM.PCRMask,
 		Consumed:   false,
-	}
+	})
 }
 
 func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTokenStatus {
-	st := SessionTokenStatus{}
 	if v == nil {
-		return st
+		return SessionTokenStatus{}
 	}
-
-	now := unixTimestamp(time.Now())
-
-	v.tokenMu.Lock()
-	defer v.tokenMu.Unlock()
-
-	for k, rec := range v.tokenIndex {
-		if rec.ValidUntil > 0 && rec.ValidUntil <= now {
-			delete(v.tokenIndex, k)
-		}
-	}
-
-	rec, ok := v.tokenIndex[token]
-	if !ok {
-		return st
-	}
-
-	st.Exists = true
-	st.ClientID = rec.ClientID
-	st.HardwareID = rec.HardwareID
-	st.ValidUntil = rec.ValidUntil
-	st.ResultCode = rec.ResultCode
-	st.Flags = rec.Flags
-	st.PCRMask = rec.PCRMask
-	st.Consumed = rec.Consumed
-	st.Expired = rec.ValidUntil > 0 && rec.ValidUntil <= now
-
-	if st.Expired {
-		delete(v.tokenIndex, token)
-		st.Exists = false
-		return st
-	}
-
-	if consume && !rec.Consumed {
-		rec.Consumed = true
-		v.tokenIndex[token] = rec
-		st.Consumed = true
-	}
-
-	return st
+	return v.sessionTokenStore.Validate(token, consume, unixTimestamp(time.Now()))
 }
 
 func (v *Verifier) deriveSessionToken(report *types.AttestationReport, clientID string,
@@ -691,7 +670,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			result.Result = types.VerifyPCRFail
 			return result, fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
 		}
-		if err := VerifyPCRDigestParsed(parsedAttest, report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
+		if err := VerifyPCRDigestParsed(parsedAttest, &report.TPM.PCRValues, report.TPM.PCRMask); err != nil {
 			clog.Error("PCR digest verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
@@ -700,28 +679,36 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		clog.Debug("PCR digest verified against TPM-signed attestation")
 	}
 
-	if err := v.pcrVerifier.VerifyReport(report); err != nil {
-		clog.Error("PCR verification failed", "error", err)
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
-		return result, err
-	}
-
-	// verify event log -> independent PCR reconstruction
+	// verify event log -> independent PCR reconstruction + boot facts.
+	// Runs before the policy gates because RequireSecureBoot and the
+	// cmdline policy consume the quote-authenticated facts extracted
+	// here. PCR 8 consistency is enforced whenever the active policy
+	// gates on the measured cmdline; otherwise a forged kernel_cmdline
+	// event would go undetected.
+	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
-		if err := VerifyEventLog(report); err != nil {
+		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.ActivePolicyRequiresCmdline())
+		if err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
 			v.metrics.Rejections.Inc("pcr_fail")
 			result.Result = types.VerifyPCRFail
 			return result, fmt.Errorf("event log inconsistency: %w", err)
 		}
+		bootFacts = facts
 		clog.Debug("event log verified", "size", len(report.EventLog))
 	} else {
 		clog.Error("event log required but not provided")
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
 		return result, errors.New("event log required but not provided")
+	}
+
+	if err := v.pcrVerifier.VerifyReportWithFacts(report, bootFacts); err != nil {
+		clog.Error("PCR verification failed", "error", err)
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, err
 	}
 
 	// check agent self-measurement against baseline
@@ -872,13 +859,26 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		// values as the canonical baseline; later attestations
 		// would then "match" the poisoned baseline. Refuse that
 		// branch when the operator has not authenticated the
-		// initial PCR0/1/7 values through either:
+		// initial PCR0/1/7 values through one of:
 		//   - the active signed policy (PCR0+PCR1+PCR7 hex
 		//     entries that the existing PCRVerifier compares
-		//     against the report), or
+		//     against the report),
 		//   - an out-of-band baseline row that is already
-		//     present in the store for this client.
-		// The check runs only when the verifier is about to write
+		//     present in the store for this client, or
+		//   - the event-log Secure Boot anchor: the active policy
+		//     enforces RequireSecureBoot and this report's
+		//     quote-authenticated event log proves Secure Boot
+		//     enabled
+		//     Policy gate above already rejected the report otherwise;
+		//     re-derived from bootFacts so this branch cannot silently
+		//     widen if the gates move).
+		//     Raw PCR0/1/7 differ per machine, so a diverse fleet
+		//     cannot pin them in policy; with the firmware
+		//     boot-with-Secure-Boot-off path already rejected
+		//     machine-independently, the TOFU row serves as a
+		//     per-device rollback/consistency anchor rather than
+		//     the firmware trust control itself.
+		// Check runs only when the verifier is about to write
 		// boot columns (bootPtr non-nil) so PCR14-only legacy
 		// flows are unaffected.
 		if v.requireBootEnrollment && bootPtr != nil {
@@ -888,12 +888,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				enrolled = true
 			}
 			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
-				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-					"active_policy", v.pcrVerifier.GetActivePolicy(),
-					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or disable RequireBootEnrollment for legacy hosts")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+				if v.pcrVerifier.ActivePolicyRequiresSecureBoot() && SecureBootAnchored(bootFacts) {
+					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
+						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
+				} else {
+					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
+					v.metrics.Rejections.Inc("baseline_error")
+					result.Result = types.VerifyIntegrityMismatch
+					return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+				}
 			}
 		}
 
@@ -951,9 +957,33 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 					"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 					"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
 					"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+
+				// capture the event log + firmware version alongside the boot
+				// baseline so a later self-service re-anchor can replay-diff
+				// PCR 7 and apply the firmware anti-rollback check
+				if rs, ok := v.baselineStore.(ReanchorStorer); ok {
+					var esrtVer uint32
+					esrtPresent := false
+					if report.ESRT != nil && report.ESRT.Present {
+						esrtVer = report.ESRT.FWVersion
+						esrtPresent = true
+					}
+					if err := rs.RecordBootEvidence(clientID, report.EventLog,
+						esrtVer, esrtPresent); err != nil {
+						clog.Warn("failed to record boot evidence for re-anchor",
+							"error", err)
+					}
+				}
 			case TOFUMatch:
 				clog.Debug("boot PCRs match baseline")
 			case TOFUMismatch:
+				// self-service re-anchor:
+				// if the drift preserves the Secure Boot root of trust,
+				// re-pin the baseline instead of rejecting.
+				// Returns true only on an actual re-pin.
+				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+					break
+				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
 				if outcome.BootBaseline != nil {
 					exp0, exp1, exp7 = outcome.BootBaseline.PCR0,
@@ -1245,4 +1275,98 @@ func (v *Verifier) AIKStore() store.AIKStore {
 // returns client IDs currently present in the nonce store
 func (v *Verifier) ListActiveClients() []string {
 	return v.nonceStore.ListActiveClients()
+}
+
+// tryReanchor attempts self-service re-anchor on a firmware/Secure Boot PCR drift.
+// It returns true only when the per-device boot baseline was actually re-pinned
+// (the strong path, or an operator-approved LFA path), in which case the caller
+// treats the attestation as a match instead of rejecting.
+// Pending or escalated outcome returns false and the caller rejects as before.
+// Decision itself lives in reanchorDecision.
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+	boot *BootBaseline, report *types.AttestationReport,
+	bootFacts *BootFacts,
+) bool {
+	if !v.selfServiceReanchor {
+		return false
+	}
+	// diverse-fleet profile only:
+	// an active policy with require_secureboot and the event-log Secure Boot
+	// anchor proven for this boot
+	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+		return false
+	}
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return false
+	}
+
+	st := rs.GetReanchorState(clientID)
+	verdict, reason := reanchorDecision(ReanchorInputs{
+		BaselineEventLog:    st.EventLogBaseline,
+		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
+		BaselineESRTVersion: st.ESRTVersion,
+		CurrentESRT:         report.ESRT,
+		ESRTCapable:         st.ESRTCapable,
+		LastReanchorAt:      st.LastReanchorAt,
+		Now:                 time.Now(),
+	})
+
+	esrtPresent := report.ESRT != nil && report.ESRT.Present
+	var esrtVer uint32
+	if esrtPresent {
+		esrtVer = report.ESRT.FWVersion
+	}
+
+	switch verdict {
+	case ReanchorAllow:
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, false, "strong"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "boot baseline re-anchored (strong path)", "reason", reason)
+		v.metrics.Reanchors.Inc("strong")
+		return true
+	case ReanchorLFA:
+		// LFA re-anchor applies automatically (no approval gate):
+		// player keeps attesting after a firmware update.
+		// ArchiveAndReanchor flags the client for post-fact operator review;
+		// the alert below and the review list (GET /api/v1/reanchor/review)
+		// surface it so an operator can inspect and, if needed, revoke or ban.
+		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
+			esrtVer, esrtPresent, true, "lfa"); err != nil {
+			clog.Warn("re-anchor archive failed", "error", err)
+			return false
+		}
+		logging.Security(clog, "ALERT: boot baseline re-anchored on the low-firmware-assurance path (operator review recommended)", "reason", reason)
+		v.metrics.Reanchors.Inc("lfa")
+		return true
+	default:
+		logging.Security(clog, "boot baseline re-anchor escalated to operator", "reason", reason)
+		v.metrics.Reanchors.Inc("escalate")
+		return false
+	}
+}
+
+// ListReanchorReview returns the clients that re-anchored on the
+// Low-Firmware-Assurance path and have not yet been reviewed by an operator.
+// List is informational (post-fact); LFA re-anchors are not blocked on it.
+func (v *Verifier) ListReanchorReview() ([]string, error) {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return nil, fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.ListLFAReviewPending(), nil
+}
+
+// AcknowledgeReanchorReview clears a client's pending-review flag once an
+// operator has inspected its LFA re-anchor.
+// It does not change the baseline.
+func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
+	rs, ok := v.baselineStore.(ReanchorStorer)
+	if !ok {
+		return fmt.Errorf("baseline store does not support self-service re-anchor")
+	}
+	return rs.AcknowledgeLFAReview(clientID)
 }

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA attestation-CA enrollment client.
  *
@@ -38,8 +39,7 @@ struct tpm_context;
 struct enroll_state {
 	uint32_t magic;
 	uint32_t version;
-	uint64_t
-	    aik_generation; /* AIK generation the stored cert was issued for */
+	uint64_t aik_generation; /* AIK generation the stored cert was issued for */
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;
@@ -112,5 +112,17 @@ int do_enroll(const char *server, int port, const char *ca_cert,
  * Returns 0 on success, 1 on failure.
  */
 int do_reenroll(void);
+
+/*
+ * Daemon-side certificate renewal: reuse the recorded CA endpoint and run a
+ * fresh credential activation against the CA using the already-provisioned
+ * AIK in tpm, refreshing LOTA_AIK_CERT_PATH and the recorded generation.
+ * Caller owns TPM and network initialization (unlike do_reenroll, this does
+ * not bring up the TPM or the global net layer).
+ * Returns 0 on success, or a negative errno on failure:
+ * -ENOENT when no endpoint was recorded, so the caller can disable
+ * auto-renewal.
+ */
+int enroll_renew_cert(struct tpm_context *tpm);
 
 #endif /* LOTA_AGENT_ENROLL_H */

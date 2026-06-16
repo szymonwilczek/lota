@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA attestation-CA enrollment wire protocol.
  *
@@ -10,8 +11,6 @@
 
 #ifndef LOTA_ENROLL_H
 #define LOTA_ENROLL_H
-
-#include <stdint.h>
 
 /* "LCAE", matched against the big-endian preamble of every frame. */
 #define LOTA_ENROLL_MAGIC 0x4C434145u

@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Agent - BPF ring buffer event handler
  */
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "../../include/lota.h"
 #include "agent.h"
@@ -15,6 +16,7 @@
 #include "hash_verify.h"
 #include "journal.h"
 #include "runtime_image_measure.h"
+#include "lota_runtime_image_measure.h"
 
 /*
  * Format SHA-256 hex string into buffer.
@@ -109,8 +111,8 @@ static void remeasure_protected_image(const struct lota_exec_event *event)
 	ret = lota_runtime_measure_pid((pid_t)event->tgid, digest);
 	if (ret < 0) {
 		lota_warn(
-		    "event-driven re-measure failed for protected pid=%u: %s",
-		    event->tgid, strerror(-ret));
+			"event-driven re-measure failed for protected pid=%u: %s",
+			event->tgid, strerror(-ret));
 		return;
 	}
 
@@ -237,10 +239,10 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		if (is_exec && hash_is_nonzero(event->hash)) {
 			format_sha256(event->hash, hash_hex);
 			lota_info(
-			    "[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-			    (unsigned long long)event->timestamp_ns,
-			    event_type_str, event->comm, event->filename,
-			    hash_hex, event->pid, event->uid);
+				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
+				(unsigned long long)event->timestamp_ns,
+				event_type_str, event->comm, event->filename,
+				hash_hex, event->pid, event->uid);
 			return 0;
 		}
 
@@ -249,15 +251,15 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		if (is_exec && is_blocked)
 			goto log_no_hash;
 
-		hash_ret =
-		    hash_verify_event(&g_agent.hash_ctx, event, content_hash);
+		hash_ret = hash_verify_event(&g_agent.hash_ctx, event,
+					     content_hash);
 		if (hash_ret == 0) {
 			format_sha256(content_hash, hash_hex);
 			lota_info(
-			    "[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
-			    (unsigned long long)event->timestamp_ns,
-			    event_type_str, event->comm, event->filename,
-			    hash_hex, event->pid, event->uid);
+				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
+				(unsigned long long)event->timestamp_ns,
+				event_type_str, event->comm, event->filename,
+				hash_hex, event->pid, event->uid);
 			return 0;
 		}
 		/* hash failed -> fall through to log without hash */

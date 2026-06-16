@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Privacy CA test fixtures for the server package: a test attestation CA
 // that issues AIK certificates carrying the device pseudonym, and a
 // certificate-verifying AIK store that trusts it.
@@ -78,7 +79,7 @@ func newCertStore(t *testing.T) store.AIKStore {
 	dir := t.TempDir()
 	caPath := filepath.Join(dir, "ca.pem")
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: testCACert.Raw})
-	if err := os.WriteFile(caPath, pemBytes, 0600); err != nil {
+	if err := os.WriteFile(caPath, pemBytes, 0o600); err != nil {
 		t.Fatalf("write test CA: %v", err)
 	}
 	cs, err := store.NewCertificateStore(filepath.Join(dir, "store"), []string{caPath}, true)

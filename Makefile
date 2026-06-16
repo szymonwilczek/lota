@@ -41,6 +41,7 @@ endif
 # Output files
 AGENT_BIN := $(BUILD_DIR)/lota-agent
 INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
+INSTALLER_BIN := $(BUILD_DIR)/lota-install
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
@@ -124,7 +125,9 @@ endif
 # -target bpf: Generate BPF bytecode
 # -g: Include debug info
 # -O2: Optimization level (for BPF verifier)
-BPF_CFLAGS := -target bpf -g -O2
+# -mcpu=v3: Enable the atomic xchg/cmpxchg instructions used by the
+# allow-event budget counter.
+BPF_CFLAGS := -target bpf -g -O2 -mcpu=v3
 BPF_CFLAGS += -D__TARGET_ARCH_$(BPF_ARCH)
 BPF_CFLAGS += -D__BPF_PROGRAM__
 BPF_CFLAGS += -I$(INC_DIR)
@@ -164,6 +167,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
               $(AGENT_DIR)/report.c \
+              $(AGENT_DIR)/esrt.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
               $(AGENT_DIR)/shutdown.c \
@@ -180,6 +184,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/enroll_state.c \
+              $(AGENT_DIR)/aik_cert.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -205,7 +210,7 @@ ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
 
 # build directories
 $(BUILD_DIR):
@@ -225,6 +230,19 @@ $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
+	@echo "Built: $@"
+
+# build the guided player installer.
+# Self-contained TUI binary that links only libcrypto
+# (PCR14 lock-constant derivation + AIK certificate expiry)
+# Every privileged action shells out to the same tooling the documentation names
+# (dracut, grubby, systemctl, ...)
+INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
+	installer/ui.c installer/run.c installer/probe.c
+$(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
+		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
+		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
 	@echo "Built: $@"
 
 # auto-generated header dependencies. -MMD writes a sibling
@@ -280,7 +298,7 @@ $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR
 	@echo "Built: $@"
 
 # build bpf program
-$(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
+$(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 	@echo "Built: $@"
 
@@ -291,13 +309,15 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag reproducible-build test test-unit test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
 agent: $(AGENT_BIN)
 
 initramfs-lock: $(INITRAMFS_LOCK_BIN)
+
+installer: $(INSTALLER_BIN)
 
 verifier: $(VERIFIER_BIN)
 
@@ -379,13 +399,16 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@echo "Signed: $(BPF_OBJ).sig"
 
 # Go verifier
-$(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
+$(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 	@echo "Built: $@"
 
 # Go attestation CA
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
+# GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
+# HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
+GO_TAGS ?=
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
+	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 	@echo "Built: $@"
 
 # Canonical reproducible build
@@ -396,7 +419,7 @@ $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go
 # given commit (or tag) is deterministic.
 # Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
 # git.
-# See docs/BUILD-REPRODUCIBLE.md for how to verify shipped == tag.
+# See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
 REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
@@ -407,6 +430,21 @@ reproducible-build: all
 clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
+
+# Documentation (Sphinx
+# Config and sources live under Documentation/
+# htmldocs builds strictly (-W)
+# docs-lint runs the reStructuredText linter
+htmldocs:
+	$(MAKE) -C Documentation html
+docs-lint:
+	$(MAKE) -C Documentation lint
+docs-linkcheck:
+	$(MAKE) -C Documentation linkcheck
+docs-serve:
+	$(MAKE) -C Documentation serve
+cleandocs:
+	$(MAKE) -C Documentation clean
 
 check-version-tag:
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
@@ -420,6 +458,43 @@ check-version-tag:
 		fi; \
 	fi
 
+# Include-hygiene gate
+# Fails on any header pulled in but not used directly (transitive dependency).
+# Drives clang-include-cleaner over a bear-built compile database.
+# See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
+check-includes:
+	@scripts/check-includes.sh
+
+# Combined lint:
+# clang-format style check on the C sources and headers plus golangci-lint
+# on every Go module.
+# Read-only -- it reports, it never rewrites.
+# Use `clang-format -i` / `golangci-lint fmt` to apply fixes.
+CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
+	command -v clang-format 2>/dev/null)
+GOLANGCI_LINT ?= golangci-lint
+LINT_GO_MODULES := src/verifier src/attestca src/crl
+
+lint: lint-c lint-go
+
+lint-c:
+	@test -n "$(CLANG_FORMAT)" || { \
+		echo "lint-c: clang-format not found (install clang-tools / clang-format-22)" >&2; \
+		exit 1; }
+	@files=$$(git ls-files '*.c' '*.h' | grep -v '^include/vmlinux.h$$'); \
+		$(CLANG_FORMAT) --dry-run --Werror $$files
+	@echo "lint-c: clean"
+
+lint-go:
+	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
+		echo "lint-go: golangci-lint not found" >&2; exit 1; }
+	@for m in $(LINT_GO_MODULES); do \
+		echo "==> golangci-lint $$m"; \
+		( cd $$m && $(GOLANGCI_LINT) run --config $(CURDIR)/.golangci.yml ./... ) \
+			|| exit $$?; \
+	done
+	@echo "lint-go: clean"
+
 # Install to system (requires root)
 install: check-version-tag all
 	install -d $(DESTDIR)/usr/bin
@@ -430,6 +505,7 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
+	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
 	install -m 755 $(VERIFIER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(ATTESTCA_BIN) $(DESTDIR)/usr/bin/
@@ -497,7 +573,10 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
+	$(TEST_BIN_DIR)/test_esrt \
+	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
+	$(TEST_BIN_DIR)/test_devt \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
@@ -516,6 +595,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
+	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
@@ -523,6 +603,10 @@ $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 	@echo "Built: $@"
 
@@ -598,8 +682,19 @@ $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_aik_cert_renew: tests/test_aik_cert_renew.c $(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^
+	@echo "Built: $@"
+
+$(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $<
 	@echo "Built: $@"
 
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
@@ -674,6 +769,10 @@ $(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bp
 	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 	@echo "Built: $@"
 
+# Build the unit/integration test binaries without running them. Used by
+# the include-hygiene gate so test sources are analyzed too.
+test-bins: $(TEST_BINS)
+
 # Full test suite (unit + integration + hardware)
 # Note: hardware tests require root. Run 'sudo make test-hardware' for them.
 test: test-unit
@@ -699,7 +798,9 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_io_read_file
+	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_initramfs_lock
+	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
@@ -777,6 +878,7 @@ VALGRIND_UNIT_BINS := \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
+	test_installer_probe test_devt \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
 
 valgrind-unit: $(TEST_BINS)
@@ -818,47 +920,102 @@ valgrind-smoke: all examples
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
+# Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
+# the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
-FUZZ_AGENT_OBJS += $(BUILD_DIR)/agent/fuzz/ipc_fuzz.o
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
 
-$(BUILD_DIR)/agent/fuzz/ipc_fuzz.o: src/agent/fuzz/ipc_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/agent/fuzz:
+$(BUILD_DIR)/fuzz:
 	mkdir -p $@
 
 fuzz-agent: $(FUZZ_AGENT_OBJS)
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
 # Config parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/config_fuzz.o: src/agent/fuzz/config_fuzz.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/agent/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/agent/fuzz/config_fuzz.o $(BUILD_DIR)/agent/fuzz/config_obj.o
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
 # Net pin SHA-256 parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o: src/agent/fuzz/net_pin_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_net_pin.o: fuzz/fuzz_net_pin.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-net-pin: $(BUILD_DIR)/agent/fuzz/net_pin_fuzz.o
+fuzz-net-pin: $(BUILD_DIR)/fuzz/fuzz_net_pin.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
 
 # Net wire protocol parser fuzz (standalone, libc only)
-$(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o: src/agent/fuzz/net_wire_fuzz.c | $(BUILD_DIR)/agent/fuzz
+$(BUILD_DIR)/fuzz/fuzz_net_wire.o: fuzz/fuzz_net_wire.c | $(BUILD_DIR)/fuzz
 	clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-net-wire: $(BUILD_DIR)/agent/fuzz/net_wire_fuzz.o
+fuzz-net-wire: $(BUILD_DIR)/fuzz/fuzz_net_wire.o
 	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
 
-fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire
+# Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
+$(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
+
+# Sealed-envelope parser + AES-256-GCM core fuzz (links seal_envelope.c)
+$(BUILD_DIR)/fuzz/fuzz_seal_envelope.o: fuzz/fuzz_seal_envelope.c include/lota_envelope.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
+
+# TPM attestation-structure unmarshal fuzz (standalone, tss2-mu only)
+$(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
+
+# Policy Ed25519 signature-verify fuzz (links policy_sign.c)
+$(BUILD_DIR)/fuzz/fuzz_policy_sign.o: fuzz/fuzz_policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
+
+# Server SDK attestation-token verify fuzz (links lota_server.c)
+$(BUILD_DIR)/fuzz/fuzz_server_sdk.o: fuzz/fuzz_server_sdk.c include/lota_server.h | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+
+fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
+
+# TPM2B response/credential unmarshal fuzz (standalone, tss2-mu only)
+$(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
+	clang $(FUZZ_CFLAGS) -c $< -o $@
+
+fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
+	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
+
+fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
+	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
+	fuzz-tpm-resp
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
-# syscalls run through the LOTA kernel surface. See syzkaller/README.md.
+# syscalls run through the LOTA kernel surface. See syzkaller/README.rst.
 SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
 
 syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
@@ -894,6 +1051,8 @@ help:
 	@echo "  sanitizer-build  Build CI-safe userspace artifacts under ASan/UBSan"
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
+	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
+	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""
@@ -903,9 +1062,14 @@ help:
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
 	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
+	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
+	@echo "  fuzz-tpm-attest  Build TPM attestation-structure unmarshal fuzz target"
+	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
+	@echo "  fuzz-server-sdk  Build server SDK token-verify fuzz target"
+	@echo "  fuzz-tpm-resp    Build TPM2B response/credential unmarshal fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
-	@echo "Benchmark targets (see benchmarks/README.md):"
+	@echo "Benchmark targets (see benchmarks/README.rst):"
 	@echo "  bench            Run L1 C + Go micro-benchmarks"
 	@echo "  bench-go         Run Go benchmarks (verifier, sdk/server, attestca)"
 	@echo "  bench-c          Build and run C SDK micro-benchmarks"
@@ -914,7 +1078,14 @@ help:
 	@echo "  BENCH_COUNT=10 make bench-go   more samples for benchstat"
 	@echo ""
 	@echo "Release targets:"
-	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see docs/BUILD-REPRODUCIBLE.md)"
+	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see Documentation/security/reproducible-builds.rst)"
+	@echo ""
+	@echo "Documentation targets (Sphinx, see Documentation/conf.py):"
+	@echo "  htmldocs         Build HTML docs strictly (-W) into Documentation/_build"
+	@echo "  docs-lint        Lint reStructuredText sources (sphinx-lint)"
+	@echo "  docs-linkcheck   Verify documentation links resolve"
+	@echo "  docs-serve       Build then serve docs at http://localhost:8000"
+	@echo "  cleandocs        Remove built documentation"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
@@ -925,11 +1096,11 @@ help:
 	@echo "  make test-unit"
 	@echo "  sudo make install"
 
-# Benchmarks (see benchmarks/README.md).
+# Benchmarks (see benchmarks/README.rst).
 # L1 micro-benchmarks only
 # L2 macro suite (hyperfine over swtpm)
 # L3 kernel suite (perf over the BPF LSM)
-# are operator runbooks documented in benchmarks/README.md.
+# are operator runbooks documented in benchmarks/README.rst.
 .PHONY: bench bench-go bench-c bench-clean
 
 BENCH_DIR := benchmarks
@@ -942,7 +1113,7 @@ BENCH_TIME ?= 1s
 
 bench: bench-c bench-go
 	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
-	@echo "Render docs/PERF.md with: benchmarks/scripts/run_all.sh"
+	@echo "Render Documentation/performance/evaluation.rst with: benchmarks/scripts/run_all.sh"
 
 bench-go:
 	@mkdir -p $(BENCH_RESULTS)

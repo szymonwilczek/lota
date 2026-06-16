@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite database management
 //
 // Manages database connection, schema migrations, and connection tuning.
@@ -145,6 +146,37 @@ var migrations = []migration{
 			ALTER TABLE baselines ADD COLUMN agent_hash BLOB;
 		`,
 	},
+	{
+		version: 5,
+		description: "Self-service re-anchor: event-log baseline, ESRT " +
+			"firmware version, assurance/rate-limit state, archive table",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN eventlog_baseline BLOB;
+			ALTER TABLE baselines ADD COLUMN esrt_version INTEGER;
+			ALTER TABLE baselines ADD COLUMN esrt_capable INTEGER DEFAULT 0;
+			ALTER TABLE baselines ADD COLUMN lfa INTEGER DEFAULT 0;
+			ALTER TABLE baselines ADD COLUMN reanchor_count INTEGER DEFAULT 0;
+			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMP;
+			CREATE TABLE baseline_archive (
+				id           INTEGER PRIMARY KEY AUTOINCREMENT,
+				client_id    TEXT NOT NULL,
+				archived_at  TIMESTAMP NOT NULL,
+				pcr0         BLOB,
+				pcr1         BLOB,
+				pcr7         BLOB,
+				esrt_version INTEGER,
+				reason       TEXT
+			);
+			CREATE INDEX idx_baseline_archive_client ON baseline_archive(client_id);
+		`,
+	},
+	{
+		version:     6,
+		description: "re-anchor: post-fact LFA review flag",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN lfa_review_pending INTEGER DEFAULT 0;
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path
@@ -162,7 +194,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	if path != "" && path != ":memory:" {
 		dir := filepath.Dir(path)
 		if dir != "." {
-			if err := os.MkdirAll(dir, 0700); err != nil {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, fmt.Errorf("failed to create database directory %q: %w", dir, err)
 			}
 		}

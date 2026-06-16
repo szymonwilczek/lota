@@ -180,6 +180,67 @@ jobs:
           test -x build/examples/block_victim
           test -f build/examples/evil.so
 
+  include-hygiene:
+    name: include-hygiene
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        # full agent + examples toolchain:
+        # gate builds every C target (all, examples, test-bins, fuzz-all,
+        # bench-c, syzkaller-fuzz-loader) so clang-include-cleaner sees
+        # each TU with its real flags
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm pkg-config \
+            libelf-dev zlib1g-dev \
+            libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev \
+            libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev \
+            bear
+
+      - name: Install clang-include-cleaner 22 from apt.llvm.org
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends \
+            wget gnupg ca-certificates lsb-release
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          codename="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] \
+          http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-tools-22
+          sudo ln -sf /usr/bin/clang-include-cleaner-22 \
+            /usr/local/bin/clang-include-cleaner
+          clang-include-cleaner --version
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends git
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Check include hygiene
+        # committed include/vmlinux.h is used as-is (the gate passes
+        # -o so make -B does not regenerate it from a kernel BTF the
+        # runner does not have)
+        run: make check-includes
+
   benchmarks:
     name: benchmarks (C + Go smoke)
     runs-on: ubuntu-24.04
@@ -208,8 +269,9 @@ jobs:
         # Shared CI runners are noisy, so this is a correctness gate - it
         # proves the cbench.h harness and every C benchmark build and run
         # without crashing, not a performance measurement. Tiny reps and a
-        # 64 KiB image keep it fast; real numbers live in docs/PERF.md on
-        # pinned hardware (see benchmarks/README.md).
+        # 64 KiB image keep it fast;
+        # real numbers live in Documentation/performance/evaluation.rst on
+        # pinned hardware (see benchmarks/README.rst)
         env:
           BENCH_REPS: "3"
           BENCH_TARGET_MS: "1"

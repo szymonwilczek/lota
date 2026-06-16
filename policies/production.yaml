@@ -1,11 +1,21 @@
 # SPDX-License-Identifier: MIT
 # LOTA PCR Policy - Production Template
 #
-# WARNING: This file ships with placeholder PCR values. The verifier
-# REJECTS attestations from clients whose PCR 0/1/7 do not match a pin
-# in this file unless the operator opts in to TOFU boot enrollment
-# explicitly (see policies/README.md, "Boot enrollment ceremony").
-# Replace the placeholders below with real values from your hardware.
+# WARNING: This template ships with the raw PCR pins commented out.
+# Pick a deployment shape before going live (see the `pcrs:` block
+# below and policies/README.rst, "Boot enrollment ceremony"): pin real
+# PCR 0/1/7 values for a homogeneous fleet, or leave them unpinned for
+# a diverse fleet and let require_secureboot anchor the per-device
+# enrollment. On the diverse-fleet path (require_secureboot, no raw PCR
+# pins) the agent self-hash also goes through TOFU, so agent_hashes MUST
+# be pinned there - otherwise a modified, non-enforcing agent could pin
+# its own hash on first use and attest while doing nothing.
+#
+# Verifier refuses such a policy unless started with --allow-unpinned-agent
+# (INSECURE)!
+#
+# Pin the official hash from the signed release (see Documentation/security/reproducible-builds.rst).
+# Kernel_hashes are advisory and do not count.
 #
 # How to collect values:
 #   Full policy:   sudo lota-agent --export-policy > my-policy.yaml
@@ -15,7 +25,13 @@
 # PCR meanings (SHA-256):
 #   PCR 0:   SRTM, BIOS/UEFI firmware measurements
 #   PCR 1:   UEFI configuration data (NVRAM-resident BIOS settings)
-#   PCR 7:   Secure Boot state (policies and certificates)
+#   PCR 7:   Secure Boot state (policies and certificates) - the
+#            maintenance-free signed-kernel anchor: a kernel signed by a
+#            trusted key keeps the same PCR 7 across updates
+#   PCR 8:   kernel command line + boot config (GRUB). Pinning it rejects a
+#            signed kernel booted with a sabotaged cmdline (init=, lockdown=,
+#            module.sig_enforce=). On systemd-boot/UKI the cmdline lands in
+#            PCR 12 - pin 12 there instead of 8.
 #   PCR 14:  LOTA agent self-measurement (boot-commitment derived,
 #            never TOFU under the production verifier default)
 
@@ -23,20 +39,44 @@ name: production
 description: "Production policy - customize PCR values for your environment"
 
 # Expected PCR values (SHA-256 hex-encoded, 64 chars).
-# PCR 0/1/7 are REQUIRED under VerifierConfig.RequireBootEnrollment=true
-# (the production default). Leaving them as placeholders means the
-# verifier rejects every client until the operator either pins real
-# values here or runs `lota-agent --export-policy` on a known-good host.
+#
+# Decision point - the raw pins and the event-log checks further down
+# are alternatives, not layers to stack blindly:
+#   Homogeneous fleet (identical firmware/bootloader images): uncomment
+#     and pin real PCR 0/1/7 values; every first-use client must match
+#     them exactly. A raw PCR 8 pin is then redundant with
+#     require_cmdline_policy but harmless.
+#   Diverse fleet (per-machine firmware, e.g. a gamer population):
+#     leave the pins commented out. PCR 0/1/7 differ per machine, so a
+#     raw pin can never match more than one device, and a raw PCR 8 pin
+#     hashes the per-machine root=UUID. Enrollment instead rides
+#     require_secureboot below (see policies/README.rst, "Boot
+#     enrollment ceremony", path 3) and the cmdline is enforced
+#     machine-independently by require_cmdline_policy. A later firmware
+#     update shifts each device's PCR 0/1; start the verifier with
+#     -enable-self-service-reanchor so a drift that preserves the Secure
+#     Boot root of trust re-pins the baseline without operator action
+#     (see Documentation/operator/production-bringup/index.rst). Do NOT enable it for a homogeneous
+#     fleet that pins raw PCR 0/1/7 above - there a drift is a real
+#     mismatch the operator should review.
 pcrs:
-  0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
-  1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
-  7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
+  # 0: "REPLACE_WITH_REAL_PCR0_FROM_lota-agent_--export-policy"
+  # 1: "REPLACE_WITH_REAL_PCR1_FROM_lota-agent_--export-policy"
+  # 7: "REPLACE_WITH_REAL_PCR7_FROM_lota-agent_--export-policy"
+  # PCR 8 (homogeneous fleets only): kernel cmdline integrity on GRUB.
+  # Stays stable across kernel updates because the cmdline rarely
+  # changes. Capture with `lota-agent --export-policy`.
+  # Remove this line on systemd-boot/UKI hosts and pin 12 instead.
+  # 8: "REPLACE_WITH_REAL_PCR8_FROM_lota-agent_--export-policy"
 
-# Allowed kernel image hashes (SHA-256)
-# Add all kernels that should be permitted to boot
-kernel_hashes:
-  # - "sha256_of_vmlinuz_version_1"
-  # - "sha256_of_vmlinuz_version_2"
+# Allowed kernel image hashes (SHA-256).
+# ADVISORY ONLY, NOT a trust control: this hash is the agent's userspace
+# sha256(/boot/vmlinuz), self-reported by code running on the kernel, so a
+# compromised kernel can spoof it. The kernel trust anchor is PCR 7 (signed
+# kernel) plus PCR 8 (cmdline) above.
+# Leave empty in production; populating it does not add real assurance and
+# forces a per-kernel maintenance treadmill.
+kernel_hashes: []
 
 # Allowed LOTA agent binary hashes (SHA-256)
 # Update when deploying new agent versions
@@ -47,5 +87,22 @@ agent_hashes:
 require_iommu: true # DMA protection via IOMMU/VT-d
 require_enforce: true # LSM (SELinux/AppArmor) in enforce mode
 require_module_sig: false # Signed kernel modules (distribution-dependent)
-require_secureboot: false # UEFI Secure Boot (requires hardware support)
 require_lockdown: false # Kernel lockdown mode
+
+# Kernel trust (universal, machine-independent; see README "Kernel trust").
+# Both checks read the TPM event log and bind it to the quote, so they
+# work for a diverse population without per-machine PCR pins.
+#
+# Secure Boot must be enabled per the firmware-measured SecureBoot
+# variable (PCR 7). The agent-reported flag is telemetry only.
+require_secureboot: true
+# The GRUB-measured kernel command line (PCR 8) must be free of
+# denylisted parameters (init=, rd.break, lockdown=none, ...). Hosts
+# whose bootloader does not measure into PCR 8 (systemd-boot/UKI) skip
+# this check; Secure Boot enforcement still applies there.
+require_cmdline_policy: true
+# Operator extensions to the builtin denylist. Entry forms:
+#   "param"   - bare flag or any valued form
+#   "param="  - any value
+#   "param=v" - exact key=value pair
+cmdline_deny: []

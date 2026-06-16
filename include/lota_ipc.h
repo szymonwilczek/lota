@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA IPC Protocol
  *
@@ -28,17 +29,17 @@
  * IPC Commands
  */
 enum lota_ipc_cmd {
-	LOTA_IPC_CMD_PING = 0x01,	/* Whether agent is alive */
+	LOTA_IPC_CMD_PING = 0x01, /* Whether agent is alive */
 	LOTA_IPC_CMD_GET_STATUS = 0x02, /* Attestation status */
-	LOTA_IPC_CMD_GET_TOKEN = 0x03,	/* Signed attestation token */
+	LOTA_IPC_CMD_GET_TOKEN = 0x03, /* Signed attestation token */
 	LOTA_IPC_CMD_SUBSCRIBE =
-	    0x04, /* Subscribe to status changes (requires privileged peer) */
+		0x04, /* Subscribe to status changes (requires privileged peer) */
 	LOTA_IPC_CMD_PROTECT_PID =
-	    0x05, /* Hot-add protected PID (requires privileged peer) */
+		0x05, /* Hot-add protected PID (requires privileged peer) */
 	LOTA_IPC_CMD_UNPROTECT_PID =
-	    0x06, /* Hot-remove protected PID (requires privileged peer) */
+		0x06, /* Hot-remove protected PID (requires privileged peer) */
 	LOTA_IPC_CMD_SHUTDOWN =
-	    0x07, /* Graceful agent self-shutdown (requires privileged peer) */
+		0x07, /* Graceful agent self-shutdown (requires privileged peer) */
 };
 
 /*
@@ -61,14 +62,14 @@ enum lota_ipc_result {
 /*
  * Attestation status flags
  */
-#define LOTA_STATUS_ATTESTED (1 << 0)	 /* Successfully attested */
-#define LOTA_STATUS_TPM_OK (1 << 1)	 /* TPM initialized */
-#define LOTA_STATUS_IOMMU_OK (1 << 2)	 /* IOMMU verified */
-#define LOTA_STATUS_BPF_LOADED (1 << 3)	 /* BPF LSM active */
+#define LOTA_STATUS_ATTESTED (1 << 0) /* Successfully attested */
+#define LOTA_STATUS_TPM_OK (1 << 1) /* TPM initialized */
+#define LOTA_STATUS_IOMMU_OK (1 << 2) /* IOMMU verified */
+#define LOTA_STATUS_BPF_LOADED (1 << 3) /* BPF LSM active */
 #define LOTA_STATUS_SECURE_BOOT (1 << 4) /* Secure Boot enabled */
 #define LOTA_STATUS_TPM_LOCKOUT (1 << 5) /* TPM signaled DA lockout */
-#define LOTA_STATUS_RINGBUF_DROPS                                              \
-	(1                                                                     \
+#define LOTA_STATUS_RINGBUF_DROPS \
+	(1                        \
 	 << 6) /* BPF events ringbuf dropped at least one event since last     \
 		  poll; forensic stream incomplete, enforcement unaffected */
 
@@ -79,9 +80,9 @@ enum lota_ipc_result {
  * Payload follows immediately after.
  */
 struct lota_ipc_request {
-	uint32_t magic;	  /* LOTA_IPC_MAGIC */
+	uint32_t magic; /* LOTA_IPC_MAGIC */
 	uint32_t version; /* LOTA_IPC_VERSION */
-	uint32_t cmd;	  /* enum lota_ipc_cmd */
+	uint32_t cmd; /* enum lota_ipc_cmd */
 	uint32_t payload_len;
 } __attribute__((packed));
 
@@ -94,9 +95,9 @@ struct lota_ipc_request {
  * Payload follows immediately after.
  */
 struct lota_ipc_response {
-	uint32_t magic;	  /* LOTA_IPC_MAGIC */
+	uint32_t magic; /* LOTA_IPC_MAGIC */
 	uint32_t version; /* LOTA_IPC_VERSION */
-	uint32_t result;  /* enum lota_ipc_result */
+	uint32_t result; /* enum lota_ipc_result */
 	uint32_t payload_len;
 } __attribute__((packed));
 
@@ -107,20 +108,20 @@ struct lota_ipc_response {
  */
 struct lota_ipc_ping_response {
 	uint64_t uptime_sec; /* Agent uptime in seconds */
-	uint32_t pid;	     /* Agent PID */
+	uint32_t pid; /* Agent PID */
 } __attribute__((packed));
 
 /*
  * GET_STATUS response payload
  */
 struct lota_ipc_status {
-	uint32_t flags;		   /* LOTA_STATUS_* bitmask */
-	uint32_t _reserved1;	   /* Padding for alignment */
+	uint32_t flags; /* LOTA_STATUS_* bitmask */
+	uint32_t _reserved1; /* Padding for alignment */
 	uint64_t last_attest_time; /* Unix timestamp of last attestation */
-	uint64_t valid_until;	   /* Token valid until (Unix timestamp) */
-	uint32_t attest_count;	   /* Total successful attestations */
-	uint32_t fail_count;	   /* Total failed attestations */
-	uint8_t mode;		   /* Current mode (enum lota_mode) */
+	uint64_t valid_until; /* Token valid until (Unix timestamp) */
+	uint32_t attest_count; /* Total successful attestations */
+	uint32_t fail_count; /* Total failed attestations */
+	uint8_t mode; /* Current mode (enum lota_mode) */
 	uint8_t reserved[3];
 } __attribute__((packed));
 
@@ -145,25 +146,23 @@ struct lota_ipc_token_request {
  * - Check PCR digest in attest_data matches expected policy
  */
 struct lota_ipc_token {
-	uint64_t valid_until;	  /* Unix timestamp */
-	uint32_t flags;		  /* LOTA_STATUS_* at issue time */
+	uint64_t valid_until; /* Unix timestamp */
+	uint32_t flags; /* LOTA_STATUS_* at issue time */
 	uint8_t client_nonce[32]; /* Echo of client nonce */
 
 	/* TPM Quote data */
-	uint16_t attest_size;	   /* Size of TPMS_ATTEST blob */
-	uint16_t sig_size;	   /* Size of signature */
-	uint16_t sig_alg;	   /* TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS */
-	uint16_t hash_alg;	   /* TPM2_ALG_SHA256 */
-	uint32_t pcr_mask;	   /* PCRs included in quote */
+	uint16_t attest_size; /* Size of TPMS_ATTEST blob */
+	uint16_t sig_size; /* Size of signature */
+	uint16_t sig_alg; /* TPM2_ALG_RSASSA or TPM2_ALG_RSAPSS */
+	uint16_t hash_alg; /* TPM2_ALG_SHA256 */
+	uint32_t pcr_mask; /* PCRs included in quote */
 	uint8_t policy_digest[32]; /* SHA-256 over enforcement startup policy */
-	uint8_t
-	    runtime_protect_digest[32]; /* SHA-256 over canonical runtime set */
+	uint8_t runtime_protect_digest[32]; /* SHA-256 over canonical runtime set */
 	uint32_t protect_pid_count; /* Number of protected PIDs in payload */
 	uint64_t runtime_protect_epoch; /* Monotonic runtime protection mutation
 					   id */
-	uint16_t pid_list_size;		/* Bytes for protected_pids[] */
-	uint16_t
-	    runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint16_t pid_list_size; /* Bytes for protected_pids[] */
+	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
 
 	/*
 	 * Variable-length data follows:
@@ -184,7 +183,7 @@ struct lota_ipc_token {
 
 /* runtime_protect_version values (mirror of lota_token.h) */
 #define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only (0 = legacy) */
-#define LOTA_IPC_RUNTIME_PROTECT_V2                                            \
+#define LOTA_IPC_RUNTIME_PROTECT_V2 \
 	2 /* PID set + per-PID kernel image digest */
 
 /*
@@ -194,8 +193,8 @@ struct lota_ipc_token {
  * quote would overflow LOTA_IPC_MAX_PAYLOAD is rejected at runtime
  * (fail closed); realistic protected sets are far below that point.
  */
-#define LOTA_IPC_TOKEN_MAX_SIZE                                                \
-	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +       \
+#define LOTA_IPC_TOKEN_MAX_SIZE                                          \
+	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE + \
 	 LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG)
 
 /*
@@ -204,8 +203,8 @@ struct lota_ipc_token {
  * Controls which state changes trigger push notifications.
  */
 #define LOTA_IPC_EVENT_STATUS (1U << 0) /* Status flags changed */
-#define LOTA_IPC_EVENT_ATTEST                                                  \
-	(1U << 1)		      /* Attestation completed (pass/fail)     \
+#define LOTA_IPC_EVENT_ATTEST \
+	(1U << 1) /* Attestation completed (pass/fail)     \
 				       */
 #define LOTA_IPC_EVENT_MODE (1U << 2) /* Enforcement mode changed */
 #define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
@@ -230,13 +229,13 @@ struct lota_ipc_subscribe_request {
  * Push notification payload
  */
 struct lota_ipc_notify {
-	uint32_t events;	   /* LOTA_IPC_EVENT_* that triggered this */
-	uint32_t flags;		   /* Current LOTA_STATUS_* bitmask */
+	uint32_t events; /* LOTA_IPC_EVENT_* that triggered this */
+	uint32_t flags; /* Current LOTA_STATUS_* bitmask */
 	uint64_t last_attest_time; /* Unix timestamp of last attestation */
-	uint64_t valid_until;	   /* Token valid until (Unix timestamp) */
-	uint32_t attest_count;	   /* Total successful attestations */
-	uint32_t fail_count;	   /* Total failed attestations */
-	uint8_t mode;		   /* Current mode (enum lota_mode) */
+	uint64_t valid_until; /* Token valid until (Unix timestamp) */
+	uint32_t attest_count; /* Total successful attestations */
+	uint32_t fail_count; /* Total failed attestations */
+	uint8_t mode; /* Current mode (enum lota_mode) */
 	uint8_t reserved[3];
 } __attribute__((packed));
 

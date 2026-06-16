@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 [Unit]
 Description=LOTA PCR14 initramfs lock
 DefaultDependencies=no
