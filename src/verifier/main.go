@@ -177,12 +177,13 @@ func main() {
 	if *selfServiceReanchor {
 		logger.Info("self-service re-anchor enabled (diverse-fleet); a firmware/Secure Boot drift that preserves the Secure Boot root of trust will re-pin the per-device baseline automatically")
 	}
-	if *maxRestartSkew > math.MaxUint32 {
+	if skew := *maxRestartSkew; skew <= math.MaxUint32 {
+		verifierCfg.MaxRestartCountSkew = uint32(skew)
+	} else {
 		logger.Error("--max-restart-count-skew exceeds uint32 range",
-			"value", *maxRestartSkew, "max", uint64(math.MaxUint32))
+			"value", skew, "max", uint64(math.MaxUint32))
 		os.Exit(1)
 	}
-	verifierCfg.MaxRestartCountSkew = uint32(*maxRestartSkew)
 	verifierCfg.RejectLegacyBaselines = *rejectLegacyBase
 	if *rejectLegacyBase {
 		logger.Info("rejecting legacy baseline agent_hash backfills")
