@@ -106,6 +106,12 @@ func (s *SQLiteAIKStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) err
 		clientID, derBytes,
 	)
 	if err != nil {
+		// concurrent registration can win the race after the pre-check
+		// above passed; unique index then rejects this INSERT.
+		// Surface it as the same typed error the pre-check returns.
+		if isUniqueViolation(err) {
+			return ErrAIKAlreadyRegistered
+		}
 		return fmt.Errorf("failed to store AIK: %w", err)
 	}
 
@@ -344,6 +350,11 @@ func (s *SQLiteAIKStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error
 		derBytes, clientID,
 	)
 	if err != nil {
+		// concurrent rotation/registration can take the key first;
+		// unique index then rejects this UPDATE. Map it to the typed error.
+		if isUniqueViolation(err) {
+			return ErrAIKAlreadyRegistered
+		}
 		return fmt.Errorf("failed to rotate AIK: %w", err)
 	}
 
