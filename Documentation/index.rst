@@ -36,9 +36,9 @@ intentionally fails closed when required gates are missing.
 * :doc:`Production bring-up <operator/production-bringup/index>`
 * :doc:`Player install (lota-install) <operator/player-install>`
 * :doc:`Verifier deployment topologies (HA) <operator/ha-deployment>`
-* PCR policy templates: `policies/README.rst <https://github.com/szymonwilczek/lota/blob/main/policies/README.rst>`__
-* SELinux policy: `selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__
-* EK root bundles: `configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__
+* PCR policy templates: :ghsrc:`policies/README.rst`
+* SELinux policy: :ghsrc:`selinux/README.rst`
+* EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
 
 Security reviewer or academic reviewer
 --------------------------------------
@@ -63,9 +63,9 @@ commitment.
 * :doc:`Threat model <security/threat-model>`
 * :doc:`Attestation CA signing key <security/ca-key>`
 * :doc:`Production bring-up <operator/production-bringup/index>`
-* Enrollment example: `examples/enrollment/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/enrollment/README.rst>`__
-* EK root bundles: `configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__
-* PCR policy documentation: `policies/README.rst <https://github.com/szymonwilczek/lota/blob/main/policies/README.rst>`__
+* Enrollment example: :ghsrc:`examples/enrollment/README.rst`
+* EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
+* PCR policy documentation: :ghsrc:`policies/README.rst`
 
 Kernel or BPF engineer
 ----------------------
@@ -76,9 +76,9 @@ harness.
 
 * :doc:`Production bring-up <operator/production-bringup/index>`
 * :doc:`Kernel test policy <contributor/development/index>`
-* SELinux policy: `selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__
-* Syzkaller harness: `syzkaller/README.rst <https://github.com/szymonwilczek/lota/blob/main/syzkaller/README.rst>`__
-* Runtime remeasurement example: `examples/runtime_remeasure/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/runtime_remeasure/README.rst>`__
+* SELinux policy: :ghsrc:`selinux/README.rst`
+* Syzkaller harness: :ghsrc:`syzkaller/README.rst`
+* Runtime remeasurement example: :ghsrc:`examples/runtime_remeasure/README.rst`
 
 Game or anti-cheat integrator
 -----------------------------
@@ -86,13 +86,13 @@ Game or anti-cheat integrator
 LOTA exposes trust decisions and token verification material. Gameplay policy
 remains outside this repository.
 
-* Example index: `examples/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/README.rst>`__
-* Reference server: `examples/demo_server/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/demo_server/README.rst>`__
-* Anti-cheat heartbeat producer: `examples/demo_anticheat/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/demo_anticheat/README.rst>`__
-* Demo game client: `examples/demo_game/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/demo_game/README.rst>`__
-* End-to-end demo: `examples/demo/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/demo/README.rst>`__
-* mTLS example: `examples/mtls/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/mtls/README.rst>`__
-* Runtime remeasurement: `examples/runtime_remeasure/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/runtime_remeasure/README.rst>`__
+* Example index: :ghsrc:`examples/README.rst`
+* Reference server: :ghsrc:`examples/demo_server/README.rst`
+* Anti-cheat heartbeat producer: :ghsrc:`examples/demo_anticheat/README.rst`
+* Demo game client: :ghsrc:`examples/demo_game/README.rst`
+* End-to-end demo: :ghsrc:`examples/demo/README.rst`
+* mTLS example: :ghsrc:`examples/mtls/README.rst`
+* Runtime remeasurement: :ghsrc:`examples/runtime_remeasure/README.rst`
 
 Distribution maintainer
 -----------------------
@@ -103,7 +103,7 @@ reproducible and verified against signed manifests.
 * :doc:`Reproducible builds <security/reproducible-builds>`
 * :doc:`Release and branch flow <contributor/branching>`
 * :doc:`Production install gates <operator/production-bringup/index>`
-* SELinux policy: `selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__
+* SELinux policy: :ghsrc:`selinux/README.rst`
 
 .. toctree::
    :hidden:

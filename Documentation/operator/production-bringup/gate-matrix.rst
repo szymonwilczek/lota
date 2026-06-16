@@ -33,7 +33,7 @@ current tree.
        and the default ``off`` do not satisfy the gate.
    * - ``/dev/tpm{rm,}0`` carries ``lota_tpm_device_t``
      - ``src/agent/bpf_loader.c::tpm_device_selinux_label_ok()``
-     - Install the udev rule under `configs/udev/99-lota-tpm.rules <https://github.com/szymonwilczek/lota/blob/main/configs/udev/99-lota-tpm.rules>`__ (handled by
+     - Install the udev rule under :ghsrc:`configs/udev/99-lota-tpm.rules` (handled by
        ``make install``) and run ``udevadm trigger``.
    * - fs-verity on ``/usr/bin/lota-agent``
      - ``src/agent/bpf_loader.c::agent_self_fsverity_enabled()``

@@ -32,9 +32,26 @@ else:
     )
 version = release.split("-", 1)[0]  # X.Y.Z without any pre-release suffix
 
+# Branch this build documents
+# Deploy workflow sets LOTA_DOCS_REF per channel
+# (main for the stable site, lota-next for the development site)
+# so a source-tree link resolves against the branch the page is built from.
+# Local builds default to main.
+ref = os.environ.get("LOTA_DOCS_REF", "").strip() or "main"
+
 # -- General configuration ----------------------------------------------------
 
-extensions: list[str] = []
+extensions: list[str] = ["sphinx.ext.extlinks"]
+
+# :ghsrc:`path/to/file` links a repository-relative path to its source on
+# GitHub, pinned to the branch this build documents (see ref above)
+# Detecting hardcoded blob links keeps a raw URL from slipping past the role
+# under the strict build
+extlinks = {
+    "ghsrc": (f"https://github.com/szymonwilczek/lota/blob/{ref}/%s", "%s"),
+}
+extlinks_detect_hardcoded_links = True
+
 source_suffix = {".rst": "restructuredtext"}
 root_doc = "index"
 language = "en"

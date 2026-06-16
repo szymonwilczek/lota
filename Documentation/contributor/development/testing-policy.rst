@@ -35,7 +35,7 @@ Testing policy
      - ``make fuzz-all``
    * - Kernel
      - BPF LSM live in a guest
-     - Syzkaller harness ``lota_bpf_fuzz`` (see `syzkaller/README.rst <https://github.com/szymonwilczek/lota/blob/main/syzkaller/README.rst>`__)
+     - Syzkaller harness ``lota_bpf_fuzz`` (see :ghsrc:`syzkaller/README.rst`)
    * - Repro
      - bit-for-bit build
      - ``make reproducible-build``; gated in CI
