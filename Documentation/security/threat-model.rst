@@ -139,6 +139,10 @@ Active threats
        | A re-anchor archives the superseded PCR 0/1/7 row, so a re-baseline is auditable
          after the fact; on an HA deployment the archive and the re-anchor bookkeeping
          live in the shared Postgres store so every verifier instance sees the same history.
+       | The per-device re-anchor interval (the main barrier against repeated downgrade
+         re-anchors on the low-firmware-assurance path) is re-checked inside the write
+         transaction under the row lock, so a burst of concurrent attestations for one
+         device cannot race the check and re-anchor more than once per window.
        | The re-anchor discriminator admits a drift only when it preserves the Secure Boot
          root of trust: PK/KEK/db byte-identical by event-log replay, dbx append-only
          (revocation can grow, never shrink), Secure Boot still enabled, and the firmware

@@ -1302,6 +1302,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	}
 
 	st := rs.GetReanchorState(clientID)
+	now := time.Now()
 	verdict, reason := reanchorDecision(ReanchorInputs{
 		BaselineEventLog:    st.EventLogBaseline,
 		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
@@ -1309,7 +1310,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		CurrentESRT:         report.ESRT,
 		ESRTCapable:         st.ESRTCapable,
 		LastReanchorAt:      st.LastReanchorAt,
-		Now:                 time.Now(),
+		Now:                 now,
 	})
 
 	esrtPresent := report.ESRT != nil && report.ESRT.Present
@@ -1321,7 +1322,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	switch verdict {
 	case ReanchorAllow:
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
-			esrtVer, esrtPresent, false, "strong"); err != nil {
+			esrtVer, esrtPresent, false, "strong", now); err != nil {
+			if errors.Is(err, ErrReanchorRateLimited) {
+				// concurrent attestation for this client re-anchored first;
+				// in-transaction guard refused this one. Fail closed.
+				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
+				v.metrics.Reanchors.Inc("escalate")
+				return false
+			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
@@ -1335,7 +1343,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		// the alert below and the review list (GET /api/v1/reanchor/review)
 		// surface it so an operator can inspect and, if needed, revoke or ban.
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
-			esrtVer, esrtPresent, true, "lfa"); err != nil {
+			esrtVer, esrtPresent, true, "lfa", now); err != nil {
+			if errors.Is(err, ErrReanchorRateLimited) {
+				// concurrent attestation for this client re-anchored first;
+				// in-transaction guard refused this one. Fail closed.
+				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
+				v.metrics.Reanchors.Inc("escalate")
+				return false
+			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
