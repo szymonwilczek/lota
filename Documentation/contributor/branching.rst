@@ -41,6 +41,23 @@ tag is built and signed.
   short pointer to it, identical on both branches, so an integration merge
   never touches it.
 
+Documentation hosting
+=====================
+
+The documentation site mirrors the branch model as two channels, both
+published to GitHub Pages from a single deploy
+(``.github/workflows/docs-deploy.yml``):
+
+* **stable** -- built from ``main`` and served at the site root. This is the
+  released documentation; its source links resolve against ``main``.
+* **development** -- built from ``lota-next`` and served under ``/lota-next/``.
+  It carries a banner, is labelled ``lota-next (<short-sha>)``, and is marked
+  noindex so it does not compete with the stable pages in search.
+
+Push to either branch rebuilds both channels and redeploys the whole site,
+so a change to one channel never overwrites the other. A switcher under the
+sidebar title moves between them.
+
 Contributing
 ============
 

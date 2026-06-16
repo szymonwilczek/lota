@@ -346,5 +346,5 @@ Production deployments must:
 * document operator recovery for AIK rotation, policy rotation, and legitimate
   binary updates.
 
-See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, `policies/README.rst <https://github.com/szymonwilczek/lota/blob/main/policies/README.rst>`__, and
-`selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__ for the deployment details.
+See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, :ghsrc:`policies/README.rst`, and
+:ghsrc:`selinux/README.rst` for the deployment details.

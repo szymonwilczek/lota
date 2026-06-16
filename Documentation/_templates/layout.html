@@ -1,0 +1,40 @@
+{# SPDX-License-Identifier: MIT #}
+{# Copyright (C) 2026 Szymon Wilczek #}
+{#
+   Channel-aware overrides for the two-channel site:
+   - the development channel (lota-next, served under /lota-next/) is kept out
+     of search results and points crawlers at its stable counterpart
+   - switcher under the sidebar title links the stable and development sites
+   - the development channel carries a banner above every page
+     lota_channel / lota_stable_url / lota_dev_url come from html_context (conf.py)
+#}
+{% extends "!layout.html" %}
+
+{%- block extrahead %}
+  {{ super() }}
+  {%- if lota_channel == 'dev' %}
+  <meta name="robots" content="noindex, follow">
+  {%- endif %}
+{% endblock %}
+
+{%- block sidebartitle %}
+  {{ super() }}
+  <div class="lota-channel-switch" style="margin-top: 0.5em; font-size: 90%; color: rgba(255, 255, 255, 0.85);">
+    {%- if lota_channel == 'dev' %}
+    development &middot; <a href="{{ lota_stable_url }}" style="color: #fff; text-decoration: underline;">switch to stable</a>
+    {%- else %}
+    stable &middot; <a href="{{ lota_dev_url }}" style="color: #fff; text-decoration: underline;">switch to development</a>
+    {%- endif %}
+  </div>
+{% endblock %}
+
+{%- block document %}
+  {%- if lota_channel == 'dev' %}
+  <div class="admonition warning">
+    <p class="admonition-title">Development documentation</p>
+    <p>This is the in-progress lota-next branch. For the released version, see
+      the <a href="{{ lota_stable_url }}">stable documentation</a>.</p>
+  </div>
+  {%- endif %}
+  {{ super() }}
+{% endblock %}

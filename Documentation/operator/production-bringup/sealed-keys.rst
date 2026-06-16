@@ -79,4 +79,4 @@ until the hardware bring-up above). If your use case *does* need downgrade
 protection, bind the secret to a TPM NV monotonic counter in addition to the
 PCRs and bump the counter to revoke.
 
-Complete, tested tpm2-tools recipe is in `examples/sealed-key/anti-rollback-recipe.sh <https://github.com/szymonwilczek/lota/blob/main/examples/sealed-key/anti-rollback-recipe.sh>`__.
+Complete, tested tpm2-tools recipe is in :ghsrc:`examples/sealed-key/anti-rollback-recipe.sh`.
