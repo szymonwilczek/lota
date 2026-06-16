@@ -116,8 +116,8 @@ around them.
 
 * ``sudo make install`` **does not load the SELinux module.** The install rule
   lands ``lota.pp`` under the source tree but does not call ``semodule -i``.
-  After any change to ``selinux/lota.te``, rebuild the module on the host (the
-  in-tree ``selinux/Makefile`` writes to ``tmp/`` in the cwd, which the
+  After any change to `selinux/lota.te <https://github.com/szymonwilczek/lota/blob/main/selinux/lota.te>`__, rebuild the module on the host (the
+  in-tree `selinux/Makefile <https://github.com/szymonwilczek/lota/blob/main/selinux/Makefile>`__ writes to ``tmp/`` in the cwd, which the
   read-only virtiofs blocks), then load the package inside the guest:
 
   .. code-block:: sh

@@ -309,7 +309,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -441,6 +441,8 @@ docs-lint:
 	$(MAKE) -C Documentation lint
 docs-linkcheck:
 	$(MAKE) -C Documentation linkcheck
+docs-serve:
+	$(MAKE) -C Documentation serve
 cleandocs:
 	$(MAKE) -C Documentation clean
 
@@ -1082,6 +1084,7 @@ help:
 	@echo "  htmldocs         Build HTML docs strictly (-W) into Documentation/_build"
 	@echo "  docs-lint        Lint reStructuredText sources (sphinx-lint)"
 	@echo "  docs-linkcheck   Verify documentation links resolve"
+	@echo "  docs-serve       Build then serve docs at http://localhost:8000"
 	@echo "  cleandocs        Remove built documentation"
 	@echo ""
 	@echo "Install/cleanup targets:"

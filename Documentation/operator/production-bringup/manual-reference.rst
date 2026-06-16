@@ -24,7 +24,7 @@ enrollment and sealed keys are covered in their own documents
         --signing-key /etc/lota/policy.key
 
 Add ``policy_pubkey = /etc/lota/policy.pub`` to ``/etc/lota/lota.conf`` (or copy
-``configs/lota.conf.example`` and edit). The agent reads this file by default;
+`configs/lota.conf.example <https://github.com/szymonwilczek/lota/blob/main/configs/lota.conf.example>`__ and edit). The agent reads this file by default;
 pass ``--config /path`` if the operator policy lives elsewhere.
 
 The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
@@ -88,7 +88,7 @@ rootfs without signatures that bricks the host at the next boot. Stage with
 ``ima_appraise=fix`` for one boot (the kernel writes missing xattrs as it walks
 matched files) before switching to ``enforce``.
 
-The shipped ``configs/ima/lota-ima-policy`` is the **developer baseline** that
+The shipped `configs/ima/lota-ima-policy <https://github.com/szymonwilczek/lota/blob/main/configs/ima/lota-ima-policy>`__ is the **developer baseline** that
 ``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:
 it measures every exec/mmap for the IMA log and its ``appraise_type=imasig``
 rules verify signatures where they exist. IMA rules cannot match by path, so it
@@ -98,7 +98,7 @@ signatures.
 4. SELinux label on /dev/tpm
 ============================
 
-The udev rule from ``configs/udev/99-lota-tpm.rules`` lays this down on
+The udev rule from `configs/udev/99-lota-tpm.rules <https://github.com/szymonwilczek/lota/blob/main/configs/udev/99-lota-tpm.rules>`__ lays this down on
 device-add. After ``make install``:
 
 .. code-block:: sh
