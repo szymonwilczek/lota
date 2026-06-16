@@ -37,21 +37,41 @@ branch.
 Pull request quality gate
 =========================
 
-The ``PR quality`` workflow checks commit metadata and the aggregate pull
-request diff before the build matrix runs:
+The ``PR quality`` workflow checks commit metadata and the hotpath
+documentation contract before the build matrix runs:
 
 * every non-merge commit created on top of a tree that already carries the
   quality gate must carry a DCO ``Signed-off-by`` trailer,
 * commits with AI assistant co-author or generator trailers are labeled
   ``AI-Assisted``,
-* a pull request that changes a hotpath file must update one of the documented
-  companion files in the same pull request diff.
+* a commit that changes a hotpath file must update the documentation its tier
+  requires.
 
 The hotpath-to-documentation contract is versioned in
-``.github/pr-quality-hotpaths.txt``. It intentionally keys off critical
-surfaces rather than commit size: TPM enrollment, verifier policy, BPF LSM
-enforcement, SDK token formats, deployment policy, CI, build, and release
-process.
+``.github/pr-quality-hotpaths.txt``. Each rule maps a set of hotpath globs to
+the companion docs that describe them and carries a tier:
+
+* ``required`` -- the change must touch one of the companion docs, or the
+  commit must carry a ``Docs-Not-Needed: <reason>`` trailer, or the gate fails.
+  These cover the documented contracts: TPM enrollment, verifier policy, BPF
+  LSM enforcement, SDK token formats, deployment policy, and operator
+  provisioning.
+* ``recommended`` -- a missing companion doc only warns, never fails. These
+  cover process surfaces that seldom change a contract: CI, build, the gate
+  scripts, and dependency manifests.
+
+The commit type (the ``type:`` subject prefix) caps the tier. An
+infrastructure type -- ``ci``, ``build``, ``test``, ``tests``, ``chore``,
+``style``, ``refactor``, ``perf``, ``release`` -- is treated as recommended
+even against a required rule; ``docs``, ``license``, and ``gitignore`` are
+exempt; module-scoped commits (``agent:``, ``bpf:``, ``verifier:``, ...) and
+``treewide:`` take the tier of the rule. A ``Docs-Not-Needed: <reason>``
+trailer with a non-empty reason waives the requirement for the commit it sits
+on and is recorded in history.
+
+In ``--pr-diff`` mode a companion doc anywhere in the pull-request diff
+satisfies a required rule, so a documentation commit can accompany a code
+commit within the same pull request.
 
 Scripts are split by audience: developer-workflow tooling (``check-*``,
 ``format-patch``, the CI gate scripts) maps to the contributor docs above,

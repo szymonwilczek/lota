@@ -5,18 +5,34 @@
 
 set -euo pipefail
 
+# Infrastructure commit types:
+# capped at the recommended tier even against a required rule, because by convention
+# they do not change a documented contract
+INFRA_TYPES=" ci build test tests chore style refactor perf release "
+
+# Exempt commit types:
+# the change is documentation or housekeeping by nature and never needs a companion doc
+EXEMPT_TYPES=" docs license gitignore "
+
 usage() {
 	cat >&2 <<'USAGE'
 usage: scripts/check-pr-quality.sh [--pr-diff] <base-commit> <head-commit>
 
 Checks every commit in base..head for:
   - DCO Signed-off-by trailer,
-  - hotpath changes without same-commit documentation updates.
+  - hotpath changes without the documentation their tier requires.
+
+Hotpath rule is either "required" (the change must touch a companion doc or
+the commit must carry a "Docs-Not-Needed: <reason>" trailer) or "recommended"
+(a missing doc only warns). The commit type caps the tier: an infrastructure
+type (ci, build, test, chore, style, refactor, perf, release) is capped at
+recommended, and docs/license/gitignore are exempt. See
+.github/pr-quality-hotpaths.txt.
 
 With --pr-diff, DCO is checked only for non-merge commits made on top of a tree
-that already carried this gate, and hotpath documentation is checked against
-the aggregate pull-request diff. This keeps newly added rules from being
-applied retroactively to historical integration commits.
+that already carried this gate, and a companion doc anywhere in the pull-request
+diff satisfies a required rule. This keeps newly added rules from being applied
+retroactively to historical integration commits.
 
 AI assistant co-author or generator trailers are reported through the
 ai_assisted=true output when GITHUB_OUTPUT is set. They do not fail this
@@ -35,6 +51,29 @@ short_commit() {
 
 commit_subject() {
 	git log -1 --format=%s "$1"
+}
+
+# Type token of a commit:
+# prefix before the first colon, with any conventional-commit scope "(...)"
+# and "docs/ima" style sub-scope removed
+commit_type() {
+	local subject type
+	subject=$(commit_subject "$1")
+	type=${subject%%:*}
+	# no colon -> no recognizable type
+	[[ $type == "$subject" ]] && return 0
+	type=${type%%(*}
+	type=${type%%/*}
+	type=${type// /}
+	printf '%s' "${type,,}"
+}
+
+# non-empty reason from a "Docs-Not-Needed: <reason>" trailer, if present
+docs_not_needed_reason() {
+	git log -1 --format=%B "$1" |
+		sed -n -E \
+			's/^[Dd]ocs-[Nn]ot-[Nn]eeded:[[:space:]]*(.+[^[:space:]])[[:space:]]*$/\1/p' |
+		head -n1
 }
 
 is_merge_commit() {
@@ -66,65 +105,120 @@ is_test_only_path() {
 	return 1
 }
 
-check_hotpath_docs_for_files() {
+# does any hot glob in the manifest match one of the given files?
+files_touch_hotpath() {
 	local manifest=$1
-	local scope=$2
+	shift
+	local -a files=("$@")
+	local tier hot_globs rest hot_glob path
+	local -a hot_patterns
+
+	while IFS='|' read -r tier hot_globs rest; do
+		[[ -z ${tier// /} || ${tier:0:1} == "#" ]] && continue
+		read -r -a hot_patterns <<<"$hot_globs"
+		for path in "${files[@]}"; do
+			for hot_glob in "${hot_patterns[@]}"; do
+				[[ $path == $hot_glob ]] && return 0
+			done
+		done
+	done <"$manifest"
+
+	return 1
+}
+
+# Classify one commit against the manifest.
+# Args: <commit> <manifest> <doc-pool files...>
+# doc pool is the commit's own files (commit mode) or the aggregate
+# pull-request diff (pr-diff mode);
+# doc there satisfies a required rule.
+# Returns 1 only on an unwaived required miss; recommended misses warn.
+classify_commit() {
+	local commit=$1 manifest=$2
 	shift 2
+	local -a doc_pool=("$@")
 
-	local rc=0
-	local hot_globs doc_globs reason
-	local hot_hits doc_hits hot_glob doc_glob path
-	local -a files hot_patterns doc_patterns effective_files
+	local type cap reason
+	type=$(commit_type "$commit")
+	[[ " $EXEMPT_TYPES " == *" $type "* ]] && return 0
 
-	files=("$@")
+	cap="none"
+	[[ " $INFRA_TYPES " == *" $type "* ]] && cap="recommended"
+
+	local -a files effective_files
+	mapfile -t files < <(git diff-tree --no-commit-id --name-only -r "$commit")
 	effective_files=()
+	local path
 	for path in "${files[@]}"; do
-		if ! is_test_only_path "$path"; then
-			effective_files+=("$path")
-		fi
+		is_test_only_path "$path" || effective_files+=("$path")
 	done
+	((${#effective_files[@]} == 0)) && return 0
 
-	if ((${#effective_files[@]} == 0)); then
+	# explicit Docs-Not-Needed:
+	# trailer waives the requirement for this commit;
+	# note it once if it actually covers a hotpath change
+	reason=$(docs_not_needed_reason "$commit")
+	if [[ -n $reason ]]; then
+		if files_touch_hotpath "$manifest" "${effective_files[@]}"; then
+			printf 'docs waived: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
+			printf '  Docs-Not-Needed: %s\n' "$reason" >&2
+		fi
 		return 0
 	fi
 
-	while IFS='|' read -r hot_globs doc_globs reason; do
-		[[ -z ${hot_globs// /} ]] && continue
-		[[ ${hot_globs:0:1} == "#" ]] && continue
+	local tier hot_globs doc_globs why eff doc_ok failed=0
+	local -a hot_patterns doc_patterns hot_hits
+	local hot_glob doc_glob
+
+	while IFS='|' read -r tier hot_globs doc_globs why; do
+		[[ -z ${tier// /} || ${tier:0:1} == "#" ]] && continue
 
 		read -r -a hot_patterns <<<"$hot_globs"
 		read -r -a doc_patterns <<<"$doc_globs"
-		hot_hits=()
-		doc_hits=()
 
+		hot_hits=()
 		for path in "${effective_files[@]}"; do
 			for hot_glob in "${hot_patterns[@]}"; do
-				if [[ $path == $hot_glob ]]; then
+				[[ $path == $hot_glob ]] && {
 					hot_hits+=("$path")
 					break
-				fi
-			done
-
-			for doc_glob in "${doc_patterns[@]}"; do
-				if [[ $path == $doc_glob ]]; then
-					doc_hits+=("$path")
-					break
-				fi
+				}
 			done
 		done
+		((${#hot_hits[@]} == 0)) && continue
 
-		if ((${#hot_hits[@]} > 0 && ${#doc_hits[@]} == 0)); then
-			printf 'hotpath changed without %s docs update\n' "$scope" >&2
-			printf 'reason: %s\n' "$reason" >&2
-			printf 'hotpath files:\n' >&2
-			printf '  %s\n' "${hot_hits[@]}" >&2
-			printf 'expected one of:\n' >&2
-			printf '  %s\n' "${doc_patterns[@]}" >&2
-			rc=1
+		doc_ok=0
+		for path in "${doc_pool[@]}"; do
+			for doc_glob in "${doc_patterns[@]}"; do
+				[[ $path == $doc_glob ]] && {
+					doc_ok=1
+					break 2
+				}
+			done
+		done
+		((doc_ok == 1)) && continue
+
+		eff=$tier
+		[[ $cap == "recommended" && $eff == "required" ]] && eff="recommended"
+
+		if [[ $eff == "required" ]]; then
+			failed=1
+			printf 'required docs missing: %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
+		else
+			printf 'recommended docs (not blocking): %s %s\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
 		fi
+		printf '  reason: %s\n' "$why" >&2
+		printf '  hotpath files:\n' >&2
+		printf '    %s\n' "${hot_hits[@]}" >&2
+		printf '  %s one of:\n' \
+			"$([[ $eff == required ]] && printf update || printf consider)" >&2
+		printf '    %s\n' "${doc_patterns[@]}" >&2
+		printf '  or record a "Docs-Not-Needed: <reason>" trailer if no docs are warranted\n' >&2
 	done <"$manifest"
 
-	return "$rc"
+	((failed == 0))
 }
 
 check_signoff() {
@@ -173,23 +267,6 @@ check_ai_assistance() {
 	return 1
 }
 
-check_hotpath_docs() {
-	local commit=$1
-	local manifest=$2
-	local rc=0
-	local -a files
-
-	mapfile -t files < <(git diff-tree --no-commit-id --name-only -r "$commit")
-	check_hotpath_docs_for_files "$manifest" "same-commit" "${files[@]}" || rc=1
-
-	if ((rc != 0)); then
-		printf 'commit: %s %s\n' \
-			"$(short_commit "$commit")" "$(commit_subject "$commit")" >&2
-	fi
-
-	return "$rc"
-}
-
 main() {
 	local mode="commit"
 	local base
@@ -198,7 +275,7 @@ main() {
 	local rc=0
 	local ai_assisted=0
 	local commit
-	local -a commits changed_files checked_commits
+	local -a commits checked_commits pr_files commit_files
 
 	if [[ ${1:-} == "--pr-diff" ]]; then
 		mode="pr-diff"
@@ -223,6 +300,10 @@ main() {
 		return 0
 	fi
 
+	if [[ $mode == "pr-diff" ]]; then
+		mapfile -t pr_files < <(git diff --name-only "$base" "$head")
+	fi
+
 	for commit in "${commits[@]}"; do
 		if [[ $mode == "pr-diff" ]]; then
 			if is_merge_commit "$commit"; then
@@ -238,15 +319,17 @@ main() {
 		if check_ai_assistance "$commit"; then
 			ai_assisted=1
 		fi
-		if [[ $mode == "commit" ]]; then
-			check_hotpath_docs "$commit" "$manifest" || rc=1
+
+		if [[ $mode == "pr-diff" ]]; then
+			classify_commit "$commit" "$manifest" \
+				${pr_files[@]+"${pr_files[@]}"} || rc=1
+		else
+			mapfile -t commit_files < \
+				<(git diff-tree --no-commit-id --name-only -r "$commit")
+			classify_commit "$commit" "$manifest" \
+				${commit_files[@]+"${commit_files[@]}"} || rc=1
 		fi
 	done
-
-	if [[ $mode == "pr-diff" ]]; then
-		mapfile -t changed_files < <(git diff --name-only "$base" "$head")
-		check_hotpath_docs_for_files "$manifest" "PR diff" "${changed_files[@]}" || rc=1
-	fi
 
 	if [[ -n ${GITHUB_OUTPUT:-} ]]; then
 		printf 'ai_assisted=%s\n' "$([[ $ai_assisted -eq 1 ]] && printf true || printf false)" \
