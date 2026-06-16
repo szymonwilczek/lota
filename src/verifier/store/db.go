@@ -17,14 +17,41 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	sqlite "modernc.org/sqlite"
 )
+
+// sqliteConstraint is the primary SQLITE_CONSTRAINT result code
+// extended UNIQUE (2067) and PRIMARY KEY (1555) violation codes share this low byte
+const sqliteConstraint = 19
+
+// pgUniqueViolation is the SQLSTATE for a Postgres unique_violation
+const pgUniqueViolation = "23505"
+
+// isUniqueViolation reports whether err is a unique / primary-key constraint
+// violation from either backend.
+// Global AIK-uniqueness index raises one when a concurrent registration wins
+// the race after a caller's pre-check passed.
+// Callers map it back to ErrAIKAlreadyRegistered so the race surfaces the same
+// typed error as the sequential path.
+func isUniqueViolation(err error) bool {
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		return se.Code()&0xFF == sqliteConstraint
+	}
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return pe.Code == pgUniqueViolation
+	}
+	return false
+}
 
 type sqliteConnector struct {
 	driver *sqlite.Driver

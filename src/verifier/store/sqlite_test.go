@@ -11,9 +11,69 @@ package store
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestSQLiteAIK_ConcurrentSameKeyTypedError pins that the global AIK-uniqueness
+// invariant reports a typed error under contention, not an opaque one.
+// Pre-check SELECT in RegisterAIK is racy:
+// When several clients register the same key at once, the losers can pass the
+// pre-check and only collide at the INSERT, where the unique index rejects them.
+// That rejection must still surface as ErrAIKAlreadyRegistered so callers can
+// react to it, rather than as a generic "failed to store AIK" wrapping the driver error.
+func TestSQLiteAIK_ConcurrentSameKeyTypedError(t *testing.T) {
+	// file-backed so the connection pool shares one database
+	// (:memory: DSN gives each pooled connection its own database)
+	dir := t.TempDir()
+	db, err := OpenDB(dir + "/aik.sqlite")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+	store := NewSQLiteAIKStore(db)
+
+	key := generateTestKey(t)
+
+	const n = 32
+	start := make(chan struct{})
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release together to force the pre-check / INSERT race
+			errs[i] = store.RegisterAIK(fmt.Sprintf("client-%d", i), &key.PublicKey)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var won, dup, other int
+	for _, e := range errs {
+		switch {
+		case e == nil:
+			won++
+		case errors.Is(e, ErrAIKAlreadyRegistered):
+			dup++
+		default:
+			other++
+			t.Logf("opaque error from a loser: %v", e)
+		}
+	}
+
+	if won != 1 {
+		t.Errorf("exactly one registration must win, got %d", won)
+	}
+	if other != 0 {
+		t.Errorf("every loser must report ErrAIKAlreadyRegistered; got %d opaque error(s)", other)
+	}
+	if dup != n-1 {
+		t.Errorf("losers reporting ErrAIKAlreadyRegistered: got %d, want %d", dup, n-1)
+	}
+}
 
 // helper to create an in-memory SQLite AIK store for testing
 func createTestSQLiteAIKStore(t testing.TB) (*SQLiteAIKStore, func()) {
