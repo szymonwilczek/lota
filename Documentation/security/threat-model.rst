@@ -147,6 +147,10 @@ Active threats
          root of trust: PK/KEK/db byte-identical by event-log replay, dbx append-only
          (revocation can grow, never shrink), Secure Boot still enabled, and the firmware
          version not rolled back; anything touching PK/KEK/db escalates to the operator.
+       | A forward firmware version only earns the automatic strong re-anchor when it is
+         at or above the vendor's own anti-rollback floor (the ESRT LowestSupported value);
+         a version below that floor is firmware running below the lowest version it claims
+         to accept and escalates to the operator instead.
    * - Secure Boot disabled to boot a tampered kernel
      - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
          event log (PCR 7) and accepts it only when the log replay reproduces the

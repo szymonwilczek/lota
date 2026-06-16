@@ -211,3 +211,43 @@ func TestReanchorDecision(t *testing.T) {
 		})
 	}
 }
+
+// TestReanchorDecision_FirmwareFloor pins the ESRT anti-rollback floor as a
+// gate on the strong path.
+// ESRT carries the vendor's LowestSupported version alongside the running FWVersion;
+// forward-versus-baseline update whose FWVersion sits below that floor is firmware
+// running below its own declared lowest-supported version, so it must not earn the
+// automatic strong re-anchor.
+// Floor of zero means the vendor declared none and does not constrain the decision.
+func TestReanchorDecision_FirmwareFloor(t *testing.T) {
+	base := pcr7Log(baseVars())
+	current := mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more"))))
+
+	// forward vs baseline (785 > 700) but below the vendor floor (785 < 900):
+	// escalate to the operator instead of auto re-anchor on the strong path
+	below := ReanchorInputs{
+		BaselineEventLog:    base,
+		CurrentParsed:       current,
+		BaselineESRTVersion: 700,
+		CurrentESRT:         &types.ESRTInfo{Present: true, FWVersion: 785, LowestSupported: 900},
+		ESRTCapable:         true,
+	}
+	if got, reason := reanchorDecision(below); got != ReanchorEscalate {
+		t.Errorf("below-floor forward update: verdict = %v (%q), want escalate",
+			got, reason)
+	}
+
+	// at the floor the forward update stays the strong path
+	atFloor := below
+	atFloor.CurrentESRT = &types.ESRTInfo{Present: true, FWVersion: 785, LowestSupported: 785}
+	if got, reason := reanchorDecision(atFloor); got != ReanchorAllow {
+		t.Errorf("at-floor forward update: verdict = %v (%q), want allow", got, reason)
+	}
+
+	// vendor that reports no floor (0) does not constrain the forward update
+	noFloor := below
+	noFloor.CurrentESRT = &types.ESRTInfo{Present: true, FWVersion: 785, LowestSupported: 0}
+	if got, reason := reanchorDecision(noFloor); got != ReanchorAllow {
+		t.Errorf("no-floor forward update: verdict = %v (%q), want allow", got, reason)
+	}
+}
