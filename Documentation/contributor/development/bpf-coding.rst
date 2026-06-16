@@ -32,6 +32,26 @@ Cross-CPU map updates
 The fetch/CMPXCHG forms need kernel 5.12+ verifier support, which the BPF LSM
 floor already exceeds.
 
+Ring-buffer emission budget
+===========================
+
+Under ``LOTA_MODE_ENFORCE`` every event is rate-limited per one-second window
+before it claims a ``bpf_ringbuf_reserve`` slot, so an attacker-driven flood
+cannot fill the ring buffer faster than user space drains it. Allowed (benign)
+and blocked (security-relevant) events are counted in separate windows, so a
+flood of one class cannot consume the other's budget; blocked events get the
+larger budget but are still bounded. Suppressing an event drops only its
+per-event detail -- the block counts are tallied in the ``stats`` map
+independently of ring-buffer emission, so an operator never loses the tally.
+
+The budget arithmetic lives in ``include/lota_event_budget.h`` as pure helpers
+(``lota_event_budget_limit``, ``lota_event_budget_window_expired``,
+``lota_event_budget_exhausted``) with no map lookups or atomics, so it is
+unit-tested in user space (``tests/test_event_budget.c``); the BPF program wraps
+those helpers with the shared-map lookup and the cross-CPU atomics above. Change
+the budgets or the window only through the header so the program and the test
+stay in step.
+
 Device and inode identity
 =========================
 
