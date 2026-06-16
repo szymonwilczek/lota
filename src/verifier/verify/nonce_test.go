@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Nonce Store Unit Tests
 //
 // Tests for challenge-response freshness and anti-replay protection.

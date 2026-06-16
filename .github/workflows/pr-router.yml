@@ -51,6 +51,6 @@ jobs:
           I have automatically retargeted this PR to \`lota-next\`.
           If it now shows conflicts, please rebase your branch onto \`lota-next\`.
 
-          See the branch model and release flow in \`docs/BRANCHING.md\`.
+          See the branch model and release flow in \`Documentation/contributor/branching.rst\`.
           EOF
           gh pr comment "$NUM" --repo "$REPO" --body-file /tmp/pr-comment.md

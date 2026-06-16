@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL database management
 //
 // Postgres backend for multi-instance / high-availability deployments.

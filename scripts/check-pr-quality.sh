@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Check commit-level pull request quality rules.
 
 set -euo pipefail

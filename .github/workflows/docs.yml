@@ -1,0 +1,67 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main, lota-next]
+    paths:
+      - 'Documentation/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'Documentation/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage;
+# let pushes to the integration branches run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    name: build and validate documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation toolchain
+        run: pip install -r Documentation/requirements.txt
+
+      # reStructuredText style/markup lint
+      # Fails the job on any finding
+      - name: Lint reStructuredText
+        run: make -C Documentation lint
+
+      # strict Sphinx build: -W promotes every warning (broken cross-reference,
+      # document missing from a toctree, unknown directive) to a hard error,
+      # --keep-going reports them all in one pass
+      # This is the authoritative gate
+      - name: Build HTML (warnings are errors)
+        run: make -C Documentation html
+
+      # Link integrity is informational:
+      # external endpoints flap and must not gate a documentation change
+      # internal (:doc:/:ref:) breakage is already caught by the strict build above
+      - name: Check links
+        run: make -C Documentation linkcheck
+        continue-on-error: true
+
+      - name: Upload built HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-html
+          path: Documentation/_build/html
+          retention-days: 14

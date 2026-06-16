@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - pinned multi-vendor EK root trust bundle
 //
 // A deployment trusts EK certificates from several TPM manufacturers

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA - CRL set unit tests
 //
 // Tests for the unexported canonicalisation and load gates live here

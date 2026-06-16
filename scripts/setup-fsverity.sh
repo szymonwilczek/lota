@@ -1,5 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Helper script for setting up fs-verity for LOTA testing.
 #

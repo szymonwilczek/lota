@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - EK trust and AIK certificate issuance
 //
 // The issuer holds the operator's CA signing key and the trusted TPM

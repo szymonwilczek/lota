@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 #ifndef LOTA_TEST_SERVERS_H
 #define LOTA_TEST_SERVERS_H
 

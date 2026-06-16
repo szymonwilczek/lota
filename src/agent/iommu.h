@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA - IOMMU Verification Module
  * Verifies VT-d (Intel) or AMD-Vi status for DMA attack protection

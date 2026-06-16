@@ -1,5 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # lota-dev-bringup.sh
 #
@@ -125,7 +126,7 @@ fi
 #    under enforce a rootfs without IMA signatures blocks every execution.
 #    fix satisfies the agent's kernel floor and writes the missing xattrs
 #    as files are matched; production routes to enforce are the operator's
-#    call (see docs/PRODUCTION_BRINGUP.md, "IMA appraisal policy")
+#    call (see Documentation/operator/production-bringup/index.rst, "IMA appraisal policy")
 if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
 	info "IMA appraisal already in an enforcing mode"
 else
@@ -134,7 +135,7 @@ else
 	warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=fix'"
 	warn "  sudo reboot"
 	warn "(enforce on a rootfs without IMA signatures blocks every exec;"
-	warn "see docs/PRODUCTION_BRINGUP.md before using it)"
+	warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi
 
 if [[ -f "$IMA_POLICY_SRC" ]] &&
@@ -185,4 +186,4 @@ info "     in 'journalctl -u lota-agent --no-pager | tail -20'."
 info ""
 info "If systemctl start still fails after reboot, inspect the journal for"
 info "the first ERR-level line; the bring-up gates report which check is"
-info "still unsatisfied. docs/PRODUCTION_BRINGUP.md has the full reference."
+info "still unsatisfied. Documentation/operator/production-bringup/index.rst has the full reference."

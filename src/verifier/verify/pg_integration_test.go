@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 //go:build pg_integration
 
 // Integration tests for the Postgres baseline and used-nonce backends.

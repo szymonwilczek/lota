@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * Per-process runtime image measurement (kernel-anchored).
  *

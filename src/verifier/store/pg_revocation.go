@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL Revocation, Ban, and Audit Log Stores
 //
 // Postgres counterparts of the SQLite revocation, ban, audit and

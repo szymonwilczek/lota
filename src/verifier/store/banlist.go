@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Hardware Ban List
 //
 // Manages hardware-level bans using the TPM-derived hardware identity.

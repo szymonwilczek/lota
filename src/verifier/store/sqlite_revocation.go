@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Revocation, Ban, and Audit Log Stores
 //
 // Persistent implementations of RevocationStore, BanStore, and AuditLog

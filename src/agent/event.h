@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 #ifndef LOTA_EVENT_H
 #define LOTA_EVENT_H
 

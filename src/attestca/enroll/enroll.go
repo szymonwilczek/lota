@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - enrollment state machine
 //
 // Drives one host through the credential-activation ceremony: verify the

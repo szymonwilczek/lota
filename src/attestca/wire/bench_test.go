@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // Benchmarks for the enrollment wire codec (pure CPU, no TPM).
 
 package wire

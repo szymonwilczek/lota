@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - self-hosted enrollment service
 //
 // Each LOTA adopter runs their own lota-attest-ca with their own CA
@@ -163,7 +164,7 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 		// Warn loudly so it is never mistaken for a default.
 		log.Warn("using on-disk CA signing key -- development-only fallback; "+
 			"hold the CA key in an HSM in production",
-			"flag", "-ca-key", "doc", "docs/PRODUCTION_BRINGUP.md")
+			"flag", "-ca-key", "doc", "Documentation/operator/production-bringup/index.rst")
 	}
 
 	var ekRootPEMs [][]byte

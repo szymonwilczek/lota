@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite database management
 //
 // Manages database connection, schema migrations, and connection tuning.

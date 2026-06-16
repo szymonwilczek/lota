@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - TPM Event Log Parser and PCR Replay
 //
 // Parses the TCG binary event log (binary_bios_measurements) and replays

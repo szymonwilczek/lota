@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 //go:build pkcs11
 
 // PKCS#11-backed CA signing key.

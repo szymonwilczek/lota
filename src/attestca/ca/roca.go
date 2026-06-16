@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - ROCA (CVE-2017-15361) fingerprint detection
 //
 // Infineon RSALib generated RSA primes of the form k*M + (65537^a mod M)

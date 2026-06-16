@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PCR Baseline Store (TOFU)
 //
 // Implements Trust On First Use (TOFU) for PCR values.

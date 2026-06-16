@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * bench_sdk.c - microbenchmarks for the pure-CPU LOTA SDK hot paths.
  *
@@ -10,7 +11,7 @@
  *
  * TPM-backed paths (GET_TOKEN, quote, ActivateCredential) and the agent IPC
  * round-trip are measured by the L2 macro suite (hyperfine over the swtpm
- * sandbox); see benchmarks/README.md.
+ * sandbox); see benchmarks/README.rst.
  */
 #include <stdlib.h>
 #include <string.h>

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Set up a SoftHSM token holding an RSA CA signing key for lota-attest-ca,
 # then print the flags that point the CA at it.
@@ -75,5 +76,5 @@ Build the CA with PKCS#11 support and point it at the token:
       -ek-root-bundle /var/lib/lota/ek-roots
 
 ca.crt must be a CA certificate bound to this token key -- see
-examples/hsm-ca/README.md for issuing it from the HSM key.
+examples/hsm-ca/README.rst for issuing it from the HSM key.
 EOF

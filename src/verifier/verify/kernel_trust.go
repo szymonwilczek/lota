@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Kernel trust from event-log semantics
 //
 // Machine-independent kernel trust controls derived from the TPM event

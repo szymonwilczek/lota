@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - REST Monitoring API tests
 //
 // Unit tests verify individual handler behavior in isolation.

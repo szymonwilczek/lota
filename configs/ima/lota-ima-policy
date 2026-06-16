@@ -31,9 +31,10 @@
 # the host. LOTA ships no xattr-signing pipeline: production
 # appraisal content - the signatures and the rule set - is
 # distribution- or operator-supplied. See "IMA appraisal policy"
-# in docs/PRODUCTION_BRINGUP.md for the supported routes; LOTA's
-# own binaries are integrity-bound through fs-verity and the
-# PCR14 boot commitment independent of IMA.
+# in Documentation/operator/production-bringup/index.rst for the
+# supported routes;
+# LOTA's own binaries are integrity-bound through fs-verity and
+# the PCR14 boot commitment independent of IMA.
 
 dont_appraise fsmagic=0x9fa0
 dont_appraise fsmagic=0x62656572

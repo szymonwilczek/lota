@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 # Push every program in a LOTA BPF object through the in-kernel verifier
 # with veristat and fail on any rejection. Meant to run inside a VM booted
 # on the deployment kernel (see the bpf-veristat job) so the verdict matches

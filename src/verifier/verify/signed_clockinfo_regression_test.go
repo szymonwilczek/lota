@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - regression tests for the signed-clockinfo PCR14 fix
 //
 // Background. Production attestation on swtpm (Fedora 44, TPM 2.0

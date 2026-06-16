@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - SQLite Baseline Store & Used Nonce Backend Tests
 //
 // Tests for persistent storage implementations.

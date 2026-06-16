@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Signature verification module
 //
 // The signature verifier validates the TPM quote (TPMS_ATTEST +

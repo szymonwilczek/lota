@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - PostgreSQL Baseline Store
 //
 // Postgres counterpart of SQLiteBaselineStore.

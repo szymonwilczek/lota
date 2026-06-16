@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - TLS enrollment server
 //
 // One TLS connection carries one enrollment: the server reads a

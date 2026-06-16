@@ -309,7 +309,7 @@ $(INC_DIR)/vmlinux.h:
 	@echo "Generated: $@"
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -419,7 +419,7 @@ $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go
 # given commit (or tag) is deterministic.
 # Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
 # git.
-# See docs/BUILD-REPRODUCIBLE.md for how to verify shipped == tag.
+# See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
 REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
@@ -430,6 +430,19 @@ reproducible-build: all
 clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned build artifacts"
+
+# Documentation (Sphinx
+# Config and sources live under Documentation/
+# htmldocs builds strictly (-W)
+# docs-lint runs the reStructuredText linter
+htmldocs:
+	$(MAKE) -C Documentation html
+docs-lint:
+	$(MAKE) -C Documentation lint
+docs-linkcheck:
+	$(MAKE) -C Documentation linkcheck
+cleandocs:
+	$(MAKE) -C Documentation clean
 
 check-version-tag:
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
@@ -1000,7 +1013,7 @@ fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
-# syscalls run through the LOTA kernel surface. See syzkaller/README.md.
+# syscalls run through the LOTA kernel surface. See syzkaller/README.rst.
 SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
 
 syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
@@ -1054,7 +1067,7 @@ help:
 	@echo "  fuzz-tpm-resp    Build TPM2B response/credential unmarshal fuzz target"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
-	@echo "Benchmark targets (see benchmarks/README.md):"
+	@echo "Benchmark targets (see benchmarks/README.rst):"
 	@echo "  bench            Run L1 C + Go micro-benchmarks"
 	@echo "  bench-go         Run Go benchmarks (verifier, sdk/server, attestca)"
 	@echo "  bench-c          Build and run C SDK micro-benchmarks"
@@ -1063,7 +1076,13 @@ help:
 	@echo "  BENCH_COUNT=10 make bench-go   more samples for benchstat"
 	@echo ""
 	@echo "Release targets:"
-	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see docs/BUILD-REPRODUCIBLE.md)"
+	@echo "  reproducible-build  Build all with pinned timestamp/TZ/locale (see Documentation/security/reproducible-builds.rst)"
+	@echo ""
+	@echo "Documentation targets (Sphinx, see Documentation/conf.py):"
+	@echo "  htmldocs         Build HTML docs strictly (-W) into Documentation/_build"
+	@echo "  docs-lint        Lint reStructuredText sources (sphinx-lint)"
+	@echo "  docs-linkcheck   Verify documentation links resolve"
+	@echo "  cleandocs        Remove built documentation"
 	@echo ""
 	@echo "Install/cleanup targets:"
 	@echo "  install          Install to DESTDIR/usr (root required without DESTDIR)"
@@ -1074,11 +1093,11 @@ help:
 	@echo "  make test-unit"
 	@echo "  sudo make install"
 
-# Benchmarks (see benchmarks/README.md).
+# Benchmarks (see benchmarks/README.rst).
 # L1 micro-benchmarks only
 # L2 macro suite (hyperfine over swtpm)
 # L3 kernel suite (perf over the BPF LSM)
-# are operator runbooks documented in benchmarks/README.md.
+# are operator runbooks documented in benchmarks/README.rst.
 .PHONY: bench bench-go bench-c bench-clean
 
 BENCH_DIR := benchmarks
@@ -1091,7 +1110,7 @@ BENCH_TIME ?= 1s
 
 bench: bench-c bench-go
 	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
-	@echo "Render docs/PERF.md with: benchmarks/scripts/run_all.sh"
+	@echo "Render Documentation/performance/evaluation.rst with: benchmarks/scripts/run_all.sh"
 
 bench-go:
 	@mkdir -p $(BENCH_RESULTS)

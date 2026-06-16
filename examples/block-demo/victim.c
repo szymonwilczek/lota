@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA block-demo: victim process that opts itself into the
  * runtime enforcement layer and then asks the dynamic loader to

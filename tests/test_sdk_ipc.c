@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+/* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA SDK Integration Test
  * Tests SDK functions against running lota-agent IPC server.

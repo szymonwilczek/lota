@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
 #
 # Operator-facing tamper trigger for the live demo.
 #

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA - Certificate Revocation List (CRL) verification
 //
 // Shared CRL engine for the LOTA services that consume operator-supplied

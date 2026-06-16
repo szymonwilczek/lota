@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Copyright (C) 2026 Szymon Wilczek
 // LOTA Attestation CA - TPM 2.0 credential-activation primitive
 //
 // Verifier side of the TCG credential-activation ceremony
