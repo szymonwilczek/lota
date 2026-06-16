@@ -63,7 +63,7 @@ Quick start
   <Documentation/operator/production-bringup/index.rst>`_
 * Run the end-to-end demo material: see
   `examples/README.rst <examples/README.rst>`_
-* Report a vulnerability: see `SECURITY.rst <SECURITY.rst>`_
+* Report a vulnerability: see `SECURITY.md <SECURITY.md>`_
 * Contribute a patch: see `CONTRIBUTING.rst <CONTRIBUTING.rst>`_
 
 Build inputs include a C toolchain, clang/LLVM for BPF, libbpf, TPM2-TSS,
@@ -96,7 +96,7 @@ All users should know where these documents live:
 * SELinux policy: `selinux/README.rst <selinux/README.rst>`_
 * EK root bundle material: `configs/ek-roots/README.rst
   <configs/ek-roots/README.rst>`_
-* Security reporting: `SECURITY.rst <SECURITY.rst>`_
+* Security reporting: `SECURITY.md <SECURITY.md>`_
 * Code of Conduct: `CODE_OF_CONDUCT.rst <CODE_OF_CONDUCT.rst>`_
 
 The full documentation tree, organised by reader role, lives under
@@ -182,7 +182,7 @@ public issues for exploitable vulnerabilities.
 
 * Threat model: `Documentation/security/threat-model.rst
   <Documentation/security/threat-model.rst>`_
-* Security reporting: `SECURITY.rst <SECURITY.rst>`_
+* Security reporting: `SECURITY.md <SECURITY.md>`_
 * Reproducible release verification:
   `Documentation/security/reproducible-builds.rst
   <Documentation/security/reproducible-builds.rst>`_
@@ -286,14 +286,14 @@ trailers, or bypass documentation updates for changed behavior.
 * Contribution rules: `CONTRIBUTING.rst <CONTRIBUTING.rst>`_
 * Development policy: `Documentation/contributor/development/index.rst
   <Documentation/contributor/development/index.rst>`_
-* Security reporting: `SECURITY.rst <SECURITY.rst>`_
+* Security reporting: `SECURITY.md <SECURITY.md>`_
 * Local quality gate: ``scripts/check-patch``
 
 Communication and support
 =========================
 
 * Security vulnerabilities: use GitHub Private Vulnerability Reporting for
-  ``github.com/szymonwilczek/lota``; see `SECURITY.rst <SECURITY.rst>`_.
+  ``github.com/szymonwilczek/lota``; see `SECURITY.md <SECURITY.md>`_.
 * General contribution process: see `CONTRIBUTING.rst <CONTRIBUTING.rst>`_.
 * Conduct reports: see `CODE_OF_CONDUCT.rst <CODE_OF_CONDUCT.rst>`_.
 * Release status and supported versions are documented in release notes and
