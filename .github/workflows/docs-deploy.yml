@@ -13,10 +13,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# default every job to read-only
+# write scopes Pages needs are granted on the deploy job alone
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -28,11 +28,15 @@ jobs:
     # only main and stable releases are hosted
     if: ${{ !contains(github.ref, '-rc') }}
     runs-on: ubuntu-24.04
+    # build only reads the repository and produces an artifact
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # need the tag history for the version label
+          persist-credentials: false  # no git auth is needed past checkout
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -67,6 +71,9 @@ jobs:
     name: deploy to Pages
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      pages: write  # publish the built artifact to Pages
+      id-token: write  # mint the OIDC token deploy-pages presents to Pages
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
