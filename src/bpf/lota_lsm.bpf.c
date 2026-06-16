@@ -40,6 +40,7 @@
 #include <bpf/bpf_tracing.h>
 
 #include "lota.h"
+#include "lota_devt.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -733,13 +734,12 @@ static __always_inline int is_write_open_flags(int flags)
 
 static __always_inline unsigned int lota_dev_major(dev_t dev)
 {
-	return (unsigned int)(((unsigned long long)dev >> 8) & 0xFFFULL);
+	return LOTA_DEVT_MAJOR(dev);
 }
 
 static __always_inline unsigned int lota_dev_minor(dev_t dev)
 {
-	return (unsigned int)(((unsigned long long)dev & 0xFFULL) |
-			      (((unsigned long long)dev >> 12) & 0xFFFFF00ULL));
+	return LOTA_DEVT_MINOR(dev);
 }
 
 static __always_inline int is_kernel_mem_device(struct file *file)

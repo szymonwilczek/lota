@@ -298,7 +298,7 @@ $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR
 	@echo "Built: $@"
 
 # build bpf program
-$(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h | $(BUILD_DIR)
+$(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 	@echo "Built: $@"
 
@@ -561,6 +561,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
+	$(TEST_BIN_DIR)/test_devt \
 	$(TEST_BIN_DIR)/test_initramfs_lock \
 	$(TEST_BIN_DIR)/test_hardening \
 	$(TEST_BIN_DIR)/test_server_sdk \
@@ -677,6 +678,10 @@ $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_uti
 	$(CC) $(CFLAGS) -o $@ $^
 	@echo "Built: $@"
 
+$(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $<
+	@echo "Built: $@"
+
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 	@echo "Built: $@"
@@ -778,6 +783,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_io_read_file
+	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_hardening
@@ -857,7 +863,7 @@ VALGRIND_UNIT_BINS := \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe \
+	test_installer_probe test_devt \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
 
 valgrind-unit: $(TEST_BINS)

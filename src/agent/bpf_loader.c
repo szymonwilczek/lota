@@ -28,6 +28,7 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_devt.h"
 #include "bpf_loader.h"
 #include "journal.h"
 #include "policy_sign.h"
@@ -1683,7 +1684,7 @@ static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
 	if (ret < 0)
 		return ret;
 
-	key.dev = (uint64_t)st.st_dev;
+	key.dev = lota_devt_from_st(st.st_dev);
 	key.ino = (uint64_t)st.st_ino;
 	if (key.dev == 0 || key.ino == 0)
 		return -EINVAL;
@@ -1859,7 +1860,7 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ret < 0)
 		return ret;
 
-	key.dev = (uint64_t)st.st_dev;
+	key.dev = lota_devt_from_st(st.st_dev);
 	key.ino = (uint64_t)st.st_ino;
 	if (key.dev == 0 || key.ino == 0)
 		return -EINVAL;
@@ -1893,7 +1894,7 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ret < 0)
 		return ret;
 
-	key.dev = (uint64_t)st.st_dev;
+	key.dev = lota_devt_from_st(st.st_dev);
 	key.ino = (uint64_t)st.st_ino;
 	if (key.dev == 0 || key.ino == 0)
 		return -EINVAL;
