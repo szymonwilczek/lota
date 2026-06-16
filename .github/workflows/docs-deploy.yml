@@ -1,0 +1,76 @@
+name: Deploy documentation
+
+# Publishes the Sphinx HTML to GitHub Pages.
+#
+# Site tracks main: every merge of lota-next into main redeploys, and a stable
+# release tag redeploys so the version label reflects the tag the docs were
+# built from.
+#
+# Release-candidate tags are skipped -- only main and stable v* tags are hosted.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build site
+    # skip release-candidate tags
+    # only main and stable releases are hosted
+    if: ${{ !contains(github.ref, '-rc') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need the tag history for the version label
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation toolchain
+        run: pip install -r Documentation/requirements.txt
+
+      # on a tag build use the tag itself
+      # on a branch build use the latest stable tag reachable from main
+      - name: Resolve release tag
+        id: ver
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-rc*')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build HTML (warnings are errors)
+        env:
+          LOTA_DOCS_VERSION: ${{ steps.ver.outputs.tag }}
+        run: make -C Documentation html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: Documentation/_build/html
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

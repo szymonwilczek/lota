@@ -14,10 +14,10 @@ subject is the device pseudonym. The EK is presented only to the CA; verifiers
 never see it.
 
 Stand up the CA with your CA key, the trusted manufacturer EK roots and a server
-TLS keypair (``examples/enrollment/gen-ca.sh`` generates the CA material).
+TLS keypair (`examples/enrollment/gen-ca.sh <https://github.com/szymonwilczek/lota/blob/main/examples/enrollment/gen-ca.sh>`__ generates the CA material).
 Production fleets span several TPM manufacturers, so trust a pin-enforced
 multi-vendor bundle with ``-ek-root-bundle``; the CA fails closed if any pinned
-root is missing, mismatched, or unpinned (see ``configs/ek-roots/README.rst``
+root is missing, mismatched, or unpinned (see `configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__
 for how to materialize one):
 
 .. code-block:: sh
@@ -35,7 +35,7 @@ both.
 Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 (repeatable) loads a manufacturer CRL, enrollment rejects a revoked EK, and
 SIGHUP reloads a rewritten feed in place. See the "Manufacturer CRLs" section of
-``configs/ek-roots/README.rst``.
+`configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__.
 
 CA signing key
 ==============
@@ -113,7 +113,7 @@ then materialize the bundle:
 does not vouch for it, so confirm the pin against the vendor before the line
 enters ``sources``.
 
-See ``configs/ek-roots/README.rst`` for the full flow.
+See `configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__ for the full flow.
 
 Enrolling a host
 ================
@@ -149,7 +149,7 @@ Point every verifier at the CA root:
 A host that has not enrolled (no AIK certificate) is refused under the
 production ``--require-cert`` default.
 
-See ``examples/enrollment/README.rst`` for the full end-to-end walk-through.
+See `examples/enrollment/README.rst <https://github.com/szymonwilczek/lota/blob/main/examples/enrollment/README.rst>`__ for the full end-to-end walk-through.
 
 Self-service re-anchor (diverse-fleet profile)
 ==============================================

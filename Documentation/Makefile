@@ -11,7 +11,9 @@ SPHINXBUILD   ?= sphinx-build
 SOURCEDIR     = .
 BUILDDIR      = _build
 
-.PHONY: help html linkcheck lint clean Makefile
+SERVE_PORT    ?= 8000
+
+.PHONY: help html linkcheck lint serve clean Makefile
 
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
@@ -30,6 +32,12 @@ linkcheck:
 lint:
 	@find . -name '*.rst' -not -path './_build/*' -print0 \
 		| xargs -0 python3 -m sphinxlint --enable all --disable line-too-long
+
+# build, then serve the HTML locally for preview
+# override with SERVE_PORT=NNNN
+serve: html
+	@echo "Serving docs at http://localhost:$(SERVE_PORT)/ (Ctrl-C to stop)"
+	@python3 -m http.server "$(SERVE_PORT)" --directory "$(BUILDDIR)/html"
 
 clean:
 	@rm -rf "$(BUILDDIR)"
