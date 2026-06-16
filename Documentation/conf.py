@@ -75,3 +75,12 @@ html_baseurl = "https://lota.szymon-wilczek.me/"
 # _extra/ is copied verbatim to the site root:
 # it carries the GitHub Pages CNAME file that pins the custom domain on every deploy
 html_extra_path = ["_extra"]
+
+# -- Link checking ------------------------------------------------------------
+
+# Source-tree links resolve to github.com/szymonwilczek/lota/blob/<ref>/...
+# Their existence is owned by the repository itself and the internal :doc:/:ref: graph
+# is already validated by the strict HTML build, so leave these out of the link check
+linkcheck_ignore = [r"https://github\.com/szymonwilczek/lota/blob/"]
+linkcheck_retries = 2
+linkcheck_timeout = 15
