@@ -749,6 +749,7 @@ func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 		st.EventLogBaseline = append([]byte(nil), evlog...)
 	}
 	if esrtVersion.Valid {
+		// #nosec G115 -- uint32 ESRT version stored in a signed INTEGER column, round-tripped back to its source type
 		st.ESRTVersion = uint32(esrtVersion.Int64)
 	}
 	st.ESRTCapable = esrtCapable.Valid && esrtCapable.Int64 != 0
