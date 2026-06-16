@@ -380,8 +380,9 @@ func TestPostgresReanchor(t *testing.T) {
 		t.Fatalf("fresh re-anchor state wrong: %+v", st)
 	}
 
+	t0 := time.Now()
 	if err := bs.ArchiveAndReanchor(cid, boot(0xC0, 0xC1, 0xB7),
-		[]byte("evlog"), 785, true, false, "strong"); err != nil {
+		[]byte("evlog"), 785, true, false, "strong", t0); err != nil {
 		t.Fatalf("ArchiveAndReanchor: %v", err)
 	}
 	st = bs.GetReanchorState(cid)
@@ -396,8 +397,10 @@ func TestPostgresReanchor(t *testing.T) {
 	}
 
 	// LFA re-anchor: esrt_capable stays sticky-true even though we pass false
+	// past the LFA interval so this legitimate second re-anchor is admitted
 	if err := bs.ArchiveAndReanchor(cid, boot(0xD0, 0xD1, 0xB7),
-		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		[]byte("v2"), 0, false, true, "lfa",
+		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
 	}
 	st = bs.GetReanchorState(cid)

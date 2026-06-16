@@ -1517,7 +1517,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	b.PCR0[0], b.PCR1[0], b.PCR7[0] = 1, 2, 7
 	bs.CheckAndUpdateBootPCRs("dev1", b)
 	// simulate an LFA re-anchor: flags dev1 for post-fact review
-	if err := bs.ArchiveAndReanchor("dev1", b, []byte("log"), 0, false, true, "lfa"); err != nil {
+	if err := bs.ArchiveAndReanchor("dev1", b, []byte("log"), 0, false, true, "lfa", time.Now()); err != nil {
 		t.Fatalf("seed LFA re-anchor: %v", err)
 	}
 

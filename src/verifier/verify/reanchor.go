@@ -6,10 +6,18 @@ package verify
 
 import (
 	"bytes"
+	"errors"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
 )
+
+// ErrReanchorRateLimited is returned by a store's ArchiveAndReanchor when the
+// per-client re-anchor interval has not elapsed.
+// Interval is re-checked inside the write transaction (under the row lock),
+// so a burst of concurrent attestations for one client cannot race the cheap-path
+// rate-limit gate in reanchorDecision and re-anchor more than once per window.
+var ErrReanchorRateLimited = errors.New("reanchor: rate limit not elapsed")
 
 // Re-anchor rate limits per assurance tier.
 // Strong path proves a forward firmware version; the LFA path cannot,
@@ -19,6 +27,20 @@ const (
 	ReanchorMinIntervalStrong = 30 * 24 * time.Hour
 	ReanchorMinIntervalLFA    = 90 * 24 * time.Hour
 )
+
+// reanchorInterval is the minimum spacing between re-anchors for the assurance
+// tier.
+// LFA path (no firmware version proof) is held to the wider interval because
+// the rate limit is then the main barrier against repeated downgrade re-anchors.
+// Both reanchorDecision (cheap-path gate) and every store's ArchiveAndReanchor
+// (authoritative in-transaction guard) derive the interval here so the two
+// cannot drift apart.
+func reanchorInterval(lfa bool) time.Duration {
+	if lfa {
+		return ReanchorMinIntervalLFA
+	}
+	return ReanchorMinIntervalStrong
+}
 
 // ReanchorVerdict is the outcome of the re-anchor discriminator.
 // The zero value is Escalate so any unhandled path fails closed to the operator.
@@ -128,10 +150,7 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 		verdict = ReanchorLFA
 	}
 
-	interval := ReanchorMinIntervalStrong
-	if verdict == ReanchorLFA {
-		interval = ReanchorMinIntervalLFA
-	}
+	interval := reanchorInterval(verdict == ReanchorLFA)
 	if !in.LastReanchorAt.IsZero() && in.Now.Sub(in.LastReanchorAt) < interval {
 		return ReanchorEscalate, "re-anchor rate limit not elapsed"
 	}

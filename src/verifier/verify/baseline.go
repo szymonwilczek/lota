@@ -364,10 +364,15 @@ type ReanchorState struct {
 //     baseline, ESRT version and assurance tier, setting esrt_capable sticky,
 //     and bumping reanchor_count / last_reanchor_at. reason labels the archive
 //     row ("strong" or "lfa").
+//     now is the re-anchor clock: the implementation re-reads last_reanchor_at
+//     under the same lock/transaction as the write and returns ErrReanchorRateLimited
+//     when now is still within the assurance-tier interval, so concurrent attestations
+//     for one client cannot race the cheap-path gate in reanchorDecision.
 type ReanchorStorer interface {
 	GetReanchorState(clientID string) ReanchorState
 	ArchiveAndReanchor(clientID string, boot BootBaseline, eventLog []byte,
-		esrtVersion uint32, esrtCapable, lfa bool, reason string) error
+		esrtVersion uint32, esrtCapable, lfa bool, reason string,
+		now time.Time) error
 
 	// RecordBootEvidence captures the event log and firmware version that
 	// accompanied a first-use boot baseline, so a later re-anchor has a
@@ -519,18 +524,22 @@ func (s *BaselineStore) GetReanchorState(clientID string) ReanchorState {
 // esrtCapable is sticky: once true it stays true.
 func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	eventLog []byte, esrtVersion uint32, esrtCapable, lfa bool,
-	reason string,
+	reason string, now time.Time,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
+	prev := s.reanchor[clientID]
+	if prev != nil && !prev.LastReanchorAt.IsZero() &&
+		now.Sub(prev.LastReanchorAt) < reanchorInterval(lfa) {
+		return ErrReanchorRateLimited
+	}
+
 	nb := boot
 	nb.FirstSeen = now
 	nb.LastSeen = now
 	s.bootBaselines[clientID] = &nb
 
-	prev := s.reanchor[clientID]
 	st := &ReanchorState{Present: true}
 	if prev != nil {
 		*st = *prev
