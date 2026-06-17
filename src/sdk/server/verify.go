@@ -50,12 +50,14 @@ const (
 
 // Token freshness policy defaults (see: include/lota_server.h)
 const (
-	// Maximum acceptable age (in seconds) for a token.
-	// Tokens older than this are flagged as TooOld.
+	// Maximum lifetime (in seconds) VerifyToken accepts for a token:
+	// its validUntil must be no further than this in the future, plus
+	// MaxClockSkew.
+	// Issuers must size validUntil within this window.
 	DefaultMaxTokenAge = 300 // 5 minutes
 
-	// Maximum allowed clock skew (in seconds) between issuer and verifier.
-	// Tokens issued further in the future are flagged as IssuedInFuture.
+	// Allowance (in seconds) added to the freshness window for clock
+	// skew between the issuing agent and the verifying server.
 	MaxClockSkew = 60 // 1 minute
 )
 
@@ -86,14 +88,17 @@ const (
 
 // Errors returned by verification functions
 var (
-	ErrInvalidArg   = errors.New("lota: invalid argument")
-	ErrBadToken     = errors.New("lota: malformed token")
-	ErrBadVersion   = errors.New("lota: unsupported token version")
-	ErrSigFail      = errors.New("lota: signature verification failed")
-	ErrNonceFail    = errors.New("lota: nonce mismatch")
-	ErrExpired      = errors.New("lota: token expired")
+	ErrInvalidArg = errors.New("lota: invalid argument")
+	ErrBadToken   = errors.New("lota: malformed token")
+	ErrBadVersion = errors.New("lota: unsupported token version")
+	ErrSigFail    = errors.New("lota: signature verification failed")
+	ErrNonceFail  = errors.New("lota: nonce mismatch")
+	ErrExpired    = errors.New("lota: token expired")
+	// ErrTooOld is reserved:
+	// token carries no issued-at field, so its absolute age cannot
+	// be measured and VerifyToken does not return this
 	ErrTooOld       = errors.New("lota: token too old")
-	ErrFutureToken  = errors.New("lota: token issued in the future")
+	ErrFutureToken  = errors.New("lota: token validity exceeds the freshness window")
 	ErrAttestParse  = errors.New("lota: failed to parse TPMS_ATTEST")
 	ErrNotQuote     = errors.New("lota: TPMS_ATTEST is not a quote")
 	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
@@ -272,6 +277,19 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	// return claims with error for temporal violations
 	if claims.Expired {
 		return claims, ErrExpired
+	}
+
+	// Bound the remaining lifetime:
+	// The token carries no issued-at field, so validUntil is the only
+	// temporal anchor:
+	// legitimately issued token expires at most DefaultMaxTokenAge in the
+	// future, + allowance for issuer/verifier clock skew.
+	// Reject one whose expiry is implausibly far out.
+	// Callers must size validUntil accordingly:
+	// keep the agent attest_interval at or below DefaultMaxTokenAge
+	if hdr.validUntil > 0 &&
+		int64(hdr.validUntil) > now.Unix()+DefaultMaxTokenAge+MaxClockSkew {
+		return claims, ErrFutureToken
 	}
 
 	return claims, nil

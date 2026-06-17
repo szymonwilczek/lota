@@ -22,7 +22,7 @@ func FuzzVerifyToken(f *testing.F) {
 	aikPub := &priv.PublicKey
 
 	var nonce [32]byte
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	validTok := buildTestToken(f, priv, validUntil, 0, nonce, 0, nil)
 
 	f.Add(validTok)

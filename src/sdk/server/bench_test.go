@@ -18,7 +18,7 @@ func benchToken(b *testing.B) ([]byte, *rsa.PrivateKey, [32]byte) {
 	key := generateTestKey(b)
 	var nonce [32]byte
 	_, _ = rand.Read(nonce[:])
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	pcrDigest := make([]byte, 32)
 	_, _ = rand.Read(pcrDigest)
 	tok := buildTestToken(b, key, validUntil, 0x07, nonce, 0x4001, pcrDigest)

@@ -18,7 +18,7 @@ func FuzzParseToken(f *testing.F) {
 	nonce := [32]byte{0xAA, 0xBB, 0xCC}
 	policyDigest := [32]byte{}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	attestData := []byte("fake-attest")
 	sig := []byte("fake-sig")
 	validTok, _ := SerializeToken(validUntil, 0x07, nonce,
