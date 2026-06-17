@@ -37,7 +37,9 @@ func main() {
 	nonce := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
 	now := uint64(time.Now().Unix())
 
-	validUntil := now + 3600
+	// keep validUntil within the server SDK freshness window
+	// (DefaultMaxTokenAge + MaxClockSkew) so VerifyToken accepts it
+	validUntil := now + 60
 	flags := uint32(0x07)
 	pcrMask := uint32(0x4001)
 	policyDigest := [32]byte{0x11, 0x22, 0x33, 0x44}
