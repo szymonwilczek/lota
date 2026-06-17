@@ -671,8 +671,17 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	return 0;
 }
 
+/*
+ * Verify the detached signature over the BPF object at bpf_obj_path and,
+ * on success, hand the verified bytes back through out_obj_data / out_obj_len
+ * (ownership transfers to the caller, which frees them).
+ * Returning the exact buffer that was signature-checked lets the loader hand
+ * those bytes to libbpf directly.
+ */
 static int verify_bpf_object_signature(const char *bpf_obj_path,
-				       const char *bpf_pubkey_pem_path)
+				       const char *bpf_pubkey_pem_path,
+				       uint8_t **out_obj_data,
+				       size_t *out_obj_len)
 {
 	char *sig_path = NULL;
 	size_t sig_path_len;
@@ -685,8 +694,11 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 	int ret;
 
 	if (!bpf_obj_path || !bpf_pubkey_pem_path ||
-	    bpf_pubkey_pem_path[0] == '\0')
+	    bpf_pubkey_pem_path[0] == '\0' || !out_obj_data || !out_obj_len)
 		return -EINVAL;
+
+	*out_obj_data = NULL;
+	*out_obj_len = 0;
 
 	f = fopen(bpf_obj_path, "rb");
 	if (!f)
@@ -751,6 +763,13 @@ static int verify_bpf_object_signature(const char *bpf_obj_path,
 	}
 
 	ret = policy_verify_buffer(obj_data, obj_len, bpf_pubkey_pem_path, sig);
+	if (ret == 0) {
+		/* transfer the verified buffer to the caller so the load uses
+		 * exactly these bytes */
+		*out_obj_data = obj_data;
+		*out_obj_len = obj_len;
+		obj_data = NULL;
+	}
 
 out:
 	if (f)
@@ -779,7 +798,11 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	if (ctx->loaded)
 		return -EALREADY;
 
-	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path);
+	uint8_t *obj_data = NULL;
+	size_t obj_len = 0;
+
+	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path,
+					  &obj_data, &obj_len);
 	if (ret < 0) {
 		lota_err("BPF object signature verification failed for %s: %s",
 			 bpf_obj_path, strerror(-ret));
@@ -791,7 +814,16 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		.kernel_log_level = 1,
 	};
 
-	ctx->obj = bpf_object__open_file(bpf_obj_path, &opts);
+	/*
+	 * Load from the verified buffer, not the path.
+	 * bpf_object__open_mem() copies the bytes, so the loaded object is
+	 * exactly what passed the signature check and the file cannot be
+	 * swapped between verify and load.
+	 * libbpf duplicates obj_data, so it is freed right after
+	 */
+	ctx->obj = bpf_object__open_mem(obj_data, obj_len, &opts);
+	free(obj_data);
+	obj_data = NULL;
 	if (!ctx->obj) {
 		lota_err("Failed to open BPF object %s: %s", bpf_obj_path,
 			 strerror(errno));
