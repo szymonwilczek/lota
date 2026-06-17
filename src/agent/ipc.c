@@ -804,10 +804,12 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	if (runtime_pid_count > LOTA_IPC_TOKEN_MAX_PROTECT_PIDS) {
-		lota_err("runtime protected PID count too large: %u",
-			 runtime_pid_count);
+		lota_err("runtime protected PID count %u exceeds the per-token "
+			 "limit of %u",
+			 runtime_pid_count,
+			 (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS);
 		fail = true;
-		fail_code = LOTA_IPC_ERR_INTERNAL;
+		fail_code = LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS;
 		goto out;
 	}
 
@@ -928,9 +930,10 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	total_size = LOTA_IPC_TOKEN_HEADER_SIZE + pid_list_size +
 		     image_list_size + quote.attest_size + quote.signature_size;
 	if (total_size > LOTA_IPC_MAX_PAYLOAD) {
-		lota_err("token too large (%zu bytes)", total_size);
+		lota_err("token too large (%zu bytes): too many protected PIDs",
+			 total_size);
 		fail = true;
-		fail_code = LOTA_IPC_ERR_INTERNAL;
+		fail_code = LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS;
 		goto out;
 	}
 

@@ -34,6 +34,21 @@ The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
 in-memory store is the contract reference exercised by ``boot_baseline_test.go``.
 
+IPC token payload budget
+========================
+
+Signed token returned over the local socket (``struct lota_ipc_token`` in
+``include/lota_ipc.h``, built by ``src/agent/ipc.c``, parsed by the SDK in
+``src/sdk/lota_gaming.c``) must fit ``LOTA_IPC_MAX_PAYLOAD``. Every protected
+PID costs four bytes in the PID list plus a 32-byte kernel image digest in a
+v2 token, so ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload
+budget left after the header, a maximum quote and a maximum signature -- it is
+the real per-token limit, not a round number.
+
+Both sides take the cap from the shared header, so the agent and the SDK
+parser stay in lockstep; changing the payload size or the per-PID cost must
+keep the derived cap and that test in agreement.
+
 Installer probes and agent gates
 ================================
 
