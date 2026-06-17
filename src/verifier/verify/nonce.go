@@ -17,9 +17,9 @@
 package verify
 
 import (
-	"bytes"
 	"container/list"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -338,7 +338,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	}
 
 	// verify nonce matches whats in report header
-	if !bytes.Equal(entry.nonce[:], report.TPM.Nonce[:]) {
+	if subtle.ConstantTimeCompare(entry.nonce[:], report.TPM.Nonce[:]) != 1 {
 		return errors.New("nonce mismatch in report header")
 	}
 
