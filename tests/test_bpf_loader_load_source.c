@@ -15,6 +15,7 @@
  * it asserts the loader called open_mem (not open_file) with the verified bytes
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,9 +85,14 @@ __wrap_bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
 
 static void write_file(const char *path, const void *data, size_t len)
 {
-	FILE *f = fopen(path, "wb");
-	if (!f)
-		T_FAIL("fopen %s: %s", path, strerror(errno));
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		T_FAIL("open %s: %s", path, strerror(errno));
+	FILE *f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		T_FAIL("fdopen %s: %s", path, strerror(errno));
+	}
 	if (fwrite(data, 1, len, f) != len)
 		T_FAIL("fwrite %s", path);
 	fclose(f);
