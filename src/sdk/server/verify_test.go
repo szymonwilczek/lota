@@ -301,6 +301,33 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	}
 }
 
+func TestVerifyToken_RejectsFarFutureValidUntil(t *testing.T) {
+	key := generateTestKey(t)
+
+	var nonce [32]byte
+	rand.Read(nonce[:])
+
+	// token carries no issued-at field, so an implausibly distant expiry
+	// is the only signal that a misconfigured or compromised issuer minted
+	// an effectively immortal token
+	//
+	// validUntil beyond the SDK's freshness window (DefaultMaxTokenAge + MaxClockSkew)
+	// must be rejected
+	farFuture := uint64(time.Now().Add(10 * 365 * 24 * time.Hour).Unix())
+	tok := buildTestToken(t, key, farFuture, 0, nonce, 0, nil)
+
+	if _, err := VerifyToken(tok, &key.PublicKey, nonce[:]); !errors.Is(err, ErrFutureToken) {
+		t.Fatalf("far-future token: err = %v, want ErrFutureToken", err)
+	}
+
+	//A token within the freshness window still verifies
+	okUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
+	okTok := buildTestToken(t, key, okUntil, 0, nonce, 0, nil)
+	if _, err := VerifyToken(okTok, &key.PublicKey, nonce[:]); err != nil {
+		t.Fatalf("in-window token must verify, got %v", err)
+	}
+}
+
 func TestVerifyToken_FreshToken(t *testing.T) {
 	key := generateTestKey(t)
 
