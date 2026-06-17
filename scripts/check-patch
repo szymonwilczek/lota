@@ -30,6 +30,7 @@ order. Head defaults to HEAD.
 Checks:
   - CI-equivalent DCO and hotpath documentation rules,
   - conventional commit subjects with scope parentheses,
+  - good GPG or SSH signature on every commit,
   - standalone Problem: and Solution: commit body sections,
   - one blank line before the Signed-off-by trailer,
   - commit body lines wrapped to 75 columns, with a two-column tolerance,
@@ -402,6 +403,34 @@ check_message_whitespace() {
 	fi
 }
 
+check_commit_signatures() {
+	local rc=0
+	local commit status
+
+	# git log %G? reports the signature state:
+	# G good, U good but the key is untrusted, B bad, X/Y/R expired or revoked, E unverifiable, N none
+	# commit counts as signed only when the signature is good (G or U);
+	# anything else, including an unverifiable or absent signature, FAILS
+	for commit in "$@"; do
+		status=$(git log -1 --format='%G?' "$commit")
+		case "$status" in
+		G | U) ;;
+		*)
+			printf '  %s %s (signature: %s)\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
+			rc=1
+			;;
+		esac
+	done
+
+	if ((rc == 0)); then
+		pass "commit signatures"
+	else
+		fail "commit signatures" \
+			"sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
+	fi
+}
+
 is_text_file() {
 	local path=$1
 
@@ -602,6 +631,7 @@ main() {
 	collect_changed_files "$base" "$head" changed_files
 
 	check_ci_policy "$base" "$head"
+	check_commit_signatures "${commits[@]}"
 	check_commit_subjects "${commits[@]}"
 	check_commit_body_contract "${commits[@]}"
 	check_commit_body_layout "${commits[@]}"
