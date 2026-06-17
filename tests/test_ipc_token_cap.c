@@ -9,48 +9,43 @@
 // If the advertised cap is larger than what fits, the runtime count guard can
 // never fire before the payload overflows, so token issuance fails opaquely
 // once the protected set grows past the real (much lower) limit.
+//
+// Bounds relate compile-time constants only, so they are enforced at build
+// time with _Static_assert (matching src/agent/ipc.c)
+// main() just reports the resulting cap
 
 #include "lota_ipc.h"
 
-#include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
+
+#define LOTA_IPC_TOKEN_FIXED_SIZE                                 \
+	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
+	 LOTA_IPC_TOKEN_MAX_SIG)
+
+/* full protected set in the worst-case (v2) token must fit the payload */
+_Static_assert(LOTA_IPC_TOKEN_FIXED_SIZE +
+			       (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *
+				       LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE <=
+		       LOTA_IPC_MAX_PAYLOAD,
+	       "worst-case v2 token must fit the IPC payload");
+
+/* cap must be the binding limit: one more PID must overflow the payload */
+_Static_assert(LOTA_IPC_TOKEN_FIXED_SIZE +
+			       ((size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS + 1) *
+				       LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE >
+		       LOTA_IPC_MAX_PAYLOAD,
+	       "protected-PID cap must be the binding limit");
+
+/* compile-time maximum token size must stay within the payload too */
+_Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
+	       "advertised max token size must fit the IPC payload");
 
 int main(void)
 {
-	const size_t per_pid = 4 + LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE;
-	const size_t fixed = LOTA_IPC_TOKEN_HEADER_SIZE +
-			     LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG;
-
-	/* full protected set in the worst-case (v2) token must fit */
-	size_t full = fixed + (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * per_pid;
-	if (full > LOTA_IPC_MAX_PAYLOAD) {
-		fprintf(stderr,
-			"FAIL: cap %u over-advertised: worst-case token %zu > payload %u\n",
-			(unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, full,
-			(unsigned)LOTA_IPC_MAX_PAYLOAD);
-		return 1;
-	}
-
-	/* cap must be the binding limit: one more PID must overflow */
-	size_t over =
-		fixed + ((size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS + 1) * per_pid;
-	if (over <= LOTA_IPC_MAX_PAYLOAD) {
-		fprintf(stderr,
-			"FAIL: cap %u not tight: cap+1 still fits (%zu <= %u)\n",
-			(unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, over,
-			(unsigned)LOTA_IPC_MAX_PAYLOAD);
-		return 1;
-	}
-
-	/* compile-time maximum token size must account for the same
-	 * worst-case set and stay within the payload */
-	if (LOTA_IPC_TOKEN_MAX_SIZE > LOTA_IPC_MAX_PAYLOAD) {
-		fprintf(stderr,
-			"FAIL: LOTA_IPC_TOKEN_MAX_SIZE %u > payload %u\n",
-			(unsigned)LOTA_IPC_TOKEN_MAX_SIZE,
-			(unsigned)LOTA_IPC_MAX_PAYLOAD);
-		return 1;
-	}
+	size_t full = LOTA_IPC_TOKEN_FIXED_SIZE +
+		      (size_t)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS *
+			      LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE;
 
 	printf("ipc token protected-PID cap: %u PIDs, worst-case %zu/%u bytes\n",
 	       (unsigned)LOTA_IPC_TOKEN_MAX_PROTECT_PIDS, full,
