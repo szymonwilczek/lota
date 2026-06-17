@@ -28,6 +28,7 @@ import (
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
@@ -225,7 +226,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	} else {
 		runtimeDigest = computeRuntimeProtectDigest(protectedPIDs)
 	}
-	if !bytes.Equal(runtimeDigest[:], hdr.runtimeProtectDigest[:]) {
+	if subtle.ConstantTimeCompare(runtimeDigest[:], hdr.runtimeProtectDigest[:]) != 1 {
 		return nil, fmt.Errorf("%w: runtime protected PID digest mismatch", ErrNonceFail)
 	}
 
@@ -245,12 +246,12 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 
 	// verify nonce binding: extraData == SHA256(valid_until||flags||pcr_mask||nonce||policy_digest||runtime_protect_digest||runtime_protect_epoch)
 	computedNonce := computeExpectedNonce(hdr.validUntil, hdr.flags, hdr.pcrMask, hdr.nonce, hdr.policy, hdr.runtimeProtectDigest, hdr.runtimeProtectEpoch)
-	if !bytes.Equal(extraData, computedNonce[:]) {
+	if subtle.ConstantTimeCompare(extraData, computedNonce[:]) != 1 {
 		return nil, fmt.Errorf("%w: extraData does not match SHA256(metadata||nonce)", ErrNonceFail)
 	}
 
 	// verify caller-provided challenge nonce
-	if !bytes.Equal(hdr.nonce[:], expectedNonce) {
+	if subtle.ConstantTimeCompare(hdr.nonce[:], expectedNonce) != 1 {
 		return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
 	}
 
