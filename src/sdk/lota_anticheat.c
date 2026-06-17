@@ -1201,8 +1201,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 			return -EIO;
 		}
 
-		if (memcmp(token.nonce, heartbeat_nonce, LOTA_NONCE_SIZE) !=
-		    0) {
+		if (CRYPTO_memcmp(token.nonce, heartbeat_nonce,
+				  LOTA_NONCE_SIZE) != 0) {
 			lota_token_free(&token);
 			return -EPROTO;
 		}
@@ -1335,7 +1335,7 @@ int lota_ac_verify_heartbeat(
 	if (ret != LOTA_SERVER_OK)
 		return ret;
 
-	if (memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
+	if (CRYPTO_memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 
 	/*
