@@ -576,6 +576,30 @@ smatch:
 		echo "smatch: SMATCH_STRICT set -- failing" >&2; exit 1; \
 	fi
 
+# Coccinelle semantic-patch rules in scripts/coccinelle/ over the C sources.
+# Blocking: rules are curated to be clean on a healthy tree, so any match is
+# real finding and fails the target.
+coccicheck:
+	@command -v $(SPATCH) >/dev/null 2>&1 || { \
+		echo "coccicheck: $(SPATCH) not found (install 'coccinelle'); skipping" >&2; \
+		exit 0; }
+	@echo "coccicheck: running Coccinelle semantic patches"; \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	rc=0; \
+	for cocci in scripts/coccinelle/*.cocci; do \
+		[ -e "$$cocci" ] || continue; \
+		out=$$($(SPATCH) --very-quiet --no-show-diff --sp-file $$cocci $$srcs 2>/dev/null) || true; \
+		if [ -n "$$out" ]; then \
+			echo "== $$cocci =="; \
+			echo "$$out"; \
+			rc=1; \
+		fi; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "coccicheck: matches found (see above)" >&2; exit 1; \
+	fi; \
+	echo "coccicheck: clean"
+
 # Install to system (requires root)
 install: check-version-tag all
 	install -d $(DESTDIR)/usr/bin
