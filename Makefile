@@ -24,6 +24,30 @@ CC ?= gcc
 CLANG ?= clang
 LLC ?= llc
 
+# Build verbosity:
+# `make V=1` prints full commands
+# default prints a terse one-line summary per artifact
+ifeq ($(V),1)
+  Q =
+  QUIET_CC =
+  QUIET_CLANG =
+  QUIET_LD =
+  QUIET_AR =
+  QUIET_GO =
+  QUIET_GEN =
+else
+  Q = @
+  # strip the build-directory prefix so the summary stays readable
+  # and independent of overridden BUILD_DIR
+  quiet_name = $(patsubst $(BUILD_DIR)/%,%,$@)
+  QUIET_CC      = @echo "  CC      $(quiet_name)"
+  QUIET_CLANG   = @echo "  CLANG   $(quiet_name)"
+  QUIET_LD      = @echo "  LD      $(quiet_name)"
+  QUIET_AR      = @echo "  AR      $(quiet_name)"
+  QUIET_GO      = @echo "  GO      $(quiet_name)"
+  QUIET_GEN     = @echo "  GEN     $(quiet_name)"
+endif
+
 # Directories
 SRC_DIR := src
 BPF_DIR := $(SRC_DIR)/bpf
@@ -214,12 +238,12 @@ all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_B
 
 # build directories
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)/agent
+	$(Q)mkdir -p $(BUILD_DIR)/agent
 
 # build agent binary
 $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-	@echo "Built: $@"
+	$(QUIET_LD)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # build the initramfs PCR14 lock helper. The binary stays small and
 # self-contained: it links only against TSS2-ESYS and OpenSSL so the
@@ -228,9 +252,9 @@ $(AGENT_BIN): $(AGENT_OBJS) | $(BUILD_DIR)
 # flags are inherited from CFLAGS so the helper is built with the
 # same protections as the daemon.
 $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pie -Wl,-z,relro,-z,now \
 		-ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
-	@echo "Built: $@"
 
 # build the guided player installer.
 # Self-contained TUI binary that links only libcrypto
@@ -241,9 +265,9 @@ INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
-	@echo "Built: $@"
 
 # auto-generated header dependencies. -MMD writes a sibling
 # <object>.d listing every header the .c file pulled in;
@@ -255,13 +279,15 @@ DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 
 # compile agent
 $(BUILD_DIR)/agent/%.o: $(AGENT_DIR)/%.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+	$(QUIET_CC)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 # compile SDK
 $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
+	$(QUIET_CC)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
 # server SDK version string (liblotaserver + dependents)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
@@ -269,44 +295,43 @@ $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
 # build SDK shared library
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_LD)
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^
 
 # build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
-	$(AR) rcs $@ $^
-	@echo "Built: $@"
+	$(QUIET_AR)
+	$(Q)$(AR) rcs $@ $^
 
 # build server SDK shared library
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_LD)
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 
 # build server SDK static library
 $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(AR) rcs $@ $^
-	@echo "Built: $@"
+	$(QUIET_AR)
+	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
-	@echo "Built: $@"
+	$(QUIET_LD)
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
 
 # build anti-cheat compatibility layer (includes gaming + server SDK)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
-	$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_LD)
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
 
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
-	$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
-	@echo "Built: $@"
+	$(QUIET_CLANG)
+	$(Q)$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 
 # generate vmlinux.h from running kernel btf
 $(INC_DIR)/vmlinux.h:
-	@echo "Generating vmlinux.h from kernel BTF..."
-	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
-	@echo "Generated: $@"
+	$(QUIET_GEN)
+	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
 .PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
@@ -342,7 +367,7 @@ EXAMPLES_BUILD_DIR := $(BUILD_DIR)/examples
 EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
 
 $(EXAMPLES_BUILD_DIR): | $(BUILD_DIR)
-	mkdir -p $@
+	$(Q)mkdir -p $@
 
 examples: $(EXAMPLES_BUILD_DIR)
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
@@ -400,16 +425,16 @@ sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 
 # Go verifier
 $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
-	@echo "Built: $@"
+	$(QUIET_GO)
+	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 
 # Go attestation CA
 # GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
 # HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
 GO_TAGS ?=
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
-	cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
-	@echo "Built: $@"
+	$(QUIET_GO)
+	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
@@ -600,179 +625,180 @@ TEST_BINS := \
 	$(TEST_SDK_BIN)
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 
 $(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 
 $(TEST_BIN_DIR)/test_packaging: tests/test_packaging.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lsystemd
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 
 $(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_HOOK_TESTING -o $@ $^ -lpthread
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_TESTING -o $@ $^ -lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_signal_shutdown: tests/test_signal_shutdown.c $(AGENT_DIR)/daemon.c $(AGENT_DIR)/shutdown.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -pthread
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -pthread
 
 $(TEST_BIN_DIR)/test_daemon_loop: tests/test_daemon_loop.c $(AGENT_DIR)/daemon_loop_telemetry.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/policy.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_aik_cert_renew: tests/test_aik_cert_renew.c $(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $<
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_event_budget: tests/test_event_budget.c $(INC_DIR)/lota_event_budget.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $<
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_initramfs_lock: tests/test_initramfs_lock.c src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INITRAMFS_LOCK_NO_MAIN -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -lcrypto
 
 $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lseccomp -lsystemd -pthread
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_protect_digest: tests/test_runtime_protect_digest.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_image_collect: tests/test_runtime_image_collect.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
 
 $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
@@ -932,88 +958,112 @@ FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc
 FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
 
 $(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 $(BUILD_DIR)/fuzz:
-	mkdir -p $@
+	$(Q)mkdir -p $@
 
 fuzz-agent: $(FUZZ_AGENT_OBJS)
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
 # Config parser fuzz (standalone, libc only)
 $(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
 
 fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
 # Net pin SHA-256 parser fuzz (standalone, libc only)
 $(BUILD_DIR)/fuzz/fuzz_net_pin.o: fuzz/fuzz_net_pin.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 fuzz-net-pin: $(BUILD_DIR)/fuzz/fuzz_net_pin.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
 
 # Net wire protocol parser fuzz (standalone, libc only)
 $(BUILD_DIR)/fuzz/fuzz_net_wire.o: fuzz/fuzz_net_wire.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 fuzz-net-wire: $(BUILD_DIR)/fuzz/fuzz_net_wire.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
 
 # Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
 
 # Sealed-envelope parser + AES-256-GCM core fuzz (links seal_envelope.c)
 $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o: fuzz/fuzz_seal_envelope.c include/lota_envelope.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
 # TPM attestation-structure unmarshal fuzz (standalone, tss2-mu only)
 $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
 
 # Policy Ed25519 signature-verify fuzz (links policy_sign.c)
 $(BUILD_DIR)/fuzz/fuzz_policy_sign.o: fuzz/fuzz_policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_sign.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
 
 # Server SDK attestation-token verify fuzz (links lota_server.c)
 $(BUILD_DIR)/fuzz/fuzz_server_sdk.o: fuzz/fuzz_server_sdk.c include/lota_server.h | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
 # TPM2B response/credential unmarshal fuzz (standalone, tss2-mu only)
 $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
-	clang $(FUZZ_CFLAGS) -c $< -o $@
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
-	clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
@@ -1027,8 +1077,8 @@ SYZ_FUZZ_LOADER := $(BUILD_DIR)/lota_bpf_fuzz
 syzkaller-fuzz-loader: $(SYZ_FUZZ_LOADER)
 
 $(SYZ_FUZZ_LOADER): syzkaller/lota_bpf_fuzz.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< -lbpf
-	@echo "Built: $@"
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -lbpf
 
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
@@ -1139,7 +1189,8 @@ bench-c: $(BENCH_C_BIN)
 
 $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
 		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(BENCH_DIR)/include -o $@ $^ -lcrypto -lm
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -I$(BENCH_DIR)/include -o $@ $^ -lcrypto -lm
 
 bench-clean:
 	rm -rf $(BENCH_RESULTS)/*.txt $(BENCH_RESULTS)/*.json $(BENCH_C_BIN)
