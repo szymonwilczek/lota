@@ -91,6 +91,13 @@ The game, anti-cheat service, or relying server consumes LOTA status and token
 verification results. It remains responsible for gameplay policy and behavioral
 detection.
 
+Server SDK's ``VerifyToken`` enforces token freshness: a token whose ``validUntil``
+is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rejected,
+so a misconfigured or compromised agent cannot mint an effectively immortal token.
+
+The token carries no issued-at field, so issuers must size ``validUntil`` within that
+window -- keep the agent ``attest_interval`` at or below ``DefaultMaxTokenAge``.
+
 Active threats
 ==============
 

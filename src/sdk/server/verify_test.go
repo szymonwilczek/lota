@@ -106,7 +106,7 @@ func generateTestKey(t testing.TB) *rsa.PrivateKey {
 
 func TestSerializeParseRoundtrip(t *testing.T) {
 	nonce := [32]byte{1, 2, 3, 4, 5}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07) // ATTESTED|TPM_OK|IOMMU_OK
 	policyDigest := [32]byte{0xAA, 0xBB}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
@@ -158,7 +158,7 @@ func TestVerifyToken_Success(t *testing.T) {
 	nonce := [32]byte{}
 	rand.Read(nonce[:])
 
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	pcrDigest := make([]byte, 32)
 	rand.Read(pcrDigest)
@@ -185,7 +185,7 @@ func TestVerifyToken_WithExpectedNonce(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0xAA, 0xBB, 0xCC}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 
 	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
@@ -211,7 +211,7 @@ func TestVerifyToken_BadSignature(t *testing.T) {
 	otherKey := generateTestKey(t)
 
 	nonce := [32]byte{}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 
 	tok := buildTestToken(t, key, validUntil, 0, nonce, 0, nil)
 
@@ -226,7 +226,7 @@ func TestVerifyToken_TamperedToken(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 
 	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0, nil)
 
@@ -249,7 +249,7 @@ func TestVerifyToken_TruncatedAttestRejected(t *testing.T) {
 	nonce := [32]byte{}
 	rand.Read(nonce[:])
 
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	pcrMask := uint32(0x4001)
 	policyDigest := [32]byte{0x11, 0x22, 0x33}
@@ -333,7 +333,7 @@ func TestVerifyToken_FreshToken(t *testing.T) {
 
 	nonce := [32]byte{0xCC}
 	// issued just now
-	validUntil := uint64(time.Now().Add(1 * time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 
 	tok := buildTestToken(t, key, validUntil, 0x07, nonce, 0x4001, nil)
 
@@ -388,7 +388,7 @@ func TestVerifyToken_RSAPSS(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0x42}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	policyDigest := [32]byte{0x10, 0x20}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
@@ -428,7 +428,7 @@ func TestVerifyToken_RSASSA_SHA384(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0x99}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	policyDigest := [32]byte{0x10, 0x20}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
@@ -465,7 +465,7 @@ func TestVerifyToken_UnsupportedHashAlgRejected(t *testing.T) {
 	key := generateTestKey(t)
 
 	nonce := [32]byte{0x42}
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	policyDigest := [32]byte{0x10, 0x20}
 	runtimeDigest := computeRuntimeProtectDigest(nil)
@@ -635,7 +635,7 @@ func TestVerifyToken_V2_Success(t *testing.T) {
 	nonce := [32]byte{}
 	rand.Read(nonce[:])
 
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	pcrMask := uint32(0x4001)
 	pcrDigest := make([]byte, 32)
@@ -670,7 +670,7 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 
 	nonce := [32]byte{}
 	rand.Read(nonce[:])
-	validUntil := uint64(time.Now().Add(time.Hour).Unix())
+	validUntil := uint64(time.Now().Add(2 * time.Minute).Unix())
 	flags := uint32(0x07)
 	pcrMask := uint32(0x4001)
 	pcrDigest := make([]byte, 32)
