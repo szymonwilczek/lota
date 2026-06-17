@@ -1,0 +1,143 @@
+name: C static analysis
+
+on:
+  push:
+    branches: [main, lota-next]
+  pull_request:
+
+permissions:
+  contents: read
+
+# cancel superseded runs of this workflow on the same ref to bound
+# concurrent job usage
+# let pushes to main run to completion
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# three jobs share the clang-analyzer dependency set:
+# sparse/smatch preprocess the sources, so the project's dev headers
+# (tss2, sdl2, dbus, systemd, ...) and libbpf must be present or the checkers
+# drown in "file not found".
+# src/bpf is excluded inside the make targets, the same exclusion clang-analyzer
+# uses for the x86 BPF target.
+jobs:
+  sparse:
+    name: sparse
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install analysis dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config sparse \
+            libelf-dev zlib1g-dev libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Run sparse (advisory)
+        run: make sparse
+
+  coccinelle:
+    name: coccinelle
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install analysis dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config coccinelle \
+            libelf-dev zlib1g-dev libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Run coccicheck (blocking)
+        run: make coccicheck
+
+  smatch:
+    name: smatch
+    runs-on: ubuntu-24.04
+    env:
+      # pinned for a reproducible build and a stable cache key
+      SMATCH_REV: bcc58b9ccf06d28ab6be4f0992bc74f462aa12f8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install analysis dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libsqlite3-dev libxml2-dev \
+            libelf-dev zlib1g-dev libtss2-dev \
+            libssl-dev libsystemd-dev libseccomp-dev libdbus-1-dev \
+            libsdl2-dev libcurl4-openssl-dev
+
+      - name: Install libbpf >= 1.0
+        env:
+          LIBBPF_VERSION: v1.4.6
+        run: |
+          set -eu
+          git clone --depth 1 --branch "$LIBBPF_VERSION" \
+            https://github.com/libbpf/libbpf.git /tmp/libbpf
+          make -C /tmp/libbpf/src -j"$(nproc)"
+          sudo make -C /tmp/libbpf/src install \
+            PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
+          sudo ldconfig
+
+      - name: Cache smatch build
+        id: smatch-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/smatch
+          key: smatch-${{ env.SMATCH_REV }}-ubuntu-24.04
+
+      - name: Build smatch
+        if: steps.smatch-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          git clone https://repo.or.cz/smatch.git /tmp/smatch
+          git -C /tmp/smatch checkout "$SMATCH_REV"
+          make -C /tmp/smatch -j"$(nproc)"
+          mkdir -p /opt/smatch
+          cp -a /tmp/smatch/. /opt/smatch/
+
+      - name: Run smatch (advisory)
+        run: make smatch SMATCH=/opt/smatch/smatch
