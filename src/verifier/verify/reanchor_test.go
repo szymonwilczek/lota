@@ -251,3 +251,37 @@ func TestReanchorDecision_FirmwareFloor(t *testing.T) {
 		t.Errorf("no-floor forward update: verdict = %v (%q), want allow", got, reason)
 	}
 }
+
+// TestReanchorDecision_FirmwareFloorUnchangedVersion pins the anti-rollback
+// floor on the unchanged-version (LFA) path too, not only the forward/strong
+// path.
+// Firmware reporting that it runs below its own declared LowestSupported is
+// the rollback the floor exists to catch regardless of how the version compares
+// to the baseline, so an unchanged-version drift report below the floor must escalate.
+func TestReanchorDecision_FirmwareFloorUnchangedVersion(t *testing.T) {
+	const floorReason = "firmware version below vendor anti-rollback floor"
+	base := pcr7Log(baseVars())
+	current := mustParse(pcr7Log(varsWith("dbx", []byte("dbx0+more"))))
+
+	// unchanged version vs baseline (700 == 700),
+	// normally the LFA path, but the firmware reports
+	// running below the vendor floor (700 < 900)
+	below := ReanchorInputs{
+		BaselineEventLog:    base,
+		CurrentParsed:       current,
+		BaselineESRTVersion: 700,
+		CurrentESRT:         &types.ESRTInfo{Present: true, FWVersion: 700, LowestSupported: 900},
+		ESRTCapable:         true,
+	}
+	if got, reason := reanchorDecision(below); got != ReanchorEscalate || reason != floorReason {
+		t.Errorf("below-floor unchanged version: verdict = %v (%q), want escalate (%q)",
+			got, reason, floorReason)
+	}
+
+	// at the floor the unchanged version must not trip the floor escalation
+	atFloor := below
+	atFloor.CurrentESRT = &types.ESRTInfo{Present: true, FWVersion: 700, LowestSupported: 700}
+	if _, reason := reanchorDecision(atFloor); reason == floorReason {
+		t.Errorf("at-floor unchanged version must not trip the anti-rollback floor")
+	}
+}
