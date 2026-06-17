@@ -349,16 +349,20 @@ func (s *Set) Check(cert *x509.Certificate, now time.Time) error {
 		return nil
 	}
 
-	allStale := true
+	freshSeen := false
 	for _, crl := range crls {
 		// loadAndVerify rejects CRLs without NextUpdate, but defend in
 		// depth: any zero NextUpdate that reaches this path is treated
 		// as immediately stale
-		if crl.NextUpdate.IsZero() || now.After(crl.NextUpdate) {
-			continue
+		if !crl.NextUpdate.IsZero() && !now.After(crl.NextUpdate) {
+			freshSeen = true
 		}
-		allStale = false
 
+		// scan every matching CRL regardless of its freshness
+		// staleness may only add distrust, never erase a revocation already
+		// published for this issuer:
+		// skipping stale CRLs here would let fresh sibling mask a revocation
+		// carried only by a now-stale one
 		for _, entry := range crl.RevokedCertificateEntries {
 			if entry.SerialNumber == nil {
 				continue
@@ -372,7 +376,10 @@ func (s *Set) Check(cert *x509.Certificate, now time.Time) error {
 		}
 	}
 
-	if allStale {
+	// no CRL for this issuer is current:
+	// with no fresh revocation feed the certificate cannot be proven unrevoked,
+	// so fail closed
+	if !freshSeen {
 		return fmt.Errorf("%w: issuer=%q", ErrCRLStale, cert.Issuer.String())
 	}
 	return nil
