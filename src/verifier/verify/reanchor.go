@@ -131,20 +131,20 @@ func reanchorDecision(in ReanchorInputs) (verdict ReanchorVerdict, reason string
 	// before any parsing.
 	verdict = ReanchorAllow
 	if in.CurrentESRT != nil && in.CurrentESRT.Present {
+		// Firmware reporting that it runs below its own declared
+		// anti-rollback floor (ESRT LowestSupported above FWVersion) is
+		// exactly the rollback the floor exists to catch, whatever its
+		// relation to the baseline.
+		// Evaluate it once, before the tier switch, so the unchanged-version
+		// (LFA) path escalates too and not only the forward/strong path.
+		// Floor of zero means none was declared.
+		if in.CurrentESRT.LowestSupported > 0 &&
+			in.CurrentESRT.FWVersion < in.CurrentESRT.LowestSupported {
+			return ReanchorEscalate, "firmware version below vendor anti-rollback floor"
+		}
 		switch {
 		case in.CurrentESRT.FWVersion > in.BaselineESRTVersion:
-			// forward update -> strong, but only when the running version is
-			// at or above the vendor's own anti-rollback floor
-			// LowestSupported above FWVersion means the firmware reports it is
-			// running below the lowest version it claims to accept;
-			// that is exactly the rollback the floor exists to catch, so it
-			// escalates instead of earning the automatic strong re-anchor.
-			// Floor of zero means none was declared.
-			if in.CurrentESRT.LowestSupported > 0 &&
-				in.CurrentESRT.FWVersion < in.CurrentESRT.LowestSupported {
-				return ReanchorEscalate, "firmware version below vendor anti-rollback floor"
-			}
-			verdict = ReanchorAllow
+			verdict = ReanchorAllow // forward update -> strong
 		case in.CurrentESRT.FWVersion == in.BaselineESRTVersion:
 			verdict = ReanchorLFA // unchanged version despite drift (DIY flash)
 		default:
