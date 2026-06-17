@@ -25,11 +25,14 @@
 static inline int lota_tpm_nv_chunk_check(uint32_t chunk_size,
 					  uint32_t size_to_read)
 {
-	(void)chunk_size;
-	(void)size_to_read;
-	/* no validation yet:
-	 * this mirrors the original inline loop and
-	 * is characterised by test_tpm_nv_chunk */
+	/* zero-length chunk makes no progress and would spin
+	 * the read loop forever */
+	if (chunk_size == 0)
+		return -EBADMSG;
+	/* spec-compliant TPM never returns more than was requested;
+	 * trusting larger length would overrun the destination buffer */
+	if (chunk_size > size_to_read)
+		return -EOVERFLOW;
 	return 0;
 }
 
