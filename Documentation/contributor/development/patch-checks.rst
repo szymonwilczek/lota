@@ -11,8 +11,14 @@ Local patch checks
 Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
 branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
-message and patch whitespace, clang-format, gofmt, the full build, and the same
-hotpath documentation policy enforced by CI.
+commit signatures, message and patch whitespace, clang-format, gofmt, the full
+build, and the same hotpath documentation policy enforced by CI.
+
+Every commit in ``base..head`` must carry a good GPG or SSH signature; the
+check fails on any commit whose signature is missing, bad, or unverifiable.
+Set ``commit.gpgsign true`` with a configured signing key, or commit with
+``git commit -S``, so the commits match the repository ruleset that requires
+signed commits and GitHub marks them verified.
 
 Commit body headings must use standalone ``Problem:`` and ``Solution:`` lines,
 with the explanatory text starting on the next line. Body text is wrapped to 75
