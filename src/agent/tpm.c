@@ -35,6 +35,7 @@
 
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
+#include "../../include/lota_tpm_nv.h"
 #include "quote.h"
 #include "tpm.h"
 #include "attestation.h"
@@ -4078,6 +4079,13 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 							     (void **)&nv_data);
 			if (call_ret < 0)
 				return call_ret;
+		}
+
+		int chunk_ret =
+			lota_tpm_nv_chunk_check(nv_data->size, size_to_read);
+		if (chunk_ret < 0) {
+			Esys_Free(nv_data);
+			return chunk_ret;
 		}
 
 		memcpy(buf + offset, nv_data->buffer, nv_data->size);
