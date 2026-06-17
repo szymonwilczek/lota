@@ -12,7 +12,9 @@ Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
 branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
 commit signatures, message and patch whitespace, clang-format, gofmt, the full
-build, and the same hotpath documentation policy enforced by CI.
+build, include hygiene, the same hotpath documentation policy enforced by CI,
+and -- when the patch touches C -- the Sparse, Smatch and Coccinelle analyzers
+described below.
 
 Every commit in ``base..head`` must carry a good GPG or SSH signature; the
 check fails on any commit whose signature is missing, bad, or unverifiable.
@@ -29,6 +31,36 @@ one blank line.
 The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
 same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
 workflow.
+
+C static analysis
+=================
+
+Three style semantic checkers run over the C sources -- every tracked
+``*.c`` except ``src/bpf``, which targets the x86 BPF machine and trips the
+checkers, the same exclusion clang-analyzer uses. Each is a self-contained make
+target that passes a reduced flag set (includes, ``_GNU_SOURCE`` and the
+``pkg-config`` dependency flags), because the hardening, machine, and sanitizer
+flags in ``CFLAGS`` confuse the parsers:
+
+* ``make sparse`` runs the Sparse semantic checker. It is **advisory**: it
+  prints findings and exits zero. Set ``SPARSE_STRICT=1`` to fail on any
+  finding.
+* ``make smatch`` runs the Smatch flow analyzer, also advisory, with
+  ``SMATCH_STRICT=1`` for the strict mode. Smatch has no distribution package;
+  build it from ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or
+  pass ``SMATCH=/path/to/smatch``), otherwise the target skips.
+* ``make coccicheck`` runs the Coccinelle semantic-patch rules under
+  ``scripts/coccinelle`` (configured by ``.cocciconfig``). It is **blocking**:
+  the rules are tuned to be clean on a healthy tree, so any match is a finding.
+
+Install the front ends with ``dnf install sparse coccinelle`` on Fedora or
+``apt-get install sparse coccinelle`` on Debian and Ubuntu, and build Smatch
+from source. ``scripts/check-patch`` runs all three when the patch touches C
+and skips each one whose tool is absent, so the gate stays usable without them.
+The advisory status for Sparse and Smatch is deliberate -- the first pass over
+the tree carries a backlog -- and the ``*_STRICT`` switches are the ratchet to
+flip once it is burned down. The same three checks run in CI under the
+``C static analysis`` workflow.
 
 Use ``scripts/format-patch [<base> [<head>]]`` only to normalize local commit
 messages before pushing. It rewrites commits in ``base..head`` to remove
