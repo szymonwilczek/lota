@@ -623,6 +623,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
+	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_SDK_BIN)
 
@@ -810,6 +811,15 @@ $(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bp
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
+# Interpose libbpf's open calls and the signature verify so the loader's
+# verify-then-load path is testable without a key or a live kernel
+$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=policy_verify_buffer \
+		-Wl,--wrap=bpf_object__open_file \
+		-Wl,--wrap=bpf_object__open_mem
+
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
 test-bins: $(TEST_BINS)
@@ -858,6 +868,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_seal_tpm
 	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_symbols
+	@$(BUILD_DIR)/test_bpf_loader_load_source
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -S /run/lota/lota.sock ]; then \
