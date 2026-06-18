@@ -10,6 +10,7 @@ package verify
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -200,7 +201,7 @@ func VerifyNonceInAttest(attestData, expectedNonce []byte) error {
 		return fmt.Errorf("failed to parse TPMS_ATTEST: %w", err)
 	}
 
-	if !bytes.Equal(attest.ExtraData, expectedNonce) {
+	if subtle.ConstantTimeCompare(attest.ExtraData, expectedNonce) != 1 {
 		return fmt.Errorf("nonce mismatch: TPMS_ATTEST extraData does not match challenge nonce")
 	}
 

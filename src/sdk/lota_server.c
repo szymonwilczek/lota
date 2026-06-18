@@ -481,7 +481,8 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 		}
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 	}
-	if (memcmp(runtime_protect_digest, hdr.runtime_protect_digest, 32) != 0)
+	if (CRYPTO_memcmp(runtime_protect_digest, hdr.runtime_protect_digest,
+			  32) != 0)
 		ret = LOTA_SERVER_ERR_NONCE_FAIL;
 	else
 		ret = LOTA_SERVER_OK;
@@ -528,12 +529,12 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	}
 
 	if (extra_data_len != 32 ||
-	    memcmp(extra_data, computed_nonce, 32) != 0) {
+	    CRYPTO_memcmp(extra_data, computed_nonce, 32) != 0) {
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 	}
 
 	/* verify caller-provided challenge nonce */
-	if (memcmp(hdr.nonce, expected_nonce, 32) != 0)
+	if (CRYPTO_memcmp(hdr.nonce, expected_nonce, 32) != 0)
 		return LOTA_SERVER_ERR_NONCE_FAIL;
 
 	if (expected_pcr_digest_len == 0)
