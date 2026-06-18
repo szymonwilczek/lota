@@ -1,0 +1,6 @@
+# Coccinelle defaults for the LOTA tree (read by spatch from the repo root).
+# Keeps single-rule runs bounded.
+# Rules live in scripts/coccinelle/
+[spatch]
+	options = --timeout 60
+	options = --use-gitgrep

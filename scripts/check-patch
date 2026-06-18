@@ -39,7 +39,11 @@ Checks:
   - clang-format and gofmt on changed C, header, and Go files,
   - full project build,
   - include hygiene when C changes (skipped if clang-include-cleaner or
-    bear is missing).
+    bear is missing),
+  - sparse and smatch semantic analysis when C changes (advisory; each
+    skipped if its tool is missing),
+  - Coccinelle semantic-patch rules when C changes (blocking; skipped if
+    spatch is missing).
 USAGE
 }
 
@@ -590,6 +594,84 @@ check_includes() {
 	fi
 }
 
+# true when the patch touches any C source or header
+patch_touches_c() {
+	local path
+	for path in "$@"; do
+		case "$path" in
+		*.c | *.h)
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# sparse and smatch are advisory:
+# They report a summary but never fail the patch (the findings are backlog to
+# ratchet down, not a release blocker).
+# Both run the make target so the flag set stays in one place, only when the
+# patch touches C and the tool is installed.
+check_sparse() {
+	local out summary
+
+	if ! patch_touches_c "$@"; then
+		pass "sparse"
+		return
+	fi
+	if ! command -v sparse >/dev/null 2>&1; then
+		skip "sparse" "install 'sparse' to run the semantic check."
+		return
+	fi
+
+	out=$(make sparse 2>&1) || true
+	summary=$(printf '%s\n' "$out" | grep -E '^sparse: [0-9]+ file' | tail -1)
+	note "${summary:-sparse: ran} (advisory)"
+	pass "sparse"
+}
+
+check_smatch() {
+	local out summary
+
+	if ! patch_touches_c "$@"; then
+		pass "smatch"
+		return
+	fi
+	if ! command -v smatch >/dev/null 2>&1; then
+		skip "smatch" \
+			"build smatch from https://repo.or.cz/smatch.git and add it to PATH."
+		return
+	fi
+
+	out=$(make smatch 2>&1) || true
+	summary=$(printf '%s\n' "$out" | grep -E '^smatch: [0-9]+ file' | tail -1)
+	note "${summary:-smatch: ran} (advisory)"
+	pass "smatch"
+}
+
+# Coccinelle is blocking:
+# rules are tuned clean, so a match is a finding
+check_coccinelle() {
+	local out
+
+	if ! patch_touches_c "$@"; then
+		pass "coccicheck"
+		return
+	fi
+	if ! command -v spatch >/dev/null 2>&1; then
+		skip "coccicheck" "install 'coccinelle' to run the semantic-patch rules."
+		return
+	fi
+
+	if out=$(make coccicheck 2>&1); then
+		pass "coccicheck"
+	else
+		printf '%s\n' "$out" | grep -v '^make'
+		fail "coccicheck" \
+			"a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
+	fi
+}
+
 main() {
 	local base=""
 	local head="HEAD"
@@ -643,6 +725,9 @@ main() {
 	check_gofmt "${changed_files[@]}"
 	check_build
 	check_includes "${changed_files[@]}"
+	check_sparse "${changed_files[@]}"
+	check_smatch "${changed_files[@]}"
+	check_coccinelle "${changed_files[@]}"
 
 	if ((FAILURES != 0)); then
 		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"

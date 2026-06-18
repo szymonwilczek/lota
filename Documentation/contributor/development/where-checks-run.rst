@@ -7,8 +7,8 @@ Where the checks run
 
 * **Every pull request** (the ``pull_request`` trigger has no branch filter, so
   it covers PRs aimed at ``lota-next``): build, unit tests, linters, Go static
-  analysis, cross-arch build, the reproducible-build gate and security
-  analysis.
+  analysis, C static analysis (Sparse, Smatch and Coccinelle), cross-arch
+  build, the reproducible-build gate and security analysis.
 * **Cross-architecture build**: the arm64 workflow starts on every pull
   request, but skips QEMU and the arm64 container when the commit range does
   not change source, build, BPF, policy, or deployment inputs.

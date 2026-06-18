@@ -334,7 +334,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -519,6 +519,86 @@ lint-go:
 			|| exit $$?; \
 	done
 	@echo "lint-go: clean"
+
+# Semantic C analysis: sparse, smatch, Coccinelle.
+# These pass a reduced flag set: hardening, machine and sanitizer flags in CFLAGS
+# confuse the checkers, so only includes and the feature macro are given.
+# Dependency include paths come from pkg-config so system headers resolve.
+# src/bpf is excluded (x86 BPF target), same as clang-analyzer and lint-c
+SPARSE ?= sparse
+SMATCH ?= smatch
+SPATCH ?= spatch
+CHECK_PKG_CFLAGS := $(foreach p,libsystemd libseccomp dbus-1 sdl2 libcurl libbpf openssl tss2-esys tss2-mu tss2-tctildr,$(shell pkg-config --cflags $(p) 2>/dev/null))
+CHECK_CPPFLAGS := -I$(INC_DIR) -I$(SRC_DIR) -D_GNU_SOURCE $(CHECK_PKG_CFLAGS)
+
+# sparse over every project C source (advisory: reports, exits 0)
+# Set SPARSE_STRICT=1 to fail on any finding
+sparse:
+	@command -v $(SPARSE) >/dev/null 2>&1 || { \
+		echo "sparse: $(SPARSE) not found (install 'sparse'); skipping" >&2; \
+		exit 0; }
+	@echo "sparse: checking C sources (advisory)"; \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	n=0; \
+	for f in $$srcs; do \
+		out=$$($(SPARSE) $(CHECK_CPPFLAGS) -D__CHECKER__ -Wsparse-all $$f 2>&1) || true; \
+		if [ -n "$$out" ]; then \
+			echo "== $$f =="; \
+			echo "$$out"; \
+			n=$$((n + 1)); \
+		fi; \
+	done; \
+	echo "sparse: $$n file(s) with findings"; \
+	if [ -n "$$SPARSE_STRICT" ] && [ "$$n" -gt 0 ]; then \
+		echo "sparse: SPARSE_STRICT set -- failing" >&2; exit 1; \
+	fi
+
+# smatch over every project C source (advisory: reports, exits 0)
+# Set SMATCH_STRICT=1 to fail on any finding.
+# build it from https://repo.or.cz/smatch.git and put it on PATH
+smatch:
+	@command -v $(SMATCH) >/dev/null 2>&1 || { \
+		echo "smatch: $(SMATCH) not found; build from https://repo.or.cz/smatch.git and add to PATH; skipping" >&2; \
+		exit 0; }
+	@echo "smatch: checking C sources (advisory)"; \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	n=0; \
+	for f in $$srcs; do \
+		out=$$($(SMATCH) $(CHECK_CPPFLAGS) $$f 2>&1) || true; \
+		if [ -n "$$out" ]; then \
+			echo "== $$f =="; \
+			echo "$$out"; \
+			n=$$((n + 1)); \
+		fi; \
+	done; \
+	echo "smatch: $$n file(s) with findings"; \
+	if [ -n "$$SMATCH_STRICT" ] && [ "$$n" -gt 0 ]; then \
+		echo "smatch: SMATCH_STRICT set -- failing" >&2; exit 1; \
+	fi
+
+# Coccinelle semantic-patch rules in scripts/coccinelle/ over the C sources.
+# Blocking: rules are curated to be clean on a healthy tree, so any match is
+# real finding and fails the target.
+coccicheck:
+	@command -v $(SPATCH) >/dev/null 2>&1 || { \
+		echo "coccicheck: $(SPATCH) not found (install 'coccinelle'); skipping" >&2; \
+		exit 0; }
+	@echo "coccicheck: running Coccinelle semantic patches"; \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	rc=0; \
+	for cocci in scripts/coccinelle/*.cocci; do \
+		[ -e "$$cocci" ] || continue; \
+		out=$$($(SPATCH) --very-quiet --no-show-diff --sp-file $$cocci $$srcs 2>/dev/null) || true; \
+		if [ -n "$$out" ]; then \
+			echo "== $$cocci =="; \
+			echo "$$out"; \
+			rc=1; \
+		fi; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "coccicheck: matches found (see above)" >&2; exit 1; \
+	fi; \
+	echo "coccicheck: clean"
 
 # Install to system (requires root)
 install: check-version-tag all
@@ -1132,6 +1212,9 @@ help:
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
+	@echo "  sparse           sparse semantic check over C sources (advisory)"
+	@echo "  smatch           smatch flow analysis over C sources (advisory)"
+	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""
