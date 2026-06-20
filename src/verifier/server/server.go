@@ -202,18 +202,24 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// newMonitoringHTTPServer builds the monitoring API server with the request
+// timeouts that bound slow-client attacks.
+func newMonitoringHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+}
+
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
 	NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey, s.readerAPIKey)
 
-	s.httpServer = &http.Server{
-		Addr:         s.httpAddr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	s.httpServer = newMonitoringHTTPServer(s.httpAddr, mux)
 
 	ln, err := net.Listen("tcp", s.httpAddr)
 	if err != nil {
