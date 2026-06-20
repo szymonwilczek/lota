@@ -334,7 +334,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -1180,9 +1180,44 @@ fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
+# BPF LSM decision-logic oracle fuzzers (standalone, libc only).
+#
+# Differential harnesses under fuzz/bpf_oracle/:
+# mirror of the BPF helper logic checked against an independent reference.
+# fuzz-bpf-devt is zero-copy over the real include/lota_devt.h.
+# others mirror helpers embedded in src/bpf/lota_lsm.bpf.c
+# (see fuzz/bpf_oracle/MIRROR.md)
+BPF_ORACLE_CFLAGS := $(FUZZ_CFLAGS) -I$(INC_DIR) -Ifuzz/bpf_oracle
+
+$(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
+
+$(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
+
+$(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
+
+fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device
+
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
-	fuzz-tpm-resp
+	fuzz-tpm-resp fuzz-bpf-all
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -1241,6 +1276,7 @@ help:
 	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
 	@echo "  fuzz-server-sdk  Build server SDK token-verify fuzz target"
 	@echo "  fuzz-tpm-resp    Build TPM2B response/credential unmarshal fuzz target"
+	@echo "  fuzz-bpf-all     Build all BPF LSM decision-logic oracle fuzz targets"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Benchmark targets (see benchmarks/README.rst):"
