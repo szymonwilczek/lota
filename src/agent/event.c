@@ -15,6 +15,7 @@
 #include "event.h"
 #include "hash_verify.h"
 #include "journal.h"
+#include "path_validate.h"
 #include "runtime_image_measure.h"
 #include "lota_runtime_image_measure.h"
 
@@ -137,6 +138,8 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	const char *event_type_str;
 	uint8_t content_hash[LOTA_HASH_SIZE];
 	char hash_hex[LOTA_HASH_SIZE * 2 + 1];
+	char comm_safe[LOTA_MAX_COMM_LEN];
+	char filename_safe[LOTA_MAX_PATH_LEN];
 	int has_file = 0;
 	bool is_exec = false;
 	bool is_blocked = false;
@@ -160,6 +163,17 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	memcpy(&event_copy, data, sizeof(event_copy));
 	event->comm[LOTA_MAX_COMM_LEN - 1] = '\0';
 	event->filename[LOTA_MAX_PATH_LEN - 1] = '\0';
+
+	/*
+	 * comm and filename are attacker-controlled (PR_SET_NAME / path an attacker can name).
+	 * Log through control-folded copies so embedded newline or ANSI escape cannot forge
+	 * log line or rewrite the operator's terminal.
+	 * raw event->filename is kept for the open() in the hash path,
+	 * which must see the true path.
+	 */
+	lota_str_sanitize(event->comm, comm_safe, sizeof(comm_safe));
+	lota_str_sanitize(event->filename, filename_safe,
+			  sizeof(filename_safe));
 
 	switch (event->event_type) {
 	case LOTA_EVENT_EXEC:
@@ -199,24 +213,24 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		event_type_str = "PTRACE";
 		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
 			  (unsigned long long)event->timestamp_ns,
-			  event_type_str, event->comm, event->target_pid,
-			  event->filename, event->pid, event->uid);
+			  event_type_str, comm_safe, event->target_pid,
+			  filename_safe, event->pid, event->uid);
 		return 0;
 	case LOTA_EVENT_PTRACE_BLOCKED:
 		event_type_str = "PTRACE_BLOCKED";
 		lota_info("[%llu] %s %s -> pid=%u: %s (pid=%u, uid=%u)",
 			  (unsigned long long)event->timestamp_ns,
-			  event_type_str, event->comm, event->target_pid,
-			  event->filename, event->pid, event->uid);
+			  event_type_str, comm_safe, event->target_pid,
+			  filename_safe, event->pid, event->uid);
 		return 0;
 	case LOTA_EVENT_KILL_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> pid=%u (pid=%u, uid=%u)",
-			  (unsigned long long)event->timestamp_ns, event->comm,
+			  (unsigned long long)event->timestamp_ns, comm_safe,
 			  event->target_pid, event->pid, event->uid);
 		return 0;
 	case LOTA_EVENT_SETUID:
 		lota_info("[%llu] SETUID %s: uid %u -> %u (pid=%u)",
-			  (unsigned long long)event->timestamp_ns, event->comm,
+			  (unsigned long long)event->timestamp_ns, comm_safe,
 			  event->uid, event->target_uid, event->pid);
 		return 0;
 	case LOTA_EVENT_ANON_EXEC:
@@ -241,7 +255,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			lota_info(
 				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
 				(unsigned long long)event->timestamp_ns,
-				event_type_str, event->comm, event->filename,
+				event_type_str, comm_safe, filename_safe,
 				hash_hex, event->pid, event->uid);
 			return 0;
 		}
@@ -258,7 +272,7 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			lota_info(
 				"[%llu] %s %s: %s verity32=%s (pid=%u, uid=%u)",
 				(unsigned long long)event->timestamp_ns,
-				event_type_str, event->comm, event->filename,
+				event_type_str, comm_safe, filename_safe,
 				hash_hex, event->pid, event->uid);
 			return 0;
 		}
@@ -269,7 +283,7 @@ log_no_hash:
 
 	lota_info("[%llu] %s %s: %s (pid=%u, uid=%u)",
 		  (unsigned long long)event->timestamp_ns, event_type_str,
-		  event->comm, event->filename, event->pid, event->uid);
+		  comm_safe, filename_safe, event->pid, event->uid);
 
 	return 0;
 }
