@@ -138,12 +138,75 @@ static void test_null_args(void)
 	      "NULL out rejected");
 }
 
+/*
+ * fw_version past UINT32_MAX must not silently truncate into the anti-rollback
+ * comparison. entry is skipped (fail closed) so the host is reported as
+ * not-present rather than carrying a wrapped version
+ */
+static void test_overrange_fw_version_skipped(void)
+{
+	const char *base = tmp_base();
+	struct lota_esrt e;
+
+	mkdir(base, 0755);
+	make_entry(base, "entry0", "1", "4294967296", "0",
+		   "b53e82ee-2b53-5829-9756-68e1e4eff873");
+
+	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
+	CHECK(e.present == 0, "over-range fw_version entry skipped");
+	CHECK(e.fw_version == 0, "no truncated version recorded");
+
+	rm_rf(base);
+}
+
+/*
+ * malformed fw_class with a dangling final nibble must be rejected without
+ * stepping the parse cursor past the buffer.
+ *
+ * parse_guid reads into a 64-byte buffer.
+ * string below is exactly 63 bytes ("ab" + 60 hyphens + "c"), so the parser
+ * skips the hyphens and lands on the lone 'c' at offset 62 with the NUL
+ * terminator at offset 63: the old code consumed one nibble and advanced the
+ * cursor by two, one byte past the buffer, and the next iteration read out of
+ * bounds (ASan stack-buffer- overflow).
+ *
+ * fix rejects the dangling nibble first.
+ * entry is still present; only the GUID is left unset.
+ */
+static void test_malformed_guid_graceful(void)
+{
+	const char *base = tmp_base();
+	struct lota_esrt e;
+	char guid[64];
+	int i;
+
+	guid[0] = 'a';
+	guid[1] = 'b';
+	for (i = 2; i < 62; i++)
+		guid[i] = '-';
+	guid[62] = 'c';
+	guid[63] = '\0';
+
+	mkdir(base, 0755);
+	make_entry(base, "entry0", "1", "785", "785", guid);
+
+	CHECK(esrt_read_system_firmware_path(base, &e) == 0, "read returns 0");
+	CHECK(e.present == 1, "entry present despite malformed GUID");
+	CHECK(e.fw_version == 785, "fw_version still parsed");
+	CHECK(e.fw_class[0] == 0 && e.fw_class[1] == 0,
+	      "malformed GUID left unset, no over-read");
+
+	rm_rf(base);
+}
+
 int main(void)
 {
 	test_picks_system_firmware();
 	test_missing_is_not_present();
 	test_only_device_entries();
 	test_null_args();
+	test_overrange_fw_version_skipped();
+	test_malformed_guid_graceful();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) FAILED\n", g_failures);
