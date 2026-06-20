@@ -20,6 +20,7 @@ copy, so no drift.
 | Harness | Production code under test |
 |---|---|
 | `fuzz_devt.c` | `include/lota_devt.h` (`LOTA_DEVT_MAJOR/MINOR/MKDEV`, `lota_devt_from_st`) |
+| `fuzz_event_budget.c` | `include/lota_event_budget.h` (`lota_event_budget_limit/window_expired/exhausted`) |
 
 ## Mirror (drift-guarded)
 
@@ -32,6 +33,8 @@ program's hand-defined constants.
 |---|---|---|
 | `fuzz_open_flags.c` | `mirror_is_write_open_flags` | `src/bpf/lota_lsm.bpf.c:737` (+ `O_*` macros `:83-94`) |
 | `fuzz_kmem_device.c` | `mirror_is_kernel_mem_device` | `src/bpf/lota_lsm.bpf.c:760` (+ `S_IF*` macros `:96-100`) |
+| `fuzz_inaccessible_exec.c` | `mirror_is_inaccessible_exec` | `src/bpf/lota_lsm.bpf.c:801` (+ flag `:64-65`) |
+| `fuzz_shebang.c` | `mirror_is_shebang` | `src/bpf/lota_lsm.bpf.c:788` |
 
 ### Keeping the mirror honest
 

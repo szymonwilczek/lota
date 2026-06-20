@@ -75,4 +75,31 @@ static inline int mirror_is_kernel_mem_device(unsigned int i_mode,
 	return minor == 1 || minor == 2 || minor == 4;
 }
 
+/* --- src/bpf/lota_lsm.bpf.c:64-65 --- */
+#define LOTA_BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
+
+/*
+ * MIRROR of is_inaccessible_exec_path (src/bpf/lota_lsm.bpf.c:801),
+ * with the BPF_CORE_READ(bprm -> {interp_flags,fdpath}) reads lifted
+ * to the caller.
+ * fdpath_present is the truth of the original's non-NULL fdpath pointer.
+ */
+static inline int mirror_is_inaccessible_exec(unsigned int interp_flags,
+					      int fdpath_present)
+{
+	if (interp_flags & LOTA_BINPRM_FLAGS_PATH_INACCESSIBLE)
+		return 1;
+
+	return fdpath_present ? 1 : 0;
+}
+
+/*
+ * MIRROR of is_shebang_binprm (src/bpf/lota_lsm.bpf.c:788),
+ * with the BPF_CORE_READ(bprm -> buf[0..1]) reads lifted to the caller.
+ */
+static inline int mirror_is_shebang(char c0, char c1)
+{
+	return c0 == '#' && c1 == '!';
+}
+
 #endif /* LOTA_FUZZ_LSM_LOGIC_H */

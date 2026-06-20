@@ -45,4 +45,32 @@ static inline int reference_is_kernel_mem_device(unsigned int i_mode,
 	return major == 1 && (minor == 1 || minor == 2 || minor == 4);
 }
 
+/*
+ * Exec is from an inaccessible path when the kernel flagged the path as
+ * inaccessible, or it runs from an anonymous /dev/fd descriptor (a non-NULL
+ * bprm->fdpath).
+ * PATH_INACCESSIBLE is bit 2 in the kernel's binprm flags (uapi linux/binfmts.h);
+ * restated independently of the helper's macro.
+ */
+#define REF_BINPRM_FLAGS_PATH_INACCESSIBLE 0x4u
+
+static inline int reference_is_inaccessible_exec(unsigned int interp_flags,
+						 int fdpath_present)
+{
+	if (interp_flags & REF_BINPRM_FLAGS_PATH_INACCESSIBLE)
+		return 1;
+
+	return fdpath_present != 0;
+}
+
+/*
+ * shebang script leads with the bytes '#' '!' (0x23 0x21).
+ * Literal code points are restated here so a non-ASCII char-encoding
+ * assumption in the helper would diverge.
+ */
+static inline int reference_is_shebang(char c0, char c1)
+{
+	return (unsigned char)c0 == 0x23u && (unsigned char)c1 == 0x21u;
+}
+
 #endif /* LOTA_FUZZ_REFERENCE_H */
