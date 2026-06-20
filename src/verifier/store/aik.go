@@ -794,6 +794,7 @@ var (
 	ErrCertificateNotYet   = errors.New("certificate not yet valid")
 	ErrNoTrustedCAs        = errors.New("no trusted CAs configured")
 	ErrCertificateEKOID    = errors.New("EK certificate missing TCG TPM 2.0 OID (2.23.133.8.1)")
+	ErrRotateNeedsCert     = errors.New("AIK rotation on a certificate store requires a certificate; use the certificate-verified registration path")
 )
 
 // hardware identity errors
@@ -1132,6 +1133,15 @@ func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) 
 	return cs.fileStore.GetRegisteredAt(clientID)
 }
 
-func (cs *CertificateStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
-	return cs.fileStore.RotateAIK(clientID, newKey)
+// RotateAIK refuses a keyed-only rotation.
+// CertificateStore binds each client to a CA-verified AIK certificate,
+// so swapping the trusted key without re-verifying a certificate chain would
+// bypass the gate RegisterAIKWithCert enforces on first registration.
+//
+// Method signature carries no certificate and so cannot re-verify one;
+// AIK change in the certificate model is handled by re-verifying the new
+// certificate per attestation, never by a stored keyed rotation.
+// Fail closed instead of delegating to the plain FileStore.
+func (cs *CertificateStore) RotateAIK(_ string, _ *rsa.PublicKey) error {
+	return ErrRotateNeedsCert
 }
