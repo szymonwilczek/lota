@@ -8,6 +8,7 @@
  * fw_class GUID. Values feed the verifier's firmware anti-rollback check.
  */
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -43,6 +44,14 @@ static int read_sysfs_u32(const char *dir, const char *name, uint32_t *out)
 		return -EINVAL;
 	}
 	fclose(f);
+	/*
+	 * these values feed the verifier's firmware anti-rollback comparison.
+	 * value past UINT32_MAX would silently truncate;
+	 * reject it so the entry is skipped (fail closed) instead of
+	 * comparing a wrapped number
+	 */
+	if (val > UINT32_MAX)
+		return -ERANGE;
 	*out = (uint32_t)val;
 	return 0;
 }
@@ -80,6 +89,15 @@ static int parse_guid(const char *dir, uint8_t out[16])
 			p++;
 			continue;
 		}
+		/*
+		 * byte is two hex chars
+		 * Require both before advancing by two, so a dangling final nibble
+		 * (p[1] is the NUL terminator) is rejected here instead of stepping
+		 * the cursor past the buffer on the next iteration
+		 */
+		if (!isxdigit((unsigned char)p[0]) ||
+		    !isxdigit((unsigned char)p[1]))
+			return -EINVAL;
 		if (sscanf(p, "%2x", &byte) != 1)
 			return -EINVAL;
 		out[n++] = (uint8_t)byte;
