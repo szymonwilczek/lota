@@ -334,7 +334,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -1096,24 +1096,6 @@ fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
-# Net pin SHA-256 parser fuzz (standalone, libc only)
-$(BUILD_DIR)/fuzz/fuzz_net_pin.o: fuzz/fuzz_net_pin.c | $(BUILD_DIR)/fuzz
-	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
-
-fuzz-net-pin: $(BUILD_DIR)/fuzz/fuzz_net_pin.o
-	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-pin $^
-
-# Net wire protocol parser fuzz (standalone, libc only)
-$(BUILD_DIR)/fuzz/fuzz_net_wire.o: fuzz/fuzz_net_wire.c | $(BUILD_DIR)/fuzz
-	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
-
-fuzz-net-wire: $(BUILD_DIR)/fuzz/fuzz_net_wire.o
-	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-net-wire $^
-
 # Enrollment reply decoders fuzz (standalone, includes enroll.c, libc only)
 $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent/enroll.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -1281,7 +1263,7 @@ update-bpf-mirror:
 	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
 	echo "bpf-mirror: lock refreshed"
 
-fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
+fuzz-all: fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
 	fuzz-tpm-resp fuzz-bpf-all
 
@@ -1335,8 +1317,6 @@ help:
 	@echo "  fuzz-all         Build every fuzz target"
 	@echo "  fuzz-agent       Build IPC/agent fuzz target"
 	@echo "  fuzz-config      Build config parser fuzz target"
-	@echo "  fuzz-net-pin     Build TLS pin parser fuzz target"
-	@echo "  fuzz-net-wire    Build verifier wire-protocol fuzz target"
 	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
 	@echo "  fuzz-tpm-attest  Build TPM attestation-structure unmarshal fuzz target"
 	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
