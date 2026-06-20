@@ -4,6 +4,7 @@ package server
 
 import (
 	"encoding/hex"
+	"net/http"
 	"testing"
 )
 
@@ -24,5 +25,29 @@ func TestNewChallengeID_UniqueAndHex(t *testing.T) {
 	}
 	if _, err := hex.DecodeString(id1); err != nil {
 		t.Fatalf("id1 is not hex: %q: %v", id1, err)
+	}
+}
+
+// monitoring HTTP server must set every slow-client timeout, including
+// ReadHeaderTimeout, which bounds the header-read phase on its own so a
+// slow-header client cannot hold a connection for the full ReadTimeout
+func TestNewMonitoringHTTPServer_Timeouts(t *testing.T) {
+	srv := newMonitoringHTTPServer("127.0.0.1:0", http.NewServeMux())
+
+	if srv.ReadTimeout <= 0 {
+		t.Errorf("ReadTimeout not set: %v", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout <= 0 {
+		t.Errorf("WriteTimeout not set: %v", srv.WriteTimeout)
+	}
+	if srv.IdleTimeout <= 0 {
+		t.Errorf("IdleTimeout not set: %v", srv.IdleTimeout)
+	}
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout not set: %v", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadHeaderTimeout > srv.ReadTimeout {
+		t.Errorf("ReadHeaderTimeout %v exceeds ReadTimeout %v",
+			srv.ReadHeaderTimeout, srv.ReadTimeout)
 	}
 }
