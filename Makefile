@@ -1240,6 +1240,47 @@ fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o
 fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
 
+# Mirror drift guard.
+# Mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
+# fuzz/bpf_oracle/mirror.lock pins that source by content hash.
+# check-bpf-mirror fails when production drifts from the lock,
+# so a change to a mirrored helper forces a re-verify of the copy.
+BPF_MIRROR_SRC := src/bpf/lota_lsm.bpf.c
+BPF_MIRROR_LOCK := fuzz/bpf_oracle/mirror.lock
+BPF_MIRROR_FUNCS := is_write_open_flags is_kernel_mem_device is_shebang_binprm is_inaccessible_exec_path
+BPF_MIRROR_MACROS := LOTA_O_ACCMODE LOTA_O_WRONLY LOTA_O_RDWR LOTA_O_TRUNC S_IFMT S_IFCHR BINPRM_FLAGS_PATH_INACCESSIBLE
+
+# emit the canonical "func"/"macro" lines for the current production source
+define BPF_MIRROR_GEN
+	for fn in $(BPF_MIRROR_FUNCS); do \
+		h=$$(awk -v fn="$$fn" '$$0 ~ ("(^|[^A-Za-z_])" fn "\\(") && /^static/ {inf=1} inf{print} inf && /^}/{exit}' $(BPF_MIRROR_SRC) | sha256sum | cut -d" " -f1); \
+		echo "func $$fn $$h"; \
+	done; \
+	for m in $(BPF_MIRROR_MACROS); do \
+		grep -E "^#define $$m " $(BPF_MIRROR_SRC) | head -1 | sed "s/^/macro $$m /"; \
+	done
+endef
+
+.PHONY: check-bpf-mirror update-bpf-mirror
+check-bpf-mirror:
+	$(Q)cur=$$(mktemp); lck=$$(mktemp); \
+	{ $(BPF_MIRROR_GEN); } > $$cur; \
+	grep -vE '^#' $(BPF_MIRROR_LOCK) | grep -vE '^[[:space:]]*$$' > $$lck; \
+	if diff -u $$lck $$cur >/dev/null; then \
+		echo "bpf-mirror: in sync"; rm -f $$cur $$lck; \
+	else \
+		echo "ERROR: src/bpf/lota_lsm.bpf.c mirrored logic changed:"; \
+		diff -u $$lck $$cur || true; \
+		echo "Re-verify fuzz/bpf_oracle/lota_lsm_logic.h, then: make update-bpf-mirror"; \
+		rm -f $$cur $$lck; exit 1; \
+	fi
+
+update-bpf-mirror:
+	$(Q)sed -n '1,/do not hand-edit\./p' $(BPF_MIRROR_LOCK) > $(BPF_MIRROR_LOCK).new; \
+	{ $(BPF_MIRROR_GEN); } >> $(BPF_MIRROR_LOCK).new; \
+	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
+	echo "bpf-mirror: lock refreshed"
+
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
 	fuzz-tpm-resp fuzz-bpf-all
