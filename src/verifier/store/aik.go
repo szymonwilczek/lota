@@ -1029,18 +1029,21 @@ func (cs *CertificateStore) verifyAIKCertificate(certDER []byte, expectedPubKey 
 	}
 
 	// verify certificate chain against trusted CAs
-	if len(cs.trustedCAs) > 0 {
-		opts := x509.VerifyOptions{
-			Roots:       cs.caPool,
-			CurrentTime: now,
-			KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		}
-
-		if _, err := cert.Verify(opts); err != nil {
-			return fmt.Errorf("%w: %v", ErrCertificateChain, err)
-		}
-	} else if cs.requireCerts {
+	// With no anchors chain cannot be verified, so refuse rather than accepting
+	// on time-validity and public-key match alone.
+	// Fail closed at verify time so the skip cannot be configured into existence
+	// even when the store was built in TOFU mode (requireCerts=false)
+	if len(cs.trustedCAs) == 0 {
 		return ErrNoTrustedCAs
+	}
+	opts := x509.VerifyOptions{
+		Roots:       cs.caPool,
+		CurrentTime: now,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+
+	if _, err := cert.Verify(opts); err != nil {
+		return fmt.Errorf("%w: %v", ErrCertificateChain, err)
 	}
 
 	// verify that certificate public key matches the AIK from attestation
@@ -1077,19 +1080,22 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 		return ErrCertificateExpired
 	}
 
-	// verify certificate chain against trusted CAs (TPM manufacturer CAs)
-	if len(cs.trustedCAs) > 0 {
-		opts := x509.VerifyOptions{
-			Roots:       cs.caPool,
-			CurrentTime: now,
-			KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		}
-
-		if _, err := cert.Verify(opts); err != nil {
-			return fmt.Errorf("%w: %v", ErrCertificateChain, err)
-		}
-	} else if cs.requireCerts {
+	// verify certificate chain against trusted CAs (TPM manufacturer CAs).
+	// With no anchors a chain cannot be verified, so refuse rather than
+	// accepting the EK on time-validity and OID alone.
+	// Fail closed at verify time so the skip cannot be configured into
+	// existence even in TOFU mode
+	if len(cs.trustedCAs) == 0 {
 		return ErrNoTrustedCAs
+	}
+	opts := x509.VerifyOptions{
+		Roots:       cs.caPool,
+		CurrentTime: now,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+
+	if _, err := cert.Verify(opts); err != nil {
+		return fmt.Errorf("%w: %v", ErrCertificateChain, err)
 	}
 
 	// EK certificate must carry the TCG EK Credential Profile OID
