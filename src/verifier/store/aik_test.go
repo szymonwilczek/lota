@@ -302,6 +302,31 @@ func TestCertificateStore_RequireCertsNeedsTrustedCAs(t *testing.T) {
 	}
 }
 
+// CertificateStore with no trust anchors cannot verify a certificate chain.
+// Even constructed in TOFU mode (requireCerts=false), it must refuse to verify
+// presented certificate rather than accept it on time-validity and public-key
+// match alone, so the chain check can never be skipped into existence.
+func TestCertificateStore_VerifyWithoutAnchorsFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	selfSigned := generateTestCertificate(t, aikKey, false)
+	selfSignedDER, err := x509.CreateCertificate(rand.Reader, selfSigned,
+		selfSigned, &aikKey.PublicKey, aikKey)
+	if err != nil {
+		t.Fatalf("self-sign: %v", err)
+	}
+
+	if _, err := cs.VerifyAIKCertificate(&aikKey.PublicKey, selfSignedDER); !errors.Is(err, ErrNoTrustedCAs) {
+		t.Fatalf("VerifyAIKCertificate without anchors: want ErrNoTrustedCAs, got %v", err)
+	}
+}
+
 func TestCertificateStore_RequireCerts_MissingRequiredPairFails(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "lota-test-*")
 	if err != nil {
