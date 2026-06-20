@@ -682,6 +682,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
+	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
 	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
 	$(TEST_BIN_DIR)/test_ipc_token_cap \
@@ -812,6 +813,10 @@ $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DI
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_path_sanitize: tests/test_path_sanitize.c $(AGENT_DIR)/path_validate.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_event_budget: tests/test_event_budget.c $(INC_DIR)/lota_event_budget.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
@@ -935,6 +940,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
+	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
 	@$(BUILD_DIR)/test_tpm_nv_chunk
 	@$(BUILD_DIR)/test_ipc_token_cap

@@ -4,6 +4,7 @@
 #define LOTA_PATH_VALIDATE_H
 
 #include <ctype.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 static inline bool lota_path_is_abs(const char *p)
@@ -46,6 +47,24 @@ static inline bool lota_str_has_control(const char *s)
 			return true;
 	}
 	return false;
+}
+
+/*
+ * Copy in into out, folding every control characterto a single space,
+ * and truncating to out_size - 1 bytes.
+ * out is always NUL-terminated when out_size > 0
+ */
+static inline void lota_str_sanitize(const char *in, char *out, size_t out_size)
+{
+	size_t i = 0;
+
+	if (out_size == 0)
+		return;
+	if (in) {
+		for (; in[i] != '\0' && i + 1 < out_size; i++)
+			out[i] = iscntrl((unsigned char)in[i]) ? ' ' : in[i];
+	}
+	out[i] = '\0';
 }
 
 #endif /* LOTA_PATH_VALIDATE_H */
