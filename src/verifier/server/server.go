@@ -204,13 +204,18 @@ func isLoopbackAddr(addr string) bool {
 
 // newMonitoringHTTPServer builds the monitoring API server with the request
 // timeouts that bound slow-client attacks.
+// ReadTimeout/WriteTimeout/IdleTimeout bound the whole exchange;
+// ReadHeaderTimeout additionally caps the header-read phase on its own so
+// Slowloris-style slow-header client cannot hold a connection up to the full
+// ReadTimeout before the body even starts.
 func newMonitoringHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 }
 
