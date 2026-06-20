@@ -28,12 +28,28 @@ import (
 	sqlite "modernc.org/sqlite"
 )
 
-// sqliteConstraint is the primary SQLITE_CONSTRAINT result code
-// extended UNIQUE (2067) and PRIMARY KEY (1555) violation codes share this low byte
+// sqliteConstraintUnique and sqliteConstraintPrimaryKey are the extended
+// SQLITE_CONSTRAINT result codes for a UNIQUE and a PRIMARY KEY violation.
+// Matching the precise subtypes keeps a future non-uniqueness constraint
+// on the same table from being misreported as a uniqueness violation,
+// and mirrors the Postgres path that checks the precise SQLSTATE.
+const (
+	sqliteConstraintUnique     = 2067
+	sqliteConstraintPrimaryKey = 1555
+)
+
+// sqliteConstraint is the SQLITE_CONSTRAINT low byte shared by every
+// constraint-violation subtype.
 const sqliteConstraint = 19
 
 // pgUniqueViolation is the SQLSTATE for a Postgres unique_violation
 const pgUniqueViolation = "23505"
+
+// isSQLiteUniqueViolationCode reports whether an extended SQLite result code
+// is a UNIQUE or PRIMARY KEY constraint violation.
+func isSQLiteUniqueViolationCode(code int) bool {
+	return code == sqliteConstraintUnique || code == sqliteConstraintPrimaryKey
+}
 
 // isUniqueViolation reports whether err is a unique / primary-key constraint
 // violation from either backend.
