@@ -38,10 +38,6 @@ const (
 	sqliteConstraintPrimaryKey = 1555
 )
 
-// sqliteConstraint is the SQLITE_CONSTRAINT low byte shared by every
-// constraint-violation subtype.
-const sqliteConstraint = 19
-
 // pgUniqueViolation is the SQLSTATE for a Postgres unique_violation
 const pgUniqueViolation = "23505"
 
@@ -60,7 +56,7 @@ func isSQLiteUniqueViolationCode(code int) bool {
 func isUniqueViolation(err error) bool {
 	var se *sqlite.Error
 	if errors.As(err, &se) {
-		return se.Code()&0xFF == sqliteConstraint
+		return isSQLiteUniqueViolationCode(se.Code())
 	}
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
