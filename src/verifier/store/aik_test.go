@@ -1138,16 +1138,34 @@ func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
 	if _, err := cs.GetRegisteredAt("client-a"); err != nil {
 		t.Fatalf("GetRegisteredAt: %v", err)
 	}
+}
+
+// CertificateStore gates every AIK change behind certificate-chain verification,
+// so the keyed-only RotateAIK - which carries no certificate - must refuse rather
+// than silently swap the trusted key, and must leave the stored key untouched.
+func TestCertificateStore_RotateAIKRefused(t *testing.T) {
+	dir := t.TempDir()
+
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	key := generateTestKey(t)
+	if err := cs.RegisterAIK("client-a", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
 
 	newKey := generateTestKey(t)
-	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err != nil {
-		t.Fatalf("RotateAIK: %v", err)
+	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err == nil {
+		t.Fatal("RotateAIK on a CertificateStore must refuse a keyed-only rotation")
 	}
-	rotated, err := cs.GetAIK("client-a")
+
+	got, err := cs.GetAIK("client-a")
 	if err != nil {
-		t.Fatalf("GetAIK after rotation: %v", err)
+		t.Fatalf("GetAIK: %v", err)
 	}
-	if rotated.N.Cmp(newKey.PublicKey.N) != 0 {
-		t.Fatal("RotateAIK did not replace the stored key")
+	if got.N.Cmp(key.PublicKey.N) != 0 {
+		t.Fatal("refused RotateAIK must leave the stored key unchanged")
 	}
 }
