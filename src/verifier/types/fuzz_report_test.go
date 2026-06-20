@@ -46,11 +46,37 @@ func FuzzParseReport(f *testing.F) {
 		if report.Header.Version != ReportVersion {
 			t.Fatal("parsed report has wrong version")
 		}
+		// every variable-length field's declared size must fit its fixed buffer
+		// size past the buffer is the exact bug that lets a later consumer slice
+		// out of bounds, so the parser must never accept one
 		if report.TPM.QuoteSigSize > MaxSigSize {
-			t.Fatal("parsed report has quote_sig_size exceeding max")
+			t.Fatalf("quote_sig_size %d exceeds max %d", report.TPM.QuoteSigSize, MaxSigSize)
 		}
 		if report.TPM.AttestSize > MaxAttestSize {
-			t.Fatal("parsed report has attest_size exceeding max")
+			t.Fatalf("attest_size %d exceeds max %d", report.TPM.AttestSize, MaxAttestSize)
+		}
+		if report.TPM.AIKPublicSize > MaxAIKPubSize {
+			t.Fatalf("aik_public_size %d exceeds max %d", report.TPM.AIKPublicSize, MaxAIKPubSize)
+		}
+		if report.TPM.AIKCertSize > MaxAIKCertSize {
+			t.Fatalf("aik_cert_size %d exceeds max %d", report.TPM.AIKCertSize, MaxAIKCertSize)
+		}
+		if report.TPM.EKCertSize > MaxEKCertSize {
+			t.Fatalf("ek_cert_size %d exceeds max %d", report.TPM.EKCertSize, MaxEKCertSize)
+		}
+		if report.TPM.PrevAIKSize > MaxAIKPubSize {
+			t.Fatalf("prev_aik_size %d exceeds max %d", report.TPM.PrevAIKSize, MaxAIKPubSize)
+		}
+		// determinism:
+		// re-parsing the same bytes must reach the same verdict
+		// and yield the same declared report size
+		again, err2 := ParseReport(data)
+		if err2 != nil || again == nil {
+			t.Fatal("ParseReport nondeterministic: second parse failed")
+		}
+		if again.Header.ReportSize != report.Header.ReportSize {
+			t.Fatalf("ParseReport nondeterministic: report_size %d then %d",
+				report.Header.ReportSize, again.Header.ReportSize)
 		}
 	})
 }
