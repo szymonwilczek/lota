@@ -45,6 +45,19 @@ func FuzzParseToken(f *testing.F) {
 		}
 		if claims == nil {
 			t.Error("ParseToken returned nil claims without error")
+			return
+		}
+		// determinism:
+		// re-parsing the same bytes must yield the same core claims;
+		// divergence means parser state leaked across calls
+		again, err2 := ParseToken(data)
+		if err2 != nil || again == nil {
+			t.Error("ParseToken nondeterministic: second parse failed")
+			return
+		}
+		if again.Flags != claims.Flags || again.PCRMask != claims.PCRMask ||
+			again.Nonce != claims.Nonce || !again.ExpiresAt.Equal(claims.ExpiresAt) {
+			t.Error("ParseToken nondeterministic: core claims differ across parses")
 		}
 	})
 }
@@ -161,6 +174,23 @@ func FuzzParseRSAPublicKeySDK(f *testing.F) {
 		}
 		if pub == nil {
 			t.Error("ParseRSAPublicKey returned nil without error")
+			return
+		}
+		// roundtrip:
+		// accepted key must survive re-encoding to PKIX DER and re-parsing
+		// with an identical modulus and exponent.
+		// asymmetry between the encoder and this parser would let two encodings
+		// of the same key disagree
+		reDER, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			t.Fatalf("failed to re-marshal an accepted key: %v", err)
+		}
+		again, err := ParseRSAPublicKey(reDER)
+		if err != nil {
+			t.Fatalf("re-parse of a re-marshalled accepted key failed: %v", err)
+		}
+		if again.N.Cmp(pub.N) != 0 || again.E != pub.E {
+			t.Fatal("RSA public key changed across marshal/parse roundtrip")
 		}
 	})
 }
