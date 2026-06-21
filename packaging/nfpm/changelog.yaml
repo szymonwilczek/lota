@@ -1,0 +1,6 @@
+# Changelog for the LOTA nfpm packages (chglog format)
+- semver: 0.4.0-rc2
+  date: 2026-06-21T00:00:00Z
+  packager: Szymon Wilczek <swilczek.lx@gmail.com>
+  changes:
+    - note: Initial native packaging of the agent, verifier, attest-CA and SDK.

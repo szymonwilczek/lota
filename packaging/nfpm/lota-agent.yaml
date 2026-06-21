@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: MIT
+# nfpm config for the lota-agent package (host enforcement)
+#
+# Ships the agent, the BPF LSM object, the PCR14 initramfs helper and 90lota
+# dracut module, the systemd/dbus/udev integration and the guided installer.
+#
+# Build from the repo root with LOTA_VERSION set; see the `packages` make target.
+#
+# BPF object is shipped UNSIGNED on purpose:
+# each adopter signs it with their own key during bring-up
+# (lota-install / make sign-bpf)
+name: lota-agent
+arch: amd64
+platform: linux
+version: ${LOTA_VERSION}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: Szymon Wilczek <swilczek.lx@gmail.com>
+vendor: LOTA
+homepage: https://github.com/szymonwilczek/lota
+license: MIT AND GPL-2.0-only
+description: |
+  LOTA host attestation agent
+  Measured-boot TPM attestation client with a BPF LSM runtime-integrity
+  enforcer. Fails closed until host bring-up (lota-install) signs the BPF
+  object, installs the 90lota initramfs module and arms the PCR14 commitment.
+
+changelog: ./packaging/nfpm/changelog.yaml
+
+overrides:
+  rpm:
+    depends:
+      - tpm2-tss
+      - libbpf
+      - openssl-libs
+      - libseccomp
+      - systemd
+      - dracut
+
+contents:
+  - src: ./build/lota-agent
+    dst: /usr/bin/lota-agent
+    file_info:
+      mode: 0755
+  - src: ./build/lota-install
+    dst: /usr/bin/lota-install
+    file_info:
+      mode: 0755
+  - src: ./build/lota-pcr14-lock
+    dst: /usr/lib/lota/lota-pcr14-lock
+    file_info:
+      mode: 0755
+  - src: ./build/lota_lsm.bpf.o
+    dst: /usr/lib/lota/lota_lsm.bpf.o
+    file_info:
+      mode: 0644
+  - src: ./VERSION
+    dst: /usr/share/lota/VERSION
+    file_info:
+      mode: 0644
+  - src: ./configs/ima/lota-ima-policy
+    dst: /usr/share/lota/ima/lota-ima-policy
+    file_info:
+      mode: 0644
+  - src: ./dbus/org.lota.Agent1.conf
+    dst: /etc/dbus-1/system.d/org.lota.Agent1.conf
+    type: "config|noreplace"
+    file_info:
+      mode: 0644
+  - src: ./systemd/lota-agent.service
+    dst: /usr/lib/systemd/system/lota-agent.service
+    file_info:
+      mode: 0644
+  - src: ./systemd/lota-agent.socket
+    dst: /usr/lib/systemd/system/lota-agent.socket
+    file_info:
+      mode: 0644
+  - src: ./systemd/lota-agent.service.d/10-xdg-runtime.conf.example
+    dst: /usr/share/lota/systemd/10-xdg-runtime.conf.example
+    file_info:
+      mode: 0644
+  - src: ./configs/udev/99-lota-tpm.rules
+    dst: /usr/lib/udev/rules.d/99-lota-tpm.rules
+    file_info:
+      mode: 0644
+  - src: ./src/initramfs/90lota/module-setup.sh
+    dst: /usr/lib/dracut/modules.d/90lota/module-setup.sh
+    file_info:
+      mode: 0755
+  - src: ./src/initramfs/90lota/lota-pcr14-lock.service
+    dst: /usr/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
+    file_info:
+      mode: 0644
+  - dst: /usr/lib/lota
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /var/lib/lota/aiks
+    type: dir
+    file_info:
+      mode: 0700
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lota-agent/LICENSE
+    type: license
+    file_info:
+      mode: 0644
+  - src: ./LICENSE.GPL-2.0-only
+    dst: /usr/share/licenses/lota-agent/LICENSE.GPL-2.0-only
+    type: license
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/nfpm/scripts/agent-postinstall.sh
+  preremove: ./packaging/nfpm/scripts/agent-preremove.sh
+  postremove: ./packaging/nfpm/scripts/agent-postremove.sh
