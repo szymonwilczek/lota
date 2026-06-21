@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+apiVersion: v2
+name: lota-verifier
+description: LOTA remote-attestation verifier, HA and Postgres-backed.
+type: application
+version: 0.1.0
+appVersion: "0.4.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/szymonwilczek/lota
+sources:
+  - https://github.com/szymonwilczek/lota
+maintainers:
+  - name: Szymon Wilczek
+keywords:
+  - attestation
+  - tpm
+  - security
+  - verifier
