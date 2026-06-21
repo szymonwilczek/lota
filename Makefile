@@ -353,7 +353,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -587,6 +587,35 @@ srpm:
 		--define "_srcrpmdir $(abspath $(OUTDIR))" \
 		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
 	@echo "SRPM written to $(OUTDIR)"
+
+# Signed dnf repository (self-hosted, for the nfpm binary packages) rpm-sign
+# signs every RPM in PKG_DIR with the project signing key.
+# dnf-repo assembles createrepo_c repository under REPO_DIR with signed metadata,
+# the exported public key and a generated .repo file.
+# Signing key is a release secret held outside the tree:
+# set LOTA_RPM_GPG_NAME to its uid or key id and have its passphrase available
+# through gpg-agent
+# PKG_DIR is defined with the native-packages target above.
+REPO_DIR ?= $(BUILD_DIR)/dnf-repo
+LOTA_RPM_GPG_NAME ?=
+LOTA_REPO_BASEURL ?= https://lota.example/rpm
+
+rpm-sign:
+	@test -n "$(LOTA_RPM_GPG_NAME)" || { \
+		echo "rpm-sign: set LOTA_RPM_GPG_NAME to the signing key uid/id" >&2; exit 1; }
+	$(Q)rpmsign --define "_gpg_name $(LOTA_RPM_GPG_NAME)" --addsign $(PKG_DIR)/*.rpm
+	@echo "Signed RPMs in $(PKG_DIR)"
+
+dnf-repo: rpm-sign
+	$(Q)rm -rf $(REPO_DIR)
+	$(Q)mkdir -p $(REPO_DIR)
+	$(Q)cp $(PKG_DIR)/*.rpm $(REPO_DIR)/
+	$(Q)createrepo_c --quiet $(REPO_DIR)
+	$(Q)gpg --batch --yes --armor --detach-sign $(REPO_DIR)/repodata/repomd.xml
+	$(Q)gpg --export --armor "$(LOTA_RPM_GPG_NAME)" >$(REPO_DIR)/RPM-GPG-KEY-lota
+	$(Q)sed 's,@BASEURL@,$(LOTA_REPO_BASEURL),g' \
+		packaging/repo/lota.repo.in >$(REPO_DIR)/lota.repo
+	@echo "Signed dnf repo in $(REPO_DIR) (baseurl $(LOTA_REPO_BASEURL))"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -1445,6 +1474,8 @@ help:
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
+	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
+	@echo "  dnf-repo         Build a signed createrepo_c dnf repository under REPO_DIR"
 	@echo "  examples         Build end-to-end demo material under examples/"
 	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""
