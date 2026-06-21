@@ -1,0 +1,22 @@
+# ko build configuration for the LOTA verifier OCI image.
+#
+# Verifier is a pure-Go service (modernc.org/sqlite, jackc/pgx -- no cgo),
+# so it links static and needs nothing in the image but the binary itself.
+# ko builds reproducible distroless image without a Dockerfile or the
+# Docker daemon; build it through `make container-image-verifier`
+#
+# Base is the nonroot distroless static image: no shell, no libc, no package
+# manager.
+# Verifier therefore runs as an unprivileged user and the SQLite path (when used)
+# must live on a writable mounted volume.
+defaultBaseImage: gcr.io/distroless/static:nonroot
+builds:
+  - id: lota-verifier
+    main: .
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
