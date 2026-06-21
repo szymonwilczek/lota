@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# nfpm config for the lota-verifier package (relying-party service)
+#
+# For operators who run the verifier on host rather than as the container image.
+name: lota-verifier
+arch: amd64
+platform: linux
+version: ${LOTA_VERSION}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: Szymon Wilczek <swilczek.lx@gmail.com>
+vendor: LOTA
+homepage: https://github.com/szymonwilczek/lota
+license: MIT
+description: |
+  LOTA remote attestation verifier
+  Relying-party service that verifies TPM attestation reports against a signed
+  PCR policy and issues short-lived session tokens. Backs onto SQLite or a
+  shared Postgres for the HA topology.
+changelog: ./packaging/nfpm/changelog.yaml
+
+contents:
+  - src: ./build/lota-verifier
+    dst: /usr/bin/lota-verifier
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lota-verifier/LICENSE
+    type: license
+    file_info:
+      mode: 0644

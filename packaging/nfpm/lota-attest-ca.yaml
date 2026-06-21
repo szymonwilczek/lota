@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# nfpm config for the lota-attest-ca package (enrollment service)
+#
+# default pure-Go build, so no library dependencies beyond glibc
+# pkcs11/HSM build is a separate cgo artifact and is not packaged here
+name: lota-attest-ca
+arch: amd64
+platform: linux
+version: ${LOTA_VERSION}
+version_schema: semver
+section: admin
+priority: optional
+maintainer: Szymon Wilczek <swilczek.lx@gmail.com>
+vendor: LOTA
+homepage: https://github.com/szymonwilczek/lota
+license: MIT
+description: |
+  LOTA attestation CA
+  Self-hosted enrollment service that proves an AIK lives in a genuine TPM
+  through credential activation and issues short-lived AIK certificates that
+  the fleet verifier trusts.
+changelog: ./packaging/nfpm/changelog.yaml
+
+contents:
+  - src: ./build/lota-attest-ca
+    dst: /usr/bin/lota-attest-ca
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lota-attest-ca/LICENSE
+    type: license
+    file_info:
+      mode: 0644
