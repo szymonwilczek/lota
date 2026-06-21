@@ -22,6 +22,8 @@ intentionally fails closed when required gates are missing.
   Kubernetes.
 * :doc:`COPR repository <copr>` -- install the packages from the Fedora COPR
   build service.
+* :doc:`Signed dnf repository <dnf-repo>` -- sign the packages and serve them
+  from a dnf repository.
 
 Related deployment material lives next to the code:
 
@@ -40,3 +42,4 @@ Related deployment material lives next to the code:
    container-images
    helm-chart
    copr
+   dnf-repo
