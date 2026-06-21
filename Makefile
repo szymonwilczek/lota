@@ -334,7 +334,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -1180,9 +1180,110 @@ fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
+# BPF LSM decision-logic oracle fuzzers (standalone, libc only).
+#
+# Differential harnesses under fuzz/bpf_oracle/:
+# mirror of the BPF helper logic checked against an independent reference.
+# fuzz-bpf-devt is zero-copy over the real include/lota_devt.h.
+# others mirror helpers embedded in src/bpf/lota_lsm.bpf.c
+# (see fuzz/bpf_oracle/MIRROR.md)
+BPF_ORACLE_CFLAGS := $(FUZZ_CFLAGS) -I$(INC_DIR) -Ifuzz/bpf_oracle
+
+$(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
+
+$(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
+
+$(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
+
+$(BUILD_DIR)/fuzz/fuzz_event_budget.o: fuzz/bpf_oracle/fuzz_event_budget.c include/lota_event_budget.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-event-budget $^
+
+$(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o: fuzz/bpf_oracle/fuzz_inaccessible_exec.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-inaccessible-exec $^
+
+$(BUILD_DIR)/fuzz/fuzz_shebang.o: fuzz/bpf_oracle/fuzz_shebang.c fuzz/bpf_oracle/lota_lsm_logic.h fuzz/bpf_oracle/reference.h | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
+
+fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-shebang $^
+
+fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
+	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
+
+# Mirror drift guard.
+# Mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
+# fuzz/bpf_oracle/mirror.lock pins that source by content hash.
+# check-bpf-mirror fails when production drifts from the lock,
+# so a change to a mirrored helper forces a re-verify of the copy.
+BPF_MIRROR_SRC := src/bpf/lota_lsm.bpf.c
+BPF_MIRROR_LOCK := fuzz/bpf_oracle/mirror.lock
+BPF_MIRROR_FUNCS := is_write_open_flags is_kernel_mem_device is_shebang_binprm is_inaccessible_exec_path
+BPF_MIRROR_MACROS := LOTA_O_ACCMODE LOTA_O_WRONLY LOTA_O_RDWR LOTA_O_TRUNC S_IFMT S_IFCHR BINPRM_FLAGS_PATH_INACCESSIBLE
+
+# emit the canonical "func"/"macro" lines for the current production source
+define BPF_MIRROR_GEN
+	for fn in $(BPF_MIRROR_FUNCS); do \
+		h=$$(awk -v fn="$$fn" '$$0 ~ ("(^|[^A-Za-z_])" fn "\\(") && /^static/ {inf=1} inf{print} inf && /^}/{exit}' $(BPF_MIRROR_SRC) | sha256sum | cut -d" " -f1); \
+		echo "func $$fn $$h"; \
+	done; \
+	for m in $(BPF_MIRROR_MACROS); do \
+		grep -E "^#define $$m " $(BPF_MIRROR_SRC) | head -1 | sed "s/^/macro $$m /"; \
+	done
+endef
+
+.PHONY: check-bpf-mirror update-bpf-mirror
+check-bpf-mirror:
+	$(Q)cur=$$(mktemp); lck=$$(mktemp); \
+	{ $(BPF_MIRROR_GEN); } > $$cur; \
+	grep -vE '^#' $(BPF_MIRROR_LOCK) | grep -vE '^[[:space:]]*$$' > $$lck; \
+	if diff -u $$lck $$cur >/dev/null; then \
+		echo "bpf-mirror: in sync"; rm -f $$cur $$lck; \
+	else \
+		echo "ERROR: src/bpf/lota_lsm.bpf.c mirrored logic changed:"; \
+		diff -u $$lck $$cur || true; \
+		echo "Re-verify fuzz/bpf_oracle/lota_lsm_logic.h, then: make update-bpf-mirror"; \
+		rm -f $$cur $$lck; exit 1; \
+	fi
+
+update-bpf-mirror:
+	$(Q)sed -n '1,/do not hand-edit\./p' $(BPF_MIRROR_LOCK) > $(BPF_MIRROR_LOCK).new; \
+	{ $(BPF_MIRROR_GEN); } >> $(BPF_MIRROR_LOCK).new; \
+	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
+	echo "bpf-mirror: lock refreshed"
+
 fuzz-all: fuzz-agent fuzz-config fuzz-net-pin fuzz-net-wire fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
-	fuzz-tpm-resp
+	fuzz-tpm-resp fuzz-bpf-all
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -1241,6 +1342,7 @@ help:
 	@echo "  fuzz-policy-sign Build policy signature-verify fuzz target"
 	@echo "  fuzz-server-sdk  Build server SDK token-verify fuzz target"
 	@echo "  fuzz-tpm-resp    Build TPM2B response/credential unmarshal fuzz target"
+	@echo "  fuzz-bpf-all     Build all BPF LSM decision-logic oracle fuzz targets"
 	@echo "  syzkaller-fuzz-loader  Build the syzkaller BPF LSM bring-up harness"
 	@echo ""
 	@echo "Benchmark targets (see benchmarks/README.rst):"

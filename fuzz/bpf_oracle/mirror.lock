@@ -1,0 +1,23 @@
+# Drift lock for the fuzz/bpf_oracle mirrors.
+#
+# Harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c
+# (the helpers cannot be linked in user space).
+# This file pins the source by content:
+# 	`func` lines hash the awk-extracted function body,
+# 	`macro` lines pin the exact #define.
+# 	`make check-bpf-mirror` fails when production drifts from these,
+# 	signalling that fuzz/bpf_oracle/lota_lsm_logic.h must be re-verified
+# 	and the lock refreshed with `make update-bpf-mirror`.
+#
+# Lines below this header are generated; do not hand-edit.
+func is_write_open_flags 6a6e261c48a8d8673fb23b8af743e6a261135fa4130143659a5ca8f8ee7bd5bc
+func is_kernel_mem_device a6ecda7382e5dfb634fdd264133c155479ba4cc3399652ce63fb01e4b78cfe59
+func is_shebang_binprm bb928fe0a37e90a7cb3645d7717c51673a1c519133bdf901326a4e89f0f5a022
+func is_inaccessible_exec_path 2434100bb17474dda598082c1fb60c572e26d7ec9906e2f0231d01db1ce15682
+macro LOTA_O_ACCMODE #define LOTA_O_ACCMODE 00000003
+macro LOTA_O_WRONLY #define LOTA_O_WRONLY 00000001
+macro LOTA_O_RDWR #define LOTA_O_RDWR 00000002
+macro LOTA_O_TRUNC #define LOTA_O_TRUNC 00001000
+macro S_IFMT #define S_IFMT 00170000
+macro S_IFCHR #define S_IFCHR 0020000
+macro BINPRM_FLAGS_PATH_INACCESSIBLE #define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
