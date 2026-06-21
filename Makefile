@@ -353,7 +353,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -521,6 +521,34 @@ packages: all selinux-pp
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
+
+# Container images (OCI, built with ko -> distroless static, no Docker daemon)
+# KO_DOCKER_REPO is the destination registry prefix
+# -B names the images <repo>/verifier and <repo>/attestca after the base of each import path.
+# Build is reproducible (SOURCE_DATE_EPOCH from the HEAD commit), carries an SPDX SBOM
+# and OCI source/licence/version labels, and is multi-arch.
+# Release flow cosign-signs the pushed digests.
+# For a local Podman inspection, point ko at an OCI layout instead of a registry:
+#   cd src/verifier && ko build --oci-layout-path=/tmp/v .
+#   skopeo copy oci:/tmp/v containers-storage:localhost/lota-verifier
+KO ?= ko
+KO_DOCKER_REPO ?= ghcr.io/szymonwilczek/lota
+KO_IMAGE_TAGS ?= $(PROJECT_VERSION),latest
+KO_PLATFORMS ?= linux/amd64,linux/arm64
+KO_LABELS := \
+	--image-label org.opencontainers.image.version=$(PROJECT_VERSION) \
+	--image-label org.opencontainers.image.source=https://github.com/szymonwilczek/lota \
+	--image-label org.opencontainers.image.licenses=MIT
+KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
+	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
+
+container-images: container-image-verifier container-image-attest-ca
+
+container-image-verifier:
+	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
+
+container-image-attest-ca:
+	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -1377,6 +1405,7 @@ help:
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  examples         Build end-to-end demo material under examples/"
 	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""
