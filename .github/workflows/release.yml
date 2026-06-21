@@ -124,3 +124,166 @@ jobs:
             --title "$TAG" \
             --notes "$notes" \
             $prerelease
+
+  images:
+    name: push and sign container images
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write    # push to ghcr.io
+      id-token: write    # OIDC token for cosign keyless signing
+    env:
+      KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/lota
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache: false
+
+      - name: Install ko
+        uses: ko-build/setup-ko@v0.7
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Log in to ghcr.io
+        run: ko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+
+      - name: Build and push the images
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          make container-images KO_IMAGE_TAGS="${TAG#v},latest"
+
+      - name: Sign the images (keyless)
+        # cosign resolves each tag to its pushed digest and signs that digest;
+        # Sigstore certificate is bound to this workflow's OIDC identity
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          for image in verifier attestca; do
+            cosign sign --yes "${KO_DOCKER_REPO}/${image}:${TAG#v}"
+          done
+
+  helm:
+    name: package and push Helm chart
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write    # upload the chart to the release
+      packages: write    # push the chart to the ghcr OCI registry
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package the chart
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist
+          helm package deploy/helm/lota-verifier \
+            --version "${TAG#v}" --app-version "${TAG#v}" -d dist
+
+      - name: Push the chart to ghcr.io
+        run: |
+          set -eu
+          helm registry login ghcr.io \
+            -u "${{ github.actor }}" -p "${{ github.token }}"
+          helm push dist/*.tgz \
+            "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+      - name: Attach the chart to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/*.tgz --clobber
+
+  rpms:
+    name: build, sign and publish RPMs
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write    # upload the packages and repo to the release
+    container:
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+    env:
+      RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+      RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
+      RPM_GPG_NAME: ${{ vars.RPM_GPG_NAME }}
+      LOTA_REPO_BASEURL: ${{ vars.LOTA_REPO_BASEURL }}
+    steps:
+      - name: Install toolchain and packaging tools
+        run: |
+          dnf -y install \
+            git make gcc clang llvm pkgconf-pkg-config \
+            libbpf-devel elfutils-libelf-devel zlib-devel \
+            tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
+            dbus-devel golang \
+            rpm-build rpm-sign rpmlint createrepo_c gnupg2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+
+      - name: Build the RPMs
+        run: make packages
+
+      - name: Import the signing key
+        # preset the passphrase into gpg-agent so both rpmsign and the repomd
+        # signing run unattended.
+        # rpm signs through loopback gpg command.
+        run: |
+          set -eu
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          {
+            echo "allow-loopback-pinentry"
+            echo "allow-preset-passphrase"
+          } >>"$HOME/.gnupg/gpg-agent.conf"
+          gpgconf --kill gpg-agent || true
+          printf '%s' "$RPM_GPG_PRIVATE_KEY" | gpg --batch --import
+          keygrip=$(gpg --batch --with-keygrip --list-secret-keys "$RPM_GPG_NAME" \
+            | awk '/Keygrip/ { print $3; exit }')
+          /usr/libexec/gpg-preset-passphrase --preset \
+            --passphrase "$RPM_GPG_PASSPHRASE" "$keygrip"
+          cat >"$HOME/.rpmmacros" <<EOF
+          %_gpg_name $RPM_GPG_NAME
+          %__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}
+          EOF
+
+      - name: Sign and build the dnf repository
+        run: make dnf-repo LOTA_RPM_GPG_NAME="$RPM_GPG_NAME"
+
+      - name: Publish the packages and repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          tar -czf "lota-dnf-repo-${TAG#v}.tar.gz" -C build/dnf-repo .
+          gh release upload "$TAG" \
+            build/packages/*.rpm "lota-dnf-repo-${TAG#v}.tar.gz" --clobber
