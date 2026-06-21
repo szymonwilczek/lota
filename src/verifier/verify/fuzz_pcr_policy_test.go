@@ -8,6 +8,8 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -65,16 +67,31 @@ pcrs:
 `))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		// exercise the production loader, not a re-implemented unmarshal:
+		// LoadPolicy runs the YAML parse, PCR-index validation and the
+		// measurement-empty / unpinned-agent refusal gates.
+		// with permissive loading allowed, successful parse must not panic
+		// and must yield non-error or well-formed error
+		dir := t.TempDir()
+		path := filepath.Join(dir, "policy.yaml")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Skipf("write policy: %v", err)
+		}
+		v := NewPCRVerifier()
+		v.SetAllowPermissivePolicy(true)
+		v.SetAllowUnpinnedAgent(true)
+		_ = v.LoadPolicy(path)
+
+		// independent invariant on the parse + validate layer
 		var policy PCRPolicy
-		err := yaml.Unmarshal(data, &policy)
-		if err != nil {
+		if err := yaml.Unmarshal(data, &policy); err != nil {
 			return
 		}
-
-		// validate must not panic on any successfully-parsed policy
 		warnings := ValidatePolicy(&policy)
-
-		// must have warnings
+		// ValidatePolicy must be deterministic for a fixed policy
+		if again := ValidatePolicy(&policy); len(again) != len(warnings) {
+			t.Fatalf("ValidatePolicy nondeterministic: %d then %d warnings", len(warnings), len(again))
+		}
 		hasReqs := policy.RequireIOMMU || policy.RequireEnforce ||
 			policy.RequireModuleSig || policy.RequireSecureBoot ||
 			policy.RequireLockdown || policy.RequireCmdlinePolicy
@@ -109,24 +126,24 @@ func FuzzParsePolicyPublicKeyPEM(f *testing.F) {
 	f.Add(garbagePEM)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		block, _ := pem.Decode(data)
-		if block == nil {
-			return
+		// Exercise the production loader rather than re-implementing PEM
+		// decode + key-type check:
+		// LoadPolicyPublicKey must reject anything that is not a PEM-wrapped
+		// 32-byte Ed25519 key via ErrBadKeyFormat, never panic
+		dir := t.TempDir()
+		path := filepath.Join(dir, "key.pem")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Skipf("write key: %v", err)
 		}
-
-		parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+		key, err := LoadPolicyPublicKey(path)
 		if err != nil {
+			if key != nil {
+				t.Fatal("LoadPolicyPublicKey returned a key with an error")
+			}
 			return
 		}
-
-		edPub, ok := parsed.(ed25519.PublicKey)
-		if !ok {
-			return
-		}
-
-		// key must be 32 bytes
-		if len(edPub) != ed25519.PublicKeySize {
-			t.Errorf("Ed25519 key size %d, want %d", len(edPub), ed25519.PublicKeySize)
+		if len(key) != ed25519.PublicKeySize {
+			t.Fatalf("accepted key of size %d, want %d", len(key), ed25519.PublicKeySize)
 		}
 	})
 }

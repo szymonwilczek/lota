@@ -17,7 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <openssl/types.h>
 #include <stdint.h>
 
 #include "../../include/lota_runtime_protect_digest.h"

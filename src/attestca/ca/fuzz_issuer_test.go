@@ -40,8 +40,37 @@ func FuzzParseEKBundleManifest(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		entries, err := parseEKBundleManifest(data)
-		if err != nil && entries != nil {
-			t.Fatalf("entries returned alongside error: %v", err)
+		if err != nil {
+			if entries != nil {
+				t.Fatalf("entries returned alongside error: %v", err)
+			}
+			return
+		}
+		// every accepted entry must carry a 64-hex-char (SHA-256)
+		// pin and a non-empty filename:
+		// those two are what bind a trusted root to a version-controlled
+		// fingerprint, so an entry missing either would silently weaken
+		// the pinned trust set
+		for _, e := range entries {
+			if len(e.pin) != 64 {
+				t.Fatalf("accepted entry with %d-char pin, want 64: %q", len(e.pin), e.pin)
+			}
+			for _, c := range e.pin {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+					t.Fatalf("accepted entry with non-lowercase-hex pin: %q", e.pin)
+				}
+			}
+			if e.filename == "" {
+				t.Fatal("accepted entry with empty filename")
+			}
+		}
+		// determinism:
+		// re-parsing the same manifest must return the same
+		// number of entries
+		again, err2 := parseEKBundleManifest(data)
+		if err2 != nil || len(again) != len(entries) {
+			t.Fatalf("parseEKBundleManifest nondeterministic: %d then %d entries (err=%v)",
+				len(entries), len(again), err2)
 		}
 	})
 }

@@ -34,8 +34,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tpm2_types.h>
+
+/* every successful unmarshal must report consuming no more than the input;
+ * agent uses the offset to bound later reads, so an over-run here would
+ * drive an out-of-bounds access downstream */
+#define FZ_OFFSET_OK(rc, off, len)                            \
+	do {                                                  \
+		if ((rc) == TSS2_RC_SUCCESS && (off) > (len)) \
+			abort();                              \
+	} while (0)
 
 int LLVMFuzzerInitialize(int *argc, char ***argv);
 
@@ -54,30 +64,36 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	size_t off;
+	TSS2_RC rc;
 
 	{
 		TPM2B_PUBLIC v;
 		off = 0;
 		memset(&v, 0, sizeof(v));
-		Tss2_MU_TPM2B_PUBLIC_Unmarshal(data, size, &off, &v);
+		rc = Tss2_MU_TPM2B_PUBLIC_Unmarshal(data, size, &off, &v);
+		FZ_OFFSET_OK(rc, off, size);
 	}
 	{
 		TPM2B_PRIVATE v;
 		off = 0;
 		memset(&v, 0, sizeof(v));
-		Tss2_MU_TPM2B_PRIVATE_Unmarshal(data, size, &off, &v);
+		rc = Tss2_MU_TPM2B_PRIVATE_Unmarshal(data, size, &off, &v);
+		FZ_OFFSET_OK(rc, off, size);
 	}
 	{
 		TPM2B_ID_OBJECT v;
 		off = 0;
 		memset(&v, 0, sizeof(v));
-		Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(data, size, &off, &v);
+		rc = Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(data, size, &off, &v);
+		FZ_OFFSET_OK(rc, off, size);
 	}
 	{
 		TPM2B_ENCRYPTED_SECRET v;
 		off = 0;
 		memset(&v, 0, sizeof(v));
-		Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(data, size, &off, &v);
+		rc = Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(data, size, &off,
+							      &v);
+		FZ_OFFSET_OK(rc, off, size);
 	}
 	return 0;
 }

@@ -77,6 +77,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (rc != TSS2_RC_SUCCESS)
 		return 0;
 
+	/* agent slices the quote out of the buffer using this offset;
+	 * success that reports consuming more than was supplied would drive
+	 * a later out-of-bounds read */
+	if (offset > sizeof(kAttestMagic) + size)
+		abort();
+
 	/* touch the fields parse_signed_clockinfo() pulls from the blob */
 	sink = attest.clockInfo.resetCount;
 	sink = attest.clockInfo.restartCount;
