@@ -135,6 +135,36 @@ func DeriveBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	return out
 }
 
+// pcr14Index is the TPM PCR the LOTA boot-commitment chain anchors in.
+// It is also the PCR shim measures the MOK state into on UEFI Secure Boot.
+const pcr14Index = 14
+
+// PCR14BaselineFromEventLog reconstructs the PCR14 content present before
+// any LOTA extend by replaying the firmware TCG event log.
+// On UEFI Secure Boot shim measures the MOK state (MokList, SbatLevel, MokListRT)
+// into PCR14 before ExitBootServices;
+// LOTA's initramfs-lock and agent extends run afterwards and never enter the
+// firmware log, so the replayed PCR14 is exactly the baseline the lock chain
+// anchors on.
+//
+// nil log, replay error, or no PCR14 events yields 0^32 - the legacy/BIOS host
+// that never touched PCR14.
+//
+// baseline needs no separate trust:
+// it is authenticated by the quote, since forged event log makes Derive*(baseline, ...)
+// diverge from the signed PCR14 and the match fails closed
+func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
+	var zero [types.HashSize]byte
+	if parsed == nil || pcr14Index >= types.PCRCount {
+		return zero
+	}
+	replay, err := ReplayEventLog(parsed)
+	if err != nil {
+		return zero
+	}
+	return replay.PCRValues[pcr14Index]
+}
+
 // MatchBootCommitmentPCR14 rederives PCR14 for the agent_hash bound at
 // boot and the (resetCount, restartCount) reported in the quote's
 // ClockInfo, then scans restartCount backward looking for a value whose

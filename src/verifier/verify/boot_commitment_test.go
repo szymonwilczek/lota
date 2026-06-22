@@ -602,3 +602,59 @@ func TestDerivePCR14_BaselineAware(t *testing.T) {
 		t.Fatal("matcher must reject a target derived against a different baseline")
 	}
 }
+
+// proves the verifier reconstructs the pre-LOTA PCR14 baseline
+// (shim/MOK on UEFI Secure Boot) by replaying the firmware event log, and that
+// the reconstructed baseline feeds the boot-commitment derivation
+func TestPCR14BaselineFromEventLog(t *testing.T) {
+	// nil log -> zero baseline (legacy/BIOS host that never touched PCR14)
+	if PCR14BaselineFromEventLog(nil) != zeroBaseline {
+		t.Fatal("nil event log must yield a zero baseline")
+	}
+
+	// two synthetic shim PCR14 measurements (MokList, MokListRT)
+	d1 := sha256.Sum256([]byte("MokList"))
+	d2 := sha256.Sum256([]byte("MokListRT"))
+	parsed := &ParsedEventLog{
+		AlgorithmList: []uint16{AlgSHA256},
+		Entries: []EventLogEntry{
+			{PCRIndex: 14, Digests: map[uint16][]byte{AlgSHA256: d1[:]}},
+			{PCRIndex: 7, Digests: map[uint16][]byte{AlgSHA256: sha256Sum("unrelated")}},
+			{PCRIndex: 14, Digests: map[uint16][]byte{AlgSHA256: d2[:]}},
+		},
+	}
+
+	// expected B = extend(extend(0, d1), d2), ignoring the PCR7 event
+	step := sha256.New()
+	var acc [types.HashSize]byte
+	step.Write(acc[:])
+	step.Write(d1[:])
+	copy(acc[:], step.Sum(nil))
+	step.Reset()
+	step.Write(acc[:])
+	step.Write(d2[:])
+	copy(acc[:], step.Sum(nil))
+
+	got := PCR14BaselineFromEventLog(parsed)
+	if got != acc {
+		t.Fatalf("baseline mismatch: PCR14 replay did not fold only the PCR14 events\n got %x\nwant %x", got, acc)
+	}
+	if got == zeroBaseline {
+		t.Fatal("a non-empty shim PCR14 log must produce a non-zero baseline")
+	}
+
+	// reconstructed baseline must change the locked derivation vs zero
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = 0x42
+	}
+	if DeriveLockedBootCommitmentPCR14(got, agentHash, 3, 0) ==
+		DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 3, 0) {
+		t.Fatal("event-log baseline must feed the locked boot-commitment derivation")
+	}
+}
+
+func sha256Sum(s string) []byte {
+	d := sha256.Sum256([]byte(s))
+	return d[:]
+}
