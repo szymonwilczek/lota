@@ -26,7 +26,12 @@ The most common failures, with the gate that produced them:
   metadata backup or evict the AIK handle and reboot so the agent re-provisions
   clean.
 * ``PCR14 holds an unexpected value``. Cold reboot. PCR14 only resets on
-  hardware reset; warm reboot keeps the value.
+  hardware reset; warm reboot keeps the value. On UEFI Secure Boot this also
+  appears when the ``90lota`` initramfs lock did not run: shim leaves the MOK
+  measurement in PCR14, and without the lock recording that baseline at
+  ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
+  the dracut module is installed and the initramfs was rebuilt (see
+  :doc:`manual-reference`, section 5), then cold reboot.
 
 Threat model implications of the dev path
 =========================================

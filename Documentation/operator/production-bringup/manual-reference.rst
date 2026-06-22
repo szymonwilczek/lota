@@ -115,7 +115,28 @@ agent binds PCR14 against ``(self_hash, resetCount, restartCount)`` once per
 boot. The counters are obtained through a TPM2_Quote with an empty PCR selection
 so the value extended into PCR14 matches the clockInfo carried by the later
 attestation quote even on TPM 2.0 simulators (swtpm) whose ``Esys_ReadClock``
-and ``Quote.clockInfo`` disagree. The agent therefore provisions its AIK before
+and ``Quote.clockInfo`` disagree.
+
+PCR14 is not pristine on every platform. On UEFI Secure Boot, shim measures
+the MOK state (``MokList``, ``SbatLevel``, ``MokListRT``) into PCR14 before the
+initramfs runs, so the register is already non-zero when the lock helper
+extends it. The helper therefore folds whatever PCR14 holds -- the *baseline*
+-- into the chain instead of requiring ``0^32``, and records it at
+``/run/lota/pcr14_baseline`` (raw 32 bytes, on the ``/run`` tmpfs that survives
+the initramfs handoff). The agent reads that file so its derivations anchor on
+the same baseline, and the verifier reconstructs the baseline independently by
+replaying the signed TPM event log -- the LOTA extends happen after
+ExitBootServices and never enter that log, so the log's PCR14 events are exactly
+the firmware/shim baseline. A legacy/BIOS host that never measures PCR14 sees a
+``0^32`` baseline and behaves as before. Because the verifier derives the
+baseline from the signed log, a forged ``/run`` handoff cannot move trust: it
+only makes the host fail closed.
+
+A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
+baseline and therefore the final PCR14, so an enrolled host reports an
+``INTEGRITY_MISMATCH`` against its pinned baseline until an operator re-anchors
+it -- the same review gate a firmware change goes through, since enrolling a MOK
+key is a security-relevant boot-chain change. The agent therefore provisions its AIK before
 ``self_measure()`` runs; attestations issued before ``--enroll`` fall back to
 the unauthenticated clock and must be rebound on the next start. A re-install
 that changes either the initramfs helper or the agent binary without rebuilding
