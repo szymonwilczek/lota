@@ -28,27 +28,36 @@
  *   untrusted userspace process produces a value the verifier cannot
  *   match, so the attestation fails closed.
  *
+ * Baseline
+ *   PCR14 is not pristine on every platform. On UEFI Secure Boot shim
+ *   measures the MOK state (MokList, SbatLevel, MokListRT) into PCR14
+ *   before the initramfs runs, so PCR14 is already non-zero.
+ *   The helper therefore extends its commitment on top of whatever PCR14
+ *   holds (the baseline) instead of requiring 0^32, and records that baseline
+ *   at BASELINE_PATH on /run.
+ *   lota-agent reads it to anchor its derivations, and the verifier
+ *   independently reconstructs it from the signed event log, so forged handoff
+ *   cannot move trust - it only fails closed.
+ *   On a legacy/BIOS host the baseline is 0^32 and behaviour is unchanged.
+ *
  * Idempotency
- *   The helper is safe to run multiple times within a single boot
- *   session. It reads PCR14 first and exits with code 0 when the
- *   value already matches the expected post-extend digest (which is
- *   the normal "I already ran this boot" outcome on a kexec or
- *   late-stage systemd-tpm2 hook). Only when PCR14 is exactly
- *   0^32 does the helper actually extend.
+ *   The helper is safe to run multiple times within a single boot session.
+ *   First run records the baseline. Later runs (kexec, a late systemd-tpm2 hook)
+ *   recompute SHA256(baseline || commit) from the recorded baseline and exit 0
+ *   when PCR14 already matches it.
  *
  * Failure mode
- *   Any TPM error, PCR mismatch (PCR14 already non-zero but not the
- *   expected lock value, e.g. the boot loader extended it with a
- *   different scheme), or unsupported TSS2 layer surfaces as a
- *   non-zero exit. The initramfs systemd unit that wraps this helper
- *   is ordered before sysroot.mount / initrd-root-fs.target so a
- *   non-zero exit aborts the transition to the real root.
+ *   TPM error, unsupported TSS2 layer, failure to persist the baseline, or PCR14
+ *   mutating away from the recorded baseline after the first run, all surface as
+ *   non-zero exit.
+ *   initramfs systemd unit that wraps this helper is ordered before sysroot.mount /
+ *   initrd-root-fs.target so non-zero exit aborts the transition to the real root.
  *
- * No-cleanup model
- *   The helper has no persistent per-run state and releases all
- *   TSS2/OpenSSL allocations before exit. ENV variable
- *   LOTA_INITRAMFS_LOCK_TCTI overrides the default /dev/tpmrm0
- *   device path (used by the test harness).
+ * Cleanup model
+ *   Helper records the baseline at BASELINE_PATH on the /run tmpfs and otherwise
+ *   releases all TSS2/OpenSSL allocations before exit.
+ *   ENV variable LOTA_INITRAMFS_LOCK_TCTI overrides the default /dev/tpmrm0 device
+ *   path (used by the test harness)
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -58,6 +67,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <openssl/evp.h>
 
@@ -69,6 +79,18 @@
 #define INITRAMFS_LOCK_PCR 14
 #define PCR14_HASH_ALG TPM2_ALG_SHA256
 #define HASH_SIZE 32
+
+/*
+ * Baseline handoff.
+ * Helper records the PCR14 value it observed before its own extend
+ * (0^32 on legacy/BIOS, the firmware/shim MOK measurement on UEFI Secure Boot)
+ * here, on the /run tmpfs that persists across the initramfs -> rootfs switch.
+ * lota-agent reads it (LOTA_PCR14_BASELINE_PATH in src/agent/tpm.h) so its
+ * boot-commitment derivations anchor on the same baseline, and re-runs of this
+ * helper use it for idempotency.
+ */
+#define BASELINE_DIR "/run/lota"
+#define BASELINE_PATH "/run/lota/pcr14_baseline"
 
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
 static const char *device_path(void)
@@ -119,23 +141,63 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
 /*
- * expected_post_extend - SHA256(0^32 || commit). PCR14 starts at
- * 0^32 on cold boot, and the kernel does not extend it before
- * userspace runs, so SHA256(0^32 || commit) is the only acceptable
- * post-extend value on an honest path.
+ * extend_over - SHA256(base || commit), the PCR14 value after extending
+ * commit on top of base.
+ * base is the pre-extend PCR14 content: 0^32 on a legacy/BIOS host,
+ * or the firmware/shim MOK measurement on UEFI Secure Boot.
+ * PCR14 is not pristine on Secure Boot, so the lock cannot assume zero base;
+ * it folds whatever the firmware left into the chain.
  */
-static int expected_post_extend(const uint8_t commit[HASH_SIZE],
-				uint8_t out[HASH_SIZE])
+static int extend_over(const uint8_t base[HASH_SIZE],
+		       const uint8_t commit[HASH_SIZE], uint8_t out[HASH_SIZE])
 {
-	uint8_t zero[HASH_SIZE] = { 0 };
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
 		return -ENOMEM;
 	int ok = EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
-		 EVP_DigestUpdate(md, zero, sizeof(zero)) == 1 &&
+		 EVP_DigestUpdate(md, base, HASH_SIZE) == 1 &&
 		 EVP_DigestUpdate(md, commit, HASH_SIZE) == 1 &&
 		 EVP_DigestFinal_ex(md, out, NULL) == 1;
 	EVP_MD_CTX_free(md);
+	return ok ? 0 : -EIO;
+}
+
+/*
+ * read_saved_baseline - load a baseline this helper persisted earlier in
+ * the same boot session.
+ * Returns 1 and fills out on success, 0 when no file exists yet
+ * (the normal first-run case), negative errno on error.
+ */
+static int read_saved_baseline(uint8_t out[HASH_SIZE])
+{
+	FILE *f = fopen(BASELINE_PATH, "rb");
+	if (!f)
+		return errno == ENOENT ? 0 : -errno;
+	size_t n = fread(out, 1, HASH_SIZE, f);
+	int err = ferror(f);
+	fclose(f);
+	if (err)
+		return -EIO;
+	return n == HASH_SIZE ? 1 : 0;
+}
+
+/*
+ * write_baseline - persist the observed pre-extend PCR14 for lota-agent
+ * and for idempotent re-runs of this helper.
+ * Written before the extend so crash between write and extend still lets
+ * the agent attribute PCR14.
+ */
+static int write_baseline(const uint8_t base[HASH_SIZE])
+{
+	if (mkdir(BASELINE_DIR, 0755) != 0 && errno != EEXIST)
+		return -errno;
+	FILE *f = fopen(BASELINE_PATH, "wb");
+	if (!f)
+		return -errno;
+	size_t n = fwrite(base, 1, HASH_SIZE, f);
+	int ok = (n == HASH_SIZE) && (fflush(f) == 0);
+	if (fclose(f) != 0)
+		ok = 0;
 	return ok ? 0 : -EIO;
 }
 
@@ -264,19 +326,6 @@ int main(int argc, char **argv)
 		return 7;
 	}
 
-	uint8_t expected[HASH_SIZE];
-	crc = expected_post_extend(commit, expected);
-	if (crc < 0) {
-		fprintf(stderr,
-			"lota-pcr14-lock: expected-value derivation failed "
-			"(errno %d)\n",
-			-crc);
-		Esys_Finalize(&esys);
-		Tss2_Tcti_Finalize(tcti);
-		free(tcti);
-		return 8;
-	}
-
 	uint8_t current[HASH_SIZE];
 	crc = read_pcr14(esys, current);
 	if (crc < 0) {
@@ -289,37 +338,89 @@ int main(int argc, char **argv)
 		return 9;
 	}
 
-	uint8_t zero[HASH_SIZE] = { 0 };
+	uint8_t saved[HASH_SIZE];
+	int have_saved = read_saved_baseline(saved);
+	if (have_saved < 0) {
+		fprintf(stderr,
+			"lota-pcr14-lock: baseline read failed (errno %d)\n",
+			-have_saved);
+		Esys_Finalize(&esys);
+		Tss2_Tcti_Finalize(tcti);
+		free(tcti);
+		return 8;
+	}
+
 	int exit_code = 0;
 
-	if (memcmp(current, zero, HASH_SIZE) == 0) {
-		/* Fresh boot, PCR14 untouched: extend. */
-		crc = extend_pcr14(esys, commit);
+	if (have_saved) {
+		/*
+		 * Helper already recorded a baseline this boot session.
+		 * Re-entry (kexec, a late systemd-tpm2 hook):
+		 * act idempotently against the recorded baseline
+		 */
+		uint8_t locked[HASH_SIZE];
+		crc = extend_over(saved, commit, locked);
 		if (crc < 0) {
 			fprintf(stderr,
-				"lota-pcr14-lock: PCR14 extend failed\n");
-			exit_code = 10;
-		} else {
+				"lota-pcr14-lock: derivation failed (errno %d)\n",
+				-crc);
+			exit_code = 8;
+		} else if (memcmp(current, locked, HASH_SIZE) == 0) {
 			fprintf(stderr,
-				"lota-pcr14-lock: PCR14 locked "
-				"(observed resetCount=%u restartCount=%u)\n",
-				(unsigned)reset_count, (unsigned)restart_count);
+				"lota-pcr14-lock: PCR14 already locked, skipping extend\n");
+		} else if (memcmp(current, saved, HASH_SIZE) == 0) {
+			/* baseline persisted but the extend did not land
+			 * (crash between write and extend): finish it */
+			crc = extend_pcr14(esys, commit);
+			if (crc < 0) {
+				fprintf(stderr,
+					"lota-pcr14-lock: PCR14 extend failed\n");
+				exit_code = 10;
+			} else {
+				fprintf(stderr,
+					"lota-pcr14-lock: PCR14 locked over recorded baseline\n");
+			}
+		} else {
+			/*
+			 * PCR14 is neither the recorded baseline nor our locked value:
+			 * non-LOTA writer touched it after recorded the baseline this boot.
+			 * Fail loud; the verifier rejects the resulting quote regardless.
+			 */
+			fprintf(stderr,
+				"lota-pcr14-lock: PCR14 mutated after the baseline was "
+				"recorded this boot; refusing to extend\n");
+			exit_code = 11;
 		}
-	} else if (memcmp(current, expected, HASH_SIZE) == 0) {
-		/* helper already ran this boot session: no-op, exit success */
-		fprintf(stderr,
-			"lota-pcr14-lock: PCR14 already locked, skipping extend\n");
 	} else {
 		/*
-		 * PCR14 holds something else - boot loader or a non-LOTA
-		 * component extended it before this helper ran. agent will
-		 * refuse to attest with an explicit -EBADMSG anyway, so report
-		 * the mismatch here and fail loud
+		 * First run this boot.
+		 * Whatever PCR14 holds now is the pre-LOTA baseline:
+		 * 0^32 on a legacy/BIOS host, or the firmware/shim MOK measurement
+		 * on UEFI Secure Boot.
+		 * Persist it for lota-agent and for idempotent re-runs, then extend
+		 * the lock commitment on top.
 		 */
-		fprintf(stderr, "lota-pcr14-lock: PCR14 holds unexpected value "
-				"before lock; "
-				"refusing to extend\n");
-		exit_code = 11;
+		crc = write_baseline(current);
+		if (crc < 0) {
+			fprintf(stderr,
+				"lota-pcr14-lock: baseline persist to %s failed "
+				"(errno %d)\n",
+				BASELINE_PATH, -crc);
+			exit_code = 12;
+		} else {
+			crc = extend_pcr14(esys, commit);
+			if (crc < 0) {
+				fprintf(stderr,
+					"lota-pcr14-lock: PCR14 extend failed\n");
+				exit_code = 10;
+			} else {
+				fprintf(stderr,
+					"lota-pcr14-lock: PCR14 locked over baseline "
+					"(observed resetCount=%u restartCount=%u)\n",
+					(unsigned)reset_count,
+					(unsigned)restart_count);
+			}
+		}
 	}
 
 	Esys_Finalize(&esys);
