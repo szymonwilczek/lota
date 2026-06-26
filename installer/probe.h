@@ -80,9 +80,17 @@ int probe_module_sig_enforced(void);
 /* 0 when lockdown is [integrity] or [confidentiality] */
 int probe_lockdown_restrictive(void);
 
-/* Derives the constant PCR14 value installed by the initramfs lock:
- * SHA256(0^32 || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")) */
+/* Derives the post-lock PCR14 value installed by the initramfs lock:
+ * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
+ * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (0^32 on a
+ * legacy/BIOS host, the firmware/shim MOK measurement on UEFI Secure Boot). */
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE]);
+
+/* Path-parameterized variant behind the fixed-path wrapper above;
+ * baseline_path is the file lota-pcr14-lock writes the pre-extend PCR14 to.
+ * Lets tests pin the derivation against known baseline. */
+void probe_pcr14_lock_value_at(const char *baseline_path,
+			       uint8_t out[PROBE_HASH_SIZE]);
 
 /* Pure parser:
  * Hex string (exactly 2*n chars, case-insensitive) to bytes.

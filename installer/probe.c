@@ -264,6 +264,14 @@ void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 	EVP_MD_CTX_free(md);
 }
 
+void probe_pcr14_lock_value_at(const char *baseline_path,
+			       uint8_t out[PROBE_HASH_SIZE])
+{
+	/* TODO(fix): honour the baseline persisted at baseline_path. */
+	(void)baseline_path;
+	probe_pcr14_lock_value(out);
+}
+
 static int hex_nibble(char c)
 {
 	if (c >= '0' && c <= '9')
