@@ -463,7 +463,19 @@ NFPM ?= nfpm
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
 
-packages: all
+# Compiled SELinux policy module.
+# Built via the policy devel Makefile under selinux/ (needs selinux-policy-devel)
+# and shipped in the agent RPM at /usr/share/lota/selinux/lota.pp so
+# lota-install's SELinux stage can load it without the operator
+# hand-compiling the module out of band.
+SELINUX_PP := selinux/lota.pp
+$(SELINUX_PP):
+	$(Q)$(MAKE) -C selinux lota.pp
+
+.PHONY: selinux-pp
+selinux-pp: $(SELINUX_PP)
+
+packages: all selinux-pp
 	$(Q)mkdir -p $(PKG_DIR)
 	$(Q)for c in $(NFPM_CONFIGS); do \
 		echo "  NFPM    $$c"; \

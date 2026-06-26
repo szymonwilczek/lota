@@ -55,6 +55,10 @@ contents:
     dst: /usr/lib/lota/lota_lsm.bpf.o
     file_info:
       mode: 0644
+  - src: ./selinux/lota.pp
+    dst: /usr/share/lota/selinux/lota.pp
+    file_info:
+      mode: 0644
   - src: ./VERSION
     dst: /usr/share/lota/VERSION
     file_info:
