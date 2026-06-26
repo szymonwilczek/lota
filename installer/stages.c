@@ -177,11 +177,15 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(note, cap,
-			 "The BPF object signature does not verify against "
-			 "%s - the bundle is inconsistent or tampered. "
-			 "Obtain a matching bundle from the operator.",
-			 ctx->opts.policy_pubkey);
+		snprintf(
+			note, cap,
+			"The BPF object signature does not verify against "
+			"%s. Expected after a package upgrade replaces the "
+			"unsigned BPF object: re-sign it with the operator key "
+			"(lota-agent --sign-policy %s --signing-key <key>), or "
+			"obtain a matching signed bundle from the operator. The "
+			"installer never signs on this host by design.",
+			ctx->opts.policy_pubkey, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
