@@ -861,7 +861,7 @@ int install_self_check(struct install_ctx *ctx)
 		      "one needs operator approval)");
 
 	if (ctx->opts.verifier) {
-		const char *argv[8];
+		const char *argv[10];
 		int n = 0;
 		int rc;
 
@@ -872,6 +872,10 @@ int install_self_check(struct install_ctx *ctx)
 		if (ctx->opts.verifier_port) {
 			argv[n++] = "--port";
 			argv[n++] = ctx->opts.verifier_port;
+		}
+		if (ctx->opts.ca_cert) {
+			argv[n++] = "--ca-cert";
+			argv[n++] = ctx->opts.ca_cert;
 		}
 		argv[n] = NULL;
 
