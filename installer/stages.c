@@ -723,6 +723,12 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 			 days, days == 1 ? "" : "s");
 		return STAGE_DONE;
 	}
+	if (rc == 0 && days == 0) {
+		snprintf(note, cap,
+			 "AIK certificate present, less than a day left "
+			 "(auto-renewal refreshes it before expiry).");
+		return STAGE_DONE;
+	}
 	if (rc == 0) {
 		snprintf(note, cap,
 			 "AIK certificate expired. Guided "
