@@ -36,6 +36,7 @@
 #define PATH_DRACUT_MODULE "/usr/lib/dracut/modules.d/90lota/module-setup.sh"
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
 #define PATH_POLICY_PUB_DEFAULT "/etc/lota/policy.pub"
+#define PATH_LOTA_STATE_DIR "/var/lib/lota"
 #define PATH_AIK_CERT "/var/lib/lota/aik_cert.der"
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 

@@ -469,6 +469,28 @@ static int agent_label_ok(void)
 	return strstr(lctx, "lota_agent_exec_t") != NULL;
 }
 
+/* Confined lota_agent_t service reads its AIK witness from /var/lib/lota.
+ * Enrollment may have created that state under an unconfined login shell,
+ * leaving the generic var_lib_t label that lota_agent_t cannot read
+ * (the daemon then dies with EACCES on aik_meta.dat).
+ *
+ * Treat missing dir or non-SELinux host as fine;
+ * present dir must carry lota_var_t */
+static int lota_state_label_ok(void)
+{
+	char lctx[256];
+	ssize_t got;
+
+	if (!file_exists(PATH_LOTA_STATE_DIR))
+		return 1;
+	got = getxattr(PATH_LOTA_STATE_DIR, "security.selinux", lctx,
+		       sizeof(lctx) - 1);
+	if (got < 0)
+		return errno == ENOTSUP ? 1 : 0;
+	lctx[got] = '\0';
+	return strstr(lctx, "lota_var_t") != NULL;
+}
+
 static int selinux_module_loaded(void)
 {
 	char out[16384];
@@ -496,10 +518,10 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 {
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && agent_label_ok()) {
+	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
 		snprintf(note, cap,
-			 "TPM device and agent binary carry the "
-			 "LOTA SELinux labels.");
+			 "TPM device, agent binary and state directory "
+			 "carry the LOTA SELinux labels.");
 		return STAGE_DONE;
 	}
 	if (dev == -ENOENT) {
@@ -565,6 +587,15 @@ static int st_selinux_apply(struct install_ctx *ctx)
 
 		rc = run_cmd(&ctx->ui, "Restoring the agent binary label",
 			     argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+	}
+	if (file_exists(PATH_LOTA_STATE_DIR)) {
+		const char *const argv[] = { "restorecon", "-R",
+					     PATH_LOTA_STATE_DIR, NULL };
+
+		rc = run_cmd(&ctx->ui,
+			     "Restoring the LOTA state directory labels", argv);
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
