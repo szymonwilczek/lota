@@ -32,6 +32,25 @@
 
 #include "lota.h"
 
+/*
+ * Canonical set of PCR indices the agent reads from the live TPM when generating
+ * policy (--export-policy).
+ * Single source of truth so the set is testable without TPM and a regression
+ * (re-pinning a drift-prone PCR) is caught by tests/test_policy_export.c
+ */
+static const int policy_export_pcr_list[] = {
+	POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4,  POLICY_PCR_7,
+	POLICY_PCR_8, POLICY_PCR_9, POLICY_PCR_11, POLICY_PCR_14,
+};
+
+const int *policy_export_pcrs(size_t *count)
+{
+	if (count)
+		*count = sizeof(policy_export_pcr_list) /
+			 sizeof(policy_export_pcr_list[0]);
+	return policy_export_pcr_list;
+}
+
 static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE])
 {
 	for (int i = 0; i < LOTA_HASH_SIZE; i++)

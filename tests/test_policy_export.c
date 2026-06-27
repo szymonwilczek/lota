@@ -679,6 +679,38 @@ static void test_emit_written_count(void)
 	PASS();
 }
 
+static void test_export_pcrs_omit_grub_registers(void)
+{
+	TEST("policy_export_pcrs - omits grubenv-driven PCR 8/9");
+
+	size_t count = 0;
+	const int *pcrs = policy_export_pcrs(&count);
+
+	if (!pcrs || count == 0) {
+		FAIL("policy_export_pcrs returned an empty list");
+		return;
+	}
+
+	/*
+	 * PCR 8 (GRUB command/cmdline) and PCR 9 (GRUB-loaded files) both fold
+	 * in the grubenv (greenboot boot_success / saved_entry), which legitimately
+	 * changes across benign reboots.
+	 * static pin then fails healthy host, so they must not be in the export set
+	 */
+	for (size_t i = 0; i < count; i++) {
+		if (pcrs[i] == POLICY_PCR_8) {
+			FAIL("PCR 8 must not be exported (grubenv drift)");
+			return;
+		}
+		if (pcrs[i] == POLICY_PCR_9) {
+			FAIL("PCR 9 must not be exported (grubenv drift)");
+			return;
+		}
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== LOTA Policy Export - Test Suite ===\n\n");
@@ -707,6 +739,9 @@ int main(void)
 	test_emit_verifier_fields();
 	test_emit_spdx_header();
 	test_emit_written_count();
+
+	printf("\nExport PCR selection:\n");
+	test_export_pcrs_omit_grub_registers();
 
 	printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
 	if (tests_passed < tests_run) {

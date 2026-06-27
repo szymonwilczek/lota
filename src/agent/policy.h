@@ -19,7 +19,8 @@
 #include "../../include/lota.h"
 
 /*
- * PCR indices exported by default.
+ * PCR index definitions.
+ * Set actually exported by --export-policy is policy_export_pcrs() (see policy.c)
  *
  *   PCR 0:  SRTM / firmware measurement
  *   PCR 1:  BIOS / UEFI configuration
@@ -105,5 +106,17 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out);
  */
 int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
 		       size_t buf_size, size_t *written);
+
+/*
+ * policy_export_pcrs - Canonical PCR indices read for --export-policy
+ *
+ * @count: out, number of entries in the returned array (may be NULL)
+ *
+ * Returns pointer to static array of PCR indices the agent reads from the
+ * live TPM when generating a policy.
+ * Centralized here so the set has a single source of truth and can be unit-tested
+ * without a TPM.
+ */
+const int *policy_export_pcrs(size_t *count);
 
 #endif /* LOTA_POLICY_H */
