@@ -20,14 +20,15 @@
 
 /*
  * PCR index definitions.
- * Set actually exported by --export-policy is policy_export_pcrs() (see policy.c)
+ * Set actually exported by --export-policy is policy_export_pcrs()
+ * See policy.c for why PCR 8/9 are excluded.
  *
  *   PCR 0:  SRTM / firmware measurement
  *   PCR 1:  BIOS / UEFI configuration
  *   PCR 4:  Boot manager / loader stage
  *   PCR 7:  Secure Boot state
- *   PCR 8:  Boot config / command line measurements
- *   PCR 9:  Kernel/initrd measurements (bootloader-dependent)
+ *   PCR 8:  Boot config / command line (grubenv-driven, drifts; not exported)
+ *   PCR 9:  Kernel/initrd measurements (grubenv-driven, drifts; not exported)
  *   PCR 11: Unified Kernel Image (UKI) measurements
  *   PCR 14: LOTA agent self-measurement
  */

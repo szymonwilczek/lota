@@ -35,12 +35,22 @@
 /*
  * Canonical set of PCR indices the agent reads from the live TPM when generating
  * policy (--export-policy).
- * Single source of truth so the set is testable without TPM and a regression
+ * Single source of truth so the set is testable without TPM and regression
  * (re-pinning a drift-prone PCR) is caught by tests/test_policy_export.c
+ *
+ * PCR 8 (GRUB command/cmdline) and PCR 9 (GRUB-loaded files) are deliberately
+ * excluded:
+ * on GRUB + grubenv distributions
+ * (greenboot toggles boot_success / boot_indeterminate / saved_entry, all measured)
+ * these registers drift across benign reboots, so static pin fails healthy host.
+ * Their security-relevant content is covered elsewhere -- the kernel command line
+ * by the verifier's quote-bound PCR 8 event-log denylist (not the aggregate pin),
+ * the kernel image by PCR 4 and kernel_hash, and the initramfs by the PCR 14
+ * boot-commitment chain.
  */
 static const int policy_export_pcr_list[] = {
-	POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4,  POLICY_PCR_7,
-	POLICY_PCR_8, POLICY_PCR_9, POLICY_PCR_11, POLICY_PCR_14,
+	POLICY_PCR_0, POLICY_PCR_1,  POLICY_PCR_4,
+	POLICY_PCR_7, POLICY_PCR_11, POLICY_PCR_14,
 };
 
 const int *policy_export_pcrs(size_t *count)
