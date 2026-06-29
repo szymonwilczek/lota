@@ -30,20 +30,44 @@ pass ``--config /path`` if the operator policy lives elsewhere.
 The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
 call into the build system for CI / packaging.
 
-2. fs-verity on the agent binary
-================================
+2. Kernel-enforced immutability of the agent binary
+===================================================
+
+The agent refuses to start unless the kernel will reject a modified read of
+``/usr/bin/lota-agent``, so a binary swapped while the host is offline is
+caught at the next boot. Two mechanisms satisfy this, and the agent accepts
+**either** (``agent_self_immutability_enforced()``):
+
+**fs-verity** -- ext4, btrfs, f2fs and recent XFS:
 
 .. code-block:: sh
 
-    # Filesystem must support fs-verity.
     # ext4 needs the feature enabled at mkfs time
     # or via `sudo tune2fs -O verity /dev/sdX` on an unmounted device.
     # btrfs / f2fs ship verity in 5.15+.
     sudo fsverity enable /usr/bin/lota-agent
     sudo fsverity measure /usr/bin/lota-agent
 
-If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem feature is off.
-Production lays this down at install time via dracut + fs-verity-enabled rootfs.
+If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
+support. Production lays this down at install time via dracut + an
+fs-verity-enabled rootfs.
+
+**Signed IMA xattr** -- any filesystem with a ``security`` xattr namespace,
+including XFS and ZFS where fs-verity is unavailable. Under
+``ima_appraise=enforce`` (see section 3) the kernel refuses to exec or read a
+file whose content does not match the hash signed in its ``security.ima``
+xattr by a key on the ``.ima`` keyring, which is the same offline-swap
+guarantee:
+
+.. code-block:: sh
+
+    # sign the binary; load the matching cert onto the .ima keyring
+    sudo evmctl ima_sign --key /etc/keys/ima.key /usr/bin/lota-agent
+    getfattr -m security.ima -d /usr/bin/lota-agent   # verify present
+
+Bare (unsigned) digest does **not** count -- attacker who swaps the binary
+offline can recompute it. The agent and the installer accept only a
+signature-type ``security.ima`` xattr.
 
 3. IMA appraisal policy
 =======================
@@ -65,9 +89,12 @@ The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
 operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
-appraisal policy**, and the kernel-floor check in the agent pins only the mode;
-LOTA's own binaries are integrity-bound through fs-verity and the PCR14 boot
-commitment independent of IMA appraisal. Two supported routes for the content:
+appraisal policy**, and the kernel-floor check in the agent pins only the mode.
+On a verity-capable rootfs LOTA's own binary is integrity-bound through
+fs-verity and the PCR14 boot commitment independently of IMA appraisal; on a
+filesystem without verity (XFS, ZFS) the signed ``security.ima`` route from
+section 2 is what binds the agent binary instead. Two supported routes for the
+appraisal content:
 
 #. **Distribution signatures.** On Fedora/RHEL, packages can carry IMA file
    signatures applied at install time (``rpm-plugin-ima``, with the
