@@ -25,6 +25,18 @@ enum probe_verity {
 	PROBE_VERITY_UNSUPPORTED, /* filesystem lacks the verity feature */
 };
 
+/* Filesystem class of the volume backing path, used to steer binary-immutability
+ * remediation: verity-capable filesystems take the fs-verity path, the rest take
+ * the filesystem-agnostic signed-IMA-xattr path */
+enum probe_fstype {
+	PROBE_FS_UNKNOWN = 0,
+	PROBE_FS_EXT4, /* ext2/ext3/ext4 */
+	PROBE_FS_XFS,
+	PROBE_FS_BTRFS,
+	PROBE_FS_F2FS,
+	PROBE_FS_ZFS,
+};
+
 /* PCR14 state relative to the initramfs lock */
 enum probe_pcr14 {
 	PROBE_PCR14_LOCK_ONLY = 0, /* lock ran, agent not yet extended */
@@ -44,6 +56,33 @@ int probe_fsverity_state(const char *path);
 /* Enables fs-verity (SHA-256, 4K blocks) on the file.
  * 0 or -errno; EOPNOTSUPP/-ENOTTY mean the filesystem lacks the feature. */
 int probe_fsverity_enable(const char *path);
+
+/* Pure: maps statfs f_type magic to probe_fstype */
+enum probe_fstype probe_fstype_from_magic(long magic);
+
+/* Pure:
+ * 1 when the filesystem implements native fs-verity (ext4, btrfs, f2fs),
+ * 0 otherwise.
+ * Live ioctl in probe_fsverity_state() stays authoritative for capability;
+ * this only steers remediation text */
+int probe_fs_supports_fsverity(enum probe_fstype fs);
+
+/* Pure:
+ * Writes filesystem-specific guidance for establishing kernel-enforced
+ * immutability of the binary at path.
+ * Verity-capable filesystems get the fs-verity-enable path;
+ * the rest get the filesystem-agnostic signed-IMA-xattr path */
+void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
+			      size_t cap);
+
+/* statfs the path and classify its filesystem.
+ * enum probe_fstype, or PROBE_FS_UNKNOWN when statfs fails */
+enum probe_fstype probe_path_fstype(const char *path);
+
+/* Mirrors the agent's agent_self_ima_signed():
+ * 1 when the file carries a signature-type security.ima xattr,
+ * 0 when it has none or only a bare digest, errno on read failure. */
+int probe_file_ima_signed(const char *path);
 
 /* 1 = Secure Boot enabled, 0 = disabled/setup mode,
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
