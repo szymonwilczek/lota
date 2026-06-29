@@ -293,6 +293,77 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/* statfs f_type magics, mirroring <linux/magic.h> */
+#define KAT_EXT_MAGIC 0xEF53
+#define KAT_XFS_MAGIC 0x58465342
+#define KAT_BTRFS_MAGIC 0x9123683E
+#define KAT_F2FS_MAGIC 0xF2F52010
+#define KAT_ZFS_MAGIC 0x2FC12FC1
+
+static void test_fstype_magic_mapping(void)
+{
+	TEST("statfs magic maps to the right filesystem class");
+	if (probe_fstype_from_magic(KAT_EXT_MAGIC) != PROBE_FS_EXT4 ||
+	    probe_fstype_from_magic(KAT_XFS_MAGIC) != PROBE_FS_XFS ||
+	    probe_fstype_from_magic(KAT_BTRFS_MAGIC) != PROBE_FS_BTRFS ||
+	    probe_fstype_from_magic(KAT_F2FS_MAGIC) != PROBE_FS_F2FS ||
+	    probe_fstype_from_magic(KAT_ZFS_MAGIC) != PROBE_FS_ZFS) {
+		FAIL("known magic misclassified");
+		return;
+	}
+	if (probe_fstype_from_magic(0x12345) != PROBE_FS_UNKNOWN) {
+		FAIL("unknown magic not reported as UNKNOWN");
+		return;
+	}
+	PASS();
+}
+
+static void test_fs_verity_capability(void)
+{
+	TEST("verity-capable filesystems are ext4/btrfs/f2fs only");
+	if (!probe_fs_supports_fsverity(PROBE_FS_EXT4) ||
+	    !probe_fs_supports_fsverity(PROBE_FS_BTRFS) ||
+	    !probe_fs_supports_fsverity(PROBE_FS_F2FS)) {
+		FAIL("a verity-capable filesystem reported as incapable");
+		return;
+	}
+	if (probe_fs_supports_fsverity(PROBE_FS_XFS) ||
+	    probe_fs_supports_fsverity(PROBE_FS_ZFS) ||
+	    probe_fs_supports_fsverity(PROBE_FS_UNKNOWN)) {
+		FAIL("a non-verity filesystem reported as capable");
+		return;
+	}
+	PASS();
+}
+
+static void test_verity_remediation_per_fs(void)
+{
+	char ext[512];
+	char xfs[512];
+	char zfs[512];
+
+	TEST("remediation steers ext4 to verity and XFS/ZFS to IMA");
+	probe_verity_remediation(PROBE_FS_EXT4, "/usr/bin/lota-agent", ext,
+				 sizeof(ext));
+	probe_verity_remediation(PROBE_FS_XFS, "/usr/bin/lota-agent", xfs,
+				 sizeof(xfs));
+	probe_verity_remediation(PROBE_FS_ZFS, "/usr/bin/lota-agent", zfs,
+				 sizeof(zfs));
+	if (!strstr(ext, "tune2fs")) {
+		FAIL("ext4 hint omits the tune2fs verity path");
+		return;
+	}
+	if (strstr(xfs, "tune2fs") || !strstr(xfs, "security.ima")) {
+		FAIL("XFS hint must drop tune2fs and name the IMA route");
+		return;
+	}
+	if (strstr(zfs, "tune2fs") || !strstr(zfs, "security.ima")) {
+		FAIL("ZFS hint must drop tune2fs and name the IMA route");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -304,6 +375,9 @@ int main(void)
 	test_cmdline_token();
 	test_conf_key();
 	test_esrt_present();
+	test_fstype_magic_mapping();
+	test_fs_verity_capability();
+	test_verity_remediation_per_fs();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
