@@ -255,7 +255,7 @@ static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
 	case PROBE_VERITY_UNSUPPORTED:
 		/*
 		 * no native fs-verity on this filesystem.
-		 * Signed security.ima xattr appraised under ima_appraise= enforce
+		 * Signed security.ima xattr appraised under ima_appraise=enforce
 		 * gives the same offline-swap guarantee and the agent accepts it
 		 * as equivalent, so IMA-signed binary is done.
 		 * Otherwise block with filesystem-specific guidance
@@ -914,9 +914,9 @@ const struct stage install_stages[] = {
 	{
 		.title = "Tamper-proofing the agent binary",
 		.explain =
-			"Kernel must refuse any modified read of usr/bin/lota-agent"
-			"so replacing or patching it breaks attestation visibly."
-			"On ext4/btrfs/f2fs this stage enables fs-verity."
+			"Kernel must refuse any modified read of /usr/bin/lota-agent "
+			"so replacing or patching it breaks attestation visibly. "
+			"On ext4/btrfs/f2fs this stage enables fs-verity. "
 			"On XFS, ZFS and other filesystems without verity, signed "
 			"security.ima xattr appraised under ima_appraise=enforce "
 			"gives the same guarantee; the agent accepts either. "
