@@ -35,7 +35,16 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 // initramfs lock helper installs:
 //
 //	commit = SHA256(initramfsLockTag)
-//	pcr14  = SHA256(0^32 || commit)
+//	pcr14  = SHA256(baseline || commit)
+//
+// baseline is the PCR14 content present when the lock helper runs:
+// 0^32 on a legacy/BIOS host where nothing measured PCR14 before userspace,
+// or the firmware/shim MOK measurement (MokList, SbatLevel, MokListRT)
+// on a UEFI Secure Boot host.
+//
+// Verifier reconstructs baseline from the TPM event log;
+// passing zero baseline reproduces the pre-baseline derivation for hosts
+// that never touched PCR14.
 //
 // resetCount and restartCount are accepted for API symmetry with the
 // agent helper, but intentionally ignored. The initramfs lock runs long
@@ -43,16 +52,15 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 // boot fail when the counter moves between initramfs and attestation.
 // Freshness is bound by the later agent boot commitment, which still
 // includes the TPMS_ATTEST ClockInfo counters.
-func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]byte {
+func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte, resetCount, restartCount uint32) [types.HashSize]byte {
 	_, _ = resetCount, restartCount
 
 	commit := sha256.New()
 	commit.Write([]byte(initramfsLockTag))
 	commitDigest := commit.Sum(nil)
 
-	var zero [types.HashSize]byte
 	pcr := sha256.New()
-	pcr.Write(zero[:])
+	pcr.Write(baseline[:])
 	pcr.Write(commitDigest)
 
 	var out [types.HashSize]byte
@@ -71,10 +79,10 @@ func DeriveInitramfsLockPCR14(resetCount, restartCount uint32) [types.HashSize]b
 // The verifier picks this derivation when the report carries
 // FlagInitramfsLockV1 alongside FlagBootCommitment; a report with
 // only FlagBootCommitment falls back to DeriveBootCommitmentPCR14.
-func DeriveLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
+func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, restartCount uint32,
 ) [types.HashSize]byte {
-	lockValue := DeriveInitramfsLockPCR14(resetCount, restartCount)
+	lockValue := DeriveInitramfsLockPCR14(baseline, resetCount, restartCount)
 
 	var counters [8]byte
 	binary.BigEndian.PutUint32(counters[0:4], resetCount)
@@ -95,14 +103,17 @@ func DeriveLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	return out
 }
 
-// DeriveBootCommitmentPCR14 reproduces the agent's PCR14 derivation:
+// DeriveBootCommitmentPCR14 reproduces the agent's PCR14 derivation on host
+// with no initramfs lock (single-hop):
 //
 //	commit  = SHA256(tag || agent_hash || resetCount_be || restartCount_be)
-//	pcr14   = SHA256(0^32 || commit)
+//	pcr14   = SHA256(baseline || commit)
 //
-// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo
-// of the quote.
-func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
+// baseline is the PCR14 content the agent extended on top of:
+// 0^32 on a legacy/BIOS host, or the firmware/shim MOK measurement on UEFI
+// Secure Boot (see DeriveInitramfsLockPCR14).
+// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo of the quote.
+func DeriveBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, restartCount uint32,
 ) [types.HashSize]byte {
 	var counters [8]byte
@@ -115,14 +126,43 @@ func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
 	commit.Write(counters[:])
 	commitDigest := commit.Sum(nil)
 
-	var zero [types.HashSize]byte
 	pcr := sha256.New()
-	pcr.Write(zero[:])
+	pcr.Write(baseline[:])
 	pcr.Write(commitDigest)
 
 	var out [types.HashSize]byte
 	copy(out[:], pcr.Sum(nil))
 	return out
+}
+
+// pcr14Index is the TPM PCR the LOTA boot-commitment chain anchors in.
+// It is also the PCR shim measures the MOK state into on UEFI Secure Boot.
+const pcr14Index = 14
+
+// PCR14BaselineFromEventLog reconstructs the PCR14 content present before
+// any LOTA extend by replaying the firmware TCG event log.
+// On UEFI Secure Boot shim measures the MOK state (MokList, SbatLevel, MokListRT)
+// into PCR14 before ExitBootServices;
+// LOTA's initramfs-lock and agent extends run afterwards and never enter the
+// firmware log, so the replayed PCR14 is exactly the baseline the lock chain
+// anchors on.
+//
+// nil log, replay error, or no PCR14 events yields 0^32 - the legacy/BIOS host
+// that never touched PCR14.
+//
+// baseline needs no separate trust:
+// it is authenticated by the quote, since forged event log makes Derive*(baseline, ...)
+// diverge from the signed PCR14 and the match fails closed
+func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
+	var zero [types.HashSize]byte
+	if parsed == nil || pcr14Index >= types.PCRCount {
+		return zero
+	}
+	replay, err := ReplayEventLog(parsed)
+	if err != nil {
+		return zero
+	}
+	return replay.PCRValues[pcr14Index]
 }
 
 // MatchBootCommitmentPCR14 rederives PCR14 for the agent_hash bound at
@@ -151,12 +191,15 @@ func DeriveBootCommitmentPCR14(agentHash [types.HashSize]byte,
 // not know the pinned agent_hash cannot produce a matching PCR14 for
 // any restartCount value, and resetCount is not iterated so a post-cold-boot
 // state cannot be replayed.
-func MatchBootCommitmentPCR14(agentHash [types.HashSize]byte,
+func MatchBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, quoteRestartCount uint32,
 	target [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-	return matchPCR14(DeriveBootCommitmentPCR14, agentHash, resetCount,
+	derive := func(ah [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
+		return DeriveBootCommitmentPCR14(baseline, ah, reset, restart)
+	}
+	return matchPCR14(derive, agentHash, resetCount,
 		quoteRestartCount, target, maxRestartSkew)
 }
 
@@ -165,12 +208,15 @@ func MatchBootCommitmentPCR14(agentHash [types.HashSize]byte,
 // the agent. The skew-tolerant scan stays the same; only the per-step
 // derivation function differs so a caller dispatching on
 // FlagInitramfsLockV1 selects the right chain.
-func MatchLockedBootCommitmentPCR14(agentHash [types.HashSize]byte,
+func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, quoteRestartCount uint32,
 	target [types.HashSize]byte,
 	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-	return matchPCR14(DeriveLockedBootCommitmentPCR14, agentHash, resetCount,
+	derive := func(ah [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
+		return DeriveLockedBootCommitmentPCR14(baseline, ah, reset, restart)
+	}
+	return matchPCR14(derive, agentHash, resetCount,
 		quoteRestartCount, target, maxRestartSkew)
 }
 

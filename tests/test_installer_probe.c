@@ -66,6 +66,69 @@ static void test_pcr14_lock_constant_kat(void)
 	PASS();
 }
 
+/* Cross-component KAT taken from live UEFI Secure Boot host:
+ * shim extends PCR14 before the initramfs lock runs, so the persisted baseline
+ * is nonzero and the post-lock PCR14 is SHA256(baseline || commit).
+ * These exact values were measured on the validation VM (baseline -> live PCR14).
+ * Must stay in sync with src/initramfs/lota-pcr14-lock.c and the verifier's
+ * DeriveInitramfsLockPCR14. */
+static const char baseline_kat_hex[] =
+	"17cdefd9548f4383b67a37a901673bf3c8ded6f619d36c8007562de1d93c81cc";
+static const char locked_over_baseline_kat_hex[] =
+	"046235f86682f585211ebfc580372280c61782df8c98b4d5039436cfbda9f2d9";
+
+static void write_raw_file(const char *path, const uint8_t *buf, size_t n)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+
+	if (fd < 0)
+		return;
+	if (write(fd, buf, n) != (ssize_t)n)
+		fprintf(stderr, "warning: short write to %s\n", path);
+	close(fd);
+}
+
+static void test_pcr14_lock_value_baseline_aware(void)
+{
+	uint8_t baseline[PROBE_HASH_SIZE];
+	uint8_t expect[PROBE_HASH_SIZE];
+	uint8_t zero_expect[PROBE_HASH_SIZE];
+	uint8_t got[PROBE_HASH_SIZE];
+	char path[256];
+
+	snprintf(path, sizeof(path), "/tmp/lota-inst-base.%d", (int)getpid());
+
+	TEST("PCR14 lock value folds in a nonzero (shim) baseline");
+	if (probe_hex_to_bytes(baseline_kat_hex, baseline, sizeof(baseline)) !=
+		    0 ||
+	    probe_hex_to_bytes(locked_over_baseline_kat_hex, expect,
+			       sizeof(expect)) != 0) {
+		FAIL("KAT hex did not parse");
+		return;
+	}
+	write_raw_file(path, baseline, sizeof(baseline));
+	probe_pcr14_lock_value_at(path, got);
+	unlink(path);
+	if (memcmp(got, expect, sizeof(expect)) != 0) {
+		FAIL("derived value ignores the persisted baseline");
+		return;
+	}
+	PASS();
+
+	TEST("PCR14 lock value falls back to a zero baseline when absent");
+	if (probe_hex_to_bytes(lock_kat_hex, zero_expect,
+			       sizeof(zero_expect)) != 0) {
+		FAIL("KAT hex did not parse");
+		return;
+	}
+	probe_pcr14_lock_value_at("/nonexistent/lota-pcr14-baseline", got);
+	if (memcmp(got, zero_expect, sizeof(zero_expect)) != 0) {
+		FAIL("absent baseline should derive the zero-based constant");
+		return;
+	}
+	PASS();
+}
+
 static void test_hex_to_bytes(void)
 {
 	uint8_t out[4];
@@ -235,6 +298,7 @@ int main(void)
 	printf("installer probe helpers:\n");
 
 	test_pcr14_lock_constant_kat();
+	test_pcr14_lock_value_baseline_aware();
 	test_hex_to_bytes();
 	test_cmdline_ima();
 	test_cmdline_token();

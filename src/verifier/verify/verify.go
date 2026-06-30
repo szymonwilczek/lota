@@ -802,14 +802,27 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			restartDrift uint32
 			matched      bool
 		)
+		// pcr14Baseline is the PCR14 content present before the
+		// initramfs lock / agent extends: 0^32 on a legacy/BIOS host,
+		// or the firmware/shim MOK measurement on UEFI Secure Boot,
+		// reconstructed by replaying the firmware event log (the LOTA
+		// extends are post-ExitBootServices and never enter that log).
+		// Forged log diverges from the signed PCR14 and fails the
+		// match below, so baseline doesnt need separate pin here
+		var pcr14Baseline [types.HashSize]byte
+		if bootFacts != nil {
+			pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
+		}
 		if useInitramfsLock {
 			expected, restartDrift, matched = MatchLockedBootCommitmentPCR14(
+				pcr14Baseline,
 				report.System.AgentHash,
 				parsedAttest.ClockInfo.ResetCount,
 				parsedAttest.ClockInfo.RestartCount,
 				pcr14, v.maxRestartCountSkew)
 		} else {
 			expected, restartDrift, matched = MatchBootCommitmentPCR14(
+				pcr14Baseline,
 				report.System.AgentHash,
 				parsedAttest.ClockInfo.ResetCount,
 				parsedAttest.ClockInfo.RestartCount,

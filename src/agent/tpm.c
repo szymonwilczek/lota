@@ -1936,55 +1936,119 @@ static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
 }
 
 /*
- * derive_expected_pcr14 - SHA-256(0^32 || boot_commit). Final PCR14
- * value an agent observes when it extends boot commitment onto an
- * untouched PCR14 (no initramfs lock ran).
+ * read_pcr14_baseline - load the pre-LOTA PCR14 baseline written by the
+ * initramfs lock helper.
+ *
+ * On UEFI Secure Boot shim measures the MOK state into PCR14 before the
+ * initramfs runs, so PCR14 is non-zero when the lock helper extends it.
+ * The helper records the value it observed (raw 32 bytes) at
+ * LOTA_PCR14_BASELINE_PATH on the /run tmpfs, which persists across the
+ * initramfs -> rootfs switch, so the agent anchors its derivations on the
+ * same baseline. A legacy/BIOS host (or one without the lock module)
+ * leaves no file; out is then zeroed, reproducing the 0^32 anchor.
+ *
+ * The baseline is not a trust input: a tampered file only makes the
+ * agent's own self-check derivations miss the real PCR14 and fail closed.
+ * The verifier independently reconstructs the baseline from the signed
+ * event log.
+ *
+ * Returns: 0 on success or when no baseline file exists (out zeroed).
+ */
+static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
+{
+	memset(out, 0, LOTA_HASH_SIZE);
+
+	int fd = open(LOTA_PCR14_BASELINE_PATH,
+		      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0) {
+		if (errno == ENOENT)
+			return 0;
+		return -errno;
+	}
+	FILE *f = fdopen(fd, "rb");
+	if (!f) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
+
+	uint8_t buf[LOTA_HASH_SIZE];
+	size_t n = fread(buf, 1, sizeof(buf), f);
+	int read_err = ferror(f);
+	fclose(f);
+
+	if (read_err)
+		return -EIO;
+	if (n != LOTA_HASH_SIZE) {
+		/* truncated/oversized handoff is treated as absent:
+		 * fall back to the zero anchor and let the boot-commitment match decide
+		 */
+		fprintf(stderr,
+			"PCR14 boot-commitment: ignoring malformed baseline handoff "
+			"(%zu bytes at %s)\n",
+			n, LOTA_PCR14_BASELINE_PATH);
+		memset(out, 0, LOTA_HASH_SIZE);
+		return 0;
+	}
+
+	memcpy(out, buf, LOTA_HASH_SIZE);
+	return 0;
+}
+
+/*
+ * derive_expected_pcr14 - SHA-256(baseline || boot_commit).
+ * Final PCR14 value an agent observes when it extends boot commitment
+ * onto the pre-LOTA baseline directly (no initramfs lock ran).
+ * baseline is 0^32 on a legacy/BIOS host and the firmware/shim MOK
+ * measurement on UEFI Secure Boot (see read_pcr14_baseline).
  */
 static int derive_expected_pcr14(const uint8_t self_hash[],
+				 const uint8_t baseline[LOTA_HASH_SIZE],
 				 uint32_t reset_count, uint32_t restart_count,
 				 uint8_t out_pcr14[LOTA_HASH_SIZE])
 {
 	uint8_t commit[LOTA_HASH_SIZE];
-	uint8_t zero[LOTA_HASH_SIZE] = { 0 };
 	int ret = tpm_boot_commitment_digest(self_hash, reset_count,
 					     restart_count, commit);
 	if (ret < 0)
 		return ret;
-	return sha256_two_block(zero, commit, out_pcr14);
+	return sha256_two_block(baseline, commit, out_pcr14);
 }
 
 /*
- * derive_lock_pcr14_value - SHA-256(0^32 || lock_commit). The exact
- * PCR14 value PCR14 carries when the initramfs lock helper ran but
+ * derive_lock_pcr14_value - SHA-256(baseline || lock_commit).
+ * Exact PCR14 value PCR14 carries when the initramfs lock helper ran but
  * the agent has not extended its own commitment yet.
+ * baseline is the pre-LOTA PCR14 content the lock helper extended on top of.
  */
-static int derive_lock_pcr14_value(uint32_t reset_count, uint32_t restart_count,
+static int derive_lock_pcr14_value(const uint8_t baseline[LOTA_HASH_SIZE],
+				   uint32_t reset_count, uint32_t restart_count,
 				   uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_commit[LOTA_HASH_SIZE];
-	uint8_t zero[LOTA_HASH_SIZE] = { 0 };
 	int ret = tpm_initramfs_lock_digest(reset_count, restart_count,
 					    lock_commit);
 	if (ret < 0)
 		return ret;
-	return sha256_two_block(zero, lock_commit, out);
+	return sha256_two_block(baseline, lock_commit, out);
 }
 
 /*
  * derive_expected_locked_pcr14 - final PCR14 after the lock-then-extend
- * chain: SHA-256(lock_value || boot_commit). Used by both the warm-
- * restart match (when the agent re-runs in a locked boot session) and
- * the post-extend state save.
+ * chain: SHA-256(lock_value || boot_commit).
+ * Used by both the warm-restart match (when the agent re-runs in locked
+ * boot session) and the post-extend state save.
  */
 static int derive_expected_locked_pcr14(const uint8_t self_hash[],
+					const uint8_t baseline[LOTA_HASH_SIZE],
 					uint32_t reset_count,
 					uint32_t restart_count,
 					uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_value[LOTA_HASH_SIZE];
 	uint8_t boot_commit[LOTA_HASH_SIZE];
-	int ret =
-		derive_lock_pcr14_value(reset_count, restart_count, lock_value);
+	int ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
+					  lock_value);
 	if (ret < 0)
 		return ret;
 	ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
@@ -2197,11 +2261,23 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 
 	/*
+	 * Baseline = the PCR14 content present before any LOTA extend: 0^32
+	 * on a legacy/BIOS host, or the firmware/shim MOK measurement on
+	 * UEFI Secure Boot, handed off by the initramfs lock helper.
+	 * Every candidate below anchors on it so the chain holds on Secure
+	 * Boot where PCR14 is never pristine
+	 */
+	uint8_t baseline[LOTA_HASH_SIZE];
+	ret = read_pcr14_baseline(baseline);
+	if (ret < 0)
+		return ret;
+
+	/*
 	 * Three candidate PCR14 values the agent can legitimately observe:
-	 *   expected_pcr14         = SHA-256(0^32 || boot_commit)
-	 *     - unlocked host, agent extended boot commit on top of an
-	 *       untouched PCR14
-	 *   lock_pcr14_value       = SHA-256(0^32 || lock_commit)
+	 *   expected_pcr14         = SHA-256(baseline || boot_commit)
+	 *     - unlocked host, agent extended boot commit on top of the
+	 *       baseline directly
+	 *   lock_pcr14_value       = SHA-256(baseline || lock_commit)
 	 *     - locked host where the initramfs helper ran but the agent
 	 *       has not extended its own commitment yet
 	 *   expected_locked_pcr14  = SHA-256(lock_value || boot_commit)
@@ -2209,16 +2285,17 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * Anything else is treated as tamper and routed through the
 	 * attribution logic below.
 	 */
-	ret = derive_expected_pcr14(self_hash, reset_count, restart_count,
-				    expected_pcr14);
+	ret = derive_expected_pcr14(self_hash, baseline, reset_count,
+				    restart_count, expected_pcr14);
 	if (ret < 0)
 		return ret;
-	ret = derive_lock_pcr14_value(reset_count, restart_count,
+	ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
 				      lock_pcr14_value);
 	if (ret < 0)
 		return ret;
-	ret = derive_expected_locked_pcr14(
-		self_hash, reset_count, restart_count, expected_locked_pcr14);
+	ret = derive_expected_locked_pcr14(self_hash, baseline, reset_count,
+					   restart_count,
+					   expected_locked_pcr14);
 	if (ret < 0)
 		return ret;
 

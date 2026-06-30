@@ -237,12 +237,43 @@ int probe_lockdown_restrictive(void)
  */
 #define INITRAMFS_LOCK_TAG "LOTA-PCR14-INITRAMFS-LOCK-v1"
 
-void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
+/*
+ * lota-pcr14-lock records the pre-extend PCR14 content here on the /run
+ * tmpfs (0^32 on a legacy/BIOS host, the firmware/shim MOK measurement on
+ * UEFI Secure Boot).
+ * Must match BASELINE_PATH in src/initramfs/lota-pcr14-lock.c.
+ */
+#define PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
+
+/*
+ * read_pcr14_baseline_at - load the baseline the lock helper persisted this
+ * boot.
+ * Missing or short file means the legacy/BIOS path: zero baseline, which
+ * reproduces the pre-fix behaviour and the agent's own fallback.
+ */
+static void read_pcr14_baseline_at(const char *path,
+				   uint8_t out[PROBE_HASH_SIZE])
 {
+	int fd;
+
+	memset(out, 0, PROBE_HASH_SIZE);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	if (read(fd, out, PROBE_HASH_SIZE) != PROBE_HASH_SIZE)
+		memset(out, 0, PROBE_HASH_SIZE);
+	close(fd);
+}
+
+void probe_pcr14_lock_value_at(const char *baseline_path,
+			       uint8_t out[PROBE_HASH_SIZE])
+{
+	uint8_t baseline[PROBE_HASH_SIZE];
 	uint8_t commit[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
 	unsigned int len = 0;
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
+
+	read_pcr14_baseline_at(baseline_path, baseline);
 
 	/* SHA-256 over a static tag cannot fail with a live libcrypto;
 	 * NULL ctx would mean allocation failure, where aborting via
@@ -257,11 +288,16 @@ void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 			     strlen(INITRAMFS_LOCK_TAG)) == 1 &&
 	    EVP_DigestFinal_ex(md, commit, &len) == 1 && len == sizeof(commit))
 		if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
-		    EVP_DigestUpdate(md, zero, sizeof(zero)) == 1 &&
+		    EVP_DigestUpdate(md, baseline, sizeof(baseline)) == 1 &&
 		    EVP_DigestUpdate(md, commit, sizeof(commit)) == 1)
 			EVP_DigestFinal_ex(md, out, &len);
 
 	EVP_MD_CTX_free(md);
+}
+
+void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
+{
+	probe_pcr14_lock_value_at(PCR14_BASELINE_PATH, out);
 }
 
 static int hex_nibble(char c)

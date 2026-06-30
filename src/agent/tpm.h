@@ -784,6 +784,17 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
 #define TPM_MAX_EVENT_LOG_SIZE (512 * 1024)
 
 /*
+ * PCR14 baseline handoff.
+ * initramfs lock helper records the PCR14 value it observed before its extend
+ * (0^32 on legacy/BIOS, the firmware/shim MOK measurement on UEFI Secure Boot)
+ * as raw 32 bytes here, on the /run tmpfs that persists across the
+ * initramfs -> rootfs switch.
+ * Agent reads it so its boot-commitment derivations anchor on the same baseline.
+ * Absent file = zero baseline (legacy path).
+ */
+#define LOTA_PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
+
+/*
  * tpm_read_event_log - Read TPM event log from securityfs
  * @buf: Output buffer (caller allocates, recommend TPM_MAX_EVENT_LOG_SIZE)
  * @buf_size: Size of output buffer
