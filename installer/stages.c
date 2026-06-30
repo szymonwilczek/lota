@@ -232,7 +232,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 4: fs-verity on the agent binary */
+/* stage 4: kernel-enforced binary immutability (fs-verity or signed IMA) */
 
 static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
@@ -253,13 +253,24 @@ static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
 			 PATH_AGENT_BIN);
 		return STAGE_PENDING;
 	case PROBE_VERITY_UNSUPPORTED:
-		snprintf(note, cap,
-			 "The filesystem holding %s lacks the verity "
-			 "feature. ext4: enable it with 'tune2fs -O verity' "
-			 "on the unmounted device (btrfs/f2fs ship it by "
-			 "default). The agent refuses to run from a mutable "
-			 "binary.",
-			 PATH_AGENT_BIN);
+		/*
+		 * no native fs-verity on this filesystem.
+		 * Signed security.ima xattr appraised under ima_appraise=enforce
+		 * gives the same offline-swap guarantee and the agent accepts it
+		 * as equivalent, so IMA-signed binary is done.
+		 * Otherwise block with filesystem-specific guidance
+		 */
+		if (probe_file_ima_signed(PATH_AGENT_BIN) == 1) {
+			snprintf(
+				note, cap,
+				"No fs-verity on this filesystem; %s carries a "
+				"signed security.ima xattr enforced by IMA "
+				"appraisal instead",
+				PATH_AGENT_BIN);
+			return STAGE_DONE;
+		}
+		probe_verity_remediation(probe_path_fstype(PATH_AGENT_BIN),
+					 PATH_AGENT_BIN, note, cap);
 		return STAGE_BLOCKED;
 	default:
 		snprintf(note, cap, "fs-verity probe failed: %s",
@@ -785,10 +796,12 @@ int install_self_check(struct install_ctx *ctx)
 	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok))
 		ok = 0;
 
-	ui_kv(&ctx->ui, "fs-verity on the agent",
+	ui_kv(&ctx->ui, "agent binary immutability",
 	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
-		      "Enabled" :
-		      "NOT enabled");
+		      "Enforced (fs-verity)" :
+	      probe_file_ima_signed(PATH_AGENT_BIN) == 1 ?
+		      "Enforced (signed IMA xattr)" :
+		      "NOT enforced");
 
 	ui_kv(&ctx->ui, "agent service",
 	      agent_service_active() ? "Active" : "NOT active");
@@ -899,14 +912,16 @@ const struct stage install_stages[] = {
 		.apply = st_trust_apply,
 	},
 	{
-		.title = "Tamper-proofing the agent binary (fs-verity)",
+		.title = "Tamper-proofing the agent binary",
 		.explain =
-			"fs-verity makes the kernel refuse any modified read of "
-			"/usr/bin/lota-agent: the file gets a Merkle tree and "
-			"becomes immutable."
-			"Replacing or patching it breaks attestation visibly."
-			"This changes only that one file's state on disk and is "
-			"undone by reinstalling the package.",
+			"Kernel must refuse any modified read of /usr/bin/lota-agent "
+			"so replacing or patching it breaks attestation visibly. "
+			"On ext4/btrfs/f2fs this stage enables fs-verity. "
+			"On XFS, ZFS and other filesystems without verity, signed "
+			"security.ima xattr appraised under ima_appraise=enforce "
+			"gives the same guarantee; the agent accepts either. "
+			"fs-verity changes only that one file's state on disk and "
+			"is undone by reinstalling the package.",
 		.probe = st_verity_probe,
 		.apply = st_verity_apply,
 	},

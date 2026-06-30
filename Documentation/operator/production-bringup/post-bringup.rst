@@ -15,9 +15,12 @@ The most common failures, with the gate that produced them:
   ``[confidentiality]``), ``cat /sys/module/module/parameters/sig_enforce``
   (must be ``Y``), and ``grep -oE 'ima_appraise=\w+' /proc/cmdline`` (must
   report ``enforce`` or ``fix``).
-* ``Agent binary is not fs-verity protected``. Re-run ``fsverity enable`` on
-  ``/usr/bin/lota-agent``. The verity merkle root is bound to the inode, so
-  re-installs invalidate the bit; the bring-up script re-enables on every run.
+* ``Agent binary is not protected against offline tampering``. On
+  ext4/btrfs/f2fs re-run ``fsverity enable`` on ``/usr/bin/lota-agent``; the
+  verity merkle root is bound to the inode, so re-installs invalidate the bit
+  and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
+  re-sign the binary into its ``security.ima`` xattr and confirm
+  ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
 * ``BPF object signature verification failed``. The ``.sig`` is from a different
   key. Re-sign with the key that ``policy_pubkey`` points at, or update
   ``policy_pubkey`` to match the signing key.

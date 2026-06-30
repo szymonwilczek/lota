@@ -29,6 +29,7 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_devt.h"
+#include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
 #include "journal.h"
 #include "policy_sign.h"
@@ -558,6 +559,56 @@ static int agent_self_fsverity_enabled(void)
 	return ret;
 }
 
+/* Signed security.ima xattr fits comfortably below this;
+ * RSA-8192 signature plus the IMA v2 header is ~1 KiB.
+ * Oversized values return ERANGE and are treated as not-determinable */
+#define LOTA_IMA_XATTR_READ_MAX 4096
+
+/*
+ * Returns 0 when /proc/self/exe carries a kernel-enforced IMA signature
+ * in its security.ima xattr, negative errno otherwise.
+ *
+ * Under ima_appraise=enforce the kernel refuses to exec or read a file whose
+ * content does not match the hash signed in security.ima by a key in the .ima keyring.
+ * Signature-type xattr on the running binary is therefore live evidence that the kernel
+ * appraised it: unsigned or tampered binary would not have reached this code.
+ * This is the same offline-swap coverage fs-verity gives, on any filesystem with security
+ * xattr namespace (XFS, ZFS, ...) where fs-verity is unavailable.
+ * Bare digest does not count -- attacker who swaps the binary offline can recompute it.
+ */
+static int agent_self_ima_signed(void)
+{
+	uint8_t xattr[LOTA_IMA_XATTR_READ_MAX];
+	ssize_t n = getxattr("/proc/self/exe", "security.ima", xattr,
+			     sizeof(xattr));
+
+	if (n < 0)
+		return -errno;
+	if (!lota_ima_xattr_is_signature(xattr, (size_t)n))
+		return -ENODATA;
+	return 0;
+}
+
+/*
+ * Returns 0 when the agent binary is protected by at least one kernel-enforced
+ * immutability mechanism, negative errno otherwise.
+ * fs-verity (ext4, btrfs, f2fs, recent XFS) and appraised signed security.ima
+ * xattr (any filesystem with a security xattr namespace) are equivalent for the
+ * offline-swap threat this gate closes, so either one satisfies it.
+ * fs-verity errno is preserved when neither holds, since it is the more specific
+ * failure on verity-capable rootfs.
+ */
+static int agent_self_immutability_enforced(void)
+{
+	int ret = agent_self_fsverity_enabled();
+
+	if (ret == 0)
+		return 0;
+	if (agent_self_ima_signed() == 0)
+		return 0;
+	return ret;
+}
+
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	int ret;
@@ -616,12 +667,13 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		}
 	}
 
-	ret = agent_self_fsverity_enabled();
+	ret = agent_self_immutability_enforced();
 	if (ret < 0) {
 		if (allow_mutable_rootfs) {
 			lota_warn(
-				"INSECURE: agent binary (/proc/self/exe) is not "
-				"fs-verity protected, and "
+				"INSECURE: agent binary (/proc/self/exe) is "
+				"neither fs-verity protected nor covered by a "
+				"signed security.ima xattr, and "
 				"--insecure-allow-mutable-rootfs "
 				"was set. Dirty shutdown "
 				"(panic/power-loss/SIGKILL) on "
@@ -635,14 +687,18 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 				"while the "
 				"host was offline.");
 		} else {
-			lota_err("Agent binary (/proc/self/exe) is not "
-				 "fs-verity protected "
-				 "(required to detect tampering across "
-				 "panic/power-loss/SIGKILL; "
-				 "dirty shutdown cannot run "
-				 "poison_runtime_pcr() and the verifier "
-				 "has no other way to notice a swapped binary "
-				 "on a measured rootfs)");
+			lota_err(
+				"Agent binary (/proc/self/exe) is not "
+				"protected against offline tampering "
+				"(needs fs-verity, or a signed security.ima "
+				"xattr appraised under ima_appraise=enforce on "
+				"filesystems without verity such as XFS or ZFS; "
+				"required to detect tampering across "
+				"panic/power-loss/SIGKILL, where "
+				"dirty shutdown cannot run "
+				"poison_runtime_pcr() and the verifier "
+				"has no other way to notice a swapped binary "
+				"on a measured rootfs)");
 			return ret;
 		}
 	}

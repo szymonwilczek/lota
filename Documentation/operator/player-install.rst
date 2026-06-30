@@ -108,8 +108,10 @@ What the stages do
    that key. Fail-closed: the installer never generates a signing key on the
    player machine -- a locally generated key would let local malware re-sign a
    tampered enforcement object.
-#. **fs-verity** -- enables the kernel-enforced immutability bit on the agent
-   binary.
+#. **Binary immutability** -- enables fs-verity on the agent binary
+   (ext4/btrfs/f2fs). On filesystems without verity (XFS, ZFS) it instead
+   accepts a signed ``security.ima`` xattr enforced by IMA appraisal, which
+   gives the same guarantee.
 #. **Initramfs PCR14 lock** -- regenerates the initramfs so the PCR14 lock
    helper runs before any regular userspace. Requires a reboot.
 #. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus

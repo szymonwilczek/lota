@@ -35,10 +35,12 @@ current tree.
      - ``src/agent/bpf_loader.c::tpm_device_selinux_label_ok()``
      - Install the udev rule under :ghsrc:`configs/udev/99-lota-tpm.rules` (handled by
        ``make install``) and run ``udevadm trigger``.
-   * - fs-verity on ``/usr/bin/lota-agent``
-     - ``src/agent/bpf_loader.c::agent_self_fsverity_enabled()``
-     - Filesystem must have the verity feature enabled. Run
-       ``fsverity enable /usr/bin/lota-agent`` (or let bring-up do it).
+   * - Kernel-enforced immutability of ``/usr/bin/lota-agent``
+     - ``src/agent/bpf_loader.c::agent_self_immutability_enforced()``
+     - fs-verity OR a signed ``security.ima`` xattr. On ext4/btrfs/f2fs run
+       ``fsverity enable /usr/bin/lota-agent`` (or let bring-up do it); on
+       XFS/ZFS sign the binary (``evmctl ima_sign``) under
+       ``ima_appraise=enforce``.
    * - BPF object Ed25519 signature
      - ``src/agent/bpf_loader.c::verify_bpf_object_signature()``
      - Sign ``lota_lsm.bpf.o`` against the operator key, install the ``.sig``
