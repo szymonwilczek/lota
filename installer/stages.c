@@ -822,6 +822,7 @@ int install_self_check(struct install_ctx *ctx)
 	struct floor_state st;
 	int days = 0;
 	int ok = 1;
+	int rc_cert;
 
 	ui_stage_begin(&ctx->ui, install_stage_count + 1,
 		       install_stage_count + 1, "Self-check");
@@ -845,12 +846,25 @@ int install_self_check(struct install_ctx *ctx)
 	if (!agent_service_active())
 		ok = 0;
 
-	if (probe_cert_days_left(PATH_AIK_CERT, &days) == 0 && days > 0) {
+	rc_cert = probe_cert_days_left(PATH_AIK_CERT, &days);
+	if (rc_cert == 0 && days > 0) {
 		char buf[64];
 
 		snprintf(buf, sizeof(buf), "Valid, %d day%s left", days,
 			 days == 1 ? "" : "s");
 		ui_kv(&ctx->ui, "AIK certificate", buf);
+	} else if (rc_cert == 0 && days == 0) {
+		/*
+		 * whole-day granularity:
+		 * freshly issued cert with the default 24h CA TTL has less than
+		 * one full day and still validates (notAfter is in the future),
+		 * and continuous attestation renews it before expiry.
+		 *
+		 * mirror st_enroll_probe so the self-check does not fail CA that
+		 * issues short-lived AIK certificates
+		 */
+		ui_kv(&ctx->ui, "AIK certificate",
+		      "Valid, less than a day left");
 	} else {
 		ui_kv(&ctx->ui, "AIK certificate", "NOT valid");
 		ok = 0;
