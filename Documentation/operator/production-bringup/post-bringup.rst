@@ -91,9 +91,15 @@ does not attest. A deployed host proves its state through a second unit,
 renews the CA-issued AIK certificate before it expires. It is a separate unit
 on purpose: the attestation loop is network-facing, so isolating it from the
 enforcement daemon keeps that security core on a tight seccomp and capability
-profile (the attest unit holds no ``CAP_BPF`` / ``CAP_SYS_ADMIN`` and cannot
-disable enforcement). A compromise of the attest process at worst stops fresh
-attestations, which the verifier sees as staleness and marks untrusted.
+profile. The attest unit itself runs with no effective capabilities at all
+(``SecureBits=noroot-locked`` with an empty ambient set), reaches the TPM only
+through ``DeviceAllow``, and cannot load BPF or disable enforcement. A
+compromise of the attest process at worst stops fresh attestations, which the
+verifier sees as staleness and marks untrusted.
+
+The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
+independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
+TLS socket misses the deadline and systemd restarts it.
 
 The verifier, port, CA certificate and cadence come from
 ``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);

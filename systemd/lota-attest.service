@@ -50,6 +50,15 @@ Restart=on-failure
 # host that is reachable but not yet fully enrolled should back off
 RestartSec=30s
 
+# Continuous loop pings the watchdog every WatchdogSec/2
+# (cadence is decoupled from attest_interval), so loop wedged on the TPM
+# or stalled TLS socket misses the deadline and systemd restarts it.
+# NotifyAccess=main makes systemd hand over NOTIFY_SOCKET under Type=simple
+# so the pings are received; the one-shot config (attest_interval=0) just exits
+# success before the first deadline.
+WatchdogSec=60s
+NotifyAccess=main
+
 User=root
 Group=root
 
@@ -67,11 +76,15 @@ DevicePolicy=closed
 DeviceAllow=/dev/tpmrm0 rw
 DeviceAllow=/dev/tpm0 rw
 
-# Minimal capabilities:
-# lock TPM secrets in memory; nothing else.
-# No CAP_SYS_ADMIN / CAP_BPF / CAP_PERFMON / CAP_SYS_RAWIO
-# unlike the enforcement daemon
-CapabilityBoundingSet=CAP_IPC_LOCK
+# No capabilities at all.
+# SecureBits=noroot-locked below stops uid 0 from auto-granting any and
+# AmbientCapabilities is empty, so the loop runs cap-less: TPM access comes
+# from DeviceAllow plus root-owned DAC and the verifier/CA sockets need none.
+# Unlike the enforcement daemon (CAP_SYS_ADMIN/CAP_BPF/CAP_PERFMON) this
+# process loads no BPF and touches no raw I/O.
+# Agent never calls mlock; LimitMEMLOCK below still lets any library-internal
+# secret locking succeed within the rlimit without CAP_IPC_LOCK.
+CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 
