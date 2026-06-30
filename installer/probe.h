@@ -25,6 +25,18 @@ enum probe_verity {
 	PROBE_VERITY_UNSUPPORTED, /* filesystem lacks the verity feature */
 };
 
+/* Filesystem class of the volume backing path, used to steer binary-immutability
+ * remediation: verity-capable filesystems take the fs-verity path, the rest take
+ * the filesystem-agnostic signed-IMA-xattr path */
+enum probe_fstype {
+	PROBE_FS_UNKNOWN = 0,
+	PROBE_FS_EXT4, /* ext2/ext3/ext4 */
+	PROBE_FS_XFS,
+	PROBE_FS_BTRFS,
+	PROBE_FS_F2FS,
+	PROBE_FS_ZFS,
+};
+
 /* PCR14 state relative to the initramfs lock */
 enum probe_pcr14 {
 	PROBE_PCR14_LOCK_ONLY = 0, /* lock ran, agent not yet extended */
@@ -44,6 +56,33 @@ int probe_fsverity_state(const char *path);
 /* Enables fs-verity (SHA-256, 4K blocks) on the file.
  * 0 or -errno; EOPNOTSUPP/-ENOTTY mean the filesystem lacks the feature. */
 int probe_fsverity_enable(const char *path);
+
+/* Pure: maps statfs f_type magic to probe_fstype */
+enum probe_fstype probe_fstype_from_magic(long magic);
+
+/* Pure:
+ * 1 when the filesystem implements native fs-verity (ext4, btrfs, f2fs),
+ * 0 otherwise.
+ * Live ioctl in probe_fsverity_state() stays authoritative for capability;
+ * this only steers remediation text */
+int probe_fs_supports_fsverity(enum probe_fstype fs);
+
+/* Pure:
+ * Writes filesystem-specific guidance for establishing kernel-enforced
+ * immutability of the binary at path.
+ * Verity-capable filesystems get the fs-verity-enable path;
+ * the rest get the filesystem-agnostic signed-IMA-xattr path */
+void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
+			      size_t cap);
+
+/* statfs the path and classify its filesystem.
+ * enum probe_fstype, or PROBE_FS_UNKNOWN when statfs fails */
+enum probe_fstype probe_path_fstype(const char *path);
+
+/* Mirrors the agent's agent_self_ima_signed():
+ * 1 when the file carries a signature-type security.ima xattr,
+ * 0 when it has none or only a bare digest, errno on read failure. */
+int probe_file_ima_signed(const char *path);
 
 /* 1 = Secure Boot enabled, 0 = disabled/setup mode,
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
@@ -80,9 +119,17 @@ int probe_module_sig_enforced(void);
 /* 0 when lockdown is [integrity] or [confidentiality] */
 int probe_lockdown_restrictive(void);
 
-/* Derives the constant PCR14 value installed by the initramfs lock:
- * SHA256(0^32 || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")) */
+/* Derives the post-lock PCR14 value installed by the initramfs lock:
+ * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
+ * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (0^32 on a
+ * legacy/BIOS host, the firmware/shim MOK measurement on UEFI Secure Boot). */
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE]);
+
+/* Path-parameterized variant behind the fixed-path wrapper above;
+ * baseline_path is the file lota-pcr14-lock writes the pre-extend PCR14 to.
+ * Lets tests pin the derivation against known baseline. */
+void probe_pcr14_lock_value_at(const char *baseline_path,
+			       uint8_t out[PROBE_HASH_SIZE]);
 
 /* Pure parser:
  * Hex string (exactly 2*n chars, case-insensitive) to bytes.

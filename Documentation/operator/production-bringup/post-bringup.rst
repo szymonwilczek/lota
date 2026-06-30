@@ -15,9 +15,12 @@ The most common failures, with the gate that produced them:
   ``[confidentiality]``), ``cat /sys/module/module/parameters/sig_enforce``
   (must be ``Y``), and ``grep -oE 'ima_appraise=\w+' /proc/cmdline`` (must
   report ``enforce`` or ``fix``).
-* ``Agent binary is not fs-verity protected``. Re-run ``fsverity enable`` on
-  ``/usr/bin/lota-agent``. The verity merkle root is bound to the inode, so
-  re-installs invalidate the bit; the bring-up script re-enables on every run.
+* ``Agent binary is not protected against offline tampering``. On
+  ext4/btrfs/f2fs re-run ``fsverity enable`` on ``/usr/bin/lota-agent``; the
+  verity merkle root is bound to the inode, so re-installs invalidate the bit
+  and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
+  re-sign the binary into its ``security.ima`` xattr and confirm
+  ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
 * ``BPF object signature verification failed``. The ``.sig`` is from a different
   key. Re-sign with the key that ``policy_pubkey`` points at, or update
   ``policy_pubkey`` to match the signing key.
@@ -26,7 +29,12 @@ The most common failures, with the gate that produced them:
   metadata backup or evict the AIK handle and reboot so the agent re-provisions
   clean.
 * ``PCR14 holds an unexpected value``. Cold reboot. PCR14 only resets on
-  hardware reset; warm reboot keeps the value.
+  hardware reset; warm reboot keeps the value. On UEFI Secure Boot this also
+  appears when the ``90lota`` initramfs lock did not run: shim leaves the MOK
+  measurement in PCR14, and without the lock recording that baseline at
+  ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
+  the dracut module is installed and the initramfs was rebuilt (see
+  :doc:`manual-reference`, section 5), then cold reboot.
 
 Threat model implications of the dev path
 =========================================
@@ -74,6 +82,54 @@ Two supported paths exist:
    an attack surface for an init-domain compromise. Operators planning updates
    therefore schedule them alongside a regular maintenance reboot.
 
+Continuous attestation
+----------------------
+
+``lota-agent.service`` only enforces locally (BPF LSM, PCR14 commitment); it
+does not attest. A deployed host proves its state through a second unit,
+``lota-attest.service``, which runs ``lota-agent --attest`` fire-and-forget and
+renews the CA-issued AIK certificate before it expires. It is a separate unit
+on purpose: the attestation loop is network-facing, so isolating it from the
+enforcement daemon keeps that security core on a tight seccomp and capability
+profile. The attest unit itself runs with no effective capabilities at all
+(``SecureBits=noroot-locked`` with an empty ambient set), reaches the TPM only
+through ``DeviceAllow``, and cannot load BPF or disable enforcement. A
+compromise of the attest process at worst stops fresh attestations, which the
+verifier sees as staleness and marks untrusted.
+
+The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
+independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
+TLS socket misses the deadline and systemd restarts it.
+
+The verifier, port, CA certificate and cadence come from
+``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
+no attestation flags are hardcoded in the unit. Keep ``attest_interval``
+non-zero -- a zero interval attests once and exits.
+
+``ca_cert`` must point at a path the hardened unit can read. The service runs
+with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
+an operator home directory (the ``--ca-cert ~/tls.crt`` used for a manual
+``--enroll``) is invisible to it. Copy the verifier CA certificate under
+``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
+there, for example::
+
+   sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
+   # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
+
+First enrollment stays operator-driven. ``lota-attest.service`` carries
+``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
+the operator's first ``lota-agent --enroll`` records that state; afterwards the
+loop renews the certificate automatically. Start it after the first enrollment
+(or it activates on the next boot):
+
+.. code-block:: sh
+
+   sudo systemctl enable --now lota-attest.service
+
+The shipped ``85-lota.preset`` enables both ``lota-agent.service`` and
+``lota-attest.service`` by default, so a packaged install only needs the first
+enrollment to begin attesting.
+
 VM testing caveats
 ------------------
 
@@ -116,8 +172,8 @@ around them.
 
 * ``sudo make install`` **does not load the SELinux module.** The install rule
   lands ``lota.pp`` under the source tree but does not call ``semodule -i``.
-  After any change to `selinux/lota.te <https://github.com/szymonwilczek/lota/blob/main/selinux/lota.te>`__, rebuild the module on the host (the
-  in-tree `selinux/Makefile <https://github.com/szymonwilczek/lota/blob/main/selinux/Makefile>`__ writes to ``tmp/`` in the cwd, which the
+  After any change to :ghsrc:`selinux/lota.te`, rebuild the module on the host (the
+  in-tree :ghsrc:`selinux/Makefile` writes to ``tmp/`` in the cwd, which the
   read-only virtiofs blocks), then load the package inside the guest:
 
   .. code-block:: sh

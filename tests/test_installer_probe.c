@@ -66,6 +66,69 @@ static void test_pcr14_lock_constant_kat(void)
 	PASS();
 }
 
+/* Cross-component KAT taken from live UEFI Secure Boot host:
+ * shim extends PCR14 before the initramfs lock runs, so the persisted baseline
+ * is nonzero and the post-lock PCR14 is SHA256(baseline || commit).
+ * These exact values were measured on the validation VM (baseline -> live PCR14).
+ * Must stay in sync with src/initramfs/lota-pcr14-lock.c and the verifier's
+ * DeriveInitramfsLockPCR14. */
+static const char baseline_kat_hex[] =
+	"17cdefd9548f4383b67a37a901673bf3c8ded6f619d36c8007562de1d93c81cc";
+static const char locked_over_baseline_kat_hex[] =
+	"046235f86682f585211ebfc580372280c61782df8c98b4d5039436cfbda9f2d9";
+
+static void write_raw_file(const char *path, const uint8_t *buf, size_t n)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+
+	if (fd < 0)
+		return;
+	if (write(fd, buf, n) != (ssize_t)n)
+		fprintf(stderr, "warning: short write to %s\n", path);
+	close(fd);
+}
+
+static void test_pcr14_lock_value_baseline_aware(void)
+{
+	uint8_t baseline[PROBE_HASH_SIZE];
+	uint8_t expect[PROBE_HASH_SIZE];
+	uint8_t zero_expect[PROBE_HASH_SIZE];
+	uint8_t got[PROBE_HASH_SIZE];
+	char path[256];
+
+	snprintf(path, sizeof(path), "/tmp/lota-inst-base.%d", (int)getpid());
+
+	TEST("PCR14 lock value folds in a nonzero (shim) baseline");
+	if (probe_hex_to_bytes(baseline_kat_hex, baseline, sizeof(baseline)) !=
+		    0 ||
+	    probe_hex_to_bytes(locked_over_baseline_kat_hex, expect,
+			       sizeof(expect)) != 0) {
+		FAIL("KAT hex did not parse");
+		return;
+	}
+	write_raw_file(path, baseline, sizeof(baseline));
+	probe_pcr14_lock_value_at(path, got);
+	unlink(path);
+	if (memcmp(got, expect, sizeof(expect)) != 0) {
+		FAIL("derived value ignores the persisted baseline");
+		return;
+	}
+	PASS();
+
+	TEST("PCR14 lock value falls back to a zero baseline when absent");
+	if (probe_hex_to_bytes(lock_kat_hex, zero_expect,
+			       sizeof(zero_expect)) != 0) {
+		FAIL("KAT hex did not parse");
+		return;
+	}
+	probe_pcr14_lock_value_at("/nonexistent/lota-pcr14-baseline", got);
+	if (memcmp(got, zero_expect, sizeof(zero_expect)) != 0) {
+		FAIL("absent baseline should derive the zero-based constant");
+		return;
+	}
+	PASS();
+}
+
 static void test_hex_to_bytes(void)
 {
 	uint8_t out[4];
@@ -230,16 +293,91 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/* statfs f_type magics, mirroring <linux/magic.h> */
+#define KAT_EXT_MAGIC 0xEF53
+#define KAT_XFS_MAGIC 0x58465342
+#define KAT_BTRFS_MAGIC 0x9123683E
+#define KAT_F2FS_MAGIC 0xF2F52010
+#define KAT_ZFS_MAGIC 0x2FC12FC1
+
+static void test_fstype_magic_mapping(void)
+{
+	TEST("statfs magic maps to the right filesystem class");
+	if (probe_fstype_from_magic(KAT_EXT_MAGIC) != PROBE_FS_EXT4 ||
+	    probe_fstype_from_magic(KAT_XFS_MAGIC) != PROBE_FS_XFS ||
+	    probe_fstype_from_magic(KAT_BTRFS_MAGIC) != PROBE_FS_BTRFS ||
+	    probe_fstype_from_magic(KAT_F2FS_MAGIC) != PROBE_FS_F2FS ||
+	    probe_fstype_from_magic(KAT_ZFS_MAGIC) != PROBE_FS_ZFS) {
+		FAIL("known magic misclassified");
+		return;
+	}
+	if (probe_fstype_from_magic(0x12345) != PROBE_FS_UNKNOWN) {
+		FAIL("unknown magic not reported as UNKNOWN");
+		return;
+	}
+	PASS();
+}
+
+static void test_fs_verity_capability(void)
+{
+	TEST("verity-capable filesystems are ext4/btrfs/f2fs only");
+	if (!probe_fs_supports_fsverity(PROBE_FS_EXT4) ||
+	    !probe_fs_supports_fsverity(PROBE_FS_BTRFS) ||
+	    !probe_fs_supports_fsverity(PROBE_FS_F2FS)) {
+		FAIL("a verity-capable filesystem reported as incapable");
+		return;
+	}
+	if (probe_fs_supports_fsverity(PROBE_FS_XFS) ||
+	    probe_fs_supports_fsverity(PROBE_FS_ZFS) ||
+	    probe_fs_supports_fsverity(PROBE_FS_UNKNOWN)) {
+		FAIL("a non-verity filesystem reported as capable");
+		return;
+	}
+	PASS();
+}
+
+static void test_verity_remediation_per_fs(void)
+{
+	char ext[512];
+	char xfs[512];
+	char zfs[512];
+
+	TEST("remediation steers ext4 to verity and XFS/ZFS to IMA");
+	probe_verity_remediation(PROBE_FS_EXT4, "/usr/bin/lota-agent", ext,
+				 sizeof(ext));
+	probe_verity_remediation(PROBE_FS_XFS, "/usr/bin/lota-agent", xfs,
+				 sizeof(xfs));
+	probe_verity_remediation(PROBE_FS_ZFS, "/usr/bin/lota-agent", zfs,
+				 sizeof(zfs));
+	if (!strstr(ext, "tune2fs")) {
+		FAIL("ext4 hint omits the tune2fs verity path");
+		return;
+	}
+	if (strstr(xfs, "tune2fs") || !strstr(xfs, "security.ima")) {
+		FAIL("XFS hint must drop tune2fs and name the IMA route");
+		return;
+	}
+	if (strstr(zfs, "tune2fs") || !strstr(zfs, "security.ima")) {
+		FAIL("ZFS hint must drop tune2fs and name the IMA route");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
 
 	test_pcr14_lock_constant_kat();
+	test_pcr14_lock_value_baseline_aware();
 	test_hex_to_bytes();
 	test_cmdline_ima();
 	test_cmdline_token();
 	test_conf_key();
 	test_esrt_present();
+	test_fstype_magic_mapping();
+	test_fs_verity_capability();
+	test_verity_remediation_per_fs();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -7,8 +7,6 @@ package verify
 import (
 	"crypto/sha256"
 	"testing"
-
-	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 func FuzzParseEventLog(f *testing.F) {
@@ -49,15 +47,20 @@ func FuzzParseEventLog(f *testing.F) {
 			t.Fatal("ParseEventLog returned nil without error")
 		}
 		for _, entry := range parsed.Entries {
-			if entry.PCRIndex >= types.PCRCount {
-				// parser should accept any index; replay skips out-of-range
-			}
 			for algID, digest := range entry.Digests {
 				expected := algDigestSize(algID)
 				if expected != 0 && len(digest) != expected {
 					t.Fatalf("digest length %d for alg 0x%04x, expected %d", len(digest), algID, expected)
 				}
 			}
+		}
+		// determinism: parsing the same bytes must yield the same entry count
+		again, err2 := ParseEventLog(data)
+		if err2 != nil || again == nil {
+			t.Fatal("ParseEventLog nondeterministic: second parse failed")
+		}
+		if len(again.Entries) != len(parsed.Entries) {
+			t.Fatalf("ParseEventLog nondeterministic: %d then %d entries", len(parsed.Entries), len(again.Entries))
 		}
 	})
 }
@@ -91,6 +94,15 @@ func FuzzReplayEventLog(f *testing.F) {
 		}
 		if result.TotalEntries != len(parsed.Entries) {
 			t.Fatalf("TotalEntries=%d, parsed entries=%d", result.TotalEntries, len(parsed.Entries))
+		}
+		// replay is a pure function of the parsed log:
+		// second replay must reconstruct the identical PCR bank
+		result2, err := ReplayEventLog(parsed)
+		if err != nil || result2 == nil {
+			t.Fatal("ReplayEventLog nondeterministic: second replay failed")
+		}
+		if result2.PCRValues != result.PCRValues {
+			t.Fatal("ReplayEventLog reconstructed different PCRs for the same log")
 		}
 	})
 }

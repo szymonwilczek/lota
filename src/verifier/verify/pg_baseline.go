@@ -831,6 +831,7 @@ func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState 
 		st.EventLogBaseline = append([]byte(nil), evlog...)
 	}
 	if esrtVersion.Valid {
+		// #nosec G115 -- uint32 ESRT version stored in a signed BIGINT column, round-tripped back to its source type
 		st.ESRTVersion = uint32(esrtVersion.Int64)
 	}
 	st.ESRTCapable = esrtCapable.Valid && esrtCapable.Bool
@@ -850,13 +851,13 @@ func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState 
 // esrt_capable is kept sticky (OR), never cleared.
 func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
-	esrtCapable, lfa bool, reason string,
+	esrtCapable, lfa bool, reason string, now time.Time,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ctx := context.Background()
-	now := time.Now().UTC()
+	now = now.UTC()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -877,12 +878,20 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	var (
 		oldPCR0, oldPCR1, oldPCR7 []byte
 		oldESRT                   sql.NullInt64
+		lastReanchor              sql.NullTime
 	)
+	// FOR UPDATE locks the row, and last_reanchor_at is read under that lock,
+	// so the rate-limit guard below cannot be raced by a concurrent re-anchor
+	// running on another verifier instance
 	if err := tx.QueryRowContext(ctx,
-		"SELECT pcr0, pcr1, pcr7, esrt_version FROM baselines WHERE client_id = $1 FOR UPDATE",
+		"SELECT pcr0, pcr1, pcr7, esrt_version, last_reanchor_at FROM baselines WHERE client_id = $1 FOR UPDATE",
 		clientID,
-	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT); err != nil {
+	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT, &lastReanchor); err != nil {
 		return err
+	}
+	if lastReanchor.Valid &&
+		now.Sub(lastReanchor.Time.UTC()) < reanchorInterval(lfa) {
+		return ErrReanchorRateLimited
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO baseline_archive

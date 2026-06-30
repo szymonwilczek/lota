@@ -177,11 +177,15 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(note, cap,
-			 "The BPF object signature does not verify against "
-			 "%s - the bundle is inconsistent or tampered. "
-			 "Obtain a matching bundle from the operator.",
-			 ctx->opts.policy_pubkey);
+		snprintf(
+			note, cap,
+			"The BPF object signature does not verify against "
+			"%s. Expected after a package upgrade replaces the "
+			"unsigned BPF object: re-sign it with the operator key "
+			"(lota-agent --sign-policy %s --signing-key <key>), or "
+			"obtain a matching signed bundle from the operator. The "
+			"installer never signs on this host by design.",
+			ctx->opts.policy_pubkey, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
@@ -232,7 +236,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 4: fs-verity on the agent binary */
+/* stage 4: kernel-enforced binary immutability (fs-verity or signed IMA) */
 
 static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
@@ -253,13 +257,24 @@ static enum stage_state st_verity_probe(struct install_ctx *ctx, char *note,
 			 PATH_AGENT_BIN);
 		return STAGE_PENDING;
 	case PROBE_VERITY_UNSUPPORTED:
-		snprintf(note, cap,
-			 "The filesystem holding %s lacks the verity "
-			 "feature. ext4: enable it with 'tune2fs -O verity' "
-			 "on the unmounted device (btrfs/f2fs ship it by "
-			 "default). The agent refuses to run from a mutable "
-			 "binary.",
-			 PATH_AGENT_BIN);
+		/*
+		 * no native fs-verity on this filesystem.
+		 * Signed security.ima xattr appraised under ima_appraise=enforce
+		 * gives the same offline-swap guarantee and the agent accepts it
+		 * as equivalent, so IMA-signed binary is done.
+		 * Otherwise block with filesystem-specific guidance
+		 */
+		if (probe_file_ima_signed(PATH_AGENT_BIN) == 1) {
+			snprintf(
+				note, cap,
+				"No fs-verity on this filesystem; %s carries a "
+				"signed security.ima xattr enforced by IMA "
+				"appraisal instead",
+				PATH_AGENT_BIN);
+			return STAGE_DONE;
+		}
+		probe_verity_remediation(probe_path_fstype(PATH_AGENT_BIN),
+					 PATH_AGENT_BIN, note, cap);
 		return STAGE_BLOCKED;
 	default:
 		snprintf(note, cap, "fs-verity probe failed: %s",
@@ -458,6 +473,28 @@ static int agent_label_ok(void)
 	return strstr(lctx, "lota_agent_exec_t") != NULL;
 }
 
+/* Confined lota_agent_t service reads its AIK witness from /var/lib/lota.
+ * Enrollment may have created that state under an unconfined login shell,
+ * leaving the generic var_lib_t label that lota_agent_t cannot read
+ * (the daemon then dies with EACCES on aik_meta.dat).
+ *
+ * Treat missing dir or non-SELinux host as fine;
+ * present dir must carry lota_var_t */
+static int lota_state_label_ok(void)
+{
+	char lctx[256];
+	ssize_t got;
+
+	if (!file_exists(PATH_LOTA_STATE_DIR))
+		return 1;
+	got = getxattr(PATH_LOTA_STATE_DIR, "security.selinux", lctx,
+		       sizeof(lctx) - 1);
+	if (got < 0)
+		return errno == ENOTSUP ? 1 : 0;
+	lctx[got] = '\0';
+	return strstr(lctx, "lota_var_t") != NULL;
+}
+
 static int selinux_module_loaded(void)
 {
 	char out[16384];
@@ -485,10 +522,10 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 {
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && agent_label_ok()) {
+	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
 		snprintf(note, cap,
-			 "TPM device and agent binary carry the "
-			 "LOTA SELinux labels.");
+			 "TPM device, agent binary and state directory "
+			 "carry the LOTA SELinux labels.");
 		return STAGE_DONE;
 	}
 	if (dev == -ENOENT) {
@@ -554,6 +591,15 @@ static int st_selinux_apply(struct install_ctx *ctx)
 
 		rc = run_cmd(&ctx->ui, "Restoring the agent binary label",
 			     argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+	}
+	if (file_exists(PATH_LOTA_STATE_DIR)) {
+		const char *const argv[] = { "restorecon", "-R",
+					     PATH_LOTA_STATE_DIR, NULL };
+
+		rc = run_cmd(&ctx->ui,
+			     "Restoring the LOTA state directory labels", argv);
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
@@ -681,6 +727,12 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 			 days, days == 1 ? "" : "s");
 		return STAGE_DONE;
 	}
+	if (rc == 0 && days == 0) {
+		snprintf(note, cap,
+			 "AIK certificate present, less than a day left "
+			 "(auto-renewal refreshes it before expiry).");
+		return STAGE_DONE;
+	}
 	if (rc == 0) {
 		snprintf(note, cap,
 			 "AIK certificate expired. Guided "
@@ -774,6 +826,7 @@ int install_self_check(struct install_ctx *ctx)
 	struct floor_state st;
 	int days = 0;
 	int ok = 1;
+	int rc_cert;
 
 	ui_stage_begin(&ctx->ui, install_stage_count + 1,
 		       install_stage_count + 1, "Self-check");
@@ -785,22 +838,37 @@ int install_self_check(struct install_ctx *ctx)
 	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok))
 		ok = 0;
 
-	ui_kv(&ctx->ui, "fs-verity on the agent",
+	ui_kv(&ctx->ui, "agent binary immutability",
 	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
-		      "Enabled" :
-		      "NOT enabled");
+		      "Enforced (fs-verity)" :
+	      probe_file_ima_signed(PATH_AGENT_BIN) == 1 ?
+		      "Enforced (signed IMA xattr)" :
+		      "NOT enforced");
 
 	ui_kv(&ctx->ui, "agent service",
 	      agent_service_active() ? "Active" : "NOT active");
 	if (!agent_service_active())
 		ok = 0;
 
-	if (probe_cert_days_left(PATH_AIK_CERT, &days) == 0 && days > 0) {
+	rc_cert = probe_cert_days_left(PATH_AIK_CERT, &days);
+	if (rc_cert == 0 && days > 0) {
 		char buf[64];
 
 		snprintf(buf, sizeof(buf), "Valid, %d day%s left", days,
 			 days == 1 ? "" : "s");
 		ui_kv(&ctx->ui, "AIK certificate", buf);
+	} else if (rc_cert == 0 && days == 0) {
+		/*
+		 * whole-day granularity:
+		 * freshly issued cert with the default 24h CA TTL has less than
+		 * one full day and still validates (notAfter is in the future),
+		 * and continuous attestation renews it before expiry.
+		 *
+		 * mirror st_enroll_probe so the self-check does not fail CA that
+		 * issues short-lived AIK certificates
+		 */
+		ui_kv(&ctx->ui, "AIK certificate",
+		      "Valid, less than a day left");
 	} else {
 		ui_kv(&ctx->ui, "AIK certificate", "NOT valid");
 		ok = 0;
@@ -817,7 +885,7 @@ int install_self_check(struct install_ctx *ctx)
 		      "one needs operator approval)");
 
 	if (ctx->opts.verifier) {
-		const char *argv[8];
+		const char *argv[10];
 		int n = 0;
 		int rc;
 
@@ -828,6 +896,10 @@ int install_self_check(struct install_ctx *ctx)
 		if (ctx->opts.verifier_port) {
 			argv[n++] = "--port";
 			argv[n++] = ctx->opts.verifier_port;
+		}
+		if (ctx->opts.ca_cert) {
+			argv[n++] = "--ca-cert";
+			argv[n++] = ctx->opts.ca_cert;
 		}
 		argv[n] = NULL;
 
@@ -899,14 +971,16 @@ const struct stage install_stages[] = {
 		.apply = st_trust_apply,
 	},
 	{
-		.title = "Tamper-proofing the agent binary (fs-verity)",
+		.title = "Tamper-proofing the agent binary",
 		.explain =
-			"fs-verity makes the kernel refuse any modified read of "
-			"/usr/bin/lota-agent: the file gets a Merkle tree and "
-			"becomes immutable."
-			"Replacing or patching it breaks attestation visibly."
-			"This changes only that one file's state on disk and is "
-			"undone by reinstalling the package.",
+			"Kernel must refuse any modified read of /usr/bin/lota-agent "
+			"so replacing or patching it breaks attestation visibly. "
+			"On ext4/btrfs/f2fs this stage enables fs-verity. "
+			"On XFS, ZFS and other filesystems without verity, signed "
+			"security.ima xattr appraised under ima_appraise=enforce "
+			"gives the same guarantee; the agent accepts either. "
+			"fs-verity changes only that one file's state on disk and "
+			"is undone by reinstalling the package.",
 		.probe = st_verity_probe,
 		.apply = st_verity_apply,
 	},

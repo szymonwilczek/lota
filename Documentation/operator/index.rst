@@ -17,10 +17,10 @@ intentionally fails closed when required gates are missing.
 
 Related deployment material lives next to the code:
 
-* PCR policy templates: `policies/README.rst <https://github.com/szymonwilczek/lota/blob/main/policies/README.rst>`__
-* SELinux policy: `selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__
-* EK root bundles: `configs/ek-roots/README.rst <https://github.com/szymonwilczek/lota/blob/main/configs/ek-roots/README.rst>`__
-* Example configuration: `configs/lota.conf.example <https://github.com/szymonwilczek/lota/blob/main/configs/lota.conf.example>`__
+* PCR policy templates: :ghsrc:`policies/README.rst`
+* SELinux policy: :ghsrc:`selinux/README.rst`
+* EK root bundles: :ghsrc:`configs/ek-roots/README.rst`
+* Example configuration: :ghsrc:`configs/lota.conf.example`
 
 .. toctree::
    :hidden:

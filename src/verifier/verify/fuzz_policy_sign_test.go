@@ -33,11 +33,18 @@ func FuzzVerifyPolicySignature(f *testing.F) {
 		}
 		key := ed25519.PublicKey(keyBytes)
 		err := VerifyPolicySignature(data, sig, key)
-		if err == nil {
-			// signature accepted — verify it actually checks out
-			if !ed25519.Verify(key, data, sig) {
-				t.Fatal("VerifyPolicySignature accepted a signature that ed25519.Verify rejects")
-			}
+
+		// full differential against the primitive:
+		// acceptance must match correctly-sized signature that ed25519.Verify
+		// also accepts, and reject must correspond to bad size or bad signature.
+		// One-directional check would miss false rejects (valid signature the
+		// wrapper wrongly refuses)
+		want := len(sig) == PolicySigSize && ed25519.Verify(key, data, sig)
+		if want && err != nil {
+			t.Fatalf("VerifyPolicySignature rejected a valid signature: %v", err)
+		}
+		if !want && err == nil {
+			t.Fatal("VerifyPolicySignature accepted an invalid signature")
 		}
 	})
 }

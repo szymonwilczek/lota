@@ -91,6 +91,13 @@ The game, anti-cheat service, or relying server consumes LOTA status and token
 verification results. It remains responsible for gameplay policy and behavioral
 detection.
 
+Server SDK's ``VerifyToken`` enforces token freshness: a token whose ``validUntil``
+is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rejected,
+so a misconfigured or compromised agent cannot mint an effectively immortal token.
+
+The token carries no issued-at field, so issuers must size ``validUntil`` within that
+window -- keep the agent ``attest_interval`` at or below ``DefaultMaxTokenAge``.
+
 Active threats
 ==============
 
@@ -139,10 +146,18 @@ Active threats
        | A re-anchor archives the superseded PCR 0/1/7 row, so a re-baseline is auditable
          after the fact; on an HA deployment the archive and the re-anchor bookkeeping
          live in the shared Postgres store so every verifier instance sees the same history.
+       | The per-device re-anchor interval (the main barrier against repeated downgrade
+         re-anchors on the low-firmware-assurance path) is re-checked inside the write
+         transaction under the row lock, so a burst of concurrent attestations for one
+         device cannot race the check and re-anchor more than once per window.
        | The re-anchor discriminator admits a drift only when it preserves the Secure Boot
          root of trust: PK/KEK/db byte-identical by event-log replay, dbx append-only
          (revocation can grow, never shrink), Secure Boot still enabled, and the firmware
          version not rolled back; anything touching PK/KEK/db escalates to the operator.
+       | A firmware version below the vendor's own anti-rollback floor (the ESRT
+         LowestSupported value) is firmware running below the lowest version it claims
+         to accept, and escalates to the operator on every path. A floor of zero means
+         the vendor declared none.
    * - Secure Boot disabled to boot a tampered kernel
      - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
          event log (PCR 7) and accepts it only when the log replay reproduces the
@@ -346,5 +361,5 @@ Production deployments must:
 * document operator recovery for AIK rotation, policy rotation, and legitimate
   binary updates.
 
-See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, `policies/README.rst <https://github.com/szymonwilczek/lota/blob/main/policies/README.rst>`__, and
-`selinux/README.rst <https://github.com/szymonwilczek/lota/blob/main/selinux/README.rst>`__ for the deployment details.
+See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, :ghsrc:`policies/README.rst`, and
+:ghsrc:`selinux/README.rst` for the deployment details.

@@ -74,7 +74,7 @@ func hexDigit(c byte) byte {
 // the post-fix derivation must reproduce that value byte for byte.
 func TestRegression_LockedDerivation_SwtpmCounters(t *testing.T) {
 	ah := referenceAgentHash()
-	got := DeriveLockedBootCommitmentPCR14(ah, regressionResetCount,
+	got := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
 		regressionRestartCount)
 	const want = "69b35748b79e3bc3d3db72cc90364750c258d9da36c022ae729107dde3df7e4d"
 	if FormatPCR14(got) != want {
@@ -90,12 +90,12 @@ func TestRegression_LockedDerivation_SwtpmCounters(t *testing.T) {
 // quote carried Quote counters, the verifier could never match.
 func TestRegression_LockedDerivation_ReadClockCountersDiverge(t *testing.T) {
 	ah := referenceAgentHash()
-	signed := DeriveLockedBootCommitmentPCR14(ah, regressionResetCount,
+	signed := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
 		regressionRestartCount)
 	// the helper reported resetCount=9, restartCount=0 in the failing
 	// run; using those values would yield a different PCR14 (and did,
 	// 938aae...).
-	readclock := DeriveLockedBootCommitmentPCR14(ah, 9, 0)
+	readclock := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, 9, 0)
 	if signed == readclock {
 		t.Fatal("PCR14 derivation collapsed to a counter-free value")
 	}
@@ -113,10 +113,10 @@ func TestRegression_LockedDerivation_ReadClockCountersDiverge(t *testing.T) {
 // = true on the exact derivation (no skew burn).
 func TestRegression_MatchLockedBootCommitment_AcceptsSignedQuote(t *testing.T) {
 	ah := referenceAgentHash()
-	pcr14 := DeriveLockedBootCommitmentPCR14(ah, regressionResetCount,
+	pcr14 := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
 		regressionRestartCount)
 
-	exp, drift, ok := MatchLockedBootCommitmentPCR14(ah,
+	exp, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah,
 		regressionResetCount, regressionRestartCount, pcr14, 1024)
 	if !ok {
 		t.Fatalf("matcher rejected the signed-quote derivation; "+
@@ -135,9 +135,9 @@ func TestRegression_MatchLockedBootCommitment_AcceptsSignedQuote(t *testing.T) {
 // silently absorb the bug.
 func TestRegression_MatchLockedBootCommitment_RejectsCounterDrift(t *testing.T) {
 	ah := referenceAgentHash()
-	pcr14ExtendedWithReadClock := DeriveLockedBootCommitmentPCR14(ah, 9, 0)
+	pcr14ExtendedWithReadClock := DeriveLockedBootCommitmentPCR14(zeroBaseline, ah, 9, 0)
 
-	_, _, ok := MatchLockedBootCommitmentPCR14(ah, regressionResetCount,
+	_, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, regressionResetCount,
 		regressionRestartCount, pcr14ExtendedWithReadClock, 1024)
 	if ok {
 		t.Fatal("matcher accepted a PCR14 extended with the wrong " +

@@ -302,6 +302,31 @@ func TestCertificateStore_RequireCertsNeedsTrustedCAs(t *testing.T) {
 	}
 }
 
+// CertificateStore with no trust anchors cannot verify a certificate chain.
+// Even constructed in TOFU mode (requireCerts=false), it must refuse to verify
+// presented certificate rather than accept it on time-validity and public-key
+// match alone, so the chain check can never be skipped into existence.
+func TestCertificateStore_VerifyWithoutAnchorsFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	aikKey := generateTestKey(t)
+	selfSigned := generateTestCertificate(t, aikKey, false)
+	selfSignedDER, err := x509.CreateCertificate(rand.Reader, selfSigned,
+		selfSigned, &aikKey.PublicKey, aikKey)
+	if err != nil {
+		t.Fatalf("self-sign: %v", err)
+	}
+
+	if _, err := cs.VerifyAIKCertificate(&aikKey.PublicKey, selfSignedDER); !errors.Is(err, ErrNoTrustedCAs) {
+		t.Fatalf("VerifyAIKCertificate without anchors: want ErrNoTrustedCAs, got %v", err)
+	}
+}
+
 func TestCertificateStore_RequireCerts_MissingRequiredPairFails(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "lota-test-*")
 	if err != nil {
@@ -1138,16 +1163,34 @@ func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
 	if _, err := cs.GetRegisteredAt("client-a"); err != nil {
 		t.Fatalf("GetRegisteredAt: %v", err)
 	}
+}
+
+// CertificateStore gates every AIK change behind certificate-chain verification,
+// so the keyed-only RotateAIK - which carries no certificate - must refuse rather
+// than silently swap the trusted key, and must leave the stored key untouched.
+func TestCertificateStore_RotateAIKRefused(t *testing.T) {
+	dir := t.TempDir()
+
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	key := generateTestKey(t)
+	if err := cs.RegisterAIK("client-a", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
 
 	newKey := generateTestKey(t)
-	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err != nil {
-		t.Fatalf("RotateAIK: %v", err)
+	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err == nil {
+		t.Fatal("RotateAIK on a CertificateStore must refuse a keyed-only rotation")
 	}
-	rotated, err := cs.GetAIK("client-a")
+
+	got, err := cs.GetAIK("client-a")
 	if err != nil {
-		t.Fatalf("GetAIK after rotation: %v", err)
+		t.Fatalf("GetAIK: %v", err)
 	}
-	if rotated.N.Cmp(newKey.PublicKey.N) != 0 {
-		t.Fatal("RotateAIK did not replace the stored key")
+	if got.N.Cmp(key.PublicKey.N) != 0 {
+		t.Fatal("refused RotateAIK must leave the stored key unchanged")
 	}
 }

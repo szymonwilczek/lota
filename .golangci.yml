@@ -41,9 +41,6 @@ linters:
         - all
         - -ST1*
         - -QF1*
-    gosec:
-      excludes:
-        - G115
   exclusions:
     generated: lax
     presets:

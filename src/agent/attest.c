@@ -129,10 +129,8 @@ int export_policy(int mode)
 	time_t now;
 	struct tm tm_buf;
 
-	static const int pcrs_to_export[] = { POLICY_PCR_0,  POLICY_PCR_1,
-					      POLICY_PCR_4,  POLICY_PCR_7,
-					      POLICY_PCR_8,  POLICY_PCR_9,
-					      POLICY_PCR_11, POLICY_PCR_14 };
+	size_t pcr_export_count;
+	const int *pcrs_to_export = policy_export_pcrs(&pcr_export_count);
 
 	memset(&snap, 0, sizeof(snap));
 
@@ -173,8 +171,7 @@ int export_policy(int mode)
 	}
 
 	/* PCR values */
-	snap.pcr_count =
-		(int)(sizeof(pcrs_to_export) / sizeof(pcrs_to_export[0]));
+	snap.pcr_count = (int)pcr_export_count;
 	for (int i = 0; i < snap.pcr_count; i++) {
 		snap.pcrs[i].index = pcrs_to_export[i];
 		ret = tpm_read_pcr(&g_agent.tpm_ctx, pcrs_to_export[i],

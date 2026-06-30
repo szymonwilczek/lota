@@ -56,6 +56,7 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_ACCESS_DENIED = 0x07,
 	LOTA_IPC_ERR_BAD_VERSION = 0x08,
 	LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
+	LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS = 0x0A,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -177,9 +178,25 @@ struct lota_ipc_token {
 #define LOTA_IPC_TOKEN_HEADER_SIZE sizeof(struct lota_ipc_token)
 #define LOTA_IPC_TOKEN_MAX_ATTEST 1024
 #define LOTA_IPC_TOKEN_MAX_SIG 512
-#define LOTA_IPC_TOKEN_MAX_PROTECT_PIDS 1024
-#define LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE (LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE 32
+/*
+ * Worst-case bytes one protected PID contributes to a v2 token:
+ * its 4-byte value plus its 32-byte kernel image digest
+ */
+#define LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE (4 + LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
+/*
+ * Cap the per-token protected-PID count at what actually fits the IPC payload
+ * once the fixed header, a maximum quote and a maximum signature are accounted
+ * for, so the runtime count guard in handle_get_token() is the real binding
+ * limit.
+ */
+#define LOTA_IPC_TOKEN_MAX_PROTECT_PIDS                         \
+	((LOTA_IPC_MAX_PAYLOAD - LOTA_IPC_TOKEN_HEADER_SIZE -   \
+	  LOTA_IPC_TOKEN_MAX_ATTEST - LOTA_IPC_TOKEN_MAX_SIG) / \
+	 LOTA_IPC_TOKEN_PROTECT_ENTRY_SIZE)
+#define LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE (LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * 4)
+#define LOTA_IPC_TOKEN_MAX_IMAGE_LIST_SIZE \
+	(LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
 
 /* runtime_protect_version values (mirror of lota_token.h) */
 #define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only (0 = legacy) */
@@ -187,15 +204,17 @@ struct lota_ipc_token {
 	2 /* PID set + per-PID kernel image digest */
 
 /*
- * The v1 maximum already saturates the IPC payload buffer, so the optional
- * v2 image-digest block is not folded into this compile-time bound. A v2
- * token whose pid set is large enough that header + pids + image digests +
- * quote would overflow LOTA_IPC_MAX_PAYLOAD is rejected at runtime
- * (fail closed); realistic protected sets are far below that point.
+ * Worst-case v2 token:
+ * the header, the full protected-PID list, the per-PID image-digest list,
+ * and a maximum quote plus signature.
+ * Protected-PID cap above is derived so this stays within LOTA_IPC_MAX_PAYLOAD
+ * asserted in ipc.c.
+ * SDK sizes its receive buffer from this bound.
  */
-#define LOTA_IPC_TOKEN_MAX_SIZE                                          \
-	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE + \
-	 LOTA_IPC_TOKEN_MAX_ATTEST + LOTA_IPC_TOKEN_MAX_SIG)
+#define LOTA_IPC_TOKEN_MAX_SIZE                                           \
+	(LOTA_IPC_TOKEN_HEADER_SIZE + LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE +  \
+	 LOTA_IPC_TOKEN_MAX_IMAGE_LIST_SIZE + LOTA_IPC_TOKEN_MAX_ATTEST + \
+	 LOTA_IPC_TOKEN_MAX_SIG)
 
 /*
  * Subscription event types (bitmask for SUBSCRIBE request)

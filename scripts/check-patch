@@ -30,6 +30,7 @@ order. Head defaults to HEAD.
 Checks:
   - CI-equivalent DCO and hotpath documentation rules,
   - conventional commit subjects with scope parentheses,
+  - good GPG or SSH signature on every commit,
   - standalone Problem: and Solution: commit body sections,
   - one blank line before the Signed-off-by trailer,
   - commit body lines wrapped to 75 columns, with a two-column tolerance,
@@ -38,7 +39,13 @@ Checks:
   - clang-format and gofmt on changed C, header, and Go files,
   - full project build,
   - include hygiene when C changes (skipped if clang-include-cleaner or
-    bear is missing).
+    bear is missing),
+  - sparse and smatch semantic analysis when C changes (advisory; each
+    skipped if its tool is missing),
+  - Coccinelle semantic-patch rules when C changes (blocking; skipped if
+    spatch is missing),
+  - BPF mirror drift guard when src/bpf/lota_lsm.bpf.c or fuzz/bpf_oracle
+    changes (blocking).
 USAGE
 }
 
@@ -402,6 +409,34 @@ check_message_whitespace() {
 	fi
 }
 
+check_commit_signatures() {
+	local rc=0
+	local commit status
+
+	# git log %G? reports the signature state:
+	# G good, U good but the key is untrusted, B bad, X/Y/R expired or revoked, E unverifiable, N none
+	# commit counts as signed only when the signature is good (G or U);
+	# anything else, including an unverifiable or absent signature, FAILS
+	for commit in "$@"; do
+		status=$(git log -1 --format='%G?' "$commit")
+		case "$status" in
+		G | U) ;;
+		*)
+			printf '  %s %s (signature: %s)\n' \
+				"$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
+			rc=1
+			;;
+		esac
+	done
+
+	if ((rc == 0)); then
+		pass "commit signatures"
+	else
+		fail "commit signatures" \
+			"sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
+	fi
+}
+
 is_text_file() {
 	local path=$1
 
@@ -561,6 +596,110 @@ check_includes() {
 	fi
 }
 
+# true when the patch touches any C source or header
+patch_touches_c() {
+	local path
+	for path in "$@"; do
+		case "$path" in
+		*.c | *.h)
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# sparse and smatch are advisory:
+# They report a summary but never fail the patch (the findings are backlog to
+# ratchet down, not a release blocker).
+# Both run the make target so the flag set stays in one place, only when the
+# patch touches C and the tool is installed.
+check_sparse() {
+	local out summary
+
+	if ! patch_touches_c "$@"; then
+		pass "sparse"
+		return
+	fi
+	if ! command -v sparse >/dev/null 2>&1; then
+		skip "sparse" "install 'sparse' to run the semantic check."
+		return
+	fi
+
+	out=$(make sparse 2>&1) || true
+	summary=$(printf '%s\n' "$out" | grep -E '^sparse: [0-9]+ file' | tail -1)
+	note "${summary:-sparse: ran} (advisory)"
+	pass "sparse"
+}
+
+check_smatch() {
+	local out summary
+
+	if ! patch_touches_c "$@"; then
+		pass "smatch"
+		return
+	fi
+	if ! command -v smatch >/dev/null 2>&1; then
+		skip "smatch" \
+			"build smatch from https://repo.or.cz/smatch.git and add it to PATH."
+		return
+	fi
+
+	out=$(make smatch 2>&1) || true
+	summary=$(printf '%s\n' "$out" | grep -E '^smatch: [0-9]+ file' | tail -1)
+	note "${summary:-smatch: ran} (advisory)"
+	pass "smatch"
+}
+
+# Coccinelle is blocking:
+# rules are tuned clean, so a match is a finding
+check_coccinelle() {
+	local out
+
+	if ! patch_touches_c "$@"; then
+		pass "coccicheck"
+		return
+	fi
+	if ! command -v spatch >/dev/null 2>&1; then
+		skip "coccicheck" "install 'coccinelle' to run the semantic-patch rules."
+		return
+	fi
+
+	if out=$(make coccicheck 2>&1); then
+		pass "coccicheck"
+	else
+		printf '%s\n' "$out" | grep -v '^make'
+		fail "coccicheck" \
+			"a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
+	fi
+}
+
+# fuzz/bpf_oracle mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
+# make check-bpf-mirror fails when that source drifts from the pinned lock.
+# Only run when the BPF source or the sandbox changed.
+check_bpf_mirror() {
+	local path touched=1 out
+	for path in "$@"; do
+		case "$path" in
+		src/bpf/lota_lsm.bpf.c | fuzz/bpf_oracle/*)
+			touched=0
+			;;
+		esac
+	done
+	if ((touched != 0)); then
+		pass "bpf-mirror"
+		return
+	fi
+
+	if out=$(make check-bpf-mirror 2>&1); then
+		pass "bpf-mirror"
+	else
+		printf '%s\n' "$out" | grep -v '^make'
+		fail "bpf-mirror" \
+			"src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
+	fi
+}
+
 main() {
 	local base=""
 	local head="HEAD"
@@ -602,6 +741,7 @@ main() {
 	collect_changed_files "$base" "$head" changed_files
 
 	check_ci_policy "$base" "$head"
+	check_commit_signatures "${commits[@]}"
 	check_commit_subjects "${commits[@]}"
 	check_commit_body_contract "${commits[@]}"
 	check_commit_body_layout "${commits[@]}"
@@ -613,6 +753,10 @@ main() {
 	check_gofmt "${changed_files[@]}"
 	check_build
 	check_includes "${changed_files[@]}"
+	check_sparse "${changed_files[@]}"
+	check_smatch "${changed_files[@]}"
+	check_coccinelle "${changed_files[@]}"
+	check_bpf_mirror "${changed_files[@]}"
 
 	if ((FAILURES != 0)); then
 		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"

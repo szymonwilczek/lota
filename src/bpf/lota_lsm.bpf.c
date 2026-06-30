@@ -41,6 +41,7 @@
 
 #include "lota.h"
 #include "lota_devt.h"
+#include "lota_event_budget.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -172,13 +173,22 @@ struct {
 #define STAT_EXEC_BLOCKED 12
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_ALLOW_EVENTS_SUPPRESSED 14
+#define STAT_BLOCKED_EVENTS_SUPPRESSED 15
 
-#define ALLOW_EVENT_BUDGET_PER_SEC 256U
-
-struct event_budget_state {
+/*
+ * One rate-limit window per event class (see lota_event_budget.h).
+ * Classes are counted separately so a blocked-event flood cannot consume
+ * the allowed budget and vice versa; each is independently bounded.
+ */
+struct event_budget_window {
 	u64 window_start_ns;
 	u32 emitted;
 	u32 pad;
+};
+
+struct event_budget_state {
+	struct event_budget_window allow;
+	struct event_budget_window blocked;
 };
 
 struct {
@@ -364,25 +374,29 @@ static __always_inline u32 get_config(u32 key)
 
 /*
  * Event emission policy under ring buffer pressure:
- * - blocked events are always emitted when possible
- * - in ENFORCE mode, allowed events are budgeted per second to prevent
- *   attacker-generated benign floods from starving security-relevant logs
+ * - outside ENFORCE mode nothing is budgeted
+ * - in ENFORCE mode both allowed and blocked events are budgeted per second,
+ *   each in its own window, so an attacker-generated flood of either class
+ *   cannot starve the other by exhausting the ring buffer. Blocked events get
+ *   the larger budget (lota_event_budget.h); their counts are still tallied in
+ *   the stats map regardless of emission, so only per-event detail is dropped.
  */
 static __always_inline int should_emit_event(u32 mode, int blocked)
 {
 	struct event_budget_state *state;
+	struct event_budget_window *win;
 	u64 now_ns, window;
-	u32 key = 0;
+	u32 key = 0, limit;
 
-	if (blocked)
-		return 1;
-
-	if (mode != LOTA_MODE_ENFORCE)
+	limit = lota_event_budget_limit(mode == LOTA_MODE_ENFORCE, blocked);
+	if (limit == 0)
 		return 1;
 
 	state = bpf_map_lookup_elem(&event_budget, &key);
 	if (!state)
 		return 0;
+
+	win = blocked ? &state->blocked : &state->allow;
 
 	/*
 	 * Map is a shared single-entry ARRAY, so the window rotation
@@ -396,16 +410,17 @@ static __always_inline int should_emit_event(u32 mode, int blocked)
 	 * once per second.
 	 */
 	now_ns = bpf_ktime_get_ns();
-	window = state->window_start_ns;
-	if (now_ns < window || now_ns - window >= 1000000000ULL) {
-		if (__sync_val_compare_and_swap(&state->window_start_ns, window,
+	window = win->window_start_ns;
+	if (lota_event_budget_window_expired(now_ns, window)) {
+		if (__sync_val_compare_and_swap(&win->window_start_ns, window,
 						now_ns) == window)
-			(void)__sync_lock_test_and_set(&state->emitted, 0);
+			(void)__sync_lock_test_and_set(&win->emitted, 0);
 	}
 
-	if (__sync_fetch_and_add(&state->emitted, 1) >=
-	    ALLOW_EVENT_BUDGET_PER_SEC) {
-		inc_stat(STAT_ALLOW_EVENTS_SUPPRESSED);
+	if (lota_event_budget_exhausted(__sync_fetch_and_add(&win->emitted, 1),
+					limit)) {
+		inc_stat(blocked ? STAT_BLOCKED_EVENTS_SUPPRESSED :
+				   STAT_ALLOW_EVENTS_SUPPRESSED);
 		return 0;
 	}
 

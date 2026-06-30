@@ -161,6 +161,52 @@ func TestSet_StaleCRLFailsClosed(t *testing.T) {
 	}
 }
 
+// TestSet_RevocationInStaleSiblingStillRejected pins the contract that
+// revocation is honored regardless of which sibling CRL carries it.
+// Issuer with multiple CRLs (partitioned / scoped feeds) must not let
+// fresh sibling mask a revocation that lives only in a now-stale one:
+// staleness may add distrust, never erase a published revocation.
+func TestSet_RevocationInStaleSiblingStillRejected(t *testing.T) {
+	ca, caKey := buildCA(t)
+
+	const decoySerial = 0x11
+	const victimSerial = 0x22
+	// fresh sibling revokes a decoy
+	// stale sibling is the only CRL carrying the victim's revocation
+	fresh := makeCRL(t, ca, caKey, time.Now().Add(time.Hour), decoySerial)
+	stale := makeCRL(t, ca, caKey, time.Now().Add(-30*time.Minute), victimSerial)
+
+	set := NewSet()
+	if err := set.verifyAndAdd("fresh.pem", 0, fresh, []*x509.Certificate{ca}); err != nil {
+		t.Fatalf("verifyAndAdd fresh: %v", err)
+	}
+	if err := set.verifyAndAdd("stale.pem", 0, stale, []*x509.Certificate{ca}); err != nil {
+		t.Fatalf("verifyAndAdd stale: %v", err)
+	}
+	if set.Size() != 2 {
+		t.Fatalf("expected 2 CRLs, got %d", set.Size())
+	}
+
+	// fresh sibling is present, so the issuer is not wholly stale
+	// victim's revocation must still take effect
+	victim := buildLeaf(t, ca, caKey, victimSerial)
+	if err := set.Check(victim, time.Now()); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("victim revoked in stale sibling must be rejected, got %v", err)
+	}
+
+	// Sanity:
+	// decoy in the fresh sibling still rejects
+	// and serial revoked in neither sibling still passes
+	decoy := buildLeaf(t, ca, caKey, decoySerial)
+	if err := set.Check(decoy, time.Now()); !errors.Is(err, ErrCertificateRevoked) {
+		t.Fatalf("decoy revoked in fresh sibling must be rejected, got %v", err)
+	}
+	clean := buildLeaf(t, ca, caKey, 0x33)
+	if err := set.Check(clean, time.Now()); err != nil {
+		t.Fatalf("unrevoked leaf with a fresh sibling present must pass, got %v", err)
+	}
+}
+
 func TestSet_NoCRLForIssuerIsAccepted(t *testing.T) {
 	ca, caKey := buildCA(t)
 	other, otherKey := buildNamedCA(t, "Unrelated Vendor CA")

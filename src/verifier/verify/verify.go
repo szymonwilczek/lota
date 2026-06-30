@@ -802,14 +802,27 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			restartDrift uint32
 			matched      bool
 		)
+		// pcr14Baseline is the PCR14 content present before the
+		// initramfs lock / agent extends: 0^32 on a legacy/BIOS host,
+		// or the firmware/shim MOK measurement on UEFI Secure Boot,
+		// reconstructed by replaying the firmware event log (the LOTA
+		// extends are post-ExitBootServices and never enter that log).
+		// Forged log diverges from the signed PCR14 and fails the
+		// match below, so baseline doesnt need separate pin here
+		var pcr14Baseline [types.HashSize]byte
+		if bootFacts != nil {
+			pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
+		}
 		if useInitramfsLock {
 			expected, restartDrift, matched = MatchLockedBootCommitmentPCR14(
+				pcr14Baseline,
 				report.System.AgentHash,
 				parsedAttest.ClockInfo.ResetCount,
 				parsedAttest.ClockInfo.RestartCount,
 				pcr14, v.maxRestartCountSkew)
 		} else {
 			expected, restartDrift, matched = MatchBootCommitmentPCR14(
+				pcr14Baseline,
 				report.System.AgentHash,
 				parsedAttest.ClockInfo.ResetCount,
 				parsedAttest.ClockInfo.RestartCount,
@@ -1302,6 +1315,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	}
 
 	st := rs.GetReanchorState(clientID)
+	now := time.Now()
 	verdict, reason := reanchorDecision(ReanchorInputs{
 		BaselineEventLog:    st.EventLogBaseline,
 		CurrentParsed:       bootFacts.Parsed, // already parsed + quote-verified upstream
@@ -1309,7 +1323,7 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		CurrentESRT:         report.ESRT,
 		ESRTCapable:         st.ESRTCapable,
 		LastReanchorAt:      st.LastReanchorAt,
-		Now:                 time.Now(),
+		Now:                 now,
 	})
 
 	esrtPresent := report.ESRT != nil && report.ESRT.Present
@@ -1321,7 +1335,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 	switch verdict {
 	case ReanchorAllow:
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
-			esrtVer, esrtPresent, false, "strong"); err != nil {
+			esrtVer, esrtPresent, false, "strong", now); err != nil {
+			if errors.Is(err, ErrReanchorRateLimited) {
+				// concurrent attestation for this client re-anchored first;
+				// in-transaction guard refused this one. Fail closed.
+				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
+				v.metrics.Reanchors.Inc("escalate")
+				return false
+			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}
@@ -1335,7 +1356,14 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		// the alert below and the review list (GET /api/v1/reanchor/review)
 		// surface it so an operator can inspect and, if needed, revoke or ban.
 		if err := rs.ArchiveAndReanchor(clientID, *boot, report.EventLog,
-			esrtVer, esrtPresent, true, "lfa"); err != nil {
+			esrtVer, esrtPresent, true, "lfa", now); err != nil {
+			if errors.Is(err, ErrReanchorRateLimited) {
+				// concurrent attestation for this client re-anchored first;
+				// in-transaction guard refused this one. Fail closed.
+				logging.Security(clog, "boot baseline re-anchor escalated (rate limit raced)", "reason", reason)
+				v.metrics.Reanchors.Inc("escalate")
+				return false
+			}
 			clog.Warn("re-anchor archive failed", "error", err)
 			return false
 		}

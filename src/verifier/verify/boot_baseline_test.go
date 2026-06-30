@@ -6,7 +6,9 @@ package verify
 
 import (
 	"bytes"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -344,9 +346,10 @@ func TestReanchor_MemoryStateAndArchive(t *testing.T) {
 	}
 
 	// strong re-anchor: records event log + ESRT version, sets capable
+	t0 := time.Now()
 	log1 := []byte("eventlog-v1")
 	if err := bs.ArchiveAndReanchor("dev", boot(0x20, 0x21, 0x17), log1,
-		785, true, false, "strong"); err != nil {
+		785, true, false, "strong", t0); err != nil {
 		t.Fatalf("ArchiveAndReanchor: %v", err)
 	}
 	st = bs.GetReanchorState("dev")
@@ -364,8 +367,10 @@ func TestReanchor_MemoryStateAndArchive(t *testing.T) {
 	}
 
 	// LFA re-anchor: esrt_capable stays sticky-true, count bumps, LFA set
+	// past the LFA interval so this legitimate second re-anchor is admitted
 	if err := bs.ArchiveAndReanchor("dev", boot(0x30, 0x31, 0x17),
-		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		[]byte("v2"), 0, false, true, "lfa",
+		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
 	}
 	st = bs.GetReanchorState("dev")
@@ -399,9 +404,10 @@ func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
 		t.Fatalf("fresh re-anchor state wrong: %+v", st)
 	}
 
+	t0 := time.Now()
 	log := []byte("evlog-baseline")
 	if err := bs.ArchiveAndReanchor("c", boot(0xC0, 0xC1, 0xB7), log,
-		785, true, false, "strong"); err != nil {
+		785, true, false, "strong", t0); err != nil {
 		t.Fatalf("ArchiveAndReanchor: %v", err)
 	}
 	st = bs.GetReanchorState("c")
@@ -425,8 +431,10 @@ func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
 	}
 
 	// LFA re-anchor: capability stays sticky, count bumps, second archive row
+	// past the LFA interval so this legitimate second re-anchor is admitted
 	if err := bs.ArchiveAndReanchor("c", boot(0xD0, 0xD1, 0xB7),
-		[]byte("v2"), 0, false, true, "lfa"); err != nil {
+		[]byte("v2"), 0, false, true, "lfa",
+		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatalf("ArchiveAndReanchor (lfa): %v", err)
 	}
 	st = bs.GetReanchorState("c")
@@ -440,6 +448,71 @@ func TestReanchor_SQLitePersistsAndArchives(t *testing.T) {
 	if n != 2 {
 		t.Errorf("archive rows after two re-anchors: got %d, want 2", n)
 	}
+}
+
+// TestArchiveAndReanchor_RateLimitAtomic pins the rate limit as an
+// in-transaction invariant of the store rather than a cheap-path advisory
+// in reanchorDecision.
+// Two re-anchors for the same client inside the assurance-tier interval must
+// leave exactly one re-anchor on record: the second is refused with
+// ErrReanchorRateLimited and must not touch the baseline.
+// Without the in-store guard, a burst of concurrent attestations could each
+// pass the advisory gate and re-anchor repeatedly in one window.
+func TestArchiveAndReanchor_RateLimitAtomic(t *testing.T) {
+	t0 := time.Now()
+
+	check := func(name string, rs ReanchorStorer) {
+		// first strong re-anchor at t0 is admitted
+		if err := rs.ArchiveAndReanchor("c", boot(0x20, 0x21, 0x17),
+			[]byte("v1"), 785, true, false, "strong", t0); err != nil {
+			t.Fatalf("%s: first re-anchor: %v", name, err)
+		}
+		// second re-anchor one second later is well inside the 30-day strong
+		// interval and must be rate-limited
+		err := rs.ArchiveAndReanchor("c", boot(0x30, 0x31, 0x17),
+			[]byte("v2"), 900, true, false, "strong", t0.Add(time.Second))
+		if !errors.Is(err, ErrReanchorRateLimited) {
+			t.Fatalf("%s: second re-anchor: got %v, want ErrReanchorRateLimited",
+				name, err)
+		}
+		// refused re-anchor left the row untouched:
+		// count stays 1 and the event-log baseline is still v1
+		st := rs.GetReanchorState("c")
+		if st.ReanchorCount != 1 {
+			t.Errorf("%s: ReanchorCount: got %d, want 1", name, st.ReanchorCount)
+		}
+		if !bytes.Equal(st.EventLogBaseline, []byte("v1")) {
+			t.Errorf("%s: event-log baseline overwritten by rate-limited re-anchor",
+				name)
+		}
+		// once the interval elapses the re-anchor is admitted again
+		if err := rs.ArchiveAndReanchor("c", boot(0x40, 0x41, 0x17),
+			[]byte("v3"), 1000, true, false, "strong",
+			t0.Add(ReanchorMinIntervalStrong+time.Hour)); err != nil {
+			t.Fatalf("%s: post-interval re-anchor: %v", name, err)
+		}
+		if st = rs.GetReanchorState("c"); st.ReanchorCount != 2 {
+			t.Errorf("%s: ReanchorCount after interval: got %d, want 2",
+				name, st.ReanchorCount)
+		}
+	}
+
+	mem := NewBaselineStore()
+	mem.CheckAndUpdateBootPCRs("c", boot(0x10, 0x11, 0x17))
+	check("memory", mem)
+
+	dir := t.TempDir()
+	db, err := store.OpenDB(dir + "/rl.sqlite")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	sq := NewSQLiteBaselineStore(db)
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0xDE
+	sq.CheckAndUpdate("c", pcr14)
+	sq.CheckAndUpdateBootPCRs("c", boot(0x10, 0x11, 0x17))
+	check("sqlite", sq)
 }
 
 func TestRecordBootEvidence_MemoryAndSQLite(t *testing.T) {
@@ -494,7 +567,8 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	if len(bs.ListLFAReviewPending()) != 0 {
 		t.Fatal("no review pending before any LFA re-anchor")
 	}
-	if err := bs.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+	t0 := time.Now()
+	if err := bs.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa", t0); err != nil {
 		t.Fatal(err)
 	}
 	if got := bs.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {
@@ -507,7 +581,9 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 		t.Error("review should be cleared after acknowledge (in-memory)")
 	}
 	// strong re-anchor must not leave the client on the review list
-	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong"); err != nil {
+	// (past the LFA interval so the second re-anchor is admitted)
+	if err := bs.ArchiveAndReanchor("c", boot(3, 2, 7), []byte("l"), 800, true, false, "strong",
+		t0.Add(ReanchorMinIntervalLFA+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if len(bs.ListLFAReviewPending()) != 0 {
@@ -526,7 +602,7 @@ func TestLFAReview_MemoryAndSQLite(t *testing.T) {
 	pcr14[0] = 0xDE
 	sq.CheckAndUpdate("c", pcr14)
 	sq.CheckAndUpdateBootPCRs("c", boot(1, 2, 7))
-	if err := sq.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa"); err != nil {
+	if err := sq.ArchiveAndReanchor("c", boot(2, 2, 7), []byte("l"), 0, false, true, "lfa", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if got := sq.ListLFAReviewPending(); len(got) != 1 || got[0] != "c" {

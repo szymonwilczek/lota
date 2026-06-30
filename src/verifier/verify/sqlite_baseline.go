@@ -749,6 +749,7 @@ func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 		st.EventLogBaseline = append([]byte(nil), evlog...)
 	}
 	if esrtVersion.Valid {
+		// #nosec G115 -- uint32 ESRT version stored in a signed INTEGER column, round-tripped back to its source type
 		st.ESRTVersion = uint32(esrtVersion.Int64)
 	}
 	st.ESRTCapable = esrtCapable.Valid && esrtCapable.Int64 != 0
@@ -769,12 +770,12 @@ func (s *SQLiteBaselineStore) GetReanchorState(clientID string) ReanchorState {
 // can never silently lose the capability.
 func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
-	esrtCapable, lfa bool, reason string,
+	esrtCapable, lfa bool, reason string, now time.Time,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now().UTC()
+	now = now.UTC()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -790,12 +791,20 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 	var (
 		oldPCR0, oldPCR1, oldPCR7 []byte
 		oldESRT                   sql.NullInt64
+		lastReanchor              sql.NullTime
 	)
+	// last_reanchor_at is read inside the transaction so the rate-limit guard
+	// below sees a value no concurrent re-anchor can have moved out from under
+	// it between the read and the write
 	if err := tx.QueryRow(
-		"SELECT pcr0, pcr1, pcr7, esrt_version FROM baselines WHERE client_id = ?",
+		"SELECT pcr0, pcr1, pcr7, esrt_version, last_reanchor_at FROM baselines WHERE client_id = ?",
 		clientID,
-	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT); err != nil {
+	).Scan(&oldPCR0, &oldPCR1, &oldPCR7, &oldESRT, &lastReanchor); err != nil {
 		return err
+	}
+	if lastReanchor.Valid &&
+		now.Sub(lastReanchor.Time.UTC()) < reanchorInterval(lfa) {
+		return ErrReanchorRateLimited
 	}
 	if _, err = tx.Exec(
 		`INSERT INTO baseline_archive

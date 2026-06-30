@@ -14,12 +14,15 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <sys/vfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 #include <openssl/asn1.h>
 #include <openssl/types.h>
 
 #include <linux/fsverity.h>
+
+#include "../include/lota_ima_xattr.h"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -101,6 +104,98 @@ int probe_fsverity_enable(const char *path)
 	if (ret == 0)
 		return 0;
 	return -errno;
+}
+
+/* statfs f_type magics, mirroring <linux/magic.h> */
+#define PROBE_MAGIC_EXT 0xEF53L
+#define PROBE_MAGIC_XFS 0x58465342L
+#define PROBE_MAGIC_BTRFS 0x9123683EL
+#define PROBE_MAGIC_F2FS 0xF2F52010L
+#define PROBE_MAGIC_ZFS 0x2FC12FC1L
+
+enum probe_fstype probe_fstype_from_magic(long magic)
+{
+	switch (magic) {
+	case PROBE_MAGIC_EXT:
+		return PROBE_FS_EXT4;
+	case PROBE_MAGIC_XFS:
+		return PROBE_FS_XFS;
+	case PROBE_MAGIC_BTRFS:
+		return PROBE_FS_BTRFS;
+	case PROBE_MAGIC_F2FS:
+		return PROBE_FS_F2FS;
+	case PROBE_MAGIC_ZFS:
+		return PROBE_FS_ZFS;
+	default:
+		return PROBE_FS_UNKNOWN;
+	}
+}
+
+int probe_fs_supports_fsverity(enum probe_fstype fs)
+{
+	switch (fs) {
+	case PROBE_FS_EXT4:
+	case PROBE_FS_BTRFS:
+	case PROBE_FS_F2FS:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+void probe_verity_remediation(enum probe_fstype fs, const char *path, char *out,
+			      size_t cap)
+{
+	if (!out || cap == 0)
+		return;
+	if (!path)
+		path = "the agent binary";
+
+	if (probe_fs_supports_fsverity(fs)) {
+		/* verity-capable filesystem,
+		 * feature just not enabled here */
+		snprintf(out, cap,
+			 "Filesystem holding %s supports fs-verity but it "
+			 "is not enabled. ext4: 'tune2fs -O verity' on the "
+			 "unmounted device; btrfs and f2fs ship the feature by "
+			 "default. Then re-run lota-install.",
+			 path);
+		return;
+	}
+
+	/* XFS / ZFS: no native fs-verity
+	 * IMA appraisal of a signed security.ima xattr gives the same offline-swap
+	 * guarantee on any filesystem, and the agent accepts it as equivalent */
+	snprintf(out, cap,
+		 "Filesystem holding %s has no fs-verity. Establish "
+		 "kernel-enforced immutability with IMA instead: sign the "
+		 "binary into a security.ima xattr (evmctl ima_sign --key "
+		 "<ima.key>), load the matching certificate into the .ima "
+		 "keyring, and boot with ima_appraise=enforce. Then re-run "
+		 "lota-install.",
+		 path);
+}
+
+enum probe_fstype probe_path_fstype(const char *path)
+{
+	struct statfs sfs;
+
+	if (!path || statfs(path, &sfs) != 0)
+		return PROBE_FS_UNKNOWN;
+	return probe_fstype_from_magic((long)sfs.f_type);
+}
+
+int probe_file_ima_signed(const char *path)
+{
+	uint8_t xattr[4096];
+	ssize_t n;
+
+	if (!path)
+		return -EINVAL;
+	n = getxattr(path, "security.ima", xattr, sizeof(xattr));
+	if (n < 0)
+		return errno == ENODATA ? 0 : -errno;
+	return lota_ima_xattr_is_signature(xattr, (size_t)n) ? 1 : 0;
 }
 
 /*
@@ -237,12 +332,43 @@ int probe_lockdown_restrictive(void)
  */
 #define INITRAMFS_LOCK_TAG "LOTA-PCR14-INITRAMFS-LOCK-v1"
 
-void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
+/*
+ * lota-pcr14-lock records the pre-extend PCR14 content here on the /run
+ * tmpfs (0^32 on a legacy/BIOS host, the firmware/shim MOK measurement on
+ * UEFI Secure Boot).
+ * Must match BASELINE_PATH in src/initramfs/lota-pcr14-lock.c.
+ */
+#define PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
+
+/*
+ * read_pcr14_baseline_at - load the baseline the lock helper persisted this
+ * boot.
+ * Missing or short file means the legacy/BIOS path: zero baseline, which
+ * reproduces the pre-fix behaviour and the agent's own fallback.
+ */
+static void read_pcr14_baseline_at(const char *path,
+				   uint8_t out[PROBE_HASH_SIZE])
 {
+	int fd;
+
+	memset(out, 0, PROBE_HASH_SIZE);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	if (read(fd, out, PROBE_HASH_SIZE) != PROBE_HASH_SIZE)
+		memset(out, 0, PROBE_HASH_SIZE);
+	close(fd);
+}
+
+void probe_pcr14_lock_value_at(const char *baseline_path,
+			       uint8_t out[PROBE_HASH_SIZE])
+{
+	uint8_t baseline[PROBE_HASH_SIZE];
 	uint8_t commit[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
 	unsigned int len = 0;
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
+
+	read_pcr14_baseline_at(baseline_path, baseline);
 
 	/* SHA-256 over a static tag cannot fail with a live libcrypto;
 	 * NULL ctx would mean allocation failure, where aborting via
@@ -257,11 +383,16 @@ void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
 			     strlen(INITRAMFS_LOCK_TAG)) == 1 &&
 	    EVP_DigestFinal_ex(md, commit, &len) == 1 && len == sizeof(commit))
 		if (EVP_DigestInit_ex(md, EVP_sha256(), NULL) == 1 &&
-		    EVP_DigestUpdate(md, zero, sizeof(zero)) == 1 &&
+		    EVP_DigestUpdate(md, baseline, sizeof(baseline)) == 1 &&
 		    EVP_DigestUpdate(md, commit, sizeof(commit)) == 1)
 			EVP_DigestFinal_ex(md, out, &len);
 
 	EVP_MD_CTX_free(md);
+}
+
+void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE])
+{
+	probe_pcr14_lock_value_at(PCR14_BASELINE_PATH, out);
 }
 
 static int hex_nibble(char c)

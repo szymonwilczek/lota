@@ -14,4 +14,4 @@ reporting -- lives in `Documentation/contributor/code-of-conduct.rst
 
 Conduct issues can be reported to ``swilczek.lx@gmail.com``.
 
-Security vulnerabilities should follow `SECURITY.rst <SECURITY.rst>`_, not this process.
+Security vulnerabilities should follow `SECURITY.md <SECURITY.md>`_, not this process.

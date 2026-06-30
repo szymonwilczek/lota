@@ -55,6 +55,7 @@ func (s *PostgresSessionTokenStore) Remember(token [32]byte, rec sessionTokenRec
 			pcr_mask    = EXCLUDED.pcr_mask,
 			consumed    = FALSE`,
 		token[:], rec.ClientID, rec.HardwareID[:],
+		// #nosec G115 -- Postgres has no unsigned type; unsigned fields are stored in signed BIGINT columns, bit pattern preserved and restored verbatim on read
 		int64(rec.ValidUntil), int64(rec.ResultCode), int64(rec.Flags), int64(rec.PCRMask),
 	); err != nil {
 		slog.Error("session token remember failed", "client_id", rec.ClientID, "error", err)
@@ -66,6 +67,7 @@ func (s *PostgresSessionTokenStore) Remember(token [32]byte, rec sessionTokenRec
 	// and the valid_until index keeps the delete bounded to already-dead rows
 	if _, err := s.db.Exec(
 		"DELETE FROM session_tokens WHERE valid_until > 0 AND valid_until <= $1",
+		// #nosec G115 -- unix timestamp stored in a signed BIGINT column, far below int64 range
 		int64(unixTimestamp(time.Now())),
 	); err != nil {
 		slog.Warn("session token prune failed", "error", err)
@@ -101,12 +103,14 @@ func (s *PostgresSessionTokenStore) Validate(token [32]byte, consume bool, now u
 	if len(hwid) == types.HardwareIDSize {
 		copy(st.HardwareID[:], hwid)
 	}
-	st.ValidUntil = uint64(validUntil)
-	st.ResultCode = uint32(resultCode)
-	st.Flags = uint32(flags)
-	st.PCRMask = uint32(pcrMask)
+	// #nosec G115 -- signed BIGINT columns round-tripped back to the unsigned source types written by Remember
+	vu, rc, fl, pm := uint64(validUntil), uint32(resultCode), uint32(flags), uint32(pcrMask)
+	st.ValidUntil = vu
+	st.ResultCode = rc
+	st.Flags = fl
+	st.PCRMask = pm
 	st.Consumed = consumed
-	st.Expired = validUntil > 0 && uint64(validUntil) <= now
+	st.Expired = validUntil > 0 && vu <= now
 
 	if st.Expired {
 		if _, err := s.db.Exec("DELETE FROM session_tokens WHERE token_hash = $1", token[:]); err != nil {

@@ -1,19 +1,30 @@
 # Hotpath documentation rules for scripts/check-pr-quality.sh.
 #
 # Format:
-# hot_globs|doc_globs|reason
+# tier|hot_globs|doc_globs|reason
+#
+# tier is one of:
+#   required    - a matching change must touch a doc_globs file, or the commit
+#                 must carry a "Docs-Not-Needed: <reason>" trailer; otherwise the
+#                 gate fails.
+#   recommended - a matching change only warns when no doc_globs file is touched;
+#                 it never fails the gate.
 #
 # Globs are Bash [[ string == pattern ]] patterns separated by spaces.
-# In commit mode, a non-test commit that touches any hot_globs entry must also
-# touch at least one matching doc_globs entry in the same commit.
-# In PR diff mode, the same mapping is enforced against the aggregate pull
-# request diff.
+#
+# The tier a change lands in is also capped by the commit type
+# (the "type:" # subject prefix)
+# Infrastructure type (ci, build, test, tests, chore, style, refactor, perf, release)
+# is capped at "recommended" even against a required rule, because by convention it
+# does not change a documented contract.
+# The docs, license, and gitignore types are exempt entirely.
+# Module-scoped commits (agent:, bpf:, verifier:, ...) and treewide: take the tier of the rule.
 
-src/agent/tpm.c src/agent/tpm.h src/agent/attest.c src/agent/enroll*.c src/agent/enroll*.h src/attestca/*.go include/attestation.h include/lota_enroll.h|Documentation/operator/production-bringup/* Documentation/security/threat-model.rst examples/enrollment/README.rst configs/ek-roots/README.rst|TPM enrollment, attestation reports and CA activation define the hardware trust contract.
-src/verifier/verify/* src/verifier/types/* src/verifier/store/* src/verifier/server/*|Documentation/security/threat-model.rst Documentation/operator/production-bringup/* Documentation/contributor/development/* policies/README.rst examples/demo_server/README.rst|Verifier, policy, nonce, baseline, revocation and monitoring logic define relying-party behavior.
-src/bpf/* src/agent/bpf_loader.c src/agent/bpf_loader.h src/agent/runtime_image_measure.* include/lota_runtime* include/lota_token* include/lota_ipc.h|Documentation/security/threat-model.rst Documentation/operator/production-bringup/* Documentation/contributor/development/* examples/runtime_remeasure/README.rst examples/demo_anticheat/README.rst examples/demo_server/README.rst|BPF LSM, runtime measurement and token formats define enforcement and SDK trust boundaries.
-src/sdk/*.c src/sdk/server/*.go include/lota_gaming.h include/lota_anticheat.h include/lota_server.h examples/demo_anticheat/* examples/demo_server/*.go|Documentation/security/threat-model.rst examples/demo_anticheat/README.rst examples/demo_server/README.rst examples/demo/README.rst examples/mtls/README.rst|SDK and demo server surfaces are integrator-facing contracts.
-policies/* configs/* systemd/* dbus/* selinux/* src/agent/config.* src/agent/startup_policy.*|Documentation/operator/production-bringup/* policies/README.rst selinux/README.rst Documentation/security/threat-model.rst configs/ek-roots/README.rst|Deployment policy, hardening, service and MAC changes alter operator bring-up requirements.
-Makefile .github/workflows/* .github/pr-quality-hotpaths.txt scripts/check-* scripts/format-patch scripts/veristat-gate.sh Documentation/security/reproducible-builds.rst Documentation/contributor/development/* Documentation/contributor/branching.rst|Documentation/contributor/development/* Documentation/security/reproducible-builds.rst Documentation/contributor/branching.rst|CI, build, release and developer workflow changes alter contributor or release process.
-scripts/lota-* scripts/setup-fsverity.sh|Documentation/operator/production-bringup/* configs/ek-roots/README.rst examples/enrollment/README.rst examples/demo/README.rst|Operator provisioning and host bring-up scripts are deployment steps, documented for operators rather than contributors.
-go.work go.work.sum go.mod go.sum */go.mod */go.sum|Documentation/contributor/development/*|Module and workspace manifests are dependency and toolchain changes, a contributor-facing concern.
+required|src/agent/tpm.c src/agent/tpm.h src/agent/attest.c src/agent/enroll*.c src/agent/enroll*.h src/attestca/*.go include/attestation.h include/lota_enroll.h|Documentation/operator/production-bringup/* Documentation/security/threat-model.rst examples/enrollment/README.rst configs/ek-roots/README.rst|TPM enrollment, attestation reports and CA activation define the hardware trust contract.
+required|src/verifier/verify/* src/verifier/types/* src/verifier/store/* src/verifier/server/*|Documentation/security/threat-model.rst Documentation/operator/production-bringup/* Documentation/contributor/development/* policies/README.rst examples/demo_server/README.rst|Verifier, policy, nonce, baseline, revocation and monitoring logic define relying-party behavior.
+required|src/bpf/* src/agent/bpf_loader.c src/agent/bpf_loader.h src/agent/runtime_image_measure.* include/lota_runtime* include/lota_token* include/lota_ipc.h|Documentation/security/threat-model.rst Documentation/operator/production-bringup/* Documentation/contributor/development/* examples/runtime_remeasure/README.rst examples/demo_anticheat/README.rst examples/demo_server/README.rst|BPF LSM, runtime measurement and token formats define enforcement and SDK trust boundaries.
+required|src/sdk/*.c src/sdk/server/*.go include/lota_gaming.h include/lota_anticheat.h include/lota_server.h examples/demo_anticheat/* examples/demo_server/*.go|Documentation/security/threat-model.rst examples/demo_anticheat/README.rst examples/demo_server/README.rst examples/demo/README.rst examples/mtls/README.rst|SDK and demo server surfaces are integrator-facing contracts.
+required|policies/* configs/* systemd/* dbus/* selinux/* src/agent/config.* src/agent/startup_policy.*|Documentation/operator/production-bringup/* policies/README.rst selinux/README.rst Documentation/security/threat-model.rst configs/ek-roots/README.rst|Deployment policy, hardening, service and MAC changes alter operator bring-up requirements.
+required|scripts/lota-* scripts/setup-fsverity.sh|Documentation/operator/production-bringup/* configs/ek-roots/README.rst examples/enrollment/README.rst examples/demo/README.rst|Operator provisioning and host bring-up scripts are deployment steps, documented for operators rather than contributors.
+recommended|Makefile .github/workflows/* .github/pr-quality-hotpaths.txt scripts/check-* scripts/format-patch scripts/veristat-gate.sh Documentation/security/reproducible-builds.rst Documentation/contributor/development/* Documentation/contributor/branching.rst|Documentation/contributor/development/* Documentation/security/reproducible-builds.rst Documentation/contributor/branching.rst|CI, build, release and developer workflow changes usually alter contributor or release process.
+recommended|go.work go.work.sum go.mod go.sum */go.mod */go.sum|Documentation/contributor/development/*|Module and workspace manifests are dependency and toolchain changes, a contributor-facing concern.

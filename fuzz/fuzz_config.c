@@ -18,17 +18,38 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "../src/agent/config.h"
+
+#define FZ_CHECK(cond)           \
+	do {                     \
+		if (!(cond))     \
+			abort(); \
+	} while (0)
+
+/* every fixed char buffer the parser fills must stay NUL-terminated in range;
+ * unterminated string would over-read in any later consumer */
+static void check_terminated(const struct lota_config *cfg)
+{
+	FZ_CHECK(memchr(cfg->server, '\0', sizeof(cfg->server)) != NULL);
+	FZ_CHECK(memchr(cfg->ca_cert, '\0', sizeof(cfg->ca_cert)) != NULL);
+	FZ_CHECK(memchr(cfg->pin_sha256, '\0', sizeof(cfg->pin_sha256)) !=
+		 NULL);
+	FZ_CHECK(memchr(cfg->bpf_path, '\0', sizeof(cfg->bpf_path)) != NULL);
+	FZ_CHECK(memchr(cfg->mode, '\0', sizeof(cfg->mode)) != NULL);
+	FZ_CHECK(memchr(cfg->kernel_path, '\0', sizeof(cfg->kernel_path)) !=
+		 NULL);
+}
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-	struct lota_config cfg;
+	struct lota_config cfg, cfg2;
 	char tmppath[] = "/tmp/lota-cfg-fuzz-XXXXXX";
-	int fd;
+	int fd, rc1, rc2;
 	FILE *tmp;
 
 	/* cap input to prevent slow runs */
@@ -56,12 +77,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		stderr = saved;
 
 	config_init(&cfg);
-	config_load(&cfg, tmppath);
+	rc1 = config_load(&cfg, tmppath);
+	/* parsing the same file again must reach the same verdict and produce
+	 * byte-identical struct:
+	 * nondeterministic parser hides state that leaked across calls */
+	config_init(&cfg2);
+	rc2 = config_load(&cfg2, tmppath);
 
 	if (stderr != saved)
 		fclose(stderr);
 	stderr = saved;
-
 	unlink(tmppath);
+
+	FZ_CHECK((rc1 == 0) == (rc2 == 0));
+	if (rc1 == 0) {
+		check_terminated(&cfg);
+		FZ_CHECK(memcmp(&cfg, &cfg2, sizeof(cfg)) == 0);
+	}
 	return 0;
 }

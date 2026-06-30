@@ -1,15 +1,18 @@
 name: Deploy documentation
 
-# Publishes the Sphinx HTML to GitHub Pages.
+# Publishes the Sphinx HTML to GitHub Pages as two channels from one artifact.
 #
-# Site tracks main: every merge of lota-next into main redeploys, and a stable
-# release tag redeploys so the version label reflects the tag the docs were
-# built from.
+# stable:      built from main, served at the site root, version label from
+#              the latest stable tag (or the pushed tag itself).
+# development: built from lota-next, served under /lota-next/, labelled
+#              "lota-next (<short-sha>)" and marked noindex.
 #
+# Push to either branch (or a stable tag) rebuilds both channels and redeploys
+# the combined site, so neither channel can overwrite the other.
 # Release-candidate tags are skipped -- only main and stable v* tags are hosted.
 on:
   push:
-    branches: [main]
+    branches: [main, lota-next]
     tags: ['v*']
   workflow_dispatch:
 
@@ -32,11 +35,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout
+      - name: Checkout stable (main)
         uses: actions/checkout@v4
         with:
+          ref: main
+          path: stable
           fetch-depth: 0  # need the tag history for the version label
           persist-credentials: false  # no git auth is needed past checkout
+
+      - name: Checkout development (lota-next)
+        uses: actions/checkout@v4
+        with:
+          ref: lota-next
+          path: dev
+          fetch-depth: 0  # short-sha for the development version label
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,28 +57,48 @@ jobs:
           python-version: '3.12'
 
       - name: Install documentation toolchain
-        run: pip install -r Documentation/requirements.txt
+        run: pip install -r stable/Documentation/requirements.txt
 
       # on a tag build use the tag itself
-      # on a branch build use the latest stable tag reachable from main
-      - name: Resolve release tag
+      # otherwise use the latest stable tag reachable from main
+      - name: Resolve labels
         id: ver
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "stable=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-rc*')" >> "$GITHUB_OUTPUT"
+            echo "stable=$(git -C stable describe --tags --abbrev=0 --match 'v*' --exclude '*-rc*')" >> "$GITHUB_OUTPUT"
           fi
+          echo "dev=lota-next ($(git -C dev rev-parse --short HEAD))" >> "$GITHUB_OUTPUT"
 
-      - name: Build HTML (warnings are errors)
+      - name: Build stable channel
         env:
-          LOTA_DOCS_VERSION: ${{ steps.ver.outputs.tag }}
-        run: make -C Documentation html
+          LOTA_DOCS_CHANNEL: stable
+          LOTA_DOCS_REF: main
+          LOTA_DOCS_VERSION: ${{ steps.ver.outputs.stable }}
+        run: make -C stable/Documentation html
+
+      - name: Build development channel
+        env:
+          LOTA_DOCS_CHANNEL: dev
+          LOTA_DOCS_REF: lota-next
+          LOTA_DOCS_VERSION: ${{ steps.ver.outputs.dev }}
+        run: make -C dev/Documentation html
+
+      # assemble one tree:
+      # stable at the root, development under /lota-next/ the stable build
+      # carries the CNAME (html_extra_path) at the site root
+      - name: Assemble site
+        run: |
+          mkdir site
+          cp -r stable/Documentation/_build/html/. site/
+          mkdir site/lota-next
+          cp -r dev/Documentation/_build/html/. site/lota-next/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: Documentation/_build/html
+          path: site
 
   deploy:
     name: deploy to Pages

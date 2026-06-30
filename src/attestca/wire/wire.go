@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 )
 
 const (
@@ -93,6 +94,7 @@ type ResultReply struct {
 
 type encoder struct {
 	buf []byte
+	err error
 }
 
 func newEncoder() *encoder {
@@ -111,9 +113,26 @@ func (e *encoder) u32(v uint32) {
 }
 
 func (e *encoder) bytes16(b []byte) {
-	// #nosec G115 -- callers cap every field well below 65535 before encoding
-	e.u16(uint16(len(b)))
+	if e.err != nil {
+		return
+	}
+	n := len(b)
+	// every caller validates its fields against the Max* limits above, all far below 65535
+	// guard the length prefix so the conversion cannot overflow
+	if n < 0 || n > math.MaxUint16 {
+		e.err = ErrTooLarge
+		return
+	}
+	e.u16(uint16(n))
 	e.buf = append(e.buf, b...)
+}
+
+// result returns the encoded bytes, or the first error a bytes16 hit.
+func (e *encoder) result() ([]byte, error) {
+	if e.err != nil {
+		return nil, e.err
+	}
+	return e.buf, nil
 }
 
 // EncodeBegin serializes a BeginRequest.
@@ -124,7 +143,7 @@ func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	e := newEncoder()
 	e.bytes16(r.EKCertDER)
 	e.bytes16(r.AIKPublic)
-	return e.buf, nil
+	return e.result()
 }
 
 // EncodeChallenge serializes a ChallengeReply.
@@ -139,7 +158,7 @@ func EncodeChallenge(r *ChallengeReply) ([]byte, error) {
 	e.bytes16([]byte(r.SessionID))
 	e.bytes16(r.CredentialBlob)
 	e.bytes16(r.EncryptedSecret)
-	return e.buf, nil
+	return e.result()
 }
 
 // EncodeComplete serializes a CompleteRequest.
@@ -150,7 +169,7 @@ func EncodeComplete(r *CompleteRequest) ([]byte, error) {
 	e := newEncoder()
 	e.bytes16([]byte(r.SessionID))
 	e.bytes16(r.Secret)
-	return e.buf, nil
+	return e.result()
 }
 
 // EncodeResult serializes a ResultReply.
@@ -162,7 +181,7 @@ func EncodeResult(r *ResultReply) ([]byte, error) {
 	e.u16(r.Status)
 	e.bytes16(r.AIKCertDER)
 	e.bytes16([]byte(r.DeviceID))
-	return e.buf, nil
+	return e.result()
 }
 
 type decoder struct {
@@ -299,9 +318,14 @@ func WriteFrame(w io.Writer, body []byte) error {
 	if len(body) > MaxFrameSize {
 		return ErrTooLarge
 	}
+	n := len(body)
+	// MaxFrameSize already bounds body well within uint32
+	// keep the explicit guard so the length-prefix conversion is provably safe
+	if n < 0 || n > math.MaxUint32 {
+		return ErrTooLarge
+	}
 	var hdr [4]byte
-	// #nosec G115 -- len(body) is bounded by MaxFrameSize above
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(body)))
+	binary.BigEndian.PutUint32(hdr[:], uint32(n))
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err
 	}
