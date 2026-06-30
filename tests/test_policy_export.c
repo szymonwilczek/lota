@@ -208,9 +208,15 @@ static void test_emit_pcr_values(void)
 		return;
 	}
 
-	/* PCR 14: 32 bytes of 0x0E */
-	if (!contains(yaml, "  14: \"0e0e0e0e")) {
-		FAIL("PCR 14 value missing or wrong");
+	/*
+	 * PCR 14 is the LOTA boot-commitment register:
+	 * it changes every boot (the commitment folds the TPM resetCount) and is
+	 * validated by the verifier's boot-commitment derivation, not a static pin
+	 * policy_emit() must NOT emit it even when the snapshot carries it --
+	 * static pin freezes one boot's value and rejects the host on the next reboot
+	 */
+	if (contains(yaml, "  14: \"")) {
+		FAIL("PCR 14 must not be statically pinned in exported policy");
 		return;
 	}
 
@@ -704,6 +710,15 @@ static void test_export_pcrs_omit_grub_registers(void)
 		}
 		if (pcrs[i] == POLICY_PCR_9) {
 			FAIL("PCR 9 must not be exported (grubenv drift)");
+			return;
+		}
+		/*
+		 * PCR 14 is the per-boot boot-commitment register;
+		 * verifier validates it by derivation, never a static pin,
+		 * so the agent must not even read it for export
+		 */
+		if (pcrs[i] == POLICY_PCR_14) {
+			FAIL("PCR 14 must not be exported (per-boot drift)");
 			return;
 		}
 	}
