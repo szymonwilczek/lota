@@ -32,6 +32,40 @@
 
 #include "lota.h"
 
+/*
+ * Canonical set of PCR indices the agent reads from the live TPM when generating
+ * policy (--export-policy).
+ * Single source of truth so the set is testable without TPM and regression
+ * (re-pinning a drift-prone PCR) is caught by tests/test_policy_export.c
+ *
+ * PCR 8 (GRUB command/cmdline) and PCR 9 (GRUB-loaded files) are deliberately
+ * excluded:
+ * on GRUB + grubenv distributions
+ * (greenboot toggles boot_success / boot_indeterminate / saved_entry, all measured)
+ * these registers drift across benign reboots, so static pin fails healthy host.
+ * Their security-relevant content is covered elsewhere -- the kernel command line
+ * by the verifier's quote-bound PCR 8 event-log denylist (not the aggregate pin),
+ * the kernel image by PCR 4 and kernel_hash, and the initramfs by the PCR 14
+ * boot-commitment chain.
+ *
+ * PCR 14 (LOTA boot-commitment) is excluded for the same drift reason but stronger one:
+ * its value changes on every boot (the commitment folds the TPM resetCount) and the
+ * verifier validates it through the boot-commitment derivation, not a static pin.
+ * policy_emit() also drops it defensively at the emit stage so no snapshot can freeze
+ * one boot's value into the policy.
+ */
+static const int policy_export_pcr_list[] = {
+	POLICY_PCR_0, POLICY_PCR_1, POLICY_PCR_4, POLICY_PCR_7, POLICY_PCR_11,
+};
+
+const int *policy_export_pcrs(size_t *count)
+{
+	if (count)
+		*count = sizeof(policy_export_pcr_list) /
+			 sizeof(policy_export_pcr_list[0]);
+	return policy_export_pcr_list;
+}
+
 static void emit_hash_hex(FILE *out, const uint8_t hash[LOTA_HASH_SIZE])
 {
 	for (int i = 0; i < LOTA_HASH_SIZE; i++)
@@ -145,9 +179,17 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 	fprintf(out, "# PCR values (SHA-256, hex-encoded)\n");
 	fprintf(out, "# Only listed PCRs are verified; others are ignored.\n");
 
+	/*
+	 * PCR14 is the LOTA boot-commitment register.
+	 * Its value changes every boot (the commitment folds the TPM resetCount),
+	 * and the verifier validates it through the boot-commitment derivation,
+	 * not a static pin
+	 * Skip it defensively here so even snapshot that carries it cannot freeze
+	 * one boot's value into the policy and reject the host on its next reboot
+	 */
 	int valid_pcrs = 0;
 	for (i = 0; i < snap->pcr_count; i++) {
-		if (snap->pcrs[i].valid)
+		if (snap->pcrs[i].valid && snap->pcrs[i].index != POLICY_PCR_14)
 			valid_pcrs++;
 	}
 
@@ -158,11 +200,17 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 		for (i = 0; i < snap->pcr_count; i++) {
 			if (!snap->pcrs[i].valid)
 				continue;
+			if (snap->pcrs[i].index == POLICY_PCR_14)
+				continue;
 			fprintf(out, "  %d: \"", snap->pcrs[i].index);
 			emit_hash_hex(out, snap->pcrs[i].value);
 			fprintf(out, "\"\n");
 		}
 	}
+	fprintf(out,
+		"# PCR14 (LOTA boot-commitment) is intentionally omitted: it is\n"
+		"# validated by the verifier's boot-commitment derivation, not a\n"
+		"# static pin, and changes on every boot.\n");
 	fprintf(out, "\n");
 
 	/*

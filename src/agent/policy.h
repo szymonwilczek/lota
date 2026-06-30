@@ -19,16 +19,18 @@
 #include "../../include/lota.h"
 
 /*
- * PCR indices exported by default.
+ * PCR index definitions.
+ * Set actually exported by --export-policy is policy_export_pcrs()
+ * See policy.c for why PCR 8/9/14 are excluded.
  *
  *   PCR 0:  SRTM / firmware measurement
  *   PCR 1:  BIOS / UEFI configuration
  *   PCR 4:  Boot manager / loader stage
  *   PCR 7:  Secure Boot state
- *   PCR 8:  Boot config / command line measurements
- *   PCR 9:  Kernel/initrd measurements (bootloader-dependent)
+ *   PCR 8:  Boot config / command line (grubenv-driven, drifts; not exported)
+ *   PCR 9:  Kernel/initrd measurements (grubenv-driven, drifts; not exported)
  *   PCR 11: Unified Kernel Image (UKI) measurements
- *   PCR 14: LOTA agent self-measurement
+ *   PCR 14: LOTA boot-commitment (per-boot, derivation-validated; not exported)
  */
 #define POLICY_PCR_0 0
 #define POLICY_PCR_1 1
@@ -105,5 +107,17 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out);
  */
 int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
 		       size_t buf_size, size_t *written);
+
+/*
+ * policy_export_pcrs - Canonical PCR indices read for --export-policy
+ *
+ * @count: out, number of entries in the returned array (may be NULL)
+ *
+ * Returns pointer to static array of PCR indices the agent reads from the
+ * live TPM when generating a policy.
+ * Centralized here so the set has a single source of truth and can be unit-tested
+ * without a TPM.
+ */
+const int *policy_export_pcrs(size_t *count);
 
 #endif /* LOTA_POLICY_H */

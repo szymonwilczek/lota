@@ -208,9 +208,15 @@ static void test_emit_pcr_values(void)
 		return;
 	}
 
-	/* PCR 14: 32 bytes of 0x0E */
-	if (!contains(yaml, "  14: \"0e0e0e0e")) {
-		FAIL("PCR 14 value missing or wrong");
+	/*
+	 * PCR 14 is the LOTA boot-commitment register:
+	 * it changes every boot (the commitment folds the TPM resetCount) and is
+	 * validated by the verifier's boot-commitment derivation, not a static pin
+	 * policy_emit() must NOT emit it even when the snapshot carries it --
+	 * static pin freezes one boot's value and rejects the host on the next reboot
+	 */
+	if (contains(yaml, "  14: \"")) {
+		FAIL("PCR 14 must not be statically pinned in exported policy");
 		return;
 	}
 
@@ -679,6 +685,47 @@ static void test_emit_written_count(void)
 	PASS();
 }
 
+static void test_export_pcrs_omit_grub_registers(void)
+{
+	TEST("policy_export_pcrs - omits grubenv-driven PCR 8/9");
+
+	size_t count = 0;
+	const int *pcrs = policy_export_pcrs(&count);
+
+	if (!pcrs || count == 0) {
+		FAIL("policy_export_pcrs returned an empty list");
+		return;
+	}
+
+	/*
+	 * PCR 8 (GRUB command/cmdline) and PCR 9 (GRUB-loaded files) both fold
+	 * in the grubenv (greenboot boot_success / saved_entry), which legitimately
+	 * changes across benign reboots.
+	 * static pin then fails healthy host, so they must not be in the export set
+	 */
+	for (size_t i = 0; i < count; i++) {
+		if (pcrs[i] == POLICY_PCR_8) {
+			FAIL("PCR 8 must not be exported (grubenv drift)");
+			return;
+		}
+		if (pcrs[i] == POLICY_PCR_9) {
+			FAIL("PCR 9 must not be exported (grubenv drift)");
+			return;
+		}
+		/*
+		 * PCR 14 is the per-boot boot-commitment register;
+		 * verifier validates it by derivation, never a static pin,
+		 * so the agent must not even read it for export
+		 */
+		if (pcrs[i] == POLICY_PCR_14) {
+			FAIL("PCR 14 must not be exported (per-boot drift)");
+			return;
+		}
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== LOTA Policy Export - Test Suite ===\n\n");
@@ -707,6 +754,9 @@ int main(void)
 	test_emit_verifier_fields();
 	test_emit_spdx_header();
 	test_emit_written_count();
+
+	printf("\nExport PCR selection:\n");
+	test_export_pcrs_omit_grub_registers();
 
 	printf("\n=== Results: %d/%d passed", tests_passed, tests_run);
 	if (tests_passed < tests_run) {
