@@ -106,6 +106,16 @@ The verifier, port, CA certificate and cadence come from
 no attestation flags are hardcoded in the unit. Keep ``attest_interval``
 non-zero -- a zero interval attests once and exits.
 
+``ca_cert`` must point at a path the hardened unit can read. The service runs
+with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
+an operator home directory (the ``--ca-cert ~/tls.crt`` used for a manual
+``--enroll``) is invisible to it. Copy the verifier CA certificate under
+``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
+there, for example::
+
+   sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
+   # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
+
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
 the operator's first ``lota-agent --enroll`` records that state; afterwards the
