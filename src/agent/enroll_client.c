@@ -158,29 +158,53 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	memset(&net, 0, sizeof(net));
 	ret = net_context_init(&net, server, port, ca_cert, skip_verify, pin);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"Failed to set up the TLS channel to the CA at %s:%d "
+			"(check --ca-cert): %s\n",
+			server, port, strerror(-ret));
 		goto out;
+	}
 	net_inited = 1;
 	ret = net_connect(&net);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"Could not reach the attestation CA at %s:%d: %s. "
+			"Confirm lota-attest-ca is running and reachable.\n",
+			server, port, strerror(-ret));
 		goto out;
+	}
 
 	blen = enroll_encode_begin(body, sizeof(body), ek_cert, ek_len, aik_pub,
 				   aik_len);
 	if (blen < 0) {
 		ret = (int)blen;
+		fprintf(stderr, "Failed to encode the enrollment request: %s\n",
+			strerror(-ret));
 		goto out;
 	}
 	ret = send_frame(&net, body, (size_t)blen);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"Failed to send the enrollment request to the CA: %s\n",
+			strerror(-ret));
 		goto out;
+	}
 
 	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"No challenge received from the CA (connection "
+			"dropped?): %s\n",
+			strerror(-ret));
 		goto out;
+	}
 	ret = enroll_decode_challenge(rbuf, rlen, &ch);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr, "Malformed challenge from the CA: %s\n",
+			strerror(-ret));
 		goto out;
+	}
 	if (ch.status != LOTA_ENROLL_STATUS_OK) {
 		fprintf(stderr,
 			"CA refused enrollment at challenge (status %u)\n",
@@ -203,18 +227,34 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	OPENSSL_cleanse(secret, sizeof(secret));
 	if (blen < 0) {
 		ret = (int)blen;
+		fprintf(stderr,
+			"Failed to encode the credential response: %s\n",
+			strerror(-ret));
 		goto out;
 	}
 	ret = send_frame(&net, body, (size_t)blen);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"Failed to send the credential response to the CA: %s\n",
+			strerror(-ret));
 		goto out;
+	}
 
 	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"No completion response from the CA (connection "
+			"dropped?): %s\n",
+			strerror(-ret));
 		goto out;
+	}
 	ret = enroll_decode_result(rbuf, rlen, &res);
-	if (ret < 0)
+	if (ret < 0) {
+		fprintf(stderr,
+			"Malformed completion response from the CA: %s\n",
+			strerror(-ret));
 		goto out;
+	}
 	if (res.status != LOTA_ENROLL_STATUS_OK) {
 		fprintf(stderr,
 			"CA refused enrollment at completion (status %u)\n",
