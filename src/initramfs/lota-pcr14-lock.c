@@ -63,11 +63,13 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <openssl/evp.h>
 
@@ -191,9 +193,16 @@ static int write_baseline(const uint8_t base[HASH_SIZE])
 {
 	if (mkdir(BASELINE_DIR, 0755) != 0 && errno != EEXIST)
 		return -errno;
-	FILE *f = fopen(BASELINE_PATH, "wb");
-	if (!f)
+	int fd = open(BASELINE_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW,
+		      0600);
+	if (fd < 0)
 		return -errno;
+	FILE *f = fdopen(fd, "wb");
+	if (!f) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
 	size_t n = fwrite(base, 1, HASH_SIZE, f);
 	int ok = (n == HASH_SIZE) && (fflush(f) == 0);
 	if (fclose(f) != 0)
