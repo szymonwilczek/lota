@@ -30,6 +30,16 @@ pass ``--config /path`` if the operator policy lives elsewhere.
 The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
 call into the build system for CI / packaging.
 
+.. note::
+
+   The agent package ships ``lota_lsm.bpf.o`` **unsigned** on purpose, so each
+   operator signs it with their own key. **Upgrading the package replaces the
+   object and invalidates the previous signature** -- re-run the
+   ``--sign-policy`` step above after every ``lota-agent`` package upgrade, then
+   re-run ``lota-install`` to confirm the operator-trust stage. ``lota-install``
+   only verifies the signature; it never signs on the host (a locally generated
+   key would let local malware re-sign a tampered object).
+
 2. Kernel-enforced immutability of the agent binary
 ===================================================
 
