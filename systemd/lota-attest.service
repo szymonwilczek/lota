@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT
+#
+# LOTA Attestation - systemd Service Unit
+#
+# Runs the agent's continuous remote-attestation loop fire-and-forget so deployed
+# host keeps proving its state (and auto-renews its CA-issued AIK certificate)
+# without the operator running `lota-agent --attest` by hand.
+#
+# Deliberately a separate unit from lota-agent.service: the enforcement daemon
+# is the security core (BPF LSM, TPM PCR14 commitment) and keeps tight seccomp/
+# capability profile.
+# Attestation is network-facing, so it runs in its own process with smaller
+# blast radius -- compromise of the attest loop cannot touch the kernel-enforced
+# BPF policy, and the verifier still notices a host that stops sending fresh
+# attestations.
+#
+# First enrollment is operator-driven (lota-agent --enroll), which records
+# /var/lib/lota/enroll_state.dat.
+#
+# ConditionPathExists below keeps this unit inactive until that bootstrap exists;
+# afterwards the loop renews the AIK certificate automatically (auto-renew keys off
+# the same recorded endpoint).
+#
+# Configuration (server, port, ca_cert, attest_interval) is read from
+# /etc/lota/lota.conf; no attestation flags are hardcoded here so the
+# operator tunes cadence and verifier in one place.
+#
+# Copyright (C) 2026 Szymon Wilczek
+
+[Unit]
+Description=LOTA continuous remote attestation
+Documentation=https://github.com/szymonwilczek/lota
+After=lota-agent.service network-online.target
+Wants=lota-agent.service network-online.target
+# stay inactive on host that has never completed its first enrollment;
+# operator's `lota-agent --enroll` writes this file
+ConditionPathExists=/var/lib/lota/enroll_state.dat
+
+[Service]
+Type=simple
+#
+# No attestation flags here on purpose.
+# server / port / ca_cert / attest_interval are driven by /etc/lota/lota.conf
+# so operator tunes the verifier and cadence in one place.
+# Set attest_interval to a non-zero value there to keep the loop continuous
+# (zero interval attests once and exits)
+#
+ExecStart=/usr/bin/lota-agent --attest
+Restart=on-failure
+# host that is reachable but not yet fully enrolled should back off
+RestartSec=30s
+
+# Continuous loop pings the watchdog every WatchdogSec/2
+# (cadence is decoupled from attest_interval), so loop wedged on the TPM
+# or stalled TLS socket misses the deadline and systemd restarts it.
+# NotifyAccess=main makes systemd hand over NOTIFY_SOCKET under Type=simple
+# so the pings are received; the one-shot config (attest_interval=0) just exits
+# success before the first deadline.
+WatchdogSec=60s
+NotifyAccess=main
+
+User=root
+Group=root
+
+# Filesystem confinement.
+# Loop reads its config and CA cert, reads the AIK key state, and writes the
+# renewed AIK certificate back under /var/lib/lota
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lota /run/lota
+ReadOnlyPaths=/etc/lota /usr/lib/lota
+ProtectHome=yes
+PrivateTmp=yes
+
+# TPM only: quote signing and AIK load. No BPF, no raw I/O.
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=/dev/tpm0 rw
+
+# No capabilities at all.
+# SecureBits=noroot-locked below stops uid 0 from auto-granting any and
+# AmbientCapabilities is empty, so the loop runs cap-less: TPM access comes
+# from DeviceAllow plus root-owned DAC and the verifier/CA sockets need none.
+# Unlike the enforcement daemon (CAP_SYS_ADMIN/CAP_BPF/CAP_PERFMON) this
+# process loads no BPF and touches no raw I/O.
+# Agent never calls mlock; LimitMEMLOCK below still lets any library-internal
+# secret locking succeed within the rlimit without CAP_IPC_LOCK.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Standard service plus outbound networking; explicitly no bpf/perf
+SystemCallFilter=@system-service @network-io
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+
+# Unix + IPv4/IPv6 for the verifier/CA TLS
+# No AF_NETLINK: this process never loads BPF
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+PrivateUsers=no
+RestrictNamespaces=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+
+# no BPF JIT here, so write-execute memory can stay denied
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+UMask=0077
+RestrictRealtime=yes
+KeyringMode=private
+SupplementaryGroups=
+SecureBits=noroot-locked
+
+LimitMEMLOCK=64M
+LimitNOFILE=1024
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lota-attest
+SyslogFacility=auth
+
+[Install]
+WantedBy=multi-user.target

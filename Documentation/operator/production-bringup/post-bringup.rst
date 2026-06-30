@@ -82,6 +82,54 @@ Two supported paths exist:
    an attack surface for an init-domain compromise. Operators planning updates
    therefore schedule them alongside a regular maintenance reboot.
 
+Continuous attestation
+----------------------
+
+``lota-agent.service`` only enforces locally (BPF LSM, PCR14 commitment); it
+does not attest. A deployed host proves its state through a second unit,
+``lota-attest.service``, which runs ``lota-agent --attest`` fire-and-forget and
+renews the CA-issued AIK certificate before it expires. It is a separate unit
+on purpose: the attestation loop is network-facing, so isolating it from the
+enforcement daemon keeps that security core on a tight seccomp and capability
+profile. The attest unit itself runs with no effective capabilities at all
+(``SecureBits=noroot-locked`` with an empty ambient set), reaches the TPM only
+through ``DeviceAllow``, and cannot load BPF or disable enforcement. A
+compromise of the attest process at worst stops fresh attestations, which the
+verifier sees as staleness and marks untrusted.
+
+The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
+independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
+TLS socket misses the deadline and systemd restarts it.
+
+The verifier, port, CA certificate and cadence come from
+``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
+no attestation flags are hardcoded in the unit. Keep ``attest_interval``
+non-zero -- a zero interval attests once and exits.
+
+``ca_cert`` must point at a path the hardened unit can read. The service runs
+with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
+an operator home directory (the ``--ca-cert ~/tls.crt`` used for a manual
+``--enroll``) is invisible to it. Copy the verifier CA certificate under
+``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
+there, for example::
+
+   sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
+   # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
+
+First enrollment stays operator-driven. ``lota-attest.service`` carries
+``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
+the operator's first ``lota-agent --enroll`` records that state; afterwards the
+loop renews the certificate automatically. Start it after the first enrollment
+(or it activates on the next boot):
+
+.. code-block:: sh
+
+   sudo systemctl enable --now lota-attest.service
+
+The shipped ``85-lota.preset`` enables both ``lota-agent.service`` and
+``lota-attest.service`` by default, so a packaged install only needs the first
+enrollment to begin attesting.
+
 VM testing caveats
 ------------------
 

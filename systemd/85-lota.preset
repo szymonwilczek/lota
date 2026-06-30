@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+#
+# LOTA systemd preset: enable the enforcement daemon and the continuous
+# attestation loop by default on install.
+# `systemctl preset` (and packaging %systemd_post) honour this so deployed
+# host enforces and attests fire-and-forget without the operator enabling
+# units by hand.
+# lota-attest.service still gates itself on a completed first enrollment
+# via its ConditionPathExists.
+#
+# Copyright (C) 2026 Szymon Wilczek
+enable lota-agent.service
+enable lota-attest.service

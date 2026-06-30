@@ -80,11 +80,136 @@ static void test_packaged_unit_does_not_set_mode(void)
 	PASS();
 }
 
+static FILE *open_shipped(const char *rel)
+{
+	FILE *fp = fopen(rel, "re");
+
+	if (!fp) {
+		char up[256];
+
+		snprintf(up, sizeof(up), "../%s", rel);
+		fp = fopen(up, "re");
+	}
+	return fp;
+}
+
+/*
+ * Continuous-attestation unit must drive the verifier and cadence from
+ * /etc/lota/lota.conf, so ExecStart carries --attest but pins neither the
+ * interval nor --mode.
+ * Hardcoded --attest-interval would override the operator's lota.conf;
+ * --mode flag would fight the enforce-by-config rule
+ */
+static void test_attest_unit_config_driven(void)
+{
+	TEST("attest unit: ExecStart is --attest, no interval/mode pin");
+
+	FILE *fp = open_shipped("systemd/lota-attest.service");
+	if (!fp) {
+		FAIL("could not open lota-attest.service");
+		return;
+	}
+
+	char line[1024];
+	bool saw_attest = false;
+	bool bad_flag = false;
+	while (fgets(line, sizeof(line), fp)) {
+		if (strncmp(line, "ExecStart=", 10) != 0)
+			continue;
+		if (strstr(line, "--attest"))
+			saw_attest = true;
+		if (strstr(line, "--attest-interval") || strstr(line, "--mode"))
+			bad_flag = true;
+	}
+	fclose(fp);
+
+	if (!saw_attest) {
+		FAIL("ExecStart must invoke --attest");
+		return;
+	}
+	if (bad_flag) {
+		FAIL("ExecStart must not pin --attest-interval or --mode");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * attest loop is network-facing and runs as a separate process from the
+ * enforcement daemon precisely so it carries a smaller blast radius.
+ * Guard that it never grants itself the enforcement daemon's powerful caps,
+ * and that it gates on a completed first enrollment.
+ */
+static void test_attest_unit_isolated(void)
+{
+	TEST("attest unit: no BPF/admin caps, gated on first enroll");
+
+	FILE *fp = open_shipped("systemd/lota-attest.service");
+	if (!fp) {
+		FAIL("could not open lota-attest.service");
+		return;
+	}
+
+	char line[1024];
+	bool powerful_cap = false;
+	bool enroll_gate = false;
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "CapabilityBoundingSet=") &&
+		    (strstr(line, "CAP_BPF") || strstr(line, "CAP_SYS_ADMIN") ||
+		     strstr(line, "CAP_PERFMON") ||
+		     strstr(line, "CAP_SYS_RAWIO")))
+			powerful_cap = true;
+		if (strstr(line, "ConditionPathExists=") &&
+		    strstr(line, "/var/lib/lota/enroll_state.dat"))
+			enroll_gate = true;
+	}
+	fclose(fp);
+
+	if (powerful_cap) {
+		FAIL("attest unit must not hold BPF/admin/rawio caps");
+		return;
+	}
+	if (!enroll_gate) {
+		FAIL("attest unit must gate on enroll_state.dat");
+		return;
+	}
+	PASS();
+}
+
+/* preset must enable the attest loop so deployed host attests by default once enrolled */
+static void test_preset_enables_attest(void)
+{
+	TEST("preset: enables lota-attest.service");
+
+	FILE *fp = open_shipped("systemd/85-lota.preset");
+	if (!fp) {
+		FAIL("could not open 85-lota.preset");
+		return;
+	}
+
+	char line[1024];
+	bool enables = false;
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "enable lota-attest.service"))
+			enables = true;
+	}
+	fclose(fp);
+
+	if (!enables) {
+		FAIL("preset does not enable lota-attest.service");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
 
 	test_packaged_unit_does_not_set_mode();
+	test_attest_unit_config_driven();
+	test_attest_unit_isolated();
+	test_preset_enables_attest();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
