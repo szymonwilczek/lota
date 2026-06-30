@@ -40,11 +40,17 @@ static int tests_passed;
 static void test_signature_types_accepted(void)
 {
 	const uint8_t digsig[] = { LOTA_IMA_XATTR_DIGSIG, 0x02, 0xab, 0xcd };
+	const uint8_t portable[] = { LOTA_IMA_XATTR_PORTABLE_DIGSIG, 0x02,
+				     0xab };
 	const uint8_t verity[] = { LOTA_IMA_XATTR_VERITY_DIGSIG, 0x02, 0xab };
 
-	TEST("DIGSIG (0x03) and VERITY_DIGSIG (0x05) count as signatures");
+	TEST("DIGSIG (0x03), portable (0x05) and verity (0x06) are signatures");
 	if (!lota_ima_xattr_is_signature(digsig, sizeof(digsig))) {
 		FAIL("DIGSIG not recognised as a signature");
+		return;
+	}
+	if (!lota_ima_xattr_is_signature(portable, sizeof(portable))) {
+		FAIL("PORTABLE_DIGSIG not recognised as a signature");
 		return;
 	}
 	if (!lota_ima_xattr_is_signature(verity, sizeof(verity))) {
