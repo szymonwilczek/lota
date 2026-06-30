@@ -172,9 +172,15 @@ static int extend_over(const uint8_t base[HASH_SIZE],
  */
 static int read_saved_baseline(uint8_t out[HASH_SIZE])
 {
-	FILE *f = fopen(BASELINE_PATH, "rb");
-	if (!f)
+	int fd = open(BASELINE_PATH, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0)
 		return errno == ENOENT ? 0 : -errno;
+	FILE *f = fdopen(fd, "rb");
+	if (!f) {
+		int err = -errno;
+		close(fd);
+		return err;
+	}
 	size_t n = fread(out, 1, HASH_SIZE, f);
 	int err = ferror(f);
 	fclose(f);

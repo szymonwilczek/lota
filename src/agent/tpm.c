@@ -1958,11 +1958,18 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
 {
 	memset(out, 0, LOTA_HASH_SIZE);
 
-	FILE *f = fopen(LOTA_PCR14_BASELINE_PATH, "rb");
-	if (!f) {
+	int fd = open(LOTA_PCR14_BASELINE_PATH,
+		      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0) {
 		if (errno == ENOENT)
 			return 0;
 		return -errno;
+	}
+	FILE *f = fdopen(fd, "rb");
+	if (!f) {
+		int err = -errno;
+		close(fd);
+		return err;
 	}
 
 	uint8_t buf[LOTA_HASH_SIZE];
