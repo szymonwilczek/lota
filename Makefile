@@ -611,7 +611,8 @@ dnf-repo: rpm-sign
 	$(Q)mkdir -p $(REPO_DIR)
 	$(Q)cp $(PKG_DIR)/*.rpm $(REPO_DIR)/
 	$(Q)createrepo_c --quiet $(REPO_DIR)
-	$(Q)gpg --batch --yes --armor --detach-sign $(REPO_DIR)/repodata/repomd.xml
+	$(Q)gpg --batch --yes --armor -u "$(LOTA_RPM_GPG_NAME)" \
+		--detach-sign $(REPO_DIR)/repodata/repomd.xml
 	$(Q)gpg --export --armor "$(LOTA_RPM_GPG_NAME)" >$(REPO_DIR)/RPM-GPG-KEY-lota
 	$(Q)sed 's,@BASEURL@,$(LOTA_REPO_BASEURL),g' \
 		packaging/repo/lota.repo.in >$(REPO_DIR)/lota.repo
