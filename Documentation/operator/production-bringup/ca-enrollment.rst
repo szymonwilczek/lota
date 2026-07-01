@@ -172,6 +172,41 @@ existing endpoints. Leave the flag off for the enterprise profile, where
 firmware drift is a feature and re-baselining stays a deliberate operator
 action.
 
+Operator-forced re-anchor and client removal
+============================================
+
+Deliberate counterpart of the self-service path works on every profile
+and needs no verifier flag. When a platform change is legitimate but the
+self-service re-anchor refuses it (or the profile does not enable it), drop
+the device's pinned baselines through the admin API; the next attestation
+re-establishes trust per the active TOFU/policy configuration:
+
+.. code-block:: sh
+
+    curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
+        -H "Authorization: Bearer $ADMIN_KEY" \
+        -d '{"actor":"ops@example.com","note":"planned firmware update"}'
+
+``actor`` is required and lands in the audit log together with the ``note``;
+the action is also logged at security level and counted in the ``forced``
+re-anchor metric. The enrollment is untouched -- the host keeps attesting
+with its enrolled AIK identity.
+
+To remove a device from the fleet entirely (decommissioned host, or trust
+state that must be rebuilt from scratch), delete the client. This drops the
+baselines and any AIK-store registration; the optional body is audit
+metadata:
+
+.. code-block:: sh
+
+    curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
+        -H "Authorization: Bearer $ADMIN_KEY" \
+        -d '{"actor":"ops@example.com","note":"decommissioned"}'
+
+Revocations and hardware bans are keyed separately and survive the delete,
+so removing a client cannot be used to shed either -- a revoked identity
+that re-enrolls is still revoked.
+
 AIK rotation status over D-Bus
 ==============================
 
