@@ -26,7 +26,7 @@ description: |
   enforcer. Fails closed until host bring-up (lota-install) signs the BPF
   object, installs the 90lota initramfs module and arms the PCR14 commitment.
 
-changelog: ./packaging/nfpm/changelog.yaml
+changelog: ./build/changelog.gen.yaml
 
 overrides:
   rpm:

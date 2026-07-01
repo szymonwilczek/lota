@@ -18,7 +18,7 @@ description: |
   LOTA SDK development files
   Headers and shared libraries for the gaming, anti-cheat and server SDKs,
   with the Proton/Steam integration helpers.
-changelog: ./packaging/nfpm/changelog.yaml
+changelog: ./build/changelog.gen.yaml
 
 overrides:
   rpm:

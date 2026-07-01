@@ -19,7 +19,7 @@ description: |
   Self-hosted enrollment service that proves an AIK lives in a genuine TPM
   through credential activation and issues short-lived AIK certificates that
   the fleet verifier trusts.
-changelog: ./packaging/nfpm/changelog.yaml
+changelog: ./build/changelog.gen.yaml
 
 contents:
   - src: ./build/lota-attest-ca

@@ -18,7 +18,7 @@ description: |
   Relying-party service that verifies TPM attestation reports against a signed
   PCR policy and issues short-lived session tokens. Backs onto SQLite or a
   shared Postgres for the HA topology.
-changelog: ./packaging/nfpm/changelog.yaml
+changelog: ./build/changelog.gen.yaml
 
 contents:
   - src: ./build/lota-verifier

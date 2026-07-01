@@ -458,10 +458,17 @@ reproducible-build: all
 # libraries they reference.
 # Agent package ships the BPF object UNSIGNED on purpose:
 # each adopter signs it during bring-up.
+#
+# Changelog version tracks VERSION: the template placeholder is substituted from
+# PROJECT_VERSION into a generated file the configs point at, so it never has to
+# be bumped alongside VERSION.
+#
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
+CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
+CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 
 # Compiled SELinux policy module.
 # Built via the policy devel Makefile under selinux/ (needs selinux-policy-devel)
@@ -477,6 +484,7 @@ selinux-pp: $(SELINUX_PP)
 
 packages: all selinux-pp
 	$(Q)mkdir -p $(PKG_DIR)
+	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
 		echo "  NFPM    $$c"; \
 		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
