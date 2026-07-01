@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# nfpm config for the lota-sdk-devel package (integrator surface)
+#
+# Headers and shared libraries for embedding the gaming/anti-cheat and server
+# SDKs + Proton/Steam helper scripts.
+name: lota-sdk-devel
+arch: amd64
+platform: linux
+version: ${LOTA_VERSION}
+version_schema: semver
+section: devel
+priority: optional
+maintainer: Szymon Wilczek <swilczek.lx@gmail.com>
+vendor: LOTA
+homepage: https://github.com/szymonwilczek/lota
+license: MIT
+description: |
+  LOTA SDK development files
+  Headers and shared libraries for the gaming, anti-cheat and server SDKs,
+  with the Proton/Steam integration helpers.
+changelog: ./build/changelog.gen.yaml
+
+overrides:
+  rpm:
+    depends:
+      - openssl-libs
+
+contents:
+  - src: ./build/liblotagaming.so
+    dst: /usr/lib64/liblotagaming.so
+    file_info:
+      mode: 0755
+  - src: ./build/liblotaserver.so
+    dst: /usr/lib64/liblotaserver.so
+    file_info:
+      mode: 0755
+  - src: ./build/liblota_wine_hook.so
+    dst: /usr/lib64/liblota_wine_hook.so
+    file_info:
+      mode: 0755
+  - src: ./build/liblota_anticheat.so
+    dst: /usr/lib64/liblota_anticheat.so
+    file_info:
+      mode: 0755
+  - src: ./include/lota_gaming.h
+    dst: /usr/include/lota/lota_gaming.h
+    file_info:
+      mode: 0644
+  - src: ./include/lota_wine_hook.h
+    dst: /usr/include/lota/lota_wine_hook.h
+    file_info:
+      mode: 0644
+  - src: ./include/lota_server.h
+    dst: /usr/include/lota/lota_server.h
+    file_info:
+      mode: 0644
+  - src: ./include/lota_ipc.h
+    dst: /usr/include/lota/lota_ipc.h
+    file_info:
+      mode: 0644
+  - src: ./include/lota_anticheat.h
+    dst: /usr/include/lota/lota_anticheat.h
+    file_info:
+      mode: 0644
+  - src: ./scripts/lota-proton-hook
+    dst: /usr/bin/lota-proton-hook
+    file_info:
+      mode: 0755
+  - src: ./scripts/lota-steam-setup
+    dst: /usr/bin/lota-steam-setup
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lota-sdk-devel/LICENSE
+    type: license
+    file_info:
+      mode: 0644

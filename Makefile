@@ -334,7 +334,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -451,6 +451,57 @@ reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
 reproducible-build: all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
+
+# Native packages (RPM via nfpm)
+# Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
+# Depends on the build artifacts (all), so the configs find the binaries and
+# libraries they reference.
+# Agent package ships the BPF object UNSIGNED on purpose:
+# each adopter signs it during bring-up.
+#
+# Changelog version tracks VERSION:
+# Template placeholder is substituted from PROJECT_VERSION into a generated file
+# the configs point at, so it never has to be bumped alongside VERSION.
+#
+# rpmlint runs over the built RPMs when installed (report only, non-fatal);
+# the release CI is the gating lint.
+#
+# .spec / COPR path layers on top for the Fedora build service.
+NFPM ?= nfpm
+RPMLINT ?= rpmlint
+PKG_DIR ?= $(BUILD_DIR)/packages
+NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
+CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
+CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
+
+# Compiled SELinux policy module.
+# Built via the policy devel Makefile under selinux/ (needs selinux-policy-devel)
+# and shipped in the agent RPM at /usr/share/lota/selinux/lota.pp so
+# lota-install's SELinux stage can load it without the operator
+# hand-compiling the module out of band.
+SELINUX_PP := selinux/lota.pp
+$(SELINUX_PP):
+	$(Q)$(MAKE) -C selinux lota.pp
+
+.PHONY: selinux-pp
+selinux-pp: $(SELINUX_PP)
+
+packages: all selinux-pp
+	$(Q)mkdir -p $(PKG_DIR)
+	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
+	$(Q)for c in $(NFPM_CONFIGS); do \
+		echo "  NFPM    $$c"; \
+		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
+			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
+	done
+	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
+		echo "  RPMLINT $(PKG_DIR)"; \
+		$(RPMLINT) --ignore-unused-rpmlintrc \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
+	else \
+		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -1303,6 +1354,7 @@ help:
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
+	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
 	@echo "  examples         Build end-to-end demo material under examples/"
 	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""

@@ -1,0 +1,12 @@
+# Changelog for the LOTA nfpm packages (chglog format).
+#
+# @LOTA_VERSION@ is a placeholder.
+# `packages` make target substitutes it from PROJECT_VERSION (read from VERSION)
+# into build/changelog.gen.yaml, which the nfpm configs reference.
+# Changelog version therefore tracks VERSION and is never bumped by hand
+# -- build the packages via `make packages`
+- semver: "@LOTA_VERSION@"
+  date: 2026-06-21T00:00:00Z
+  packager: Szymon Wilczek <swilczek.lx@gmail.com>
+  changes:
+    - note: Initial native packaging of the agent, verifier, attest-CA and SDK.
