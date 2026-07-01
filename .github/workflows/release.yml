@@ -148,13 +148,16 @@ jobs:
           cache: false
 
       - name: Install ko
-        uses: ko-build/setup-ko@v0.7
+        uses: ko-build/setup-ko@3aebd0597dc1e9d1a26bcfdb7cbeb19c131d3037 # v0.7
 
       - name: Install cosign
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
 
       - name: Log in to ghcr.io
-        run: ko login ghcr.io -u "${{ github.actor }}" -p "${{ github.token }}"
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: ko login ghcr.io -u "$REGISTRY_USER" -p "$REGISTRY_TOKEN"
 
       - name: Build and push the images
         env:
@@ -188,7 +191,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Package the chart
         env:
@@ -200,12 +203,15 @@ jobs:
             --version "${TAG#v}" --app-version "${TAG#v}" -d dist
 
       - name: Push the chart to ghcr.io
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -eu
           helm registry login ghcr.io \
-            -u "${{ github.actor }}" -p "${{ github.token }}"
-          helm push dist/*.tgz \
-            "oci://ghcr.io/${{ github.repository_owner }}/charts"
+            -u "$REGISTRY_USER" -p "$REGISTRY_TOKEN"
+          helm push dist/*.tgz "oci://ghcr.io/$OWNER/charts"
 
       - name: Attach the chart to the release
         env:
@@ -217,6 +223,9 @@ jobs:
     name: build, sign and publish RPMs
     needs: release
     runs-on: ubuntu-24.04
+    # RPM signing key lives in dedicated environment so its secrets
+    # are scoped to the release job and can carry protection rules
+    environment: release
     permissions:
       contents: write    # upload the packages and repo to the release
     container:
