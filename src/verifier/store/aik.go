@@ -3,20 +3,20 @@
 // LOTA Verifier - AIK key store
 //
 // Manages Attestation Identity Keys.
-// Production trust model is certificate-backed:
-// verifier requires and chain-verifies the CA-issued AIK certificate
-// in every attestation report.
-// Verifier resolves the manufacturer EK chain through AIKCertificateVerifier
-// and pins the SHA-256(EK modulus) into the report.TPM.HardwareID binding
-// before the AIK is allowed to sign attestations.
+// Under the Privacy CA model the verifier's live use of this store is
+// certificate VERIFICATION, not storage:
+// CertificateStore carries the attestation-CA trust anchors and the CRL engine,
+// and VerifyReport chain-verifies the CA-issued AIK certificate presented in
+// every attestation report (AIKCertVerifier).
+// Durable client identity is the CA-assigned device pseudonym in the certificate
+// subject; verifier never sees the EK and records nothing here per client.
 //
-// The legacy TOFU path remains for two narrow cases: hosts that
-// opted out of --require-cert (operator acknowledges no chain
-// verification), and the in-memory test store (MemoryStore) used by
-// the verifier's own unit and integration tests. Production builds
-// with --require-cert (the default) never take that branch at
-// runtime; the methods stay in the interface so the test store and
-// the cert-backed store share one shape.
+// Registration/rotation surface (RegisterAIK*, RotateAIK, RegisterHardwareID)
+// is NOT called by the verifier runtime.
+// It remains for the in-memory/unit-test stores, for external provisioning tooling
+// that pre-loads a store out-of-band, and for legacy pre-Privacy-CA deployments
+// whose stores still carry registrations.
+// Such records also feed the client-existence check.
 
 package store
 
@@ -47,13 +47,15 @@ type AIKStore interface {
 	// retrieves AIK public key for client
 	GetAIK(clientID string) (*rsa.PublicKey, error)
 
-	// stores AIK public key for client. Reserved for the legacy
-	// TOFU branch used by the test MemoryStore and by deployments
-	// that opted out of --require-cert; production registrations go
-	// through RegisterAIKWithCert.
+	// stores AIK public key for client.
+	// Not called by the verifier runtime (see the package comment);
+	// used by the test stores and by out-of-band provisioning tooling.
 	RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 
-	// stores AIK with certificate verification
+	// stores AIK with certificate verification.
+	// Like RegisterAIK this is provisioning surface, not a runtime path:
+	// VerifyReport authenticates the AIK through the per-report certificate
+	// and registers nothing.
 	RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error
 
 	// registers or validates hardware ID for client
