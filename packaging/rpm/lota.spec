@@ -46,6 +46,7 @@ BuildRequires:  SDL2-devel
 BuildRequires:  libcurl-devel
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  zlib-devel
+BuildRequires:  selinux-policy-devel
 
 %description
 LOTA is a measured-boot remote-attestation framework with a BPF LSM
@@ -98,9 +99,16 @@ build a proprietary product on top.
 # go.work puts the build in workspace mode, where modules resolve read-only
 # from the proxy; COPR project must have external network enabled.
 %make_build all
+# Compiled SELinux policy module (needs selinux-policy-devel).
+# lota-install's SELinux stage loads it from %{_datadir}/lota/selinux,
+# so the agent RPM ships it.
+%make_build selinux-pp
 
 %install
 %make_install
+# make install does not place the SELinux module;
+# install it where lota-install expects it (GPL-2.0-only, like the BPF object)
+install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
 
 %post agent
 systemctl daemon-reload >/dev/null 2>&1 || :
@@ -111,10 +119,10 @@ module and arm the PCR14 boot commitment. The agent is not started here.
 EOF
 
 %preun agent
-%systemd_preun lota-agent.service lota-agent.socket
+%systemd_preun lota-agent.service lota-agent.socket lota-attest.service
 
 %postun agent
-%systemd_postun lota-agent.service lota-agent.socket
+%systemd_postun lota-agent.service lota-agent.socket lota-attest.service
 
 %files agent
 %license LICENSE LICENSE.GPL-2.0-only
@@ -129,12 +137,16 @@ EOF
 %{_prefix}/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
 %{_unitdir}/lota-agent.service
 %{_unitdir}/lota-agent.socket
+%{_unitdir}/lota-attest.service
+%{_presetdir}/85-lota.preset
 %{_prefix}/lib/udev/rules.d/99-lota-tpm.rules
 %config(noreplace) %{_sysconfdir}/dbus-1/system.d/org.lota.Agent1.conf
 %dir %{_datadir}/lota
 %{_datadir}/lota/VERSION
 %dir %{_datadir}/lota/ima
 %{_datadir}/lota/ima/lota-ima-policy
+%dir %{_datadir}/lota/selinux
+%{_datadir}/lota/selinux/lota.pp
 %dir %{_datadir}/lota/systemd
 %{_datadir}/lota/systemd/10-xdg-runtime.conf.example
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
