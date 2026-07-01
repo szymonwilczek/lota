@@ -74,6 +74,13 @@ SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
 SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 
+# Shared-library ABI version. The soname carries the major only (bumped on an
+# incompatible ABI change); the on-disk file carries the full version and the
+# soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
+# layout. Independent of the release VERSION -- pre-1.0 ABI starts at 0.
+LOTA_ABI_MAJOR := 0
+LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
+
 # Detect target architecture (overridable)
 ifndef ARCH
 	HOST_ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
@@ -293,35 +300,47 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
-# build SDK shared library
+# build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build server SDK shared library
+# build server SDK shared library (versioned)
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build server SDK static library
 $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build Wine/Proton hook (self-contained: includes gaming SDK)
+# build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lpthread
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
-# build anti-cheat compatibility layer (includes gaming + server SDK)
+# build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
@@ -470,7 +489,7 @@ reproducible-build: all
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
 PKG_DIR ?= $(BUILD_DIR)/packages
-NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
+NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
 CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 
@@ -676,10 +695,13 @@ install: check-version-tag all
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
 	fi
 	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
-	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(ANTICHEAT_LIB) $(DESTDIR)/usr/lib64/
+	for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
+		install -m 755 $(BUILD_DIR)/$$l.so.$(LOTA_ABI_VERSION) \
+			$(DESTDIR)/usr/lib64/; \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
+			$(DESTDIR)/usr/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(DESTDIR)/usr/lib64/$$l.so; \
+	done
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-dev-bringup.sh $(DESTDIR)/usr/bin/
