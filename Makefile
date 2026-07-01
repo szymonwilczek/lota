@@ -353,7 +353,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -549,6 +549,25 @@ container-image-verifier:
 
 container-image-attest-ca:
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
+
+# Helm chart validation (no Kubernetes cluster required)
+# helm-lint checks chart structure; helm-template renders the manifests
+# and pipes them through kubeconform for Kubernetes API schema validation.
+# Both run offline against the local chart, so they fit CI without cluster.
+HELM ?= helm
+KUBECONFORM ?= kubeconform
+HELM_CHART_DIR := deploy/helm/lota-verifier
+HELM_CHECK_VALUES := \
+	--set aikCA.existingSecret=example-aik-ca \
+	--set postgres.existingSecret=example-pg \
+	--set policy.enabled=true \
+	--set policy.existingSecret=example-policy
+
+helm-lint:
+	$(HELM) lint $(HELM_CHART_DIR) $(HELM_CHECK_VALUES)
+
+helm-template:
+	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -1422,6 +1441,8 @@ help:
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
+	@echo "  helm-lint        Lint the verifier Helm chart"
+	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""

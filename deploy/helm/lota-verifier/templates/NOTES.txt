@@ -1,0 +1,19 @@
+{{ include "lota-verifier.fullname" . }} is installed.
+
+Replicas: {{ .Values.replicaCount }} (stateless; shared state in Postgres)
+Service:  {{ .Values.service.type }} on port {{ .Values.service.port }} (TLS attestation)
+
+Before the pods become Ready, make sure:
+  - the Postgres DSN Secret exists
+    {{- if .Values.postgres.existingSecret }} ({{ .Values.postgres.existingSecret }}, key {{ .Values.postgres.dsnKey }}){{- else if .Values.postgres.dsn }} (created by this release){{- else }}: set postgres.existingSecret or postgres.dsn{{- end }}
+  - the TLS Secret {{ .Values.tls.existingSecret }} holds tls.crt and tls.key
+  - the AIK attestation-CA root Secret exists
+    {{- if .Values.aikCA.existingSecret }} ({{ .Values.aikCA.existingSecret }}, files {{ .Values.aikCA.files | join ", " }}){{- else }} (requireCert is off; AIK chains are NOT verified){{- end }}
+  - a PCR policy is configured
+    {{- if .Values.policy.enabled }} ({{ if .Values.policy.existingConfigMap }}ConfigMap {{ .Values.policy.existingConfigMap }}{{ else }}Secret {{ .Values.policy.existingSecret }}{{ end }}){{- else }} (permissive built-in policy -- INSECURE){{- end }}
+
+Check rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "lota-verifier.fullname" . }}
+
+Reach the verifier in-cluster:
+  {{ include "lota-verifier.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}

@@ -18,6 +18,8 @@ intentionally fails closed when required gates are missing.
   and bring up the agent.
 * :doc:`Container images <container-images>` -- distroless OCI images for the
   verifier and attestation CA, built with ko.
+* :doc:`Verifier Helm chart <helm-chart>` -- install the HA verifier on
+  Kubernetes.
 
 Related deployment material lives next to the code:
 
@@ -34,3 +36,4 @@ Related deployment material lives next to the code:
    ha-deployment
    packages
    container-images
+   helm-chart
