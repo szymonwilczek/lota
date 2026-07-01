@@ -257,7 +257,6 @@ type clientListResponse struct {
 
 type clientInfoResponse struct {
 	ClientID          string `json:"client_id"`
-	HasAIK            bool   `json:"has_aik"`
 	HardwareID        string `json:"hardware_id,omitempty"`
 	Revoked           bool   `json:"revoked"`
 	RevocationReason  string `json:"revocation_reason,omitempty"`
@@ -489,7 +488,6 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 
 	resp := clientInfoResponse{
 		ClientID:          info.ClientID,
-		HasAIK:            info.HasAIK,
 		HardwareID:        info.HardwareID,
 		Revoked:           info.Revoked,
 		RevocationReason:  info.RevocationReason,

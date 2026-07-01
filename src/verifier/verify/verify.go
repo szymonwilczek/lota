@@ -1186,7 +1186,6 @@ func (v *Verifier) Stats() Stats {
 // per-client information for monitoring API
 type ClientInfo struct {
 	ClientID          string
-	HasAIK            bool
 	HardwareID        string // hex-encoded
 	Revoked           bool
 	RevocationReason  string
@@ -1204,9 +1203,11 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		ClientID: clientID,
 	}
 
-	// check AIK store
+	// AIK store carries registrations only on legacy deployments;
+	// under the Privacy CA flow the per-report certificate is
+	// the AIK trust anchor and this lookup never hits
 	_, err := v.aikStore.GetAIK(clientID)
-	info.HasAIK = err == nil
+	hasAIK := err == nil
 
 	// hardware ID
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {

@@ -1113,8 +1113,8 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if len(prefix) > 16 {
 		prefix = prefix[:16]
 	}
-	t.Logf("✓ Client info fully populated: AIK=%v, attests=%d, pcr14=%s...",
-		resp.HasAIK, resp.AttestCount, prefix)
+	t.Logf("✓ Client info fully populated: attests=%d, pcr14=%s...",
+		resp.AttestCount, prefix)
 }
 
 func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
