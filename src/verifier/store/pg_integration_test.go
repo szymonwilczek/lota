@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 )
@@ -139,6 +140,22 @@ func TestPostgresAIKStore(t *testing.T) {
 	}
 	if _, err := s.GetRegisteredAt("cX"); err == nil {
 		t.Fatal("GetRegisteredAt on unknown client should fail")
+	}
+
+	// operator-forced re-enrollment:
+	// delete frees the row and the AIK-uniqueness slot,
+	// unknown client maps to ErrAIKNotFound
+	if err := s.DeleteClient("c3"); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+	if _, err := s.GetAIK("c3"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("GetAIK after delete: %v, want ErrAIKNotFound", err)
+	}
+	if err := s.DeleteClient("c3"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("DeleteClient on unknown client: %v, want ErrAIKNotFound", err)
+	}
+	if err := s.RegisterAIK("c4", &k3.PublicKey); err != nil {
+		t.Fatalf("re-registering the freed AIK failed: %v", err)
 	}
 }
 

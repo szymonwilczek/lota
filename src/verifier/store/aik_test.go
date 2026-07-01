@@ -1194,3 +1194,140 @@ func TestCertificateStore_RotateAIKRefused(t *testing.T) {
 		t.Fatal("refused RotateAIK must leave the stored key unchanged")
 	}
 }
+
+func TestMemoryStore_DeleteClient(t *testing.T) {
+	store := NewMemoryStore()
+	key := generateTestKey(t)
+	hwid := [32]byte{0xAA}
+
+	if err := store.RegisterAIK("del-client", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK failed: %v", err)
+	}
+	if err := store.RegisterHardwareID("del-client", hwid); err != nil {
+		t.Fatalf("RegisterHardwareID failed: %v", err)
+	}
+
+	if err := store.DeleteClient("del-client"); err != nil {
+		t.Fatalf("DeleteClient failed: %v", err)
+	}
+
+	if _, err := store.GetAIK("del-client"); !errors.Is(err, ErrAIKNotFound) {
+		t.Errorf("expected ErrAIKNotFound after delete, got %v", err)
+	}
+	if _, err := store.GetHardwareID("del-client"); !errors.Is(err, ErrHardwareIDNotFound) {
+		t.Errorf("expected ErrHardwareIDNotFound after delete, got %v", err)
+	}
+	if _, err := store.GetRegisteredAt("del-client"); err == nil {
+		t.Error("registration time survived delete")
+	}
+
+	// freed identity must accept a fresh enrollment with a new key
+	newKey := generateTestKey(t)
+	if err := store.RegisterAIK("del-client", &newKey.PublicKey); err != nil {
+		t.Fatalf("re-registration after delete failed: %v", err)
+	}
+}
+
+func TestMemoryStore_DeleteClientNotFound(t *testing.T) {
+	store := NewMemoryStore()
+	if err := store.DeleteClient("ghost"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("expected ErrAIKNotFound, got %v", err)
+	}
+}
+
+func TestFileStore_DeleteClient(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+	hwid := [32]byte{0xBB}
+
+	if err := store.RegisterAIK("del-client", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK failed: %v", err)
+	}
+	if err := store.RegisterHardwareID("del-client", hwid); err != nil {
+		t.Fatalf("RegisterHardwareID failed: %v", err)
+	}
+
+	if err := store.DeleteClient("del-client"); err != nil {
+		t.Fatalf("DeleteClient failed: %v", err)
+	}
+
+	for _, ext := range []string{".pem", ".meta", ".hwid"} {
+		path := filepath.Join(tempDir, "del-client"+ext)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s file survived delete", ext)
+		}
+	}
+	if _, err := store.GetAIK("del-client"); !errors.Is(err, ErrAIKNotFound) {
+		t.Errorf("expected ErrAIKNotFound after delete, got %v", err)
+	}
+
+	// fresh store over the same directory must not resurrect the client
+	reopened, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore reopen failed: %v", err)
+	}
+	if _, err := reopened.GetAIK("del-client"); !errors.Is(err, ErrAIKNotFound) {
+		t.Errorf("deleted client resurrected on reload: %v", err)
+	}
+
+	// fingerprint index entry is freed:
+	// the same PUBLIC KEY may be registered again (fresh enrollment of the same host)
+	if err := store.RegisterAIK("other-client", &key.PublicKey); err != nil {
+		t.Fatalf("re-registering the freed AIK failed: %v", err)
+	}
+}
+
+func TestFileStore_DeleteClientNotFound(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+
+	if err := store.DeleteClient("ghost"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("expected ErrAIKNotFound, got %v", err)
+	}
+	if err := store.DeleteClient("../escape"); !errors.Is(err, ErrInvalidClientID) {
+		t.Fatalf("expected ErrInvalidClientID, got %v", err)
+	}
+}
+
+func TestCertificateStore_DeleteClientDelegates(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lota-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := NewCertificateStore(tempDir, nil, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStore failed: %v", err)
+	}
+
+	key := generateTestKey(t)
+	if err := store.RegisterAIK("del-client", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK failed: %v", err)
+	}
+
+	if err := store.DeleteClient("del-client"); err != nil {
+		t.Fatalf("DeleteClient failed: %v", err)
+	}
+	if _, err := store.GetAIK("del-client"); !errors.Is(err, ErrAIKNotFound) {
+		t.Errorf("expected ErrAIKNotFound after delete, got %v", err)
+	}
+}
