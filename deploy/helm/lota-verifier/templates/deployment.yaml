@@ -1,4 +1,13 @@
 # SPDX-License-Identifier: MIT
+{{- if and .Values.requireCert (not .Values.aikCA.existingSecret) }}
+{{- fail "requireCert is true but aikCA.existingSecret is unset: the verifier refuses to start without a trusted attestation-CA root. Set aikCA.existingSecret to a Secret holding the Privacy CA PEM root(s), or set requireCert=false (INSECURE)." }}
+{{- end }}
+{{- if and (not .Values.policy.enabled) (not .Values.allowPermissivePolicy) }}
+{{- fail "no PCR policy configured: the verifier refuses to start without one. Set policy.enabled with a policy Secret/ConfigMap, or set allowPermissivePolicy=true (INSECURE)." }}
+{{- end }}
+{{- if and .Values.policy.enabled .Values.allowPermissivePolicy }}
+{{- fail "policy.enabled and allowPermissivePolicy are mutually exclusive: choose a real policy or the permissive built-in, not both." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,11 +48,19 @@ spec:
             - --cert={{ .Values.tls.mountPath }}/tls.crt
             - --key={{ .Values.tls.mountPath }}/tls.key
             - --aik-store={{ .Values.dataDir }}/aiks
+            {{- if .Values.aikCA.existingSecret }}
+            {{- range .Values.aikCA.files }}
+            - --aik-ca-cert={{ $.Values.aikCA.mountPath }}/{{ . }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.policy.enabled }}
             - --policy={{ .Values.policy.mountPath }}/policy.yaml
             {{- if .Values.policy.pubKey }}
             - --policy-pubkey={{ .Values.policy.mountPath }}/policy.pub
             {{- end }}
+            {{- end }}
+            {{- if .Values.allowPermissivePolicy }}
+            - --allow-permissive-policy
             {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
@@ -87,6 +104,11 @@ spec:
             - name: tls
               mountPath: {{ .Values.tls.mountPath }}
               readOnly: true
+            {{- if .Values.aikCA.existingSecret }}
+            - name: aik-ca
+              mountPath: {{ .Values.aikCA.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.policy.enabled }}
             - name: policy
               mountPath: {{ .Values.policy.mountPath }}
@@ -100,6 +122,11 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.tls.existingSecret }}
+        {{- if .Values.aikCA.existingSecret }}
+        - name: aik-ca
+          secret:
+            secretName: {{ .Values.aikCA.existingSecret }}
+        {{- end }}
         {{- if .Values.policy.enabled }}
         - name: policy
           {{- if .Values.policy.existingConfigMap }}

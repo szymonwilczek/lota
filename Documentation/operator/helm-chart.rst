@@ -32,8 +32,11 @@ What the chart deploys
 Required inputs
 ===============
 
-The chart does not mint secrets. Provide two pieces of material before the
-pods become Ready:
+The chart does not mint secrets, and it fails closed at render time:
+the verifier refuses to start without a trusted AIK root or a PCR policy,
+so the chart rejects an install that would produce a crash-looping pod.
+
+Provide this material before installing:
 
 * **Postgres DSN.** Reference an existing Secret with
   ``postgres.existingSecret`` (recommended), or set ``postgres.dsn`` to have
@@ -43,10 +46,18 @@ pods become Ready:
 * **TLS keypair.** A ``kubernetes.io/tls`` Secret named by
   ``tls.existingSecret`` (keys ``tls.crt`` and ``tls.key``), mounted read-only
   for the attestation listener.
-
-A signed PCR policy is optional: enable ``policy.enabled`` and point
-``policy.existingConfigMap`` or ``policy.existingSecret`` at the policy file
-(and set ``policy.pubKey`` when an Ed25519 ``policy.pub`` accompanies it).
+* **Attestation-CA root (required with the default** ``requireCert``\ **).**
+  A Secret holding the Privacy CA PEM root(s), referenced by
+  ``aikCA.existingSecret`` and mounted read-only; each ``aikCA.files`` entry is
+  passed as one ``--aik-ca-cert``. This is the root the AIK certificate must
+  chain to, distinct from the listener TLS material. Setting
+  ``requireCert=false`` drops the requirement but disables AIK chain
+  verification (INSECURE).
+* **PCR policy choice (required).** Either enable ``policy.enabled`` and point
+  ``policy.existingConfigMap`` or ``policy.existingSecret`` at the policy file
+  (set ``policy.pubKey`` when an Ed25519 ``policy.pub`` accompanies it), or set
+  ``allowPermissivePolicy=true`` to accept the permissive built-in policy
+  (INSECURE). The two are mutually exclusive.
 
 Installing
 ==========
@@ -56,12 +67,16 @@ Installing
    helm install lota-verifier deploy/helm/lota-verifier \
        --set postgres.existingSecret=lota-pg \
        --set tls.existingSecret=lota-verifier-tls \
+       --set aikCA.existingSecret=lota-aik-ca \
+       --set policy.enabled=true \
+       --set policy.existingSecret=lota-verifier-policy \
        --set replicaCount=3
 
    kubectl rollout status deploy/lota-verifier-lota-verifier
 
 ``--require-cert`` stays on by default; keep it on for production so reports
-without a CA-issued AIK certificate are rejected.
+without a CA-issued AIK certificate are rejected, and supply the
+``aikCA.existingSecret`` root it verifies against.
 
 Validating without a cluster
 ============================

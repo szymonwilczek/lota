@@ -21,6 +21,19 @@ imagePullSecrets: []
 # Reject reports without Privacy CA-issued AIK cert.
 requireCert: true
 
+# Trusted attestation-CA root(s) the AIK certificate must chain to (verifier --aik-ca-cert)
+# REQUIRED when requireCert is true -- the verifier refuses to start without it.
+# Reference a Secret holding one or more PEM roots; chart mounts it read-only
+# and passes each `files` entry as separate --aik-ca-cert.
+#
+# Privacy CA root, distinct from the listener TLS material below.
+aikCA:
+  existingSecret: ""
+  mountPath: /etc/lota/aik-ca
+  # file name(s) within the Secret, each passed as one --aik-ca-cert.
+  files:
+    - ca.crt
+
 # Writable scratch dir (emptyDir) for the AIK store etc.
 # Durable enforcement state lives in Postgres, not here.
 dataDir: /var/lib/lota
@@ -42,6 +55,9 @@ tls:
   existingSecret: lota-verifier-tls
   mountPath: /etc/lota/tls
 
+# Verifier refuses to start without PCR policy.
+# Either enable `policy` below with a signed policy,
+# or set allowPermissivePolicy to accept the permissive built-in policy.
 policy:
   enabled: false
   mountPath: /etc/lota/policy
@@ -49,6 +65,14 @@ policy:
   existingSecret: ""
   # set true when the policy is accompanied by Ed25519 pubkey (policy.pub)
   pubKey: false
+
+# INSECURE:
+# Start with the permissive built-in PCR policy
+# (no measurements, no kernel/agent-hash allowlists)
+#
+# Leave false in production and supply real policy via `policy` above;
+# Only one of the two may be chosen.
+allowPermissivePolicy: false
 
 service:
   type: ClusterIP

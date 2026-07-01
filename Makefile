@@ -557,12 +557,17 @@ container-image-attest-ca:
 HELM ?= helm
 KUBECONFORM ?= kubeconform
 HELM_CHART_DIR := deploy/helm/lota-verifier
+HELM_CHECK_VALUES := \
+	--set aikCA.existingSecret=example-aik-ca \
+	--set postgres.existingSecret=example-pg \
+	--set policy.enabled=true \
+	--set policy.existingSecret=example-policy
 
 helm-lint:
-	$(HELM) lint $(HELM_CHART_DIR)
+	$(HELM) lint $(HELM_CHART_DIR) $(HELM_CHECK_VALUES)
 
 helm-template:
-	$(HELM) template lota-verifier $(HELM_CHART_DIR) | $(KUBECONFORM) -strict -summary -
+	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
 
 clean:
 	rm -rf $(BUILD_DIR)
