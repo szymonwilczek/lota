@@ -255,8 +255,10 @@ type BaselineStorer interface {
 	// returns the stored baseline for a client (nil if not found)
 	GetBaseline(clientID string) *ClientBaseline
 
-	// removes stored baseline for a client
-	ClearBaseline(clientID string)
+	// removes all stored baseline state for client:
+	// the PCR14 baseline, the PCR0/1/7 boot baseline and the re-anchor bookkeeping.
+	// Next attestation re-establishes trust per the active TOFU/policy configuration.
+	ClearBaseline(clientID string) error
 
 	// returns all known client IDs
 	ListClients() []string
@@ -650,11 +652,17 @@ func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	return nil
 }
 
-// removes stored baseline for a client
-func (s *BaselineStore) ClearBaseline(clientID string) {
+// Removes all stored baseline state for a client.
+// SQL-backed stores keep the PCR14, boot-PCR and re-anchor columns in one row,
+// so their DELETE drops everything at once.
+// Mirror that here across the three maps.
+func (s *BaselineStore) ClearBaseline(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.baselines, clientID)
+	delete(s.bootBaselines, clientID)
+	delete(s.reanchor, clientID)
+	return nil
 }
 
 // returns all known client IDs

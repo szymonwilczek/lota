@@ -62,6 +62,38 @@ func TestBootBaseline_MemoryDetectsMismatch(t *testing.T) {
 	}
 }
 
+func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
+	bs := NewBaselineStore()
+
+	pcr14 := [types.HashSize]byte{0x14}
+	bs.CheckAndUpdate("c3", pcr14)
+	bs.CheckAndUpdateBootPCRs("c3", boot(0x30, 0x31, 0x37))
+	if err := bs.RecordBootEvidence("c3", []byte("event-log"), 7, true); err != nil {
+		t.Fatalf("RecordBootEvidence failed: %v", err)
+	}
+
+	if err := bs.ClearBaseline("c3"); err != nil {
+		t.Fatalf("ClearBaseline failed: %v", err)
+	}
+
+	// SQL stores keep all client state in one row, so their DELETE drops
+	// the PCR14 baseline, boot baseline and re-anchor bookkeeping together
+	// in-memory store must match or forced re-anchor leaves stale boot pin behind
+	if bs.GetBaseline("c3") != nil {
+		t.Error("PCR14 baseline survived ClearBaseline")
+	}
+	if bs.GetBootBaseline("c3") != nil {
+		t.Error("boot baseline survived ClearBaseline")
+	}
+	if st := bs.GetReanchorState("c3"); st.Present {
+		t.Errorf("re-anchor state survived ClearBaseline: %+v", st)
+	}
+
+	if res, _ := bs.CheckAndUpdateBootPCRs("c3", boot(0x40, 0x41, 0x47)); res != TOFUFirstUse {
+		t.Fatalf("expected TOFUFirstUse after clear, got %v", res)
+	}
+}
+
 func TestBootBaseline_SQLitePersistsAcrossOpen(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/baselines.sqlite"

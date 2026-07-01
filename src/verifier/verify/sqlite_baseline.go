@@ -286,13 +286,12 @@ func (s *SQLiteBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	return &out
 }
 
-func (s *SQLiteBaselineStore) ClearBaseline(clientID string) {
+func (s *SQLiteBaselineStore) ClearBaseline(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := s.db.Exec("DELETE FROM baselines WHERE client_id = ?", clientID); err != nil {
-		return
-	}
+	_, err := s.db.Exec("DELETE FROM baselines WHERE client_id = ?", clientID)
+	return err
 }
 
 func (s *SQLiteBaselineStore) ListClients() []string {
