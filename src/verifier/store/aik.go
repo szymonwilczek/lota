@@ -2,13 +2,13 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - AIK key store
 //
-// Manages Attestation Identity Keys. The production trust model is
-// certificate-backed: VerifierConfig.RequireCert defaults to true, so
-// RegisterAIKWithCert() is the path every first registration takes on
-// a production deployment. The verifier resolves the manufacturer EK
-// chain through AIKCertificateVerifier and pins the
-// SHA-256(EK modulus) into the report.TPM.HardwareID binding before
-// the AIK is allowed to sign attestations.
+// Manages Attestation Identity Keys.
+// Production trust model is certificate-backed:
+// verifier requires and chain-verifies the CA-issued AIK certificate
+// in every attestation report.
+// Verifier resolves the manufacturer EK chain through AIKCertificateVerifier
+// and pins the SHA-256(EK modulus) into the report.TPM.HardwareID binding
+// before the AIK is allowed to sign attestations.
 //
 // The legacy TOFU path remains for two narrow cases: hosts that
 // opted out of --require-cert (operator acknowledges no chain
@@ -986,8 +986,8 @@ func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 
 func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	// Cert-less registration entry. Production deployments run with
-	// cs.requireCerts == true (the default carried from
-	// VerifierConfig.RequireCert) so this branch is the canonical
+	// cs.requireCerts == true (the default carried from the
+	// --require-cert flag) so this branch is the canonical
 	// reject path. The legacy TOFU fall-through under
 	// requireCerts == false remains only for hosts that
 	// intentionally opted out via the operator-facing CLI.

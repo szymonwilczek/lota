@@ -130,7 +130,6 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog       bool
-	requireCert           bool
 	requireBootPCRs       bool
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
@@ -219,10 +218,6 @@ type VerifierConfig struct {
 
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
-
-	// if true, reject new AIK registrations that do not provide
-	// AIK or EK certificates (disables pure TOFU)
-	RequireCert bool
 
 	// if true, reject attestation reports whose pcr_mask does not
 	// include PCR 0, 1, and 7 (firmware, platform configuration,
@@ -315,7 +310,6 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
-		RequireCert:           true,
 		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
@@ -362,7 +356,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:         cfg.NonceLifetime,
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
-		requireCert:           cfg.RequireCert,
 		requireBootPCRs:       cfg.RequireBootPCRs,
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,

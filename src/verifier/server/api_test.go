@@ -125,7 +125,6 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -258,7 +257,6 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -301,7 +299,6 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -1523,7 +1520,6 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = bs

@@ -266,7 +266,6 @@ func persistentClientID(challengeID string) string {
 func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	// fixtures emit pcr_mask 0x4003 (PCR 0/1/14); production-default
 	// enforcement of PCR 0/1/7 is exercised by dedicated tests.
 	cfg.RequireBootPCRs = false
@@ -847,7 +846,6 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.NonceLifetime = 1 * time.Second
 	// RequireBootPCRs left at its DefaultConfig value (true).
 
@@ -889,7 +887,6 @@ func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -933,7 +930,6 @@ func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	// RequireInitramfsLock left at its DefaultConfig value (true).
 	cfg.NonceLifetime = 1 * time.Second
@@ -978,7 +974,6 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
