@@ -497,7 +497,8 @@ packages: all selinux-pp
 	@echo "RPMs written to $(PKG_DIR)"
 	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
 		echo "  RPMLINT $(PKG_DIR)"; \
-		$(RPMLINT) $(PKG_DIR)/*.rpm || true; \
+		$(RPMLINT) --ignore-unused-rpmlintrc \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
