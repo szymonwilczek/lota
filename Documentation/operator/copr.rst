@@ -6,18 +6,28 @@ COPR repository
 ===============
 
 Alongside the self-hosted dnf repository of nfpm-built binary packages, LOTA is
-published through `COPR <https://copr.fedorainfracloud.org>`_. COPR rebuilds
-the same four subpackages -- ``lota-agent``, ``lota-verifier``,
-``lota-attest-ca`` and ``lota-sdk-devel`` -- from source in a clean chroot for
-each target Fedora and EPEL release, which both validates the build across
-releases and hosts a signed dnf repository operators can enable directly.
+intended to be published through `COPR
+<https://copr.fedorainfracloud.org>`_. COPR would rebuild the subpackages --
+``lota-agent``, ``lota-verifier``, ``lota-attest-ca``, ``lota-sdk`` and
+``lota-sdk-devel`` -- from source in a clean chroot for each target Fedora and
+EPEL release, which both validates the build across releases and hosts a signed
+dnf repository operators can enable directly.
 
-Installing
-==========
+.. note::
 
-::
+   The COPR project is not published yet, so the commands below do not work
+   today. The spec (``packaging/rpm/lota.spec``) and the ``.copr/Makefile``
+   entry point are in the tree, so the project is ready to be created; until
+   then, build from source with ``make srpm`` or use the self-hosted signed
+   :doc:`dnf-repo`.
 
-   sudo dnf copr enable szymonwilczek/lota
+Installing (once the project is published)
+==========================================
+
+The COPR project will live under the ``szymon-wilczek`` COPR account (which is
+distinct from the ``szymonwilczek`` GitHub handle)::
+
+   sudo dnf copr enable szymon-wilczek/lota
    sudo dnf install lota-agent
 
 The agent still fails closed and is not started by the package. Complete the
