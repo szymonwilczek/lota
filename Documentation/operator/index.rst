@@ -20,6 +20,8 @@ intentionally fails closed when required gates are missing.
   verifier and attestation CA, built with ko.
 * :doc:`Verifier Helm chart <helm-chart>` -- install the HA verifier on
   Kubernetes.
+* :doc:`COPR repository <copr>` -- install the packages from the Fedora COPR
+  build service.
 
 Related deployment material lives next to the code:
 
@@ -37,3 +39,4 @@ Related deployment material lives next to the code:
    packages
    container-images
    helm-chart
+   copr

@@ -353,7 +353,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -568,6 +568,25 @@ helm-lint:
 
 helm-template:
 	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
+
+# Source RPM (COPR / rpmbuild from source)
+# Archives HEAD into a tarball and builds an SRPM into OUTDIR.
+# COPR drives this through .copr/Makefile; locally run `make srpm`.
+# Spec Version uses ~ for the prerelease, so the project version is normalised the same way.
+SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
+SRPM_TREE := $(BUILD_DIR)/srpmtree
+OUTDIR ?= $(BUILD_DIR)/srpm
+
+srpm:
+	$(Q)rm -rf $(SRPM_TREE)
+	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(OUTDIR)
+	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
+		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
+	$(Q)rpmbuild -bs packaging/rpm/lota.spec \
+		--define "_topdir $(abspath $(SRPM_TREE))" \
+		--define "_srcrpmdir $(abspath $(OUTDIR))" \
+		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
+	@echo "SRPM written to $(OUTDIR)"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -1425,6 +1444,7 @@ help:
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
+	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  examples         Build end-to-end demo material under examples/"
 	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""
