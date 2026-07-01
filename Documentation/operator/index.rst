@@ -16,6 +16,8 @@ intentionally fails closed when required gates are missing.
   N instances behind a load balancer.
 * :doc:`RPM packages <packages>` -- the native packages and how to install
   and bring up the agent.
+* :doc:`Container images <container-images>` -- distroless OCI images for the
+  verifier and attestation CA, built with ko.
 
 Related deployment material lives next to the code:
 
@@ -31,3 +33,4 @@ Related deployment material lives next to the code:
    player-install
    ha-deployment
    packages
+   container-images
