@@ -95,6 +95,32 @@ jobs:
           mkdir site/lota-next
           cp -r dev/Documentation/_build/html/. site/lota-next/
 
+      # Fold the signed dnf repository into the Pages tree under /rpm,
+      # so the site at LOTA_REPO_BASEURL/rpm serves the packages, metadata and public key.
+      #
+      # Repo is public asset of the latest release (built and signed by release.yml),
+      # so this needs no secret.
+      #
+      # Pages artifact is rebuilt from scratch each deploy, so re-including it here keeps
+      # /rpm alive across doc pushes
+      - name: Include the signed dnf repository under /rpm (if a release exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p site/rpm
+          # newest non-draft release, prereleases included (0.x ship as prerelease)
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+                --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          if [ -n "${tag:-}" ] && \
+             gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+               --pattern 'lota-dnf-repo-*.tar.gz' --dir /tmp/lota-repo 2>/dev/null; then
+            tar -xzf /tmp/lota-repo/lota-dnf-repo-*.tar.gz -C site/rpm
+            echo "included dnf repo from release $tag"
+          else
+            echo "no release dnf repo yet; /rpm left empty"
+          fi
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
