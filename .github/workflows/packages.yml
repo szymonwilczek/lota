@@ -42,7 +42,7 @@ jobs:
             git make gcc clang llvm pkgconf-pkg-config \
             libbpf-devel elfutils-libelf-devel zlib-devel \
             tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
-            dbus-devel golang \
+            dbus-devel golang selinux-policy-devel \
             rpm-build rpmlint createrepo_c
 
       - name: Checkout
