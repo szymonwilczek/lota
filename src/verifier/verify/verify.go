@@ -1234,14 +1234,19 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 
 	// baseline store data
+	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
 	}
 
 	// check if client exists in any store
-	if !info.HasAIK && info.MonotonicCounter == 0 {
+	// baseline row is the durable record under the Privacy CA flow:
+	// AIK store carries no registrations there and the nonce history
+	// may start empty after a verifier restart
+	if !info.HasAIK && info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
 
