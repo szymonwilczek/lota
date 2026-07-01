@@ -459,12 +459,16 @@ reproducible-build: all
 # Agent package ships the BPF object UNSIGNED on purpose:
 # each adopter signs it during bring-up.
 #
-# Changelog version tracks VERSION: the template placeholder is substituted from
-# PROJECT_VERSION into a generated file the configs point at, so it never has to
-# be bumped alongside VERSION.
+# Changelog version tracks VERSION:
+# Template placeholder is substituted from PROJECT_VERSION into a generated file
+# the configs point at, so it never has to be bumped alongside VERSION.
+#
+# rpmlint runs over the built RPMs when installed (report only, non-fatal);
+# the release CI is the gating lint.
 #
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
+RPMLINT ?= rpmlint
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
@@ -491,6 +495,12 @@ packages: all selinux-pp
 			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
 	done
 	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
+		echo "  RPMLINT $(PKG_DIR)"; \
+		$(RPMLINT) $(PKG_DIR)/*.rpm || true; \
+	else \
+		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)

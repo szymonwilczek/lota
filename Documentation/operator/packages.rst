@@ -48,7 +48,8 @@ Building
 
 builds every RPM under ``build/packages`` (``PKG_DIR``), each named from the
 project version. The target depends on a full build so the configs find the
-binaries and libraries they reference. ``rpmlint`` validates the result.
+binaries and libraries they reference. ``rpmlint`` then runs over the built
+RPMs when it is installed, reporting any packaging warnings.
 
 Installing
 ==========
