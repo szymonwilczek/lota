@@ -18,11 +18,6 @@ addFilter("unstripped-binary-or-object")
 # missing-dependency defect.
 addFilter("explicit-lib-dependency")
 
-# SDK shared libraries ship under their unversioned upstream names and carry
-# no soname yet.
-# TODO: drop once ABI lands
-addFilter("invalid-soname")
-
 # nfpm does not stamp the RPM release into the attached changelog, so changelog
 # entry version (e.g. 0.4.0) omits the -1 release the package carries.
 # Cosmetic nfpm limitation and not version mismatch.

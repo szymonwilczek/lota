@@ -31,13 +31,18 @@ The packages
    * - lota-attest-ca
      - the attestation CA service binary
      - MIT
+   * - lota-sdk
+     - versioned SDK runtime libraries (gaming, anti-cheat, server, Proton hook)
+     - MIT
    * - lota-sdk-devel
-     - SDK headers and shared libraries, Proton/Steam helpers
+     - SDK headers, linker symlinks and Proton/Steam helpers (needs lota-sdk)
      - MIT
 
 Only ``lota-agent`` is host-coupled (TPM, BPF, initramfs); the verifier and CA
-can equally run as container images on a cluster. ``lota-sdk-devel`` is the
-integrator surface for building on top of LOTA.
+can equally run as container images on a cluster. ``lota-sdk`` carries the
+versioned shared libraries and ``lota-sdk-devel`` the headers and linker
+symlinks to build against them -- together the integrator surface for building
+on top of LOTA.
 
 Building
 ========

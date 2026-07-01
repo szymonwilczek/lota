@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# nfpm config for the lota-sdk package (SDK runtime libraries)
+#
+# Versioned shared libraries for the gaming, anti-cheat and server SDKs and
+# the Proton/Steam hook.
+#
+# Headers and unversioned linker symlinks live in lota-sdk-devel.
+# ABI version lives only in the Makefile.
+# Globs below capture whatever versioned files and soname symlinks the build produced.
+name: lota-sdk
+arch: amd64
+platform: linux
+version: ${LOTA_VERSION}
+version_schema: semver
+section: libs
+priority: optional
+maintainer: Szymon Wilczek <swilczek.lx@gmail.com>
+vendor: LOTA
+homepage: https://github.com/szymonwilczek/lota
+license: MIT
+description: |
+  LOTA SDK runtime libraries
+  Versioned shared libraries for the gaming, anti-cheat and server SDKs and the
+  Proton/Steam hook. Install lota-sdk-devel to build against them.
+changelog: ./build/changelog.gen.yaml
+
+overrides:
+  rpm:
+    depends:
+      - openssl-libs
+
+contents:
+  # each glob captures the versioned library and its soname symlink
+  # (libX.so.MAJOR.MINOR.PATCH and libX.so.MAJOR
+  # unversioned libX.so linker symlink is shipped by lota-sdk-devel
+  - src: ./build/liblotagaming.so.*
+    dst: /usr/lib64/
+    file_info:
+      mode: 0755
+  - src: ./build/liblotaserver.so.*
+    dst: /usr/lib64/
+    file_info:
+      mode: 0755
+  - src: ./build/liblota_wine_hook.so.*
+    dst: /usr/lib64/
+    file_info:
+      mode: 0755
+  - src: ./build/liblota_anticheat.so.*
+    dst: /usr/lib64/
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lota-sdk/LICENSE
+    type: license
+    file_info:
+      mode: 0644

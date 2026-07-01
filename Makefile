@@ -489,7 +489,7 @@ reproducible-build: all
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
 PKG_DIR ?= $(BUILD_DIR)/packages
-NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk-devel
+NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
 CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 
