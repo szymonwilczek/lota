@@ -263,8 +263,9 @@ jobs:
 
       - name: Import the signing key
         # preset the passphrase into gpg-agent so both rpmsign and the repomd
-        # signing run unattended.
-        # rpm signs through loopback gpg command.
+        # signing run unattended, then let rpm's default signing command drive
+        # gpg through the agent -- overriding %__gpg_sign_cmd breaks on modern
+        # rpm, so then -- only %_gpg_name
         run: |
           set -eu
           mkdir -p "$HOME/.gnupg"
@@ -279,10 +280,7 @@ jobs:
             | awk '/Keygrip/ { print $3; exit }')
           /usr/libexec/gpg-preset-passphrase --preset \
             --passphrase "$RPM_GPG_PASSPHRASE" "$keygrip"
-          cat >"$HOME/.rpmmacros" <<EOF
-          %_gpg_name $RPM_GPG_NAME
-          %__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}
-          EOF
+          printf '%%_gpg_name %s\n' "$RPM_GPG_NAME" >"$HOME/.rpmmacros"
 
       - name: Sign and build the dnf repository
         run: make dnf-repo LOTA_RPM_GPG_NAME="$RPM_GPG_NAME"
