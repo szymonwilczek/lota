@@ -26,6 +26,8 @@ intentionally fails closed when required gates are missing.
   build service.
 * :doc:`Signed dnf repository <dnf-repo>` -- sign the packages and serve them
   from a dnf repository.
+* :doc:`Fleet CLI (lota-fleet) <fleet-cli>` -- drive the verifier's
+  monitoring API: revocations, bans, re-anchor, client removal, logs.
 
 Related deployment material lives next to the code:
 
@@ -46,3 +48,4 @@ Related deployment material lives next to the code:
    helm-chart
    copr
    dnf-repo
+   fleet-cli
