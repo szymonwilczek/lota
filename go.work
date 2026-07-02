@@ -4,6 +4,7 @@ use (
 	./examples/demo_server
 	./src/attestca
 	./src/crl
+	./src/fleetctl
 	./src/sdk/server
 	./src/verifier
 )
