@@ -28,6 +28,8 @@ intentionally fails closed when required gates are missing.
   from a dnf repository.
 * :doc:`Fleet CLI (lota-fleet) <fleet-cli>` -- drive the verifier's
   monitoring API: revocations, bans, re-anchor, client removal, logs.
+* :doc:`Monitoring API reference <monitoring-api>` -- the REST endpoint
+  contract the fleet CLI and custom tooling consume.
 
 Related deployment material lives next to the code:
 
@@ -49,3 +51,4 @@ Related deployment material lives next to the code:
    copr
    dnf-repo
    fleet-cli
+   monitoring-api
