@@ -403,3 +403,126 @@ func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
 		t.Fatalf("session token tenant = %q, want acme-corp", st.Tenant)
 	}
 }
+
+func TestTenantPolicyBinding(t *testing.T) {
+	pv := NewPCRVerifier()
+
+	if err := pv.AddPolicy(&PCRPolicy{Name: "base", RequireEnforce: true}); err != nil {
+		t.Fatalf("AddPolicy(base): %v", err)
+	}
+	if err := pv.AddPolicy(&PCRPolicy{Name: "acme-policy", Tenant: "acme", RequireEnforce: true}); err != nil {
+		t.Fatalf("AddPolicy(acme-policy): %v", err)
+	}
+
+	if got := pv.PolicyNameForTenant("acme"); got != "acme-policy" {
+		t.Fatalf("PolicyNameForTenant(acme) = %q, want acme-policy", got)
+	}
+	if got := pv.PolicyNameForTenant("unbound"); got != "base" {
+		t.Fatalf("PolicyNameForTenant(unbound) = %q, want the active policy", got)
+	}
+	if got := pv.PolicyNameForTenant(""); got != "base" {
+		t.Fatalf("PolicyNameForTenant(\"\") = %q, want the active policy", got)
+	}
+
+	// tenant binds to at most one policy
+	if err := pv.AddPolicy(&PCRPolicy{Name: "other", Tenant: "acme", RequireEnforce: true}); err == nil {
+		t.Fatal("second policy bound to the same tenant was accepted")
+	}
+
+	// binding name must be a valid tenant
+	if err := pv.AddPolicy(&PCRPolicy{Name: "bad", Tenant: "Not Valid", RequireEnforce: true}); err == nil {
+		t.Fatal("invalid tenant binding was accepted")
+	}
+
+	// re-registering the policy without the binding releases the tenant
+	if err := pv.AddPolicy(&PCRPolicy{Name: "acme-policy", RequireEnforce: true}); err != nil {
+		t.Fatalf("re-register without tenant: %v", err)
+	}
+	if got := pv.PolicyNameForTenant("acme"); got != "base" {
+		t.Fatalf("PolicyNameForTenant after unbind = %q, want base", got)
+	}
+}
+
+func TestChallengePolicyMaskIsUnion(t *testing.T) {
+	pv := NewPCRVerifier()
+
+	if err := pv.AddPolicy(&PCRPolicy{Name: "base", PCRs: map[int]string{4: "aa"}}); err != nil {
+		t.Fatalf("AddPolicy(base): %v", err)
+	}
+	if err := pv.AddPolicy(&PCRPolicy{Name: "bound", Tenant: "acme", PCRs: map[int]string{5: "bb"}}); err != nil {
+		t.Fatalf("AddPolicy(bound): %v", err)
+	}
+
+	mask := pv.GetChallengePolicyMask()
+	if mask&(1<<4) == 0 || mask&(1<<5) == 0 {
+		t.Fatalf("challenge mask %#x must cover the active AND the tenant-bound policy PCRs", mask)
+	}
+	if active := pv.GetActivePolicyMask(); active&(1<<5) != 0 {
+		t.Fatalf("active mask %#x should not include the bound policy's PCR", active)
+	}
+}
+
+// attestWithTenantPolicy attests once against a verifier whose policy set binds
+// tenant "acme-corp" to policy the fixture report cannot satisfy,
+// while the active policy accepts anything.
+func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types.VerifyResult, error) {
+	t.Helper()
+
+	cfg := DefaultConfig()
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.NonceLifetime = 1 * time.Second
+	verifier := NewVerifier(cfg, newCertStore(t))
+
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	// fixture report does not set FlagLockdown,
+	// so this policy rejects any client it is selected for
+	if err := verifier.AddPolicy(&PCRPolicy{
+		Name:            "acme-strict",
+		Tenant:          "acme-corp",
+		RequireLockdown: true,
+	}); err != nil {
+		t.Fatalf("AddPolicy(acme-strict) failed: %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default) failed: %v", err)
+	}
+
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+
+	testAIKCertOUs = ous
+	defer func() { testAIKCertOUs = nil }()
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	return verifier.VerifyReport(clientID, reportData)
+}
+
+func TestIntegration_TenantBoundPolicySelected(t *testing.T) {
+	// acme-corp client verifies against its bound policy and fails
+	result, err := attestWithTenantPolicy(t, "tenant-policy-acme", []string{"acme-corp"})
+	if err == nil {
+		t.Fatal("tenant-bound strict policy was not applied")
+	}
+	if result.Result != types.VerifyPCRFail {
+		t.Fatalf("result = %d, want VerifyPCRFail", result.Result)
+	}
+
+	// client outside the bound tenant falls back to the active policy
+	result, err = attestWithTenantPolicy(t, "tenant-policy-plain", nil)
+	if err != nil {
+		t.Fatalf("default-tenant client rejected: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("result = %d, want VerifyOK", result.Result)
+	}
+}

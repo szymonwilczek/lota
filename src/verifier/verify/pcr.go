@@ -30,6 +30,13 @@ type PCRPolicy struct {
 	// explains what this policy represents
 	Description string `yaml:"description"`
 
+	// binds this policy to one tenant:
+	// clients whose AIK certificate carries this tenant verify against it
+	// instead of the active policy.
+	// Empty means no binding.
+	// Binding travels inside the policy file, so signed policy authenticates its own scope.
+	Tenant string `yaml:"tenant"`
+
 	// maps PCR index to expected hash value (hex-encoded)
 	// IMPORTANT: only PCRs listed here are checked; others are ignored
 	PCRs map[int]string `yaml:"pcrs"`
@@ -82,6 +89,7 @@ type PCRVerifier struct {
 	mu           sync.RWMutex
 	policies     map[string]*PCRPolicy
 	active       string            // name of active policy
+	tenantPolicy map[string]string // tenant -> bound policy name
 	policyPubKey ed25519.PublicKey // if set, policy files require valid Ed25519 signature
 
 	// if false, LoadPolicy rejects policies that define no measurement allowlists
@@ -98,6 +106,7 @@ type PCRVerifier struct {
 func NewPCRVerifier() *PCRVerifier {
 	return &PCRVerifier{
 		policies:              make(map[string]*PCRPolicy),
+		tenantPolicy:          make(map[string]string),
 		allowPermissivePolicy: false,
 		allowUnpinnedAgent:    false,
 	}
@@ -245,17 +254,7 @@ func (v *PCRVerifier) LoadPolicy(path string) error {
 		slog.Warn(w)
 	}
 
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	v.policies[policy.Name] = &policy
-
-	// set as active if first policy
-	if v.active == "" {
-		v.active = policy.Name
-	}
-
-	return nil
+	return v.registerPolicy(&policy)
 }
 
 // adds a policy programmatically
@@ -267,11 +266,38 @@ func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
 		slog.Warn(w)
 	}
 
+	return v.registerPolicy(policy)
+}
+
+// registerPolicy stores validated policy and maintains the tenant binding index.
+// Tenant binds to at most one policy.
+// Re-registering the same policy name refreshes its binding.
+func (v *PCRVerifier) registerPolicy(policy *PCRPolicy) error {
+	if policy.Tenant != "" && !ValidTenantName(policy.Tenant) {
+		return fmt.Errorf("policy '%s' declares an invalid tenant %q", policy.Name, policy.Tenant)
+	}
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	v.policies[policy.Name] = policy
+	if policy.Tenant != "" {
+		if bound, ok := v.tenantPolicy[policy.Tenant]; ok && bound != policy.Name {
+			return fmt.Errorf("tenant %q is already bound to policy '%s'", policy.Tenant, bound)
+		}
+	}
 
+	// drop stale binding when policy is re-registered under
+	// new or removed tenant
+	if old, ok := v.policies[policy.Name]; ok && old.Tenant != "" && old.Tenant != policy.Tenant {
+		delete(v.tenantPolicy, old.Tenant)
+	}
+
+	v.policies[policy.Name] = policy
+	if policy.Tenant != "" {
+		v.tenantPolicy[policy.Tenant] = policy.Name
+	}
+
+	// set as active if first policy
 	if v.active == "" {
 		v.active = policy.Name
 	}
@@ -301,15 +327,79 @@ func (v *PCRVerifier) VerifyReport(report *types.AttestationReport) error {
 // checks report against active policy using the quote-authenticated
 // boot facts extracted from the event log
 func (v *PCRVerifier) VerifyReportWithFacts(report *types.AttestationReport, facts *BootFacts) error {
-	v.mu.RLock()
-	policy, exists := v.policies[v.active]
-	v.mu.RUnlock()
+	return v.VerifyReportForTenant(report, "", facts)
+}
 
+// checks report against the policy bound to the client's tenant,
+// falling back to the active policy when the tenant has no binding
+func (v *PCRVerifier) VerifyReportForTenant(report *types.AttestationReport, tenant string, facts *BootFacts) error {
+	policy, exists := v.policyForTenant(tenant)
 	if !exists {
 		return errors.New("no active policy configured")
 	}
 
 	return v.verifyAgainstPolicy(report, policy, facts)
+}
+
+// policyForTenant resolves the policy a tenant verifies against:
+// its bound policy when one is registered, the active policy otherwise
+func (v *PCRVerifier) policyForTenant(tenant string) (*PCRPolicy, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if tenant != "" {
+		if name, ok := v.tenantPolicy[tenant]; ok {
+			if policy, ok := v.policies[name]; ok {
+				return policy, true
+			}
+		}
+	}
+	policy, ok := v.policies[v.active]
+	return policy, ok
+}
+
+// PolicyNameForTenant reports which policy tenant verifies against (for logging).
+// Falls back to the active policy name
+func (v *PCRVerifier) PolicyNameForTenant(tenant string) string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	if tenant != "" {
+		if name, ok := v.tenantPolicy[tenant]; ok {
+			return name
+		}
+	}
+	return v.active
+}
+
+// tenant-aware counterpart of ActivePolicyDeclaresBootPCRs
+func (v *PCRVerifier) PolicyDeclaresBootPCRsForTenant(tenant string) bool {
+	policy, ok := v.policyForTenant(tenant)
+	if !ok || policy == nil {
+		return false
+	}
+	if _, ok := policy.PCRs[0]; !ok {
+		return false
+	}
+	if _, ok := policy.PCRs[1]; !ok {
+		return false
+	}
+	if _, ok := policy.PCRs[7]; !ok {
+		return false
+	}
+	return true
+}
+
+// tenant-aware counterpart of ActivePolicyRequiresSecureBoot
+func (v *PCRVerifier) PolicyRequiresSecureBootForTenant(tenant string) bool {
+	policy, ok := v.policyForTenant(tenant)
+	return ok && policy != nil && policy.RequireSecureBoot
+}
+
+// tenant-aware counterpart of ActivePolicyRequiresCmdline
+func (v *PCRVerifier) PolicyRequiresCmdlineForTenant(tenant string) bool {
+	policy, ok := v.policyForTenant(tenant)
+	return ok && policy != nil && policy.RequireCmdlinePolicy
 }
 
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
@@ -569,4 +659,27 @@ func (v *PCRVerifier) GetActivePolicyMask() uint32 {
 
 	// fallback if no active policy
 	return DefaultPolicy().GetRequiredMask()
+}
+
+// GetChallengePolicyMask returns the union of the PCR masks of the active policy
+// and every tenant-bound policy.
+// Challenge is issued before the client authenticates its tenant, so it must
+// request every PCR any selectable policy may check.
+// Quoting a superset is harmless.
+func (v *PCRVerifier) GetChallengePolicyMask() uint32 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	var mask uint32
+	if policy, exists := v.policies[v.active]; exists {
+		mask = policy.GetRequiredMask()
+	} else {
+		mask = DefaultPolicy().GetRequiredMask()
+	}
+	for _, name := range v.tenantPolicy {
+		if policy, ok := v.policies[name]; ok {
+			mask |= policy.GetRequiredMask()
+		}
+	}
+	return mask
 }

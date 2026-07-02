@@ -466,7 +466,9 @@ func (v *Verifier) Close() {
 
 // creates a challenge for client attestation
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
-	pcrMask := v.pcrVerifier.GetActivePolicyMask()
+	// challenges precede tenant authentication, so request the union
+	// of every selectable policy's PCRs
+	pcrMask := v.pcrVerifier.GetChallengePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
@@ -700,7 +702,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// event would go undetected.
 	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
-		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.ActivePolicyRequiresCmdline())
+		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.PolicyRequiresCmdlineForTenant(tenant))
 		if err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
@@ -717,7 +719,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("event log required but not provided")
 	}
 
-	if err := v.pcrVerifier.VerifyReportWithFacts(report, bootFacts); err != nil {
+	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
 		clog.Error("PCR verification failed", "error", err)
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
@@ -913,14 +915,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			if readerOK && reader.GetBootBaseline(clientID) != nil {
 				enrolled = true
 			}
-			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
-				if v.pcrVerifier.ActivePolicyRequiresSecureBoot() && SecureBootAnchored(bootFacts) {
+			if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+				if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
 					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
 				} else {
 					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
 					v.metrics.Rejections.Inc("baseline_error")
 					result.Result = types.VerifyIntegrityMismatch
@@ -1007,7 +1009,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				// if the drift preserves the Secure Boot root of trust,
 				// re-pin the baseline instead of rejecting.
 				// Returns true only on an actual re-pin.
-				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+				if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
 					break
 				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
@@ -1328,7 +1330,7 @@ func (v *Verifier) ListActiveClients() []string {
 // treats the attestation as a match instead of rejecting.
 // Pending or escalated outcome returns false and the caller rejects as before.
 // Decision itself lives in reanchorDecision.
-func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
 ) bool {
@@ -1336,9 +1338,9 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		return false
 	}
 	// diverse-fleet profile only:
-	// an active policy with require_secureboot and the event-log Secure Boot
+	// client's policy with require_secureboot and the event-log Secure Boot
 	// anchor proven for this boot
-	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+	if !v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) || !SecureBootAnchored(bootFacts) {
 		return false
 	}
 	rs, ok := v.baselineStore.(ReanchorStorer)
