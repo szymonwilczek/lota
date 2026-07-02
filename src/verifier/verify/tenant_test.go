@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
@@ -99,13 +100,135 @@ func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.Veri
 	return verifier.VerifyReport(clientID, reportData)
 }
 
+// attestVerifierWithCertOUs is attestWithCertOUs but returns
+// the verifier so tests can inspect post-attestation state.
+func attestVerifierWithCertOUs(t *testing.T, clientID string, ous []string) (*Verifier, *types.VerifyResult, error) {
+	t.Helper()
+
+	aikStore := newCertStore(t)
+	verifier := createTestVerifier(t, aikStore)
+
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+
+	testAIKCertOUs = ous
+	defer func() { testAIKCertOUs = nil }()
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	return verifier, result, err
+}
+
 func TestIntegration_TenantCertAttests(t *testing.T) {
-	result, err := attestWithCertOUs(t, "tenant-client-ok", []string{"acme-corp"})
+	verifier, result, err := attestVerifierWithCertOUs(t, "tenant-client-ok", []string{"acme-corp"})
 	if err != nil {
 		t.Fatalf("attestation with a tenant OU failed: %v", err)
 	}
 	if result.Result != types.VerifyOK {
 		t.Fatalf("result = %d, want VerifyOK", result.Result)
+	}
+
+	// verifier keys client state by the certificate CN
+	// (the device pseudonym), not by the challenge ID
+	info, found := verifier.ClientInfo(testPseudonym("tenant-client-ok"))
+	if !found {
+		t.Fatal("client not found after attestation")
+	}
+	if info.Tenant != "acme-corp" {
+		t.Fatalf("ClientInfo.Tenant = %q, want the certificate tenant", info.Tenant)
+	}
+}
+
+func TestIntegration_NoOUCertIsDefaultTenant(t *testing.T) {
+	verifier, result, err := attestVerifierWithCertOUs(t, "tenant-client-plain", nil)
+	if err != nil {
+		t.Fatalf("attestation without an OU failed: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("result = %d, want VerifyOK", result.Result)
+	}
+
+	info, found := verifier.ClientInfo(testPseudonym("tenant-client-plain"))
+	if !found {
+		t.Fatal("client not found after attestation")
+	}
+	if info.Tenant != DefaultTenant {
+		t.Fatalf("ClientInfo.Tenant = %q, want %q", info.Tenant, DefaultTenant)
+	}
+}
+
+func TestSQLiteBaselineStore_Tenant(t *testing.T) {
+	db, err := store.OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	s := NewSQLiteBaselineStore(db)
+
+	if err := s.SetClientTenant("ghost", "acme"); err == nil {
+		t.Fatal("SetClientTenant stamped a client with no baseline row")
+	}
+
+	pcr14 := [32]byte{0x14}
+	if res, _ := s.CheckAndUpdate("host1", pcr14); res != TOFUFirstUse {
+		t.Fatal("CheckAndUpdate first use failed")
+	}
+
+	// freshly migrated row is in the default tenant
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant before stamp = %q, %v; want default", tenant, err)
+	}
+
+	if err := s.SetClientTenant("host1", "acme"); err != nil {
+		t.Fatalf("SetClientTenant: %v", err)
+	}
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != "acme" {
+		t.Fatalf("ClientTenant = %q, %v; want acme", tenant, err)
+	}
+
+	if err := s.ClearBaseline("host1"); err != nil {
+		t.Fatalf("ClearBaseline: %v", err)
+	}
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant after clear = %q, %v; want default", tenant, err)
+	}
+}
+
+func TestBaselineStore_TenantLifecycle(t *testing.T) {
+	s := NewBaselineStore()
+
+	if err := s.SetClientTenant("ghost", "acme"); err == nil {
+		t.Fatal("SetClientTenant stamped a client with no baseline row")
+	}
+
+	pcr14 := [32]byte{0x14}
+	if res, _ := s.CheckAndUpdate("host1", pcr14); res != TOFUFirstUse {
+		t.Fatalf("CheckAndUpdate = %v, want TOFUFirstUse", res)
+	}
+
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant before stamp = %q, %v; want default", tenant, err)
+	}
+
+	if err := s.SetClientTenant("host1", "acme"); err != nil {
+		t.Fatalf("SetClientTenant: %v", err)
+	}
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != "acme" {
+		t.Fatalf("ClientTenant = %q, %v; want acme", tenant, err)
+	}
+
+	if err := s.ClearBaseline("host1"); err != nil {
+		t.Fatalf("ClearBaseline: %v", err)
+	}
+	if tenant, err := s.ClientTenant("host1"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant after clear = %q, %v; want default", tenant, err)
 	}
 }
 

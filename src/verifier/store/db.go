@@ -216,6 +216,14 @@ var migrations = []migration{
 			ALTER TABLE baselines ADD COLUMN lfa_review_pending INTEGER DEFAULT 0;
 		`,
 	},
+	{
+		version:     7,
+		description: "multi-tenancy: CA-assigned tenant on the baseline row",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

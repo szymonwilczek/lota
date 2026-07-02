@@ -1109,6 +1109,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	clog.Info("verification successful")
 
+	// stamp the CA-assigned tenant on the baseline row so the operator
+	// surface can scope this client.
+	// Fail closed rather than let tenant-owned device linger unscoped
+	// in the default tenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		if err := ts.SetClientTenant(clientID, tenant); err != nil {
+			clog.Error("failed to persist the client tenant", "error", err)
+			result.Result = types.VerifyInternalError
+			return result, fmt.Errorf("failed to persist client tenant: %w", err)
+		}
+	}
+
 	result.Result = types.VerifyOK
 	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
 	sessionToken, err := v.deriveSessionToken(report, clientID, identity, result.ValidUntil, result.Result)
@@ -1203,6 +1215,7 @@ type ClientInfo struct {
 	PendingChallenges int
 	PCR14Baseline     string // hex-encoded
 	FirstSeen         time.Time
+	Tenant            string // CA-assigned; DefaultTenant when never stamped
 }
 
 // returns aggregated information about a specific client

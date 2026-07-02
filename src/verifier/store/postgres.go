@@ -153,6 +153,14 @@ var pgMigrations = []migration{
 			ALTER TABLE baselines ADD COLUMN lfa_review_pending BOOLEAN NOT NULL DEFAULT FALSE;
 		`,
 	},
+	{
+		version:     4,
+		description: "multi-tenancy: CA-assigned tenant on the baseline row",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
+		`,
+	},
 }
 
 // OpenPostgresDB opens a Postgres-backed store at the given DSN and applies
