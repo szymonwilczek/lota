@@ -593,12 +593,20 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		result.Result = types.VerifySigFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
+	tenant, err := TenantFromCertificate(aikLeaf)
+	if err != nil {
+		logging.Security(clog, "AIK certificate carries an invalid tenant",
+			"subject", aikLeaf.Subject.CommonName, "error", err)
+		v.metrics.Rejections.Inc("sig_fail")
+		result.Result = types.VerifySigFail
+		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
+	}
 	clientID = aikLeaf.Subject.CommonName
 	hwID = clientID
 	if len(hwID) > 16 {
 		hwID = hwID[:16]
 	}
-	clog = logging.WithClient(v.log, clientID)
+	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
 	// check revocation BEFORE consuming nonce
