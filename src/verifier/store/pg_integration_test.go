@@ -164,10 +164,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	audit := NewPostgresAuditLog(db)
 	rev := NewPostgresRevocationStore(db, audit)
 
-	if err := rev.Revoke("c1", RevocationReason("compromised"), "op", "n1"); err != nil {
+	if err := rev.Revoke("default", "c1", RevocationReason("compromised"), "op", "n1"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if err := rev.Revoke("c1", RevocationReason("compromised"), "op", "n1"); err != ErrAlreadyRevoked {
+	if err := rev.Revoke("default", "c1", RevocationReason("compromised"), "op", "n1"); err != ErrAlreadyRevoked {
 		t.Fatalf("duplicate Revoke: got %v want ErrAlreadyRevoked", err)
 	}
 	if e, ok := rev.IsRevoked("c1"); !ok || e.RevokedBy != "op" {
@@ -186,13 +186,13 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	ban := NewPostgresBanStore(db, audit)
 	var hw [32]byte
 	hw[0] = 0x09
-	if err := ban.BanHardware(hw, RevocationReason("cheat"), "op", "b1"); err != nil {
+	if err := ban.BanHardware("default", hw, RevocationReason("cheat"), "op", "b1"); err != nil {
 		t.Fatalf("BanHardware: %v", err)
 	}
-	if err := ban.BanHardware(hw, RevocationReason("cheat"), "op", "b1"); err != ErrAlreadyBanned {
+	if err := ban.BanHardware("default", hw, RevocationReason("cheat"), "op", "b1"); err != ErrAlreadyBanned {
 		t.Fatalf("duplicate ban: got %v want ErrAlreadyBanned", err)
 	}
-	if e, ok := ban.IsBanned(hw); !ok || e.HardwareID != hw {
+	if e, ok := ban.IsBanned("default", hw); !ok || e.HardwareID != hw {
 		t.Fatal("IsBanned")
 	}
 	if ban.CountBans() != 1 {
@@ -207,10 +207,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if lb := ban.ListBansPage(1, 0); len(lb) != 1 {
 		t.Fatalf("ListBansPage = %+v", lb)
 	}
-	if err := ban.UnbanHardware(hw); err != nil {
+	if err := ban.UnbanHardware("default", hw); err != nil {
 		t.Fatalf("UnbanHardware: %v", err)
 	}
-	if err := ban.UnbanHardware(hw); err != ErrNotBanned {
+	if err := ban.UnbanHardware("default", hw); err != ErrNotBanned {
 		t.Fatalf("double unban: got %v want ErrNotBanned", err)
 	}
 
@@ -218,6 +218,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if n := len(audit.Query(100)); n != 4 {
 		t.Fatalf("audit entries = %d, want 4", n)
 	}
+
+	// per-tenant semantics against the real Postgres schema
+	testRevocationTenant(t, rev, "Postgres")
+	testBanStorePerTenant(t, ban, "Postgres")
 }
 
 func TestPostgresAttestationLog(t *testing.T) {

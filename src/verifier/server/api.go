@@ -672,7 +672,14 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	err := revStore.Revoke(clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	// Record the tenant the CA assigned to this client so listings can be scoped
+	// Client with no baseline row falls into the default tenant
+	tenant := verify.DefaultTenant
+	if info, found := h.verifier.ClientInfo(clientID); found {
+		tenant = info.Tenant
+	}
+
+	err := revStore.Revoke(tenant, clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyRevoked {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
@@ -829,7 +836,7 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = banStr.BanHardware(hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	err = banStr.BanHardware(verify.DefaultTenant, hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyBanned {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "hardware ID is already banned"})
@@ -873,7 +880,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
-	err = banStr.UnbanHardware(hwid)
+	err = banStr.UnbanHardware(verify.DefaultTenant, hwid)
 	if err != nil {
 		if err == store.ErrNotBanned {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})

@@ -161,6 +161,18 @@ var pgMigrations = []migration{
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
 		`,
 	},
+	{
+		version: 5,
+		description: "multi-tenancy: tenant on revocations, per-tenant " +
+			"hardware bans keyed (tenant, hardware_id)",
+		sql: `
+			ALTER TABLE revocations ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
+			ALTER TABLE hardware_bans ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			ALTER TABLE hardware_bans DROP CONSTRAINT hardware_bans_pkey;
+			ALTER TABLE hardware_bans ADD PRIMARY KEY (tenant, hardware_id);
+		`,
+	},
 }
 
 // OpenPostgresDB opens a Postgres-backed store at the given DSN and applies

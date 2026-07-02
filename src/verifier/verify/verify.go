@@ -624,8 +624,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// check hardware ban BEFORE consuming nonce
+	//
+	// Bans are strictly per-tenant:
+	// Only a ban recorded in the tenant the CA assigned to this client rejects it.
+	// The same hardware stays clean in every other tenant.
 	if v.banStore != nil {
-		if entry, banned := v.banStore.IsBanned(identity); banned {
+		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
 			v.bannedAttests.Add(1)
 			v.metrics.Rejections.Inc("banned")
 			logging.Security(clog, "attestation rejected: hardware banned",

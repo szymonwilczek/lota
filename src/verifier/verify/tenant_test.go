@@ -7,8 +7,10 @@ package verify
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -249,5 +251,102 @@ func TestIntegration_AmbiguousTenantCertRejected(t *testing.T) {
 	}
 	if result.Result != types.VerifySigFail {
 		t.Fatalf("result = %d, want VerifySigFail (fail-closed)", result.Result)
+	}
+}
+
+// attestWithBanStore runs one full attestation with the given ban store
+// installed and the AIK certificate carrying the given tenant OU
+func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.BanStore) (*types.VerifyResult, error) {
+	t.Helper()
+
+	cfg := DefaultConfig()
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.NonceLifetime = 1 * time.Second
+	cfg.BanStore = bans
+	verifier := NewVerifier(cfg, newCertStore(t))
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default) failed: %v", err)
+	}
+
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+
+	testAIKCertOUs = ous
+	defer func() { testAIKCertOUs = nil }()
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	return verifier.VerifyReport(clientID, reportData)
+}
+
+// devicePseudonymHWID returns the hardware identity the verifier derives
+// for test client: hex-decoded certificate pseudonym
+func devicePseudonymHWID(t *testing.T, clientID string) [32]byte {
+	t.Helper()
+	raw, err := hex.DecodeString(testPseudonym(clientID))
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("test pseudonym is not a 32-byte hex identity: %v", err)
+	}
+	var hwid [32]byte
+	copy(hwid[:], raw)
+	return hwid
+}
+
+func TestIntegration_HardwareBanIsPerTenant(t *testing.T) {
+	const clientID = "tenant-ban-client"
+	hwid := devicePseudonymHWID(t, clientID)
+
+	// banned in a DIFFERENT tenant: the client must attest cleanly
+	bans := store.NewMemoryBanStore()
+	if err := bans.BanHardware("other-game", hwid, store.RevocationCheating, "op", ""); err != nil {
+		t.Fatalf("BanHardware(other-game): %v", err)
+	}
+	result, err := attestWithBanStore(t, clientID, []string{"acme-corp"}, bans)
+	if err != nil {
+		t.Fatalf("attestation rejected by a foreign tenant's ban: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("result = %d, want VerifyOK", result.Result)
+	}
+
+	// banned in the client's OWN tenant: attestation must fail
+	if err := bans.BanHardware("acme-corp", hwid, store.RevocationCheating, "op", ""); err != nil {
+		t.Fatalf("BanHardware(acme-corp): %v", err)
+	}
+	result, err = attestWithBanStore(t, clientID, []string{"acme-corp"}, bans)
+	if err == nil {
+		t.Fatal("attestation accepted despite a ban in the client's tenant")
+	}
+	if result.Result != types.VerifyBanned {
+		t.Fatalf("result = %d, want VerifyBanned", result.Result)
+	}
+}
+
+func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
+	const clientID = "tenant-ban-plain"
+	hwid := devicePseudonymHWID(t, clientID)
+
+	// certificate without an OU lands in the default tenant,
+	// so a default-tenant ban still rejects it
+	bans := store.NewMemoryBanStore()
+	if err := bans.BanHardware(DefaultTenant, hwid, store.RevocationCheating, "op", ""); err != nil {
+		t.Fatalf("BanHardware(default): %v", err)
+	}
+	result, err := attestWithBanStore(t, clientID, nil, bans)
+	if err == nil {
+		t.Fatal("attestation accepted despite a default-tenant ban")
+	}
+	if result.Result != types.VerifyBanned {
+		t.Fatalf("result = %d, want VerifyBanned", result.Result)
 	}
 }

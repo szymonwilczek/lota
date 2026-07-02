@@ -28,7 +28,10 @@ import (
 )
 
 // records an active hardware ban
+// Ban is scoped to a single tenant:
+// the same hardware identity may be banned in one tenant and clean in another.
 type BanEntry struct {
+	Tenant     string
 	HardwareID [32]byte
 	Reason     RevocationReason
 	BannedAt   time.Time
@@ -54,20 +57,22 @@ var (
 )
 
 // manages hardware-level bans
+// Bans are strictly per-tenant:
+// Every operation names the tenant it acts within and never observes another tenant's entries.
 type BanStore interface {
-	// bans a hardware identity
-	// returns ErrAlreadyBanned if the hardware ID is already banned
-	BanHardware(hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error
+	// bans a hardware identity within a tenant
+	// returns ErrAlreadyBanned if the hardware ID is already banned there
+	BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error
 
-	// checks if a hardware identity is banned
+	// checks if a hardware identity is banned within a tenant
 	// returns the ban entry and true if banned, nil and false otherwise
-	IsBanned(hardwareID [32]byte) (*BanEntry, bool)
+	IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool)
 
-	// removes the ban for a hardware identity
-	// returns ErrNotBanned if the hardware ID is not currently banned
-	UnbanHardware(hardwareID [32]byte) error
+	// removes the ban for a hardware identity within a tenant
+	// returns ErrNotBanned if the hardware ID is not currently banned there
+	UnbanHardware(tenant string, hardwareID [32]byte) error
 
-	// returns all active hardware bans
+	// returns all active hardware bans across tenants
 	ListBans() []BanEntry
 }
 
@@ -136,10 +141,16 @@ func ParseHardwareID(hexStr string) ([32]byte, error) {
 	return hwid, nil
 }
 
+// identifies one tenant's ban on one hardware identity
+type banKey struct {
+	tenant     string
+	hardwareID [32]byte
+}
+
 // implements BanStore using an in-memory map (testing only)
 type MemoryBanStore struct {
 	mu       sync.RWMutex
-	bans     map[[32]byte]*BanEntry
+	bans     map[banKey]*BanEntry
 	auditLog AuditLog // optional audit trail
 }
 
@@ -147,7 +158,7 @@ type MemoryBanStore struct {
 // if auditLog is non-nil, all mutations are recorded in the audit trail.
 func NewMemoryBanStore(auditLog ...AuditLog) *MemoryBanStore {
 	s := &MemoryBanStore{
-		bans: make(map[[32]byte]*BanEntry),
+		bans: make(map[banKey]*BanEntry),
 	}
 	if len(auditLog) > 0 {
 		s.auditLog = auditLog[0]
@@ -155,15 +166,17 @@ func NewMemoryBanStore(auditLog ...AuditLog) *MemoryBanStore {
 	return s
 }
 
-func (s *MemoryBanStore) BanHardware(hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
+func (s *MemoryBanStore) BanHardware(tenant string, hardwareID [32]byte, reason RevocationReason, bannedBy, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.bans[hardwareID]; exists {
+	key := banKey{tenant: tenant, hardwareID: hardwareID}
+	if _, exists := s.bans[key]; exists {
 		return ErrAlreadyBanned
 	}
 
-	s.bans[hardwareID] = &BanEntry{
+	s.bans[key] = &BanEntry{
+		Tenant:     tenant,
 		HardwareID: hardwareID,
 		Reason:     reason,
 		BannedAt:   time.Now().UTC(),
@@ -180,26 +193,27 @@ func (s *MemoryBanStore) BanHardware(hardwareID [32]byte, reason RevocationReaso
 	return nil
 }
 
-func (s *MemoryBanStore) IsBanned(hardwareID [32]byte) (*BanEntry, bool) {
+func (s *MemoryBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	entry, exists := s.bans[hardwareID]
+	entry, exists := s.bans[banKey{tenant: tenant, hardwareID: hardwareID}]
 	if !exists {
 		return nil, false
 	}
 	return entry, true
 }
 
-func (s *MemoryBanStore) UnbanHardware(hardwareID [32]byte) error {
+func (s *MemoryBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.bans[hardwareID]; !exists {
+	key := banKey{tenant: tenant, hardwareID: hardwareID}
+	if _, exists := s.bans[key]; !exists {
 		return ErrNotBanned
 	}
 
-	delete(s.bans, hardwareID)
+	delete(s.bans, key)
 
 	if s.auditLog != nil {
 		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
@@ -256,7 +270,8 @@ func (s *MemoryBanStore) ListBansAfter(limit int, nextID string) ([]BanEntry, er
 		start = len(entries)
 		for i, e := range entries {
 			if e.BannedAt.Before(cursor.BannedAt) ||
-				(e.BannedAt.Equal(cursor.BannedAt) && compareHardwareID(e.HardwareID, cursor.HardwareID) < 0) {
+				(e.BannedAt.Equal(cursor.BannedAt) && compareHardwareID(e.HardwareID, cursor.HardwareID) < 0) ||
+				(e.BannedAt.Equal(cursor.BannedAt) && e.HardwareID == cursor.HardwareID && e.Tenant < cursor.Tenant) {
 				start = i
 				break
 			}
@@ -278,7 +293,10 @@ func (s *MemoryBanStore) ListBansAfter(limit int, nextID string) ([]BanEntry, er
 func sortBanEntriesDesc(entries []BanEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].BannedAt.Equal(entries[j].BannedAt) {
-			return compareHardwareID(entries[i].HardwareID, entries[j].HardwareID) > 0
+			if c := compareHardwareID(entries[i].HardwareID, entries[j].HardwareID); c != 0 {
+				return c > 0
+			}
+			return entries[i].Tenant > entries[j].Tenant
 		}
 		return entries[i].BannedAt.After(entries[j].BannedAt)
 	})
