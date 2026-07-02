@@ -13,6 +13,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -135,11 +136,53 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	return h
 }
 
+// principalCtxKey carries the authenticated Principal through the
+// request context so handlers can scope responses to its tenant set.
+type principalCtxKey struct{}
+
+// withPrincipal stashes the principal on the request context.
+func withPrincipal(r *http.Request, p *Principal) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), principalCtxKey{}, p))
+}
+
+// scopedKeySet returns the scoped key set when the server carries one.
+func (h *APIHandler) scopedKeySet() *APIKeySet {
+	if h.server == nil {
+		return nil
+	}
+	return h.server.apiKeySet()
+}
+
+// resolvePrincipal authenticates bearer token against the env keys
+// (global scope, back-compat) and the scoped key file.
+func (h *APIHandler) resolvePrincipal(token string) *Principal {
+	if h.adminAPIKey != "" && tokenMatchesHash(token, h.adminKeyHash) {
+		return &Principal{Role: RoleAdmin, AllTenants: true}
+	}
+	if h.readerAPIKey != "" && tokenMatchesHash(token, h.readerKeyHash) {
+		return &Principal{Role: RoleReader, AllTenants: true}
+	}
+	if p, ok := h.scopedKeySet().Lookup(token); ok {
+		return p
+	}
+	return nil
+}
+
+// authConfigured reports whether any auth tier exists at all.
+func (h *APIHandler) authConfigured() bool {
+	return h.adminAPIKey != "" || h.readerAPIKey != "" || h.scopedKeySet().Len() > 0
+}
+
+// adminConfigured reports whether any key can reach the admin tier.
+func (h *APIHandler) adminConfigured() bool {
+	return h.adminAPIKey != "" || h.scopedKeySet().Len() > 0
+}
+
 // wraps a handler with Bearer token authentication
-// if no admin API key is configured, all mutating requests are rejected
+// if no admin-capable key is configured, all mutating requests are rejected
 func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.adminAPIKey == "" {
+		if !h.adminConfigured() {
 			h.log.Warn("admin endpoint called but no API key configured",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
@@ -154,7 +197,8 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if !tokenMatchesHash(token, h.adminKeyHash) {
+		p := h.resolvePrincipal(token)
+		if !p.CanAdmin() {
 			logging.Security(h.log, "admin auth failed",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
@@ -162,19 +206,19 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		next(w, r)
+		next(w, withPrincipal(r, p))
 	}
 }
 
 // wraps a handler with reader-level authentication
-// accepts either the reader API key or the admin API key
-// the endpoint is public only when no auth tier is configured at all;
-// a configured admin key alone is sufficient to gate reader endpoints, so
-// an operator who sets only an admin key does not silently expose the
-// sensitive read tier
+// accepts the reader env key, the admin env key, or any scoped key
+// (admin implies reader).
+// Endpoint is public only when no auth tier is configured at all;
+// configured admin key alone is sufficient to gate reader endpoints,
+// so an operator who sets only an admin key does not silently expose the sensitive read tier
 func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.readerAPIKey == "" && h.adminAPIKey == "" {
+		if !h.authConfigured() {
 			// no auth configured: endpoint is public (loopback dev default)
 			next(w, r)
 			return
@@ -187,10 +231,8 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		readerOK := h.readerAPIKey != "" && tokenMatchesHash(token, h.readerKeyHash)
-		adminOK := h.adminAPIKey != "" && tokenMatchesHash(token, h.adminKeyHash)
-
-		if !readerOK && !adminOK {
+		p := h.resolvePrincipal(token)
+		if p == nil {
 			logging.Security(h.log, "reader auth failed",
 				"method", r.Method, "path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
@@ -198,7 +240,7 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		next(w, r)
+		next(w, withPrincipal(r, p))
 	}
 }
 

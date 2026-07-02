@@ -100,6 +100,7 @@ var (
 	ekCRLsDeprecated     stringSliceFlag
 	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	apiKeysFile          = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
 )
 
@@ -437,14 +438,15 @@ func main() {
 		AttestationLog: attestLog,
 		AdminAPIKey:    adminKey,
 		ReaderAPIKey:   readerKey,
+		APIKeysFile:    *apiKeysFile,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 	}
 
-	if *httpAddr != "" && adminKey == "" {
+	if *httpAddr != "" && adminKey == "" && *apiKeysFile == "" {
 		logger.Warn("HTTP API enabled without admin API key: admin endpoints (revoke, ban) will be disabled")
 	}
-	if *httpAddr != "" && readerKey == "" && adminKey == "" {
+	if *httpAddr != "" && readerKey == "" && adminKey == "" && *apiKeysFile == "" {
 		logger.Warn("HTTP API enabled without reader or admin API key: sensitive read-only endpoints are public on a loopback bind; a non-loopback bind will be refused")
 	}
 
@@ -476,8 +478,15 @@ func main() {
 	for sig := range sigCh {
 		switch sig {
 		case syscall.SIGHUP:
+			if *apiKeysFile != "" {
+				if err := srv.ReloadAPIKeys(); err != nil {
+					logger.Error("SIGHUP: API key reload failed; keeping previous set", "error", err)
+				}
+			}
 			if reloader == nil {
-				logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+				if *apiKeysFile == "" {
+					logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+				}
 				continue
 			}
 			if err := reloader.ReloadCRLs(); err != nil {
