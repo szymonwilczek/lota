@@ -247,6 +247,17 @@ var migrations = []migration{
 			CREATE INDEX idx_hardware_bans_tenant ON hardware_bans(tenant);
 		`,
 	},
+	{
+		version: 9,
+		description: "multi-tenancy: tenant on the audit and attestation " +
+			"logs",
+		sql: `
+			ALTER TABLE audit_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			ALTER TABLE attestation_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
+			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

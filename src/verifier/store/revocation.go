@@ -127,7 +127,7 @@ func (s *MemoryRevocationStore) Revoke(tenant, clientID string, reason Revocatio
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
 			return err
 		}
 	}
@@ -150,14 +150,15 @@ func (s *MemoryRevocationStore) Unrevoke(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.revocations[clientID]; !exists {
+	entry, exists := s.revocations[clientID]
+	if !exists {
 		return ErrNotRevoked
 	}
 
 	delete(s.revocations, clientID)
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(entry.Tenant, "unrevoke", clientID, "", "", ""); err != nil {
 			return err
 		}
 	}

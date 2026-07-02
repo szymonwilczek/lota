@@ -43,6 +43,7 @@ type BanEntry struct {
 type AuditEntry struct {
 	ID        int64
 	Timestamp time.Time
+	Tenant    string // tenant the action acted within
 	Action    string // "revoke", "unrevoke", "ban", "unban"
 	TargetID  string // clientID or hex-encoded hardwareID
 	Reason    string
@@ -106,7 +107,7 @@ type BanCounterWithError interface {
 // Log is append-only - entries are never modified or deleted.
 type AuditLog interface {
 	// appends an action to the audit trail
-	Log(action, targetID, reason, actor, note string) error
+	Log(tenant, action, targetID, reason, actor, note string) error
 
 	// returns the most recent audit entries (newest first)
 	// Use limit=0 for all entries
@@ -185,7 +186,7 @@ func (s *MemoryBanStore) BanHardware(tenant string, hardwareID [32]byte, reason 
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
 			return err
 		}
 	}
@@ -216,7 +217,7 @@ func (s *MemoryBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error
 	delete(s.bans, key)
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
 			return err
 		}
 	}
@@ -335,13 +336,14 @@ func NewMemoryAuditLog() *MemoryAuditLog {
 	}
 }
 
-func (l *MemoryAuditLog) Log(action, targetID, reason, actor, note string) error {
+func (l *MemoryAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.entries = append(l.entries, AuditEntry{
 		ID:        l.nextID,
 		Timestamp: time.Now().UTC(),
+		Tenant:    tenant,
 		Action:    action,
 		TargetID:  targetID,
 		Reason:    reason,
@@ -385,6 +387,7 @@ type AttestationLog interface {
 type AttestationRecord struct {
 	ID         int64
 	Timestamp  time.Time
+	Tenant     string // CA-assigned tenant, empty when the report never authenticated
 	ClientID   string
 	HardwareID string  // hex-encoded, empty if unknown
 	Result     string  // ok, nonce_fail, sig_fail, pcr_fail, integrity_mismatch, revoked, banned, parse_error

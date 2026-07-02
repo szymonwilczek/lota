@@ -173,6 +173,18 @@ var pgMigrations = []migration{
 			ALTER TABLE hardware_bans ADD PRIMARY KEY (tenant, hardware_id);
 		`,
 	},
+	{
+		version: 6,
+		description: "multi-tenancy: tenant on the audit and attestation " +
+			"logs and on session tokens",
+		sql: `
+			ALTER TABLE audit_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			ALTER TABLE attestation_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			ALTER TABLE session_tokens ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
+			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
+		`,
+	},
 }
 
 // OpenPostgresDB opens a Postgres-backed store at the given DSN and applies

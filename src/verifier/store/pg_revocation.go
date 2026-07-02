@@ -55,7 +55,7 @@ func (s *PostgresRevocationStore) Revoke(tenant, clientID string, reason Revocat
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
 			return err
 		}
 	}
@@ -85,21 +85,18 @@ func (s *PostgresRevocationStore) Unrevoke(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result, err := s.db.Exec("DELETE FROM revocations WHERE client_id = $1", clientID)
+	// deleted row carries the tenant the audit entry records
+	var tenant string
+	err := s.db.QueryRow("DELETE FROM revocations WHERE client_id = $1 RETURNING tenant", clientID).Scan(&tenant)
+	if err == sql.ErrNoRows {
+		return ErrNotRevoked
+	}
 	if err != nil {
 		return err
 	}
 
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read affected rows after unrevoke: %w", err)
-	}
-	if rows == 0 {
-		return ErrNotRevoked
-	}
-
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unrevoke", clientID, "", "", ""); err != nil {
 			return err
 		}
 	}
@@ -165,7 +162,7 @@ func (s *PostgresBanStore) BanHardware(tenant string, hardwareID [32]byte, reaso
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
 			return err
 		}
 	}
@@ -208,7 +205,7 @@ func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte) err
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
 			return err
 		}
 	}
@@ -348,13 +345,13 @@ func NewPostgresAuditLog(db *sql.DB) *PostgresAuditLog {
 	return &PostgresAuditLog{db: db}
 }
 
-func (l *PostgresAuditLog) Log(action, targetID, reason, actor, note string) error {
+func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	_, err := l.db.Exec(
-		"INSERT INTO audit_log (timestamp, action, target_id, reason, actor, note) VALUES ($1, $2, $3, $4, $5, $6)",
-		time.Now().UTC(), action, targetID, reason, actor, note,
+		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
 	)
 	return err
 }
@@ -363,7 +360,7 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := "SELECT id, timestamp, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
+	query := "SELECT id, timestamp, tenant, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
 	if limit > 0 {
 		query += " LIMIT $1"
 	}
@@ -383,7 +380,7 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 	var entries []AuditEntry
 	for rows.Next() {
 		var entry AuditEntry
-		if err := rows.Scan(&entry.ID, &entry.Timestamp, &entry.Action, &entry.TargetID, &entry.Reason, &entry.Actor, &entry.Note); err == nil {
+		if err := rows.Scan(&entry.ID, &entry.Timestamp, &entry.Tenant, &entry.Action, &entry.TargetID, &entry.Reason, &entry.Actor, &entry.Note); err == nil {
 			entries = append(entries, entry)
 		}
 	}
@@ -414,9 +411,9 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 
 	_, err := l.db.Exec(
 		`INSERT INTO attestation_log
-		 (timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		ts, entry.ClientID, entry.HardwareID, entry.Result,
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
 	)
 	return err
@@ -426,7 +423,7 @@ func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecor
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT $1"
@@ -447,7 +444,7 @@ func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecor
 	var entries []AttestationRecord
 	for rows.Next() {
 		var e AttestationRecord
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.ClientID, &e.HardwareID,
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
 			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
 			entries = append(entries, e)
 		}

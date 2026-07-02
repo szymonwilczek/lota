@@ -55,7 +55,7 @@ func (s *SQLiteRevocationStore) Revoke(tenant, clientID string, reason Revocatio
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
 			return err
 		}
 	}
@@ -85,6 +85,15 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// fetch the tenant before the delete so the audit entry records it
+	var tenant string
+	if err := s.db.QueryRow("SELECT tenant FROM revocations WHERE client_id = ?", clientID).Scan(&tenant); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotRevoked
+		}
+		return err
+	}
+
 	result, err := s.db.Exec("DELETE FROM revocations WHERE client_id = ?", clientID)
 	if err != nil {
 		return err
@@ -99,7 +108,7 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unrevoke", clientID, "", "", ""); err != nil {
 			return err
 		}
 	}
@@ -165,7 +174,7 @@ func (s *SQLiteBanStore) BanHardware(tenant string, hardwareID [32]byte, reason 
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "ban", FormatHardwareID(hardwareID), string(reason), bannedBy, note); err != nil {
 			return err
 		}
 	}
@@ -208,7 +217,7 @@ func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
 			return err
 		}
 	}
@@ -345,13 +354,13 @@ func NewSQLiteAuditLog(db *sql.DB) *SQLiteAuditLog {
 	return &SQLiteAuditLog{db: db}
 }
 
-func (l *SQLiteAuditLog) Log(action, targetID, reason, actor, note string) error {
+func (l *SQLiteAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	_, err := l.db.Exec(
-		"INSERT INTO audit_log (timestamp, action, target_id, reason, actor, note) VALUES (?, ?, ?, ?, ?, ?)",
-		time.Now().UTC(), action, targetID, reason, actor, note,
+		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
 	)
 	return err
 }
@@ -360,7 +369,7 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := "SELECT id, timestamp, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
+	query := "SELECT id, timestamp, tenant, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
 	if limit > 0 {
 		query += " LIMIT ?"
 	}
@@ -380,7 +389,7 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 	var entries []AuditEntry
 	for rows.Next() {
 		var entry AuditEntry
-		if err := rows.Scan(&entry.ID, &entry.Timestamp, &entry.Action, &entry.TargetID, &entry.Reason, &entry.Actor, &entry.Note); err == nil {
+		if err := rows.Scan(&entry.ID, &entry.Timestamp, &entry.Tenant, &entry.Action, &entry.TargetID, &entry.Reason, &entry.Actor, &entry.Note); err == nil {
 			entries = append(entries, entry)
 		}
 	}
@@ -409,9 +418,9 @@ func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 
 	_, err := l.db.Exec(
 		`INSERT INTO attestation_log
-		 (timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		ts, entry.ClientID, entry.HardwareID, entry.Result,
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
 	)
 	return err
@@ -421,7 +430,7 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT ?"
@@ -442,7 +451,7 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	var entries []AttestationRecord
 	for rows.Next() {
 		var e AttestationRecord
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.ClientID, &e.HardwareID,
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
 			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
 			entries = append(entries, e)
 		}

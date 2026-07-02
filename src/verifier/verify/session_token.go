@@ -81,6 +81,7 @@ func (m *memorySessionTokenStore) Validate(token [32]byte, consume bool, now uin
 
 	st.Exists = true
 	st.ClientID = rec.ClientID
+	st.Tenant = rec.Tenant
 	st.HardwareID = rec.HardwareID
 	st.ValidUntil = rec.ValidUntil
 	st.ResultCode = rec.ResultCode

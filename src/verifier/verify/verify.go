@@ -140,6 +140,7 @@ type Verifier struct {
 
 type sessionTokenRecord struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -150,6 +151,7 @@ type sessionTokenRecord struct {
 
 type SessionTokenStatus struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -381,7 +383,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	return v
 }
 
-func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID string,
+func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID, tenant string,
 	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
 ) {
 	if v == nil || report == nil {
@@ -390,6 +392,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 
 	v.sessionTokenStore.Remember(token, sessionTokenRecord{
 		ClientID:   clientID,
+		Tenant:     tenant,
 		HardwareID: identity,
 		ValidUntil: validUntil,
 		ResultCode: resultCode,
@@ -490,6 +493,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
 	var hwID string
+	// tenant stays empty until the AIK certificate authenticates it.
+	// attestation record without a tenant is one that never proved
+	// tenant-assigned identity
+	var tenant string
 
 	result := &types.VerifyResult{
 		Magic:   types.ReportMagic,
@@ -511,6 +518,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			resultStr := types.VerifyResultString(result.Result)
 			if err := v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
+				Tenant:     tenant,
 				ClientID:   clientID,
 				HardwareID: hwID,
 				Result:     resultStr,
@@ -593,7 +601,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		result.Result = types.VerifySigFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
-	tenant, err := TenantFromCertificate(aikLeaf)
+	tenant, err = TenantFromCertificate(aikLeaf)
 	if err != nil {
 		logging.Security(clog, "AIK certificate carries an invalid tenant",
 			"subject", aikLeaf.Subject.CommonName, "error", err)
@@ -1133,7 +1141,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, fmt.Errorf("failed to derive session token: %w", err)
 	}
 	result.SessionToken = sessionToken
-	v.rememberSessionToken(sessionToken, report, clientID, identity, result.ValidUntil, result.Result)
+	v.rememberSessionToken(sessionToken, report, clientID, tenant, identity, result.ValidUntil, result.Result)
 
 	return result, nil
 }

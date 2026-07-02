@@ -222,6 +222,19 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	// per-tenant semantics against the real Postgres schema
 	testRevocationTenant(t, rev, "Postgres")
 	testBanStorePerTenant(t, ban, "Postgres")
+
+	// audit entries record the tenant of the mutation
+	if err := rev.Revoke("game-x", "audit-tenant-c", RevocationAdmin, "op", ""); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := rev.Unrevoke("audit-tenant-c"); err != nil {
+		t.Fatalf("Unrevoke: %v", err)
+	}
+	for _, e := range audit.Query(2) {
+		if e.Tenant != "game-x" {
+			t.Fatalf("audit action %q recorded tenant %q, want game-x", e.Action, e.Tenant)
+		}
+	}
 }
 
 func TestPostgresAttestationLog(t *testing.T) {
@@ -233,5 +246,13 @@ func TestPostgresAttestationLog(t *testing.T) {
 	rs := al.QueryAttestations(10)
 	if len(rs) != 1 || rs[0].Result != "VERIFY_OK" {
 		t.Fatalf("QueryAttestations = %+v", rs)
+	}
+
+	if err := al.Record(AttestationRecord{ClientID: "c2", Tenant: "acme", Result: "VERIFY_OK"}); err != nil {
+		t.Fatalf("Record with tenant: %v", err)
+	}
+	rs = al.QueryAttestations(1)
+	if len(rs) != 1 || rs[0].Tenant != "acme" {
+		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
 	}
 }

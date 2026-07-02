@@ -341,6 +341,7 @@ func TestPostgresSessionTokenLifecycle(t *testing.T) {
 	tok[1] = 0x42
 	rec := sessionTokenRecord{
 		ClientID:   "client-x",
+		Tenant:     "acme",
 		ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
 		Flags:      0x1,
 		PCRMask:    0x7F,
@@ -355,6 +356,9 @@ func TestPostgresSessionTokenLifecycle(t *testing.T) {
 	st := s.Validate(tok, false, now)
 	if !st.Exists || st.Flags != 0x3 || st.ValidUntil != rec.ValidUntil {
 		t.Fatalf("upsert not visible: %+v", st)
+	}
+	if st.Tenant != "acme" {
+		t.Fatalf("Tenant = %q, want acme", st.Tenant)
 	}
 
 	// consuming twice keeps reporting consumed without resurrecting state

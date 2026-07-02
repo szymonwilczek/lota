@@ -44,17 +44,18 @@ func (s *PostgresSessionTokenStore) Remember(token [32]byte, rec sessionTokenRec
 	// ON CONFLICT keeps Remember idempotent regardless
 	if _, err := s.db.Exec(`
 		INSERT INTO session_tokens
-			(token_hash, client_id, hardware_id, valid_until, result_code, flags, pcr_mask, consumed)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+			(token_hash, client_id, tenant, hardware_id, valid_until, result_code, flags, pcr_mask, consumed)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE)
 		ON CONFLICT (token_hash) DO UPDATE SET
 			client_id   = EXCLUDED.client_id,
+			tenant      = EXCLUDED.tenant,
 			hardware_id = EXCLUDED.hardware_id,
 			valid_until = EXCLUDED.valid_until,
 			result_code = EXCLUDED.result_code,
 			flags       = EXCLUDED.flags,
 			pcr_mask    = EXCLUDED.pcr_mask,
 			consumed    = FALSE`,
-		token[:], rec.ClientID, rec.HardwareID[:],
+		token[:], rec.ClientID, rec.Tenant, rec.HardwareID[:],
 		// #nosec G115 -- Postgres has no unsigned type; unsigned fields are stored in signed BIGINT columns, bit pattern preserved and restored verbatim on read
 		int64(rec.ValidUntil), int64(rec.ResultCode), int64(rec.Flags), int64(rec.PCRMask),
 	); err != nil {
@@ -79,6 +80,7 @@ func (s *PostgresSessionTokenStore) Validate(token [32]byte, consume bool, now u
 
 	var (
 		clientID   string
+		tenant     string
 		hwid       []byte
 		validUntil int64
 		resultCode int64
@@ -87,9 +89,9 @@ func (s *PostgresSessionTokenStore) Validate(token [32]byte, consume bool, now u
 		consumed   bool
 	)
 	err := s.db.QueryRow(`
-		SELECT client_id, hardware_id, valid_until, result_code, flags, pcr_mask, consumed
+		SELECT client_id, tenant, hardware_id, valid_until, result_code, flags, pcr_mask, consumed
 		  FROM session_tokens WHERE token_hash = $1`, token[:]).
-		Scan(&clientID, &hwid, &validUntil, &resultCode, &flags, &pcrMask, &consumed)
+		Scan(&clientID, &tenant, &hwid, &validUntil, &resultCode, &flags, &pcrMask, &consumed)
 	if err == sql.ErrNoRows {
 		return st
 	}
@@ -100,6 +102,7 @@ func (s *PostgresSessionTokenStore) Validate(token [32]byte, consume bool, now u
 
 	st.Exists = true
 	st.ClientID = clientID
+	st.Tenant = tenant
 	if len(hwid) == types.HardwareIDSize {
 		copy(st.HardwareID[:], hwid)
 	}

@@ -350,3 +350,56 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 		t.Fatalf("result = %d, want VerifyBanned", result.Result)
 	}
 }
+
+func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
+	const clientID = "tenant-log-client"
+
+	attestLog := store.NewMemoryAttestationLog()
+	cfg := DefaultConfig()
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.NonceLifetime = 1 * time.Second
+	cfg.AttestationLog = attestLog
+	verifier := NewVerifier(cfg, newCertStore(t))
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default) failed: %v", err)
+	}
+
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	pcr14 := [32]byte{}
+	for i := range pcr14 {
+		pcr14[i] = byte(0x14 ^ i)
+	}
+
+	testAIKCertOUs = []string{"acme-corp"}
+	defer func() { testAIKCertOUs = nil }()
+	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	if err != nil {
+		t.Fatalf("VerifyReport: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("result = %d, want VerifyOK", result.Result)
+	}
+
+	records := attestLog.QueryAttestations(1)
+	if len(records) != 1 || records[0].Tenant != "acme-corp" {
+		t.Fatalf("attestation record = %+v, want tenant acme-corp", records)
+	}
+
+	st := verifier.ValidateSessionToken(result.SessionToken, false)
+	if !st.Exists {
+		t.Fatal("session token not found after attestation")
+	}
+	if st.Tenant != "acme-corp" {
+		t.Fatalf("session token tenant = %q, want acme-corp", st.Tenant)
+	}
+}

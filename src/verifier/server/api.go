@@ -1061,7 +1061,8 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 
 	entries := h.auditLog.Query(limit)
 	resp := make([]auditResponse, len(entries))
-	for i, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		resp[i] = auditResponse{
 			ID:        e.ID,
 			Timestamp: e.Timestamp.UTC().Format(time.RFC3339),
@@ -1334,6 +1335,13 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	}
 
 	logID := sanitizeLogField(clientID)
+
+	// resolve the tenant for the audit entry
+	tenant := verify.DefaultTenant
+	if info, found := h.verifier.ClientInfo(clientID); found {
+		tenant = info.Tenant
+	}
+
 	if err := h.verifier.ForceReanchor(clientID); err != nil {
 		if errors.Is(err, verify.ErrUnknownClient) {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
@@ -1345,7 +1353,7 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log("reanchor", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "reanchor", clientID, "", req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "reanchor", "client_id", logID, "error", err)
 		}
@@ -1375,6 +1383,13 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	logID := sanitizeLogField(clientID)
+
+	// resolve the tenant before the delete removes the baseline row
+	tenant := verify.DefaultTenant
+	if info, found := h.verifier.ClientInfo(clientID); found {
+		tenant = info.Tenant
+	}
+
 	if err := h.verifier.DeleteClient(clientID); err != nil {
 		switch {
 		case errors.Is(err, verify.ErrUnknownClient):
@@ -1389,7 +1404,7 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log("delete_client", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "delete_client", clientID, "", req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "delete_client", "client_id", logID, "error", err)
 		}

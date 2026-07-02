@@ -286,7 +286,7 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	t.Helper()
 
 	t.Run(label+"/Log", func(t *testing.T) {
-		err := l.Log("revoke", "client-1", "cheating", "admin", "test note")
+		err := l.Log("default", "revoke", "client-1", "cheating", "admin", "test note")
 		if err != nil {
 			t.Fatalf("Log failed: %v", err)
 		}
@@ -318,9 +318,9 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	})
 
 	t.Run(label+"/QueryNewestFirst", func(t *testing.T) {
-		l.Log("action-1", "target-1", "", "", "")
+		l.Log("default", "action-1", "target-1", "", "", "")
 		time.Sleep(2 * time.Millisecond) // ensure different timestamps
-		l.Log("action-2", "target-2", "", "", "")
+		l.Log("default", "action-2", "target-2", "", "", "")
 
 		entries := l.Query(2)
 		if len(entries) < 2 {
@@ -337,7 +337,7 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	t.Run(label+"/QueryLimit", func(t *testing.T) {
 		// enough entries
 		for i := 0; i < 5; i++ {
-			l.Log("bulk", "target", "", "", "")
+			l.Log("default", "bulk", "target", "", "", "")
 		}
 
 		entries := l.Query(3)
@@ -739,4 +739,82 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 			t.Fatalf("pagination returned %d of %d per-tenant bans", len(seen), len(tenants))
 		}
 	})
+}
+
+// verifies the tenant lands on audit entries written through store
+// mutations and through direct Log calls
+func TestAuditLogTenant(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct {
+		label string
+		audit AuditLog
+	}{
+		{"Memory", NewMemoryAuditLog()},
+		{"SQLite", NewSQLiteAuditLog(db)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			if err := tc.audit.Log("acme", "ban", "target", "cheating", "admin", ""); err != nil {
+				t.Fatalf("Log: %v", err)
+			}
+			entries := tc.audit.Query(1)
+			if len(entries) != 1 || entries[0].Tenant != "acme" {
+				t.Fatalf("Query = %+v, want one entry in tenant acme", entries)
+			}
+		})
+	}
+
+	// mutations record the tenant they acted in
+	audit := NewSQLiteAuditLog(db)
+	rev := NewSQLiteRevocationStore(db, audit)
+	if err := rev.Revoke("game-x", "audit-tenant-client", RevocationAdmin, "admin", ""); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := rev.Unrevoke("audit-tenant-client"); err != nil {
+		t.Fatalf("Unrevoke: %v", err)
+	}
+	entries := audit.Query(2)
+	if len(entries) != 2 {
+		t.Fatalf("audit entries = %d, want 2", len(entries))
+	}
+	for _, e := range entries {
+		if e.Tenant != "game-x" {
+			t.Fatalf("audit action %q recorded tenant %q, want game-x", e.Action, e.Tenant)
+		}
+	}
+}
+
+// verifies the tenant round-trips through the attestation log
+func TestAttestationLogTenant(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct {
+		label string
+		log   AttestationLog
+	}{
+		{"Memory", NewMemoryAttestationLog()},
+		{"SQLite", NewSQLiteAttestationLog(db)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			if err := tc.log.Record(AttestationRecord{
+				Tenant:   "acme",
+				ClientID: "c1",
+				Result:   "ok",
+			}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			rs := tc.log.QueryAttestations(1)
+			if len(rs) != 1 || rs[0].Tenant != "acme" {
+				t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
+			}
+		})
+	}
 }
