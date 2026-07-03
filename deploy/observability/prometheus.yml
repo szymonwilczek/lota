@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# Reference Prometheus configuration for scraping the LOTA verifier.
+#
+# Verifier exposes Prometheus text metrics at GET /metrics on the HTTP monitoring
+# API (--http-addr, disabled by default).
+#
+# Endpoint sits on the reader tier:
+# on loopback bind no key is required; non-loopback bind fails closed unless
+# LOTA_READER_API_KEY (or a scoped key file) is configured, and then every scrape
+# must present the reader key as Bearer token.
+#
+# Monitoring API itself is plain HTTP - scrape it over loopback or trusted network,
+# or terminate TLS in front of it; never expose it directly to an untrusted network.
+#
+# Adjust targets/credentials_file to the deployment and drop this file
+# (with the alerts directory next to it) into /etc/prometheus.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - alerts/lota-verifier-alerts.yaml
+
+scrape_configs:
+  - job_name: lota-verifier
+    metrics_path: /metrics
+    scheme: http
+    # reader-tier API key, one line, root-only file.
+    # Required whenever the verifier binds the monitoring API beyond loopback
+    # Harmless on loopback bind
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/lota-reader.key
+    static_configs:
+      - targets:
+          - "127.0.0.1:8080"

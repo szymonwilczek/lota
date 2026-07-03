@@ -354,7 +354,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -576,6 +576,17 @@ helm-lint:
 
 helm-template:
 	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
+
+# Observability reference-config validation
+# check config runs --syntax-only because the scrape config names credentials
+# file that only exists on deployed host;
+# rules file is checked explicitly since --syntax-only skips rule_files
+PROMTOOL ?= promtool
+OBSERVABILITY_DIR := deploy/observability
+
+observability-lint:
+	$(PROMTOOL) check config --syntax-only $(OBSERVABILITY_DIR)/prometheus.yml
+	$(PROMTOOL) check rules $(OBSERVABILITY_DIR)/alerts/lota-verifier-alerts.yaml
 
 # Source RPM (COPR / rpmbuild from source)
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
@@ -1504,6 +1515,7 @@ help:
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
 	@echo "  helm-lint        Lint the verifier Helm chart"
 	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"
+	@echo "  observability-lint  Validate the Prometheus/Grafana reference configs"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""
