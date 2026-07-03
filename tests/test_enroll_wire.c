@@ -10,9 +10,11 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/types.h>
 
 #include "../src/agent/enroll.h"
@@ -185,6 +187,65 @@ static void test_decode_rejects_malformed(void)
 	      "decode rejects an oversized field length");
 }
 
+static const char *write_token_file(const char *content, size_t len)
+{
+	static char path[256];
+	int fd;
+
+	snprintf(path, sizeof(path), "/tmp/lota-enroll-token-test.%d",
+		 getpid());
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return NULL;
+	if (write(fd, content, len) != (ssize_t)len) {
+		close(fd);
+		return NULL;
+	}
+	close(fd);
+	return path;
+}
+
+static void test_token_from_file(void)
+{
+	char token[LOTA_ENROLL_MAX_TOKEN + 1];
+	const char *path;
+
+	path = write_token_file("game-alpha-token\n", 17);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) == 0,
+	      "token file with trailing newline loads");
+	CHECK(strcmp(token, "game-alpha-token") == 0,
+	      "trailing newline trimmed");
+
+	path = write_token_file("  \n", 3);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EINVAL,
+	      "whitespace-only token file rejected");
+
+	path = write_token_file("bad token\n", 10);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EINVAL,
+	      "inner whitespace rejected");
+
+	char big[LOTA_ENROLL_MAX_TOKEN + 2];
+	memset(big, 't', sizeof(big));
+	big[sizeof(big) - 1] = '\n';
+	path = write_token_file(big, sizeof(big));
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EMSGSIZE,
+	      "oversized token rejected");
+
+	CHECK(enroll_token_from_file("/nonexistent/lota-token", token,
+				     sizeof(token)) == -ENOENT,
+	      "missing token file is -ENOENT");
+	CHECK(enroll_token_from_file(NULL, token, sizeof(token)) == -EINVAL,
+	      "NULL path rejected");
+	CHECK(enroll_token_from_file("/tmp/x", token, 4) == -EINVAL,
+	      "undersized output buffer rejected");
+
+	if (path)
+		unlink(path);
+}
+
 int main(void)
 {
 	printf("=== enrollment wire codec tests ===\n");
@@ -195,6 +256,7 @@ int main(void)
 	test_decode_challenge();
 	test_decode_result();
 	test_decode_rejects_malformed();
+	test_token_from_file();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

@@ -27,7 +27,7 @@ struct tpm_context;
 /* On-disk record of the endpoint a host last enrolled against. */
 #define LOTA_ENROLL_STATE_PATH "/var/lib/lota/enroll_state.dat"
 #define LOTA_ENROLL_STATE_MAGIC 0x4C455354 /* "LEST" */
-#define LOTA_ENROLL_STATE_VERSION 1
+#define LOTA_ENROLL_STATE_VERSION 2
 
 /*
  * Enrollment state: the CA endpoint a successful enrollment used plus the
@@ -35,6 +35,12 @@ struct tpm_context;
  * is stored in native byte order behind a magic/version guard. It lets
  * --reenroll reuse the endpoint with no re-typed CA arguments, and lets the
  * daemon tell when a local AIK rotation has outdated the stored certificate.
+ *
+ * Version 2 appends the enrollment token so --reenroll and automatic
+ * certificate renewal keep presenting it.
+ * Loader still accepts version-1 record (everything up to enroll_token)
+ * with an empty token.
+ * Record is root-only 0600: the token is tenant-admission secret.
  */
 struct enroll_state {
 	uint32_t magic;
@@ -47,6 +53,7 @@ struct enroll_state {
 	char ca_server[256];
 	char ca_cert[PATH_MAX];
 	uint8_t _reserved[64];
+	char enroll_token[LOTA_ENROLL_MAX_TOKEN + 1];
 } __attribute__((packed));
 
 int enroll_state_save(const struct enroll_state *st);
@@ -86,6 +93,16 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
 			    const uint8_t *token, size_t token_len);
+
+/*
+ * Read an enrollment token from a file into out (NUL-terminated).
+ * out_size must be at least LOTA_ENROLL_MAX_TOKEN + 1.
+ * Trailing whitespace is trimmed; the rest must be 1..LOTA_ENROLL_MAX_TOKEN
+ * printable, non-whitespace ASCII characters so the secret survives
+ * trailing-newline write and a shell round-trip unchanged.
+ * Returns 0 or negative errno (-EMSGSIZE oversized, -EINVAL empty or malformed).
+ */
+int enroll_token_from_file(const char *path, char *out, size_t out_size);
 ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 			       const char *session_id, const uint8_t *secret,
 			       size_t secret_len);
@@ -96,20 +113,26 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 
 /*
  * Run one enrollment against the CA at server:port and write the issued
- * AIK certificate to out_cert_path. The TPM context must already have a
- * provisioned AIK. Returns 0 on success, negative errno on failure.
+ * AIK certificate to out_cert_path.
+ * token is the optional per-tenant enrollment token presented with the begin
+ * request (NULL = none).
+ * TPM context must already have a provisioned AIK.
+ * Returns 0 on success, negative errno on failure.
  */
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
-		 const char *out_cert_path);
+		 const char *token, const char *out_cert_path);
 
 /*
  * Top-level --enroll handler: bring up the TPM, provision the AIK, run
  * one enrollment against the CA, and store the issued certificate at
- * LOTA_AIK_CERT_PATH. Returns 0 on success, negative errno on failure.
+ * LOTA_AIK_CERT_PATH.
+ * token_file optionally names file holding the enrollment token to present
+ * (--enroll-token-file).
+ * Returns 0 on success, negative errno on failure.
  */
 int do_enroll(const char *server, int port, const char *ca_cert,
-	      int skip_verify, const uint8_t *pin);
+	      int skip_verify, const uint8_t *pin, const char *token_file);
 
 /*
  * Guided re-enrollment: reuse the endpoint recorded by the last successful

@@ -325,6 +325,25 @@ Add ``--require-enrollment-token`` to refuse token-less enrollments outright;
 the token set is then the sole admission control, which is the consumer shape
 where no enrolling EK is known in advance.
 
+On the device, store the token in a root-only file (never on a command line,
+where it would be visible in ``ps`` and shell history) and point ``--enroll``
+at it:
+
+.. code-block:: sh
+
+    sudo install -m 600 /dev/null /etc/lota/enroll.token
+    printf %s "$TOKEN" | sudo tee /etc/lota/enroll.token >/dev/null
+    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
+        --ca-cert /etc/lota/ca-tls.crt \
+        --enroll-token-file /etc/lota/enroll.token
+
+The token must be 1 to 128 printable, non-whitespace ASCII characters; a
+trailing newline in the file is tolerated. A successful enrollment persists
+the token (not the file path) in the root-only enrollment state next to the
+CA endpoint, so ``--reenroll`` and the daemon's automatic certificate
+renewal keep presenting it without further operator input. Re-run
+``--enroll`` with a new token file to replace it.
+
 Rotate a token by minting a new one, adding its digest to the file alongside
 the old entry (both then enroll into the tenant), shipping the new token to
 the install flow, and deleting the old digest once the rollout completes.

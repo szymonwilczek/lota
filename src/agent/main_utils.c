@@ -120,6 +120,14 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
 	       LOTA_CLI_DEFAULT_CA_PORT);
+	printf("  --enroll-token-file PATH\n");
+	printf("                    File holding a per-tenant enrollment "
+	       "token to\n");
+	printf("                    present to the CA during --enroll "
+	       "(the token,\n");
+	printf("                    never the path, is reused by --reenroll "
+	       "and\n");
+	printf("                    certificate renewal)\n");
 	printf("  --attest-interval SECS\n");
 	printf("                    Continuous attestation interval in seconds\n");
 	printf("                    (default: 0=one-shot, min: %d for "

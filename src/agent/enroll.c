@@ -10,7 +10,9 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "enroll.h"
 #include "lota_enroll.h"
@@ -225,6 +227,54 @@ int enroll_decode_challenge(const uint8_t *body, size_t len,
 	if (ret < 0)
 		return ret;
 	return 0;
+}
+
+int enroll_token_from_file(const char *path, char *out, size_t out_size)
+{
+	/* one extra byte so over-long token is detected, not truncated */
+	char buf[LOTA_ENROLL_MAX_TOKEN + 2];
+	ssize_t n;
+	size_t len;
+	int fd, ret;
+
+	if (!path || !out || out_size < LOTA_ENROLL_MAX_TOKEN + 1)
+		return -EINVAL;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	n = read(fd, buf, sizeof(buf));
+	if (n < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+	close(fd);
+
+	ret = -EINVAL;
+	len = (size_t)n;
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
+			   buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+		len--;
+	if (len == 0)
+		goto out;
+	if (len > LOTA_ENROLL_MAX_TOKEN) {
+		ret = -EMSGSIZE;
+		goto out;
+	}
+	/* printable, non-whitespace ASCII only:
+	 * CA hashes the exact bytes, so transport or shell could mangle is refused */
+	for (size_t i = 0; i < len; i++) {
+		if (buf[i] <= 0x20 || buf[i] >= 0x7F)
+			goto out;
+	}
+
+	memcpy(out, buf, len);
+	out[len] = '\0';
+	ret = 0;
+out:
+	explicit_bzero(buf, sizeof(buf));
+	return ret;
 }
 
 int enroll_decode_result(const uint8_t *body, size_t len,
