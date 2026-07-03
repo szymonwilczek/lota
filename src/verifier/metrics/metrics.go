@@ -191,26 +191,20 @@ func (m *Metrics) Export() string {
 		m.AttestationOK.Value())
 
 	// labeled rejections
-	b.WriteString("# HELP lota_rejections_total Total rejected attestations by reason\n")
-	b.WriteString("# TYPE lota_rejections_total counter\n")
-	reasons := m.Rejections.Values()
-	if len(reasons) == 0 {
-		// emit zero-value series for known reasons
-		for _, r := range []string{"nonce_fail", "sig_fail", "pcr_fail", "integrity_mismatch", "revoked", "banned"} {
-			fmt.Fprintf(&b, "lota_rejections_total{reason=%q} 0\n", r)
-		}
-	} else {
-		// sort for stable output
-		keys := make([]string, 0, len(reasons))
-		for k := range reasons {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(&b, "lota_rejections_total{reason=%q} %d\n", k, reasons[k])
-		}
-	}
-	b.WriteByte('\n')
+	writeLabeledCounter(&b, "lota_rejections_total",
+		"Total rejected attestations by reason", "reason",
+		m.Rejections.Values(),
+		[]string{
+			"nonce_fail", "sig_fail", "pcr_fail",
+			"integrity_mismatch", "revoked", "banned",
+			"baseline_error",
+		})
+
+	// labeled re-anchor outcomes
+	writeLabeledCounter(&b, "lota_reanchors_total",
+		"Total self-service re-anchor attempts by outcome", "outcome",
+		m.Reanchors.Values(),
+		[]string{"strong", "lfa", "pending", "escalate"})
 
 	writeCounter(&b, "lota_connection_errors_total",
 		"Total protocol-level connection errors",
@@ -266,6 +260,33 @@ func (m *Metrics) Export() string {
 		int64(uptime))
 
 	return b.String()
+}
+
+// writeLabeledCounter emits one series per recorded label,
+// merged with zero-valued series for every known label, so alert expressions
+// that cannot see absent series always have something to match.
+func writeLabeledCounter(b *strings.Builder, name, help, label string,
+	values map[string]int64, known []string,
+) {
+	fmt.Fprintf(b, "# HELP %s %s\n", name, help)
+	fmt.Fprintf(b, "# TYPE %s counter\n", name)
+	merged := make(map[string]int64, len(values)+len(known))
+	for _, k := range known {
+		merged[k] = 0
+	}
+	for k, v := range values {
+		merged[k] = v
+	}
+	// sort for stable output
+	keys := make([]string, 0, len(merged))
+	for k := range merged {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(b, "%s{%s=%q} %d\n", name, label, k, merged[k])
+	}
+	b.WriteByte('\n')
 }
 
 func writeCounter(b *strings.Builder, name, help string, value int64) {
