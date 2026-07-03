@@ -141,3 +141,37 @@ Check the fleet from a script::
 
    lota-fleet health || alert "verifier degraded"
    lota-fleet --json stats | jq .failed_attestations
+
+Multi-tenancy
+=============
+
+When the verifier serves several tenants, the CLI is tenant-aware.
+
+Hardware bans are per tenant. ``ban`` and ``unban`` take a ``-tenant`` flag
+naming the tenant the ban lives in; omitting it uses the server's ``default``
+tenant. A ban in one tenant never affects another, so the tenant is part of
+the ban's identity::
+
+   lota-fleet --key-file /etc/lota/fleet-admin.key \
+       ban <hardware-id> -tenant acme -reason cheating -actor alice@ops
+   lota-fleet --key-file /etc/lota/fleet-admin.key \
+       unban <hardware-id> -tenant acme
+
+The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
+a ``TENANT`` column, and ``devices show``, ``session validate`` and ``stats``
+report the tenant. Those listings also accept a ``-tenant`` flag that filters
+the displayed rows to one tenant. This filter is applied client-side, for an
+operator holding a broad key who wants to narrow the view: the verifier
+already scopes every response to the tenants the API key is allowed to see, so
+a tenant-scoped key needs no ``-tenant`` flag to stay within its bounds. A
+request that names a client, ban, or session outside the key's tenant set is
+answered as not found.
+
+``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
+tenant list, and narrows the client, revocation, and ban counts to those
+tenants; the fleet-wide attestation counters, which are not attributable per
+tenant, are omitted.
+
+Tenants are assigned by the attestation CA at enrollment and written into the
+device certificate; see :doc:`production-bringup/ca-enrollment` for the
+assignment mechanism.

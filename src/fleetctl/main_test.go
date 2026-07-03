@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -491,5 +492,172 @@ func TestAuditTable(t *testing.T) {
 	}
 	if !strings.Contains(out, "ACTION") || !strings.Contains(out, "reanchor") {
 		t.Fatalf("output = %q", out)
+	}
+}
+
+// TestBanUnbanTenantForwarded checks the CLI forwards -tenant into the ban
+// request body and the unban query string.
+func TestBanUnbanTenantForwarded(t *testing.T) {
+	hwid := strings.Repeat("ab", 32)
+
+	var banBody []byte
+	var unbanQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/bans":
+			banBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"status":"banned"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/bans/"+hwid:
+			unbanQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"status":"unbanned"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	code, out, _ := runCLI(t, noEnv, "-server", srv.URL,
+		"ban", hwid, "-tenant", "acme", "-reason", "cheating", "-actor", "ops")
+	if code != exitOK || !strings.Contains(out, "tenant acme") {
+		t.Fatalf("ban: exit = %d, out = %q", code, out)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(banBody, &body); err != nil {
+		t.Fatalf("ban body: %v", err)
+	}
+	if body["tenant"] != "acme" {
+		t.Fatalf("ban body tenant = %v, want acme", body["tenant"])
+	}
+
+	code, out, _ = runCLI(t, noEnv, "-server", srv.URL, "unban", hwid, "-tenant", "acme")
+	if code != exitOK || !strings.Contains(out, "tenant acme") {
+		t.Fatalf("unban: exit = %d, out = %q", code, out)
+	}
+	if unbanQuery != "tenant=acme" {
+		t.Fatalf("unban query = %q, want tenant=acme", unbanQuery)
+	}
+}
+
+// TestBansTableTenantColumnAndFilter checks the TENANT column renders and
+// the -tenant flag filters the displayed rows client-side.
+func TestBansTableTenantColumnAndFilter(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/bans": `{"bans":[
+			{"hardware_id":"aa","tenant":"acme","reason":"admin",
+			 "banned_at":"2026-07-02T10:00:00Z","banned_by":"ops","note":""},
+			{"hardware_id":"bb","tenant":"beta","reason":"admin",
+			 "banned_at":"2026-07-02T10:00:00Z","banned_by":"ops","note":""}],
+			"count":2,"total":2,"limit":100}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "bans")
+	if code != exitOK || !strings.Contains(out, "TENANT") {
+		t.Fatalf("bans: exit = %d, out = %q", code, out)
+	}
+	if !strings.Contains(out, "acme") || !strings.Contains(out, "beta") {
+		t.Fatalf("unfiltered bans missing a tenant: %q", out)
+	}
+
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "bans", "-tenant", "acme")
+	if code != exitOK {
+		t.Fatalf("filtered bans exit = %d", code)
+	}
+	if !strings.Contains(out, "aa") || strings.Contains(out, "bb") {
+		t.Fatalf("-tenant acme did not filter to the acme ban: %q", out)
+	}
+}
+
+// TestDevicesShowTenant checks the per-client detail prints the tenant.
+func TestDevicesShowTenant(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/clients/host1": `{"client_id":"host1","tenant":"acme","revoked":false}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "devices", "show", "host1")
+	if code != exitOK || !strings.Contains(out, "tenant: acme") {
+		t.Fatalf("devices show: exit = %d, out = %q", code, out)
+	}
+}
+
+// TestStatsTenantScoped checks the scoped stats flag and tenant list render.
+func TestStatsTenantScoped(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/stats": `{"registered_clients":1,"active_policy":"prod",
+			"loaded_policies":["prod"],"uptime":"1m0s",
+			"tenant_scoped":true,"tenants":["acme"]}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "stats")
+	if code != exitOK {
+		t.Fatalf("stats exit = %d", code)
+	}
+	if !strings.Contains(out, "tenant scoped: true") || !strings.Contains(out, "tenants: acme") {
+		t.Fatalf("scoped stats output = %q", out)
+	}
+}
+
+// TestBanUnbanUsageErrors exercises the argument validation of the
+// tenant-aware ban/unban flagsets.
+func TestBanUnbanUsageErrors(t *testing.T) {
+	hwid := strings.Repeat("ab", 32)
+	cases := [][]string{
+		{"ban"},                           // missing hardware id
+		{"ban", hwid, "-actor", "ops"},    // missing reason
+		{"ban", hwid, "-reason", "admin"}, // missing actor
+		{"ban", hwid, "-reason", "admin", "-actor", "ops", "extra"}, // extra arg
+		{"unban"},                // missing hardware id
+		{"unban", hwid, "extra"}, // extra arg
+	}
+	for _, args := range cases {
+		full := append([]string{"-server", "http://127.0.0.1:0"}, args...)
+		code, _, _ := runCLI(t, noEnv, full...)
+		if code != exitUsage {
+			t.Fatalf("%v: exit = %d, want usage error", args, code)
+		}
+	}
+}
+
+// TestListTenantFilterRemovesRows checks the -tenant filter on the log and
+// revocation listings drops non-matching rows.
+func TestListTenantFilterRemovesRows(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/revocations": `{"revocations":[
+			{"client_id":"h1","tenant":"acme","reason":"admin",
+			 "revoked_at":"2026-07-02T10:00:00Z","revoked_by":"ops","note":""},
+			{"client_id":"h2","tenant":"beta","reason":"admin",
+			 "revoked_at":"2026-07-02T10:00:00Z","revoked_by":"ops","note":""}],"count":2}`,
+		"GET /api/v1/audit": `{"entries":[
+			{"id":1,"timestamp":"t","tenant":"acme","action":"ban","target_id":"x","actor":"ops"},
+			{"id":2,"timestamp":"t","tenant":"beta","action":"ban","target_id":"y","actor":"ops"}],"count":2}`,
+		"GET /api/v1/attestations": `{"attestations":[
+			{"id":1,"timestamp":"t","tenant":"acme","client_id":"h1","result":"success","duration_ms":1},
+			{"id":2,"timestamp":"t","tenant":"beta","client_id":"h2","result":"success","duration_ms":1}],"count":2}`,
+	})
+
+	for _, tc := range []struct{ cmd, keep, drop string }{
+		{"revocations", "h1", "h2"},
+		{"audit", "x", "y"},
+		{"attests", "h1", "h2"},
+	} {
+		code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, tc.cmd, "-tenant", "acme")
+		if code != exitOK {
+			t.Fatalf("%s: exit = %d", tc.cmd, code)
+		}
+		if !strings.Contains(out, tc.keep) || strings.Contains(out, tc.drop) {
+			t.Fatalf("%s -tenant acme = %q, want %s kept and %s dropped", tc.cmd, out, tc.keep, tc.drop)
+		}
+	}
+}
+
+// TestListTenantFlagRejectsPositional checks -tenant listings still reject a
+// stray positional argument.
+func TestListTenantFlagRejectsPositional(t *testing.T) {
+	for _, cmd := range []string{"revocations", "audit", "attests", "bans"} {
+		code, _, _ := runCLI(t, noEnv, "-server", "http://127.0.0.1:0", cmd, "stray")
+		if code != exitUsage {
+			t.Fatalf("%s stray: exit = %d, want usage error", cmd, code)
+		}
 	}
 }
