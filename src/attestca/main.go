@@ -56,6 +56,8 @@ func main() {
 		maxPending   = flag.Int("max-pending", enroll.DefaultMaxPending, "max outstanding enrollments")
 		tenantMani   = flag.String("tenant-manifest", "", "EK-to-tenant manifest ('<ek_sha256> <tenant>' per line); assigns each enrolled device a tenant written into the certificate OU. Absent = every device in the default tenant.")
 		tenantStrict = flag.Bool("tenant-manifest-strict", false, "refuse enrollment for an endorsement key absent from -tenant-manifest (the manifest doubles as an EK allowlist)")
+		enrollTokens = flag.String("enrollment-tokens", "", "token-to-tenant file ('<token_sha256> <tenant>' per line); a device presenting a listed enrollment token is assigned that tenant. Absent = every presented token is rejected.")
+		requireToken = flag.Bool("require-enrollment-token", false, "refuse any enrollment that presents no token; requires -enrollment-tokens")
 	)
 	var ekRoots stringList
 	flag.Var(&ekRoots, "ek-root", "PEM file of trusted TPM manufacturer roots (repeatable)")
@@ -86,6 +88,8 @@ func main() {
 		maxPending:   *maxPending,
 		tenantMani:   *tenantMani,
 		tenantStrict: *tenantStrict,
+		enrollTokens: *enrollTokens,
+		requireToken: *requireToken,
 	}, log); err != nil {
 		log.Error("lota-attest-ca failed", "error", err)
 		os.Exit(1)
@@ -107,6 +111,8 @@ type runConfig struct {
 	maxPending   int
 	tenantMani   string
 	tenantStrict bool
+	enrollTokens string
+	requireToken bool
 }
 
 func run(listen string, cfg *runConfig, log *slog.Logger) error {
@@ -221,6 +227,19 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 		log.Info("tenant manifest loaded", "path", cfg.tenantMani, "strict", cfg.tenantStrict)
 	} else if cfg.tenantStrict {
 		return fmt.Errorf("-tenant-manifest-strict requires -tenant-manifest")
+	}
+	if cfg.enrollTokens != "" {
+		tokens, err := enroll.LoadEnrollmentTokens(cfg.enrollTokens)
+		if err != nil {
+			return fmt.Errorf("enrollment tokens: %w", err)
+		}
+		svcOpts = append(svcOpts, enroll.WithEnrollmentTokens(tokens))
+		log.Info("enrollment tokens loaded", "path", cfg.enrollTokens, "require_token", cfg.requireToken)
+	} else if cfg.requireToken {
+		return fmt.Errorf("-require-enrollment-token requires -enrollment-tokens")
+	}
+	if cfg.requireToken {
+		svcOpts = append(svcOpts, enroll.WithRequireToken())
 	}
 
 	svc, err := enroll.NewService(issuer, pseudonymKey, svcOpts...)

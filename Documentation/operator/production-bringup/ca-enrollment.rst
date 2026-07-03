@@ -286,3 +286,52 @@ The verifier reads this tenant from the certificate and scopes the device's
 bans, revocations, PCR policy, and operator-API visibility to it. See
 :doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
 state and how to configure scoped monitoring-API access.
+
+Assigning tenants with enrollment tokens
+========================================
+
+An EK manifest presumes the operator knows every endorsement key up front,
+which a consumer deployment cannot: a game title enrolls machines the operator
+has never seen. Those deployments hand each tenant's install flow a shared
+*enrollment token*, an opaque secret string the agent presents with its begin
+request; the CA resolves the tenant from the token instead of the EK.
+
+The CA never stores tokens, only their digests. Mint a token per tenant, hand
+it to that tenant's distribution channel, and record its SHA-256 in a
+token-to-tenant file with the same shape as the manifest:
+
+.. code-block:: sh
+
+    printf %s "$TOKEN" | sha256sum
+
+.. code-block:: text
+
+    # <token_sha256> <tenant>
+    5e88...12  game-alpha
+    a71c...09  game-beta
+
+Point the CA at the file with ``--enrollment-tokens``:
+
+.. code-block:: sh
+
+    lota-attest-ca ... --enrollment-tokens /etc/lota/enroll-tokens.txt
+
+A presented token is an explicit tenant assignment and fails closed: a token
+matching no entry (or any token on a CA without ``--enrollment-tokens``) is
+refused with a token rejection before the credential challenge is wrapped, and
+never falls back to the EK manifest or the default tenant. Only a token-less
+enrollment takes the EK-manifest path, so both mechanisms can serve one CA.
+Add ``--require-enrollment-token`` to refuse token-less enrollments outright;
+the token set is then the sole admission control, which is the consumer shape
+where no enrolling EK is known in advance.
+
+Rotate a token by minting a new one, adding its digest to the file alongside
+the old entry (both then enroll into the tenant), shipping the new token to
+the install flow, and deleting the old digest once the rollout completes.
+Removing a digest stops future enrollments with that token but does not
+revoke certificates it already produced; revoke those at the verifier.
+
+Wire compatibility: an agent that presents no token keeps speaking protocol
+version 1, so upgraded agents interoperate with an old CA, and the CA answers
+each request in the version it arrived with, so old agents interoperate with
+an upgraded CA. The token travels only inside the enrollment TLS channel.

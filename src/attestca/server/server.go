@@ -190,7 +190,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic)
+	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic, begin.Token)
 	if err != nil {
 		status := beginStatus(err)
 		s.log.Warn("enroll begin rejected", "remote", remote, "status", status, "error", err)
@@ -338,6 +338,8 @@ func beginStatus(err error) uint16 {
 	case errors.Is(err, credential.ErrAIKDecode), errors.Is(err, credential.ErrAIKTemplate),
 		errors.Is(err, credential.ErrAIKName), errors.Is(err, enroll.ErrAIKKeyType):
 		return wire.StatusAIKRejected
+	case errors.Is(err, enroll.ErrTokenUnknown), errors.Is(err, enroll.ErrTokenRequired):
+		return wire.StatusTokenRejected
 	case errors.Is(err, enroll.ErrTooManyPending):
 		return wire.StatusRateLimited
 	default:
