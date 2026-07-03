@@ -582,11 +582,13 @@ helm-template:
 # file that only exists on deployed host;
 # rules file is checked explicitly since --syntax-only skips rule_files
 PROMTOOL ?= promtool
+JQ ?= jq
 OBSERVABILITY_DIR := deploy/observability
 
 observability-lint:
 	$(PROMTOOL) check config --syntax-only $(OBSERVABILITY_DIR)/prometheus.yml
 	$(PROMTOOL) check rules $(OBSERVABILITY_DIR)/alerts/lota-verifier-alerts.yaml
+	$(JQ) empty $(OBSERVABILITY_DIR)/grafana/lota-verifier-dashboard.json
 
 # Source RPM (COPR / rpmbuild from source)
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
