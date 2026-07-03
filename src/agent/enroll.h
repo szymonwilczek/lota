@@ -76,10 +76,16 @@ struct enroll_result {
  * Wire codec. Encoders return the body length written or negative errno;
  * decoders return 0 or negative errno. The encoded body excludes the
  * outer u32 frame length, which the transport adds.
+ *
+ * Token names the device's tenant at the CA (the gaming path);
+ * NULL or empty means none.
+ * Token-less begin is version-1 frame an old CA accepts;
+ * Token upgrades the frame to version 2.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
-			    const uint8_t *aik_public, size_t aik_public_len);
+			    const uint8_t *aik_public, size_t aik_public_len,
+			    const uint8_t *token, size_t token_len);
 ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 			       const char *session_id, const uint8_t *secret,
 			       size_t secret_len);
