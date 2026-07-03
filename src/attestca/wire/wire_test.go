@@ -5,6 +5,7 @@ package wire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -112,7 +113,7 @@ func TestDecodeRejectsTruncated(t *testing.T) {
 func TestDecodeRejectsOversizeField(t *testing.T) {
 	// hand-craft a Begin frame whose declared EK cert length exceeds the
 	// bound so the decoder rejects it before allocating
-	e := newEncoder()
+	e := newEncoder(Version1)
 	e.u16(MaxEKCertSize + 1)
 	if _, err := DecodeBegin(e.buf); err != ErrTooLarge {
 		t.Fatalf("want ErrTooLarge, got %v", err)
@@ -147,5 +148,122 @@ func TestReadFrameRejectsOversize(t *testing.T) {
 	buf.Write([]byte{0xFF, 0xFF, 0xFF, 0xFF})
 	if _, err := ReadFrame(&buf); err == nil {
 		t.Fatal("accepted oversize frame length")
+	}
+}
+
+func TestBeginWithoutTokenStaysVersion1(t *testing.T) {
+	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}})
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version1 {
+		t.Fatalf("token-less begin frame version = %d, want %d", got, Version1)
+	}
+	out, err := DecodeBegin(enc)
+	if err != nil {
+		t.Fatalf("DecodeBegin: %v", err)
+	}
+	if out.Version != Version1 || out.Token != nil {
+		t.Fatalf("decoded version=%d token=%v, want version 1 and no token", out.Version, out.Token)
+	}
+}
+
+func TestBeginTokenRoundTrip(t *testing.T) {
+	in := &BeginRequest{
+		EKCertDER: bytes.Repeat([]byte{0xAB}, 900),
+		AIKPublic: bytes.Repeat([]byte{0xCD}, 120),
+		Token:     []byte("tenant-alpha-enroll-token"),
+	}
+	enc, err := EncodeBegin(in)
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	if got := binary.BigEndian.Uint16(enc[4:6]); got != Version2 {
+		t.Fatalf("token begin frame version = %d, want %d", got, Version2)
+	}
+	out, err := DecodeBegin(enc)
+	if err != nil {
+		t.Fatalf("DecodeBegin: %v", err)
+	}
+	if out.Version != Version2 || !bytes.Equal(out.Token, in.Token) ||
+		!bytes.Equal(out.EKCertDER, in.EKCertDER) || !bytes.Equal(out.AIKPublic, in.AIKPublic) {
+		t.Fatal("begin token round trip mismatch")
+	}
+}
+
+func TestBeginVersion2ByteLayout(t *testing.T) {
+	// pin the version-2 layout the C agent mirrors:
+	// magic, version 2, then length-prefixed EK cert, AIK public, and token
+	enc, err := EncodeBegin(&BeginRequest{
+		EKCertDER: []byte{0xAA, 0xBB},
+		AIKPublic: []byte{0xCC},
+		Token:     []byte{'t', 'k'},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	want := []byte{
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x02,
+		0x00, 0x02, 0xAA, 0xBB,
+		0x00, 0x01, 0xCC,
+		0x00, 0x02, 't', 'k',
+	}
+	if !bytes.Equal(enc, want) {
+		t.Fatalf("version-2 begin layout = %x, want %x", enc, want)
+	}
+}
+
+func TestBeginVersion2RequiresTokenField(t *testing.T) {
+	// version-2 preamble on token-less body is truncated,
+	// not silently token-free request
+	enc, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}})
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	enc[5] = byte(Version2)
+	if _, err := DecodeBegin(enc); err == nil {
+		t.Fatal("accepted a version-2 begin frame without a token field")
+	}
+}
+
+func TestEncodeBeginRejectsOversizeToken(t *testing.T) {
+	_, err := EncodeBegin(&BeginRequest{Token: make([]byte, MaxEnrollTokenSize+1)})
+	if err != ErrTooLarge {
+		t.Fatalf("want ErrTooLarge, got %v", err)
+	}
+}
+
+func TestRepliesMirrorRequestVersion(t *testing.T) {
+	for _, version := range []uint16{Version1, Version2} {
+		ch, err := EncodeChallenge(&ChallengeReply{SessionID: "s", Version: version})
+		if err != nil {
+			t.Fatalf("EncodeChallenge v%d: %v", version, err)
+		}
+		if got := binary.BigEndian.Uint16(ch[4:6]); got != version {
+			t.Fatalf("challenge frame version = %d, want %d", got, version)
+		}
+		res, err := EncodeResult(&ResultReply{DeviceID: "d", Version: version})
+		if err != nil {
+			t.Fatalf("EncodeResult v%d: %v", version, err)
+		}
+		out, err := DecodeResult(res)
+		if err != nil {
+			t.Fatalf("DecodeResult v%d: %v", version, err)
+		}
+		if out.Version != version {
+			t.Fatalf("decoded result version = %d, want %d", out.Version, version)
+		}
+	}
+}
+
+func TestEncodeRejectsUnknownVersion(t *testing.T) {
+	if _, err := EncodeChallenge(&ChallengeReply{Version: 3}); err != ErrBadVersion {
+		t.Fatalf("EncodeChallenge: want ErrBadVersion, got %v", err)
+	}
+	if _, err := EncodeComplete(&CompleteRequest{Version: 3}); err != ErrBadVersion {
+		t.Fatalf("EncodeComplete: want ErrBadVersion, got %v", err)
+	}
+	if _, err := EncodeResult(&ResultReply{Version: 3}); err != ErrBadVersion {
+		t.Fatalf("EncodeResult: want ErrBadVersion, got %v", err)
 	}
 }

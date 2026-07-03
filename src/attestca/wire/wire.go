@@ -5,7 +5,7 @@
 // Four length-prefixed, big-endian messages carry one enrollment over a
 // TLS connection:
 //
-//	agent -> CA : BeginRequest    (EK cert + AIK TPMT_PUBLIC)
+//	agent -> CA : BeginRequest    (EK cert + AIK TPMT_PUBLIC + token, v2)
 //	CA -> agent : ChallengeReply  (session id + credential blob + secret)
 //	agent -> CA : CompleteRequest (session id + activated secret)
 //	CA -> agent : ResultReply     (AIK certificate + device id)
@@ -30,17 +30,25 @@ const (
 	// big-endian here for a stable on-wire byte order)
 	Magic uint32 = 0x4C434145
 
-	// Version is the enrollment protocol version.
-	Version uint16 = 1
+	// Version1 frames carry no enrollment token;
+	// Version2 appends one to BeginRequest.
+	// Agent emits Version1 unless it presents token, and the CA mirrors
+	// the version of the request in its replies.
+	Version1 uint16 = 1
+	Version2 uint16 = 2
 
-	MaxEKCertSize    = 2048
-	MaxAIKPublicSize = 1024
-	MaxCredBlobSize  = 1024
-	MaxEncSecretSize = 512
-	MaxSecretSize    = 64
-	MaxSessionIDSize = 64
-	MaxAIKCertSize   = 4096
-	MaxDeviceIDSize  = 128
+	// Version is the newest protocol version this package speaks.
+	Version = Version2
+
+	MaxEKCertSize      = 2048
+	MaxAIKPublicSize   = 1024
+	MaxCredBlobSize    = 1024
+	MaxEncSecretSize   = 512
+	MaxSecretSize      = 64
+	MaxSessionIDSize   = 64
+	MaxAIKCertSize     = 4096
+	MaxDeviceIDSize    = 128
+	MaxEnrollTokenSize = 128
 
 	// MaxFrameSize bounds a single decoded message body.
 	MaxFrameSize = 16 * 1024
@@ -56,6 +64,7 @@ const (
 	StatusUnknownSession uint16 = 5
 	StatusInternalError  uint16 = 6
 	StatusRateLimited    uint16 = 7
+	StatusTokenRejected  uint16 = 8
 )
 
 var (
@@ -69,6 +78,15 @@ var (
 type BeginRequest struct {
 	EKCertDER []byte
 	AIKPublic []byte // marshaled TPMT_PUBLIC
+
+	// Token is the optional enrollment token, carried by Version2 frames only.
+	// EncodeBegin derives the frame version from its presence;
+	// DecodeBegin leaves it nil on a Version1 frame.
+	Token []byte
+
+	// Version is set by DecodeBegin to the version of the received frame
+	// so the server can mirror it in the replies.
+	Version uint16
 }
 
 // ChallengeReply carries the activation material back to the agent.
@@ -77,12 +95,23 @@ type ChallengeReply struct {
 	SessionID       string
 	CredentialBlob  []byte
 	EncryptedSecret []byte
+
+	// Version selects the version of the encoded frame;
+	// Zero means Version1.
+	// Server sets it to the version of the request it answers
+	// so an old agent never sees a version it rejects.
+	Version uint16
 }
 
 // CompleteRequest returns the activated secret.
 type CompleteRequest struct {
 	SessionID string
 	Secret    []byte
+
+	// Version selects the version of the encoded frame;
+	// Zero means Version1.
+	// Agent keeps one version for a whole exchange.
+	Version uint16
 }
 
 // ResultReply carries the issued certificate or a failure status.
@@ -90,6 +119,10 @@ type ResultReply struct {
 	Status     uint16
 	AIKCertDER []byte
 	DeviceID   string
+
+	// Version selects the version of the encoded frame;
+	// Zero means Version1 (see ChallengeReply.Version).
+	Version uint16
 }
 
 type encoder struct {
@@ -97,10 +130,23 @@ type encoder struct {
 	err error
 }
 
-func newEncoder() *encoder {
+// frameVersion normalizes a message's Version field:
+// zero selects Version1 for compatibility with callers that never set it.
+func frameVersion(v uint16) (uint16, error) {
+	switch v {
+	case 0, Version1:
+		return Version1, nil
+	case Version2:
+		return Version2, nil
+	default:
+		return 0, ErrBadVersion
+	}
+}
+
+func newEncoder(version uint16) *encoder {
 	e := &encoder{}
 	e.u32(Magic)
-	e.u16(Version)
+	e.u16(version)
 	return e
 }
 
@@ -136,24 +182,39 @@ func (e *encoder) result() ([]byte, error) {
 }
 
 // EncodeBegin serializes a BeginRequest.
+// Frame version is derived from the token:
+// request with no token stays a Version1 frame an old CA accepts,
+// one with a token becomes Version2.
 func EncodeBegin(r *BeginRequest) ([]byte, error) {
-	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize {
+	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize ||
+		len(r.Token) > MaxEnrollTokenSize {
 		return nil, ErrTooLarge
 	}
-	e := newEncoder()
+	version := Version1
+	if len(r.Token) > 0 {
+		version = Version2
+	}
+	e := newEncoder(version)
 	e.bytes16(r.EKCertDER)
 	e.bytes16(r.AIKPublic)
+	if version == Version2 {
+		e.bytes16(r.Token)
+	}
 	return e.result()
 }
 
 // EncodeChallenge serializes a ChallengeReply.
 func EncodeChallenge(r *ChallengeReply) ([]byte, error) {
+	version, err := frameVersion(r.Version)
+	if err != nil {
+		return nil, err
+	}
 	if len(r.SessionID) > MaxSessionIDSize ||
 		len(r.CredentialBlob) > MaxCredBlobSize ||
 		len(r.EncryptedSecret) > MaxEncSecretSize {
 		return nil, ErrTooLarge
 	}
-	e := newEncoder()
+	e := newEncoder(version)
 	e.u16(r.Status)
 	e.bytes16([]byte(r.SessionID))
 	e.bytes16(r.CredentialBlob)
@@ -163,10 +224,14 @@ func EncodeChallenge(r *ChallengeReply) ([]byte, error) {
 
 // EncodeComplete serializes a CompleteRequest.
 func EncodeComplete(r *CompleteRequest) ([]byte, error) {
+	version, err := frameVersion(r.Version)
+	if err != nil {
+		return nil, err
+	}
 	if len(r.SessionID) > MaxSessionIDSize || len(r.Secret) > MaxSecretSize {
 		return nil, ErrTooLarge
 	}
-	e := newEncoder()
+	e := newEncoder(version)
 	e.bytes16([]byte(r.SessionID))
 	e.bytes16(r.Secret)
 	return e.result()
@@ -174,10 +239,14 @@ func EncodeComplete(r *CompleteRequest) ([]byte, error) {
 
 // EncodeResult serializes a ResultReply.
 func EncodeResult(r *ResultReply) ([]byte, error) {
+	version, err := frameVersion(r.Version)
+	if err != nil {
+		return nil, err
+	}
 	if len(r.AIKCertDER) > MaxAIKCertSize || len(r.DeviceID) > MaxDeviceIDSize {
 		return nil, ErrTooLarge
 	}
-	e := newEncoder()
+	e := newEncoder(version)
 	e.u16(r.Status)
 	e.bytes16(r.AIKCertDER)
 	e.bytes16([]byte(r.DeviceID))
@@ -185,8 +254,9 @@ func EncodeResult(r *ResultReply) ([]byte, error) {
 }
 
 type decoder struct {
-	buf []byte
-	off int
+	buf     []byte
+	off     int
+	version uint16
 }
 
 func newDecoder(b []byte) (*decoder, error) {
@@ -196,10 +266,11 @@ func newDecoder(b []byte) (*decoder, error) {
 	if binary.BigEndian.Uint32(b[0:4]) != Magic {
 		return nil, ErrBadMagic
 	}
-	if binary.BigEndian.Uint16(b[4:6]) != Version {
+	v := binary.BigEndian.Uint16(b[4:6])
+	if v != Version1 && v != Version2 {
 		return nil, ErrBadVersion
 	}
-	return &decoder{buf: b, off: 6}, nil
+	return &decoder{buf: b, off: 6, version: v}, nil
 }
 
 func (d *decoder) u16() (uint16, error) {
@@ -242,7 +313,14 @@ func DecodeBegin(b []byte) (*BeginRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BeginRequest{EKCertDER: ekCert, AIKPublic: aikPub}, nil
+	req := &BeginRequest{EKCertDER: ekCert, AIKPublic: aikPub, Version: d.version}
+	if d.version >= Version2 {
+		req.Token, err = d.bytes16(MaxEnrollTokenSize)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return req, nil
 }
 
 // DecodeChallenge parses a ChallengeReply.
@@ -272,6 +350,7 @@ func DecodeChallenge(b []byte) (*ChallengeReply, error) {
 		SessionID:       string(sid),
 		CredentialBlob:  cred,
 		EncryptedSecret: secret,
+		Version:         d.version,
 	}, nil
 }
 
@@ -289,7 +368,7 @@ func DecodeComplete(b []byte) (*CompleteRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CompleteRequest{SessionID: string(sid), Secret: secret}, nil
+	return &CompleteRequest{SessionID: string(sid), Secret: secret, Version: d.version}, nil
 }
 
 // DecodeResult parses a ResultReply.
@@ -310,7 +389,7 @@ func DecodeResult(b []byte) (*ResultReply, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ResultReply{Status: status, AIKCertDER: cert, DeviceID: string(dev)}, nil
+	return &ResultReply{Status: status, AIKCertDER: cert, DeviceID: string(dev), Version: d.version}, nil
 }
 
 // WriteFrame writes a length-prefixed frame: u32 body length then body.
