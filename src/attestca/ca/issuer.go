@@ -39,6 +39,13 @@ import (
 // Both placements are accepted
 var oidTCGEKCertificate = asn1.ObjectIdentifier{2, 23, 133, 8, 1}
 
+// defaultTenant is the reserved tenant encoded as the absence
+// of an OrganizationalUnit in an issued certificate.
+// Mirrors enroll.DefaultTenant.
+// Duplicated here because the ca package cannot import enroll
+// (enroll depends on ca).
+const defaultTenant = "default"
+
 // Critical extensions a TPM EK certificate may carry that Go's x509
 // verifier does not process: the subject alternative name (TPM
 // manufacturer/model/version as a directoryName) and the subject
@@ -328,7 +335,7 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 // AIK. subjectCN is an opaque, privacy-preserving device identifier
 // chosen by the caller; the EK is never referenced so attestations
 // across verifiers cannot be linked back to the hardware.
-func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN string, now time.Time) ([]byte, error) {
+func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN, tenant string, now time.Time) ([]byte, error) {
 	if aikPub == nil {
 		return nil, errors.New("nil AIK public key")
 	}
@@ -341,9 +348,18 @@ func (is *Issuer) IssueAIKCertificate(aikPub *rsa.PublicKey, subjectCN string, n
 		return nil, fmt.Errorf("serial number: %w", err)
 	}
 
+	// verifier reads a single OrganizationalUnit as the device tenant
+	// and treats certificate with no OU as the default tenant,
+	// so the default tenant is encoded as the absence of an OU.
+	// This keeps single-tenant deployments issuing byte-identical subjects.
+	subject := pkix.Name{CommonName: subjectCN}
+	if tenant != "" && tenant != defaultTenant {
+		subject.OrganizationalUnit = []string{tenant}
+	}
+
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: subjectCN},
+		Subject:               subject,
 		NotBefore:             now.Add(-time.Minute),
 		NotAfter:              now.Add(is.certTTL),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
