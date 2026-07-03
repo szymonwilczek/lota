@@ -230,3 +230,15 @@ When ``ReenrollRequired`` is true, the host rotated its AIK and the issued
 certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
 above. The same properties emit ``PropertiesChanged``, so a subscriber is
 notified the moment a rotation happens rather than having to poll.
+
+Tenant assignment
+=================
+
+In a multi-tenant deployment the attestation CA assigns each host a tenant at
+enrollment and writes it into the AIK certificate subject as a single
+``OrganizationalUnit``. The verifier reads that tenant only after it has
+verified the certificate chain, and scopes the host's bans, revocations,
+baselines, logs, and PCR policy to it. A certificate issued without an
+organizational unit lands in the reserved ``default`` tenant. See
+:doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
+state and how to configure scoped monitoring-API access.

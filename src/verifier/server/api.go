@@ -140,6 +140,42 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 // request context so handlers can scope responses to its tenant set.
 type principalCtxKey struct{}
 
+// requestPrincipal returns the authenticated principal of a request.
+// nil means the endpoint was served without authentication (loopback
+// dev default) and scopes as every-tenant for backwards compatibility.
+func requestPrincipal(r *http.Request) *Principal {
+	if p, ok := r.Context().Value(principalCtxKey{}).(*Principal); ok {
+		return p
+	}
+	return nil
+}
+
+// principalAllowsTenant reports whether the request principal may see
+// or act within a tenant.
+// Unauthenticated (nil) principal scopes as every tenant,
+// matching the loopback dev default.
+func principalAllowsTenant(p *Principal, tenant string) bool {
+	if p == nil {
+		return true
+	}
+	return p.AllowsTenant(tenant)
+}
+
+// scopedToTenants reports whether the principal carries restricted tenant set
+// (i.e. listings must be filtered).
+func scopedToTenants(p *Principal) bool {
+	return p != nil && !p.AllTenants
+}
+
+// clientTenant resolves the CA-assigned tenant of a client,
+// falling back to the default tenant for clients without baseline row.
+func (h *APIHandler) clientTenant(clientID string) string {
+	if info, found := h.verifier.ClientInfo(clientID); found {
+		return info.Tenant
+	}
+	return verify.DefaultTenant
+}
+
 // withPrincipal stashes the principal on the request context.
 func withPrincipal(r *http.Request, p *Principal) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalCtxKey{}, p))
@@ -287,6 +323,12 @@ type statsResponse struct {
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
 	UptimeSec         int64    `json:"uptime_sec"`
+	// TenantScoped is set when the response counts were narrowed to
+	// the caller's tenant set.
+	// Fleet-wide attestation counters are then omitted because they
+	// are not attributable per tenant.
+	TenantScoped bool     `json:"tenant_scoped,omitempty"`
+	Tenants      []string `json:"tenants,omitempty"`
 }
 
 type clientListResponse struct {
@@ -299,6 +341,7 @@ type clientListResponse struct {
 
 type clientInfoResponse struct {
 	ClientID          string `json:"client_id"`
+	Tenant            string `json:"tenant"`
 	HardwareID        string `json:"hardware_id,omitempty"`
 	Revoked           bool   `json:"revoked"`
 	RevocationReason  string `json:"revocation_reason,omitempty"`
@@ -325,6 +368,7 @@ type validateSessionTokenResponse struct {
 	Valid      bool   `json:"valid"`
 	Consumed   bool   `json:"consumed"`
 	ClientID   string `json:"client_id,omitempty"`
+	Tenant     string `json:"tenant,omitempty"`
 	HardwareID string `json:"hardware_id,omitempty"`
 	ResultCode uint32 `json:"result_code,omitempty"`
 	Flags      uint32 `json:"flags,omitempty"`
@@ -379,7 +423,60 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 		resp.LoadedPolicies = []string{}
 	}
 
+	// tenant-scoped key gets tenant-narrowed counts;
+	// fleet-wide attestation/nonce counters are not attributable per tenant,
+	// so they are zeroed and the response flags itself as scoped
+	if p := requestPrincipal(r); scopedToTenants(p) {
+		resp.TenantScoped = true
+		resp.Tenants = sortedTenantSet(p)
+
+		registered := 0
+		for _, id := range h.verifier.ListClients() {
+			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
+				registered++
+			}
+		}
+		resp.RegisteredClients = registered
+
+		resp.ActiveRevocations = 0
+		if revStore := h.verifier.RevocationStore(); revStore != nil {
+			for _, e := range revStore.ListRevocations() {
+				if p.AllowsTenant(e.Tenant) {
+					resp.ActiveRevocations++
+				}
+			}
+		}
+
+		resp.ActiveBans = 0
+		if banStr := h.verifier.BanStore(); banStr != nil {
+			for _, e := range banStr.ListBans() {
+				if p.AllowsTenant(e.Tenant) {
+					resp.ActiveBans++
+				}
+			}
+		}
+
+		resp.PendingChallenges = 0
+		resp.UsedNonces = 0
+		resp.TotalAttestations = 0
+		resp.SuccessfulAttests = 0
+		resp.FailedAttests = 0
+		resp.RevokedAttests = 0
+		resp.BannedAttests = 0
+	}
+
 	writeJSON(w, resp)
+}
+
+// sortedTenantSet returns the principal's explicit tenants in sorted
+// order for a stable stats response.
+func sortedTenantSet(p *Principal) []string {
+	tenants := make([]string, 0, len(p.Tenants))
+	for t := range p.Tenants {
+		tenants = append(tenants, t)
+	}
+	sort.Strings(tenants)
+	return tenants
 }
 
 // GET /api/v1/clients - list all registered clients
@@ -392,6 +489,37 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 	limit, offset, err := parsePagination(r, defaultLimit, maxLimit)
 	if err != nil {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// tenant-scoped key sees only its tenants' clients;
+	// SQL-paged fast path below serves the global view, so scoped keys walk
+	// the full list and paginate the filtered result
+	if p := requestPrincipal(r); scopedToTenants(p) {
+		all := h.verifier.ListClients()
+		visible := make([]string, 0, len(all))
+		for _, id := range all {
+			if info, found := h.verifier.ClientInfo(id); found && p.AllowsTenant(info.Tenant) {
+				visible = append(visible, id)
+			}
+		}
+		sort.Strings(visible)
+
+		page := []string{}
+		if offset < len(visible) {
+			end := offset + limit
+			if end > len(visible) {
+				end = len(visible)
+			}
+			page = visible[offset:end]
+		}
+		writeJSON(w, clientListResponse{
+			Clients: page,
+			Count:   len(page),
+			Total:   len(visible),
+			Limit:   limit,
+			Offset:  offset,
+		})
 		return
 	}
 
@@ -527,9 +655,15 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
+	// client outside the key's tenant set does not exist for it
+	if !principalAllowsTenant(requestPrincipal(r), info.Tenant) {
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		return
+	}
 
 	resp := clientInfoResponse{
 		ClientID:          info.ClientID,
+		Tenant:            info.Tenant,
 		HardwareID:        info.HardwareID,
 		Revoked:           info.Revoked,
 		RevocationReason:  info.RevocationReason,
@@ -571,6 +705,17 @@ func (h *APIHandler) handleValidateSessionToken(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// resolve without consuming first so a token outside the key's
+	// tenant set is reported as not found and, crucially, is NOT
+	// consumed by a foreign caller
+	if scopedToTenants(requestPrincipal(r)) {
+		peek := h.verifier.ValidateSessionToken(tokBytes, false)
+		if !peek.Exists || !principalAllowsTenant(requestPrincipal(r), peek.Tenant) {
+			writeJSON(w, validateSessionTokenResponse{Valid: false})
+			return
+		}
+	}
+
 	status := h.verifier.ValidateSessionToken(tokBytes, req.Consume)
 	if !status.Exists {
 		writeJSON(w, validateSessionTokenResponse{Valid: false})
@@ -581,6 +726,7 @@ func (h *APIHandler) handleValidateSessionToken(w http.ResponseWriter, r *http.R
 		Valid:      !status.Expired,
 		Consumed:   status.Consumed,
 		ClientID:   status.ClientID,
+		Tenant:     status.Tenant,
 		HardwareID: fmt.Sprintf("%x", status.HardwareID[:]),
 		ResultCode: status.ResultCode,
 		Flags:      status.Flags,
@@ -651,6 +797,7 @@ type revokeRequest struct {
 // JSON response for revocation entries
 type revocationResponse struct {
 	ClientID  string `json:"client_id"`
+	Tenant    string `json:"tenant"`
 	Reason    string `json:"reason"`
 	RevokedAt string `json:"revoked_at"`
 	RevokedBy string `json:"revoked_by"`
@@ -716,9 +863,11 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 
 	// Record the tenant the CA assigned to this client so listings can be scoped
 	// Client with no baseline row falls into the default tenant
-	tenant := verify.DefaultTenant
-	if info, found := h.verifier.ClientInfo(clientID); found {
-		tenant = info.Tenant
+	tenant := h.clientTenant(clientID)
+	// foreign-tenant client does not exist for this key
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		return
 	}
 
 	err := revStore.Revoke(tenant, clientID, store.RevocationReason(req.Reason), req.Actor, req.Note)
@@ -750,6 +899,17 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// scope on the revocation's recorded tenant;
+	// foreign-tenant revocation is reported as "not revoked"
+	// so a key cannot probe another tenant's revocation state
+	if scopedToTenants(requestPrincipal(r)) {
+		entry, revoked := revStore.IsRevoked(clientID)
+		if !revoked || !principalAllowsTenant(requestPrincipal(r), entry.Tenant) {
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
+			return
+		}
+	}
+
 	err := revStore.Unrevoke(clientID)
 	if err != nil {
 		if err == store.ErrNotRevoked {
@@ -777,16 +937,22 @@ func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	p := requestPrincipal(r)
 	entries := revStore.ListRevocations()
-	resp := make([]revocationResponse, len(entries))
-	for i, e := range entries {
-		resp[i] = revocationResponse{
+	resp := make([]revocationResponse, 0, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		if !principalAllowsTenant(p, e.Tenant) {
+			continue
+		}
+		resp = append(resp, revocationResponse{
 			ClientID:  e.ClientID,
+			Tenant:    e.Tenant,
 			Reason:    string(e.Reason),
 			RevokedAt: e.RevokedAt.UTC().Format(time.RFC3339),
 			RevokedBy: e.RevokedBy,
 			Note:      e.Note,
-		}
+		})
 	}
 
 	writeJSON(w, map[string]any{
@@ -797,15 +963,17 @@ func (h *APIHandler) handleListRevocations(w http.ResponseWriter, r *http.Reques
 
 // JSON request for ban actions
 type banRequest struct {
-	HardwareID string `json:"hardware_id"` // hex-encoded 32 bytes
-	Reason     string `json:"reason"`      // cheating|compromised|hardware_change|admin
-	Actor      string `json:"actor"`       // administrator identifier
-	Note       string `json:"note"`        // free-form justification
+	HardwareID string `json:"hardware_id"`      // hex-encoded 32 bytes
+	Tenant     string `json:"tenant,omitempty"` // ban scope; default tenant when empty
+	Reason     string `json:"reason"`           // cheating|compromised|hardware_change|admin
+	Actor      string `json:"actor"`            // administrator identifier
+	Note       string `json:"note"`             // free-form justification
 }
 
 // JSON response for ban entries
 type banResponse struct {
 	HardwareID string `json:"hardware_id"`
+	Tenant     string `json:"tenant"`
 	Reason     string `json:"reason"`
 	BannedAt   string `json:"banned_at"`
 	BannedBy   string `json:"banned_by"`
@@ -878,7 +1046,22 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = banStr.BanHardware(verify.DefaultTenant, hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
+	// ban scope is explicit:
+	// default tenant when omitted, validated otherwise,
+	// and always within the key's tenant set
+	tenant := req.Tenant
+	if tenant == "" {
+		tenant = verify.DefaultTenant
+	} else if !verify.ValidTenantName(tenant) {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid tenant"})
+		return
+	}
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
+		writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "tenant not permitted for this key"})
+		return
+	}
+
+	err = banStr.BanHardware(tenant, hwid, store.RevocationReason(req.Reason), req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrAlreadyBanned {
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "hardware ID is already banned"})
@@ -890,11 +1073,12 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Security(h.log, "hardware banned",
-		"hardware_id", canonicalHWID, "actor", req.Actor, "reason", req.Reason)
+		"hardware_id", canonicalHWID, "tenant", tenant, "actor", req.Actor, "reason", req.Reason)
 
 	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":      "banned",
 		"hardware_id": canonicalHWID,
+		"tenant":      tenant,
 		"reason":      req.Reason,
 	})
 }
@@ -922,7 +1106,22 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
-	err = banStr.UnbanHardware(verify.DefaultTenant, hwid)
+	// ban to lift is identified by (tenant, hardware_id);
+	// tenant comes from the ?tenant= query parameter,
+	// default when omitted, and must be within the key's tenant set
+	tenant := r.URL.Query().Get("tenant")
+	if tenant == "" {
+		tenant = verify.DefaultTenant
+	} else if !verify.ValidTenantName(tenant) {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid tenant"})
+		return
+	}
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
+		writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "tenant not permitted for this key"})
+		return
+	}
+
+	err = banStr.UnbanHardware(tenant, hwid)
 	if err != nil {
 		if err == store.ErrNotBanned {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})
@@ -933,11 +1132,12 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	logging.Security(h.log, "hardware unbanned", "hardware_id", canonicalHWID)
+	logging.Security(h.log, "hardware unbanned", "hardware_id", canonicalHWID, "tenant", tenant)
 
 	writeJSON(w, map[string]string{
 		"status":      "unbanned",
 		"hardware_id": canonicalHWID,
+		"tenant":      tenant,
 	})
 }
 
@@ -1053,14 +1253,34 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 		entries = entries[:limit]
 	}
 
-	resp := make([]banResponse, len(entries))
-	for i, e := range entries {
-		resp[i] = banResponse{
+	// tenant-scoped key sees only its tenants' bans;
+	// cursor still advances over every entry (respNextID above),
+	// so filtered page may come back short but pagination stays consistent
+	p := requestPrincipal(r)
+	resp := make([]banResponse, 0, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		if !principalAllowsTenant(p, e.Tenant) {
+			continue
+		}
+		resp = append(resp, banResponse{
 			HardwareID: store.FormatHardwareID(e.HardwareID),
+			Tenant:     e.Tenant,
 			Reason:     string(e.Reason),
 			BannedAt:   e.BannedAt.UTC().Format(time.RFC3339),
 			BannedBy:   e.BannedBy,
 			Note:       e.Note,
+		})
+	}
+
+	// when scoped, the store-wide total would leak other tenants' counts;
+	// recompute the visible total from the filtered full list
+	if scopedToTenants(p) {
+		total = 0
+		for _, e := range banStr.ListBans() {
+			if p.AllowsTenant(e.Tenant) {
+				total++
+			}
 		}
 	}
 
@@ -1077,6 +1297,7 @@ func (h *APIHandler) handleListBans(w http.ResponseWriter, r *http.Request) {
 type auditResponse struct {
 	ID        int64  `json:"id"`
 	Timestamp string `json:"timestamp"`
+	Tenant    string `json:"tenant"`
 	Action    string `json:"action"`
 	TargetID  string `json:"target_id"`
 	Reason    string `json:"reason,omitempty"`
@@ -1101,19 +1322,24 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 		limit = 10000
 	}
 
+	p := requestPrincipal(r)
 	entries := h.auditLog.Query(limit)
-	resp := make([]auditResponse, len(entries))
+	resp := make([]auditResponse, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
-		resp[i] = auditResponse{
+		if !principalAllowsTenant(p, e.Tenant) {
+			continue
+		}
+		resp = append(resp, auditResponse{
 			ID:        e.ID,
 			Timestamp: e.Timestamp.UTC().Format(time.RFC3339),
+			Tenant:    e.Tenant,
 			Action:    e.Action,
 			TargetID:  e.TargetID,
 			Reason:    e.Reason,
 			Actor:     e.Actor,
 			Note:      e.Note,
-		}
+		})
 	}
 
 	writeJSON(w, map[string]any{
@@ -1126,6 +1352,7 @@ func (h *APIHandler) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 type attestationResponse struct {
 	ID         int64   `json:"id"`
 	Timestamp  string  `json:"timestamp"`
+	Tenant     string  `json:"tenant,omitempty"`
 	ClientID   string  `json:"client_id"`
 	HardwareID string  `json:"hardware_id,omitempty"`
 	Result     string  `json:"result"`
@@ -1152,13 +1379,18 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 		limit = 10000
 	}
 
+	p := requestPrincipal(r)
 	entries := h.attestationLog.QueryAttestations(limit)
-	resp := make([]attestationResponse, len(entries))
+	resp := make([]attestationResponse, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
-		resp[i] = attestationResponse{
+		if !principalAllowsTenant(p, e.Tenant) {
+			continue
+		}
+		resp = append(resp, attestationResponse{
 			ID:         e.ID,
 			Timestamp:  e.Timestamp.UTC().Format(time.RFC3339),
+			Tenant:     e.Tenant,
 			ClientID:   e.ClientID,
 			HardwareID: e.HardwareID,
 			Result:     e.Result,
@@ -1166,7 +1398,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 			PCR14:      e.PCR14,
 			Details:    sanitizeAttestationDetail(e.Details),
 			RemoteAddr: e.RemoteAddr,
-		}
+		})
 	}
 
 	writeJSON(w, map[string]any{
@@ -1324,6 +1556,15 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
 		return
 	}
+	if p := requestPrincipal(r); scopedToTenants(p) {
+		visible := make([]string, 0, len(clients))
+		for _, id := range clients {
+			if p.AllowsTenant(h.clientTenant(id)) {
+				visible = append(visible, id)
+			}
+		}
+		clients = visible
+	}
 	if clients == nil {
 		clients = []string{}
 	}
@@ -1336,6 +1577,10 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
+		return
+	}
+	if !principalAllowsTenant(requestPrincipal(r), h.clientTenant(clientID)) {
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 	if err := h.verifier.AcknowledgeReanchorReview(clientID); err != nil {
@@ -1378,10 +1623,11 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 
 	logID := sanitizeLogField(clientID)
 
-	// resolve the tenant for the audit entry
-	tenant := verify.DefaultTenant
-	if info, found := h.verifier.ClientInfo(clientID); found {
-		tenant = info.Tenant
+	// resolve the tenant for scoping and the audit entry
+	tenant := h.clientTenant(clientID)
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		return
 	}
 
 	if err := h.verifier.ForceReanchor(clientID); err != nil {
@@ -1427,9 +1673,10 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	logID := sanitizeLogField(clientID)
 
 	// resolve the tenant before the delete removes the baseline row
-	tenant := verify.DefaultTenant
-	if info, found := h.verifier.ClientInfo(clientID); found {
-		tenant = info.Tenant
+	tenant := h.clientTenant(clientID)
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
+		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		return
 	}
 
 	if err := h.verifier.DeleteClient(clientID); err != nil {

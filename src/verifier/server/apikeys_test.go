@@ -159,20 +159,32 @@ func TestScopedKeysAuthorize(t *testing.T) {
 		t.Fatalf("scoped admin key on reader endpoint: %d, want 200", code)
 	}
 
-	// admin tier: the reader key must not mutate
-	revoke := func(key string) int {
-		req := httptest.NewRequest("POST", "/api/v1/clients/some-client/revoke",
-			strings.NewReader(`{"reason":"admin","actor":"ops"}`))
+	// admin tier: reader key must not mutate.
+	// Use ban scoped to the key's own tenant so the mutation is not blocked
+	// by tenant scoping (revoking an unknown client would 404 in the acme tenant).
+	ban := func(key string) int {
+		body := `{"hardware_id":"` + strings.Repeat("ab", 32) + `","tenant":"acme","reason":"admin","actor":"ops"}`
+		req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+key)
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)
 		return rr.Code
 	}
-	if code := revoke("scoped-reader"); code != http.StatusForbidden {
+	if code := ban("scoped-reader"); code != http.StatusForbidden {
 		t.Fatalf("reader key on admin endpoint: %d, want 403", code)
 	}
-	if code := revoke("scoped-admin"); code != http.StatusCreated {
+	if code := ban("scoped-admin"); code != http.StatusCreated {
 		t.Fatalf("admin key on admin endpoint: %d, want 201", code)
+	}
+
+	// scoped admin key may not act in a tenant outside its set
+	foreignBody := `{"hardware_id":"` + strings.Repeat("cd", 32) + `","tenant":"other","reason":"admin","actor":"ops"}`
+	req := httptest.NewRequest("POST", "/api/v1/bans", strings.NewReader(foreignBody))
+	req.Header.Set("Authorization", "Bearer scoped-admin")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("admin ban into a foreign tenant: %d, want 403", rr.Code)
 	}
 }
 

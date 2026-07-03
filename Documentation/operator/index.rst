@@ -14,6 +14,8 @@ intentionally fails closed when required gates are missing.
   reboot-resumable single-machine path.
 * :doc:`Verifier deployment topologies <ha-deployment>` -- single node versus
   N instances behind a load balancer.
+* :doc:`Multi-tenancy <multi-tenancy>` -- serve several isolated tenants from
+  one verifier with per-tenant bans, policies, and scoped API keys.
 * :doc:`RPM packages <packages>` -- the native packages and how to install
   and bring up the agent.
 * :doc:`Container images <container-images>` -- distroless OCI images for the
@@ -38,6 +40,7 @@ Related deployment material lives next to the code:
    production-bringup/index
    player-install
    ha-deployment
+   multi-tenancy
    packages
    container-images
    helm-chart
