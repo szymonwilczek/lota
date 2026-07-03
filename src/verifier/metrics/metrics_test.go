@@ -181,3 +181,38 @@ func TestExport_EmptyRejections(t *testing.T) {
 		}
 	}
 }
+
+// verify path counts self-service re-anchor outcomes and every rejection reason,
+// so both must reach the exposition output:
+// operator alerting on escalations or baseline errors needs the series to exist
+// (zero-valued when nothing happened yet, so absence-blind alert expressions still match)
+func TestExport_ReanchorOutcomes(t *testing.T) {
+	m := New()
+
+	output := m.Export()
+	for _, outcome := range []string{"strong", "lfa", "pending", "escalate"} {
+		want := `lota_reanchors_total{outcome="` + outcome + `"} 0`
+		if !strings.Contains(output, want) {
+			t.Errorf("expected zero-value %q in output", want)
+		}
+	}
+	if !strings.Contains(output, `lota_rejections_total{reason="baseline_error"} 0`) {
+		t.Errorf("expected zero-value baseline_error rejection series")
+	}
+
+	m.Reanchors.Inc("strong")
+	m.Reanchors.Inc("escalate")
+	m.Reanchors.Inc("escalate")
+
+	output = m.Export()
+	checks := []string{
+		"# TYPE lota_reanchors_total counter",
+		`lota_reanchors_total{outcome="strong"} 1`,
+		`lota_reanchors_total{outcome="escalate"} 2`,
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("expected %q in output, not found.\nFull output:\n%s", check, output)
+		}
+	}
+}
