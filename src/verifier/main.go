@@ -102,6 +102,7 @@ var (
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	scopedKeysFile       = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	printVersions        = flag.Bool("print-versions", false, "Print the protocol and schema versions this binary targets, then exit. Compare against another release before a rolling upgrade.")
 )
 
 func main() {
@@ -110,7 +111,14 @@ func main() {
 	flag.Var(&ekCRLsDeprecated, "ek-crl", "DEPRECATED alias for --aik-crl. The CRLs loaded here revoke AIK certificates issued by the deployment's attestation CA, not endorsement keys; the TPM-manufacturer EK revocation feed is the attestation CA's -ek-crl flag.")
 	flag.Parse()
 
-	// initialize structured logger
+	// --print-versions is query, not server run:
+	// emit the version report and exit before any store,
+	// TLS or listener setup
+	if *printVersions {
+		writeVersions(os.Stdout)
+		return
+	}
+
 	logger := logging.New(logging.Options{
 		Level:  *logLevel,
 		Format: *logFormat,
@@ -123,7 +131,6 @@ func main() {
 		aikCRLs = append(aikCRLs, ekCRLsDeprecated...)
 	}
 
-	// shared metrics registry
 	m := metrics.New()
 
 	logger.Info("LOTA Verifier starting",
