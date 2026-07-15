@@ -18,6 +18,12 @@ intentionally fails closed when required gates are missing.
   one verifier with per-tenant bans, policies, and scoped API keys.
 * :doc:`Observability <observability>` -- Prometheus scraping, the reference
   Grafana dashboard, alert rules, and per-alert runbooks.
+* :doc:`Version compatibility <version-compatibility>` -- which agent, verifier
+  and CA versions interoperate, and why.
+* :doc:`Rolling verifier upgrades <rolling-upgrade>` -- zero-downtime upgrade of
+  the verifier tier against Postgres.
+* :doc:`Agent updates and the reboot requirement <agent-update-reboot>` -- why an
+  agent update needs a cold reboot and a pre-pinned hash.
 * :doc:`RPM packages <packages>` -- the native packages and how to install
   and bring up the agent.
 * :doc:`Container images <container-images>` -- distroless OCI images for the
@@ -48,6 +54,9 @@ Related deployment material lives next to the code:
    ha-deployment
    multi-tenancy
    observability
+   version-compatibility
+   rolling-upgrade
+   agent-update-reboot
    packages
    container-images
    helm-chart
