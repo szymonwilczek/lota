@@ -88,8 +88,25 @@ Broaden validation when the change touches a wider surface:
 
 The full testing policy is in :doc:`development/index <development/index>`.
 
+Reporting issues
+================
+
+Open new issue and pick a template.
+
+**Bug** is for non-security defects; **Enhancement** is for a proposed change
+or capability. Both live in ``.github/ISSUE_TEMPLATE`` and keep the report terse
+and reproducible.
+
+Suspected vulnerability never goes in a public issue. Use the **Private Security
+Reporting** link in the new-issue chooser, which opens a private GitHub advisory;
+the encrypted-email fallback and GPG fingerprint are in the :doc:`security policy <../security/reporting>`.
+
 Pull request expectations
 =========================
+
+Opening a pull request pre-populates ``.github/PULL_REQUEST_TEMPLATE.md``.
+Keep its sections (Problem, Solution, per-area detail, Docs, Tests, Security
+boundary); they mirror the required commit-body structure.
 
 A pull request should include:
 

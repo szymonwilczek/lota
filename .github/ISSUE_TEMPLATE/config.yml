@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private Security Reporting
+    url: https://github.com/szymonwilczek/lota/security/advisories/new
+    about: >-
+      Suspected vulnerability? Report it privately here, never as public issue.
+      Covers the attestation chain, TPM enrollment, verifier policy, BPF LSM
+      enforcement, release integrity, and SDK token validation.
+      Encrypted-email fallback and the GPG fingerprint are in the security
+      policy (Documentation/security/reporting.rst).
