@@ -202,9 +202,9 @@ func (m *Metrics) Export() string {
 
 	// labeled re-anchor outcomes
 	writeLabeledCounter(&b, "lota_reanchors_total",
-		"Total self-service re-anchor attempts by outcome", "outcome",
+		"Total baseline re-anchors by outcome", "outcome",
 		m.Reanchors.Values(),
-		[]string{"strong", "lfa", "pending", "escalate"})
+		[]string{"strong", "lfa", "forced", "escalate"})
 
 	writeCounter(&b, "lota_connection_errors_total",
 		"Total protocol-level connection errors",

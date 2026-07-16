@@ -57,9 +57,13 @@ Metric                                          Type      Meaning
                                                           ``sig_fail``, ``nonce_fail``, ``revoked``,
                                                           ``banned``, ``baseline_error`` (verifier store
                                                           failure).
-``lota_reanchors_total{outcome}``               counter   Self-service re-anchor outcomes: ``strong``,
-                                                          ``lfa``, ``pending``, ``escalate`` (operator
-                                                          review queue).
+``lota_reanchors_total{outcome}``               counter   Boot-baseline re-anchors by outcome:
+                                                          ``strong`` and ``lfa`` (self-service,
+                                                          auto-applied; ``lfa`` also lands in the
+                                                          operator review queue), ``escalate``
+                                                          (refused, device blocked until an operator
+                                                          acts), ``forced`` (operator-forced via the
+                                                          monitoring API).
 ``lota_connection_errors_total``                counter   Protocol-level errors on the attestation port.
 ``lota_verification_duration_seconds``          histogram Attestation verification latency.
 ``lota_pending_challenges``                     gauge     Outstanding attestation challenges.
@@ -209,16 +213,21 @@ LotaReanchorEscalation (warning)
 --------------------------------
 
 Device's boot baseline changed in a way the self-service re-anchor
-policy would not accept automatically, and the request is parked in the
-operator review queue.
+policy would not accept automatically. The re-anchor was refused and the
+device keeps failing attestation until an operator acts; this is not the
+post-fact review queue (that queue holds ``lfa`` re-anchors, which apply
+automatically).
 
-1. List the queue: ``GET /api/v1/reanchor/review``.
-2. Corroborate the change: a fleet-wide kernel rollout produces a wave of
-   escalations with the same measurement delta - approve them; a single
-   device with a unique delta deserves the LotaIntegrityLoss treatment.
-3. Acknowledge with
-   ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (admin key,
-   actor recorded in the audit log).
+1. Identify the device from the verifier's security log (the escalation
+   is logged with the client ID and the refusal reason).
+2. Corroborate the change: a fleet-wide firmware or kernel rollout
+   produces a wave of escalations with the same measurement delta; a
+   single device with a unique delta deserves the LotaIntegrityLoss
+   treatment.
+3. For a legitimate platform change, force the re-baseline with
+   ``POST /api/v1/clients/{clientID}/reanchor`` (admin key, actor
+   recorded in the audit log); the next attestation re-establishes
+   trust. For anything suspect, revoke or ban instead.
 
 .. _alert-lotabaselinestoreerrors:
 

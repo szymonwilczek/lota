@@ -92,11 +92,13 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Re-anchor request escalated to operator review"
+          summary: "Re-anchor request escalated to the operator"
           description: >-
             A device's self-service boot-baseline re-anchor on
             {{ $labels.instance }} did not qualify for automatic
-            acceptance and is waiting in the operator review queue.
+            acceptance and was refused. The device keeps failing
+            attestation until an operator inspects it and either forces
+            a re-anchor or revokes it.
           runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotareanchorescalation
 
   - name: lota-verifier.capacity
