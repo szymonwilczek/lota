@@ -130,7 +130,6 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog       bool
-	requireCert           bool
 	requireBootPCRs       bool
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
@@ -219,10 +218,6 @@ type VerifierConfig struct {
 
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
-
-	// if true, reject new AIK registrations that do not provide
-	// AIK or EK certificates (disables pure TOFU)
-	RequireCert bool
 
 	// if true, reject attestation reports whose pcr_mask does not
 	// include PCR 0, 1, and 7 (firmware, platform configuration,
@@ -315,7 +310,6 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
-		RequireCert:           true,
 		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
@@ -362,7 +356,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:         cfg.NonceLifetime,
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
-		requireCert:           cfg.RequireCert,
 		requireBootPCRs:       cfg.RequireBootPCRs,
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
@@ -1193,7 +1186,6 @@ func (v *Verifier) Stats() Stats {
 // per-client information for monitoring API
 type ClientInfo struct {
 	ClientID          string
-	HasAIK            bool
 	HardwareID        string // hex-encoded
 	Revoked           bool
 	RevocationReason  string
@@ -1211,9 +1203,11 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		ClientID: clientID,
 	}
 
-	// check AIK store
+	// AIK store carries registrations only on legacy deployments;
+	// under the Privacy CA flow the per-report certificate is
+	// the AIK trust anchor and this lookup never hits
 	_, err := v.aikStore.GetAIK(clientID)
-	info.HasAIK = err == nil
+	hasAIK := err == nil
 
 	// hardware ID
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
@@ -1234,14 +1228,19 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 
 	// baseline store data
+	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
 	}
 
 	// check if client exists in any store
-	if !info.HasAIK && info.MonotonicCounter == 0 {
+	// baseline row is the durable record under the Privacy CA flow:
+	// AIK store carries no registrations there and the nonce history
+	// may start empty after a verifier restart
+	if !hasAIK && info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
 

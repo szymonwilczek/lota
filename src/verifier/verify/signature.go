@@ -6,12 +6,12 @@
 // signature) against an AIK public key. It is intentionally
 // decoupled from the AIK trust model so the same verifier handles
 // every supported source for the public key:
-//   - Certificate-backed AIK chain via CertificateStore. The
-//     production default (VerifierConfig.RequireCert=true) takes
-//     this path: the AIK and EK certificates have already been
-//     chain-verified against the configured trust roots and the
-//     hardware ID has been bound to the EK modulus before the
-//     signature is checked.
+//   - Certificate-backed AIK chain via CertificateStore.
+//     Production deployments take this path unconditionally
+//     (VerifyReport requires the AIK certificate in every report):
+//     the AIK and EK certificates have already been chain-verified
+//     against the configured trust roots and the hardware ID has been
+//     bound to the EK modulus before the signature is checked.
 //   - Legacy TOFU pin via MemoryStore / FileStore for hosts that
 //     opted out of --require-cert. The AIK was pinned on first use
 //     and subsequent quotes must verify against the same key.
