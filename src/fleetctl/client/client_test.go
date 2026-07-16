@@ -123,7 +123,8 @@ func TestHealthDegradedIsData(t *testing.T) {
 func TestStats(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"registered_clients":3,"total_attestations":42,"active_policy":"prod",
-		  "loaded_policies":["prod"],"uptime":"1m0s","uptime_sec":60}`)
+		  "loaded_policies":["prod"],"uptime":"1m0s","uptime_sec":60,
+		  "tenant_scoped":true,"tenants":["acme","beta"]}`)
 
 	s, err := c.Stats()
 	if err != nil {
@@ -134,6 +135,9 @@ func TestStats(t *testing.T) {
 	}
 	if s.RegisteredClients != 3 || s.TotalAttestations != 42 || s.ActivePolicy != "prod" {
 		t.Fatalf("Stats = %+v", s)
+	}
+	if !s.TenantScoped || len(s.Tenants) != 2 || s.Tenants[0] != "acme" {
+		t.Fatalf("tenant scoping = %+v", s)
 	}
 }
 
@@ -167,7 +171,7 @@ func TestListClientsDefaultsOmitQuery(t *testing.T) {
 
 func TestClientInfo(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"client_id":"host1","hardware_id":"ab","revoked":true,
+		`{"client_id":"host1","tenant":"acme","hardware_id":"ab","revoked":true,
 		  "revocation_reason":"admin","attestation_count":7,
 		  "pcr14_baseline":"cafe"}`)
 
@@ -180,6 +184,9 @@ func TestClientInfo(t *testing.T) {
 	}
 	if !info.Revoked || info.RevocationReason != "admin" || info.AttestCount != 7 {
 		t.Fatalf("info = %+v", info)
+	}
+	if info.Tenant != "acme" {
+		t.Fatalf("tenant = %q, want acme", info.Tenant)
 	}
 }
 
@@ -245,7 +252,7 @@ func TestUnrevoke(t *testing.T) {
 
 func TestListRevocations(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"revocations":[{"client_id":"host1","reason":"admin",
+		`{"revocations":[{"client_id":"host1","tenant":"acme","reason":"admin",
 		  "revoked_at":"2026-07-02T10:00:00Z","revoked_by":"ops","note":""}],
 		  "count":1}`)
 
@@ -256,17 +263,17 @@ func TestListRevocations(t *testing.T) {
 	if rec.path != "/api/v1/revocations" {
 		t.Fatalf("path = %s", rec.path)
 	}
-	if len(revs) != 1 || revs[0].ClientID != "host1" {
+	if len(revs) != 1 || revs[0].ClientID != "host1" || revs[0].Tenant != "acme" {
 		t.Fatalf("revocations = %+v", revs)
 	}
 }
 
-func TestBanSendsHardwareID(t *testing.T) {
+func TestBanSendsHardwareIDAndTenant(t *testing.T) {
 	hwid := strings.Repeat("ab", 32)
 	c, rec := fakeVerifier(t, http.StatusCreated,
-		`{"status":"banned","hardware_id":"`+hwid+`","reason":"cheating"}`)
+		`{"status":"banned","hardware_id":"`+hwid+`","tenant":"acme","reason":"cheating"}`)
 
-	if err := c.Ban(hwid, "cheating", "ops", "note"); err != nil {
+	if err := c.Ban(hwid, "acme", "cheating", "ops", "note"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
 	if rec.method != http.MethodPost || rec.path != "/api/v1/bans" {
@@ -277,27 +284,58 @@ func TestBanSendsHardwareID(t *testing.T) {
 	if err := json.Unmarshal(rec.body, &got); err != nil {
 		t.Fatalf("request body: %v", err)
 	}
-	if got["hardware_id"] != hwid || got["actor"] != "ops" {
+	if got["hardware_id"] != hwid || got["actor"] != "ops" || got["tenant"] != "acme" {
 		t.Fatalf("body = %v", got)
 	}
 }
 
-func TestUnban(t *testing.T) {
+func TestBanDefaultTenantOmitsField(t *testing.T) {
+	hwid := strings.Repeat("ab", 32)
+	c, rec := fakeVerifier(t, http.StatusCreated, `{"status":"banned"}`)
+
+	if err := c.Ban(hwid, "", "admin", "ops", ""); err != nil {
+		t.Fatalf("Ban: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if _, present := got["tenant"]; present {
+		t.Fatalf("empty tenant should be omitted from the body: %v", got)
+	}
+}
+
+func TestUnbanWithTenant(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"status":"unbanned","hardware_id":"`+hwid+`"}`)
+		`{"status":"unbanned","hardware_id":"`+hwid+`","tenant":"acme"}`)
 
-	if err := c.Unban(hwid); err != nil {
+	if err := c.Unban(hwid, "acme"); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/bans/"+hwid {
 		t.Fatalf("request = %s %s", rec.method, rec.path)
 	}
+	if rec.query != "tenant=acme" {
+		t.Fatalf("query = %q, want tenant=acme", rec.query)
+	}
+}
+
+func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
+	hwid := strings.Repeat("cd", 32)
+	c, rec := fakeVerifier(t, http.StatusOK, `{"status":"unbanned"}`)
+
+	if err := c.Unban(hwid, ""); err != nil {
+		t.Fatalf("Unban: %v", err)
+	}
+	if rec.query != "" {
+		t.Fatalf("query = %q, want empty for the default tenant", rec.query)
+	}
 }
 
 func TestListBansCursor(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"bans":[{"hardware_id":"ab","reason":"admin",
+		`{"bans":[{"hardware_id":"ab","tenant":"acme","reason":"admin",
 		  "banned_at":"2026-07-02T10:00:00Z","banned_by":"ops","note":""}],
 		  "count":1,"total":5,"limit":1,"next_id":"cursor1"}`)
 
@@ -310,6 +348,9 @@ func TestListBansCursor(t *testing.T) {
 	}
 	if page.NextID != "cursor1" || page.Total != 5 {
 		t.Fatalf("page = %+v", page)
+	}
+	if len(page.Bans) != 1 || page.Bans[0].Tenant != "acme" {
+		t.Fatalf("ban tenant = %+v", page.Bans)
 	}
 }
 
@@ -406,7 +447,7 @@ func TestReanchorReviewAck(t *testing.T) {
 
 func TestAuditLimit(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"entries":[{"id":1,"timestamp":"2026-07-02T10:00:00Z",
+		`{"entries":[{"id":1,"timestamp":"2026-07-02T10:00:00Z","tenant":"acme",
 		  "action":"reanchor","target_id":"host1","actor":"ops"}],"count":1}`)
 
 	entries, err := c.Audit(50)
@@ -416,14 +457,14 @@ func TestAuditLimit(t *testing.T) {
 	if rec.path != "/api/v1/audit" || rec.query != "limit=50" {
 		t.Fatalf("request = %s?%s", rec.path, rec.query)
 	}
-	if len(entries) != 1 || entries[0].Action != "reanchor" {
+	if len(entries) != 1 || entries[0].Action != "reanchor" || entries[0].Tenant != "acme" {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
 
 func TestAttestations(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"attestations":[{"id":9,"timestamp":"2026-07-02T10:00:00Z",
+		`{"attestations":[{"id":9,"timestamp":"2026-07-02T10:00:00Z","tenant":"acme",
 		  "client_id":"host1","result":"success","duration_ms":12.5}],"count":1}`)
 
 	entries, err := c.Attestations(10)
@@ -433,7 +474,7 @@ func TestAttestations(t *testing.T) {
 	if rec.path != "/api/v1/attestations" || rec.query != "limit=10" {
 		t.Fatalf("request = %s?%s", rec.path, rec.query)
 	}
-	if len(entries) != 1 || entries[0].Result != "success" {
+	if len(entries) != 1 || entries[0].Result != "success" || entries[0].Tenant != "acme" {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
@@ -441,7 +482,7 @@ func TestAttestations(t *testing.T) {
 func TestValidateSessionToken(t *testing.T) {
 	token := strings.Repeat("00", 32)
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"valid":true,"consumed":true,"client_id":"host1",
+		`{"valid":true,"consumed":true,"client_id":"host1","tenant":"acme",
 		  "hardware_id":"ab","result_code":1}`)
 
 	status, err := c.ValidateSessionToken(token, true)
@@ -462,7 +503,7 @@ func TestValidateSessionToken(t *testing.T) {
 	if got.SessionToken != token || !got.Consume {
 		t.Fatalf("body = %+v", got)
 	}
-	if !status.Valid || status.ClientID != "host1" {
+	if !status.Valid || status.ClientID != "host1" || status.Tenant != "acme" {
 		t.Fatalf("status = %+v", status)
 	}
 }

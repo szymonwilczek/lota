@@ -218,6 +218,8 @@ type Stats struct {
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
 	UptimeSec         int64    `json:"uptime_sec"`
+	TenantScoped      bool     `json:"tenant_scoped,omitempty"`
+	Tenants           []string `json:"tenants,omitempty"`
 }
 
 // Stats fetches the verification engine statistics.
@@ -259,6 +261,7 @@ func (c *Client) ListClients(limit, offset int) (*ClientPage, error) {
 // ClientInfo is the GET /api/v1/clients/{id} response.
 type ClientInfo struct {
 	ClientID          string `json:"client_id"`
+	Tenant            string `json:"tenant,omitempty"`
 	HardwareID        string `json:"hardware_id,omitempty"`
 	Revoked           bool   `json:"revoked"`
 	RevocationReason  string `json:"revocation_reason,omitempty"`
@@ -293,6 +296,7 @@ type actionRequest struct {
 // banRequest adds the hardware identity to the mutation payload.
 type banRequest struct {
 	HardwareID string `json:"hardware_id"`
+	Tenant     string `json:"tenant,omitempty"`
 	Reason     string `json:"reason"`
 	Actor      string `json:"actor"`
 	Note       string `json:"note,omitempty"`
@@ -316,6 +320,7 @@ func (c *Client) Unrevoke(clientID string) error {
 // Revocation is one entry of the GET /api/v1/revocations listing.
 type Revocation struct {
 	ClientID  string `json:"client_id"`
+	Tenant    string `json:"tenant"`
 	Reason    string `json:"reason"`
 	RevokedAt string `json:"revoked_at"`
 	RevokedBy string `json:"revoked_by"`
@@ -334,22 +339,30 @@ func (c *Client) ListRevocations() ([]Revocation, error) {
 	return resp.Revocations, nil
 }
 
-// Ban bans a hardware identity (hex-encoded 32 bytes).
-func (c *Client) Ban(hardwareID, reason, actor, note string) error {
+// Ban bans a hardware identity (hex-encoded 32 bytes) within a tenant.
+// Empty tenant defaults to the server's default tenant.
+func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/bans", nil,
-		banRequest{HardwareID: hardwareID, Reason: reason, Actor: actor, Note: note},
+		banRequest{HardwareID: hardwareID, Tenant: tenant, Reason: reason, Actor: actor, Note: note},
 		nil, http.StatusCreated)
 }
 
-// Unban lifts a hardware ban.
-func (c *Client) Unban(hardwareID string) error {
+// Unban lifts a hardware ban within a tenant.
+// Empty tenant defaults to the server's default tenant;
+// Tenant selects which (tenant, hardware) ban row is lifted.
+func (c *Client) Unban(hardwareID, tenant string) error {
+	q := url.Values{}
+	if tenant != "" {
+		q.Set("tenant", tenant)
+	}
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
-		nil, nil, nil, http.StatusOK)
+		q, nil, nil, http.StatusOK)
 }
 
 // Ban is one entry of the GET /api/v1/bans listing.
 type Ban struct {
 	HardwareID string `json:"hardware_id"`
+	Tenant     string `json:"tenant"`
 	Reason     string `json:"reason"`
 	BannedAt   string `json:"banned_at"`
 	BannedBy   string `json:"banned_by"`
@@ -428,6 +441,7 @@ func (c *Client) ReanchorReviewAck(clientID string) error {
 type AuditEntry struct {
 	ID        int64  `json:"id"`
 	Timestamp string `json:"timestamp"`
+	Tenant    string `json:"tenant"`
 	Action    string `json:"action"`
 	TargetID  string `json:"target_id"`
 	Reason    string `json:"reason,omitempty"`
@@ -456,6 +470,7 @@ func (c *Client) Audit(limit int) ([]AuditEntry, error) {
 type Attestation struct {
 	ID         int64   `json:"id"`
 	Timestamp  string  `json:"timestamp"`
+	Tenant     string  `json:"tenant,omitempty"`
 	ClientID   string  `json:"client_id"`
 	HardwareID string  `json:"hardware_id,omitempty"`
 	Result     string  `json:"result"`
@@ -494,6 +509,7 @@ type SessionTokenStatus struct {
 	Valid      bool   `json:"valid"`
 	Consumed   bool   `json:"consumed"`
 	ClientID   string `json:"client_id,omitempty"`
+	Tenant     string `json:"tenant,omitempty"`
 	HardwareID string `json:"hardware_id,omitempty"`
 	ResultCode uint32 `json:"result_code,omitempty"`
 	Flags      uint32 `json:"flags,omitempty"`

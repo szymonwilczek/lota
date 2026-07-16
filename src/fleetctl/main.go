@@ -60,20 +60,26 @@ Commands:
   revoke <client-id> -reason R -actor A [-note S]
                                           revoke a client's AIK
   unrevoke <client-id>                    lift a revocation
-  revocations                             list active revocations
-  ban <hardware-id> -reason R -actor A [-note S]
-                                          ban a hardware identity
-  unban <hardware-id>                     lift a hardware ban
-  bans [-limit N] [-next-id CURSOR]       list active hardware bans
+  revocations [-tenant T]                 list active revocations
+  ban <hardware-id> -reason R -actor A [-tenant T] [-note S]
+                                          ban a hardware identity (per tenant)
+  unban <hardware-id> [-tenant T]         lift a hardware ban (per tenant)
+  bans [-limit N] [-next-id CURSOR] [-tenant T]
+                                          list active hardware bans
   reanchor <client-id> -actor A [-note S] force a baseline re-anchor
   delete <client-id> [-actor A] [-note S] remove a client's trust state
   reanchor-review list                    clients awaiting LFA review
   reanchor-review ack <client-id>         acknowledge an LFA re-anchor
-  audit [-limit N]                        operator audit log
-  attests [-limit N]                      attestation decision log
+  audit [-limit N] [-tenant T]            operator audit log
+  attests [-limit N] [-tenant T]          attestation decision log
   session validate <token> [-consume]     validate a session token
 
 Revocation and ban reasons: cheating, compromised, hardware_change, admin.
+
+Multi-tenancy: hardware bans are per tenant (-tenant on ban/unban, default
+tenant when omitted). The listing -tenant flags filter the displayed rows
+client-side; the verifier already scopes every response to the API key's
+tenant set.
 `
 
 // exit codes:
@@ -184,11 +190,11 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	case "unrevoke":
 		err = cmdUnrevoke(ctx, args)
 	case "revocations":
-		err = cmdRevocations(ctx, args)
+		err = cmdRevocations(ctx, stderr, args)
 	case "ban":
 		err = cmdBan(ctx, stderr, args)
 	case "unban":
-		err = cmdUnban(ctx, args)
+		err = cmdUnban(ctx, stderr, args)
 	case "bans":
 		err = cmdBans(ctx, stderr, args)
 	case "reanchor":
@@ -272,18 +278,26 @@ func cmdStats(ctx *cmdContext, args []string) error {
 		return printJSON(ctx.stdout, s)
 	}
 
+	if s.TenantScoped {
+		kv(ctx.stdout, "tenant scoped", true)
+		kv(ctx.stdout, "tenants", strings.Join(s.Tenants, ", "))
+	}
 	kv(ctx.stdout, "registered clients", s.RegisteredClients)
 	kv(ctx.stdout, "active policy", s.ActivePolicy)
 	kv(ctx.stdout, "loaded policies", strings.Join(s.LoadedPolicies, ", "))
-	kv(ctx.stdout, "total attestations", s.TotalAttestations)
-	kv(ctx.stdout, "successful", s.SuccessfulAttests)
-	kv(ctx.stdout, "failed", s.FailedAttests)
-	kv(ctx.stdout, "revoked", s.RevokedAttests)
-	kv(ctx.stdout, "banned", s.BannedAttests)
+	if !s.TenantScoped {
+		kv(ctx.stdout, "total attestations", s.TotalAttestations)
+		kv(ctx.stdout, "successful", s.SuccessfulAttests)
+		kv(ctx.stdout, "failed", s.FailedAttests)
+		kv(ctx.stdout, "revoked", s.RevokedAttests)
+		kv(ctx.stdout, "banned", s.BannedAttests)
+	}
 	kv(ctx.stdout, "active revocations", s.ActiveRevocations)
 	kv(ctx.stdout, "active bans", s.ActiveBans)
-	kv(ctx.stdout, "pending challenges", s.PendingChallenges)
-	kv(ctx.stdout, "used nonces", s.UsedNonces)
+	if !s.TenantScoped {
+		kv(ctx.stdout, "pending challenges", s.PendingChallenges)
+		kv(ctx.stdout, "used nonces", s.UsedNonces)
+	}
 	kv(ctx.stdout, "uptime", s.Uptime)
 	return nil
 }
@@ -330,6 +344,7 @@ func cmdDevices(ctx *cmdContext, stderr io.Writer, args []string) error {
 			return printJSON(ctx.stdout, info)
 		}
 		kv(ctx.stdout, "client", info.ClientID)
+		kv(ctx.stdout, "tenant", info.Tenant)
 		kv(ctx.stdout, "hardware id", info.HardwareID)
 		kv(ctx.stdout, "revoked", info.Revoked)
 		kv(ctx.stdout, "revocation reason", info.RevocationReason)
@@ -396,49 +411,110 @@ func cmdUnrevoke(ctx *cmdContext, args []string) error {
 	return nil
 }
 
-func cmdRevocations(ctx *cmdContext, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("%w: revocations takes no arguments", errUsage)
+func cmdRevocations(ctx *cmdContext, stderr io.Writer, args []string) error {
+	fs := flag.NewFlagSet("revocations", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	tenant := fs.String("tenant", "", "show only revocations in this tenant (client-side filter)")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("%w: revocations takes no positional arguments", errUsage)
 	}
 
 	revs, err := ctx.api.ListRevocations()
 	if err != nil {
 		return err
 	}
+	revs = filterTenant(revs, *tenant, func(r *client.Revocation) string { return r.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, revs)
 	}
 
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "CLIENT\tREASON\tREVOKED AT\tBY\tNOTE")
+	fmt.Fprintln(tw, "CLIENT\tTENANT\tREASON\tREVOKED AT\tBY\tNOTE")
 	for _, r := range revs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			r.ClientID, r.Reason, r.RevokedAt, r.RevokedBy, r.Note)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ClientID, r.Tenant, r.Reason, r.RevokedAt, r.RevokedBy, r.Note)
 	}
 	return tw.Flush()
 }
 
+// filterTenant narrows listing rows to the CLI's -tenant filter,
+// in the table and the JSON rendering alike;
+// Empty filter keeps everything.
+func filterTenant[T any](rows []T, filter string, tenantOf func(*T) string) []T {
+	if filter == "" {
+		return rows
+	}
+	kept := rows[:0]
+	for i := range rows {
+		if tenantOf(&rows[i]) == filter {
+			kept = append(kept, rows[i])
+		}
+	}
+	return kept
+}
+
 func cmdBan(ctx *cmdContext, stderr io.Writer, args []string) error {
-	hwid, reason, actor, note, err := parseActionArgs("ban", stderr, args, true, true)
-	if err != nil {
+	fs := flag.NewFlagSet("ban", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	reason := fs.String("reason", "", "ban reason")
+	actor := fs.String("actor", "", "administrator identifier for the audit log")
+	note := fs.String("note", "", "free-form justification")
+	tenant := fs.String("tenant", "", "tenant to ban within (default tenant when omitted)")
+
+	if len(args) == 0 {
+		return fmt.Errorf("%w: ban needs a hardware ID argument", errUsage)
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		return errUsage
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("%w: ban takes one hardware ID argument", errUsage)
+	}
+	if *reason == "" {
+		return fmt.Errorf("%w: ban requires -reason", errUsage)
+	}
+	if *actor == "" {
+		return fmt.Errorf("%w: ban requires -actor", errUsage)
+	}
+
+	if err := ctx.api.Ban(args[0], *tenant, *reason, *actor, *note); err != nil {
 		return err
 	}
-	if err := ctx.api.Ban(hwid, reason, actor, note); err != nil {
-		return err
-	}
-	fmt.Fprintf(ctx.stdout, "banned %s (%s)\n", hwid, reason)
+	fmt.Fprintf(ctx.stdout, "banned %s in %s (%s)\n", args[0], tenantLabel(*tenant), *reason)
 	return nil
 }
 
-func cmdUnban(ctx *cmdContext, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("%w: unban needs exactly one hardware ID", errUsage)
+func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
+	fs := flag.NewFlagSet("unban", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	tenant := fs.String("tenant", "", "tenant the ban lives in (default tenant when omitted)")
+
+	if len(args) == 0 {
+		return fmt.Errorf("%w: unban needs a hardware ID argument", errUsage)
 	}
-	if err := ctx.api.Unban(args[0]); err != nil {
+	if err := fs.Parse(args[1:]); err != nil {
+		return errUsage
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("%w: unban takes one hardware ID argument", errUsage)
+	}
+
+	if err := ctx.api.Unban(args[0], *tenant); err != nil {
 		return err
 	}
-	fmt.Fprintf(ctx.stdout, "unbanned %s\n", args[0])
+	fmt.Fprintf(ctx.stdout, "unbanned %s in %s\n", args[0], tenantLabel(*tenant))
 	return nil
+}
+
+// tenantLabel renders a possibly-empty tenant for human output.
+func tenantLabel(tenant string) string {
+	if tenant == "" {
+		return "the default tenant"
+	}
+	return "tenant " + tenant
 }
 
 func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
@@ -446,6 +522,7 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 	fs.SetOutput(stderr)
 	limit := fs.Int("limit", 0, "page size (server default 100)")
 	nextID := fs.String("next-id", "", "cursor from the previous page")
+	tenant := fs.String("tenant", "", "show only bans in this tenant (client-side page filter)")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -457,15 +534,17 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	page.Bans = filterTenant(page.Bans, *tenant, func(b *client.Ban) string { return b.Tenant })
+	page.Count = len(page.Bans)
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, page)
 	}
 
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "HARDWARE ID\tREASON\tBANNED AT\tBY\tNOTE")
+	fmt.Fprintln(tw, "HARDWARE ID\tTENANT\tREASON\tBANNED AT\tBY\tNOTE")
 	for _, b := range page.Bans {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			b.HardwareID, b.Reason, b.BannedAt, b.BannedBy, b.Note)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			b.HardwareID, b.Tenant, b.Reason, b.BannedAt, b.BannedBy, b.Note)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -537,22 +616,25 @@ func cmdReanchorReview(ctx *cmdContext, args []string) error {
 	}
 }
 
-// parseLimit handles the shared "[-limit N]" shape of the log commands.
-func parseLimit(name string, stderr io.Writer, args []string) (int, error) {
+// parseLimit handles the shared "[-limit N] [-tenant T]" shape of the log commands.
+// Tenant is client-side display filter (the server already scopes to the key's tenants);
+// Empty tenant shows every visible row.
+func parseLimit(name string, stderr io.Writer, args []string) (limit int, tenant string, err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	limit := fs.Int("limit", 0, "number of entries (server default 100)")
+	limitF := fs.Int("limit", 0, "number of entries (server default 100)")
+	tenantF := fs.String("tenant", "", "show only rows in this tenant (client-side filter)")
 	if err := fs.Parse(args); err != nil {
-		return 0, errUsage
+		return 0, "", errUsage
 	}
 	if fs.NArg() != 0 {
-		return 0, fmt.Errorf("%w: %s takes no positional arguments", errUsage, name)
+		return 0, "", fmt.Errorf("%w: %s takes no positional arguments", errUsage, name)
 	}
-	return *limit, nil
+	return *limitF, *tenantF, nil
 }
 
 func cmdAudit(ctx *cmdContext, stderr io.Writer, args []string) error {
-	limit, err := parseLimit("audit", stderr, args)
+	limit, tenant, err := parseLimit("audit", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -561,21 +643,22 @@ func cmdAudit(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	entries = filterTenant(entries, tenant, func(e *client.AuditEntry) string { return e.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, entries)
 	}
 
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "TIME\tACTION\tTARGET\tACTOR\tREASON\tNOTE")
+	fmt.Fprintln(tw, "TIME\tTENANT\tACTION\tTARGET\tACTOR\tREASON\tNOTE")
 	for _, e := range entries {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			e.Timestamp, e.Action, e.TargetID, e.Actor, e.Reason, e.Note)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			e.Timestamp, e.Tenant, e.Action, e.TargetID, e.Actor, e.Reason, e.Note)
 	}
 	return tw.Flush()
 }
 
 func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
-	limit, err := parseLimit("attests", stderr, args)
+	limit, tenant, err := parseLimit("attests", stderr, args)
 	if err != nil {
 		return err
 	}
@@ -584,16 +667,17 @@ func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	entries = filterTenant(entries, tenant, func(e *client.Attestation) string { return e.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, entries)
 	}
 
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "TIME\tCLIENT\tRESULT\tMS\tDETAILS")
+	fmt.Fprintln(tw, "TIME\tTENANT\tCLIENT\tRESULT\tMS\tDETAILS")
 	for i := range entries {
 		e := &entries[i]
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%.1f\t%s\n",
-			e.Timestamp, e.ClientID, e.Result, e.DurationMs, e.Details)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.1f\t%s\n",
+			e.Timestamp, e.Tenant, e.ClientID, e.Result, e.DurationMs, e.Details)
 	}
 	return tw.Flush()
 }
@@ -630,6 +714,7 @@ func cmdSession(ctx *cmdContext, stderr io.Writer, args []string) (int, error) {
 		kv(ctx.stdout, "valid", status.Valid)
 		kv(ctx.stdout, "consumed", status.Consumed)
 		kv(ctx.stdout, "client", status.ClientID)
+		kv(ctx.stdout, "tenant", status.Tenant)
 		kv(ctx.stdout, "hardware id", status.HardwareID)
 	}
 
