@@ -1398,3 +1398,64 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 	}
 	return rs.AcknowledgeLFAReview(clientID)
 }
+
+// ErrUnknownClient is returned by the operator-facing lifecycle helpers
+// when the target client has neither an AIK registration nor a baseline.
+var ErrUnknownClient = errors.New("unknown client")
+
+// reports whether the store pins a boot baseline for the client;
+// stores without boot-PCR support report false
+func (v *Verifier) hasBootBaseline(clientID string) bool {
+	br, ok := v.baselineStore.(BootBaselineReader)
+	return ok && br.GetBootBaseline(clientID) != nil
+}
+
+// ForceReanchor drops all stored baseline state for a client
+// (PCR14 baseline, PCR0/1/7 boot baseline, re-anchor bookkeeping)
+// so the next attestation re-establishes trust per the active TOFU/policy configuration.
+// This is the deliberate operator re-baseline for platform changes the self-service
+// re-anchor refuses (or that profile is not enabled for).
+// AIK registration is untouched, so the host keeps attesting with its enrolled identity.
+func (v *Verifier) ForceReanchor(clientID string) error {
+	// in-memory store keeps the PCR14 and boot baselines in separate maps,
+	// so existence must consult both before falling back to the AIK registration
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
+		if _, err := v.aikStore.GetAIK(clientID); err != nil {
+			return ErrUnknownClient
+		}
+	}
+	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
+		return err
+	}
+	v.metrics.Reanchors.Inc("forced")
+	return nil
+}
+
+// DeleteClient removes all verifier-side trust state for a client:
+// the baseline row and, on deployments whose AIK store carries registrations,
+// the AIK registration.
+// Under the Privacy CA model the AIK trust anchor is the certificate presented
+// per attestation, so the baseline is the state that pins the device.
+// Deleted client re-establishes trust from scratch on its next attestation.
+// Revocations and hardware bans are keyed separately and intentionally
+// survive the delete, so removal cannot be used to shed either.
+func (v *Verifier) DeleteClient(clientID string) error {
+	known := v.baselineStore.GetBaseline(clientID) != nil || v.hasBootBaseline(clientID)
+
+	if deleter, ok := v.aikStore.(store.ClientDeleter); ok {
+		switch err := deleter.DeleteClient(clientID); {
+		case err == nil:
+			known = true
+		case errors.Is(err, store.ErrAIKNotFound):
+			// nothing registered
+			// baseline decides existence
+		default:
+			return err
+		}
+	}
+
+	if !known {
+		return ErrUnknownClient
+	}
+	return v.baselineStore.ClearBaseline(clientID)
+}

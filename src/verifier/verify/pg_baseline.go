@@ -351,13 +351,12 @@ func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 	return &out
 }
 
-func (s *PostgresBaselineStore) ClearBaseline(clientID string) {
+func (s *PostgresBaselineStore) ClearBaseline(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := s.db.Exec("DELETE FROM baselines WHERE client_id = $1", clientID); err != nil {
-		return
-	}
+	_, err := s.db.Exec("DELETE FROM baselines WHERE client_id = $1", clientID)
+	return err
 }
 
 func (s *PostgresBaselineStore) ListClients() []string {

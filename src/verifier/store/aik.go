@@ -93,6 +93,15 @@ type AIKCertVerifier interface {
 	VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error)
 }
 
+// Optional interface for stores that can remove client entirely:
+// the AIK, the hardware-ID binding and the registration metadata.
+// Used by the operator API to force a re-enrollment.
+// Next enrollment goes through the full RegisterAIKWithCert chain verification again.
+// Returns ErrAIKNotFound when the client is not registered.
+type ClientDeleter interface {
+	DeleteClient(clientID string) error
+}
+
 // optional interface for database-backed stores to avoid loading all clients
 // into memory for API list endpoints.
 type PaginatedClientLister interface {
@@ -468,6 +477,49 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	return nil
 }
 
+// DeleteClient removes the client's key, hardware-ID binding and registration
+// metadata from disk and from the caches.
+// Fingerprint index entry is freed so the AIK-uniqueness check does not keep
+// pointing at a client that no longer exists.
+func (fs *FileStore) DeleteClient(clientID string) error {
+	if !filepath.IsLocal(clientID) {
+		return ErrInvalidClientID
+	}
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	pubKey, exists := fs.cache[clientID]
+	if !exists {
+		return ErrAIKNotFound
+	}
+
+	// key file first: it is the record of existence
+	// .meta/.hwid are sidecars and may legitimately be absent
+	if err := os.Remove(filepath.Join(fs.storePath, clientID+".pem")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove key file: %w", err)
+	}
+	for _, ext := range []string{".meta", ".hwid"} {
+		if err := os.Remove(filepath.Join(fs.storePath, clientID+ext)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove %s file: %w", ext, err)
+		}
+	}
+
+	if fp := Fingerprint(pubKey); fp != "" {
+		if owner, ok := fs.fpIndex[fp]; ok && owner == clientID {
+			delete(fs.fpIndex, fp)
+		}
+	}
+	delete(fs.cache, clientID)
+	delete(fs.hardwareIDs, clientID)
+	delete(fs.registeredAt, clientID)
+
+	return nil
+}
+
 // writeKeyPEM writes block to path opened with flag (mode 0600). The file's
 // Close error is reported even when the PEM encoding succeeds, so a flush
 // failure is not lost. When removeOnError is set, any failure unlinks path
@@ -698,6 +750,22 @@ func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 
 	ms.keys[clientID] = newKey
 	ms.registeredAt[clientID] = time.Now()
+	return nil
+}
+
+// DeleteClient removes the client's key, hardware-ID binding
+// and registration metadata from the in-memory store.
+func (ms *MemoryStore) DeleteClient(clientID string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if _, exists := ms.keys[clientID]; !exists {
+		return ErrAIKNotFound
+	}
+
+	delete(ms.keys, clientID)
+	delete(ms.hardwareIDs, clientID)
+	delete(ms.registeredAt, clientID)
 	return nil
 }
 
@@ -1137,6 +1205,10 @@ func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
 
 func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) {
 	return cs.fileStore.GetRegisteredAt(clientID)
+}
+
+func (cs *CertificateStore) DeleteClient(clientID string) error {
+	return cs.fileStore.DeleteClient(clientID)
 }
 
 // RotateAIK refuses a keyed-only rotation.

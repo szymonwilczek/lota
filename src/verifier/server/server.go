@@ -262,12 +262,17 @@ func (s *Server) startHTTP() error {
 			"GET /api/v1/clients/{id}",
 			"POST /api/v1/clients/{id}/revoke",
 			"DELETE /api/v1/clients/{id}/revoke",
+			"DELETE /api/v1/clients/{id}",
+			"POST /api/v1/clients/{id}/reanchor",
+			"GET /api/v1/reanchor/review",
+			"POST /api/v1/clients/{id}/reanchor-review-ack",
 			"GET /api/v1/revocations",
 			"POST /api/v1/bans",
 			"DELETE /api/v1/bans/{id}",
 			"GET /api/v1/bans",
 			"GET /api/v1/audit",
 			"GET /api/v1/attestations",
+			"POST /api/v1/session/validate",
 			"GET /metrics",
 		})
 

@@ -123,6 +123,11 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
 		h.requireAdmin(h.handleReanchorReviewAck))
 
+	// operator-forced re-baseline;
+	// deliberate counterpart of the self-service re-anchor above (admin auth required)
+	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor",
+		h.requireAdmin(h.handleForceReanchor))
+
 	// hardware ban management (admin auth required)
 	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
 	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
@@ -612,7 +617,7 @@ type revocationResponse struct {
 	Note      string `json:"note"`
 }
 
-// handles POST/DELETE on /api/v1/clients/{id}/revoke
+// handles POST/DELETE on /api/v1/clients/{id}[/revoke]
 func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/clients/")
 	parts := strings.SplitN(path, "/", 2)
@@ -634,6 +639,8 @@ func (h *APIHandler) handleClientAction(w http.ResponseWriter, r *http.Request) 
 		h.handleRevokeClient(w, r, clientID)
 	case action == "revoke" && r.Method == http.MethodDelete:
 		h.handleUnrevokeClient(w, r, clientID)
+	case action == "" && r.Method == http.MethodDelete:
+		h.handleDeleteClient(w, r, clientID)
 	default:
 		if r.Method == http.MethodGet {
 			h.handleClientInfo(w, r)
@@ -1209,6 +1216,13 @@ func sanitizeAttestationDetail(s string) string {
 	return out
 }
 
+// strips CR and LF from a request-supplied value
+// so it cannot forge additional log records
+func sanitizeLogField(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.ReplaceAll(s, "\n", " ")
+}
+
 func validateJSONComplexity(body []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	depth := 0
@@ -1282,4 +1296,104 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 	}
 	h.log.Info("operator acknowledged LFA re-anchor review", "client_id", clientID)
 	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
+}
+
+// JSON request for operator lifecycle actions
+// (forced re-anchor, delete)
+type lifecycleRequest struct {
+	Actor string `json:"actor"` // administrator identifier
+	Note  string `json:"note"`  // free-form justification
+}
+
+// POST /api/v1/clients/{clientID}/reanchor
+// Drop the client's stored baselines so the next attestation re-establishes
+// trust (admin only).
+// This is the deliberate operator re-baseline for platform changes
+// the self-service re-anchor refuses or is not enabled for.
+// AIK registration is untouched.
+func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request) {
+	clientID := r.PathValue("clientID")
+	if clientID == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
+		return
+	}
+
+	var req lifecycleRequest
+	if err := decodeJSONRequest(w, r, &req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+		return
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+
+	logID := sanitizeLogField(clientID)
+	if err := h.verifier.ForceReanchor(clientID); err != nil {
+		if errors.Is(err, verify.ErrUnknownClient) {
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+			return
+		}
+		h.log.Error("forced re-anchor failed", "client_id", logID, "error", err)
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+		return
+	}
+
+	if h.auditLog != nil {
+		if err := h.auditLog.Log("reanchor", clientID, "", req.Actor, req.Note); err != nil {
+			h.log.Error("audit log write failed",
+				"action", "reanchor", "client_id", logID, "error", err)
+		}
+	}
+	logging.Security(h.log, "client baseline force re-anchored",
+		"client_id", logID, "actor", req.Actor, "note", req.Note)
+
+	writeJSON(w, map[string]string{
+		"status":    "reanchored",
+		"client_id": clientID,
+	})
+}
+
+// DELETE /api/v1/clients/{id}
+// Remove the client's AIK registration and baselines, forcing fresh
+// enrollment (admin only).
+// Revocations and hardware bans survive the delete.
+// Body is optional audit metadata ({"actor","note"}).
+// DELETE has no required payload.
+func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+
+	logID := sanitizeLogField(clientID)
+	if err := h.verifier.DeleteClient(clientID); err != nil {
+		switch {
+		case errors.Is(err, verify.ErrUnknownClient):
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		case errors.Is(err, store.ErrInvalidClientID):
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid client ID"})
+		default:
+			h.log.Error("client delete failed", "client_id", logID, "error", err)
+			writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+		}
+		return
+	}
+
+	if h.auditLog != nil {
+		if err := h.auditLog.Log("delete_client", clientID, "", req.Actor, req.Note); err != nil {
+			h.log.Error("audit log write failed",
+				"action", "delete_client", "client_id", logID, "error", err)
+		}
+	}
+	logging.Security(h.log, "client deleted",
+		"client_id", logID, "actor", req.Actor, "note", req.Note)
+
+	writeJSON(w, map[string]string{
+		"status":    "deleted",
+		"client_id": clientID,
+	})
 }
