@@ -236,8 +236,9 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		p := h.resolvePrincipal(token)
 		if !p.CanAdmin() {
 			logging.Security(h.log, "admin auth failed",
-				"method", r.Method, "path", r.URL.Path,
-				"remote_addr", r.RemoteAddr)
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
 			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "invalid API key"})
 			return
 		}
@@ -270,8 +271,9 @@ func (h *APIHandler) requireReader(next http.HandlerFunc) http.HandlerFunc {
 		p := h.resolvePrincipal(token)
 		if p == nil {
 			logging.Security(h.log, "reader auth failed",
-				"method", r.Method, "path", r.URL.Path,
-				"remote_addr", r.RemoteAddr)
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
 			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "invalid API key"})
 			return
 		}
@@ -891,7 +893,10 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	logging.Security(h.log, "client revoked",
-		"client_id", clientID, "actor", req.Actor, "reason", req.Reason, "note", req.Note)
+		"client_id", logging.SanitizeField(clientID),
+		"actor", logging.SanitizeField(req.Actor),
+		"reason", logging.SanitizeField(req.Reason),
+		"note", logging.SanitizeField(req.Note))
 
 	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":    "revoked",
@@ -930,7 +935,8 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	logging.Security(h.log, "client unrevoked", "client_id", clientID)
+	logging.Security(h.log, "client unrevoked",
+		"client_id", logging.SanitizeField(clientID))
 
 	writeJSON(w, map[string]string{
 		"status":    "unrevoked",
@@ -1082,7 +1088,10 @@ func (h *APIHandler) handleBanHardware(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Security(h.log, "hardware banned",
-		"hardware_id", canonicalHWID, "tenant", tenant, "actor", req.Actor, "reason", req.Reason)
+		"hardware_id", canonicalHWID,
+		"tenant", logging.SanitizeField(tenant),
+		"actor", logging.SanitizeField(req.Actor),
+		"reason", logging.SanitizeField(req.Reason))
 
 	writeJSONStatus(w, http.StatusCreated, map[string]string{
 		"status":      "banned",
@@ -1141,7 +1150,9 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	logging.Security(h.log, "hardware unbanned", "hardware_id", canonicalHWID, "tenant", tenant)
+	logging.Security(h.log, "hardware unbanned",
+		"hardware_id", canonicalHWID,
+		"tenant", logging.SanitizeField(tenant))
 
 	writeJSON(w, map[string]string{
 		"status":      "unbanned",
@@ -1656,7 +1667,9 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	logging.Security(h.log, "client baseline force re-anchored",
-		"client_id", logID, "actor", req.Actor, "note", req.Note)
+		"client_id", logID,
+		"actor", logging.SanitizeField(req.Actor),
+		"note", logging.SanitizeField(req.Note))
 
 	writeJSON(w, map[string]string{
 		"status":    "reanchored",
@@ -1708,7 +1721,9 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	logging.Security(h.log, "client deleted",
-		"client_id", logID, "actor", req.Actor, "note", req.Note)
+		"client_id", logID,
+		"actor", logging.SanitizeField(req.Actor),
+		"note", logging.SanitizeField(req.Note))
 
 	writeJSON(w, map[string]string{
 		"status":    "deleted",
