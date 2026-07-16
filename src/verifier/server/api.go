@@ -1216,6 +1216,13 @@ func sanitizeAttestationDetail(s string) string {
 	return out
 }
 
+// strips CR and LF from a request-supplied value
+// so it cannot forge additional log records
+func sanitizeLogField(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.ReplaceAll(s, "\n", " ")
+}
+
 func validateJSONComplexity(body []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	depth := 0
@@ -1321,12 +1328,13 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	logID := sanitizeLogField(clientID)
 	if err := h.verifier.ForceReanchor(clientID); err != nil {
 		if errors.Is(err, verify.ErrUnknownClient) {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 			return
 		}
-		h.log.Error("forced re-anchor failed", "client_id", clientID, "error", err)
+		h.log.Error("forced re-anchor failed", "client_id", logID, "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -1334,11 +1342,11 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	if h.auditLog != nil {
 		if err := h.auditLog.Log("reanchor", clientID, "", req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
-				"action", "reanchor", "client_id", clientID, "error", err)
+				"action", "reanchor", "client_id", logID, "error", err)
 		}
 	}
 	logging.Security(h.log, "client baseline force re-anchored",
-		"client_id", clientID, "actor", req.Actor, "note", req.Note)
+		"client_id", logID, "actor", req.Actor, "note", req.Note)
 
 	writeJSON(w, map[string]string{
 		"status":    "reanchored",
@@ -1361,6 +1369,7 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
+	logID := sanitizeLogField(clientID)
 	if err := h.verifier.DeleteClient(clientID); err != nil {
 		switch {
 		case errors.Is(err, verify.ErrUnknownClient):
@@ -1368,7 +1377,7 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 		case errors.Is(err, store.ErrInvalidClientID):
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid client ID"})
 		default:
-			h.log.Error("client delete failed", "client_id", clientID, "error", err)
+			h.log.Error("client delete failed", "client_id", logID, "error", err)
 			writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		}
 		return
@@ -1377,11 +1386,11 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	if h.auditLog != nil {
 		if err := h.auditLog.Log("delete_client", clientID, "", req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
-				"action", "delete_client", "client_id", clientID, "error", err)
+				"action", "delete_client", "client_id", logID, "error", err)
 		}
 	}
 	logging.Security(h.log, "client deleted",
-		"client_id", clientID, "actor", req.Actor, "note", req.Note)
+		"client_id", logID, "actor", req.Actor, "note", req.Note)
 
 	writeJSON(w, map[string]string{
 		"status":    "deleted",
