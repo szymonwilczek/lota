@@ -195,7 +195,7 @@ func TestReloadAPIKeysKeepsOldSetOnFailure(t *testing.T) {
     tenants: ["*"]
 `, keyHashHex("k1")))
 
-	srv := &Server{apiKeysFile: path, log: logging.Nop()}
+	srv := &Server{scopedKeysFile: path, log: logging.Nop()}
 	set, err := LoadAPIKeysFile(path)
 	if err != nil {
 		t.Fatalf("initial load: %v", err)

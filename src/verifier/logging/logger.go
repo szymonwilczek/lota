@@ -108,7 +108,15 @@ func Security(logger *slog.Logger, msg string, args ...any) {
 	logger.Log(context.Background(), LevelSecurity, msg, args...)
 }
 
-// returns a child logger with the client_id field pre-set
+// SanitizeField strips CR and LF from a request-supplied value
+// so it cannot forge additional log records.
+func SanitizeField(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.ReplaceAll(s, "\n", " ")
+}
+
+// returns a child logger with the client_id field pre-set;
+// ID is client-supplied, so it is sanitized before it reaches a record
 func WithClient(logger *slog.Logger, clientID string) *slog.Logger {
-	return logger.With("client_id", clientID)
+	return logger.With("client_id", SanitizeField(clientID))
 }

@@ -1280,7 +1280,7 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		tenant, err := ts.ClientTenant(clientID)
 		if err != nil {
 			v.log.Error("failed to resolve the client tenant",
-				"client_id", clientID, "error", err)
+				"client_id", logging.SanitizeField(clientID), "error", err)
 			info.Tenant = ""
 		} else {
 			info.Tenant = tenant

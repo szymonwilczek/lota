@@ -61,12 +61,12 @@ type Server struct {
 	connSem    chan struct{} // limits concurrent connections
 
 	// http monitoring api
-	httpServer   *http.Server
-	httpAddr     string
-	adminAPIKey  string
-	readerAPIKey string
-	apiKeysFile  string
-	apiKeys      atomic.Pointer[APIKeySet]
+	httpServer     *http.Server
+	httpAddr       string
+	adminAPIKey    string
+	readerAPIKey   string
+	scopedKeysFile string
+	apiKeys        atomic.Pointer[APIKeySet]
 
 	// structured logging and telemetry
 	log     *slog.Logger
@@ -111,7 +111,7 @@ type ServerConfig struct {
 
 	// path to the scoped API key file (empty = env keys only);
 	// reloaded on SIGHUP via ReloadAPIKeys
-	APIKeysFile string
+	ScopedKeysFile string
 
 	// timeouts
 	ReadTimeout  time.Duration
@@ -161,7 +161,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		httpAddr:       cfg.HTTPAddress,
 		adminAPIKey:    cfg.AdminAPIKey,
 		readerAPIKey:   cfg.ReaderAPIKey,
-		apiKeysFile:    cfg.APIKeysFile,
+		scopedKeysFile: cfg.ScopedKeysFile,
 		log:            logger,
 		metrics:        m,
 		attestationLog: cfg.AttestationLog,
@@ -170,13 +170,13 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		writeTimeout:   cfg.WriteTimeout,
 	}
 
-	if cfg.APIKeysFile != "" {
-		set, err := LoadAPIKeysFile(cfg.APIKeysFile)
+	if cfg.ScopedKeysFile != "" {
+		set, err := LoadAPIKeysFile(cfg.ScopedKeysFile)
 		if err != nil {
 			return nil, err
 		}
 		s.apiKeys.Store(set)
-		logger.Info("scoped API keys loaded", "path", cfg.APIKeysFile, "keys", set.Len())
+		logger.Info("scoped API keys loaded", "path", cfg.ScopedKeysFile, "keys", set.Len())
 	}
 
 	if cfg.MaxConnections > 0 {
@@ -510,14 +510,14 @@ func (s *Server) apiKeySet() *APIKeySet {
 // the active set.
 // File that fails to load leaves the previous set in place, mirroring the CRL SIGHUP semantics.
 func (s *Server) ReloadAPIKeys() error {
-	if s.apiKeysFile == "" {
+	if s.scopedKeysFile == "" {
 		return fmt.Errorf("no API keys file configured")
 	}
-	set, err := LoadAPIKeysFile(s.apiKeysFile)
+	set, err := LoadAPIKeysFile(s.scopedKeysFile)
 	if err != nil {
 		return err
 	}
 	s.apiKeys.Store(set)
-	s.log.Info("scoped API keys reloaded", "path", s.apiKeysFile, "keys", set.Len())
+	s.log.Info("scoped API keys reloaded", "path", s.scopedKeysFile, "keys", set.Len())
 	return nil
 }

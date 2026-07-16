@@ -126,7 +126,7 @@ func LoadAPIKeysFile(path string) (*APIKeySet, error) {
 
 	var file apiKeyFile
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("failed to parse API keys file: %w", err)
+		return nil, fmt.Errorf("failed to parse API keys file %s: malformed YAML", path)
 	}
 	if len(file.Keys) == 0 {
 		return nil, fmt.Errorf("API keys file %s defines no keys", path)
@@ -145,7 +145,7 @@ func LoadAPIKeysFile(path string) (*APIKeySet, error) {
 		}
 
 		if e.Role != RoleReader && e.Role != RoleAdmin {
-			return nil, fmt.Errorf("key %d: role must be reader or admin, got %q", i, e.Role)
+			return nil, fmt.Errorf("key %d: role must be reader or admin", i)
 		}
 
 		if len(e.Tenants) == 0 {
@@ -158,7 +158,7 @@ func LoadAPIKeysFile(path string) (*APIKeySet, error) {
 				continue
 			}
 			if !verify.ValidTenantName(tenant) {
-				return nil, fmt.Errorf("key %d: invalid tenant %q", i, tenant)
+				return nil, fmt.Errorf("key %d: invalid tenant name", i)
 			}
 			entry.tenants[tenant] = struct{}{}
 		}
