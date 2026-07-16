@@ -274,10 +274,13 @@ absent from the manifest; the manifest then doubles as an EK allowlist. A
 strict rejection happens before the credential challenge is wrapped, so a
 barred device never consumes an enrollment session.
 
-The device pseudonym in the certificate ``CommonName`` mixes in the tenant, so
-one TPM enrolling into two tenants yields two distinct device IDs and never
-collides in the verifier's per-tenant state. A device that moves to a new
-tenant is therefore a new identity there and re-enrolls from scratch.
+The device pseudonym in the certificate ``CommonName`` mixes in a named
+tenant, so one TPM enrolling into two tenants yields two distinct device IDs
+and never collides in the verifier's per-tenant state. A device that moves to
+a new tenant is therefore a new identity there and re-enrolls from scratch.
+The ``default`` tenant keeps the pseudonym derivation used before tenant
+assignment, so devices enrolled by an older CA re-enroll under the same
+device ID and keep their verifier-side state.
 
 The verifier reads this tenant from the certificate and scopes the device's
 bans, revocations, PCR policy, and operator-API visibility to it. See

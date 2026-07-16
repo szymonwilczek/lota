@@ -5,6 +5,7 @@ package enroll
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,6 +180,22 @@ func TestEnrollAssignsTenantFromManifest(t *testing.T) {
 	// the same TPM in a different tenant must not collide on the device id
 	if acmeID == defID {
 		t.Fatal("tenant did not change the device pseudonym: cross-tenant collision")
+	}
+}
+
+// TestDefaultTenantKeepsLegacyPseudonym pins the default-tenant device ID
+// to the pre-tenant EK-only derivation, so a device enrolled before tenant
+// assignment re-enrolls under the same pseudonym and keeps its verifier
+// state (baselines, standing revocations) across a CA upgrade.
+func TestDefaultTenantKeepsLegacyPseudonym(t *testing.T) {
+	svc, root := newTestService(t)
+	ek := tpmtest.NewEKCert(t, root)
+
+	_, id := enrollWith(t, svc, ek)
+	legacy := hex.EncodeToString(hmacSHA256(
+		[]byte("pseudonym-key-0123456789abcdef"), ek.Priv.PublicKey.N.Bytes()))
+	if id != legacy {
+		t.Fatalf("default-tenant device ID %q != legacy EK-only derivation %q", id, legacy)
 	}
 }
 

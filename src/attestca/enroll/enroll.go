@@ -262,14 +262,21 @@ func (s *Service) sweepLocked(now time.Time) {
 // by a verifier that only sees the issued certificate.
 // Mixing the tenant in keeps one TPM enrolling into two tenants from colliding
 // on a single device ID, which the per-tenant state model requires.
-// NUL byte separates the tenant from the modulus;
+// Default tenant keeps the historical EK-only MAC input, so a device enrolled
+// before tenant assignment re-enrolls under the same pseudonym and its
+// standing verifier state (baselines, revocations) stays attached.
+// NUL byte separates a named tenant from the modulus;
 // Valid tenant name never contains NUL, so the split is unambiguous and no two
 // (tenant, EK) pairs share MAC input.
 func (s *Service) deviceID(ekPub *rsa.PublicKey, tenant string) string {
-	input := make([]byte, 0, len(tenant)+1+len(ekPub.N.Bytes()))
-	input = append(input, tenant...)
-	input = append(input, 0x00)
-	input = append(input, ekPub.N.Bytes()...)
+	input := ekPub.N.Bytes()
+	if tenant != DefaultTenant {
+		buf := make([]byte, 0, len(tenant)+1+len(input))
+		buf = append(buf, tenant...)
+		buf = append(buf, 0x00)
+		buf = append(buf, input...)
+		input = buf
+	}
 	mac := hmacSHA256(s.pseudonymKey, input)
 	return hex.EncodeToString(mac)
 }
