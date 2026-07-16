@@ -292,6 +292,25 @@ func TestSessionValidateInvalidExitsNonzero(t *testing.T) {
 	}
 }
 
+func TestSessionValidateRejectsMisplacedFlags(t *testing.T) {
+	f := newFakeAPI(t, nil)
+
+	// -consume before the token would silently validate the literal string
+	// "-consume" as the token
+	// reject it before any request
+	code, _, errOut := runCLI(t, noEnv, "-server", f.srv.URL,
+		"session", "validate", "-consume", strings.Repeat("00", 32))
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want 2 for flags before the token", code)
+	}
+	if !strings.Contains(errOut, "token argument") {
+		t.Fatalf("stderr = %q", errOut)
+	}
+	if f.requests != 0 {
+		t.Fatalf("request sent despite the usage error")
+	}
+}
+
 func TestAPIErrorReachesStderr(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

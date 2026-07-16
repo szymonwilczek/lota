@@ -612,6 +612,10 @@ func cmdSession(ctx *cmdContext, stderr io.Writer, args []string) (int, error) {
 	if err := fs.Parse(args[2:]); err != nil {
 		return exitUsage, errUsage
 	}
+	if fs.NArg() != 0 {
+		return exitUsage, fmt.Errorf(
+			"%w: session validate takes one token argument (flags go after it)", errUsage)
+	}
 
 	status, err := ctx.api.ValidateSessionToken(args[1], *consume)
 	if err != nil {
