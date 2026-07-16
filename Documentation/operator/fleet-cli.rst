@@ -160,7 +160,8 @@ the ban's identity::
 The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
 a ``TENANT`` column, and ``devices show``, ``session validate`` and ``stats``
 report the tenant. Those listings also accept a ``-tenant`` flag that filters
-the displayed rows to one tenant. This filter is applied client-side, for an
+the displayed rows to one tenant, in the table and the ``--json`` rendering
+alike. This filter is applied client-side, for an
 operator holding a broad key who wants to narrow the view: the verifier
 already scopes every response to the tenants the API key is allowed to see, so
 a tenant-scoped key needs no ``-tenant`` flag to stay within its bounds. A

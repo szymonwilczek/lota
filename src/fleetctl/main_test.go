@@ -651,6 +651,49 @@ func TestListTenantFilterRemovesRows(t *testing.T) {
 	}
 }
 
+// TestListTenantFilterAppliesToJSON checks the -tenant filter narrows the
+// -json rendering exactly like the table, including the bans page count.
+func TestListTenantFilterAppliesToJSON(t *testing.T) {
+	f := newFakeAPI(t, map[string]string{
+		"GET /api/v1/revocations": `{"revocations":[
+			{"client_id":"h1","tenant":"acme","reason":"admin",
+			 "revoked_at":"2026-07-02T10:00:00Z","revoked_by":"ops","note":""},
+			{"client_id":"h2","tenant":"beta","reason":"admin",
+			 "revoked_at":"2026-07-02T10:00:00Z","revoked_by":"ops","note":""}],"count":2}`,
+		"GET /api/v1/bans": `{"bans":[
+			{"hardware_id":"ab","tenant":"acme","reason":"admin",
+			 "banned_at":"2026-07-02T10:00:00Z","banned_by":"ops","note":""},
+			{"hardware_id":"cd","tenant":"beta","reason":"admin",
+			 "banned_at":"2026-07-02T10:00:00Z","banned_by":"ops","note":""}],
+			"count":2,"total":2,"limit":100}`,
+	})
+
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
+		"-json", "revocations", "-tenant", "acme")
+	if code != exitOK {
+		t.Fatalf("revocations exit = %d", code)
+	}
+	if !strings.Contains(out, "h1") || strings.Contains(out, "h2") {
+		t.Fatalf("-json revocations -tenant acme = %q, want h2 filtered out", out)
+	}
+
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL,
+		"-json", "bans", "-tenant", "acme")
+	if code != exitOK {
+		t.Fatalf("bans exit = %d", code)
+	}
+	var page struct {
+		Bans  []map[string]any `json:"bans"`
+		Count int              `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &page); err != nil {
+		t.Fatalf("bans output is not JSON: %v\n%s", err, out)
+	}
+	if len(page.Bans) != 1 || page.Count != 1 || page.Bans[0]["tenant"] != "acme" {
+		t.Fatalf("-json bans -tenant acme = %q, want one acme row and count 1", out)
+	}
+}
+
 // TestListTenantFlagRejectsPositional checks -tenant listings still reject a
 // stray positional argument.
 func TestListTenantFlagRejectsPositional(t *testing.T) {

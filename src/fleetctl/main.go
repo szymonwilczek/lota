@@ -422,6 +422,7 @@ func cmdRevocations(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	revs = filterTenant(revs, *tenant, func(r *client.Revocation) string { return r.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, revs)
 	}
@@ -429,20 +430,26 @@ func cmdRevocations(ctx *cmdContext, stderr io.Writer, args []string) error {
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "CLIENT\tTENANT\tREASON\tREVOKED AT\tBY\tNOTE")
 	for _, r := range revs {
-		if !tenantMatch(*tenant, r.Tenant) {
-			continue
-		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.ClientID, r.Tenant, r.Reason, r.RevokedAt, r.RevokedBy, r.Note)
 	}
 	return tw.Flush()
 }
 
-// tenantMatch reports whether a row's tenant passes the CLI's -tenant
-// filter;
-// Empty filter matches everything.
-func tenantMatch(filter, rowTenant string) bool {
-	return filter == "" || filter == rowTenant
+// filterTenant narrows listing rows to the CLI's -tenant filter,
+// in the table and the JSON rendering alike;
+// Empty filter keeps everything.
+func filterTenant[T any](rows []T, filter string, tenantOf func(*T) string) []T {
+	if filter == "" {
+		return rows
+	}
+	kept := rows[:0]
+	for i := range rows {
+		if tenantOf(&rows[i]) == filter {
+			kept = append(kept, rows[i])
+		}
+	}
+	return kept
 }
 
 func cmdBan(ctx *cmdContext, stderr io.Writer, args []string) error {
@@ -523,6 +530,8 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	page.Bans = filterTenant(page.Bans, *tenant, func(b *client.Ban) string { return b.Tenant })
+	page.Count = len(page.Bans)
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, page)
 	}
@@ -530,9 +539,6 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "HARDWARE ID\tTENANT\tREASON\tBANNED AT\tBY\tNOTE")
 	for _, b := range page.Bans {
-		if !tenantMatch(*tenant, b.Tenant) {
-			continue
-		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			b.HardwareID, b.Tenant, b.Reason, b.BannedAt, b.BannedBy, b.Note)
 	}
@@ -633,6 +639,7 @@ func cmdAudit(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	entries = filterTenant(entries, tenant, func(e *client.AuditEntry) string { return e.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, entries)
 	}
@@ -640,9 +647,6 @@ func cmdAudit(ctx *cmdContext, stderr io.Writer, args []string) error {
 	tw := tabwriter.NewWriter(ctx.stdout, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "TIME\tTENANT\tACTION\tTARGET\tACTOR\tREASON\tNOTE")
 	for _, e := range entries {
-		if !tenantMatch(tenant, e.Tenant) {
-			continue
-		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			e.Timestamp, e.Tenant, e.Action, e.TargetID, e.Actor, e.Reason, e.Note)
 	}
@@ -659,6 +663,7 @@ func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if err != nil {
 		return err
 	}
+	entries = filterTenant(entries, tenant, func(e *client.Attestation) string { return e.Tenant })
 	if ctx.asJSON {
 		return printJSON(ctx.stdout, entries)
 	}
@@ -667,9 +672,6 @@ func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
 	fmt.Fprintln(tw, "TIME\tTENANT\tCLIENT\tRESULT\tMS\tDETAILS")
 	for i := range entries {
 		e := &entries[i]
-		if !tenantMatch(tenant, e.Tenant) {
-			continue
-		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.1f\t%s\n",
 			e.Timestamp, e.Tenant, e.ClientID, e.Result, e.DurationMs, e.Details)
 	}
