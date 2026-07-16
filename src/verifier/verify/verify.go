@@ -1403,6 +1403,13 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 // when the target client has neither an AIK registration nor a baseline.
 var ErrUnknownClient = errors.New("unknown client")
 
+// reports whether the store pins a boot baseline for the client;
+// stores without boot-PCR support report false
+func (v *Verifier) hasBootBaseline(clientID string) bool {
+	br, ok := v.baselineStore.(BootBaselineReader)
+	return ok && br.GetBootBaseline(clientID) != nil
+}
+
 // ForceReanchor drops all stored baseline state for a client
 // (PCR14 baseline, PCR0/1/7 boot baseline, re-anchor bookkeeping)
 // so the next attestation re-establishes trust per the active TOFU/policy configuration.
@@ -1410,7 +1417,9 @@ var ErrUnknownClient = errors.New("unknown client")
 // re-anchor refuses (or that profile is not enabled for).
 // AIK registration is untouched, so the host keeps attesting with its enrolled identity.
 func (v *Verifier) ForceReanchor(clientID string) error {
-	if v.baselineStore.GetBaseline(clientID) == nil {
+	// in-memory store keeps the PCR14 and boot baselines in separate maps,
+	// so existence must consult both before falling back to the AIK registration
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
 		if _, err := v.aikStore.GetAIK(clientID); err != nil {
 			return ErrUnknownClient
 		}
@@ -1431,7 +1440,7 @@ func (v *Verifier) ForceReanchor(clientID string) error {
 // Revocations and hardware bans are keyed separately and intentionally
 // survive the delete, so removal cannot be used to shed either.
 func (v *Verifier) DeleteClient(clientID string) error {
-	known := v.baselineStore.GetBaseline(clientID) != nil
+	known := v.baselineStore.GetBaseline(clientID) != nil || v.hasBootBaseline(clientID)
 
 	if deleter, ok := v.aikStore.(store.ClientDeleter); ok {
 		switch err := deleter.DeleteClient(clientID); {

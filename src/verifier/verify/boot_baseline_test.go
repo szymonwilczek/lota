@@ -94,6 +94,33 @@ func TestBootBaseline_MemoryClearBaselineDropsAllState(t *testing.T) {
 	}
 }
 
+// client the in-memory store knows only through its boot baseline
+// (no PCR14 row, no AIK registration) must still be valid target
+// for the operator lifecycle actions, or forced re-anchor 404s while
+// the stale boot pin stays behind.
+func TestLifecycle_BootBaselineOnlyClient(t *testing.T) {
+	bs := NewBaselineStore()
+	cfg := DefaultConfig()
+	cfg.BaselineStore = bs
+	v := NewVerifier(cfg, store.NewMemoryStore())
+
+	bs.CheckAndUpdateBootPCRs("c9", boot(0x50, 0x51, 0x57))
+	if err := v.ForceReanchor("c9"); err != nil {
+		t.Fatalf("ForceReanchor failed: %v", err)
+	}
+	if bs.GetBootBaseline("c9") != nil {
+		t.Error("boot baseline survived forced re-anchor")
+	}
+
+	bs.CheckAndUpdateBootPCRs("c9", boot(0x60, 0x61, 0x67))
+	if err := v.DeleteClient("c9"); err != nil {
+		t.Fatalf("DeleteClient failed: %v", err)
+	}
+	if bs.GetBootBaseline("c9") != nil {
+		t.Error("boot baseline survived delete")
+	}
+}
+
 func TestBootBaseline_SQLitePersistsAcrossOpen(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/baselines.sqlite"
