@@ -1240,7 +1240,7 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	// baseline row is the durable record under the Privacy CA flow:
 	// AIK store carries no registrations there and the nonce history
 	// may start empty after a verifier restart
-	if !info.HasAIK && info.MonotonicCounter == 0 && !hasBaseline {
+	if !hasAIK && info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
 
