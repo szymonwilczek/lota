@@ -1271,6 +1271,22 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		info.FirstSeen = baseline.FirstSeen
 	}
 
+	// CA-assigned tenant from the baseline row;
+	// store without the capability serves the single default fleet.
+	// Unresolved tenant stays empty and matches no scoped key,
+	// so store error cannot leak the client into anyone's visible set
+	info.Tenant = DefaultTenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		tenant, err := ts.ClientTenant(clientID)
+		if err != nil {
+			v.log.Error("failed to resolve the client tenant",
+				"client_id", clientID, "error", err)
+			info.Tenant = ""
+		} else {
+			info.Tenant = tenant
+		}
+	}
+
 	// check if client exists in any store
 	// baseline row is the durable record under the Privacy CA flow:
 	// AIK store carries no registrations there and the nonce history
