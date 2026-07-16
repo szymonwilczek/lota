@@ -1305,6 +1305,9 @@ func TestFileStore_DeleteClientNotFound(t *testing.T) {
 	if err := store.DeleteClient("../escape"); !errors.Is(err, ErrInvalidClientID) {
 		t.Fatalf("expected ErrInvalidClientID, got %v", err)
 	}
+	if err := store.DeleteClient("dir/escape"); !errors.Is(err, ErrInvalidClientID) {
+		t.Fatalf("expected ErrInvalidClientID, got %v", err)
+	}
 }
 
 func TestCertificateStore_DeleteClientDelegates(t *testing.T) {

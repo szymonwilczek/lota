@@ -482,6 +482,9 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 // Fingerprint index entry is freed so the AIK-uniqueness check does not keep
 // pointing at a client that no longer exists.
 func (fs *FileStore) DeleteClient(clientID string) error {
+	if !filepath.IsLocal(clientID) {
+		return ErrInvalidClientID
+	}
 	if err := validateClientID(clientID); err != nil {
 		return err
 	}
