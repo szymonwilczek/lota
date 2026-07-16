@@ -32,7 +32,7 @@ surfaces, and only the endpoints of each surface have to agree:
    * - Attestation
      - agent - verifier
      - report wire version
-     - Strict: majors must match
+     - Strict: exact equality
    * - Enrollment
      - agent - CA
      - enrollment wire version

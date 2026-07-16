@@ -5,10 +5,11 @@
 // SchemaVersion() reports the schema live database is already at;
 // Functions here report the schema given verifier binary was built to reach.
 //
-// Operators compare the two across rolling upgrade:
-// 	every instance must target a schema greater than or equal to the one
-// 	already applied to the shared Postgres, and no instance may run against
-// 	a schema newer than it understands.
+// Operators compare the two across a rolling upgrade:
+// 	binary whose target is below the live schema must be deliberate rollback,
+// 	never an accidental downgrade.
+// 	Old binaries keep operating a schema a newer peer migrated forward because
+// 	migrations stay additive (enforced in migrations_test.go).
 //
 // SQLite and Postgres histories are versioned independently on purpose:
 // SQLite ships one consolidated schema for single-node deployments,
