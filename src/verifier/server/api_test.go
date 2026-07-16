@@ -1750,7 +1750,7 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 	mux, v := setupTestAPIWithKey(t, "test-admin-key")
 	clientID := attestTestClient(t, v, "delete-revoked-client")
 
-	if err := v.RevocationStore().Revoke(clientID, store.RevocationCompromised, "ops@example", "test"); err != nil {
+	if err := v.RevocationStore().Revoke("default", clientID, store.RevocationCompromised, "ops@example", "test"); err != nil {
 		t.Fatalf("Revoke failed: %v", err)
 	}
 

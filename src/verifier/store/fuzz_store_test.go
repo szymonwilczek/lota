@@ -98,16 +98,18 @@ func FuzzParseHardwareID(f *testing.F) {
 // fuzzes the bans pagination cursor decoder (next_id comes from the HTTP API)
 func FuzzDecodeBanCursor(f *testing.F) {
 	// seed 1: well-formed cursor
-	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-	// seed 2: missing hardware ID half
+	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789:default")
+	// seed 2: missing hardware ID and tenant
 	f.Add("1700000000000000000")
-	// seed 3: too many colons
-	f.Add("1:2:3")
-	// seed 4: non-numeric timestamp
-	f.Add("notanumber:abcdef")
-	// seed 5: negative timestamp
-	f.Add("-5:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-	// seed 6: empty
+	// seed 3: legacy two-part cursor without a tenant
+	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	// seed 4: too many colons
+	f.Add("1:2:3:4")
+	// seed 5: non-numeric timestamp
+	f.Add("notanumber:abcdef:default")
+	// seed 6: negative timestamp
+	f.Add("-5:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789:default")
+	// seed 7: empty
 	f.Add("")
 
 	f.Fuzz(func(t *testing.T, nextID string) {
@@ -119,6 +121,7 @@ func FuzzDecodeBanCursor(f *testing.F) {
 		// decoded cursor must survive an encode/decode round-trip
 		// unchanged (the encoder is what the API hands back to clients)
 		enc := EncodeBanCursor(BanEntry{
+			Tenant:     cur.Tenant,
 			HardwareID: cur.HardwareID,
 			BannedAt:   cur.BannedAt,
 		})
@@ -133,6 +136,10 @@ func FuzzDecodeBanCursor(f *testing.F) {
 		if !cur.BannedAt.Equal(cur2.BannedAt) {
 			t.Errorf("round-trip changed timestamp: %v -> %v",
 				cur.BannedAt, cur2.BannedAt)
+		}
+		if cur.Tenant != cur2.Tenant {
+			t.Errorf("round-trip changed tenant: %q -> %q",
+				cur.Tenant, cur2.Tenant)
 		}
 	})
 }

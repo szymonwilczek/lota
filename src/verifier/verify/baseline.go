@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -332,6 +333,22 @@ type BootBaselineReader interface {
 	GetBootBaseline(clientID string) *BootBaseline
 }
 
+// TenantStorer is optionally implemented by baseline stores that persist
+// the CA-assigned device tenant next to the baseline row.
+// Tenant is stamped from the verified AIK certificate after every successful
+// attestation and partitions the operator-facing surface:
+// listings, mutations and logs are scoped to it.
+// Row that predates tenancy (or store without the capability) reads as DefaultTenant.
+type TenantStorer interface {
+	// SetClientTenant records the client's tenant on its baseline row.
+	// Fails when the client has no baseline row to stamp.
+	SetClientTenant(clientID, tenant string) error
+
+	// ClientTenant returns the recorded tenant.
+	// Client without baseline row or with pre-tenancy row is in DefaultTenant.
+	ClientTenant(clientID string) (string, error)
+}
+
 // AgentHashStorer is optionally implemented by baseline stores that can
 // pin the agent self-hash alongside (or instead of) PCR14. The hash is
 // the SHA-256 of the agent binary as captured by the agent at startup;
@@ -452,6 +469,7 @@ type BaselineStore struct {
 	baselines     map[string]*ClientBaseline // clientID -> PCR14 baseline
 	bootBaselines map[string]*BootBaseline   // clientID -> PCR0/1/7 baseline
 	reanchor      map[string]*ReanchorState  // clientID -> re-anchor state
+	tenants       map[string]string          // clientID -> CA-assigned tenant
 }
 
 // creates a new baseline store
@@ -460,6 +478,7 @@ func NewBaselineStore() *BaselineStore {
 		baselines:     make(map[string]*ClientBaseline),
 		bootBaselines: make(map[string]*BootBaseline),
 		reanchor:      make(map[string]*ReanchorState),
+		tenants:       make(map[string]string),
 	}
 }
 
@@ -662,7 +681,31 @@ func (s *BaselineStore) ClearBaseline(clientID string) error {
 	delete(s.baselines, clientID)
 	delete(s.bootBaselines, clientID)
 	delete(s.reanchor, clientID)
+	delete(s.tenants, clientID)
 	return nil
+}
+
+// SetClientTenant records the CA-assigned tenant for client that already
+// holds baseline row.
+func (s *BaselineStore) SetClientTenant(clientID, tenant string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.baselines[clientID]; !ok {
+		return fmt.Errorf("no baseline row for client %q", clientID)
+	}
+	s.tenants[clientID] = tenant
+	return nil
+}
+
+// ClientTenant returns the recorded tenant.
+// Client never stamped is in the default tenant.
+func (s *BaselineStore) ClientTenant(clientID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if tenant, ok := s.tenants[clientID]; ok && tenant != "" {
+		return tenant, nil
+	}
+	return DefaultTenant, nil
 }
 
 // returns all known client IDs

@@ -140,6 +140,7 @@ type Verifier struct {
 
 type sessionTokenRecord struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -150,6 +151,7 @@ type sessionTokenRecord struct {
 
 type SessionTokenStatus struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -381,7 +383,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	return v
 }
 
-func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID string,
+func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID, tenant string,
 	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
 ) {
 	if v == nil || report == nil {
@@ -390,6 +392,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 
 	v.sessionTokenStore.Remember(token, sessionTokenRecord{
 		ClientID:   clientID,
+		Tenant:     tenant,
 		HardwareID: identity,
 		ValidUntil: validUntil,
 		ResultCode: resultCode,
@@ -463,7 +466,9 @@ func (v *Verifier) Close() {
 
 // creates a challenge for client attestation
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
-	pcrMask := v.pcrVerifier.GetActivePolicyMask()
+	// challenges precede tenant authentication, so request the union
+	// of every selectable policy's PCRs
+	pcrMask := v.pcrVerifier.GetChallengePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
@@ -490,6 +495,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
 	var hwID string
+	// tenant stays empty until the AIK certificate authenticates it.
+	// attestation record without a tenant is one that never proved
+	// tenant-assigned identity
+	var tenant string
 
 	result := &types.VerifyResult{
 		Magic:   types.ReportMagic,
@@ -511,6 +520,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			resultStr := types.VerifyResultString(result.Result)
 			if err := v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
+				Tenant:     tenant,
 				ClientID:   clientID,
 				HardwareID: hwID,
 				Result:     resultStr,
@@ -593,12 +603,20 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		result.Result = types.VerifySigFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
+	tenant, err = TenantFromCertificate(aikLeaf)
+	if err != nil {
+		logging.Security(clog, "AIK certificate carries an invalid tenant",
+			"subject", aikLeaf.Subject.CommonName, "error", err)
+		v.metrics.Rejections.Inc("sig_fail")
+		result.Result = types.VerifySigFail
+		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
+	}
 	clientID = aikLeaf.Subject.CommonName
 	hwID = clientID
 	if len(hwID) > 16 {
 		hwID = hwID[:16]
 	}
-	clog = logging.WithClient(v.log, clientID)
+	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
 	// check revocation BEFORE consuming nonce
@@ -616,8 +634,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// check hardware ban BEFORE consuming nonce
+	//
+	// Bans are strictly per-tenant:
+	// Only a ban recorded in the tenant the CA assigned to this client rejects it.
+	// The same hardware stays clean in every other tenant.
 	if v.banStore != nil {
-		if entry, banned := v.banStore.IsBanned(identity); banned {
+		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
 			v.bannedAttests.Add(1)
 			v.metrics.Rejections.Inc("banned")
 			logging.Security(clog, "attestation rejected: hardware banned",
@@ -680,7 +702,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// event would go undetected.
 	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
-		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.ActivePolicyRequiresCmdline())
+		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.PolicyRequiresCmdlineForTenant(tenant))
 		if err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
@@ -697,7 +719,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("event log required but not provided")
 	}
 
-	if err := v.pcrVerifier.VerifyReportWithFacts(report, bootFacts); err != nil {
+	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
 		clog.Error("PCR verification failed", "error", err)
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
@@ -893,14 +915,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			if readerOK && reader.GetBootBaseline(clientID) != nil {
 				enrolled = true
 			}
-			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
-				if v.pcrVerifier.ActivePolicyRequiresSecureBoot() && SecureBootAnchored(bootFacts) {
+			if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+				if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
 					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
 				} else {
 					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
 					v.metrics.Rejections.Inc("baseline_error")
 					result.Result = types.VerifyIntegrityMismatch
@@ -987,7 +1009,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				// if the drift preserves the Secure Boot root of trust,
 				// re-pin the baseline instead of rejecting.
 				// Returns true only on an actual re-pin.
-				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+				if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
 					break
 				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
@@ -1101,6 +1123,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	clog.Info("verification successful")
 
+	// stamp the CA-assigned tenant on the baseline row so the operator
+	// surface can scope this client.
+	// Fail closed rather than let tenant-owned device linger unscoped
+	// in the default tenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		if err := ts.SetClientTenant(clientID, tenant); err != nil {
+			clog.Error("failed to persist the client tenant", "error", err)
+			result.Result = types.VerifyInternalError
+			return result, fmt.Errorf("failed to persist client tenant: %w", err)
+		}
+	}
+
 	result.Result = types.VerifyOK
 	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
 	sessionToken, err := v.deriveSessionToken(report, clientID, identity, result.ValidUntil, result.Result)
@@ -1109,7 +1143,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, fmt.Errorf("failed to derive session token: %w", err)
 	}
 	result.SessionToken = sessionToken
-	v.rememberSessionToken(sessionToken, report, clientID, identity, result.ValidUntil, result.Result)
+	v.rememberSessionToken(sessionToken, report, clientID, tenant, identity, result.ValidUntil, result.Result)
 
 	return result, nil
 }
@@ -1195,6 +1229,7 @@ type ClientInfo struct {
 	PendingChallenges int
 	PCR14Baseline     string // hex-encoded
 	FirstSeen         time.Time
+	Tenant            string // CA-assigned; DefaultTenant when never stamped
 }
 
 // returns aggregated information about a specific client
@@ -1234,6 +1269,22 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
+	}
+
+	// CA-assigned tenant from the baseline row;
+	// store without the capability serves the single default fleet.
+	// Unresolved tenant stays empty and matches no scoped key,
+	// so store error cannot leak the client into anyone's visible set
+	info.Tenant = DefaultTenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		tenant, err := ts.ClientTenant(clientID)
+		if err != nil {
+			v.log.Error("failed to resolve the client tenant",
+				"client_id", logging.SanitizeField(clientID), "error", err)
+			info.Tenant = ""
+		} else {
+			info.Tenant = tenant
+		}
 	}
 
 	// check if client exists in any store
@@ -1295,7 +1346,7 @@ func (v *Verifier) ListActiveClients() []string {
 // treats the attestation as a match instead of rejecting.
 // Pending or escalated outcome returns false and the caller rejects as before.
 // Decision itself lives in reanchorDecision.
-func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
 ) bool {
@@ -1303,9 +1354,9 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		return false
 	}
 	// diverse-fleet profile only:
-	// an active policy with require_secureboot and the event-log Secure Boot
+	// client's policy with require_secureboot and the event-log Secure Boot
 	// anchor proven for this boot
-	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+	if !v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) || !SecureBootAnchored(bootFacts) {
 		return false
 	}
 	rs, ok := v.baselineStore.(ReanchorStorer)

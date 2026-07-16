@@ -163,3 +163,32 @@ func TestWithClient(t *testing.T) {
 		t.Errorf("expected client_id='192.168.1.1', got: %v", entry["client_id"])
 	}
 }
+
+// request-supplied values must not forge extra log records:
+// CR and LF are stripped at the Security sink and in WithClient
+func TestSecuritySanitizesStringArgs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Options{Level: "info", Format: "text", Output: &buf})
+
+	Security(logger, "reader auth failed",
+		"path", "/api/v1/clients\nFORGED level=SECURITY msg=owned")
+
+	out := buf.String()
+	if strings.Count(out, "\n") != 1 {
+		t.Fatalf("injected newline survived to the log record:\n%s", out)
+	}
+	if !strings.Contains(out, "FORGED") {
+		t.Fatalf("sanitized value lost content:\n%s", out)
+	}
+}
+
+func TestWithClientSanitizesID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Options{Level: "info", Format: "text", Output: &buf})
+
+	WithClient(logger, "host\r\nFORGED").Info("connected")
+
+	if out := buf.String(); strings.Count(out, "\n") != 1 {
+		t.Fatalf("injected CRLF survived to the log record:\n%s", out)
+	}
+}

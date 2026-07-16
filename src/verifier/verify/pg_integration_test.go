@@ -341,6 +341,7 @@ func TestPostgresSessionTokenLifecycle(t *testing.T) {
 	tok[1] = 0x42
 	rec := sessionTokenRecord{
 		ClientID:   "client-x",
+		Tenant:     "acme",
 		ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
 		Flags:      0x1,
 		PCRMask:    0x7F,
@@ -355,6 +356,9 @@ func TestPostgresSessionTokenLifecycle(t *testing.T) {
 	st := s.Validate(tok, false, now)
 	if !st.Exists || st.Flags != 0x3 || st.ValidUntil != rec.ValidUntil {
 		t.Fatalf("upsert not visible: %+v", st)
+	}
+	if st.Tenant != "acme" {
+		t.Fatalf("Tenant = %q, want acme", st.Tenant)
 	}
 
 	// consuming twice keeps reporting consumed without resurrecting state
@@ -418,5 +422,37 @@ func TestPostgresReanchor(t *testing.T) {
 	}
 	if len(bs.ListLFAReviewPending()) != 0 {
 		t.Error("review should be cleared after acknowledge (Postgres)")
+	}
+}
+
+func TestPostgresTenantRoundTrip(t *testing.T) {
+	s := pgBaselineStore(t)
+
+	if err := s.SetClientTenant("ghost", "acme"); err == nil {
+		t.Fatal("SetClientTenant stamped a client with no baseline row")
+	}
+
+	pcr14 := fill(0x14)
+	if res, _ := s.CheckAndUpdate("c-tenant", pcr14); res != TOFUFirstUse {
+		t.Fatal("CheckAndUpdate first use failed")
+	}
+
+	// freshly migrated row is in the default tenant
+	if tenant, err := s.ClientTenant("c-tenant"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant before stamp = %q, %v; want default", tenant, err)
+	}
+
+	if err := s.SetClientTenant("c-tenant", "acme"); err != nil {
+		t.Fatalf("SetClientTenant: %v", err)
+	}
+	if tenant, err := s.ClientTenant("c-tenant"); err != nil || tenant != "acme" {
+		t.Fatalf("ClientTenant = %q, %v; want acme", tenant, err)
+	}
+
+	if err := s.ClearBaseline("c-tenant"); err != nil {
+		t.Fatalf("ClearBaseline: %v", err)
+	}
+	if tenant, err := s.ClientTenant("c-tenant"); err != nil || tenant != DefaultTenant {
+		t.Fatalf("ClientTenant after clear = %q, %v; want default", tenant, err)
 	}
 }

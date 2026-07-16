@@ -216,6 +216,48 @@ var migrations = []migration{
 			ALTER TABLE baselines ADD COLUMN lfa_review_pending INTEGER DEFAULT 0;
 		`,
 	},
+	{
+		version:     7,
+		description: "multi-tenancy: CA-assigned tenant on the baseline row",
+		sql: `
+			ALTER TABLE baselines ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
+		`,
+	},
+	{
+		version: 8,
+		description: "multi-tenancy: tenant on revocations, per-tenant " +
+			"hardware bans keyed (tenant, hardware_id)",
+		sql: `
+			ALTER TABLE revocations ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
+			CREATE TABLE hardware_bans_new (
+				tenant      TEXT NOT NULL,
+				hardware_id BLOB NOT NULL CHECK(length(hardware_id) = 32),
+				reason      TEXT NOT NULL,
+				banned_at   TIMESTAMP NOT NULL,
+				banned_by   TEXT NOT NULL DEFAULT '',
+				note        TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY (tenant, hardware_id)
+			);
+			INSERT INTO hardware_bans_new (tenant, hardware_id, reason, banned_at, banned_by, note)
+				SELECT 'default', hardware_id, reason, banned_at, banned_by, note FROM hardware_bans;
+			DROP TABLE hardware_bans;
+			ALTER TABLE hardware_bans_new RENAME TO hardware_bans;
+			CREATE INDEX idx_hardware_bans_tenant ON hardware_bans(tenant);
+		`,
+	},
+	{
+		version: 9,
+		description: "multi-tenancy: tenant on the audit and attestation " +
+			"logs",
+		sql: `
+			ALTER TABLE audit_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			ALTER TABLE attestation_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
+			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
+			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
+		`,
+	},
 }
 
 // opens or creates a SQLite database at the given path

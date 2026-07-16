@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
@@ -60,10 +61,12 @@ type Server struct {
 	connSem    chan struct{} // limits concurrent connections
 
 	// http monitoring api
-	httpServer   *http.Server
-	httpAddr     string
-	adminAPIKey  string
-	readerAPIKey string
+	httpServer     *http.Server
+	httpAddr       string
+	adminAPIKey    string
+	readerAPIKey   string
+	scopedKeysFile string
+	apiKeys        atomic.Pointer[APIKeySet]
 
 	// structured logging and telemetry
 	log     *slog.Logger
@@ -105,6 +108,10 @@ type ServerConfig struct {
 
 	// reader API key for sensitive read-only endpoints (empty = public)
 	ReaderAPIKey string
+
+	// path to the scoped API key file (empty = env keys only);
+	// reloaded on SIGHUP via ReloadAPIKeys
+	ScopedKeysFile string
 
 	// timeouts
 	ReadTimeout  time.Duration
@@ -154,12 +161,22 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		httpAddr:       cfg.HTTPAddress,
 		adminAPIKey:    cfg.AdminAPIKey,
 		readerAPIKey:   cfg.ReaderAPIKey,
+		scopedKeysFile: cfg.ScopedKeysFile,
 		log:            logger,
 		metrics:        m,
 		attestationLog: cfg.AttestationLog,
 		shutdownCh:     make(chan struct{}),
 		readTimeout:    cfg.ReadTimeout,
 		writeTimeout:   cfg.WriteTimeout,
+	}
+
+	if cfg.ScopedKeysFile != "" {
+		set, err := LoadAPIKeysFile(cfg.ScopedKeysFile)
+		if err != nil {
+			return nil, err
+		}
+		s.apiKeys.Store(set)
+		logger.Info("scoped API keys loaded", "path", cfg.ScopedKeysFile, "keys", set.Len())
 	}
 
 	if cfg.MaxConnections > 0 {
@@ -241,9 +258,9 @@ func (s *Server) startHTTP() error {
 		// endpoints (clients, audit, attestations, metrics, session/validate)
 		// to anyone who can reach the socket. Refuse the bind, like TLS is
 		// refused, instead of exposing the fleet
-		if s.readerAPIKey == "" && s.adminAPIKey == "" {
+		if s.readerAPIKey == "" && s.adminAPIKey == "" && s.apiKeys.Load().Len() == 0 {
 			ln.Close()
-			return fmt.Errorf("HTTP API on non-loopback address %s requires authentication; set LOTA_READER_API_KEY (and/or LOTA_ADMIN_API_KEY) or bind 127.0.0.1", s.httpAddr)
+			return fmt.Errorf("HTTP API on non-loopback address %s requires authentication; set LOTA_READER_API_KEY (and/or LOTA_ADMIN_API_KEY), provide --api-keys-file, or bind 127.0.0.1", s.httpAddr)
 		}
 		ln = tls.NewListener(ln, s.tlsConfig)
 		s.log.Info("HTTP API using TLS (non-loopback address)")
@@ -255,6 +272,7 @@ func (s *Server) startHTTP() error {
 		"addr", s.httpAddr,
 		"admin_auth", s.adminAPIKey != "",
 		"reader_auth", s.readerAPIKey != "",
+		"scoped_keys", s.apiKeys.Load().Len(),
 		"endpoints", []string{
 			"GET /health",
 			"GET /api/v1/stats",
@@ -480,4 +498,26 @@ func (s *Server) HealthCheck() HealthStatus {
 		Address:   s.addr,
 		Stats:     s.verifier.Stats(),
 	}
+}
+
+// apiKeySet returns the currently loaded scoped key set
+// (nil when no --api-keys-file was configured).
+func (s *Server) apiKeySet() *APIKeySet {
+	return s.apiKeys.Load()
+}
+
+// ReloadAPIKeys re-reads the scoped API key file and atomically swaps
+// the active set.
+// File that fails to load leaves the previous set in place, mirroring the CRL SIGHUP semantics.
+func (s *Server) ReloadAPIKeys() error {
+	if s.scopedKeysFile == "" {
+		return fmt.Errorf("no API keys file configured")
+	}
+	set, err := LoadAPIKeysFile(s.scopedKeysFile)
+	if err != nil {
+		return err
+	}
+	s.apiKeys.Store(set)
+	s.log.Info("scoped API keys reloaded", "path", s.scopedKeysFile, "keys", set.Len())
+	return nil
 }

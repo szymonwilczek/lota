@@ -60,12 +60,17 @@ func testPseudonym(clientID string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// testAIKCertOUs, when non-nil, becomes the Subject.OrganizationalUnit of every
+// certificate issueAIKCertOrPanic mints.
+// Tenant tests set it around report creation and reset it afterwards.
+var testAIKCertOUs []string
+
 // issueAIKCertOrPanic mints an AIK certificate with the given pseudonym
 // subject, certifying aikPub and signed by the test CA.
 func issueAIKCertOrPanic(pseudonym string, aikPub *rsa.PublicKey) []byte {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
-		Subject:               pkix.Name{CommonName: pseudonym},
+		Subject:               pkix.Name{CommonName: pseudonym, OrganizationalUnit: testAIKCertOUs},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

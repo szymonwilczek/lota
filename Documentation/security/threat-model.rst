@@ -344,6 +344,48 @@ physical TPM behavior. swtpm validation is useful for protocol and regression
 coverage, but it is not a substitute for running the full enrollment,
 attestation, and runtime protection path on target hardware.
 
+Multi-tenancy and tenant scoping
+================================
+
+A single verifier can serve several isolated tenants -- enterprise fleets or
+individual game titles -- without one tenant seeing or affecting another. The
+tenant is not self-asserted by the host: the attestation CA assigns it at
+enrollment and writes it into the AIK certificate subject
+(``OrganizationalUnit``). The verifier reads the tenant only *after* it has
+verified the certificate chain, so a host cannot forge or change its own
+tenancy. A certificate with no organizational unit maps to the reserved
+``default`` tenant; a certificate with a malformed or ambiguous (multiple)
+organizational unit is rejected fail-closed before any state is written.
+
+Tenancy scopes state and enforcement, not the cryptographic root of trust,
+which is per device regardless of tenant:
+
+* **Hardware bans are strictly per tenant.** A hardware identity banned in one
+  tenant is untouched in every other; there is no cross-tenant or global ban
+  tier. The ban store keys on ``(tenant, hardware_id)`` and attestation checks
+  only the ban recorded in the attesting client's own tenant.
+* **Revocations, baselines, the audit log, the attestation log, and session
+  tokens all carry the tenant** so the operator surface can scope them.
+* **PCR policy can be bound per tenant.** A signed policy may name a tenant; a
+  client whose certificate carries that tenant is verified against the bound
+  policy, with the active policy as the fallback for unbound tenants. The
+  binding travels inside the signed policy document, so a signed policy
+  authenticates its own scope.
+
+The monitoring API enforces the same boundary. API keys are scoped: an
+operator key names a role (``reader`` or ``admin``, admin implies reader) and a
+tenant set (or ``*`` for every tenant), loaded from a file of key hashes and
+reloaded on ``SIGHUP``. A scoped key sees only its tenants' clients, bans,
+revocations, audit and attestation entries; a request that names a client or
+resource outside the key's tenant set is answered as if it did not exist (404),
+never 403, so the key cannot even probe another tenant's namespace. The
+fleet-wide surfaces that carry no tenant dimension are withheld from scoped
+keys entirely: ``/api/v1/stats`` omits the fleet-wide counters and ``/metrics``
+is refused. Environment
+keys (``LOTA_ADMIN_API_KEY`` / ``LOTA_READER_API_KEY``) remain global-scope for
+backwards compatibility. See
+:doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
+
 Operational requirements
 ========================
 
