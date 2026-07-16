@@ -68,6 +68,7 @@ INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
 INSTALLER_BIN := $(BUILD_DIR)/lota-install
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
+FLEETCTL_BIN := $(BUILD_DIR)/lota-fleet
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
@@ -353,7 +354,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -366,6 +367,8 @@ installer: $(INSTALLER_BIN)
 verifier: $(VERIFIER_BIN)
 
 attest-ca: $(ATTESTCA_BIN)
+
+fleet-cli: $(FLEETCTL_BIN)
 
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
@@ -454,6 +457,11 @@ GO_TAGS ?=
 $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
+
+# Go fleet CLI
+$(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
+	$(QUIET_GO)
+	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
@@ -664,7 +672,7 @@ check-includes:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-LINT_GO_MODULES := src/verifier src/attestca src/crl
+LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl
 
 lint: lint-c lint-go
 
@@ -1468,6 +1476,7 @@ help:
 	@echo "  initramfs-lock   Build PCR14 initramfs lock helper only"
 	@echo "  verifier         Build Go verifier only"
 	@echo "  attest-ca        Build Go attestation CA only"
+	@echo "  fleet-cli        Build lota-fleet operator CLI only"
 	@echo "  sdk              Build gaming SDK shared/static libraries"
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
