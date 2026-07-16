@@ -167,13 +167,13 @@ register anything with the verifier. ::
      "revoked": false,
      "revocation_reason": "",
      "last_attestation": "2026-07-02T10:00:00Z",
-     "last_attestation_unix": 1782727200,
+     "last_attestation_unix": 1782986400,
      "attestation_count": 7,
      "monotonic_counter": 7,
      "pending_challenges": 0,
      "pcr14_baseline": "cafe...",
      "first_seen": "2026-06-30T08:00:00Z",
-     "first_seen_unix": 1782547200
+     "first_seen_unix": 1782806400
    }
 
 String fields are omitted when empty.
@@ -376,7 +376,8 @@ service back ends validating a client-presented token). Body::
 ``consume: true`` additionally marks the token used, so it cannot
 validate again. **400** when the token is not 64 hex characters.
 **200** always for a well-formed request; an unknown token is
-``{"valid": false}`` with every other field omitted::
+``{"valid": false, "consumed": false}`` with every other field
+omitted::
 
    {
      "valid": true,
