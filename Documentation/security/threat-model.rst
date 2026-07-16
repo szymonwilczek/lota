@@ -378,7 +378,10 @@ tenant set (or ``*`` for every tenant), loaded from a file of key hashes and
 reloaded on ``SIGHUP``. A scoped key sees only its tenants' clients, bans,
 revocations, audit and attestation entries; a request that names a client or
 resource outside the key's tenant set is answered as if it did not exist (404),
-never 403, so the key cannot even probe another tenant's namespace. Environment
+never 403, so the key cannot even probe another tenant's namespace. The
+fleet-wide surfaces that carry no tenant dimension are withheld from scoped
+keys entirely: ``/api/v1/stats`` omits the fleet-wide counters and ``/metrics``
+is refused. Environment
 keys (``LOTA_ADMIN_API_KEY`` / ``LOTA_READER_API_KEY``) remain global-scope for
 backwards compatibility. See
 :doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.

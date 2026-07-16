@@ -124,7 +124,10 @@ A scoped key sees only its tenants' resources:
 * a ban or unban into a tenant outside the key's set is refused;
 * ``/api/v1/stats`` returns tenant-narrowed counts and flags itself
   ``tenant_scoped``; the fleet-wide attestation counters, which are not
-  attributable per tenant, are omitted from a scoped response.
+  attributable per tenant, are omitted from a scoped response;
+* ``/metrics`` is refused (403) for a tenant-scoped key: the Prometheus
+  exposition is fleet-wide and carries no tenant dimension, so only a
+  global-scope key (environment key or ``tenants: ["*"]``) can scrape it.
 
 The environment keys ``LOTA_ADMIN_API_KEY`` and ``LOTA_READER_API_KEY`` keep
 working and are **global-scope**: they see every tenant. A scoped key file may

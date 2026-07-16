@@ -171,3 +171,14 @@ func TestAPITenantScoping_RevocationsAndStats(t *testing.T) {
 		t.Fatalf("scoped registered_clients = %v, want 1", stats["registered_clients"])
 	}
 }
+
+// Prometheus exposition is fleet-wide with no tenant dimension,
+// so tenant-scoped key must be refused:
+// /api/v1/stats already withholds the same counters from scoped callers.
+func TestAPITenantScoping_MetricsRefusedForScopedKey(t *testing.T) {
+	f := newScopedAPIFixture(t, keyHashHex("acme-key"))
+
+	if code, _ := f.do(t, "GET", "/metrics", "acme-key"); code != http.StatusForbidden {
+		t.Fatalf("scoped key on /metrics: %d, want 403", code)
+	}
+}

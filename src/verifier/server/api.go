@@ -774,6 +774,15 @@ func fromHexByte(hi, lo byte) (byte, bool) {
 
 // GET /metrics - Prometheus text exposition format
 func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// exposition is fleet-wide and carries no tenant dimension,
+	// so tenant-scoped key must not read it:
+	// /api/v1/stats already withholds the same counters from scoped callers
+	if scopedToTenants(requestPrincipal(r)) {
+		writeJSONStatus(w, http.StatusForbidden,
+			errorResponse{Error: "metrics are global-scope; use a key with tenants [\"*\"]"})
+		return
+	}
+
 	// sync gauges from verifier stats before export
 	stats := h.verifier.Stats()
 	h.metrics.PendingChallenges.Store(int64(stats.PendingChallenges))
