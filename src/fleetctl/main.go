@@ -285,15 +285,19 @@ func cmdStats(ctx *cmdContext, args []string) error {
 	kv(ctx.stdout, "registered clients", s.RegisteredClients)
 	kv(ctx.stdout, "active policy", s.ActivePolicy)
 	kv(ctx.stdout, "loaded policies", strings.Join(s.LoadedPolicies, ", "))
-	kv(ctx.stdout, "total attestations", s.TotalAttestations)
-	kv(ctx.stdout, "successful", s.SuccessfulAttests)
-	kv(ctx.stdout, "failed", s.FailedAttests)
-	kv(ctx.stdout, "revoked", s.RevokedAttests)
-	kv(ctx.stdout, "banned", s.BannedAttests)
+	if !s.TenantScoped {
+		kv(ctx.stdout, "total attestations", s.TotalAttestations)
+		kv(ctx.stdout, "successful", s.SuccessfulAttests)
+		kv(ctx.stdout, "failed", s.FailedAttests)
+		kv(ctx.stdout, "revoked", s.RevokedAttests)
+		kv(ctx.stdout, "banned", s.BannedAttests)
+	}
 	kv(ctx.stdout, "active revocations", s.ActiveRevocations)
 	kv(ctx.stdout, "active bans", s.ActiveBans)
-	kv(ctx.stdout, "pending challenges", s.PendingChallenges)
-	kv(ctx.stdout, "used nonces", s.UsedNonces)
+	if !s.TenantScoped {
+		kv(ctx.stdout, "pending challenges", s.PendingChallenges)
+		kv(ctx.stdout, "used nonces", s.UsedNonces)
+	}
 	kv(ctx.stdout, "uptime", s.Uptime)
 	return nil
 }

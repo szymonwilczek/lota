@@ -596,6 +596,13 @@ func TestStatsTenantScoped(t *testing.T) {
 	if !strings.Contains(out, "tenant scoped: true") || !strings.Contains(out, "tenants: acme") {
 		t.Fatalf("scoped stats output = %q", out)
 	}
+	if strings.Contains(out, "total attestations") ||
+		strings.Contains(out, "pending challenges") {
+		t.Fatalf("scoped stats leaked fleet-wide counters: %q", out)
+	}
+	if !strings.Contains(out, "registered clients: 1") {
+		t.Fatalf("scoped stats dropped the narrowed counts: %q", out)
+	}
 }
 
 // TestBanUnbanUsageErrors exercises the argument validation of the
