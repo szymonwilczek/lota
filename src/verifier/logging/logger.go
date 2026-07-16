@@ -103,8 +103,16 @@ func ParseLevel(s string) slog.Level {
 	}
 }
 
-// emits a SECURITY-level log entry
+// emits a SECURITY-level log entry.
+// Security lines routinely carry request-supplied values
+// (client IDs, URL paths, actor fields, certificate subjects),
+// so every string argument is sanitized here, at the sink.
 func Security(logger *slog.Logger, msg string, args ...any) {
+	for i, a := range args {
+		if s, ok := a.(string); ok {
+			args[i] = SanitizeField(s)
+		}
+	}
 	logger.Log(context.Background(), LevelSecurity, msg, args...)
 }
 
