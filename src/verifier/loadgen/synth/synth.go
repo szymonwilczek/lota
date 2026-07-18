@@ -187,31 +187,35 @@ func Pseudonym(name string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// NewFleet builds n agents backed by a pool of keyPool RSA keys
-// (keyPool <= 0 or > n collapses to min(n, defaultKeyPool))
+// DefaultKeyPool is the AIK key pool size when the caller does not choose one
+const DefaultKeyPool = 256
+
+// NewFleet builds n agents backed by freshly generated pool of keyPool RSA keys
+// (keyPool <= 0 collapses to DefaultKeyPool, and the pool never exceeds the fleet size)
 // Key generation and certificate issuance run across all CPUs
 func NewFleet(ca *CA, n, keyPool int) (*Fleet, error) {
-	const defaultKeyPool = 256
 	if n <= 0 {
 		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
 	}
 	if keyPool <= 0 {
-		keyPool = defaultKeyPool
+		keyPool = DefaultKeyPool
 	}
-	if keyPool > n {
-		keyPool = n
-	}
-
-	keys := make([]*rsa.PrivateKey, keyPool)
-	if err := parallelFor(keyPool, func(i int) error {
-		k, err := rsa.GenerateKey(rand.Reader, aikKeyBits)
-		if err != nil {
-			return fmt.Errorf("generate AIK key %d: %w", i, err)
-		}
-		keys[i] = k
-		return nil
-	}); err != nil {
+	keyPool = min(keyPool, n)
+	keys, err := GenerateKeyPool(keyPool)
+	if err != nil {
 		return nil, err
+	}
+	return NewFleetWithKeys(ca, n, keys)
+}
+
+// NewFleetWithKeys builds n agents over an existing key pool,
+// e.g. one reloaded from rig directory
+func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey) (*Fleet, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("empty AIK key pool")
 	}
 
 	f := &Fleet{
@@ -230,7 +234,7 @@ func NewFleet(ca *CA, n, keyPool int) (*Fleet, error) {
 			Name:       name,
 			HardwareID: sha256.Sum256([]byte("lota-loadgen-hwid:" + name)),
 			Pseudonym:  Pseudonym(name),
-			Key:        keys[i%keyPool],
+			Key:        keys[i%len(keys)],
 		}
 		der, err := ca.IssueAIKCert(a.Pseudonym, &a.Key.PublicKey)
 		if err != nil {
