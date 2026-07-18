@@ -118,7 +118,7 @@ static int store_cert(const char *path, const uint8_t *der, size_t len)
 
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
-		 const char *out_cert_path)
+		 const char *token, const char *out_cert_path)
 {
 	struct net_context net;
 	int net_inited = 0;
@@ -176,7 +176,8 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	}
 
 	blen = enroll_encode_begin(body, sizeof(body), ek_cert, ek_len, aik_pub,
-				   aik_len);
+				   aik_len, (const uint8_t *)token,
+				   token ? strlen(token) : 0);
 	if (blen < 0) {
 		ret = (int)blen;
 		fprintf(stderr, "Failed to encode the enrollment request: %s\n",
@@ -206,9 +207,19 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 	if (ch.status != LOTA_ENROLL_STATUS_OK) {
-		fprintf(stderr,
-			"CA refused enrollment at challenge (status %u)\n",
-			ch.status);
+		if (ch.status == LOTA_ENROLL_STATUS_TOKEN_REJECTED)
+			fprintf(stderr,
+				"CA rejected the enrollment token (status "
+				"%u). Check the token file against the "
+				"CA's configured token set%s.\n",
+				ch.status,
+				token ? "" :
+					"; this CA requires --enroll-token-file");
+		else
+			fprintf(stderr,
+				"CA refused enrollment at challenge (status "
+				"%u)\n",
+				ch.status);
 		ret = -EACCES;
 		goto out;
 	}
@@ -291,7 +302,7 @@ out:
  */
 static void persist_enroll_state(const char *server, int port,
 				 const char *ca_cert, int skip_verify,
-				 const uint8_t *pin)
+				 const uint8_t *pin, const char *token)
 {
 	struct enroll_state st;
 
@@ -302,6 +313,8 @@ static void persist_enroll_state(const char *server, int port,
 		snprintf(st.ca_server, sizeof(st.ca_server), "%s", server);
 	if (ca_cert)
 		snprintf(st.ca_cert, sizeof(st.ca_cert), "%s", ca_cert);
+	if (token)
+		snprintf(st.enroll_token, sizeof(st.enroll_token), "%s", token);
 	if (pin) {
 		memcpy(st.pin_sha256, pin, sizeof(st.pin_sha256));
 		st.has_pin = 1;
@@ -314,6 +327,7 @@ static void persist_enroll_state(const char *server, int port,
 			"Warning: could not record enrollment state at %s; "
 			"--reenroll will need the CA endpoint again\n",
 			LOTA_ENROLL_STATE_PATH);
+	OPENSSL_cleanse(&st, sizeof(st));
 }
 
 /*
@@ -322,7 +336,8 @@ static void persist_enroll_state(const char *server, int port,
  * negative errno on failure.
  */
 static int run_enrollment(const char *server, int port, const char *ca_cert,
-			  int skip_verify, const uint8_t *pin)
+			  int skip_verify, const uint8_t *pin,
+			  const char *token)
 {
 	int ret;
 
@@ -353,9 +368,10 @@ static int run_enrollment(const char *server, int port, const char *ca_cert,
 	}
 
 	ret = enroll_to_ca(&g_agent.tpm_ctx, server, port, ca_cert, skip_verify,
-			   pin, LOTA_AIK_CERT_PATH);
+			   pin, token, LOTA_AIK_CERT_PATH);
 	if (ret == 0)
-		persist_enroll_state(server, port, ca_cert, skip_verify, pin);
+		persist_enroll_state(server, port, ca_cert, skip_verify, pin,
+				     token);
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
@@ -363,11 +379,25 @@ static int run_enrollment(const char *server, int port, const char *ca_cert,
 }
 
 int do_enroll(const char *server, int port, const char *ca_cert,
-	      int skip_verify, const uint8_t *pin)
+	      int skip_verify, const uint8_t *pin, const char *token_file)
 {
+	char token[LOTA_ENROLL_MAX_TOKEN + 1];
 	int ret;
 
 	printf("=== Attestation CA Enrollment ===\n\n");
+
+	token[0] = '\0';
+	if (token_file) {
+		ret = enroll_token_from_file(token_file, token, sizeof(token));
+		if (ret < 0) {
+			fprintf(stderr,
+				"Could not read the enrollment token from "
+				"%s: %s\n",
+				token_file, strerror(-ret));
+			printf("\n=== Enrollment Failed ===\n");
+			return 1;
+		}
+	}
 
 	/*
 	 * --enroll is a one-shot CLI mode. Return a non-negative exit code
@@ -375,7 +405,9 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	 * return as "not a diagnostic, fall through to the daemon", so a
 	 * failed enrollment must not leak a negative errno upward.
 	 */
-	ret = run_enrollment(server, port, ca_cert, skip_verify, pin);
+	ret = run_enrollment(server, port, ca_cert, skip_verify, pin,
+			     token[0] ? token : NULL);
+	OPENSSL_cleanse(token, sizeof(token));
 
 	printf("\n=== Enrollment %s ===\n", ret == 0 ? "Successful" : "Failed");
 	return ret == 0 ? 0 : 1;
@@ -406,7 +438,9 @@ int do_reenroll(void)
 	ret = run_enrollment(st.ca_server, st.ca_port,
 			     st.ca_cert[0] ? st.ca_cert : NULL,
 			     st.no_verify_tls,
-			     st.has_pin ? st.pin_sha256 : NULL);
+			     st.has_pin ? st.pin_sha256 : NULL,
+			     st.enroll_token[0] ? st.enroll_token : NULL);
+	OPENSSL_cleanse(&st, sizeof(st));
 
 	printf("\n=== Re-enrollment %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
@@ -428,11 +462,14 @@ int enroll_renew_cert(struct tpm_context *tpm)
 	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port,
 			   st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
 			   st.has_pin ? st.pin_sha256 : NULL,
+			   st.enroll_token[0] ? st.enroll_token : NULL,
 			   LOTA_AIK_CERT_PATH);
 	if (ret == 0)
-		persist_enroll_state(st.ca_server, st.ca_port,
-				     st.ca_cert[0] ? st.ca_cert : NULL,
-				     st.no_verify_tls,
-				     st.has_pin ? st.pin_sha256 : NULL);
+		persist_enroll_state(
+			st.ca_server, st.ca_port,
+			st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
+			st.has_pin ? st.pin_sha256 : NULL,
+			st.enroll_token[0] ? st.enroll_token : NULL);
+	OPENSSL_cleanse(&st, sizeof(st));
 	return ret;
 }

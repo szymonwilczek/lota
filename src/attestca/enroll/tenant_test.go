@@ -132,11 +132,12 @@ func TestTenantForDefaultAndStrict(t *testing.T) {
 	}
 }
 
-// enrollWith runs a full ceremony and returns the issued certificate and device id.
-func enrollWith(t *testing.T, svc *Service, ek tpmtest.EK) (*x509.Certificate, string) {
+// enrollWith runs a full ceremony, presenting an optional enrollment token,
+// and returns the issued certificate and device id.
+func enrollWith(t *testing.T, svc *Service, ek tpmtest.EK, token []byte) (*x509.Certificate, string) {
 	t.Helper()
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
-	ch, err := svc.Begin(ek.CertDER, aikTPMT)
+	ch, err := svc.Begin(ek.CertDER, aikTPMT, token)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestEnrollAssignsTenantFromManifest(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 
 	// baseline: no manifest -> default tenant, no OU
-	defCert, defID := enrollWith(t, svcDefault, ek)
+	defCert, defID := enrollWith(t, svcDefault, ek, nil)
 	if len(defCert.Subject.OrganizationalUnit) != 0 {
 		t.Fatalf("default enrollment carried an OU: %v", defCert.Subject.OrganizationalUnit)
 	}
@@ -169,7 +170,7 @@ func TestEnrollAssignsTenantFromManifest(t *testing.T) {
 		t.Fatalf("LoadTenantManifest: %v", err)
 	}
 	svcTenant, _ := newTestServiceWithRoot(t, root, WithTenantManifest(m))
-	acmeCert, acmeID := enrollWith(t, svcTenant, ek)
+	acmeCert, acmeID := enrollWith(t, svcTenant, ek, nil)
 
 	if len(acmeCert.Subject.OrganizationalUnit) != 1 || acmeCert.Subject.OrganizationalUnit[0] != "acme" {
 		t.Fatalf("tenant OU = %v, want [acme]", acmeCert.Subject.OrganizationalUnit)
@@ -191,7 +192,7 @@ func TestDefaultTenantKeepsLegacyPseudonym(t *testing.T) {
 	svc, root := newTestService(t)
 	ek := tpmtest.NewEKCert(t, root)
 
-	_, id := enrollWith(t, svc, ek)
+	_, id := enrollWith(t, svc, ek, nil)
 	legacy := hex.EncodeToString(hmacSHA256(
 		[]byte("pseudonym-key-0123456789abcdef"), ek.Priv.PublicKey.N.Bytes()))
 	if id != legacy {
@@ -211,7 +212,7 @@ func TestEnrollStrictManifestRejectsUnlistedEK(t *testing.T) {
 
 	unlisted := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
-	if _, err := svc.Begin(unlisted.CertDER, aikTPMT); err == nil {
+	if _, err := svc.Begin(unlisted.CertDER, aikTPMT, nil); err == nil {
 		t.Fatal("strict manifest enrolled an unlisted EK")
 	}
 	// strict rejection must not spend a session

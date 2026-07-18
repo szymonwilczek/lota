@@ -14,7 +14,16 @@
 
 /* "LCAE", matched against the big-endian preamble of every frame. */
 #define LOTA_ENROLL_MAGIC 0x4C434145u
+
+/*
+ * Version 1 frames carry no enrollment token;
+ * Version 2 appends one to BeginRequest.
+ * Agent emits version 1 unless it presents token, so it stays compatible
+ * with old CA, and the CA mirrors the version of the request in its replies,
+ * so old agent never sees version 2.
+ */
 #define LOTA_ENROLL_VERSION 1u
+#define LOTA_ENROLL_VERSION_TOKEN 2u
 
 /* Field bounds, identical to the Go wire caps. */
 /* see (src/attestcta/wire/wire.go) */
@@ -26,6 +35,7 @@
 #define LOTA_ENROLL_MAX_SESSION_ID 64u
 #define LOTA_ENROLL_MAX_AIK_CERT 4096u
 #define LOTA_ENROLL_MAX_DEVICE_ID 128u
+#define LOTA_ENROLL_MAX_TOKEN 128u
 
 /* Bound on a single decoded frame body. */
 #define LOTA_ENROLL_MAX_FRAME (16u * 1024u)
@@ -39,5 +49,6 @@
 #define LOTA_ENROLL_STATUS_UNKNOWN_SESSION 5u
 #define LOTA_ENROLL_STATUS_INTERNAL_ERROR 6u
 #define LOTA_ENROLL_STATUS_RATE_LIMITED 7u
+#define LOTA_ENROLL_STATUS_TOKEN_REJECTED 8u
 
 #endif /* LOTA_ENROLL_H */

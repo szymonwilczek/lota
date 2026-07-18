@@ -54,7 +54,9 @@ type Service struct {
 	ttl          time.Duration
 	maxPending   int
 	pseudonymKey []byte
-	tenants      *TenantManifest // nil = every device in the default tenant
+	tenants      *TenantManifest   // nil = every device in the default tenant
+	tokens       *EnrollmentTokens // nil = every presented token is rejected
+	requireToken bool
 
 	now func() time.Time
 
@@ -118,6 +120,24 @@ func WithTenantManifest(m *TenantManifest) Option {
 	}
 }
 
+// WithEnrollmentTokens binds token-to-tenant set so a device can name its tenant
+// by presenting an enrollment token.
+// Without it every presented token is rejected.
+func WithEnrollmentTokens(t *EnrollmentTokens) Option {
+	return func(s *Service) {
+		s.tokens = t
+	}
+}
+
+// WithRequireToken refuses any enrollment that presents no token,
+// turning the token set into the sole admission control
+// (the gaming deployment shape, where no enrolling EK is known up front).
+func WithRequireToken() Option {
+	return func(s *Service) {
+		s.requireToken = true
+	}
+}
+
 // NewService builds an enrollment Service. pseudonymKey keys the stable,
 // EK-derived device identifier placed in issued certificates
 // It must be kept secret so a verifier cannot reverse a device ID back to its EK
@@ -145,7 +165,9 @@ func NewService(issuer *ca.Issuer, pseudonymKey []byte, opts ...Option) (*Servic
 // Begin verifies the EK certificate and AIK template, wraps a fresh
 // activation secret, and records the pending session. The returned
 // Challenge must be activated by the agent and handed back to Complete.
-func (s *Service) Begin(ekCertDER, aikTPMTPublic []byte) (*Challenge, error) {
+// Token is the optional enrollment token from the begin request;
+// nil or empty means the device presented none.
+func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte) (*Challenge, error) {
 	now := s.now()
 
 	ekCert, err := s.issuer.VerifyEKCertificate(ekCertDER, now)
@@ -170,10 +192,21 @@ func (s *Service) Begin(ekCertDER, aikTPMTPublic []byte) (*Challenge, error) {
 		return nil, ErrAIKKeyType
 	}
 
-	// resolve the tenant from the verified EK before wrapping the
-	// credential, so device barred by strict manifest is rejected
-	// without spending a challenge
-	tenant, err := s.tenants.TenantFor(ekPub)
+	// resolve the tenant before wrapping the credential, so a barred
+	// device is rejected without spending a challenge.
+	// A presented token is an explicit assignment and fails closed:
+	// unmatched token never falls back to the EK manifest or the
+	// default tenant. Token-less enrollment takes the EK-manifest path
+	// unless the CA mandates tokens.
+	var tenant string
+	switch {
+	case len(token) > 0:
+		tenant, err = s.tokens.TenantFor(token)
+	case s.requireToken:
+		err = ErrTokenRequired
+	default:
+		tenant, err = s.tenants.TenantFor(ekPub)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("tenant assignment: %w", err)
 	}

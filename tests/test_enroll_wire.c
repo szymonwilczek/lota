@@ -10,9 +10,11 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/types.h>
 
 #include "../src/agent/enroll.h"
@@ -36,7 +38,7 @@ static void test_encode_begin_layout(void)
 	const uint8_t aik[] = { 0xCC };
 	uint8_t out[64];
 	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-					sizeof(aik));
+					sizeof(aik), NULL, 0);
 
 	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00,
 				 0x02, 0xAA, 0xBB, 0x00, 0x01, 0xCC };
@@ -53,16 +55,42 @@ static void test_encode_begin_bounds(void)
 	const uint8_t aik[1] = { 0 };
 
 	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-				  sizeof(aik)) == -ENOSPC,
+				  sizeof(aik), NULL, 0) == -ENOSPC,
 	      "encode_begin rejects an undersized buffer");
 
 	uint8_t big_out[8192];
 	uint8_t big_ek[LOTA_ENROLL_MAX_EK_CERT + 1];
 	memset(big_ek, 0, sizeof(big_ek));
 	CHECK(enroll_encode_begin(big_out, sizeof(big_out), big_ek,
-				  sizeof(big_ek), aik,
-				  sizeof(aik)) == -EMSGSIZE,
+				  sizeof(big_ek), aik, sizeof(aik), NULL,
+				  0) == -EMSGSIZE,
 	      "encode_begin rejects an oversized EK certificate");
+
+	uint8_t big_token[LOTA_ENROLL_MAX_TOKEN + 1];
+	memset(big_token, 't', sizeof(big_token));
+	CHECK(enroll_encode_begin(big_out, sizeof(big_out), ek, sizeof(ek), aik,
+				  sizeof(aik), big_token,
+				  sizeof(big_token)) == -EMSGSIZE,
+	      "encode_begin rejects an oversized token");
+}
+
+static void test_encode_begin_token_layout(void)
+{
+	const uint8_t ek[] = { 0xAA, 0xBB };
+	const uint8_t aik[] = { 0xCC };
+	const uint8_t token[] = { 't', 'k' };
+	uint8_t out[64];
+	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+					sizeof(aik), token, sizeof(token));
+
+	/* version 2, token appended; pinned against the Go wire tests */
+	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x02,
+				 0x00, 0x02, 0xAA, 0xBB, 0x00, 0x01,
+				 0xCC, 0x00, 0x02, 't',	 'k' };
+
+	CHECK(n == (ssize_t)sizeof(want), "encode_begin token length");
+	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
+	      "encode_begin token byte layout matches the Go wire format");
 }
 
 static void test_encode_complete(void)
@@ -136,6 +164,17 @@ static void test_decode_rejects_malformed(void)
 		      -EPROTONOSUPPORT,
 	      "decode rejects bad version");
 
+	/* CA mirrors a version-2 begin with version-2 replies */
+	const uint8_t v2_reply[] = {
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x02, /* magic, version 2 */
+		0x00, 0x00, /* status OK */
+		0x00, 0x01, 'a', /* session id */
+		0x00, 0x01, 0x01, /* credential blob */
+		0x00, 0x01, 0x02 /* encrypted secret */
+	};
+	CHECK(enroll_decode_challenge(v2_reply, sizeof(v2_reply), &ch) == 0,
+	      "decode accepts a version-2 reply");
+
 	const uint8_t truncated[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00 };
 	CHECK(enroll_decode_challenge(truncated, sizeof(truncated), &ch) < 0,
 	      "decode rejects truncated frame");
@@ -148,15 +187,76 @@ static void test_decode_rejects_malformed(void)
 	      "decode rejects an oversized field length");
 }
 
+static const char *write_token_file(const char *content, size_t len)
+{
+	static char path[256];
+	int fd;
+
+	snprintf(path, sizeof(path), "/tmp/lota-enroll-token-test.%d",
+		 getpid());
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return NULL;
+	if (write(fd, content, len) != (ssize_t)len) {
+		close(fd);
+		return NULL;
+	}
+	close(fd);
+	return path;
+}
+
+static void test_token_from_file(void)
+{
+	char token[LOTA_ENROLL_MAX_TOKEN + 1];
+	const char *path;
+
+	path = write_token_file("game-alpha-token\n", 17);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) == 0,
+	      "token file with trailing newline loads");
+	CHECK(strcmp(token, "game-alpha-token") == 0,
+	      "trailing newline trimmed");
+
+	path = write_token_file("  \n", 3);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EINVAL,
+	      "whitespace-only token file rejected");
+
+	path = write_token_file("bad token\n", 10);
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EINVAL,
+	      "inner whitespace rejected");
+
+	char big[LOTA_ENROLL_MAX_TOKEN + 2];
+	memset(big, 't', sizeof(big));
+	big[sizeof(big) - 1] = '\n';
+	path = write_token_file(big, sizeof(big));
+	CHECK(path && enroll_token_from_file(path, token, sizeof(token)) ==
+			      -EMSGSIZE,
+	      "oversized token rejected");
+
+	CHECK(enroll_token_from_file("/nonexistent/lota-token", token,
+				     sizeof(token)) == -ENOENT,
+	      "missing token file is -ENOENT");
+	CHECK(enroll_token_from_file(NULL, token, sizeof(token)) == -EINVAL,
+	      "NULL path rejected");
+	CHECK(enroll_token_from_file("/tmp/x", token, 4) == -EINVAL,
+	      "undersized output buffer rejected");
+
+	if (path)
+		unlink(path);
+}
+
 int main(void)
 {
 	printf("=== enrollment wire codec tests ===\n");
 	test_encode_begin_layout();
+	test_encode_begin_token_layout();
 	test_encode_begin_bounds();
 	test_encode_complete();
 	test_decode_challenge();
 	test_decode_result();
 	test_decode_rejects_malformed();
+	test_token_from_file();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

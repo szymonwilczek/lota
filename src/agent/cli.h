@@ -79,6 +79,7 @@ struct cli_options {
 	/* attestation-CA enrollment endpoint (--enroll) */
 	const char *ca_server;
 	int ca_port;
+	const char *enroll_token_file; /* --enroll-token-file: tenant token */
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;
