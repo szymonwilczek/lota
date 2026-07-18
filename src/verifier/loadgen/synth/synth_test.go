@@ -189,3 +189,46 @@ func TestCAPEMRoundTrip(t *testing.T) {
 		t.Error("CA key changed across PEM round-trip")
 	}
 }
+
+// AIK key pool round-trips through its PEM form:
+// the rig directory persists it once, so a reload must hand back the same keys
+// in the same order or every agent's certificate subject moves
+func TestKeyPoolPEMRoundTrip(t *testing.T) {
+	keys, err := GenerateKeyPool(2)
+	if err != nil {
+		t.Fatalf("GenerateKeyPool: %v", err)
+	}
+	blob, err := KeyPoolPEM(keys)
+	if err != nil {
+		t.Fatalf("KeyPoolPEM: %v", err)
+	}
+	loaded, err := LoadKeyPool(blob)
+	if err != nil {
+		t.Fatalf("LoadKeyPool: %v", err)
+	}
+	if len(loaded) != len(keys) {
+		t.Fatalf("pool has %d keys after reload, want %d", len(loaded), len(keys))
+	}
+	for i := range keys {
+		if !loaded[i].Equal(keys[i]) {
+			t.Errorf("key %d changed across PEM round-trip", i)
+		}
+	}
+}
+
+func TestKeyPoolRejectsBadInput(t *testing.T) {
+	if _, err := GenerateKeyPool(0); err == nil {
+		t.Error("non-positive pool size accepted")
+	}
+	if _, err := LoadKeyPool([]byte("not a PEM block")); err == nil {
+		t.Error("PEM-less blob accepted")
+	}
+	// well-formed PEM carrying something that is not an RSA key
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	if _, err := LoadKeyPool(ca.CertPEM()); err == nil {
+		t.Error("certificate PEM accepted as a key pool")
+	}
+}
