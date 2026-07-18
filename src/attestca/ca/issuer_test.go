@@ -234,7 +234,7 @@ func TestIssueAIKCertificateChainsToCA(t *testing.T) {
 		t.Fatalf("AIK key: %v", err)
 	}
 
-	aikCertDER, err := is.IssueAIKCertificate(&aikKey.PublicKey, "device-abc123", time.Now())
+	aikCertDER, err := is.IssueAIKCertificate(&aikKey.PublicKey, "device-abc123", "", time.Now())
 	if err != nil {
 		t.Fatalf("IssueAIKCertificate: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestNewIssuerAcceptsExternalSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AIK key: %v", err)
 	}
-	aikCertDER, err := is.IssueAIKCertificate(&aikKey.PublicKey, "device-hsm", time.Now())
+	aikCertDER, err := is.IssueAIKCertificate(&aikKey.PublicKey, "device-hsm", "", time.Now())
 	if err != nil {
 		t.Fatalf("IssueAIKCertificate via external signer: %v", err)
 	}

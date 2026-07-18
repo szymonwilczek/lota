@@ -54,6 +54,7 @@ type Service struct {
 	ttl          time.Duration
 	maxPending   int
 	pseudonymKey []byte
+	tenants      *TenantManifest // nil = every device in the default tenant
 
 	now func() time.Time
 
@@ -65,6 +66,7 @@ type session struct {
 	secret    []byte
 	aikPub    *rsa.PublicKey
 	deviceID  string
+	tenant    string
 	createdAt time.Time
 }
 
@@ -103,6 +105,16 @@ func WithClock(now func() time.Time) Option {
 		if now != nil {
 			s.now = now
 		}
+	}
+}
+
+// WithTenantManifest binds an EK-to-tenant manifest so each enrollment is
+// assigned a tenant.
+// Without it every device enrolls into the default tenant,
+// preserving single-tenant behavior.
+func WithTenantManifest(m *TenantManifest) Option {
+	return func(s *Service) {
+		s.tenants = m
 	}
 }
 
@@ -158,6 +170,14 @@ func (s *Service) Begin(ekCertDER, aikTPMTPublic []byte) (*Challenge, error) {
 		return nil, ErrAIKKeyType
 	}
 
+	// resolve the tenant from the verified EK before wrapping the
+	// credential, so device barred by strict manifest is rejected
+	// without spending a challenge
+	tenant, err := s.tenants.TenantFor(ekPub)
+	if err != nil {
+		return nil, fmt.Errorf("tenant assignment: %w", err)
+	}
+
 	ch, err := credential.GenerateChallenge(ekPub, aikName)
 	if err != nil {
 		return nil, fmt.Errorf("MakeCredential: %w", err)
@@ -177,7 +197,8 @@ func (s *Service) Begin(ekCertDER, aikTPMTPublic []byte) (*Challenge, error) {
 	s.pending[sessionID] = &session{
 		secret:    ch.Secret,
 		aikPub:    aikRSA,
-		deviceID:  s.deviceID(ekPub),
+		deviceID:  s.deviceID(ekPub, tenant),
+		tenant:    tenant,
 		createdAt: now,
 	}
 
@@ -212,7 +233,7 @@ func (s *Service) Complete(sessionID string, recoveredSecret []byte) (aikCertDER
 		return nil, "", ErrActivationMismatch
 	}
 
-	der, err := s.issuer.IssueAIKCertificate(sess.aikPub, sess.deviceID, now)
+	der, err := s.issuer.IssueAIKCertificate(sess.aikPub, sess.deviceID, sess.tenant, now)
 	if err != nil {
 		return nil, "", fmt.Errorf("issuing AIK certificate: %w", err)
 	}
@@ -234,12 +255,29 @@ func (s *Service) sweepLocked(now time.Time) {
 	}
 }
 
-// deviceID derives a stable, privacy-preserving identifier from the EK
-// modulus. The same TPM always maps to the same ID so the operator can
-// correlate re-enrollments, but the keyed hash cannot be reversed to the
-// EK by a verifier that only sees the issued certificate.
-func (s *Service) deviceID(ekPub *rsa.PublicKey) string {
-	mac := hmacSHA256(s.pseudonymKey, ekPub.N.Bytes())
+// deviceID derives a stable, privacy-preserving identifier from the EK modulus
+// and the assigned tenant.
+// The same TPM in the same tenant always maps to the same ID so the operator
+// can correlate re-enrollments, but the keyed hash cannot be reversed to the EK
+// by a verifier that only sees the issued certificate.
+// Mixing the tenant in keeps one TPM enrolling into two tenants from colliding
+// on a single device ID, which the per-tenant state model requires.
+// Default tenant keeps the historical EK-only MAC input, so a device enrolled
+// before tenant assignment re-enrolls under the same pseudonym and its
+// standing verifier state (baselines, revocations) stays attached.
+// NUL byte separates a named tenant from the modulus;
+// Valid tenant name never contains NUL, so the split is unambiguous and no two
+// (tenant, EK) pairs share MAC input.
+func (s *Service) deviceID(ekPub *rsa.PublicKey, tenant string) string {
+	input := ekPub.N.Bytes()
+	if tenant != DefaultTenant {
+		buf := make([]byte, 0, len(tenant)+1+len(input))
+		buf = append(buf, tenant...)
+		buf = append(buf, 0x00)
+		buf = append(buf, input...)
+		input = buf
+	}
+	mac := hmacSHA256(s.pseudonymKey, input)
 	return hex.EncodeToString(mac)
 }
 

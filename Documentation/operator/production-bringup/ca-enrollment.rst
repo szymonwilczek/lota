@@ -231,14 +231,58 @@ certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
 above. The same properties emit ``PropertiesChanged``, so a subscriber is
 notified the moment a rotation happens rather than having to poll.
 
-Tenant assignment
-=================
+Assigning tenants at enrollment
+===============================
 
-In a multi-tenant deployment the attestation CA assigns each host a tenant at
-enrollment and writes it into the AIK certificate subject as a single
-``OrganizationalUnit``. The verifier reads that tenant only after it has
-verified the certificate chain, and scopes the host's bans, revocations,
-baselines, logs, and PCR policy to it. A certificate issued without an
-organizational unit lands in the reserved ``default`` tenant. See
+A multi-tenant deployment gives each enrolled device a tenant, which the
+verifier then uses to scope that device's bans, revocations, baselines, logs,
+and PCR policy. The tenant is assigned by the CA at enrollment and written into
+the issued AIK certificate as a single ``OrganizationalUnit``; the verifier
+reads it only after verifying the certificate chain, so a host cannot choose
+its own tenant.
+
+The enterprise path resolves the tenant from an EK-to-tenant manifest. The
+manifest is a text file, one entry per line, mapping an endorsement-key
+fingerprint to a tenant name; blank lines and lines beginning with ``#`` are
+ignored:
+
+.. code-block:: text
+
+    # <ek_sha256> <tenant>
+    3b1f...c7  acme
+    9a20...4e  beta
+
+The fingerprint is the SHA-256 of the endorsement key's public modulus. For an
+EK certificate in ``ek.pem`` an operator computes it with:
+
+.. code-block:: sh
+
+    openssl x509 -in ek.pem -noout -modulus \
+      | sed 's/^Modulus=//' | xxd -r -p | sha256sum
+
+Point the CA at the manifest with ``--tenant-manifest``:
+
+.. code-block:: sh
+
+    lota-attest-ca ... --tenant-manifest /etc/lota/tenants.txt
+
+An endorsement key with no manifest entry lands in the reserved ``default``
+tenant, which is encoded as the absence of an ``OrganizationalUnit`` so
+single-tenant deployments keep issuing byte-identical subjects. Add
+``--tenant-manifest-strict`` to refuse enrollment for any endorsement key
+absent from the manifest; the manifest then doubles as an EK allowlist. A
+strict rejection happens before the credential challenge is wrapped, so a
+barred device never consumes an enrollment session.
+
+The device pseudonym in the certificate ``CommonName`` mixes in a named
+tenant, so one TPM enrolling into two tenants yields two distinct device IDs
+and never collides in the verifier's per-tenant state. A device that moves to
+a new tenant is therefore a new identity there and re-enrolls from scratch.
+The ``default`` tenant keeps the pseudonym derivation used before tenant
+assignment, so devices enrolled by an older CA re-enroll under the same
+device ID and keep their verifier-side state.
+
+The verifier reads this tenant from the certificate and scopes the device's
+bans, revocations, PCR policy, and operator-API visibility to it. See
 :doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
 state and how to configure scoped monitoring-API access.
