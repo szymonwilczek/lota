@@ -47,6 +47,25 @@ The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
 in-memory store is the contract reference exercised by ``boot_baseline_test.go``.
 
+Baseline store concurrency
+==========================
+
+The write fence of the Postgres baseline store is the **per-client**
+transaction-scoped advisory lock
+(``pg_advisory_xact_lock(hashtextextended(client_id, 0))``): every writer
+for one ``client_id`` serializes, and nothing wider does. Independent
+clients must commit concurrently -- that property is what lets a
+registration burst and steady-state attestation scale with the connection
+pool, and ``pg_integration_test.go``
+(``TestPostgresAttestationIndependentClientsDoNotSerialize``) enforces it
+mechanically: a store-level mutex around the transactions reintroduces a
+process-wide write lock and fails the test.
+
+The SQLite store is different by design, not by accident: SQLite's
+single-writer model serializes all writes in one file, so its throughput
+is a property of the backend, not a contract to fix. Deployments that
+need write concurrency use the Postgres backend (``--pg-dsn``).
+
 IPC token payload budget
 ========================
 
