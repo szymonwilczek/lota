@@ -11,6 +11,7 @@ on:
     paths:
       - 'packaging/**'
       - 'deploy/helm/**'
+      - 'deploy/observability/**'
       - 'Makefile'
       - 'src/**'
       - 'include/**'
@@ -91,6 +92,23 @@ jobs:
         run: |
           make helm-lint
           make helm-template
+
+  observability:
+    name: lint observability configs
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+    steps:
+      - name: Install promtool and jq
+        run: dnf -y install make golang-github-prometheus jq
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate the observability reference configs
+        run: make observability-lint
 
   images:
     name: build container images

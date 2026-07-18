@@ -16,6 +16,8 @@ intentionally fails closed when required gates are missing.
   N instances behind a load balancer.
 * :doc:`Multi-tenancy <multi-tenancy>` -- serve several isolated tenants from
   one verifier with per-tenant bans, policies, and scoped API keys.
+* :doc:`Observability <observability>` -- Prometheus scraping, the reference
+  Grafana dashboard, alert rules, and per-alert runbooks.
 * :doc:`RPM packages <packages>` -- the native packages and how to install
   and bring up the agent.
 * :doc:`Container images <container-images>` -- distroless OCI images for the
@@ -45,6 +47,7 @@ Related deployment material lives next to the code:
    player-install
    ha-deployment
    multi-tenancy
+   observability
    packages
    container-images
    helm-chart
