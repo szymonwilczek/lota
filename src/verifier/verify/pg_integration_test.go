@@ -457,6 +457,52 @@ func TestPostgresTenantRoundTrip(t *testing.T) {
 	}
 }
 
+// Repeated tenant stamp with the tenant already in place is the hot path:
+// every verified report re-stamps the CA-assigned tenant.
+// It must not rewrite the baseline row -- an unconditional UPDATE emits WAL
+// record and a commit fsync per report, which measurably caps attestation throughput.
+// Row version (xmin) detects a rewrite.
+func TestPostgresRepeatedTenantStampDoesNotRewriteRow(t *testing.T) {
+	s := pgBaselineStore(t)
+
+	if res, _ := s.CheckAndUpdate("c-stamp", fill(0x14)); res != TOFUFirstUse {
+		t.Fatal("CheckAndUpdate first use failed")
+	}
+	if err := s.SetClientTenant("c-stamp", "acme"); err != nil {
+		t.Fatalf("SetClientTenant: %v", err)
+	}
+
+	xmin := func() string {
+		var v string
+		if err := s.db.QueryRow(
+			"SELECT xmin::text FROM baselines WHERE client_id = 'c-stamp'").Scan(&v); err != nil {
+			t.Fatalf("xmin: %v", err)
+		}
+		return v
+	}
+
+	before := xmin()
+	if err := s.SetClientTenant("c-stamp", "acme"); err != nil {
+		t.Fatalf("repeated SetClientTenant: %v", err)
+	}
+	if after := xmin(); after != before {
+		t.Fatalf("repeated stamp rewrote the baseline row: xmin %s -> %s", before, after)
+	}
+
+	// real tenant change must still land
+	if err := s.SetClientTenant("c-stamp", "globex"); err != nil {
+		t.Fatalf("tenant change: %v", err)
+	}
+	if tenant, err := s.ClientTenant("c-stamp"); err != nil || tenant != "globex" {
+		t.Fatalf("ClientTenant = %q, %v; want globex", tenant, err)
+	}
+
+	// missing-row refusal must survive the conditional UPDATE
+	if err := s.SetClientTenant("ghost-stamp", "acme"); err == nil {
+		t.Fatal("SetClientTenant stamped a client with no baseline row")
+	}
+}
+
 // Attestation commits for INDEPENDENT clients must not serialize behind one another:
 // per-client advisory lock is the intended write fence, so client whose lock is
 // contended may stall, but it must never drag unrelated clients with it.
