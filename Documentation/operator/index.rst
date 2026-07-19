@@ -14,6 +14,8 @@ intentionally fails closed when required gates are missing.
   reboot-resumable single-machine path.
 * :doc:`Verifier deployment topologies <ha-deployment>` -- single node versus
   N instances behind a load balancer.
+* :doc:`Sizing guide <sizing>` -- agents per verifier, verifiers per
+  Postgres, enrollment bursts and failover behaviour, from measured runs.
 * :doc:`Multi-tenancy <multi-tenancy>` -- serve several isolated tenants from
   one verifier with per-tenant bans, policies, and scoped API keys.
 * :doc:`Observability <observability>` -- Prometheus scraping, the reference
@@ -52,6 +54,7 @@ Related deployment material lives next to the code:
    production-bringup/index
    player-install
    ha-deployment
+   sizing
    multi-tenancy
    observability
    version-compatibility
