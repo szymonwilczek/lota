@@ -74,6 +74,12 @@ concurrent use, and consumption stays one-time because the pending-map
 delete under the mutex has exactly one winner
 (``TestNonceStore_IndependentVerificationsDoNotSerializeOnBackend``).
 
+Per-report bookkeeping writes must also be no-ops when nothing changed:
+the tenant stamp (``SetClientTenant``) runs on every verified report, and
+an unconditional row rewrite costs a WAL record and a commit fsync each
+time, so the UPDATE is conditional on a real tenant change
+(``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
+
 IPC token payload budget
 ========================
 
