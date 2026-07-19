@@ -66,6 +66,14 @@ single-writer model serializes all writes in one file, so its throughput
 is a property of the backend, not a contract to fix. Deployments that
 need write concurrency use the Postgres backend (``--pg-dsn``).
 
+The nonce store follows the same rule: ``NonceStore`` (``verify/nonce.go``)
+holds its mutex only around the in-memory maps and calls the used-nonce
+backend -- a database round trip per call on the persistent backends --
+outside the lock, so ``UsedNonceBackend`` implementations must be safe for
+concurrent use, and consumption stays one-time because the pending-map
+delete under the mutex has exactly one winner
+(``TestNonceStore_IndependentVerificationsDoNotSerializeOnBackend``).
+
 IPC token payload budget
 ========================
 
