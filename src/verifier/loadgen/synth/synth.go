@@ -7,17 +7,15 @@
 // AIK certificate chain, quote signature, binding nonce, PCR digest, event log,
 // and the PCR14 boot-commitment derivation.
 //
-// No TPM involved:
-// AIK is plain RSA key and the quote is signed in software, which is exactly what
-// makes thousands of agents per host possible.
-//
-// Fleet shares one deterministic PCR bank and one agent/kernel hash, so single
-// generated policy (PolicyYAML) covers every agent.
-//
-// Identities differ per agent:
-// hardware_id, pseudonym and the CA-issued AIK certificate.
-// RSA keys come from shared pool because key generation, not signing, dominates
-// setup time; the verifier binds trust to the certificate subject, not key uniqueness.
+// Fleet shares one deterministic PCR bank and one agent/kernel hash,
+// so a single generated policy (PolicyYAML) covers every agent.
+// Identities differ per agent AND per rig:
+// hardware_id and pseudonym are salted with the rig's CA certificate,
+// so independent rigs driven against one shared verifier backend never collide
+// on client IDs, while a rig directory reloaded between runs reproduces its identities.
+// RSA keys come from a shared pool because key generation, not signing,
+// dominates setup time; the verifier binds trust to the certificate subject,
+// not key uniqueness.
 
 package synth
 
@@ -180,10 +178,20 @@ func AgentName(i int) string {
 	return fmt.Sprintf("loadgen-%06d", i)
 }
 
-// Pseudonym maps an agent name to its 64-hex device pseudonym,
+// RigID is the per-rig identity salt:
+// Digest of the rig's throwaway CA certificate.
+// Every rig generates fresh random CA, so the salt is unique per rig,
+// and the certificate persists in the rig directory, so the salt
+// - and with it every agent identity - is stable across reloads of the same rig
+func (ca *CA) RigID() string {
+	h := sha256.Sum256(ca.Cert.Raw)
+	return hex.EncodeToString(h[:8])
+}
+
+// Pseudonym maps rig and agent name to the agent's 64-hex device pseudonym,
 // the same shape the attestation CA derives for real devices
-func Pseudonym(name string) string {
-	h := sha256.Sum256([]byte("lota-loadgen-pseudonym:" + name))
+func Pseudonym(rigID, name string) string {
+	h := sha256.Sum256([]byte("lota-loadgen-pseudonym:" + rigID + ":" + name))
 	return hex.EncodeToString(h[:])
 }
 
@@ -228,12 +236,13 @@ func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey) (*Fleet, error) {
 		f.PCRs[i] = profileDigest(fmt.Sprintf("pcr-%d", i))
 	}
 
+	rigID := ca.RigID()
 	if err := parallelFor(n, func(i int) error {
 		name := AgentName(i)
 		a := &Agent{
 			Name:       name,
-			HardwareID: sha256.Sum256([]byte("lota-loadgen-hwid:" + name)),
-			Pseudonym:  Pseudonym(name),
+			HardwareID: sha256.Sum256([]byte("lota-loadgen-hwid:" + rigID + ":" + name)),
+			Pseudonym:  Pseudonym(rigID, name),
 			Key:        keys[i%len(keys)],
 		}
 		der, err := ca.IssueAIKCert(a.Pseudonym, &a.Key.PublicKey)
