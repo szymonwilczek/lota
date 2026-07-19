@@ -354,9 +354,14 @@ func (s *PostgresBaselineStore) ClearBaseline(clientID string) error {
 }
 
 // SetClientTenant records the CA-assigned tenant on the baseline row
+// Called per verified report, so the UPDATE is conditional:
+// re-stamping tenant already in place matches no row and produces no WAL write,
+// and the follow-up existence probe is a plain read.
+// Only real tenant change pays for row rewrite.
 func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 	res, err := s.db.Exec(
-		"UPDATE baselines SET tenant = $1 WHERE client_id = $2", tenant, clientID)
+		"UPDATE baselines SET tenant = $1 WHERE client_id = $2 AND tenant <> $1",
+		tenant, clientID)
 	if err != nil {
 		return fmt.Errorf("tenant UPDATE failed: %w", err)
 	}
@@ -365,7 +370,13 @@ func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("no baseline row for client %q", clientID)
+		var one int
+		err := s.db.QueryRow(
+			"SELECT 1 FROM baselines WHERE client_id = $1", clientID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("no baseline row for client %q", clientID)
+		}
+		return err
 	}
 	return nil
 }
