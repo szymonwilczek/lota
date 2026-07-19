@@ -10,6 +10,7 @@
 package synth
 
 import (
+	"crypto/rsa"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,9 +147,15 @@ func TestForeignAgentHashRejected(t *testing.T) {
 	}
 }
 
-// Identities and the measurement profile are deterministic across fleets,
-// so separately built rigs produce comparable runs and one generated policy covers them
-func TestFleetDeterminism(t *testing.T) {
+// Measurement profile is deterministic across fleets, so one generated policy
+// covers every rig and runs stay comparable.
+// Agent identities are the opposite:
+// they must be scoped to the rig, because independent rigs drive one shared
+// verifier backend side by side (the dual-rig soak) and colliding pseudonyms
+// silently fold two fleets onto the same baseline rows.
+// Within one rig, identities must be stable across reloads so server-side state
+// survives between runs.
+func TestFleetProfileSharedIdentitiesRigScoped(t *testing.T) {
 	f1 := newTestFleet(t, 2, 1)
 	f2 := newTestFleet(t, 2, 1)
 
@@ -162,11 +169,30 @@ func TestFleetDeterminism(t *testing.T) {
 		t.Error("PCR14 derivation differs between fleets")
 	}
 	for i := range f1.Agents {
-		if f1.Agents[i].HardwareID != f2.Agents[i].HardwareID {
-			t.Errorf("agent %d hardware ID differs", i)
+		if f1.Agents[i].HardwareID == f2.Agents[i].HardwareID {
+			t.Errorf("agent %d hardware ID collides across rigs", i)
 		}
-		if f1.Agents[i].Pseudonym != f2.Agents[i].Pseudonym {
-			t.Errorf("agent %d pseudonym differs", i)
+		if f1.Agents[i].Pseudonym == f2.Agents[i].Pseudonym {
+			t.Errorf("agent %d pseudonym collides across rigs", i)
+		}
+	}
+
+	// same CA + key pool = same rig directory reloaded:
+	// identities must reproduce exactly
+	keys := make([]*rsa.PrivateKey, 0, len(f1.Agents))
+	for _, a := range f1.Agents {
+		keys = append(keys, a.Key)
+	}
+	f3, err := NewFleetWithKeys(f1.CA, len(f1.Agents), keys)
+	if err != nil {
+		t.Fatalf("NewFleetWithKeys: %v", err)
+	}
+	for i := range f1.Agents {
+		if f1.Agents[i].HardwareID != f3.Agents[i].HardwareID {
+			t.Errorf("agent %d hardware ID unstable across rig reload", i)
+		}
+		if f1.Agents[i].Pseudonym != f3.Agents[i].Pseudonym {
+			t.Errorf("agent %d pseudonym unstable across rig reload", i)
 		}
 	}
 }
