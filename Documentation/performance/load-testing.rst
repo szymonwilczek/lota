@@ -127,11 +127,20 @@ Interpreting failures:
 Repeatability
 =============
 
-The fleet's measurement profile (PCR bank, agent/kernel hashes) and
-per-agent identities are deterministic: two rigs built by the same
-release produce the same policy and the same client pseudonyms, so
-recorded numbers are comparable across hosts and runs. RSA keys are
-random per rig, which changes nothing the verifier measures.
+The fleet's measurement profile (PCR bank, agent/kernel hashes) is
+deterministic: two rigs built by the same release produce the same
+policy, so recorded numbers are comparable across hosts and runs.
+Agent identities (pseudonyms, hardware IDs) are the opposite -- salted
+with the rig's CA certificate, unique per rig but stable across
+reloads of one rig directory. Multiple rigs can therefore drive one
+shared verifier backend side by side (the multi-instance failover
+drill splits the fleet across rigs, one per verifier instance) without
+colliding on client IDs; give every verifier instance every rig's
+``ca.crt`` (``--aik-ca-cert`` repeats). Regenerating a rig directory
+mints a new CA and with it a new fleet identity, so server-side
+baselines from the old rig become garbage -- point re-runs at the same
+rig directory, or start from a fresh database. RSA keys are random per
+rig, which changes nothing the verifier measures.
 
 The scale acceptance numbers recorded for a release, the soak/failover
 runbook and the sizing derivation live in
