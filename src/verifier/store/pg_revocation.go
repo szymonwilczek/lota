@@ -13,6 +13,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -412,6 +413,37 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
 	)
+	return err
+}
+
+func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	const cols = 9
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO attestation_log
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr) VALUES `)
+	args := make([]any, 0, len(entries)*cols)
+	now := time.Now().UTC()
+	for i := range entries {
+		ts := entries[i].Timestamp
+		if ts.IsZero() {
+			ts = now
+		}
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		base := i * cols
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9)
+		args = append(args, ts, entries[i].Tenant, entries[i].ClientID,
+			entries[i].HardwareID, entries[i].Result, entries[i].DurationMs,
+			entries[i].PCR14, entries[i].Details, entries[i].RemoteAddr)
+	}
+
+	_, err := l.db.Exec(sb.String(), args...)
 	return err
 }
 

@@ -8,6 +8,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -814,6 +815,68 @@ func TestAttestationLogTenant(t *testing.T) {
 			rs := tc.log.QueryAttestations(1)
 			if len(rs) != 1 || rs[0].Tenant != "acme" {
 				t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
+			}
+		})
+	}
+}
+
+func TestAttestationLogRecordBatch(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		newer func(*testing.T) BatchRecorder
+	}{
+		{"Memory", func(*testing.T) BatchRecorder { return NewMemoryAttestationLog() }},
+		{"SQLite", func(t *testing.T) BatchRecorder {
+			db, err := OpenDB(":memory:")
+			if err != nil {
+				t.Fatalf("OpenDB failed: %v", err)
+			}
+			t.Cleanup(func() { db.Close() })
+			return NewSQLiteAttestationLog(db)
+		}},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			br := tc.newer(t)
+
+			// empty batch must be a no-op, not an error
+			if err := br.RecordBatch(nil); err != nil {
+				t.Fatalf("RecordBatch(nil): %v", err)
+			}
+
+			batch := make([]AttestationRecord, 0, 64)
+			for i := range 64 {
+				batch = append(batch, AttestationRecord{
+					Tenant:   "acme",
+					ClientID: fmt.Sprintf("client-%02d", i),
+					Result:   "ok",
+				})
+			}
+			if err := br.RecordBatch(batch); err != nil {
+				t.Fatalf("RecordBatch: %v", err)
+			}
+
+			log, ok := br.(AttestationLog)
+			if !ok {
+				t.Fatal("BatchRecorder is not an AttestationLog")
+			}
+			rs := log.QueryAttestations(0)
+			if len(rs) != 64 {
+				t.Fatalf("QueryAttestations returned %d records, want 64", len(rs))
+			}
+
+			// every record must be durable, distinct, and timestamped
+			seen := make(map[string]bool, 64)
+			for _, r := range rs {
+				if r.Timestamp.IsZero() {
+					t.Errorf("record %s has a zero timestamp", r.ClientID)
+				}
+				if seen[r.ClientID] {
+					t.Errorf("duplicate record for %s", r.ClientID)
+				}
+				seen[r.ClientID] = true
+			}
+			if len(seen) != 64 {
+				t.Fatalf("saw %d distinct client IDs, want 64", len(seen))
 			}
 		})
 	}

@@ -426,6 +426,45 @@ func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 	return err
 }
 
+func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO attestation_log
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return rollbackOnErr(tx, err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC()
+	for i := range entries {
+		ts := entries[i].Timestamp
+		if ts.IsZero() {
+			ts = now
+		}
+		if _, err := stmt.Exec(
+			ts, entries[i].Tenant, entries[i].ClientID, entries[i].HardwareID,
+			entries[i].Result, entries[i].DurationMs, entries[i].PCR14,
+			entries[i].Details, entries[i].RemoteAddr,
+		); err != nil {
+			return rollbackOnErr(tx, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
