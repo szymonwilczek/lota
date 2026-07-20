@@ -96,6 +96,63 @@ throughput, route reads to Postgres read replicas; because tokens are opaque
 records in the shared store rather than self-describing blobs, this needs no
 change to the token wire format or the SDK.
 
+Scaling the write path (database sharding)
+------------------------------------------
+
+A single Postgres database bounds the fleet at its durable-write (WAL fsync)
+rate, and that rate is *shared* by every instance pointed at it -- adding
+verifier instances does not raise it. Past that ceiling, partition the
+per-client write state across several independent databases with
+``--pg-shard-dsn`` (repeatable, or ``LOTA_PG_SHARD_DSNS`` as a
+comma-separated list), mutually exclusive with ``--pg-dsn``::
+
+   lota-verifier \
+     --pg-shard-dsn "postgres://…@pg-shard-0/lota?sslmode=verify-full" \
+     --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
+     --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
+
+Each per-client baseline, nonce and session token is routed to one shard by
+a stable, process-independent hash of its key, so a given client's writes
+always land on the same shard and every instance agrees on that mapping.
+Because independent databases commit in parallel, aggregate durable-write
+throughput scales with the number of shards **when each shard has
+independent storage** (separate database hosts or volumes); shards packed
+onto one disk still serialise on that disk's fsync.
+
+Rules for a sharded deployment:
+
+* **Give every instance the same shard list in the same order.** The shard
+  index is positional; a divergent list would route the same client to
+  different databases on different instances and break replay protection and
+  cross-instance session validation.
+* **The first shard is the control database.** Fleet-global, read-mostly
+  state -- revocations, hardware bans, the audit trail and the attestation
+  decision log -- lives on shard 0, not on the per-report path.
+* **Size each shard for its slice.** A shard carries ``fleet / shards``
+  clients; size ``max_connections`` on each for the instance count times the
+  per-instance pool, as in the single-database case.
+* **A shard is a failure domain.** Losing one shard fails closed only for the
+  clients it owns (their next attestation errors and retries); the other
+  shards keep serving. Run each shard with its own HA (primary/replica) as
+  you would the single database.
+* **Fix the shard count before you enrol the fleet.** The index is
+  ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
+  After adding or removing a shard, a client's baseline, its used-nonce
+  history and its session tokens are looked up on a database that does not
+  hold them: every client presents as a first attestation, which the default
+  ``--allow-tofu-boot-baseline=false`` refuses unless a signed policy pins
+  that client's PCR0/1/7; outstanding session tokens stop validating; and
+  replay protection covers only the new routing until the history refills.
+  Treat a shard-count change as a fleet-wide re-enrolment in a maintenance
+  window -- migrate the baseline rows to their new shards first, or re-enrol
+  the fleet -- not as a rolling capacity step. Size the shard count for the
+  fleet you expect, not the one you have.
+
+Sharding composes with the multi-instance topology above: N stateless
+instances in front of M shard databases. The client-to-verifier load
+balancer needs no shard awareness -- any instance can serve any client
+because all instances share the same shard set.
+
 Choosing a topology
 ===================
 
