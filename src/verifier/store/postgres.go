@@ -205,18 +205,37 @@ var pgMigrations = []migration{
 	},
 }
 
-// OpenPostgresDB opens a Postgres-backed store at the given DSN and applies
-// pending schema migrations.
+// DefaultPGMaxOpenConns is the per-instance connection pool ceiling used when
+// the operator does not tune it.
+// Database commits concurrent transactions in one WAL fsync (group commit),
+// so the pool size caps how many enrollment/attestation writes coalesce per fsync:
+// wider pool lifts burst throughput until it hits the database's max_connections
+// (shared by every instance's pool).
+// Keep it well under max_connections / instances.
+const DefaultPGMaxOpenConns = 20
+
+// OpenPostgresDB opens a Postgres-backed store at the given DSN with the
+// default connection pool and applies pending schema migrations.
 //
 // DSN is a libpq/pgx connection string, e.g:
 // "postgres://user:pass@host:5432/lota?sslmode=verify-full"
-//
-// Connection pooling is left to database/sql; the pool is sized for the
-// per-instance attestation concurrency, not the whole fleet, because every
-// verifier instance opens its own pool against the shared server.
 func OpenPostgresDB(dsn string) (*sql.DB, error) {
+	return OpenPostgresDBPool(dsn, DefaultPGMaxOpenConns)
+}
+
+// OpenPostgresDBPool opens the backend with an explicit max-open-connections pool ceiling
+// and applies pending schema migrations.
+// Non-positive value falls back to DefaultPGMaxOpenConns.
+//
+// Pooling is left to database/sql; the pool is sized for the per-instance
+// attestation concurrency, not the whole fleet, because every verifier
+// instance opens its own pool against the shared server.
+func OpenPostgresDBPool(dsn string, maxOpenConns int) (*sql.DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("postgres DSN is empty")
+	}
+	if maxOpenConns <= 0 {
+		maxOpenConns = DefaultPGMaxOpenConns
 	}
 
 	db, err := sql.Open("pgx", dsn)
@@ -229,8 +248,12 @@ func OpenPostgresDB(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("postgres ping failed: %w", err)
 	}
 
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(10)
+	idle := maxOpenConns / 2
+	if idle < 1 {
+		idle = 1
+	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(idle)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 

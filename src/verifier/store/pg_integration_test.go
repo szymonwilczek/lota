@@ -49,6 +49,43 @@ func pgTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestPostgresDBPoolCeiling(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+
+	// explicit ceiling is applied to the pool
+	db, err := OpenPostgresDBPool(dsn, 64)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool: %v", err)
+	}
+	defer db.Close()
+	if got := db.Stats().MaxOpenConnections; got != 64 {
+		t.Fatalf("MaxOpenConnections = %d, want 64", got)
+	}
+
+	// non-positive ceiling falls back to the default
+	dbDefault, err := OpenPostgresDBPool(dsn, 0)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool(0): %v", err)
+	}
+	defer dbDefault.Close()
+	if got := dbDefault.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("default MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
+
+	// plain constructor uses the default too
+	dbPlain, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	defer dbPlain.Close()
+	if got := dbPlain.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("OpenPostgresDB MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
+}
+
 func TestPostgresMigrationsIdempotent(t *testing.T) {
 	db := pgTestDB(t)
 	// second open over the same database must be a no-op
