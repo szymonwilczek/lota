@@ -38,6 +38,16 @@ const (
 	sqliteConstraintPrimaryKey = 1555
 )
 
+// rollbackOnErr unwinds a transaction after cause aborted it.
+// It returns cause unless the rollback itself fails, in which case both are wrapped
+// so neither the original failure nor leaked transaction is lost.
+func rollbackOnErr(tx *sql.Tx, cause error) error {
+	if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+		return fmt.Errorf("%w (rollback failed: %v)", cause, rbErr)
+	}
+	return cause
+}
+
 // pgUniqueViolation is the SQLSTATE for a Postgres unique_violation
 const pgUniqueViolation = "23505"
 

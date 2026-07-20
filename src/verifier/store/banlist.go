@@ -383,6 +383,20 @@ type AttestationLog interface {
 	QueryAttestations(limit int) []AttestationRecord
 }
 
+// BatchRecorder is optional AttestationLog capability:
+// Backend that persists many records in a single round trip.
+// On a WAL-backed database that means one transaction and one commit fsync for
+// the whole batch instead of one per record, which is what lets the audit log
+// keep up with fleet-scale verify rate.
+// BatchedAttestationLog uses this to coalesce the per-report audit writes off
+// the verification hot path.
+type BatchRecorder interface {
+	// Persists every entry durably.
+	// Timestamps left zero are stamped now.
+	// Either all entries are persisted or error is returned.
+	RecordBatch(entries []AttestationRecord) error
+}
+
 // single attestation attempt outcome
 type AttestationRecord struct {
 	ID         int64
@@ -422,6 +436,27 @@ func (l *MemoryAttestationLog) Record(entry AttestationRecord) error {
 	}
 	l.entries = append(l.entries, entry)
 	l.nextID++
+	return nil
+}
+
+func (l *MemoryAttestationLog) RecordBatch(entries []AttestationRecord) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now().UTC()
+	for i := range entries {
+		entry := entries[i]
+		entry.ID = l.nextID
+		if entry.Timestamp.IsZero() {
+			entry.Timestamp = now
+		}
+		l.entries = append(l.entries, entry)
+		l.nextID++
+	}
 	return nil
 }
 
