@@ -27,8 +27,10 @@ Support tiers
        the reference environment the packaging and documentation describe.
    * - Experimental
      - The packages build and install from the same nfpm configs and dracut
-       module as the supported platform. The bring-up path is shared, not
-       separately exercised on the platform.
+       module as the supported platform, and the packaging is exercised there
+       in CI. Parts of the bring-up path may be verified on the platform, but
+       it is not the reference environment and a capability the supported
+       platform has may be missing -- the row says which.
    * - Unsupported
      - The platform needs packaging or a boot-integration model LOTA does not
        carry. The agent has no path there.
@@ -53,8 +55,11 @@ Distributions
      - RPM + dracut ``90lota`` (same nfpm configs)
      - Experimental
      - The RPM/dracut family the agent targets beyond Fedora. The RPMs build
-       and install on an el9 userspace (the ``Packages`` workflow's Rocky 9
-       job).
+       and install on el9 and el10 userspaces, and on el10 the agent enrolls,
+       commits the boot state to PCR 14 and passes its TPM attestation. The
+       BPF LSM does not arm on the el-family kernels, however -- see the
+       Kernel section below -- so runtime enforcement stays a Fedora-class
+       capability there.
    * - Debian / Ubuntu
      - separate ``initramfs-tools`` packaging
      - Unsupported
@@ -65,6 +70,24 @@ Distributions
      - Unsupported
      - A different update and root-filesystem model than the packaged
        bring-up assumes.
+
+Kernel
+======
+
+The agent's BPF LSM enforcement needs a kernel new enough for its
+``file_mprotect`` gate. That gate reads the mapped file through
+``vm_area_struct::vm_file`` and hands it to the fs-verity digest kfunc, which
+the verifier only accepts when the pointer is trusted. The kernel began marking
+that field access trusted around **6.18**; measured with ``veristat`` against
+live kernels, 6.17 rejects the program and 6.19 accepts it. The RHEL-family
+kernels are below that floor -- el9 ships 5.14 (which additionally lacks the
+fs-verity kfunc entirely) and el10 ships 6.12, where 12 of the 13 programs
+verify and only ``file_mprotect`` is rejected. Because one rejected program
+fails the whole object, the LSM does not load. The agent still enrolls,
+commits PCR 14 and completes its TPM attestation on those kernels; only the
+runtime BPF-LSM layer is unavailable. Lowering that layer to make the object
+load on an older kernel is not offered: runtime enforcement requires a
+Fedora-class kernel, not a reduced program set.
 
 Firmware and boot
 =================
