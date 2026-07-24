@@ -72,6 +72,10 @@ contents:
     type: "config|noreplace"
     file_info:
       mode: 0644
+  - src: ./systemd/lota-sysusers.conf
+    dst: /usr/lib/sysusers.d/lota-agent.conf
+    file_info:
+      mode: 0644
   - src: ./systemd/lota-agent.service
     dst: /usr/lib/systemd/system/lota-agent.service
     file_info:
