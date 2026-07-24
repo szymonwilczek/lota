@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +54,7 @@ static void test_roundtrip(void)
 		in.pin_sha256[i] = (uint8_t)i;
 	snprintf(in.ca_server, sizeof(in.ca_server), "ca.example");
 	snprintf(in.ca_cert, sizeof(in.ca_cert), "/etc/lota/ca-tls.crt");
+	snprintf(in.enroll_token, sizeof(in.enroll_token), "game-alpha-token");
 
 	CHECK(enroll_state_save_path(path, &in) == 0, "save state");
 
@@ -67,6 +69,8 @@ static void test_roundtrip(void)
 	CHECK(strcmp(out.ca_server, "ca.example") == 0, "server round-trips");
 	CHECK(strcmp(out.ca_cert, "/etc/lota/ca-tls.crt") == 0,
 	      "ca_cert round-trips");
+	CHECK(strcmp(out.enroll_token, "game-alpha-token") == 0,
+	      "enrollment token round-trips");
 
 	unlink(path);
 }
@@ -77,6 +81,50 @@ static void test_missing_is_enoent(void)
 	int ret = enroll_state_load_path("/tmp/lota-enroll-state-absent.XXXXXX",
 					 &out);
 	CHECK(ret == -ENOENT, "absent state load returns -ENOENT");
+}
+
+static void test_accepts_v1_record(void)
+{
+	/* record written before the token field existed:
+	 * version 1, ending where enroll_token begins */
+	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
+	const char *path = tmp_path();
+	struct enroll_state in, out;
+	int fd;
+
+	memset(&in, 0, sizeof(in));
+	in.magic = LOTA_ENROLL_STATE_MAGIC;
+	in.version = 1;
+	in.ca_port = 8444;
+	snprintf(in.ca_server, sizeof(in.ca_server), "ca.example");
+
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	CHECK(fd >= 0, "open v1 record");
+	if (fd >= 0) {
+		CHECK(write(fd, &in, v1_size) == (ssize_t)v1_size,
+		      "write v1 record");
+		close(fd);
+	}
+
+	memset(&out, 0xFF, sizeof(out));
+	CHECK(enroll_state_load_path(path, &out) == 0, "v1 record loads");
+	CHECK(out.ca_port == 8444 && strcmp(out.ca_server, "ca.example") == 0,
+	      "v1 endpoint survives");
+	CHECK(out.enroll_token[0] == '\0', "v1 record has an empty token");
+
+	/* v1-sized record must still claim version 1 */
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	CHECK(fd >= 0, "reopen for bad version");
+	if (fd >= 0) {
+		in.version = 2;
+		CHECK(write(fd, &in, v1_size) == (ssize_t)v1_size,
+		      "write truncated v2 record");
+		close(fd);
+	}
+	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
+	      "truncated v2 record rejected");
+
+	unlink(path);
 }
 
 static void test_rejects_bad_magic(void)
@@ -137,6 +185,7 @@ static void test_null_args(void)
 int main(void)
 {
 	test_roundtrip();
+	test_accepts_v1_record();
 	test_missing_is_enoent();
 	test_rejects_bad_magic();
 	test_rejects_truncated();

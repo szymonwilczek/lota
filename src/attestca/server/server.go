@@ -184,17 +184,17 @@ func (s *Server) handle(conn net.Conn) {
 	// Rate-limit before the expensive Begin (EK verify + MakeCredential).
 	if !s.allowBegin(remote) {
 		s.log.Warn("enroll begin rate-limited", "remote", remote)
-		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: wire.StatusRateLimited}); werr != nil {
+		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: wire.StatusRateLimited, Version: begin.Version}); werr != nil {
 			s.log.Debug("failed to write rate-limit rejection", "remote", remote, "error", werr)
 		}
 		return
 	}
 
-	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic)
+	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic, begin.Token)
 	if err != nil {
 		status := beginStatus(err)
 		s.log.Warn("enroll begin rejected", "remote", remote, "status", status, "error", err)
-		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: status}); werr != nil {
+		if werr := s.writeChallenge(conn, &wire.ChallengeReply{Status: status, Version: begin.Version}); werr != nil {
 			s.log.Debug("failed to write begin rejection", "remote", remote, "error", werr)
 		}
 		return
@@ -205,6 +205,7 @@ func (s *Server) handle(conn net.Conn) {
 		SessionID:       challenge.SessionID,
 		CredentialBlob:  challenge.CredentialBlob,
 		EncryptedSecret: challenge.EncryptedSecret,
+		Version:         begin.Version,
 	}); err != nil {
 		s.log.Warn("enroll challenge write failed", "remote", remote, "error", err)
 		return
@@ -220,7 +221,7 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil {
 		status := completeStatus(err)
 		s.log.Warn("enroll complete rejected", "remote", remote, "status", status, "error", err)
-		if werr := s.writeResult(conn, &wire.ResultReply{Status: status}); werr != nil {
+		if werr := s.writeResult(conn, &wire.ResultReply{Status: status, Version: begin.Version}); werr != nil {
 			s.log.Debug("failed to write complete rejection", "remote", remote, "error", werr)
 		}
 		return
@@ -231,6 +232,7 @@ func (s *Server) handle(conn net.Conn) {
 		Status:     wire.StatusOK,
 		AIKCertDER: certDER,
 		DeviceID:   deviceID,
+		Version:    begin.Version,
 	}); werr != nil {
 		s.log.Debug("failed to write enrollment result", "remote", remote, "error", werr)
 	}
@@ -336,6 +338,8 @@ func beginStatus(err error) uint16 {
 	case errors.Is(err, credential.ErrAIKDecode), errors.Is(err, credential.ErrAIKTemplate),
 		errors.Is(err, credential.ErrAIKName), errors.Is(err, enroll.ErrAIKKeyType):
 		return wire.StatusAIKRejected
+	case errors.Is(err, enroll.ErrTokenUnknown), errors.Is(err, enroll.ErrTokenRequired):
+		return wire.StatusTokenRejected
 	case errors.Is(err, enroll.ErrTooManyPending):
 		return wire.StatusRateLimited
 	default:

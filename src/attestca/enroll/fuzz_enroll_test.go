@@ -33,7 +33,7 @@ func FuzzServiceBegin(f *testing.F) {
 			ekCertDER = ek.CertDER
 		}
 
-		ch, err := svc.Begin(ekCertDER, aikTPMTPublic)
+		ch, err := svc.Begin(ekCertDER, aikTPMTPublic, nil)
 		if (err == nil) != (ch != nil) {
 			t.Fatalf("contract violated: err=%v ch=%v", err, ch)
 		}

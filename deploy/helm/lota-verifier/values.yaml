@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# Default values for the lota-verifier chart.
+# Override with --set or -f.
+
+# Number of stateless verifier instances.
+# HA needs the shared Postgres backend below, so every replica sees
+# the same enforcement state.
+replicaCount: 3
+
+image:
+  repository: ghcr.io/szymonwilczek/lota/verifier
+  # Defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Production default:
+# Reject reports without Privacy CA-issued AIK cert.
+requireCert: true
+
+# Trusted attestation-CA root(s) the AIK certificate must chain to (verifier --aik-ca-cert)
+# REQUIRED when requireCert is true -- the verifier refuses to start without it.
+# Reference a Secret holding one or more PEM roots; chart mounts it read-only
+# and passes each `files` entry as separate --aik-ca-cert.
+#
+# Privacy CA root, distinct from the listener TLS material below.
+aikCA:
+  existingSecret: ""
+  mountPath: /etc/lota/aik-ca
+  # file name(s) within the Secret, each passed as one --aik-ca-cert.
+  files:
+    - ca.crt
+
+# Writable scratch dir (emptyDir) for the AIK store etc.
+# Durable enforcement state lives in Postgres, not here.
+dataDir: /var/lib/lota
+
+# Shared Postgres backend (selects the multi-instance store).
+# Supply the DSN through a Secret;
+# Never pass it on the command line.
+# Either reference an existing Secret (recommended) or set `dsn`
+# to have the chart create one.
+postgres:
+  existingSecret: ""
+  dsnKey: dsn
+  dsn: ""
+
+# TLS material for the attestation listener.
+# Provide Secret of type kubernetes.io/tls (keys tls.crt / tls.key);
+# the chart does not mint keys.
+tls:
+  existingSecret: lota-verifier-tls
+  mountPath: /etc/lota/tls
+
+# Verifier refuses to start without PCR policy.
+# Either enable `policy` below with a signed policy,
+# or set allowPermissivePolicy to accept the permissive built-in policy.
+policy:
+  enabled: false
+  mountPath: /etc/lota/policy
+  existingConfigMap: ""
+  existingSecret: ""
+  # set true when the policy is accompanied by Ed25519 pubkey (policy.pub)
+  pubKey: false
+
+# INSECURE:
+# Start with the permissive built-in PCR policy
+# (no measurements, no kernel/agent-hash allowlists)
+#
+# Leave false in production and supply real policy via `policy` above;
+# Only one of the two may be chosen.
+allowPermissivePolicy: false
+
+service:
+  type: ClusterIP
+  # TLS attestation protocol port (verifier --addr)
+  port: 8443
+
+# HTTP monitoring API (verifier --http-addr).
+# Off by default.
+httpApi:
+  enabled: false
+  port: 8080
+
+extraArgs: []
+
+probes:
+  enabled: true
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+resources: {}
+
+# distroless nonroot runs as uid/gid 65532
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

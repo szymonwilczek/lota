@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: MIT
+{{- if and .Values.requireCert (not .Values.aikCA.existingSecret) }}
+{{- fail "requireCert is true but aikCA.existingSecret is unset: the verifier refuses to start without a trusted attestation-CA root. Set aikCA.existingSecret to a Secret holding the Privacy CA PEM root(s), or set requireCert=false (INSECURE)." }}
+{{- end }}
+{{- if and (not .Values.policy.enabled) (not .Values.allowPermissivePolicy) }}
+{{- fail "no PCR policy configured: the verifier refuses to start without one. Set policy.enabled with a policy Secret/ConfigMap, or set allowPermissivePolicy=true (INSECURE)." }}
+{{- end }}
+{{- if and .Values.policy.enabled .Values.allowPermissivePolicy }}
+{{- fail "policy.enabled and allowPermissivePolicy are mutually exclusive: choose a real policy or the permissive built-in, not both." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lota-verifier.fullname" . }}
+  labels:
+    {{- include "lota-verifier.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "lota-verifier.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "lota-verifier.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "lota-verifier.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: verifier
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --addr=:{{ .Values.service.port }}
+            {{- if .Values.httpApi.enabled }}
+            - --http-addr=:{{ .Values.httpApi.port }}
+            {{- end }}
+            - --require-cert={{ .Values.requireCert }}
+            - --cert={{ .Values.tls.mountPath }}/tls.crt
+            - --key={{ .Values.tls.mountPath }}/tls.key
+            - --aik-store={{ .Values.dataDir }}/aiks
+            {{- if .Values.aikCA.existingSecret }}
+            {{- range .Values.aikCA.files }}
+            - --aik-ca-cert={{ $.Values.aikCA.mountPath }}/{{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.policy.enabled }}
+            - --policy={{ .Values.policy.mountPath }}/policy.yaml
+            {{- if .Values.policy.pubKey }}
+            - --policy-pubkey={{ .Values.policy.mountPath }}/policy.pub
+            {{- end }}
+            {{- end }}
+            {{- if .Values.allowPermissivePolicy }}
+            - --allow-permissive-policy
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            # DSN carries the Postgres password, so it comes from Secret
+            # and never appears in the pod's argv
+            - name: LOTA_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lota-verifier.pgSecretName" . }}
+                  key: {{ .Values.postgres.dsnKey }}
+          ports:
+            - name: attest
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            {{- if .Values.httpApi.enabled }}
+            - name: http-api
+              containerPort: {{ .Values.httpApi.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: attest
+            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+          livenessProbe:
+            tcpSocket:
+              port: attest
+            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.periodSeconds }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tls
+              mountPath: {{ .Values.tls.mountPath }}
+              readOnly: true
+            {{- if .Values.aikCA.existingSecret }}
+            - name: aik-ca
+              mountPath: {{ .Values.aikCA.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.policy.enabled }}
+            - name: policy
+              mountPath: {{ .Values.policy.mountPath }}
+              readOnly: true
+            {{- end }}
+            - name: data
+              mountPath: {{ .Values.dataDir }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+        {{- if .Values.aikCA.existingSecret }}
+        - name: aik-ca
+          secret:
+            secretName: {{ .Values.aikCA.existingSecret }}
+        {{- end }}
+        {{- if .Values.policy.enabled }}
+        - name: policy
+          {{- if .Values.policy.existingConfigMap }}
+          configMap:
+            name: {{ .Values.policy.existingConfigMap }}
+          {{- else }}
+          secret:
+            secretName: {{ .Values.policy.existingSecret }}
+          {{- end }}
+        {{- end }}
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

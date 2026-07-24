@@ -172,6 +172,41 @@ existing endpoints. Leave the flag off for the enterprise profile, where
 firmware drift is a feature and re-baselining stays a deliberate operator
 action.
 
+Operator-forced re-anchor and client removal
+============================================
+
+Deliberate counterpart of the self-service path works on every profile
+and needs no verifier flag. When a platform change is legitimate but the
+self-service re-anchor refuses it (or the profile does not enable it), drop
+the device's pinned baselines through the admin API; the next attestation
+re-establishes trust per the active TOFU/policy configuration:
+
+.. code-block:: sh
+
+    curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
+        -H "Authorization: Bearer $ADMIN_KEY" \
+        -d '{"actor":"ops@example.com","note":"planned firmware update"}'
+
+``actor`` is required and lands in the audit log together with the ``note``;
+the action is also logged at security level and counted in the ``forced``
+re-anchor metric. The enrollment is untouched -- the host keeps attesting
+with its enrolled AIK identity.
+
+To remove a device from the fleet entirely (decommissioned host, or trust
+state that must be rebuilt from scratch), delete the client. This drops the
+baselines and any AIK-store registration; the optional body is audit
+metadata:
+
+.. code-block:: sh
+
+    curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
+        -H "Authorization: Bearer $ADMIN_KEY" \
+        -d '{"actor":"ops@example.com","note":"decommissioned"}'
+
+Revocations and hardware bans are keyed separately and survive the delete,
+so removing a client cannot be used to shed either -- a revoked identity
+that re-enrolls is still revoked.
+
 AIK rotation status over D-Bus
 ==============================
 
@@ -195,3 +230,127 @@ When ``ReenrollRequired`` is true, the host rotated its AIK and the issued
 certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
 above. The same properties emit ``PropertiesChanged``, so a subscriber is
 notified the moment a rotation happens rather than having to poll.
+
+Assigning tenants at enrollment
+===============================
+
+A multi-tenant deployment gives each enrolled device a tenant, which the
+verifier then uses to scope that device's bans, revocations, baselines, logs,
+and PCR policy. The tenant is assigned by the CA at enrollment and written into
+the issued AIK certificate as a single ``OrganizationalUnit``; the verifier
+reads it only after verifying the certificate chain, so a host cannot choose
+its own tenant.
+
+The enterprise path resolves the tenant from an EK-to-tenant manifest. The
+manifest is a text file, one entry per line, mapping an endorsement-key
+fingerprint to a tenant name; blank lines and lines beginning with ``#`` are
+ignored:
+
+.. code-block:: text
+
+    # <ek_sha256> <tenant>
+    3b1f...c7  acme
+    9a20...4e  beta
+
+The fingerprint is the SHA-256 of the endorsement key's public modulus. For an
+EK certificate in ``ek.pem`` an operator computes it with:
+
+.. code-block:: sh
+
+    openssl x509 -in ek.pem -noout -modulus \
+      | sed 's/^Modulus=//' | xxd -r -p | sha256sum
+
+Point the CA at the manifest with ``--tenant-manifest``:
+
+.. code-block:: sh
+
+    lota-attest-ca ... --tenant-manifest /etc/lota/tenants.txt
+
+An endorsement key with no manifest entry lands in the reserved ``default``
+tenant, which is encoded as the absence of an ``OrganizationalUnit`` so
+single-tenant deployments keep issuing byte-identical subjects. Add
+``--tenant-manifest-strict`` to refuse enrollment for any endorsement key
+absent from the manifest; the manifest then doubles as an EK allowlist. A
+strict rejection happens before the credential challenge is wrapped, so a
+barred device never consumes an enrollment session.
+
+The device pseudonym in the certificate ``CommonName`` mixes in a named
+tenant, so one TPM enrolling into two tenants yields two distinct device IDs
+and never collides in the verifier's per-tenant state. A device that moves to
+a new tenant is therefore a new identity there and re-enrolls from scratch.
+The ``default`` tenant keeps the pseudonym derivation used before tenant
+assignment, so devices enrolled by an older CA re-enroll under the same
+device ID and keep their verifier-side state.
+
+The verifier reads this tenant from the certificate and scopes the device's
+bans, revocations, PCR policy, and operator-API visibility to it. See
+:doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
+state and how to configure scoped monitoring-API access.
+
+Assigning tenants with enrollment tokens
+========================================
+
+An EK manifest presumes the operator knows every endorsement key up front,
+which a consumer deployment cannot: a game title enrolls machines the operator
+has never seen. Those deployments hand each tenant's install flow a shared
+*enrollment token*, an opaque secret string the agent presents with its begin
+request; the CA resolves the tenant from the token instead of the EK.
+
+The CA never stores tokens, only their digests. Mint a token per tenant, hand
+it to that tenant's distribution channel, and record its SHA-256 in a
+token-to-tenant file with the same shape as the manifest:
+
+.. code-block:: sh
+
+    printf %s "$TOKEN" | sha256sum
+
+.. code-block:: text
+
+    # <token_sha256> <tenant>
+    5e88...12  game-alpha
+    a71c...09  game-beta
+
+Point the CA at the file with ``--enrollment-tokens``:
+
+.. code-block:: sh
+
+    lota-attest-ca ... --enrollment-tokens /etc/lota/enroll-tokens.txt
+
+A presented token is an explicit tenant assignment and fails closed: a token
+matching no entry (or any token on a CA without ``--enrollment-tokens``) is
+refused with a token rejection before the credential challenge is wrapped, and
+never falls back to the EK manifest or the default tenant. Only a token-less
+enrollment takes the EK-manifest path, so both mechanisms can serve one CA.
+Add ``--require-enrollment-token`` to refuse token-less enrollments outright;
+the token set is then the sole admission control, which is the consumer shape
+where no enrolling EK is known in advance.
+
+On the device, store the token in a root-only file (never on a command line,
+where it would be visible in ``ps`` and shell history) and point ``--enroll``
+at it:
+
+.. code-block:: sh
+
+    sudo install -m 600 /dev/null /etc/lota/enroll.token
+    printf %s "$TOKEN" | sudo tee /etc/lota/enroll.token >/dev/null
+    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
+        --ca-cert /etc/lota/ca-tls.crt \
+        --enroll-token-file /etc/lota/enroll.token
+
+The token must be 1 to 128 printable, non-whitespace ASCII characters; a
+trailing newline in the file is tolerated. A successful enrollment persists
+the token (not the file path) in the root-only enrollment state next to the
+CA endpoint, so ``--reenroll`` and the daemon's automatic certificate
+renewal keep presenting it without further operator input. Re-run
+``--enroll`` with a new token file to replace it.
+
+Rotate a token by minting a new one, adding its digest to the file alongside
+the old entry (both then enroll into the tenant), shipping the new token to
+the install flow, and deleting the old digest once the rollout completes.
+Removing a digest stops future enrollments with that token but does not
+revoke certificates it already produced; revoke those at the verifier.
+
+Wire compatibility: an agent that presents no token keeps speaking protocol
+version 1, so upgraded agents interoperate with an old CA, and the CA answers
+each request in the version it arrived with, so old agents interoperate with
+an upgraded CA. The token travels only inside the enrollment TLS channel.

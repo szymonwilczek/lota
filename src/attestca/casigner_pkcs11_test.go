@@ -111,7 +111,7 @@ func TestPKCS11SignerIssuesAIK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AIK key: %v", err)
 	}
-	aikDER, err := issuer.IssueAIKCertificate(&aikKey.PublicKey, "device-hsm", now)
+	aikDER, err := issuer.IssueAIKCertificate(&aikKey.PublicKey, "device-hsm", "", now)
 	if err != nil {
 		t.Fatalf("IssueAIKCertificate via token key: %v", err)
 	}

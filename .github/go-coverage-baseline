@@ -18,3 +18,5 @@ github.com/szymonwilczek/lota/attestca/enroll 88
 github.com/szymonwilczek/lota/attestca/server 74
 github.com/szymonwilczek/lota/attestca/wire 84
 github.com/szymonwilczek/lota/crl 81
+github.com/szymonwilczek/lota/fleetctl 79
+github.com/szymonwilczek/lota/fleetctl/client 88

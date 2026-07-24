@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 )
@@ -140,6 +141,22 @@ func TestPostgresAIKStore(t *testing.T) {
 	if _, err := s.GetRegisteredAt("cX"); err == nil {
 		t.Fatal("GetRegisteredAt on unknown client should fail")
 	}
+
+	// operator-forced re-enrollment:
+	// delete frees the row and the AIK-uniqueness slot,
+	// unknown client maps to ErrAIKNotFound
+	if err := s.DeleteClient("c3"); err != nil {
+		t.Fatalf("DeleteClient: %v", err)
+	}
+	if _, err := s.GetAIK("c3"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("GetAIK after delete: %v, want ErrAIKNotFound", err)
+	}
+	if err := s.DeleteClient("c3"); !errors.Is(err, ErrAIKNotFound) {
+		t.Fatalf("DeleteClient on unknown client: %v, want ErrAIKNotFound", err)
+	}
+	if err := s.RegisterAIK("c4", &k3.PublicKey); err != nil {
+		t.Fatalf("re-registering the freed AIK failed: %v", err)
+	}
 }
 
 func TestPostgresRevocationBanAudit(t *testing.T) {
@@ -147,10 +164,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	audit := NewPostgresAuditLog(db)
 	rev := NewPostgresRevocationStore(db, audit)
 
-	if err := rev.Revoke("c1", RevocationReason("compromised"), "op", "n1"); err != nil {
+	if err := rev.Revoke("default", "c1", RevocationReason("compromised"), "op", "n1"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if err := rev.Revoke("c1", RevocationReason("compromised"), "op", "n1"); err != ErrAlreadyRevoked {
+	if err := rev.Revoke("default", "c1", RevocationReason("compromised"), "op", "n1"); err != ErrAlreadyRevoked {
 		t.Fatalf("duplicate Revoke: got %v want ErrAlreadyRevoked", err)
 	}
 	if e, ok := rev.IsRevoked("c1"); !ok || e.RevokedBy != "op" {
@@ -169,13 +186,13 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	ban := NewPostgresBanStore(db, audit)
 	var hw [32]byte
 	hw[0] = 0x09
-	if err := ban.BanHardware(hw, RevocationReason("cheat"), "op", "b1"); err != nil {
+	if err := ban.BanHardware("default", hw, RevocationReason("cheat"), "op", "b1"); err != nil {
 		t.Fatalf("BanHardware: %v", err)
 	}
-	if err := ban.BanHardware(hw, RevocationReason("cheat"), "op", "b1"); err != ErrAlreadyBanned {
+	if err := ban.BanHardware("default", hw, RevocationReason("cheat"), "op", "b1"); err != ErrAlreadyBanned {
 		t.Fatalf("duplicate ban: got %v want ErrAlreadyBanned", err)
 	}
-	if e, ok := ban.IsBanned(hw); !ok || e.HardwareID != hw {
+	if e, ok := ban.IsBanned("default", hw); !ok || e.HardwareID != hw {
 		t.Fatal("IsBanned")
 	}
 	if ban.CountBans() != 1 {
@@ -190,16 +207,33 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if lb := ban.ListBansPage(1, 0); len(lb) != 1 {
 		t.Fatalf("ListBansPage = %+v", lb)
 	}
-	if err := ban.UnbanHardware(hw); err != nil {
+	if err := ban.UnbanHardware("default", hw); err != nil {
 		t.Fatalf("UnbanHardware: %v", err)
 	}
-	if err := ban.UnbanHardware(hw); err != ErrNotBanned {
+	if err := ban.UnbanHardware("default", hw); err != ErrNotBanned {
 		t.Fatalf("double unban: got %v want ErrNotBanned", err)
 	}
 
 	// revoke + unrevoke + ban + unban = four audit entries
 	if n := len(audit.Query(100)); n != 4 {
 		t.Fatalf("audit entries = %d, want 4", n)
+	}
+
+	// per-tenant semantics against the real Postgres schema
+	testRevocationTenant(t, rev, "Postgres")
+	testBanStorePerTenant(t, ban, "Postgres")
+
+	// audit entries record the tenant of the mutation
+	if err := rev.Revoke("game-x", "audit-tenant-c", RevocationAdmin, "op", ""); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := rev.Unrevoke("audit-tenant-c"); err != nil {
+		t.Fatalf("Unrevoke: %v", err)
+	}
+	for _, e := range audit.Query(2) {
+		if e.Tenant != "game-x" {
+			t.Fatalf("audit action %q recorded tenant %q, want game-x", e.Action, e.Tenant)
+		}
 	}
 }
 
@@ -212,5 +246,13 @@ func TestPostgresAttestationLog(t *testing.T) {
 	rs := al.QueryAttestations(10)
 	if len(rs) != 1 || rs[0].Result != "VERIFY_OK" {
 		t.Fatalf("QueryAttestations = %+v", rs)
+	}
+
+	if err := al.Record(AttestationRecord{ClientID: "c2", Tenant: "acme", Result: "VERIFY_OK"}); err != nil {
+		t.Fatalf("Record with tenant: %v", err)
+	}
+	rs = al.QueryAttestations(1)
+	if len(rs) != 1 || rs[0].Tenant != "acme" {
+		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
 	}
 }

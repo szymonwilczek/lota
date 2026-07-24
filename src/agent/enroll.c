@@ -10,7 +10,9 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "enroll.h"
 #include "lota_enroll.h"
@@ -73,7 +75,10 @@ static int rd_preamble(struct rd *r)
 	ret = rd_u16(r, &version);
 	if (ret < 0)
 		return ret;
-	if (version != LOTA_ENROLL_VERSION)
+	/* CA mirrors the request's version;
+	 * replies carry no version-specific fields, so both are acceptable here */
+	if (version != LOTA_ENROLL_VERSION &&
+	    version != LOTA_ENROLL_VERSION_TOKEN)
 		return -EPROTONOSUPPORT;
 	return 0;
 }
@@ -120,28 +125,34 @@ static int wr_bytes16(struct wr *w, const uint8_t *data, size_t len)
 	return 0;
 }
 
-static int wr_preamble(struct wr *w)
+static int wr_preamble(struct wr *w, uint16_t version)
 {
 	int ret = wr_u32(w, LOTA_ENROLL_MAGIC);
 	if (ret < 0)
 		return ret;
-	return wr_u16(w, LOTA_ENROLL_VERSION);
+	return wr_u16(w, version);
 }
 
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
-			    const uint8_t *aik_public, size_t aik_public_len)
+			    const uint8_t *aik_public, size_t aik_public_len,
+			    const uint8_t *token, size_t token_len)
 {
 	struct wr w = { .buf = out, .max = out_max, .pos = 0 };
 	int ret;
 
 	if (!out || !ek_cert || !aik_public)
 		return -EINVAL;
+	if (!token && token_len > 0)
+		return -EINVAL;
 	if (ek_cert_len > LOTA_ENROLL_MAX_EK_CERT ||
-	    aik_public_len > LOTA_ENROLL_MAX_AIK_PUBLIC)
+	    aik_public_len > LOTA_ENROLL_MAX_AIK_PUBLIC ||
+	    token_len > LOTA_ENROLL_MAX_TOKEN)
 		return -EMSGSIZE;
 
-	ret = wr_preamble(&w);
+	/* a token-less request stays version 1 so old CA accepts it */
+	ret = wr_preamble(&w, token_len > 0 ? LOTA_ENROLL_VERSION_TOKEN :
+					      LOTA_ENROLL_VERSION);
 	if (ret < 0)
 		return ret;
 	ret = wr_bytes16(&w, ek_cert, ek_cert_len);
@@ -150,6 +161,11 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 	ret = wr_bytes16(&w, aik_public, aik_public_len);
 	if (ret < 0)
 		return ret;
+	if (token_len > 0) {
+		ret = wr_bytes16(&w, token, token_len);
+		if (ret < 0)
+			return ret;
+	}
 	return (ssize_t)w.pos;
 }
 
@@ -168,7 +184,7 @@ ssize_t enroll_encode_complete(uint8_t *out, size_t out_max,
 	    secret_len > LOTA_ENROLL_MAX_SECRET)
 		return -EMSGSIZE;
 
-	ret = wr_preamble(&w);
+	ret = wr_preamble(&w, LOTA_ENROLL_VERSION);
 	if (ret < 0)
 		return ret;
 	ret = wr_bytes16(&w, (const uint8_t *)session_id, sid_len);
@@ -211,6 +227,54 @@ int enroll_decode_challenge(const uint8_t *body, size_t len,
 	if (ret < 0)
 		return ret;
 	return 0;
+}
+
+int enroll_token_from_file(const char *path, char *out, size_t out_size)
+{
+	/* one extra byte so over-long token is detected, not truncated */
+	char buf[LOTA_ENROLL_MAX_TOKEN + 2];
+	ssize_t n;
+	size_t len;
+	int fd, ret;
+
+	if (!path || !out || out_size < LOTA_ENROLL_MAX_TOKEN + 1)
+		return -EINVAL;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	n = read(fd, buf, sizeof(buf));
+	if (n < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+	close(fd);
+
+	ret = -EINVAL;
+	len = (size_t)n;
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
+			   buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+		len--;
+	if (len == 0)
+		goto out;
+	if (len > LOTA_ENROLL_MAX_TOKEN) {
+		ret = -EMSGSIZE;
+		goto out;
+	}
+	/* printable, non-whitespace ASCII only:
+	 * CA hashes the exact bytes, so transport or shell could mangle is refused */
+	for (size_t i = 0; i < len; i++) {
+		if (buf[i] <= 0x20 || buf[i] >= 0x7F)
+			goto out;
+	}
+
+	memcpy(out, buf, len);
+	out[len] = '\0';
+	ret = 0;
+out:
+	explicit_bzero(buf, sizeof(buf));
+	return ret;
 }
 
 int enroll_decode_result(const uint8_t *body, size_t len,

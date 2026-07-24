@@ -68,11 +68,19 @@ INITRAMFS_LOCK_BIN := $(BUILD_DIR)/lota-pcr14-lock
 INSTALLER_BIN := $(BUILD_DIR)/lota-install
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
+FLEETCTL_BIN := $(BUILD_DIR)/lota-fleet
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
 SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
+
+# Shared-library ABI version. The soname carries the major only (bumped on an
+# incompatible ABI change); the on-disk file carries the full version and the
+# soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
+# layout. Independent of the release VERSION -- pre-1.0 ABI starts at 0.
+LOTA_ABI_MAJOR := 0
+LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
 
 # Detect target architecture (overridable)
 ifndef ARCH
@@ -293,35 +301,47 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
-# build SDK shared library
+# build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build server SDK shared library
+# build server SDK shared library (versioned)
 $(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build server SDK static library
 $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
 	$(Q)$(AR) rcs $@ $^
 
-# build Wine/Proton hook (self-contained: includes gaming SDK)
+# build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
 $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lpthread
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lpthread
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
-# build anti-cheat compatibility layer (includes gaming + server SDK)
+# build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_LD)
-	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@) $(HARDENING_LDFLAGS) -o $@ $^ -lcrypto
+	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
@@ -334,7 +354,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -347,6 +367,8 @@ installer: $(INSTALLER_BIN)
 verifier: $(VERIFIER_BIN)
 
 attest-ca: $(ATTESTCA_BIN)
+
+fleet-cli: $(FLEETCTL_BIN)
 
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
@@ -436,6 +458,11 @@ $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
+# Go fleet CLI
+$(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
+	$(QUIET_GO)
+	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
+
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
 # -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
@@ -451,6 +478,166 @@ reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
 reproducible-build: all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
+
+# Native packages (RPM via nfpm)
+# Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
+# Depends on the build artifacts (all), so the configs find the binaries and
+# libraries they reference.
+# Agent package ships the BPF object UNSIGNED on purpose:
+# each adopter signs it during bring-up.
+#
+# Changelog version tracks VERSION:
+# Template placeholder is substituted from PROJECT_VERSION into a generated file
+# the configs point at, so it never has to be bumped alongside VERSION.
+#
+# rpmlint runs over the built RPMs when installed (report only, non-fatal);
+# the release CI is the gating lint.
+#
+# .spec / COPR path layers on top for the Fedora build service.
+NFPM ?= nfpm
+RPMLINT ?= rpmlint
+PKG_DIR ?= $(BUILD_DIR)/packages
+NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
+CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
+CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
+
+# Compiled SELinux policy module.
+# Built via the policy devel Makefile under selinux/ (needs selinux-policy-devel)
+# and shipped in the agent RPM at /usr/share/lota/selinux/lota.pp so
+# lota-install's SELinux stage can load it without the operator
+# hand-compiling the module out of band.
+SELINUX_PP := selinux/lota.pp
+$(SELINUX_PP):
+	$(Q)$(MAKE) -C selinux lota.pp
+
+.PHONY: selinux-pp
+selinux-pp: $(SELINUX_PP)
+
+packages: all selinux-pp
+	$(Q)mkdir -p $(PKG_DIR)
+	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
+	$(Q)for c in $(NFPM_CONFIGS); do \
+		echo "  NFPM    $$c"; \
+		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
+			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
+	done
+	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
+		echo "  RPMLINT $(PKG_DIR)"; \
+		$(RPMLINT) --ignore-unused-rpmlintrc \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
+	else \
+		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
+	fi
+
+# Container images (OCI, built with ko -> distroless static, no Docker daemon)
+# KO_DOCKER_REPO is the destination registry prefix
+# -B names the images <repo>/verifier and <repo>/attestca after the base of each import path.
+# Build is reproducible (SOURCE_DATE_EPOCH from the HEAD commit), carries an SPDX SBOM
+# and OCI source/licence/version labels, and is multi-arch.
+# Release flow cosign-signs the pushed digests.
+# For a local Podman inspection, point ko at an OCI layout instead of a registry:
+#   cd src/verifier && ko build --oci-layout-path=/tmp/v .
+#   skopeo copy oci:/tmp/v containers-storage:localhost/lota-verifier
+KO ?= ko
+KO_DOCKER_REPO ?= ghcr.io/szymonwilczek/lota
+KO_IMAGE_TAGS ?= $(PROJECT_VERSION),latest
+KO_PLATFORMS ?= linux/amd64,linux/arm64
+KO_LABELS := \
+	--image-label org.opencontainers.image.version=$(PROJECT_VERSION) \
+	--image-label org.opencontainers.image.source=https://github.com/szymonwilczek/lota \
+	--image-label org.opencontainers.image.licenses=MIT
+KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
+	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
+
+container-images: container-image-verifier container-image-attest-ca
+
+container-image-verifier:
+	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
+
+container-image-attest-ca:
+	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
+
+# Helm chart validation (no Kubernetes cluster required)
+# helm-lint checks chart structure; helm-template renders the manifests
+# and pipes them through kubeconform for Kubernetes API schema validation.
+# Both run offline against the local chart, so they fit CI without cluster.
+HELM ?= helm
+KUBECONFORM ?= kubeconform
+HELM_CHART_DIR := deploy/helm/lota-verifier
+HELM_CHECK_VALUES := \
+	--set aikCA.existingSecret=example-aik-ca \
+	--set postgres.existingSecret=example-pg \
+	--set policy.enabled=true \
+	--set policy.existingSecret=example-policy
+
+helm-lint:
+	$(HELM) lint $(HELM_CHART_DIR) $(HELM_CHECK_VALUES)
+
+helm-template:
+	$(HELM) template lota-verifier $(HELM_CHART_DIR) $(HELM_CHECK_VALUES) | $(KUBECONFORM) -strict -summary -
+
+# Observability reference-config validation
+# check config runs --syntax-only because the scrape config names credentials
+# file that only exists on deployed host;
+# rules file is checked explicitly since --syntax-only skips rule_files
+PROMTOOL ?= promtool
+JQ ?= jq
+OBSERVABILITY_DIR := deploy/observability
+
+observability-lint:
+	$(PROMTOOL) check config --syntax-only $(OBSERVABILITY_DIR)/prometheus.yml
+	$(PROMTOOL) check rules $(OBSERVABILITY_DIR)/alerts/lota-verifier-alerts.yaml
+	$(JQ) empty $(OBSERVABILITY_DIR)/grafana/lota-verifier-dashboard.json
+
+# Source RPM (COPR / rpmbuild from source)
+# Archives HEAD into a tarball and builds an SRPM into OUTDIR.
+# COPR drives this through .copr/Makefile; locally run `make srpm`.
+# Spec Version uses ~ for the prerelease, so the project version is normalised the same way.
+SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
+SRPM_TREE := $(BUILD_DIR)/srpmtree
+OUTDIR ?= $(BUILD_DIR)/srpm
+
+srpm:
+	$(Q)rm -rf $(SRPM_TREE)
+	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(OUTDIR)
+	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
+		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
+	$(Q)rpmbuild -bs packaging/rpm/lota.spec \
+		--define "_topdir $(abspath $(SRPM_TREE))" \
+		--define "_srcrpmdir $(abspath $(OUTDIR))" \
+		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
+	@echo "SRPM written to $(OUTDIR)"
+
+# Signed dnf repository (self-hosted, for the nfpm binary packages) rpm-sign
+# signs every RPM in PKG_DIR with the project signing key.
+# dnf-repo assembles createrepo_c repository under REPO_DIR with signed metadata,
+# the exported public key and a generated .repo file.
+# Signing key is a release secret held outside the tree:
+# set LOTA_RPM_GPG_NAME to its uid or key id and have its passphrase available
+# through gpg-agent
+# PKG_DIR is defined with the native-packages target above.
+REPO_DIR ?= $(BUILD_DIR)/dnf-repo
+LOTA_RPM_GPG_NAME ?=
+LOTA_REPO_BASEURL ?= https://lota.example/rpm
+
+rpm-sign:
+	@test -n "$(LOTA_RPM_GPG_NAME)" || { \
+		echo "rpm-sign: set LOTA_RPM_GPG_NAME to the signing key uid/id" >&2; exit 1; }
+	$(Q)rpmsign --define "_gpg_name $(LOTA_RPM_GPG_NAME)" --addsign $(PKG_DIR)/*.rpm
+	@echo "Signed RPMs in $(PKG_DIR)"
+
+dnf-repo: rpm-sign
+	$(Q)rm -rf $(REPO_DIR)
+	$(Q)mkdir -p $(REPO_DIR)
+	$(Q)cp $(PKG_DIR)/*.rpm $(REPO_DIR)/
+	$(Q)createrepo_c --quiet $(REPO_DIR)
+	$(Q)gpg --batch --yes --armor -u "$(LOTA_RPM_GPG_NAME)" \
+		--detach-sign $(REPO_DIR)/repodata/repomd.xml
+	$(Q)gpg --export --armor "$(LOTA_RPM_GPG_NAME)" >$(REPO_DIR)/RPM-GPG-KEY-lota
+	$(Q)sed 's,@BASEURL@,$(LOTA_REPO_BASEURL),g' \
+		packaging/repo/lota.repo.in >$(REPO_DIR)/lota.repo
+	@echo "Signed dnf repo in $(REPO_DIR) (baseurl $(LOTA_REPO_BASEURL))"
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -498,7 +685,7 @@ check-includes:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-LINT_GO_MODULES := src/verifier src/attestca src/crl
+LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl
 
 lint: lint-c lint-go
 
@@ -625,10 +812,13 @@ install: check-version-tag all
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
 	fi
 	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
-	install -m 755 $(SDK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(SERVER_SDK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(WINE_HOOK_LIB) $(DESTDIR)/usr/lib64/
-	install -m 755 $(ANTICHEAT_LIB) $(DESTDIR)/usr/lib64/
+	for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
+		install -m 755 $(BUILD_DIR)/$$l.so.$(LOTA_ABI_VERSION) \
+			$(DESTDIR)/usr/lib64/; \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
+			$(DESTDIR)/usr/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(DESTDIR)/usr/lib64/$$l.so; \
+	done
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-dev-bringup.sh $(DESTDIR)/usr/bin/
@@ -1299,10 +1489,16 @@ help:
 	@echo "  initramfs-lock   Build PCR14 initramfs lock helper only"
 	@echo "  verifier         Build Go verifier only"
 	@echo "  attest-ca        Build Go attestation CA only"
+	@echo "  fleet-cli        Build lota-fleet operator CLI only"
 	@echo "  sdk              Build gaming SDK shared/static libraries"
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
+	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
+	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
+	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
+	@echo "  dnf-repo         Build a signed createrepo_c dnf repository under REPO_DIR"
 	@echo "  examples         Build end-to-end demo material under examples/"
 	@echo "  examples-clean   Remove demo build artifacts under build/examples"
 	@echo ""
@@ -1319,6 +1515,9 @@ help:
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
+	@echo "  helm-lint        Lint the verifier Helm chart"
+	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"
+	@echo "  observability-lint  Validate the Prometheus/Grafana reference configs"
 	@echo ""
 	@echo "  SANITIZE=address,undefined make test-unit  build+run under ASan/UBSan"
 	@echo ""

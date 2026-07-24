@@ -54,6 +54,10 @@ func main() {
 		aikCertTTL   = flag.Duration("aik-cert-ttl", ca.DefaultAIKCertTTL, "lifetime of issued AIK certificates")
 		sessionTTL   = flag.Duration("session-ttl", enroll.DefaultSessionTTL, "pending enrollment lifetime")
 		maxPending   = flag.Int("max-pending", enroll.DefaultMaxPending, "max outstanding enrollments")
+		tenantMani   = flag.String("tenant-manifest", "", "EK-to-tenant manifest ('<ek_sha256> <tenant>' per line); assigns each enrolled device a tenant written into the certificate OU. Absent = every device in the default tenant.")
+		tenantStrict = flag.Bool("tenant-manifest-strict", false, "refuse enrollment for an endorsement key absent from -tenant-manifest (the manifest doubles as an EK allowlist)")
+		enrollTokens = flag.String("enrollment-tokens", "", "token-to-tenant file ('<token_sha256> <tenant>' per line); a device presenting a listed enrollment token is assigned that tenant. Absent = every presented token is rejected.")
+		requireToken = flag.Bool("require-enrollment-token", false, "refuse any enrollment that presents no token; requires -enrollment-tokens")
 	)
 	var ekRoots stringList
 	flag.Var(&ekRoots, "ek-root", "PEM file of trusted TPM manufacturer roots (repeatable)")
@@ -63,7 +67,7 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	if err := run(*listen, runConfig{
+	if err := run(*listen, &runConfig{
 		caCertPath: *caCertPath,
 		caKeyPath:  *caKeyPath,
 		pkcs11: pkcs11KeyConfig{
@@ -82,6 +86,10 @@ func main() {
 		aikCertTTL:   *aikCertTTL,
 		sessionTTL:   *sessionTTL,
 		maxPending:   *maxPending,
+		tenantMani:   *tenantMani,
+		tenantStrict: *tenantStrict,
+		enrollTokens: *enrollTokens,
+		requireToken: *requireToken,
 	}, log); err != nil {
 		log.Error("lota-attest-ca failed", "error", err)
 		os.Exit(1)
@@ -101,9 +109,13 @@ type runConfig struct {
 	aikCertTTL   time.Duration
 	sessionTTL   time.Duration
 	maxPending   int
+	tenantMani   string
+	tenantStrict bool
+	enrollTokens string
+	requireToken bool
 }
 
-func run(listen string, cfg runConfig, log *slog.Logger) error {
+func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	required := map[string]string{
 		"ca-cert":  cfg.caCertPath,
 		"tls-cert": cfg.tlsCertPath, "tls-key": cfg.tlsKeyPath,
@@ -202,9 +214,35 @@ func run(listen string, cfg runConfig, log *slog.Logger) error {
 		return fmt.Errorf("issuer: %w", err)
 	}
 
-	svc, err := enroll.NewService(issuer, pseudonymKey,
+	svcOpts := []enroll.Option{
 		enroll.WithSessionTTL(cfg.sessionTTL),
-		enroll.WithMaxPending(cfg.maxPending))
+		enroll.WithMaxPending(cfg.maxPending),
+	}
+	if cfg.tenantMani != "" {
+		manifest, err := enroll.LoadTenantManifest(cfg.tenantMani, cfg.tenantStrict)
+		if err != nil {
+			return fmt.Errorf("tenant manifest: %w", err)
+		}
+		svcOpts = append(svcOpts, enroll.WithTenantManifest(manifest))
+		log.Info("tenant manifest loaded", "path", cfg.tenantMani, "strict", cfg.tenantStrict)
+	} else if cfg.tenantStrict {
+		return fmt.Errorf("-tenant-manifest-strict requires -tenant-manifest")
+	}
+	if cfg.enrollTokens != "" {
+		tokens, err := enroll.LoadEnrollmentTokens(cfg.enrollTokens)
+		if err != nil {
+			return fmt.Errorf("enrollment tokens: %w", err)
+		}
+		svcOpts = append(svcOpts, enroll.WithEnrollmentTokens(tokens))
+		log.Info("enrollment tokens loaded", "path", cfg.enrollTokens, "require_token", cfg.requireToken)
+	} else if cfg.requireToken {
+		return fmt.Errorf("-require-enrollment-token requires -enrollment-tokens")
+	}
+	if cfg.requireToken {
+		svcOpts = append(svcOpts, enroll.WithRequireToken())
+	}
+
+	svc, err := enroll.NewService(issuer, pseudonymKey, svcOpts...)
 	if err != nil {
 		return fmt.Errorf("enrollment service: %w", err)
 	}

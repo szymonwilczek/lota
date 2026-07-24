@@ -30,6 +30,19 @@ The verifier's per-client baseline lives in the ``baselines`` table
 never edit a shipped migration, add a new one, so a database at any
 intermediate revision still upgrades cleanly.
 
+New migrations must also be **additive**: add a table, a column, or an index,
+but never drop or rename one or retype a column in place.
+
+Multi-instance fleet rolls new verifier binaries in against one shared Postgres
+while old binaries keep serving, so the old binary must still read and write
+a schema a newer peer has already migrated forward. ``migrations_test.go`` enforces
+this mechanically -- a destructive migration fails the build -- and
+``PgTargetSchemaVersion`` / ``SQLiteTargetSchemaVersion`` report the schema
+a binary targets (surfaced to operators by ``lota-verifier --print-versions``).
+
+The operator-facing side of this contract is
+:doc:`../../operator/rolling-upgrade`.
+
 The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
 in-memory store is the contract reference exercised by ``boot_baseline_test.go``.

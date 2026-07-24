@@ -16,7 +16,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	t.Helper()
 
 	t.Run(label+"/Revoke", func(t *testing.T) {
-		err := s.Revoke("client-1", RevocationCheating, "admin@test", "caught cheating")
+		err := s.Revoke("default", "client-1", RevocationCheating, "admin@test", "caught cheating")
 		if err != nil {
 			t.Fatalf("Revoke failed: %v", err)
 		}
@@ -43,7 +43,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	})
 
 	t.Run(label+"/AlreadyRevoked", func(t *testing.T) {
-		err := s.Revoke("client-1", RevocationAdmin, "admin2", "")
+		err := s.Revoke("default", "client-1", RevocationAdmin, "admin2", "")
 		if err != ErrAlreadyRevoked {
 			t.Fatalf("Expected ErrAlreadyRevoked, got %v", err)
 		}
@@ -77,9 +77,9 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 
 	t.Run(label+"/ListRevocations", func(t *testing.T) {
 		// revoke multiple
-		s.Revoke("list-a", RevocationCheating, "admin", "")
-		s.Revoke("list-b", RevocationCompromised, "admin", "")
-		s.Revoke("list-c", RevocationAdmin, "admin", "")
+		s.Revoke("default", "list-a", RevocationCheating, "admin", "")
+		s.Revoke("default", "list-b", RevocationCompromised, "admin", "")
+		s.Revoke("default", "list-c", RevocationAdmin, "admin", "")
 
 		entries := s.ListRevocations()
 		if len(entries) < 3 {
@@ -100,7 +100,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	t.Run(label+"/AllReasons", func(t *testing.T) {
 		for _, reason := range ValidRevocationReasons {
 			id := "reason-" + string(reason)
-			err := s.Revoke(id, reason, "test", "")
+			err := s.Revoke("default", id, reason, "test", "")
 			if err != nil {
 				t.Errorf("Revoke with reason %q failed: %v", reason, err)
 			}
@@ -119,6 +119,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 func TestMemoryRevocationStore(t *testing.T) {
 	s := NewMemoryRevocationStore()
 	testRevocationStore(t, s, "Memory")
+	testRevocationTenant(t, s, "Memory")
 }
 
 func TestSQLiteRevocationStore(t *testing.T) {
@@ -131,6 +132,7 @@ func TestSQLiteRevocationStore(t *testing.T) {
 	auditLog := NewSQLiteAuditLog(db)
 	s := NewSQLiteRevocationStore(db, auditLog)
 	testRevocationStore(t, s, "SQLite")
+	testRevocationTenant(t, s, "SQLite")
 
 	// verify audit log was populated
 	t.Run("SQLite/AuditTrail", func(t *testing.T) {
@@ -165,12 +167,12 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	hwid2 := [32]byte{0xAA, 0xBB, 0xCC}
 
 	t.Run(label+"/BanHardware", func(t *testing.T) {
-		err := s.BanHardware(hwid1, RevocationCheating, "admin@test", "hardware ban")
+		err := s.BanHardware("default", hwid1, RevocationCheating, "admin@test", "hardware ban")
 		if err != nil {
 			t.Fatalf("BanHardware failed: %v", err)
 		}
 
-		entry, banned := s.IsBanned(hwid1)
+		entry, banned := s.IsBanned("default", hwid1)
 		if !banned {
 			t.Fatal("Expected hwid1 to be banned")
 		}
@@ -189,41 +191,41 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	})
 
 	t.Run(label+"/AlreadyBanned", func(t *testing.T) {
-		err := s.BanHardware(hwid1, RevocationAdmin, "admin2", "")
+		err := s.BanHardware("default", hwid1, RevocationAdmin, "admin2", "")
 		if err != ErrAlreadyBanned {
 			t.Fatalf("Expected ErrAlreadyBanned, got %v", err)
 		}
 	})
 
 	t.Run(label+"/NotBanned", func(t *testing.T) {
-		_, banned := s.IsBanned([32]byte{0xFF})
+		_, banned := s.IsBanned("default", [32]byte{0xFF})
 		if banned {
 			t.Fatal("Expected unknown hwid to not be banned")
 		}
 	})
 
 	t.Run(label+"/UnbanHardware", func(t *testing.T) {
-		err := s.UnbanHardware(hwid1)
+		err := s.UnbanHardware("default", hwid1)
 		if err != nil {
 			t.Fatalf("UnbanHardware failed: %v", err)
 		}
 
-		_, banned := s.IsBanned(hwid1)
+		_, banned := s.IsBanned("default", hwid1)
 		if banned {
 			t.Fatal("Expected hwid1 to be unbanned")
 		}
 	})
 
 	t.Run(label+"/UnbanNotBanned", func(t *testing.T) {
-		err := s.UnbanHardware([32]byte{0xDE, 0xAD})
+		err := s.UnbanHardware("default", [32]byte{0xDE, 0xAD})
 		if err != ErrNotBanned {
 			t.Fatalf("Expected ErrNotBanned, got %v", err)
 		}
 	})
 
 	t.Run(label+"/ListBans", func(t *testing.T) {
-		s.BanHardware(hwid1, RevocationCheating, "admin", "")
-		s.BanHardware(hwid2, RevocationCompromised, "admin", "")
+		s.BanHardware("default", hwid1, RevocationCheating, "admin", "")
+		s.BanHardware("default", hwid2, RevocationCompromised, "admin", "")
 
 		entries := s.ListBans()
 		if len(entries) < 2 {
@@ -243,6 +245,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 func TestMemoryBanStore(t *testing.T) {
 	s := NewMemoryBanStore()
 	testBanStore(t, s, "Memory")
+	testBanStorePerTenant(t, s, "Memory")
 }
 
 func TestSQLiteBanStore(t *testing.T) {
@@ -255,6 +258,7 @@ func TestSQLiteBanStore(t *testing.T) {
 	auditLog := NewSQLiteAuditLog(db)
 	s := NewSQLiteBanStore(db, auditLog)
 	testBanStore(t, s, "SQLite")
+	testBanStorePerTenant(t, s, "SQLite")
 
 	// verify audit log was populated
 	t.Run("SQLite/AuditTrail", func(t *testing.T) {
@@ -282,7 +286,7 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	t.Helper()
 
 	t.Run(label+"/Log", func(t *testing.T) {
-		err := l.Log("revoke", "client-1", "cheating", "admin", "test note")
+		err := l.Log("default", "revoke", "client-1", "cheating", "admin", "test note")
 		if err != nil {
 			t.Fatalf("Log failed: %v", err)
 		}
@@ -314,9 +318,9 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	})
 
 	t.Run(label+"/QueryNewestFirst", func(t *testing.T) {
-		l.Log("action-1", "target-1", "", "", "")
+		l.Log("default", "action-1", "target-1", "", "", "")
 		time.Sleep(2 * time.Millisecond) // ensure different timestamps
-		l.Log("action-2", "target-2", "", "", "")
+		l.Log("default", "action-2", "target-2", "", "", "")
 
 		entries := l.Query(2)
 		if len(entries) < 2 {
@@ -333,7 +337,7 @@ func testAuditLog(t *testing.T, l AuditLog, label string) {
 	t.Run(label+"/QueryLimit", func(t *testing.T) {
 		// enough entries
 		for i := 0; i < 5; i++ {
-			l.Log("bulk", "target", "", "", "")
+			l.Log("default", "bulk", "target", "", "", "")
 		}
 
 		entries := l.Query(3)
@@ -464,23 +468,40 @@ func TestMigrationV2_HardwareBansTable(t *testing.T) {
 	hwid[1] = 0xAD
 
 	_, err = db.Exec(
-		"INSERT INTO hardware_bans (hardware_id, reason, banned_at, banned_by, note) VALUES (?, ?, ?, ?, ?)",
-		hwid, "cheating", time.Now().UTC(), "admin", "",
+		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at, banned_by, note) VALUES (?, ?, ?, ?, ?, ?)",
+		"default", hwid, "cheating", time.Now().UTC(), "admin", "",
 	)
 	if err != nil {
 		t.Fatalf("Insert into hardware_bans failed: %v", err)
 	}
 
+	// (tenant, hardware_id) key rejects duplicate in the same tenant
+	// but accepts the same hardware in another tenant
+	_, err = db.Exec(
+		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at) VALUES (?, ?, ?, ?)",
+		"default", hwid, "cheating", time.Now().UTC(),
+	)
+	if err == nil {
+		t.Fatal("Accepted a duplicate (tenant, hardware_id) ban!")
+	}
+	_, err = db.Exec(
+		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at) VALUES (?, ?, ?, ?)",
+		"other", hwid, "cheating", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("Rejected the same hardware in another tenant: %v", err)
+	}
+
 	// wrong-length hardware ID should fail CHECK constraint
 	_, err = db.Exec(
-		"INSERT INTO hardware_bans (hardware_id, reason, banned_at) VALUES (?, ?, ?)",
-		[]byte("short"), "admin", time.Now().UTC(),
+		"INSERT INTO hardware_bans (tenant, hardware_id, reason, banned_at) VALUES (?, ?, ?, ?)",
+		"default", []byte("short"), "admin", time.Now().UTC(),
 	)
 	if err == nil {
 		t.Fatal("SECURITY: Accepted hardware_id with wrong length!")
 	}
 
-	t.Log("✓ hardware_bans table with CHECK(length=32) works correctly")
+	t.Log("✓ hardware_bans table keyed (tenant, hardware_id) with CHECK(length=32) works correctly")
 }
 
 func TestMigrationV2_AuditLogTable(t *testing.T) {
@@ -534,7 +555,7 @@ func TestSQLiteRevocationStore_Persistence(t *testing.T) {
 		t.Fatalf("OpenDB failed: %v", err)
 	}
 	s1 := NewSQLiteRevocationStore(db1, nil)
-	s1.Revoke("persist-client", RevocationCheating, "admin", "persist test")
+	s1.Revoke("default", "persist-client", RevocationCheating, "admin", "persist test")
 	db1.Close()
 
 	// second open: revocation must persist
@@ -570,7 +591,7 @@ func TestSQLiteBanStore_Persistence(t *testing.T) {
 		t.Fatalf("OpenDB failed: %v", err)
 	}
 	s1 := NewSQLiteBanStore(db1, nil)
-	s1.BanHardware(hwid, RevocationCheating, "admin", "ban persist test")
+	s1.BanHardware("default", hwid, RevocationCheating, "admin", "ban persist test")
 	db1.Close()
 
 	// second open: ban must persist
@@ -581,7 +602,7 @@ func TestSQLiteBanStore_Persistence(t *testing.T) {
 	defer db2.Close()
 	s2 := NewSQLiteBanStore(db2, nil)
 
-	entry, banned := s2.IsBanned(hwid)
+	entry, banned := s2.IsBanned("default", hwid)
 	if !banned {
 		t.Fatal("SECURITY: Hardware ban lost after database reopen!")
 	}
@@ -590,4 +611,210 @@ func TestSQLiteBanStore_Persistence(t *testing.T) {
 	}
 
 	t.Log("✓ Hardware ban persists across database reopens")
+}
+
+// exercises the tenant recorded on revocation entries
+func testRevocationTenant(t *testing.T, s RevocationStore, label string) {
+	t.Helper()
+
+	t.Run(label+"/TenantRecorded", func(t *testing.T) {
+		if err := s.Revoke("acme", "tenant-rev-client", RevocationAdmin, "admin", ""); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		entry, revoked := s.IsRevoked("tenant-rev-client")
+		if !revoked {
+			t.Fatal("client not revoked")
+		}
+		if entry.Tenant != "acme" {
+			t.Errorf("Tenant = %q, want %q", entry.Tenant, "acme")
+		}
+
+		found := false
+		for _, e := range s.ListRevocations() {
+			if e.ClientID == "tenant-rev-client" && e.Tenant == "acme" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("ListRevocations lost the tenant")
+		}
+
+		if err := s.Unrevoke("tenant-rev-client"); err != nil {
+			t.Fatalf("cleanup unrevoke: %v", err)
+		}
+	})
+}
+
+// exercises per-tenant ban semantics shared by every BanStore:
+// ban lives in exactly one tenant and never leaks into another
+func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
+	t.Helper()
+
+	hwid := [32]byte{0x7E, 0x11}
+
+	t.Run(label+"/BanIsScopedToItsTenant", func(t *testing.T) {
+		if err := s.BanHardware("game-a", hwid, RevocationCheating, "admin", ""); err != nil {
+			t.Fatalf("BanHardware: %v", err)
+		}
+		if _, banned := s.IsBanned("game-b", hwid); banned {
+			t.Fatal("ban in game-a must not be visible in game-b")
+		}
+		entry, banned := s.IsBanned("game-a", hwid)
+		if !banned {
+			t.Fatal("ban not visible in its own tenant")
+		}
+		if entry.Tenant != "game-a" {
+			t.Errorf("Tenant = %q, want %q", entry.Tenant, "game-a")
+		}
+	})
+
+	t.Run(label+"/SameHardwareBansIndependently", func(t *testing.T) {
+		if err := s.BanHardware("game-b", hwid, RevocationAdmin, "admin", ""); err != nil {
+			t.Fatalf("second-tenant ban: %v", err)
+		}
+		if err := s.BanHardware("game-a", hwid, RevocationAdmin, "admin", ""); err != ErrAlreadyBanned {
+			t.Fatalf("re-ban in the same tenant: got %v, want ErrAlreadyBanned", err)
+		}
+	})
+
+	t.Run(label+"/UnbanLeavesOtherTenants", func(t *testing.T) {
+		if err := s.UnbanHardware("game-a", hwid); err != nil {
+			t.Fatalf("UnbanHardware: %v", err)
+		}
+		if _, banned := s.IsBanned("game-a", hwid); banned {
+			t.Fatal("ban survived unban in game-a")
+		}
+		if _, banned := s.IsBanned("game-b", hwid); !banned {
+			t.Fatal("unban in game-a erased the game-b ban")
+		}
+		if err := s.UnbanHardware("game-b", hwid); err != nil {
+			t.Fatalf("cleanup unban: %v", err)
+		}
+	})
+
+	t.Run(label+"/CursorPaginationSpansTenants", func(t *testing.T) {
+		lister, ok := s.(CursorBanLister)
+		if !ok {
+			t.Skip("store does not paginate by cursor")
+		}
+
+		pageHW := [32]byte{0x7E, 0x22}
+		tenants := []string{"page-a", "page-b", "page-c"}
+		for _, tenant := range tenants {
+			if err := s.BanHardware(tenant, pageHW, RevocationAdmin, "admin", ""); err != nil {
+				t.Fatalf("BanHardware(%s): %v", tenant, err)
+			}
+		}
+		defer func() {
+			for _, tenant := range tenants {
+				if err := s.UnbanHardware(tenant, pageHW); err != nil {
+					t.Errorf("cleanup unban(%s): %v", tenant, err)
+				}
+			}
+		}()
+
+		seen := map[string]bool{}
+		next := ""
+		for range 10 {
+			page, err := lister.ListBansAfter(1, next)
+			if err != nil {
+				t.Fatalf("ListBansAfter: %v", err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, e := range page {
+				if e.HardwareID != pageHW {
+					continue
+				}
+				key := e.Tenant
+				if seen[key] {
+					t.Fatalf("tenant %q returned twice by pagination", key)
+				}
+				seen[key] = true
+			}
+			next = EncodeBanCursor(page[len(page)-1])
+		}
+		if len(seen) != len(tenants) {
+			t.Fatalf("pagination returned %d of %d per-tenant bans", len(seen), len(tenants))
+		}
+	})
+}
+
+// verifies the tenant lands on audit entries written through store
+// mutations and through direct Log calls
+func TestAuditLogTenant(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct {
+		label string
+		audit AuditLog
+	}{
+		{"Memory", NewMemoryAuditLog()},
+		{"SQLite", NewSQLiteAuditLog(db)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			if err := tc.audit.Log("acme", "ban", "target", "cheating", "admin", ""); err != nil {
+				t.Fatalf("Log: %v", err)
+			}
+			entries := tc.audit.Query(1)
+			if len(entries) != 1 || entries[0].Tenant != "acme" {
+				t.Fatalf("Query = %+v, want one entry in tenant acme", entries)
+			}
+		})
+	}
+
+	// mutations record the tenant they acted in
+	audit := NewSQLiteAuditLog(db)
+	rev := NewSQLiteRevocationStore(db, audit)
+	if err := rev.Revoke("game-x", "audit-tenant-client", RevocationAdmin, "admin", ""); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := rev.Unrevoke("audit-tenant-client"); err != nil {
+		t.Fatalf("Unrevoke: %v", err)
+	}
+	entries := audit.Query(2)
+	if len(entries) != 2 {
+		t.Fatalf("audit entries = %d, want 2", len(entries))
+	}
+	for _, e := range entries {
+		if e.Tenant != "game-x" {
+			t.Fatalf("audit action %q recorded tenant %q, want game-x", e.Action, e.Tenant)
+		}
+	}
+}
+
+// verifies the tenant round-trips through the attestation log
+func TestAttestationLogTenant(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	for _, tc := range []struct {
+		label string
+		log   AttestationLog
+	}{
+		{"Memory", NewMemoryAttestationLog()},
+		{"SQLite", NewSQLiteAttestationLog(db)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			if err := tc.log.Record(AttestationRecord{
+				Tenant:   "acme",
+				ClientID: "c1",
+				Result:   "ok",
+			}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			rs := tc.log.QueryAttestations(1)
+			if len(rs) != 1 || rs[0].Tenant != "acme" {
+				t.Fatalf("QueryAttestations = %+v, want one record in tenant acme", rs)
+			}
+		})
+	}
 }

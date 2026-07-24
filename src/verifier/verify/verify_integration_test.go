@@ -266,7 +266,6 @@ func persistentClientID(challengeID string) string {
 func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	// fixtures emit pcr_mask 0x4003 (PCR 0/1/14); production-default
 	// enforcement of PCR 0/1/7 is exercised by dedicated tests.
 	cfg.RequireBootPCRs = false
@@ -847,7 +846,6 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.NonceLifetime = 1 * time.Second
 	// RequireBootPCRs left at its DefaultConfig value (true).
 
@@ -889,7 +887,6 @@ func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -933,7 +930,6 @@ func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	// RequireInitramfsLock left at its DefaultConfig value (true).
 	cfg.NonceLifetime = 1 * time.Second
@@ -978,7 +974,6 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
@@ -1009,5 +1004,32 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 	}
 	if result.Result != types.VerifyOK {
 		t.Fatalf("expected VerifyOK with RequireInitramfsLock=false, got %d", result.Result)
+	}
+}
+
+// Client whose PCR14 baseline is on record must be visible through ClientInfo
+// even when the nonce store holds no history for it:
+// the monotonic counter starts at zero after a verifier restart with the
+// in-memory nonce backend, and the Privacy CA flow records nothing in the AIK store
+// (the certificate presented per attestation is the trust anchor).
+// Such client is listed by ListClients but the per-client lookup reported it as not found.
+func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
+	baselines := NewBaselineStore()
+	cfg := DefaultConfig()
+	cfg.RequireBootPCRs = false
+	cfg.RequireInitramfsLock = false
+	cfg.BaselineStore = baselines
+	verifier := NewVerifier(cfg, store.NewMemoryStore())
+
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0x42
+	baselines.CheckAndUpdate("restart-survivor", pcr14)
+
+	info, found := verifier.ClientInfo("restart-survivor")
+	if !found {
+		t.Fatal("client with a stored baseline reported as not found")
+	}
+	if info.PCR14Baseline == "" {
+		t.Fatal("baseline missing from client info")
 	}
 }

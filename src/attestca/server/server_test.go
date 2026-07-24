@@ -8,11 +8,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -98,7 +102,7 @@ func newSvc(tb testing.TB) (*enroll.Service, tpmtest.Root) {
 // activated secret, which exercises the activation-failure path without a
 // real TPM
 func enrollClient(t *testing.T, addr string, pool *x509.CertPool, ek tpmtest.EK,
-	secretOverride []byte,
+	secretOverride, token []byte,
 ) (*wire.ChallengeReply, *wire.ResultReply) {
 	t.Helper()
 	conn, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1"})
@@ -108,7 +112,7 @@ func enrollClient(t *testing.T, addr string, pool *x509.CertPool, ek tpmtest.EK,
 	defer conn.Close()
 
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
-	beginBody, err := wire.EncodeBegin(&wire.BeginRequest{EKCertDER: ek.CertDER, AIKPublic: aikTPMT})
+	beginBody, err := wire.EncodeBegin(&wire.BeginRequest{EKCertDER: ek.CertDER, AIKPublic: aikTPMT, Token: token})
 	if err != nil {
 		t.Fatalf("EncodeBegin: %v", err)
 	}
@@ -158,7 +162,7 @@ func TestServerFullEnrollment(t *testing.T) {
 	defer stop()
 
 	ek := tpmtest.NewEKCert(t, root)
-	_, result := enrollClient(t, addr, pool, ek, nil)
+	_, result := enrollClient(t, addr, pool, ek, nil, nil)
 	if result == nil || result.Status != wire.StatusOK {
 		t.Fatalf("enrollment failed: %+v", result)
 	}
@@ -179,7 +183,7 @@ func TestServerRejectsUntrustedEK(t *testing.T) {
 
 	rogue := tpmtest.NewVendorRoot(t, "rogue")
 	ek := tpmtest.NewEKCert(t, rogue)
-	challenge, result := enrollClient(t, addr, pool, ek, nil)
+	challenge, result := enrollClient(t, addr, pool, ek, nil, nil)
 	if result != nil {
 		t.Fatalf("expected rejection at challenge, got result %+v", result)
 	}
@@ -195,7 +199,7 @@ func TestServerRejectsWrongActivation(t *testing.T) {
 
 	ek := tpmtest.NewEKCert(t, root)
 	// a secret the agent could not have recovered from the TPM
-	_, result := enrollClient(t, addr, pool, ek, make([]byte, 32))
+	_, result := enrollClient(t, addr, pool, ek, make([]byte, 32), nil)
 	if result == nil {
 		t.Fatal("expected a result reply")
 	}
@@ -286,7 +290,7 @@ func TestServerRateLimitsBeginFlood(t *testing.T) {
 
 	// first enrollment from this loopback source consumes the single
 	// per-IP Begin slot and succeeds end to end
-	_, result := enrollClient(t, addr, pool, ek, nil)
+	_, result := enrollClient(t, addr, pool, ek, nil, nil)
 	if result == nil || result.Status != wire.StatusOK {
 		t.Fatalf("first enrollment should succeed, got %+v", result)
 	}
@@ -294,11 +298,82 @@ func TestServerRateLimitsBeginFlood(t *testing.T) {
 	// second enrollment from the same source is refused at Begin, before
 	// any MakeCredential work, with StatusRateLimited
 	ek2 := tpmtest.NewEKCert(t, root)
-	challenge, result := enrollClient(t, addr, pool, ek2, nil)
+	challenge, result := enrollClient(t, addr, pool, ek2, nil, nil)
 	if result != nil {
 		t.Fatalf("expected rejection at challenge, got result %+v", result)
 	}
 	if challenge.Status != wire.StatusRateLimited {
 		t.Fatalf("status %d, want StatusRateLimited", challenge.Status)
+	}
+}
+
+// newSvcTokens builds a service whose token set maps token -> tenant.
+func newSvcTokens(t *testing.T, token, tenant string) (*enroll.Service, tpmtest.Root) {
+	t.Helper()
+	sum := sha256.Sum256([]byte(token))
+	path := filepath.Join(t.TempDir(), "tokens.txt")
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(sum[:])+" "+tenant+"\n"), 0o600); err != nil {
+		t.Fatalf("write tokens: %v", err)
+	}
+	tokens, err := enroll.LoadEnrollmentTokens(path)
+	if err != nil {
+		t.Fatalf("LoadEnrollmentTokens: %v", err)
+	}
+	root := tpmtest.NewVendorRoot(t, "vendor-root")
+	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(t)
+	issuer, err := ca.NewIssuer(ca.IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CAKeyPEM:   caKeyPEM,
+		EKRootPEMs: [][]byte{tpmtest.PEM("CERTIFICATE", root.DER)},
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	svc, err := enroll.NewService(issuer, []byte("pseudonym-key-0123456789abcdef"),
+		enroll.WithEnrollmentTokens(tokens))
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+	return svc, root
+}
+
+func TestServerTokenEnrollment(t *testing.T) {
+	svc, root := newSvcTokens(t, "beta-token", "beta")
+	addr, pool, stop := startServer(t, svc)
+	defer stop()
+
+	ek := tpmtest.NewEKCert(t, root)
+	challenge, result := enrollClient(t, addr, pool, ek, nil, []byte("beta-token"))
+	if result == nil || result.Status != wire.StatusOK {
+		t.Fatalf("token enrollment failed: %+v", result)
+	}
+	// version-2 exchange must be answered with version-2 frames
+	if challenge.Version != wire.Version2 || result.Version != wire.Version2 {
+		t.Fatalf("reply versions %d/%d, want %d", challenge.Version, result.Version, wire.Version2)
+	}
+	aikCert, err := x509.ParseCertificate(result.AIKCertDER)
+	if err != nil {
+		t.Fatalf("parse issued cert: %v", err)
+	}
+	if len(aikCert.Subject.OrganizationalUnit) != 1 || aikCert.Subject.OrganizationalUnit[0] != "beta" {
+		t.Fatalf("tenant OU = %v, want [beta]", aikCert.Subject.OrganizationalUnit)
+	}
+}
+
+func TestServerRejectsUnknownToken(t *testing.T) {
+	svc, root := newSvcTokens(t, "beta-token", "beta")
+	addr, pool, stop := startServer(t, svc)
+	defer stop()
+
+	ek := tpmtest.NewEKCert(t, root)
+	challenge, result := enrollClient(t, addr, pool, ek, nil, []byte("wrong-token"))
+	if result != nil {
+		t.Fatalf("expected rejection at challenge, got result %+v", result)
+	}
+	if challenge.Status != wire.StatusTokenRejected {
+		t.Fatalf("status %d, want StatusTokenRejected", challenge.Status)
+	}
+	if challenge.Version != wire.Version2 {
+		t.Fatalf("rejection version %d, want %d", challenge.Version, wire.Version2)
 	}
 }

@@ -12,8 +12,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
 
@@ -81,6 +83,8 @@ int enroll_state_save_path(const char *path, const struct enroll_state *st)
 
 int enroll_state_load_path(const char *path, struct enroll_state *out)
 {
+	/* version-1 record ends where the token field begins */
+	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
 	struct enroll_state st;
 	ssize_t n;
 	int fd;
@@ -92,19 +96,22 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	if (fd < 0)
 		return -errno; /* -ENOENT when the host has never enrolled */
 
+	memset(&st, 0, sizeof(st));
 	n = read(fd, &st, sizeof(st));
 	close(fd);
 	if (n < 0)
 		return -errno;
-	if ((size_t)n != sizeof(st))
+	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
 		return -EINVAL;
-	if (st.magic != LOTA_ENROLL_STATE_MAGIC ||
-	    st.version != LOTA_ENROLL_STATE_VERSION)
+	if (!((size_t)n == sizeof(st) &&
+	      st.version == LOTA_ENROLL_STATE_VERSION) &&
+	    !((size_t)n == v1_size && st.version == 1))
 		return -EINVAL;
 
 	/* NUL-terminate the string fields defensively before use */
 	st.ca_server[sizeof(st.ca_server) - 1] = '\0';
 	st.ca_cert[sizeof(st.ca_cert) - 1] = '\0';
+	st.enroll_token[sizeof(st.enroll_token) - 1] = '\0';
 	*out = st;
 	return 0;
 }

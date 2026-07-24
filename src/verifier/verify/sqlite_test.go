@@ -599,7 +599,6 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
@@ -663,7 +662,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// first verifier instance
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
 	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
@@ -689,7 +687,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
 	cfg2.RequireInitramfsLock = false
 
@@ -731,7 +728,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// establish baseline
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireCert = false
 	cfg1.RequireBootPCRs = false
 	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
@@ -756,7 +752,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireCert = false
 	cfg2.RequireBootPCRs = false
 	cfg2.RequireInitramfsLock = false
 
@@ -803,7 +798,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)

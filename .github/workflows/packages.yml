@@ -1,0 +1,138 @@
+# Continuously validate the packaging artifacts:
+# build the RPMs in Fedora chroot, lint and schema-check the Helm chart,
+# and build the container images locally (no registry push, no signing).
+# Signed, published variants run from the Release workflow on a tag.
+# This job needs the packaging make targets (packages, helm-lint, helm-template,
+# container-images), so it lands with the branches that add them.
+name: Packages
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'deploy/helm/**'
+      - 'deploy/observability/**'
+      - 'Makefile'
+      - 'src/**'
+      - 'include/**'
+      - '.github/workflows/packages.yml'
+  push:
+    branches:
+      - lota-next
+  workflow_dispatch:
+
+# one packaging run per ref
+# newer push supersedes an in-flight validation
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rpms:
+    name: build RPMs (Fedora)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+    steps:
+      - name: Install toolchain and packaging tools
+        run: |
+          dnf -y install \
+            git make gcc clang llvm pkgconf-pkg-config \
+            libbpf-devel elfutils-libelf-devel zlib-devel \
+            tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
+            dbus-devel golang selinux-policy-devel \
+            rpm-build rpmlint createrepo_c
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+
+      - name: Build the RPMs
+        run: make packages
+
+      - name: Lint the RPMs (advisory)
+        run: rpmlint build/packages/*.rpm || true
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms
+          path: build/packages/*.rpm
+
+  helm:
+    name: lint Helm chart
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      - name: Install kubeconform
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+
+      - name: Lint and schema-check
+        run: |
+          make helm-lint
+          make helm-template
+
+  observability:
+    name: lint observability configs
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
+    steps:
+      - name: Install promtool and jq
+        run: dnf -y install make golang-github-prometheus jq
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate the observability reference configs
+        run: make observability-lint
+
+  images:
+    name: build container images
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/verifier/go.mod
+          cache: false
+
+      - name: Install ko
+        uses: ko-build/setup-ko@3aebd0597dc1e9d1a26bcfdb7cbeb19c131d3037 # v0.7
+
+      - name: Build images locally (no push)
+        # ko.local loads into the runner's Docker daemon instead of pushing to
+        # registry, so the build is validated without credentials.
+        # Single-arch keeps the local load simple.
+        run: |
+          make container-images \
+            KO_DOCKER_REPO=ko.local \
+            KO_PLATFORMS=linux/amd64

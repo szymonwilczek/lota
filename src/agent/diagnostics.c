@@ -173,7 +173,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return diagnostic_exit_code(
 			do_enroll(opts->ca_server, opts->ca_port,
 				  opts->ca_cert_path, opts->no_verify_tls,
-				  opts->has_pin ? opts->pin_sha256_bin : NULL));
+				  opts->has_pin ? opts->pin_sha256_bin : NULL,
+				  opts->enroll_token_file));
 	}
 
 	if (opts->attest_flag) {

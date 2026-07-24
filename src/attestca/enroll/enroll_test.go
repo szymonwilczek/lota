@@ -37,7 +37,7 @@ func TestEnrollFullCeremony(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
 
-	ch, err := svc.Begin(ek.CertDER, aikTPMT)
+	ch, err := svc.Begin(ek.CertDER, aikTPMT, nil)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestEnrollDeviceIDStableAcrossEnrollments(t *testing.T) {
 
 	id := func() string {
 		aikTPMT, aikName := tpmtest.AIKTemplate(t)
-		ch, err := svc.Begin(ek.CertDER, aikTPMT)
+		ch, err := svc.Begin(ek.CertDER, aikTPMT, nil)
 		if err != nil {
 			t.Fatalf("Begin: %v", err)
 		}
@@ -88,7 +88,7 @@ func TestEnrollWrongSecretRejected(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
 
-	ch, err := svc.Begin(ek.CertDER, aikTPMT)
+	ch, err := svc.Begin(ek.CertDER, aikTPMT, nil)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestEnrollWrongEKCannotActivate(t *testing.T) {
 	attackerEK := tpmtest.NewEKCert(t, root)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
 
-	ch, err := svc.Begin(issueEK.CertDER, aikTPMT)
+	ch, err := svc.Begin(issueEK.CertDER, aikTPMT, nil)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestEnrollSessionExpiry(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 	aikTPMT, aikName := tpmtest.AIKTemplate(t)
 
-	ch, err := svc.Begin(ek.CertDER, aikTPMT)
+	ch, err := svc.Begin(ek.CertDER, aikTPMT, nil)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestEnrollRejectsUntrustedEK(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, rogue)
 	aikTPMT, _ := tpmtest.AIKTemplate(t)
 
-	if _, err := svc.Begin(ek.CertDER, aikTPMT); err == nil {
+	if _, err := svc.Begin(ek.CertDER, aikTPMT, nil); err == nil {
 		t.Fatal("accepted EK from untrusted root")
 	}
 }
@@ -168,11 +168,11 @@ func TestEnrollMaxPending(t *testing.T) {
 	ek := tpmtest.NewEKCert(t, root)
 
 	aik1, _ := tpmtest.AIKTemplate(t)
-	if _, err := svc.Begin(ek.CertDER, aik1); err != nil {
+	if _, err := svc.Begin(ek.CertDER, aik1, nil); err != nil {
 		t.Fatalf("first Begin: %v", err)
 	}
 	aik2, _ := tpmtest.AIKTemplate(t)
-	if _, err := svc.Begin(ek.CertDER, aik2); err == nil {
+	if _, err := svc.Begin(ek.CertDER, aik2, nil); err == nil {
 		t.Fatal("exceeded max pending without error")
 	}
 }

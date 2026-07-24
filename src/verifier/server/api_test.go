@@ -125,7 +125,6 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -258,7 +257,6 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -301,7 +299,6 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
@@ -1116,8 +1113,8 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 	if len(prefix) > 16 {
 		prefix = prefix[:16]
 	}
-	t.Logf("✓ Client info fully populated: AIK=%v, attests=%d, pcr14=%s...",
-		resp.HasAIK, resp.AttestCount, prefix)
+	t.Logf("✓ Client info fully populated: attests=%d, pcr14=%s...",
+		resp.AttestCount, prefix)
 }
 
 func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
@@ -1523,7 +1520,6 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireCert = false
 	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = bs
@@ -1567,5 +1563,208 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 	}
 	if len(bs.ListLFAReviewPending()) != 0 {
 		t.Error("review should be cleared after admin acknowledge")
+	}
+}
+
+// drives full challenge/attest round so the client exists in the AIK store,
+// the baseline store and the nonce store
+func attestTestClient(t *testing.T, v *verify.Verifier, challengeID string) string {
+	t.Helper()
+
+	challenge, err := v.GenerateChallenge(challengeID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge failed: %v", err)
+	}
+
+	var pcr14 [32]byte
+	for i := range pcr14 {
+		pcr14[i] = byte(0x5A ^ i)
+	}
+
+	clientID := persistentClientID(challengeID)
+	key := getClientTestAIK(clientID)
+	report := buildSignedReport(t, challengeID, challenge.Nonce, pcr14, key)
+	if _, err := v.VerifyReport(challengeID, report); err != nil {
+		t.Fatalf("VerifyReport failed: %v", err)
+	}
+	return clientID
+}
+
+// fetches the audit log over the API and returns the decoded entries
+func fetchAuditEntries(t *testing.T, mux *http.ServeMux, token string) []auditResponse {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("audit query returned %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Entries []auditResponse `json:"entries"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("audit response decode failed: %v", err)
+	}
+	return resp.Entries
+}
+
+func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
+	mux, v := setupTestAPIWithKey(t, "test-admin-key")
+	clientID := attestTestClient(t, v, "force-reanchor")
+
+	info, found := v.ClientInfo(clientID)
+	if !found || info.PCR14Baseline == "" {
+		t.Fatalf("expected a pinned baseline before re-anchor, got %+v", info)
+	}
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/clients/"+clientID+"/reanchor",
+		strings.NewReader(`{"actor":"ops@example","note":"planned firmware update"}`))
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	info, found = v.ClientInfo(clientID)
+	if !found {
+		t.Fatal("client disappeared after re-anchor")
+	}
+	if info.PCR14Baseline != "" {
+		t.Errorf("baseline survived forced re-anchor: %s", info.PCR14Baseline)
+	}
+
+	for _, e := range fetchAuditEntries(t, mux, "test-admin-key") {
+		if e.Action == "reanchor" && e.TargetID == clientID && e.Actor == "ops@example" {
+			return
+		}
+	}
+	t.Error("no reanchor audit entry recorded")
+}
+
+func TestForceReanchor_RequiresActor(t *testing.T) {
+	mux, v := setupTestAPIWithKey(t, "test-admin-key")
+	clientID := attestTestClient(t, v, "force-reanchor-actor")
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/clients/"+clientID+"/reanchor", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 without actor, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForceReanchor_UnknownClient(t *testing.T) {
+	mux, _ := setupTestAPIWithKey(t, "test-admin-key")
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/clients/no-such-client/reanchor",
+		strings.NewReader(`{"actor":"ops@example"}`))
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown client, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestForceReanchor_RequiresAdminKey(t *testing.T) {
+	mux, _ := setupTestAPIWithKeys(t, "admin-secret", "reader-secret")
+
+	post := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/clients/some-client/reanchor",
+			strings.NewReader(`{"actor":"ops@example"}`))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := post(""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without token, got %d", rr.Code)
+	}
+	// reader tier must not reach an admin mutation
+	if rr := post("reader-secret"); rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 with reader key, got %d", rr.Code)
+	}
+	// admin passes auth
+	// unknown client then yields 404
+	if rr := post("admin-secret"); rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 with admin key on unknown client, got %d", rr.Code)
+	}
+}
+
+func TestDeleteClient_RemovesTrustState(t *testing.T) {
+	mux, v := setupTestAPIWithKey(t, "test-admin-key")
+	clientID := attestTestClient(t, v, "delete-client")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
+		strings.NewReader(`{"actor":"ops@example","note":"decommissioned"}`))
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// nonce-store history (monotonic counter) survives on purpose,
+	// so the client may still be listed
+	// trust material must be gone
+	if info, found := v.ClientInfo(clientID); found {
+		if info.PCR14Baseline != "" {
+			t.Errorf("baseline survived delete: %s", info.PCR14Baseline)
+		}
+	}
+
+	// second delete: no trust state left
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on second delete, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	for _, e := range fetchAuditEntries(t, mux, "test-admin-key") {
+		if e.Action == "delete_client" && e.TargetID == clientID && e.Actor == "ops@example" {
+			return
+		}
+	}
+	t.Error("no delete_client audit entry recorded")
+}
+
+func TestDeleteClient_RevocationSurvives(t *testing.T) {
+	mux, v := setupTestAPIWithKey(t, "test-admin-key")
+	clientID := attestTestClient(t, v, "delete-revoked-client")
+
+	if err := v.RevocationStore().Revoke("default", clientID, store.RevocationCompromised, "ops@example", "test"); err != nil {
+		t.Fatalf("Revoke failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req.Header.Set("Authorization", "Bearer test-admin-key")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// deletion must not shed the revocation:
+	// re-enrolled client with the same identity stays revoked
+	if _, revoked := v.RevocationStore().IsRevoked(clientID); !revoked {
+		t.Error("revocation did not survive client deletion")
 	}
 }

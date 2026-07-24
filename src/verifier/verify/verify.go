@@ -130,7 +130,6 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog       bool
-	requireCert           bool
 	requireBootPCRs       bool
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
@@ -141,6 +140,7 @@ type Verifier struct {
 
 type sessionTokenRecord struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -151,6 +151,7 @@ type sessionTokenRecord struct {
 
 type SessionTokenStatus struct {
 	ClientID   string
+	Tenant     string
 	HardwareID [types.HardwareIDSize]byte
 	ValidUntil uint64
 	ResultCode uint32
@@ -219,10 +220,6 @@ type VerifierConfig struct {
 
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
-
-	// if true, reject new AIK registrations that do not provide
-	// AIK or EK certificates (disables pure TOFU)
-	RequireCert bool
 
 	// if true, reject attestation reports whose pcr_mask does not
 	// include PCR 0, 1, and 7 (firmware, platform configuration,
@@ -315,7 +312,6 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
-		RequireCert:           true,
 		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
@@ -362,7 +358,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:         cfg.NonceLifetime,
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
-		requireCert:           cfg.RequireCert,
 		requireBootPCRs:       cfg.RequireBootPCRs,
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
@@ -388,7 +383,7 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 	return v
 }
 
-func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID string,
+func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID, tenant string,
 	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
 ) {
 	if v == nil || report == nil {
@@ -397,6 +392,7 @@ func (v *Verifier) rememberSessionToken(token [32]byte, report *types.Attestatio
 
 	v.sessionTokenStore.Remember(token, sessionTokenRecord{
 		ClientID:   clientID,
+		Tenant:     tenant,
 		HardwareID: identity,
 		ValidUntil: validUntil,
 		ResultCode: resultCode,
@@ -470,7 +466,9 @@ func (v *Verifier) Close() {
 
 // creates a challenge for client attestation
 func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) {
-	pcrMask := v.pcrVerifier.GetActivePolicyMask()
+	// challenges precede tenant authentication, so request the union
+	// of every selectable policy's PCRs
+	pcrMask := v.pcrVerifier.GetChallengePolicyMask()
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
@@ -497,6 +495,10 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
 	var hwID string
+	// tenant stays empty until the AIK certificate authenticates it.
+	// attestation record without a tenant is one that never proved
+	// tenant-assigned identity
+	var tenant string
 
 	result := &types.VerifyResult{
 		Magic:   types.ReportMagic,
@@ -518,6 +520,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			resultStr := types.VerifyResultString(result.Result)
 			if err := v.attestationLog.Record(store.AttestationRecord{
 				Timestamp:  time.Now(),
+				Tenant:     tenant,
 				ClientID:   clientID,
 				HardwareID: hwID,
 				Result:     resultStr,
@@ -600,12 +603,20 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		result.Result = types.VerifySigFail
 		return result, fmt.Errorf("invalid device identity in AIK certificate: %w", err)
 	}
+	tenant, err = TenantFromCertificate(aikLeaf)
+	if err != nil {
+		logging.Security(clog, "AIK certificate carries an invalid tenant",
+			"subject", aikLeaf.Subject.CommonName, "error", err)
+		v.metrics.Rejections.Inc("sig_fail")
+		result.Result = types.VerifySigFail
+		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
+	}
 	clientID = aikLeaf.Subject.CommonName
 	hwID = clientID
 	if len(hwID) > 16 {
 		hwID = hwID[:16]
 	}
-	clog = logging.WithClient(v.log, clientID)
+	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
 	// check revocation BEFORE consuming nonce
@@ -623,8 +634,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	// check hardware ban BEFORE consuming nonce
+	//
+	// Bans are strictly per-tenant:
+	// Only a ban recorded in the tenant the CA assigned to this client rejects it.
+	// The same hardware stays clean in every other tenant.
 	if v.banStore != nil {
-		if entry, banned := v.banStore.IsBanned(identity); banned {
+		if entry, banned := v.banStore.IsBanned(tenant, identity); banned {
 			v.bannedAttests.Add(1)
 			v.metrics.Rejections.Inc("banned")
 			logging.Security(clog, "attestation rejected: hardware banned",
@@ -687,7 +702,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// event would go undetected.
 	var bootFacts *BootFacts
 	if len(report.EventLog) > 0 {
-		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.ActivePolicyRequiresCmdline())
+		facts, err := VerifyEventLogWithPolicy(report, v.pcrVerifier.PolicyRequiresCmdlineForTenant(tenant))
 		if err != nil {
 			// present but inconsistent -> boot chain tampered
 			clog.Error("event log verification failed", "error", err)
@@ -704,7 +719,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("event log required but not provided")
 	}
 
-	if err := v.pcrVerifier.VerifyReportWithFacts(report, bootFacts); err != nil {
+	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
 		clog.Error("PCR verification failed", "error", err)
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
@@ -900,14 +915,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			if readerOK && reader.GetBootBaseline(clientID) != nil {
 				enrolled = true
 			}
-			if !enrolled && !v.pcrVerifier.ActivePolicyDeclaresBootPCRs() {
-				if v.pcrVerifier.ActivePolicyRequiresSecureBoot() && SecureBootAnchored(bootFacts) {
+			if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+				if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
 					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
 				} else {
 					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-						"active_policy", v.pcrVerifier.GetActivePolicy(),
+						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
 						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
 					v.metrics.Rejections.Inc("baseline_error")
 					result.Result = types.VerifyIntegrityMismatch
@@ -994,7 +1009,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				// if the drift preserves the Secure Boot root of trust,
 				// re-pin the baseline instead of rejecting.
 				// Returns true only on an actual re-pin.
-				if v.tryReanchor(clog, clientID, bootPtr, report, bootFacts) {
+				if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
 					break
 				}
 				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
@@ -1108,6 +1123,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 
 	clog.Info("verification successful")
 
+	// stamp the CA-assigned tenant on the baseline row so the operator
+	// surface can scope this client.
+	// Fail closed rather than let tenant-owned device linger unscoped
+	// in the default tenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		if err := ts.SetClientTenant(clientID, tenant); err != nil {
+			clog.Error("failed to persist the client tenant", "error", err)
+			result.Result = types.VerifyInternalError
+			return result, fmt.Errorf("failed to persist client tenant: %w", err)
+		}
+	}
+
 	result.Result = types.VerifyOK
 	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
 	sessionToken, err := v.deriveSessionToken(report, clientID, identity, result.ValidUntil, result.Result)
@@ -1116,7 +1143,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, fmt.Errorf("failed to derive session token: %w", err)
 	}
 	result.SessionToken = sessionToken
-	v.rememberSessionToken(sessionToken, report, clientID, identity, result.ValidUntil, result.Result)
+	v.rememberSessionToken(sessionToken, report, clientID, tenant, identity, result.ValidUntil, result.Result)
 
 	return result, nil
 }
@@ -1193,7 +1220,6 @@ func (v *Verifier) Stats() Stats {
 // per-client information for monitoring API
 type ClientInfo struct {
 	ClientID          string
-	HasAIK            bool
 	HardwareID        string // hex-encoded
 	Revoked           bool
 	RevocationReason  string
@@ -1203,6 +1229,7 @@ type ClientInfo struct {
 	PendingChallenges int
 	PCR14Baseline     string // hex-encoded
 	FirstSeen         time.Time
+	Tenant            string // CA-assigned; DefaultTenant when never stamped
 }
 
 // returns aggregated information about a specific client
@@ -1211,9 +1238,11 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		ClientID: clientID,
 	}
 
-	// check AIK store
+	// AIK store carries registrations only on legacy deployments;
+	// under the Privacy CA flow the per-report certificate is
+	// the AIK trust anchor and this lookup never hits
 	_, err := v.aikStore.GetAIK(clientID)
-	info.HasAIK = err == nil
+	hasAIK := err == nil
 
 	// hardware ID
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
@@ -1234,14 +1263,35 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 
 	// baseline store data
+	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
+		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
 	}
 
+	// CA-assigned tenant from the baseline row;
+	// store without the capability serves the single default fleet.
+	// Unresolved tenant stays empty and matches no scoped key,
+	// so store error cannot leak the client into anyone's visible set
+	info.Tenant = DefaultTenant
+	if ts, ok := v.baselineStore.(TenantStorer); ok {
+		tenant, err := ts.ClientTenant(clientID)
+		if err != nil {
+			v.log.Error("failed to resolve the client tenant",
+				"client_id", logging.SanitizeField(clientID), "error", err)
+			info.Tenant = ""
+		} else {
+			info.Tenant = tenant
+		}
+	}
+
 	// check if client exists in any store
-	if !info.HasAIK && info.MonotonicCounter == 0 {
+	// baseline row is the durable record under the Privacy CA flow:
+	// AIK store carries no registrations there and the nonce history
+	// may start empty after a verifier restart
+	if !hasAIK && info.MonotonicCounter == 0 && !hasBaseline {
 		return nil, false
 	}
 
@@ -1296,7 +1346,7 @@ func (v *Verifier) ListActiveClients() []string {
 // treats the attestation as a match instead of rejecting.
 // Pending or escalated outcome returns false and the caller rejects as before.
 // Decision itself lives in reanchorDecision.
-func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
+func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
 ) bool {
@@ -1304,9 +1354,9 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID string,
 		return false
 	}
 	// diverse-fleet profile only:
-	// an active policy with require_secureboot and the event-log Secure Boot
+	// client's policy with require_secureboot and the event-log Secure Boot
 	// anchor proven for this boot
-	if !v.pcrVerifier.ActivePolicyRequiresSecureBoot() || !SecureBootAnchored(bootFacts) {
+	if !v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) || !SecureBootAnchored(bootFacts) {
 		return false
 	}
 	rs, ok := v.baselineStore.(ReanchorStorer)
@@ -1397,4 +1447,65 @@ func (v *Verifier) AcknowledgeReanchorReview(clientID string) error {
 		return fmt.Errorf("baseline store does not support self-service re-anchor")
 	}
 	return rs.AcknowledgeLFAReview(clientID)
+}
+
+// ErrUnknownClient is returned by the operator-facing lifecycle helpers
+// when the target client has neither an AIK registration nor a baseline.
+var ErrUnknownClient = errors.New("unknown client")
+
+// reports whether the store pins a boot baseline for the client;
+// stores without boot-PCR support report false
+func (v *Verifier) hasBootBaseline(clientID string) bool {
+	br, ok := v.baselineStore.(BootBaselineReader)
+	return ok && br.GetBootBaseline(clientID) != nil
+}
+
+// ForceReanchor drops all stored baseline state for a client
+// (PCR14 baseline, PCR0/1/7 boot baseline, re-anchor bookkeeping)
+// so the next attestation re-establishes trust per the active TOFU/policy configuration.
+// This is the deliberate operator re-baseline for platform changes the self-service
+// re-anchor refuses (or that profile is not enabled for).
+// AIK registration is untouched, so the host keeps attesting with its enrolled identity.
+func (v *Verifier) ForceReanchor(clientID string) error {
+	// in-memory store keeps the PCR14 and boot baselines in separate maps,
+	// so existence must consult both before falling back to the AIK registration
+	if v.baselineStore.GetBaseline(clientID) == nil && !v.hasBootBaseline(clientID) {
+		if _, err := v.aikStore.GetAIK(clientID); err != nil {
+			return ErrUnknownClient
+		}
+	}
+	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
+		return err
+	}
+	v.metrics.Reanchors.Inc("forced")
+	return nil
+}
+
+// DeleteClient removes all verifier-side trust state for a client:
+// the baseline row and, on deployments whose AIK store carries registrations,
+// the AIK registration.
+// Under the Privacy CA model the AIK trust anchor is the certificate presented
+// per attestation, so the baseline is the state that pins the device.
+// Deleted client re-establishes trust from scratch on its next attestation.
+// Revocations and hardware bans are keyed separately and intentionally
+// survive the delete, so removal cannot be used to shed either.
+func (v *Verifier) DeleteClient(clientID string) error {
+	known := v.baselineStore.GetBaseline(clientID) != nil || v.hasBootBaseline(clientID)
+
+	if deleter, ok := v.aikStore.(store.ClientDeleter); ok {
+		switch err := deleter.DeleteClient(clientID); {
+		case err == nil:
+			known = true
+		case errors.Is(err, store.ErrAIKNotFound):
+			// nothing registered
+			// baseline decides existence
+		default:
+			return err
+		}
+	}
+
+	if !known {
+		return ErrUnknownClient
+	}
+	return v.baselineStore.ClearBaseline(clientID)
 }

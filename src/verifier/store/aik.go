@@ -2,21 +2,21 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - AIK key store
 //
-// Manages Attestation Identity Keys. The production trust model is
-// certificate-backed: VerifierConfig.RequireCert defaults to true, so
-// RegisterAIKWithCert() is the path every first registration takes on
-// a production deployment. The verifier resolves the manufacturer EK
-// chain through AIKCertificateVerifier and pins the
-// SHA-256(EK modulus) into the report.TPM.HardwareID binding before
-// the AIK is allowed to sign attestations.
+// Manages Attestation Identity Keys.
+// Under the Privacy CA model the verifier's live use of this store is
+// certificate VERIFICATION, not storage:
+// CertificateStore carries the attestation-CA trust anchors and the CRL engine,
+// and VerifyReport chain-verifies the CA-issued AIK certificate presented in
+// every attestation report (AIKCertVerifier).
+// Durable client identity is the CA-assigned device pseudonym in the certificate
+// subject; verifier never sees the EK and records nothing here per client.
 //
-// The legacy TOFU path remains for two narrow cases: hosts that
-// opted out of --require-cert (operator acknowledges no chain
-// verification), and the in-memory test store (MemoryStore) used by
-// the verifier's own unit and integration tests. Production builds
-// with --require-cert (the default) never take that branch at
-// runtime; the methods stay in the interface so the test store and
-// the cert-backed store share one shape.
+// Registration/rotation surface (RegisterAIK*, RotateAIK, RegisterHardwareID)
+// is NOT called by the verifier runtime.
+// It remains for the in-memory/unit-test stores, for external provisioning tooling
+// that pre-loads a store out-of-band, and for legacy pre-Privacy-CA deployments
+// whose stores still carry registrations.
+// Such records also feed the client-existence check.
 
 package store
 
@@ -47,13 +47,15 @@ type AIKStore interface {
 	// retrieves AIK public key for client
 	GetAIK(clientID string) (*rsa.PublicKey, error)
 
-	// stores AIK public key for client. Reserved for the legacy
-	// TOFU branch used by the test MemoryStore and by deployments
-	// that opted out of --require-cert; production registrations go
-	// through RegisterAIKWithCert.
+	// stores AIK public key for client.
+	// Not called by the verifier runtime (see the package comment);
+	// used by the test stores and by out-of-band provisioning tooling.
 	RegisterAIK(clientID string, pubKey *rsa.PublicKey) error
 
-	// stores AIK with certificate verification
+	// stores AIK with certificate verification.
+	// Like RegisterAIK this is provisioning surface, not a runtime path:
+	// VerifyReport authenticates the AIK through the per-report certificate
+	// and registers nothing.
 	RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error
 
 	// registers or validates hardware ID for client
@@ -91,6 +93,15 @@ type AIKCertificateVerifier interface {
 // device pseudonym from the subject.
 type AIKCertVerifier interface {
 	VerifyAIKCertificate(pubKey *rsa.PublicKey, aikCertDER []byte) (*x509.Certificate, error)
+}
+
+// Optional interface for stores that can remove client entirely:
+// the AIK, the hardware-ID binding and the registration metadata.
+// Used by the operator API to force a re-enrollment.
+// Next enrollment goes through the full RegisterAIKWithCert chain verification again.
+// Returns ErrAIKNotFound when the client is not registered.
+type ClientDeleter interface {
+	DeleteClient(clientID string) error
 }
 
 // optional interface for database-backed stores to avoid loading all clients
@@ -468,6 +479,49 @@ func (fs *FileStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	return nil
 }
 
+// DeleteClient removes the client's key, hardware-ID binding and registration
+// metadata from disk and from the caches.
+// Fingerprint index entry is freed so the AIK-uniqueness check does not keep
+// pointing at a client that no longer exists.
+func (fs *FileStore) DeleteClient(clientID string) error {
+	if !filepath.IsLocal(clientID) {
+		return ErrInvalidClientID
+	}
+	if err := validateClientID(clientID); err != nil {
+		return err
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	pubKey, exists := fs.cache[clientID]
+	if !exists {
+		return ErrAIKNotFound
+	}
+
+	// key file first: it is the record of existence
+	// .meta/.hwid are sidecars and may legitimately be absent
+	if err := os.Remove(filepath.Join(fs.storePath, clientID+".pem")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove key file: %w", err)
+	}
+	for _, ext := range []string{".meta", ".hwid"} {
+		if err := os.Remove(filepath.Join(fs.storePath, clientID+ext)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove %s file: %w", ext, err)
+		}
+	}
+
+	if fp := Fingerprint(pubKey); fp != "" {
+		if owner, ok := fs.fpIndex[fp]; ok && owner == clientID {
+			delete(fs.fpIndex, fp)
+		}
+	}
+	delete(fs.cache, clientID)
+	delete(fs.hardwareIDs, clientID)
+	delete(fs.registeredAt, clientID)
+
+	return nil
+}
+
 // writeKeyPEM writes block to path opened with flag (mode 0600). The file's
 // Close error is reported even when the PEM encoding succeeds, so a flush
 // failure is not lost. When removeOnError is set, any failure unlinks path
@@ -701,6 +755,22 @@ func (ms *MemoryStore) RotateAIK(clientID string, newKey *rsa.PublicKey) error {
 	return nil
 }
 
+// DeleteClient removes the client's key, hardware-ID binding
+// and registration metadata from the in-memory store.
+func (ms *MemoryStore) DeleteClient(clientID string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if _, exists := ms.keys[clientID]; !exists {
+		return ErrAIKNotFound
+	}
+
+	delete(ms.keys, clientID)
+	delete(ms.hardwareIDs, clientID)
+	delete(ms.registeredAt, clientID)
+	return nil
+}
+
 // registers hardware ID for client or validates against existing
 func (ms *MemoryStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
 	ms.mu.Lock()
@@ -918,8 +988,8 @@ func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 
 func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
 	// Cert-less registration entry. Production deployments run with
-	// cs.requireCerts == true (the default carried from
-	// VerifierConfig.RequireCert) so this branch is the canonical
+	// cs.requireCerts == true (the default carried from the
+	// --require-cert flag) so this branch is the canonical
 	// reject path. The legacy TOFU fall-through under
 	// requireCerts == false remains only for hosts that
 	// intentionally opted out via the operator-facing CLI.
@@ -1137,6 +1207,10 @@ func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
 
 func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) {
 	return cs.fileStore.GetRegisteredAt(clientID)
+}
+
+func (cs *CertificateStore) DeleteClient(clientID string) error {
+	return cs.fileStore.DeleteClient(clientID)
 }
 
 // RotateAIK refuses a keyed-only rotation.

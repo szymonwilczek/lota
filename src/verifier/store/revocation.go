@@ -52,8 +52,12 @@ func IsValidReason(reason string) bool {
 }
 
 // records an active AIK revocation
+// Tenant records which tenant the client belonged to at revocation time
+// so the operator surface can scope listings and mutations.
+// Enforcement keys on the client ID, which the CA issues per tenant.
 type RevocationEntry struct {
 	ClientID  string
+	Tenant    string
 	Reason    RevocationReason
 	RevokedAt time.Time
 	RevokedBy string // administrator identifier
@@ -69,9 +73,9 @@ var (
 
 // manages client AIK revocations
 type RevocationStore interface {
-	// marks a client's AIK as revoked
-	// returns ErrAlreadyRevoked if the client is already revoked
-	Revoke(clientID string, reason RevocationReason, revokedBy, note string) error
+	// marks client's AIK as revoked, recording the tenant it belongs to
+	// returns ErrAlreadyRevoked if already revoked
+	Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error
 
 	// checks if a client's AIK has been revoked
 	// returns the revocation entry and true if revoked, nil and false otherwise
@@ -105,7 +109,7 @@ func NewMemoryRevocationStore(auditLog ...AuditLog) *MemoryRevocationStore {
 	return s
 }
 
-func (s *MemoryRevocationStore) Revoke(clientID string, reason RevocationReason, revokedBy, note string) error {
+func (s *MemoryRevocationStore) Revoke(tenant, clientID string, reason RevocationReason, revokedBy, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -115,6 +119,7 @@ func (s *MemoryRevocationStore) Revoke(clientID string, reason RevocationReason,
 
 	s.revocations[clientID] = &RevocationEntry{
 		ClientID:  clientID,
+		Tenant:    tenant,
 		Reason:    reason,
 		RevokedAt: time.Now().UTC(),
 		RevokedBy: revokedBy,
@@ -122,7 +127,7 @@ func (s *MemoryRevocationStore) Revoke(clientID string, reason RevocationReason,
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("revoke", clientID, string(reason), revokedBy, note); err != nil {
+		if err := s.auditLog.Log(tenant, "revoke", clientID, string(reason), revokedBy, note); err != nil {
 			return err
 		}
 	}
@@ -145,14 +150,15 @@ func (s *MemoryRevocationStore) Unrevoke(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.revocations[clientID]; !exists {
+	entry, exists := s.revocations[clientID]
+	if !exists {
 		return ErrNotRevoked
 	}
 
 	delete(s.revocations, clientID)
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log("unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(entry.Tenant, "unrevoke", clientID, "", "", ""); err != nil {
 			return err
 		}
 	}

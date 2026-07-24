@@ -1,0 +1,24 @@
+# rpmlint filters for the LOTA RPMs (passed to rpmlint via `make packages`)
+#
+# Each filter below silences known, intentional finding so that a real regression
+# still stands out.
+# Every entry is deliberate design choice or nfpm limitation, documented inline.
+#
+# Do NOT add blanket filters here.
+
+# Binaries ship unstripped on purpose:
+# agent binary is fs-verity-measured and its hash is pinned, so it must ship
+# byte-for-byte as built; stripping would change the hash.
+# SDK/service binaries follow the same build.
+addFilter("unstripped-binary-or-object")
+
+# nfpm cannot derive Requires from sonames, so agent's runtime library
+# dependencies are listed by hand.
+# .spec/COPR path uses rpmbuild find-requires instead; this is not
+# missing-dependency defect.
+addFilter("explicit-lib-dependency")
+
+# nfpm does not stamp the RPM release into the attached changelog, so changelog
+# entry version (e.g. 0.4.0) omits the -1 release the package carries.
+# Cosmetic nfpm limitation and not version mismatch.
+addFilter("incoherent-version-in-changelog")

@@ -86,7 +86,7 @@ var (
 	logFormat            = flag.String("log-format", "text", "Log output format: text or json")
 	logLevel             = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog      = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
-	requireCert          = flag.Bool("require-cert", true, "Require a Privacy CA-issued AIK certificate; reject reports without one (production default)")
+	requireCert          = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert and selects the certificate-verifying AIK store. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a certificate-verifying AIK store cannot attest any client)")
 	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
 	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
@@ -100,7 +100,9 @@ var (
 	ekCRLsDeprecated     stringSliceFlag
 	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	scopedKeysFile       = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	printVersions        = flag.Bool("print-versions", false, "Print the protocol and schema versions this binary targets, then exit. Compare against another release before a rolling upgrade.")
 )
 
 func main() {
@@ -109,7 +111,14 @@ func main() {
 	flag.Var(&ekCRLsDeprecated, "ek-crl", "DEPRECATED alias for --aik-crl. The CRLs loaded here revoke AIK certificates issued by the deployment's attestation CA, not endorsement keys; the TPM-manufacturer EK revocation feed is the attestation CA's -ek-crl flag.")
 	flag.Parse()
 
-	// initialize structured logger
+	// --print-versions is query, not server run:
+	// emit the version report and exit before any store,
+	// TLS or listener setup
+	if *printVersions {
+		writeVersions(os.Stdout)
+		return
+	}
+
 	logger := logging.New(logging.Options{
 		Level:  *logLevel,
 		Format: *logFormat,
@@ -122,7 +131,6 @@ func main() {
 		aikCRLs = append(aikCRLs, ekCRLsDeprecated...)
 	}
 
-	// shared metrics registry
 	m := metrics.New()
 
 	logger.Info("LOTA Verifier starting",
@@ -160,7 +168,6 @@ func main() {
 		os.Exit(1)
 	}
 	verifierCfg.RequireEventLog = *requireEventLog
-	verifierCfg.RequireCert = *requireCert
 	verifierCfg.RequireBootPCRs = !*allowLegacyPCRMask
 	if *allowLegacyPCRMask {
 		logger.Warn("INSECURE: --allow-legacy-pcr-mask is set; agents may attest without PCR 0/1/7 and bypass the firmware/Secure Boot baseline pin")
@@ -438,14 +445,15 @@ func main() {
 		AttestationLog: attestLog,
 		AdminAPIKey:    adminKey,
 		ReaderAPIKey:   readerKey,
+		ScopedKeysFile: *scopedKeysFile,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 	}
 
-	if *httpAddr != "" && adminKey == "" {
+	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {
 		logger.Warn("HTTP API enabled without admin API key: admin endpoints (revoke, ban) will be disabled")
 	}
-	if *httpAddr != "" && readerKey == "" && adminKey == "" {
+	if *httpAddr != "" && readerKey == "" && adminKey == "" && *scopedKeysFile == "" {
 		logger.Warn("HTTP API enabled without reader or admin API key: sensitive read-only endpoints are public on a loopback bind; a non-loopback bind will be refused")
 	}
 
@@ -477,8 +485,15 @@ func main() {
 	for sig := range sigCh {
 		switch sig {
 		case syscall.SIGHUP:
+			if *scopedKeysFile != "" {
+				if err := srv.ReloadAPIKeys(); err != nil {
+					logger.Error("SIGHUP: API key reload failed; keeping previous set", "error", err)
+				}
+			}
 			if reloader == nil {
-				logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+				if *scopedKeysFile == "" {
+					logger.Warn("SIGHUP: no certificate-backed CRL store configured; nothing to reload")
+				}
 				continue
 			}
 			if err := reloader.ReloadCRLs(); err != nil {

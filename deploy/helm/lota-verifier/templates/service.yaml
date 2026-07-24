@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lota-verifier.fullname" . }}
+  labels:
+    {{- include "lota-verifier.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "lota-verifier.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: attest
+      port: {{ .Values.service.port }}
+      targetPort: attest
+      protocol: TCP
+    {{- if .Values.httpApi.enabled }}
+    - name: http-api
+      port: {{ .Values.httpApi.port }}
+      targetPort: http-api
+      protocol: TCP
+    {{- end }}

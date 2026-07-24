@@ -1,0 +1,11 @@
+# LOTA dnf repository.
+# @BASEURL@ is substituted by `make dnf-repo` (LOTA_REPO_BASEURL).
+# gpgcheck verifies each package signature.
+# repo_gpgcheck verifies the signed repository metadata (repomd.xml.asc).
+[lota]
+name=LOTA
+baseurl=@BASEURL@
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=@BASEURL@/RPM-GPG-KEY-lota

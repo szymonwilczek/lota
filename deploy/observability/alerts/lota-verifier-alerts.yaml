@@ -1,0 +1,177 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# Reference Prometheus alert rules for the LOTA verifier.
+#
+# Severity maps to the escalation tiers in the observability guide
+# (Documentation/operator/observability.rst):
+#     warning = L2 (operator triage, no data at risk yet),
+#     critical = L3 (integrity or service impact, act now).
+# Every alert names its runbook section there.
+#
+# Verifier zero-fills all labeled series, so the increase()/rate()
+# expressions below always have a series to match and never miss the
+# first event after verifier restart.
+
+groups:
+  - name: lota-verifier.availability
+    rules:
+      - alert: LotaVerifierDown
+        expr: up{job="lota-verifier"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LOTA verifier target is down"
+          description: >-
+            Prometheus cannot scrape {{ $labels.instance }}. Attestation
+            state of the fleet is unknown while the verifier is
+            unreachable.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaverifierdown
+
+      - alert: LotaAttestationStall
+        expr: >-
+          rate(lota_attestations_total[15m]) == 0
+          and lota_registered_clients > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No attestations arriving from a non-empty fleet"
+          description: >-
+            {{ $labels.instance }} has registered clients but received no
+            attestation for 30 minutes. Agents are down, unreachable, or
+            the attestation port is blocked.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaattestationstall
+
+  - name: lota-verifier.integrity
+    rules:
+      - alert: LotaIntegrityLoss
+        expr: >-
+          increase(lota_rejections_total{reason=~"pcr_fail|integrity_mismatch"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Device failed integrity verification ({{ $labels.reason }})"
+          description: >-
+            {{ $labels.instance }} rejected at least one attestation with
+            {{ $labels.reason }} in the last 5 minutes: a device presented
+            PCR or runtime state that does not match its policy or
+            baseline. This is the primary tamper signal.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaintegrityloss
+
+      - alert: LotaRevokedDeviceActivity
+        expr: >-
+          increase(lota_rejections_total{reason=~"revoked|banned"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Revoked or banned device still attesting"
+          description: >-
+            A device whose AIK is revoked or whose hardware is banned keeps
+            contacting {{ $labels.instance }}. Expected briefly after a
+            revocation; persistent activity means the operator remediation
+            never reached the host.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotarevokeddeviceactivity
+
+      - alert: LotaReplayBurst
+        expr: increase(lota_rejections_total{reason="nonce_fail"}[5m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Burst of nonce failures (possible replay)"
+          description: >-
+            {{ $labels.instance }} rejected more than 3 attestations for
+            nonce reuse or expiry within 5 minutes. Single failures are
+            benign retries; a burst points at a replay attempt or a
+            badly skewed client clock.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotareplayburst
+
+      - alert: LotaReanchorEscalation
+        expr: increase(lota_reanchors_total{outcome="escalate"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Re-anchor request escalated to the operator"
+          description: >-
+            A device's self-service boot-baseline re-anchor on
+            {{ $labels.instance }} did not qualify for automatic
+            acceptance and was refused. The device keeps failing
+            attestation until an operator inspects it and either forces
+            a re-anchor or revokes it.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotareanchorescalation
+
+  - name: lota-verifier.capacity
+    rules:
+      - alert: LotaBaselineStoreErrors
+        expr: increase(lota_rejections_total{reason="baseline_error"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Verifier baseline store is failing"
+          description: >-
+            {{ $labels.instance }} rejected attestations because reading or
+            writing the baseline store failed. The verifier is failing
+            closed: healthy devices are being refused because the database
+            backend is in trouble.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotabaselinestoreerrors
+
+      - alert: LotaAttestationFailureRatioHigh
+        expr: >-
+          sum(rate(lota_attestations_failed_total[10m]))
+            / clamp_min(sum(rate(lota_attestations_total[10m])), 1e-9)
+          > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10% of attestations failing"
+          description: >-
+            Sustained fleet-wide failure ratio above 10% for 10 minutes.
+            A single tampered device does not move this needle; a policy,
+            certificate, or infrastructure problem does.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaattestationfailureratiohigh
+
+      - alert: LotaVerifyLatencyP99High
+        expr: >-
+          histogram_quantile(0.99,
+            rate(lota_verification_duration_seconds_bucket[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Attestation verification p99 above 1s"
+          description: >-
+            Verification latency p99 on {{ $labels.instance }} exceeded 1
+            second for 10 minutes. Usually database pressure or CPU
+            saturation; agents start timing out well before latency
+            reaches the protocol limits.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaverifylatencyp99high
+
+      - alert: LotaPendingChallengesHigh
+        expr: lota_pending_challenges > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outstanding challenge backlog above 1000"
+          description: >-
+            {{ $labels.instance }} holds more than 1000 unanswered
+            attestation challenges. Either a large fleet segment stopped
+            mid-handshake or an unauthenticated flood is filling the
+            challenge table.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotapendingchallengeshigh
+
+      - alert: LotaConnectionErrorBurst
+        expr: rate(lota_connection_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained protocol-level connection errors"
+          description: >-
+            {{ $labels.instance }} sees more than one protocol error per
+            second. Malformed traffic on the attestation port: a scanner,
+            a protocol-version mismatch after a partial upgrade, or a
+            broken load-balancer health check.
+          runbook_url: https://lota.szymon-wilczek.me/operator/observability.html#alert-lotaconnectionerrorburst
