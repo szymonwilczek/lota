@@ -406,3 +406,26 @@ func TestPostgresAssertShardSet(t *testing.T) {
 		t.Fatalf("re-pin after clearing: %v", err)
 	}
 }
+
+// ServerMaxConnections reads the budget every instance's pool draws from,
+// so the verifier can tell operator that raised pool is already over it
+func TestPostgresServerMaxConnections(t *testing.T) {
+	db := pgTestDB(t)
+
+	got, err := ServerMaxConnections(db)
+	if err != nil {
+		t.Fatalf("ServerMaxConnections: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("max_connections = %d, want a positive setting", got)
+	}
+
+	// cross-check against the server's own view
+	var want int
+	if err := db.QueryRow("SHOW max_connections").Scan(&want); err != nil {
+		t.Fatalf("SHOW max_connections: %v", err)
+	}
+	if got != want {
+		t.Errorf("ServerMaxConnections = %d, server reports %d", got, want)
+	}
+}
