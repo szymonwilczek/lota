@@ -33,6 +33,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -261,11 +262,34 @@ func main() {
 			}
 			dbs = append(dbs, sdb)
 		}
-		defer func() {
+		closeShards := func() {
 			for _, sdb := range dbs {
 				_ = sdb.Close()
 			}
-		}()
+		}
+
+		// pin the shard set against the control database before anything
+		// takes dependency on the pools
+		shardIDs := make([]string, len(dbs))
+		for i, sdb := range dbs {
+			id, err := store.ShardIdentity(context.Background(), sdb)
+			if err != nil {
+				logger.Error("failed to read shard identity", "shard", i, "error", err)
+				closeShards()
+				os.Exit(1)
+			}
+			shardIDs[i] = id
+		}
+		if err := store.AssertShardSet(context.Background(), dbs[0], shardIDs); err != nil {
+			logger.Error("shard set check failed", "error", err,
+				"hint", "give every instance the same databases in the same order; "+
+					"to change the set deliberately, migrate or re-enrol the fleet and "+
+					"clear the pin with DELETE FROM shard_set on the control database")
+			closeShards()
+			os.Exit(1)
+		}
+
+		defer closeShards()
 		// control database also anchors the AIK/certificate flow below
 		db := dbs[0]
 

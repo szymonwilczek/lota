@@ -134,6 +134,15 @@ are partitioned across N databases (``verify/shard.go``,
   construction, so boot-PCR pinning, tenancy and re-anchor keep working
   under sharding. A compile-time check pins that the wrapper satisfies the
   set the verifier probes.
+- **The shard set is pinned, not assumed.** Routing is positional, so a
+  divergent list is a correctness bug an operator cannot see: it breaks
+  replay protection and cross-instance sessions for whichever clients it
+  moves. Each database mints a stable identity (``shard_identity``) and the
+  control database records the fingerprint of the ordered list
+  (``shard_set``, ``store/shard_identity.go``); a mismatch fails startup
+  closed. Identity is per database rather than per DSN because the same
+  database is reachable under different credentials, hostnames or a pooler,
+  and none of that changes routing.
 
 Fleet-global, read-mostly state (revocations, bans, audit, attestation
 log) is not sharded; it lives on the first shard, the control database.
