@@ -267,14 +267,15 @@ func TestFileStore_GlobalAIKUniquenessAcrossClients(t *testing.T) {
 	}
 }
 
-func TestCertificateStore_TOFUMode(t *testing.T) {
+// Cert-backed store has no way to verify bare public key, so it refuses one
+// however it is constructed
+func TestCertificateStore_RefusesCertlessRegistration(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "lota-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// create store without requiring certs (TOFU mode)
 	store, err := NewCertificateStore(tempDir, nil, false)
 	if err != nil {
 		t.Fatalf("NewCertificateStore failed: %v", err)
@@ -282,10 +283,47 @@ func TestCertificateStore_TOFUMode(t *testing.T) {
 
 	key := generateTestKey(t)
 
-	// should work without certificates
-	if err := store.RegisterAIK("client1", &key.PublicKey); err != nil {
-		t.Errorf("TOFU registration should succeed: %v", err)
+	if err := store.RegisterAIK("client1", &key.PublicKey); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("RegisterAIK without a certificate: want ErrNoCertificate, got %v", err)
 	}
+	if err := store.RegisterAIKWithCert("client1", &key.PublicKey, nil, nil); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("RegisterAIKWithCert with no certs: want ErrNoCertificate, got %v", err)
+	}
+	if _, err := store.GetAIK("client1"); err == nil {
+		t.Fatal("a refused registration must not leave a stored key")
+	}
+}
+
+// certBackedStoreWithClient builds CertificateStore over throwaway CA and registers
+// one client through the chain-verifying path, which is the only way key enters
+// that store.
+func certBackedStoreWithClient(t *testing.T, clientID string) (*CertificateStore, *rsa.PrivateKey) {
+	t.Helper()
+
+	dir := t.TempDir()
+	caKey := generateTestKey(t)
+	caCert := generateTestCertificate(t, caKey, true)
+	caCertPath := filepath.Join(dir, "ca.pem")
+	caCertDER, err := x509.CreateCertificate(rand.Reader, caCert, caCert, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	saveCertPEM(t, caCertPath, caCertDER)
+
+	// requireCerts=false so one chain-verified AIK certificate is enough
+	// to seed the client;
+	// EK certificate pair is exercised by the dedicated require-certs tests
+	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), []string{caCertPath}, false)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+
+	key := generateTestKey(t)
+	aikCertDER := generateSignedCertificate(t, key, caCert, caKey)
+	if err := cs.RegisterAIKWithCert(clientID, &key.PublicKey, aikCertDER, nil); err != nil {
+		t.Fatalf("RegisterAIKWithCert: %v", err)
+	}
+	return cs, key
 }
 
 func TestCertificateStore_RequireCertsNeedsTrustedCAs(t *testing.T) {
@@ -1119,17 +1157,7 @@ func TestFileStore_PathTraversal(t *testing.T) {
 // cert-backed store keeps the same observable contract as the plain
 // file store for key, hardware-ID and lifecycle lookups.
 func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
-	dir := t.TempDir()
-
-	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
-	if err != nil {
-		t.Fatalf("store init: %v", err)
-	}
-
-	key := generateTestKey(t)
-	if err := cs.RegisterAIK("client-a", &key.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK: %v", err)
-	}
+	cs, key := certBackedStoreWithClient(t, "client-a")
 
 	got, err := cs.GetAIK("client-a")
 	if err != nil {
@@ -1169,17 +1197,7 @@ func TestCertificateStore_DelegatesToFileStore(t *testing.T) {
 // so the keyed-only RotateAIK - which carries no certificate - must refuse rather
 // than silently swap the trusted key, and must leave the stored key untouched.
 func TestCertificateStore_RotateAIKRefused(t *testing.T) {
-	dir := t.TempDir()
-
-	cs, err := NewCertificateStore(filepath.Join(dir, "aiks"), nil, false)
-	if err != nil {
-		t.Fatalf("store init: %v", err)
-	}
-
-	key := generateTestKey(t)
-	if err := cs.RegisterAIK("client-a", &key.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK: %v", err)
-	}
+	cs, key := certBackedStoreWithClient(t, "client-a")
 
 	newKey := generateTestKey(t)
 	if err := cs.RotateAIK("client-a", &newKey.PublicKey); err == nil {
@@ -1311,21 +1329,7 @@ func TestFileStore_DeleteClientNotFound(t *testing.T) {
 }
 
 func TestCertificateStore_DeleteClientDelegates(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "lota-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	store, err := NewCertificateStore(tempDir, nil, false)
-	if err != nil {
-		t.Fatalf("NewCertificateStore failed: %v", err)
-	}
-
-	key := generateTestKey(t)
-	if err := store.RegisterAIK("del-client", &key.PublicKey); err != nil {
-		t.Fatalf("RegisterAIK failed: %v", err)
-	}
+	store, _ := certBackedStoreWithClient(t, "del-client")
 
 	if err := store.DeleteClient("del-client"); err != nil {
 		t.Fatalf("DeleteClient failed: %v", err)
