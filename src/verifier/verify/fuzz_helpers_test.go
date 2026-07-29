@@ -131,7 +131,7 @@ func trimToMax(b []byte, max int) []byte {
 func nominalSpec() *fuzzReportSpec {
 	s := &fuzzReportSpec{
 		flags:     types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce,
-		pcrMask:   0x00004003,
+		pcrMask:   0x00004083,
 		aikGen:    1,
 		bindNonce: true,
 	}

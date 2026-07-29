@@ -319,6 +319,13 @@ anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
 
+Pinning these registers is not optional. A report whose ``pcr_mask`` omits
+PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
+configuration accepts one. This closes the downgrade an attacker would
+otherwise ask for: an agent that simply declined to quote the firmware and
+Secure Boot registers would bypass the pin while still presenting a
+well-formed, correctly signed report.
+
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the
 kernel from a CPU-rooted late launch into PCR 17-22, removing the firmware and

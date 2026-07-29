@@ -37,7 +37,20 @@ func init() {
 }
 
 // builds a complete attestation report with valid signatures
+// productionPCRMask is the mask a current agent emits: PCR 0/1/7 (firmware,
+// platform configuration, Secure Boot policy) plus PCR 14 (boot commitment).
+// legacyPCRMask drops PCR 7 -- what downgraded or tampered agent would send.
+const (
+	productionPCRMask = uint32(0x00004083)
+	legacyPCRMask     = uint32(0x00004003)
+)
+
 func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
+	t.Helper()
+	return createValidReportWithMask(t, clientID, nonce, pcr14, productionPCRMask)
+}
+
+func createValidReportWithMask(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte, pcrMask uint32) []byte {
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
@@ -68,11 +81,11 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	}
 
 	// PCR mask
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003) // PCR 0,1,14
+	binary.LittleEndian.PutUint32(buf[offset:], pcrMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, pcrMask)
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
@@ -266,9 +279,6 @@ func persistentClientID(challengeID string) string {
 func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
-	// fixtures emit pcr_mask 0x4003 (PCR 0/1/14); production-default
-	// enforcement of PCR 0/1/7 is exercised by dedicated tests.
-	cfg.RequireBootPCRs = false
 	// fixtures predate the initramfs PCR14 lock and emit reports
 	// without FlagInitramfsLockV1; the dedicated lock-policy tests
 	// cover the require path.
@@ -704,11 +714,11 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 		offset += types.HashSize
 	}
 
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
+	binary.LittleEndian.PutUint32(buf[offset:], productionPCRMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, productionPCRMask)
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
@@ -835,19 +845,16 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,14)", challenge.PCRMask)
 }
 
-// TestVerify_RejectsMissingBootPCRsByDefault asserts that the default
-// (production) configuration refuses any attestation whose pcr_mask does
-// not include PCR 0, 1, and 7. createValidReport emits the pre-PCR7
-// legacy mask 0x4003 (PCR 0/1/14); a tampered or downgraded agent that
-// strips the firmware/Secure Boot bits from its mask must therefore be
-// rejected with VerifyPCRFail before the BootBaselineStorer pin is
-// consulted.
-func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
+// TestVerify_RejectsMissingBootPCRs asserts that the verifier refuses any attestation
+// whose pcr_mask does not include PCR 0, 1, and 7.
+// Tampered or downgraded agent that strips the firmware/Secure Boot bits from its mask
+// is rejected with VerifyPCRFail before the BootBaselineStorer pin is consulted.
+// There is no configuration that accepts such report.
+func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.NonceLifetime = 1 * time.Second
-	// RequireBootPCRs left at its DefaultConfig value (true).
 
 	verifier := NewVerifier(cfg, aikStore)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
@@ -857,7 +864,7 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
-	clientID := "boot-pcr-default-reject"
+	clientID := "boot-pcr-reject"
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
@@ -867,56 +874,14 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 	for i := range pcr14 {
 		pcr14[i] = byte(0x14 ^ i)
 	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+	reportData := createValidReportWithMask(t, clientID, challenge.Nonce, pcr14, legacyPCRMask)
 
 	result, err := verifier.VerifyReport(clientID, reportData)
 	if err == nil {
-		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7 under default RequireBootPCRs=true")
+		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7")
 	}
 	if result.Result != types.VerifyPCRFail {
 		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
-	}
-}
-
-// TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed pairs with
-// TestVerify_RejectsMissingBootPCRsByDefault: with RequireBootPCRs
-// explicitly disabled (the --allow-legacy-pcr-mask CLI escape hatch),
-// the same fixture must continue through the verifier so operators can
-// roll over a pre-PCR0/1/7 fleet without dropping it offline.
-func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
-	aikStore := newCertStore(t)
-
-	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
-	cfg.NonceLifetime = 1 * time.Second
-
-	verifier := NewVerifier(cfg, aikStore)
-	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
-
-	clientID := "boot-pcr-legacy-allow"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge: %v", err)
-	}
-
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
-
-	result, err := verifier.VerifyReport(clientID, reportData)
-	if err != nil {
-		t.Fatalf("VerifyReport: %v", err)
-	}
-	if result.Result != types.VerifyOK {
-		t.Fatalf("expected VerifyOK with RequireBootPCRs=false, got %d", result.Result)
 	}
 }
 
@@ -930,7 +895,6 @@ func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	// RequireInitramfsLock left at its DefaultConfig value (true).
 	cfg.NonceLifetime = 1 * time.Second
 
@@ -974,7 +938,6 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 
@@ -1016,7 +979,6 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	baselines := NewBaselineStore()
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = baselines
 	verifier := NewVerifier(cfg, store.NewMemoryStore())

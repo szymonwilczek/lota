@@ -599,7 +599,6 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -662,7 +661,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// first verifier instance
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireBootPCRs = false
 	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -687,7 +685,6 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireBootPCRs = false
 	cfg2.RequireInitramfsLock = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
@@ -728,7 +725,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// establish baseline
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireBootPCRs = false
 	cfg1.RequireInitramfsLock = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -752,7 +748,6 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireBootPCRs = false
 	cfg2.RequireInitramfsLock = false
 
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
@@ -798,7 +793,6 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
@@ -909,11 +903,11 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	}
 
 	// PCR mask
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
+	binary.LittleEndian.PutUint32(buf[offset:], productionPCRMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, productionPCRMask)
 
 	// TPMS_ATTEST with binding nonce including security-relevant report fields
 	bindingReport := &types.AttestationReport{}

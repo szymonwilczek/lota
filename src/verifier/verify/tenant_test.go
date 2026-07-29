@@ -260,7 +260,6 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	t.Helper()
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.BanStore = bans
@@ -356,7 +355,6 @@ func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
 
 	attestLog := store.NewMemoryAttestationLog()
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.AttestationLog = attestLog
@@ -469,7 +467,6 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	t.Helper()
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, newCertStore(t))

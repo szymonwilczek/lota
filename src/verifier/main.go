@@ -96,7 +96,6 @@ var (
 	logLevel             = flag.String("log-level", "info", "Minimum log level: debug, info, warn, error, security")
 	requireEventLog      = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
 	requireCert          = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert and selects the certificate-verifying AIK store. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a certificate-verifying AIK store cannot attest any client)")
-	allowLegacyPCRMask   = flag.Bool("allow-legacy-pcr-mask", false, "INSECURE: accept attestation reports whose pcr_mask omits PCR 0/1/7 (firmware/Secure Boot); allows pre-PCR0/1/7 fleets to attest without firmware baseline pinning")
 	allowNoInitramfsLock = flag.Bool("allow-no-initramfs-lock", false, "INSECURE: accept attestation reports that do not advertise FlagInitramfsLockV1 (initramfs PCR14 lock). Use only for legacy hosts without the 90lota dracut module installed; the kernel-handoff -> lota-agent PCR14 window is no longer covered for those hosts.")
 	allowTOFUBoot        = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	maxRestartSkew       = flag.Uint("max-restart-count-skew", 64, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required. The default of 64 covers laptop suspend/resume cadences past any realistic operator interval; raising it grows the matcher's brute-force surface linearly without buying additional uptime.")
@@ -240,10 +239,6 @@ func main() {
 		os.Exit(1)
 	}
 	verifierCfg.RequireEventLog = *requireEventLog
-	verifierCfg.RequireBootPCRs = !*allowLegacyPCRMask
-	if *allowLegacyPCRMask {
-		logger.Warn("INSECURE: --allow-legacy-pcr-mask is set; agents may attest without PCR 0/1/7 and bypass the firmware/Secure Boot baseline pin")
-	}
 	verifierCfg.RequireInitramfsLock = !*allowNoInitramfsLock
 	if *allowNoInitramfsLock {
 		logger.Warn("INSECURE: --allow-no-initramfs-lock is set; agents may attest without the initramfs PCR14 lock, leaving the kernel-handoff -> lota-agent window uncovered")

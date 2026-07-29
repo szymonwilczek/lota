@@ -130,7 +130,6 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog       bool
-	requireBootPCRs       bool
 	requireInitramfsLock  bool
 	requireBootEnrollment bool
 	rejectLegacyBaselines bool
@@ -221,12 +220,6 @@ type VerifierConfig struct {
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
 
-	// if true, reject attestation reports whose pcr_mask does not
-	// include PCR 0, 1, and 7 (firmware, platform configuration,
-	// Secure Boot policy). An agent that omits these bits would
-	// bypass the BootBaselineStorer pin even when one is configured.
-	RequireBootPCRs bool
-
 	// if true, reject attestation reports that do not advertise the
 	// initramfs PCR14 lock (FlagInitramfsLockV1). The lock is extended
 	// by the 90lota dracut helper before pivot_root, so it closes the
@@ -312,7 +305,6 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
-		RequireBootPCRs:       true,
 		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
 		MaxRestartCountSkew:   64,
@@ -358,7 +350,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:         cfg.NonceLifetime,
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
-		requireBootPCRs:       cfg.RequireBootPCRs,
 		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
@@ -755,12 +746,14 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("FAIL_PCR_FAIL: report missing FlagInitramfsLockV1 (initramfs PCR14 lock required)")
 	}
 
-	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory in
-	// the default production configuration. Move this ahead of any
-	// baseline write so a malformed report cannot persist a partial row.
+	// Mask gate: PCR0/PCR1/PCR7 (firmware + Secure Boot) are mandatory.
+	// Report that omits them would bypass the BootBaselineStorer pin
+	// even where one is configured.
+	// Move this ahead of any baseline write so malformed report cannot
+	// persist partial row.
 	const bootPCRMask = (uint32(1) << 0) | (uint32(1) << 1) | (uint32(1) << 7)
 	haveBootPCRs := report.TPM.PCRMask&bootPCRMask == bootPCRMask
-	if v.requireBootPCRs && !haveBootPCRs {
+	if !haveBootPCRs {
 		logging.Security(clog, "report omits firmware/SecureBoot PCRs from pcr_mask",
 			"pcr_mask", fmt.Sprintf("0x%08x", report.TPM.PCRMask),
 			"required_mask", fmt.Sprintf("0x%08x", bootPCRMask))
@@ -769,7 +762,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, errors.New("FAIL_PCR_FAIL: report does not include firmware/SecureBoot PCRs in pcr_mask")
 	}
 	bootStore, bootStoreOK := v.baselineStore.(BootBaselineStorer)
-	if v.requireBootPCRs && !bootStoreOK {
+	if !bootStoreOK {
 		clog.Error("baseline store does not support boot PCR pinning; refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
 		result.Result = types.VerifyIntegrityMismatch

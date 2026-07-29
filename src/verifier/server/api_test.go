@@ -125,7 +125,6 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
 	attLog := store.NewMemoryAttestationLog()
@@ -257,7 +256,6 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
@@ -299,7 +297,6 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
@@ -386,12 +383,12 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 		offset += types.HashSize
 	}
 
-	// PCR mask (PCR 0,1,14)
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
+	// PCR mask (PCR 0,1,7,14) -- the mask a current agent emits
+	binary.LittleEndian.PutUint32(buf[offset:], 0x00004083)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004083)
 
 	bindingReport := &types.AttestationReport{}
 	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
@@ -1520,7 +1517,6 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
 	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
