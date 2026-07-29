@@ -12,30 +12,9 @@ import (
 	"github.com/szymonwilczek/lota/verifier/types"
 )
 
-// referenceBootCommitmentPCR14 reproduces the PCR14 derivation by hand
-// so any drift between the helper and the wire spec gets caught.
+// zeroBaseline is the PCR14 content of a host whose firmware measured
+// nothing into the register before the initramfs lock ran.
 var zeroBaseline [types.HashSize]byte
-
-func referenceBootCommitmentPCR14(agentHash [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
-	const tag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
-	var counters [8]byte
-	binary.BigEndian.PutUint32(counters[0:4], reset)
-	binary.BigEndian.PutUint32(counters[4:8], restart)
-
-	commit := sha256.New()
-	commit.Write([]byte(tag))
-	commit.Write(agentHash[:])
-	commit.Write(counters[:])
-	d := commit.Sum(nil)
-
-	var zero [types.HashSize]byte
-	final := sha256.New()
-	final.Write(zero[:])
-	final.Write(d)
-	var out [types.HashSize]byte
-	copy(out[:], final.Sum(nil))
-	return out
-}
 
 func referenceInitramfsLockPCR14(reset, restart uint32) [types.HashSize]byte {
 	const tag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
@@ -76,24 +55,6 @@ func referenceLockedBootCommitmentPCR14(agentHash [types.HashSize]byte, reset, r
 	return out
 }
 
-func TestDeriveBootCommitmentPCR14_StableForSameInputs(t *testing.T) {
-	var agentHash [types.HashSize]byte
-	for i := range agentHash {
-		agentHash[i] = byte(i)
-	}
-
-	a := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 5, 1)
-	b := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 5, 1)
-	if a != b {
-		t.Fatal("derivation must be deterministic")
-	}
-
-	want := referenceBootCommitmentPCR14(agentHash, 5, 1)
-	if a != want {
-		t.Fatalf("derivation diverged from reference: got %x want %x", a, want)
-	}
-}
-
 func TestDeriveInitramfsLockPCR14_StableForSameInputs(t *testing.T) {
 	a := DeriveInitramfsLockPCR14(zeroBaseline, 9, 2)
 	b := DeriveInitramfsLockPCR14(zeroBaseline, 9, 2)
@@ -124,33 +85,35 @@ func TestDeriveLockedBootCommitmentPCR14_ChainsLockBeforeAgentCommit(t *testing.
 		t.Fatalf("locked derivation diverged from reference: got %x want %x", got, want)
 	}
 
-	unlocked := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 6, 3)
-	if got == unlocked {
-		t.Fatal("locked two-hop derivation must not collapse to unlocked PCR14")
+	if got != DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 6, 3) {
+		t.Fatal("derivation must be deterministic")
+	}
+	if got == DeriveInitramfsLockPCR14(zeroBaseline, 6, 3) {
+		t.Fatal("locked two-hop derivation must not collapse to the lock value")
 	}
 }
 
-func TestDeriveBootCommitmentPCR14_ResetCountInvalidatesValue(t *testing.T) {
+func TestDeriveLockedBootCommitmentPCR14_ResetCountInvalidatesValue(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x42
 	}
 
-	old := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 7, 0)
-	rebooted := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 8, 0)
+	old := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 7, 0)
+	rebooted := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 8, 0)
 	if old == rebooted {
 		t.Fatal("PCR14 must change when resetCount advances")
 	}
 }
 
-func TestDeriveBootCommitmentPCR14_RestartCountInvalidatesValue(t *testing.T) {
+func TestDeriveLockedBootCommitmentPCR14_RestartCountInvalidatesValue(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0xAB
 	}
 
-	a := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 7, 0)
-	b := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 7, 1)
+	a := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 7, 0)
+	b := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 7, 1)
 	if a == b {
 		t.Fatal("PCR14 must change when restartCount advances")
 	}
@@ -323,19 +286,19 @@ func TestMemoryAtomicAttestation_BootMismatchPreservesAgentHashRow(t *testing.T)
 	}
 }
 
-// TestMatchBootCommitmentPCR14_ExactMatch verifies that an attestation
+// TestMatchLockedBootCommitmentPCR14_ExactMatch verifies that an attestation
 // where the quote's restartCount equals the value the agent extended
 // with is accepted with zero drift.
-func TestMatchBootCommitmentPCR14_ExactMatch(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_ExactMatch(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x5A
 	}
 
 	const resetCount, restartCount uint32 = 3, 7
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, restartCount)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, restartCount)
 
-	expected, drift, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash,
+	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
 		resetCount, restartCount, target, 1024)
 	if !ok {
 		t.Fatal("expected exact-match acceptance")
@@ -348,11 +311,11 @@ func TestMatchBootCommitmentPCR14_ExactMatch(t *testing.T) {
 	}
 }
 
-// TestMatchBootCommitmentPCR14_AcceptsRestartDriftWithinWindow models the
+// TestMatchLockedBootCommitmentPCR14_AcceptsRestartDriftWithinWindow models the
 // laptop suspend/resume case: the agent extended PCR14 at restartCount
 // = boot, then several TPM2_Startup(STATE) cycles later the quote
 // reports a larger restartCount. The verifier must still match.
-func TestMatchBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0xC3
@@ -364,9 +327,9 @@ func TestMatchBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) 
 		quoteRestartCount uint32 = 14 // four suspend/resume cycles since boot
 		maxSkew           uint32 = 1024
 	)
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, bootRestartCount)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, bootRestartCount)
 
-	expected, drift, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash,
+	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
 		resetCount, quoteRestartCount, target, maxSkew)
 	if !ok {
 		t.Fatal("expected acceptance within skew window")
@@ -379,10 +342,10 @@ func TestMatchBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) 
 	}
 }
 
-// TestMatchBootCommitmentPCR14_RejectsBeyondSkewWindow covers the upper
+// TestMatchLockedBootCommitmentPCR14_RejectsBeyondSkewWindow covers the upper
 // bound: when the actual restart_count delta exceeds maxRestartSkew, the
 // scan must give up and report no match.
-func TestMatchBootCommitmentPCR14_RejectsBeyondSkewWindow(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_RejectsBeyondSkewWindow(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x77
@@ -394,9 +357,9 @@ func TestMatchBootCommitmentPCR14_RejectsBeyondSkewWindow(t *testing.T) {
 		quoteRestartCount uint32 = 200
 		maxSkew           uint32 = 50 // delta of 100 > 50
 	)
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, bootRestartCount)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, bootRestartCount)
 
-	expected, drift, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash,
+	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
 		resetCount, quoteRestartCount, target, maxSkew)
 	if ok {
 		t.Fatal("expected rejection: drift exceeds maxRestartSkew")
@@ -404,18 +367,18 @@ func TestMatchBootCommitmentPCR14_RejectsBeyondSkewWindow(t *testing.T) {
 	if drift != 0 {
 		t.Fatalf("rejection must report zero drift, got %d", drift)
 	}
-	if expected != DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, quoteRestartCount) {
+	if expected != DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, quoteRestartCount) {
 		t.Fatal("on no match, expected must be the exact quote derivation for logging")
 	}
 }
 
-// TestMatchBootCommitmentPCR14_DoesNotIterateResetCount asserts that a
+// TestMatchLockedBootCommitmentPCR14_DoesNotIterateResetCount asserts that a
 // resetCount mismatch is never accepted regardless of skew. resetCount
 // only advances at TPM_INIT (cold boot), which kills the agent process
 // and triggers a fresh extend; tolerating any resetCount drift would
 // reopen the dirty-shutdown bypass that the boot-commitment design
 // closed.
-func TestMatchBootCommitmentPCR14_DoesNotIterateResetCount(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_DoesNotIterateResetCount(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x99
@@ -424,9 +387,9 @@ func TestMatchBootCommitmentPCR14_DoesNotIterateResetCount(t *testing.T) {
 	// agent extended at resetCount=5; quote reports resetCount=6 (cold boot
 	// happened, agent should have re-extended but, for the sake of the
 	// test, has not).
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 5, 0)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 5, 0)
 
-	_, drift, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash,
+	_, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
 		6, 0, target, 1024)
 	if ok {
 		t.Fatal("expected rejection on resetCount mismatch")
@@ -436,10 +399,10 @@ func TestMatchBootCommitmentPCR14_DoesNotIterateResetCount(t *testing.T) {
 	}
 }
 
-// TestMatchBootCommitmentPCR14_SkewBoundedByQuoteRestart covers the
+// TestMatchLockedBootCommitmentPCR14_SkewBoundedByQuoteRestart covers the
 // underflow guard: the scan must not wrap around uint32 when
 // quoteRestartCount is smaller than maxRestartSkew.
-func TestMatchBootCommitmentPCR14_SkewBoundedByQuoteRestart(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_SkewBoundedByQuoteRestart(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0xEE
@@ -451,9 +414,9 @@ func TestMatchBootCommitmentPCR14_SkewBoundedByQuoteRestart(t *testing.T) {
 		maxSkew           uint32 = 1024
 	)
 	// craft a target derived from restartCount=0 (within bounds of [0,3]).
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, 0)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, 0)
 
-	_, drift, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash,
+	_, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
 		resetCount, quoteRestartCount, target, maxSkew)
 	if !ok {
 		t.Fatal("expected acceptance: target is reachable within [0, quoteRestartCount]")
@@ -463,23 +426,23 @@ func TestMatchBootCommitmentPCR14_SkewBoundedByQuoteRestart(t *testing.T) {
 	}
 }
 
-// TestMatchBootCommitmentPCR14_ZeroSkewIsExactOnly verifies that
+// TestMatchLockedBootCommitmentPCR14_ZeroSkewIsExactOnly verifies that
 // MaxRestartCountSkew=0 disables the scan entirely and only the exact
 // quote derivation is accepted.
-func TestMatchBootCommitmentPCR14_ZeroSkewIsExactOnly(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_ZeroSkewIsExactOnly(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x01
 	}
 
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 1, 5)
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 1, 5)
 
-	_, _, okExact := MatchBootCommitmentPCR14(zeroBaseline, agentHash, 1, 5, target, 0)
+	_, _, okExact := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, 1, 5, target, 0)
 	if !okExact {
 		t.Fatal("exact match must succeed even with zero skew")
 	}
 
-	_, _, okDrift := MatchBootCommitmentPCR14(zeroBaseline, agentHash, 1, 6, target, 0)
+	_, _, okDrift := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, 1, 6, target, 0)
 	if okDrift {
 		t.Fatal("any drift must be rejected when maxRestartSkew=0")
 	}
@@ -500,11 +463,11 @@ func TestDefaultConfig_MaxRestartCountSkewIs64(t *testing.T) {
 	}
 }
 
-// TestMatchBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow walks
+// TestMatchLockedBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow walks
 // the matcher with the default skew and a quote restartCount that
 // drifts just past it; rejection is mandatory because the matcher
 // must not iterate past the default budget on production reports.
-func TestMatchBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow(t *testing.T) {
+func TestMatchLockedBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow(t *testing.T) {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
 		agentHash[i] = 0x7E
@@ -516,44 +479,17 @@ func TestMatchBootCommitmentPCR14_RejectsBeyondDefaultSkewWindow(t *testing.T) {
 		defaultSkew              = uint32(64)
 		quoteRestartCount        = bootRestartCount + defaultSkew + 1
 	)
-	target := DeriveBootCommitmentPCR14(zeroBaseline, agentHash, resetCount,
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount,
 		bootRestartCount)
 
-	_, _, ok := MatchBootCommitmentPCR14(zeroBaseline, agentHash, resetCount,
+	_, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount,
 		quoteRestartCount, target, defaultSkew)
 	if ok {
 		t.Fatal("matcher accepted a drift past the default skew window")
 	}
 }
 
-func TestMatchLockedBootCommitmentPCR14_AcceptsRestartDriftWithinWindow(t *testing.T) {
-	var agentHash [types.HashSize]byte
-	for i := range agentHash {
-		agentHash[i] = 0xA1
-	}
-
-	const (
-		resetCount        uint32 = 8
-		bootRestartCount  uint32 = 1
-		quoteRestartCount uint32 = 5
-		maxSkew           uint32 = 16
-	)
-	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, resetCount, bootRestartCount)
-
-	expected, drift, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, agentHash,
-		resetCount, quoteRestartCount, target, maxSkew)
-	if !ok {
-		t.Fatal("expected locked PCR14 acceptance within skew window")
-	}
-	if drift != quoteRestartCount-bootRestartCount {
-		t.Fatalf("drift: got %d, want %d", drift, quoteRestartCount-bootRestartCount)
-	}
-	if expected != target {
-		t.Fatal("matched locked expected value diverged from target")
-	}
-}
-
-// proves the three derivations anchor on the supplied baseline
+// proves both derivations anchor on the supplied baseline
 // (the firmware/shim MOK PCR14 content on UEFI Secure Boot) instead of hardcoded 0^32,
 // and that the matcher binds it
 func TestDerivePCR14_BaselineAware(t *testing.T) {
@@ -565,9 +501,6 @@ func TestDerivePCR14_BaselineAware(t *testing.T) {
 
 	if DeriveInitramfsLockPCR14(zeroBaseline, 1, 0) == DeriveInitramfsLockPCR14(shim, 1, 0) {
 		t.Fatal("initramfs-lock PCR14 must depend on the baseline")
-	}
-	if DeriveBootCommitmentPCR14(zeroBaseline, agentHash, 1, 0) == DeriveBootCommitmentPCR14(shim, agentHash, 1, 0) {
-		t.Fatal("boot-commitment PCR14 must depend on the baseline")
 	}
 	if DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 1, 0) == DeriveLockedBootCommitmentPCR14(shim, agentHash, 1, 0) {
 		t.Fatal("locked boot-commitment PCR14 must depend on the baseline")

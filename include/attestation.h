@@ -47,12 +47,12 @@ struct lota_report_header {
 	(1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
 
 /*
- * Challenge capability flags. The verifier sends these in
- * verifier_challenge.flags to advertise the PCR14 derivations it is
- * willing to validate for the nonce it just issued. The agent must
- * emit only report derivation flags that were offered in the
- * challenge; the verifier stores the offered set alongside the nonce
- * and rejects reports that claim an unadvertised construction.
+ * Challenge capability flags.
+ * Verifier sends these in verifier_challenge.flags to name the PCR14
+ * derivation it validates.
+ * Every challenge carries the v1 bit, because v1 is the only construction
+ * there is; the field exists so future v2 derivation has something to differ
+ * from.
  */
 #define LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V1 (1U << 0)
 
@@ -68,10 +68,10 @@ struct lota_report_header {
  * chain:
  *     pcr14_lock = SHA256(0^32 || initramfs_lock_commit)
  *     pcr14_final = SHA256(pcr14_lock || boot_commitment)
- * The verifier mirrors the derivation. The bit pins the order inside
- * the negotiated v1 boot-commitment family: legacy v1 hosts keep
- * emitting LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 alone and locked v1
- * hosts add LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1.
+ *
+ * Verifier mirrors that derivation and has no other one, so every agent
+ * sets this bit alongside LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1
+ * and a report carrying only one of the two is refused.
  */
 #define LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1 (1U << 9)
 

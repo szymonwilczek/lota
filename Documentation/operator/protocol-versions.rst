@@ -68,10 +68,11 @@ Consequences:
   for a breaking report change; that is the cost the strict check pays for not
   parsing an unknown security message.
 
-Feature flags inside the report (``pcr_mask``, the boot-commitment and
-initramfs-lock flags) are gated by verifier policy *within* a wire version, not
-by the wire version itself. An agent that omits an optional flag is handled by
-policy, not by a wire-version bump.
+The report's ``pcr_mask`` and its boot-commitment and initramfs-lock flags are
+not negotiated. Every agent emits the full set and the verifier requires it, so
+a report that omits one is refused inside its own wire version rather than
+handled by a policy switch. A future derivation gets its own flag and challenge
+capability bit; the existing bits do not change meaning.
 
 Enrollment protocol (agent - CA)
 ================================

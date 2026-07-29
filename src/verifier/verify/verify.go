@@ -130,7 +130,6 @@ type Verifier struct {
 
 	// policy enforcement
 	requireEventLog       bool
-	requireInitramfsLock  bool
 	requireBootEnrollment bool
 	rejectLegacyBaselines bool
 	selfServiceReanchor   bool
@@ -220,16 +219,6 @@ type VerifierConfig struct {
 	// if true, reject attestation reports that do not include an event log
 	RequireEventLog bool
 
-	// if true, reject attestation reports that do not advertise the
-	// initramfs PCR14 lock (FlagInitramfsLockV1). The lock is extended
-	// by the 90lota dracut helper before pivot_root, so it closes the
-	// kernel-handoff -> lota-agent window in which PCR14 is still
-	// OS-writable from locality 0. A fleet that opts out (legacy host
-	// without the dracut module) can keep attesting under the bare
-	// FlagBootCommitmentV1 derivation, but the verifier no longer
-	// authenticates the initramfs-stage pin for that report.
-	RequireInitramfsLock bool
-
 	// if true, refuse to TOFU-establish a per-client boot baseline
 	// (PCR0/PCR1/PCR7) the first time a client reports. The baseline
 	// must be authenticated through one of two enrollment paths:
@@ -305,7 +294,6 @@ func DefaultConfig() VerifierConfig {
 		NonceLifetime:         5 * time.Minute,
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
-		RequireInitramfsLock:  true,
 		RequireBootEnrollment: true,
 		MaxRestartCountSkew:   64,
 		AllowPermissivePolicy: false,
@@ -350,7 +338,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		nonceLifetime:         cfg.NonceLifetime,
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
-		requireInitramfsLock:  cfg.RequireInitramfsLock,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
@@ -721,24 +708,22 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
 
-	useBootCommitment := report.Header.Flags&types.FlagBootCommitmentV1 != 0
-	useInitramfsLock := report.Header.Flags&types.FlagInitramfsLockV1 != 0
-	if useInitramfsLock && !useBootCommitment {
-		logging.Security(clog, "initramfs-lock flag set without boot-commitment flag")
+	// PCR14 carries exactly one construction:
+	// the initramfs lock value the 90lota dracut helper extends before
+	// pivot_root, with the agent's boot commitment chained on top.
+	// The lock closes the kernel-handoff -> lota-agent window in which
+	// PCR14 is still writable from locality 0, and the commitment binds
+	// the running agent binary to the quote.
+	// Report that does not advertise both flags carries PCR14 the verifier
+	// has no derivation for.
+	if report.Header.Flags&types.FlagBootCommitmentV1 == 0 {
+		logging.Security(clog, "report omits FlagBootCommitmentV1",
+			"flags", fmt.Sprintf("0x%08x", report.Header.Flags))
 		v.metrics.Rejections.Inc("pcr_fail")
 		result.Result = types.VerifyPCRFail
-		return result, errors.New("FAIL_PCR_FAIL: FlagInitramfsLockV1 requires FlagBootCommitmentV1")
+		return result, errors.New("FAIL_PCR_FAIL: report missing FlagBootCommitmentV1 (PCR14 boot commitment required)")
 	}
-	// The initramfs PCR14 lock pins PCR14 to a fixed
-	// SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1") value before pivot_root.
-	// Without it, any code path that runs in userspace before the
-	// agent's first PCR14 extend can poison the boot-commitment
-	// baseline. The default production profile rejects reports that do
-	// not advertise FlagInitramfsLockV1; a fleet that explicitly opts
-	// out (see RequireInitramfsLock) keeps attesting on the bare
-	// FlagBootCommitmentV1 derivation but surfaces the gap to the
-	// operator.
-	if v.requireInitramfsLock && !useInitramfsLock {
+	if report.Header.Flags&types.FlagInitramfsLockV1 == 0 {
 		logging.Security(clog, "report omits FlagInitramfsLockV1; initramfs PCR14 lock required",
 			"flags", fmt.Sprintf("0x%08x", report.Header.Flags))
 		v.metrics.Rejections.Inc("pcr_fail")
@@ -761,335 +746,232 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		result.Result = types.VerifyPCRFail
 		return result, errors.New("FAIL_PCR_FAIL: report does not include firmware/SecureBoot PCRs in pcr_mask")
 	}
-	bootStore, bootStoreOK := v.baselineStore.(BootBaselineStorer)
-	if !bootStoreOK {
+	if _, bootStoreOK := v.baselineStore.(BootBaselineStorer); !bootStoreOK {
 		clog.Error("baseline store does not support boot PCR pinning; refusing attestation")
 		v.metrics.Rejections.Inc("baseline_error")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, errors.New("FAIL_BASELINE_ERROR: store missing boot PCR support")
 	}
 
-	if useBootCommitment {
-		// The agent_hash pin and the firmware/SecureBoot PCR pin must
-		// commit atomically: splitting them across two store calls
-		// opens a multi-process race where a second verifier instance
-		// can observe the row mid-flight and TOFU-establish
-		// attacker-controlled PCR0/1/7 between the two writes. The
-		// AtomicBaselineStorer contract folds both decisions into one
-		// SQL transaction (BEGIN IMMEDIATE on SQLite) so any
-		// concurrent writer blocks until the first attestation
-		// commits or rolls back.
-		atomicStore, atomicOK := v.baselineStore.(AtomicBaselineStorer)
-		if !atomicOK {
-			clog.Error("baseline store does not implement AtomicBaselineStorer; refusing FlagBootCommitment attestation")
-			v.metrics.Rejections.Inc("baseline_error")
-			result.Result = types.VerifyIntegrityMismatch
-			return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
-		}
+	// agent_hash pin and the firmware/SecureBoot PCR pin must commit atomically:
+	// splitting them across two store calls opens multi-process race where
+	// second verifier instance can observe the row mid-flight and TOFU-establish
+	// attacker-controlled PCR0/1/7 between the two writes.
+	// AtomicBaselineStorer contract folds both decisions into one SQL
+	// transaction (BEGIN IMMEDIATE on SQLite) so any concurrent writer blocks
+	// until the first attestation commits or rolls back.
+	atomicStore, atomicOK := v.baselineStore.(AtomicBaselineStorer)
+	if !atomicOK {
+		clog.Error("baseline store does not implement AtomicBaselineStorer; refusing FlagBootCommitment attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_BASELINE_ERROR: store missing atomic agent_hash/boot pinning")
+	}
 
-		// Reuse the TPMS_ATTEST already parsed for the PCR digest
-		// binding above; FlagBootCommitment paths cannot run with
-		// AttestSize=0, so parsedAttest must be non-nil here.
-		if parsedAttest == nil {
-			clog.Error("FlagBootCommitment set without a TPM quote payload")
-			v.metrics.Rejections.Inc("pcr_fail")
-			result.Result = types.VerifyPCRFail
-			return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
-		}
+	// Reuse the TPMS_ATTEST already parsed for the PCR digest binding above;
+	// FlagBootCommitment paths cannot run with AttestSize=0,
+	// so parsedAttest must be non-nil here
+	if parsedAttest == nil {
+		clog.Error("FlagBootCommitment set without a TPM quote payload")
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("FAIL_PCR_FAIL: FlagBootCommitment requires a TPMS_ATTEST payload")
+	}
 
-		// Pick the derivation that matches the flag set on the
-		// report. Hosts with the 90lota dracut module run the
-		// initramfs lock helper (src/initramfs/lota-pcr14-lock.c)
-		// before the agent ever starts, so PCR14 carries the
-		// two-hop chain SHA256(lock_value || boot_commit) and the
-		// report carries FlagInitramfsLockV1. Hosts without the
-		// module emit FlagBootCommitment alone and fall through to
-		// the single-hop derivation.
-		var (
-			expected     [types.HashSize]byte
-			restartDrift uint32
-			matched      bool
-		)
-		// pcr14Baseline is the PCR14 content present before the
-		// initramfs lock / agent extends: 0^32 on a legacy/BIOS host,
-		// or the firmware/shim MOK measurement on UEFI Secure Boot,
-		// reconstructed by replaying the firmware event log (the LOTA
-		// extends are post-ExitBootServices and never enter that log).
-		// Forged log diverges from the signed PCR14 and fails the
-		// match below, so baseline doesnt need separate pin here
-		var pcr14Baseline [types.HashSize]byte
-		if bootFacts != nil {
-			pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
-		}
-		if useInitramfsLock {
-			expected, restartDrift, matched = MatchLockedBootCommitmentPCR14(
-				pcr14Baseline,
-				report.System.AgentHash,
-				parsedAttest.ClockInfo.ResetCount,
-				parsedAttest.ClockInfo.RestartCount,
-				pcr14, v.maxRestartCountSkew)
-		} else {
-			expected, restartDrift, matched = MatchBootCommitmentPCR14(
-				pcr14Baseline,
-				report.System.AgentHash,
-				parsedAttest.ClockInfo.ResetCount,
-				parsedAttest.ClockInfo.RestartCount,
-				pcr14, v.maxRestartCountSkew)
-		}
-		if !matched {
-			hint := "verify that the quoted agent binary is the one that extended PCR14"
-			if useInitramfsLock {
-				hint = "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14"
-			}
-			logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
-				"actual_pcr14", pcr14Hex,
-				"expected_pcr14", FormatPCR14(expected),
-				"reset_count", parsedAttest.ClockInfo.ResetCount,
-				"restart_count", parsedAttest.ClockInfo.RestartCount,
-				"max_restart_skew", v.maxRestartCountSkew,
-				"initramfs_lock", useInitramfsLock,
-				"hint", hint)
-			v.metrics.Rejections.Inc("integrity_mismatch")
-			result.Result = types.VerifyIntegrityMismatch
-			return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
-		}
-		if restartDrift > 0 {
-			clog.Info("PCR14 boot-commitment matched within restart_count skew window",
-				"restart_drift", restartDrift,
-				"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
-				"max_restart_skew", v.maxRestartCountSkew,
-				"initramfs_lock", useInitramfsLock)
-		}
+	// initramfs lock helper (src/initramfs/lota-pcr14-lock.c) runs before
+	// the agent ever starts, so PCR14 carries the two-hop chain
+	// SHA256(lock_value || boot_commit)
+	//
+	// pcr14Baseline is the PCR14 content present before the initramfs lock /
+	// agent extends: 0^32 on legacy/BIOS host, or the firmware/shim MOK
+	// measurement on UEFI Secure Boot, reconstructed by replaying the firmware
+	// event log (LOTA extends are post-ExitBootServices and never enter that log)
+	// Forged log diverges from the signed PCR14 and fails the match below,
+	// so baseline doesnt need separate pin here
+	var pcr14Baseline [types.HashSize]byte
+	if bootFacts != nil {
+		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
+	}
+	expected, restartDrift, matched := MatchLockedBootCommitmentPCR14(
+		pcr14Baseline,
+		report.System.AgentHash,
+		parsedAttest.ClockInfo.ResetCount,
+		parsedAttest.ClockInfo.RestartCount,
+		pcr14, v.maxRestartCountSkew)
+	if !matched {
+		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
+			"actual_pcr14", pcr14Hex,
+			"expected_pcr14", FormatPCR14(expected),
+			"reset_count", parsedAttest.ClockInfo.ResetCount,
+			"restart_count", parsedAttest.ClockInfo.RestartCount,
+			"max_restart_skew", v.maxRestartCountSkew,
+			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
+		v.metrics.Rejections.Inc("integrity_mismatch")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
+	}
+	if restartDrift > 0 {
+		clog.Info("PCR14 boot-commitment matched within restart_count skew window",
+			"restart_drift", restartDrift,
+			"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
+			"max_restart_skew", v.maxRestartCountSkew)
+	}
 
-		var bootPtr *BootBaseline
-		if haveBootPCRs && bootStoreOK {
-			boot := BootBaseline{
-				PCR0: report.TPM.PCRValues[0],
-				PCR1: report.TPM.PCRValues[1],
-				PCR7: report.TPM.PCRValues[7],
-			}
-			bootPtr = &boot
+	// mask gate above rejected a report without PCR0/1/7 and the store gate
+	// rejected store that cannot pin them, so the boot columns are always
+	// written from here on
+	bootPtr := &BootBaseline{
+		PCR0: report.TPM.PCRValues[0],
+		PCR1: report.TPM.PCRValues[1],
+		PCR7: report.TPM.PCRValues[7],
+	}
+
+	// Enrollment gate.
+	//
+	// Atomic transaction below will TOFU-establish the per-client PCR0/PCR1/PCR7
+	// row on first use.
+	// With pure TOFU, brand-new client that boots on already-tampered firmware
+	// would silently pin the attacker-controlled values as the canonical baseline;
+	// later attestations would then "match" the poisoned baseline.
+	// Refuse that branch when the operator has not authenticated the initial
+	// PCR0/1/7 values through one of:
+	//	- the active signed policy (PCR0+PCR1+PCR7 hex entries that the existing
+	//	PCRVerifier compares against the report),
+	//	- out-of-band baseline row that is already present in the store for this
+	//	client, or
+	//	- the event-log Secure Boot anchor: the active policy enforces
+	//	RequireSecureBoot and this report's quote-authenticated event log proves
+	//	Secure Boot enabled
+	//
+	//	Policy gate above already rejected the report otherwise; re-derived from
+	//	bootFacts so this branch cannot silently widen if the gates move.
+	//	Raw PCR0/1/7 differ per machine, so diverse fleet cannot pin them
+	//	in policy; with the firmware boot-with-Secure-Boot-off path already
+	//	rejected machine-independently, the TOFU row serves as per-device
+	//	rollback/consistency anchor rather than the firmware trust control itself.
+	if v.requireBootEnrollment {
+		reader, readerOK := v.baselineStore.(BootBaselineReader)
+		enrolled := false
+		if readerOK && reader.GetBootBaseline(clientID) != nil {
+			enrolled = true
 		}
-
-		// Enrollment gate.
-		//
-		// The atomic transaction below will TOFU-establish the
-		// per-client PCR0/PCR1/PCR7 row on first use. With pure
-		// TOFU, a brand-new client that boots on already-tampered
-		// firmware would silently pin the attacker-controlled
-		// values as the canonical baseline; later attestations
-		// would then "match" the poisoned baseline. Refuse that
-		// branch when the operator has not authenticated the
-		// initial PCR0/1/7 values through one of:
-		//   - the active signed policy (PCR0+PCR1+PCR7 hex
-		//     entries that the existing PCRVerifier compares
-		//     against the report),
-		//   - an out-of-band baseline row that is already
-		//     present in the store for this client, or
-		//   - the event-log Secure Boot anchor: the active policy
-		//     enforces RequireSecureBoot and this report's
-		//     quote-authenticated event log proves Secure Boot
-		//     enabled
-		//     Policy gate above already rejected the report otherwise;
-		//     re-derived from bootFacts so this branch cannot silently
-		//     widen if the gates move).
-		//     Raw PCR0/1/7 differ per machine, so a diverse fleet
-		//     cannot pin them in policy; with the firmware
-		//     boot-with-Secure-Boot-off path already rejected
-		//     machine-independently, the TOFU row serves as a
-		//     per-device rollback/consistency anchor rather than
-		//     the firmware trust control itself.
-		// Check runs only when the verifier is about to write
-		// boot columns (bootPtr non-nil) so PCR14-only legacy
-		// flows are unaffected.
-		if v.requireBootEnrollment && bootPtr != nil {
-			reader, readerOK := v.baselineStore.(BootBaselineReader)
-			enrolled := false
-			if readerOK && reader.GetBootBaseline(clientID) != nil {
-				enrolled = true
-			}
-			if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
-				if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
-					logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-						"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
-				} else {
-					logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-						"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-						"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
-					v.metrics.Rejections.Inc("baseline_error")
-					result.Result = types.VerifyIntegrityMismatch
-					return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
-				}
-			}
-		}
-
-		outcome := atomicStore.CheckAndUpdateAttestation(
-			clientID, pcr14, report.System.AgentHash, bootPtr)
-
-		switch outcome.AgentHashResult {
-		case TOFUFirstUse:
-			clog.Info("TOFU: agent_hash baseline established",
-				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
-		case TOFULegacyBackfill:
-			if v.rejectLegacyBaselines {
-				logging.Security(clog, "rejected legacy baseline agent_hash backfill",
-					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
-					"hint", "remove --reject-legacy-baselines or clear the stale baseline row to allow this client through")
-				v.metrics.Rejections.Inc("integrity_mismatch")
+		if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+			if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
+				logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
+					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+					"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
+			} else {
+				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
+				v.metrics.Rejections.Inc("baseline_error")
 				result.Result = types.VerifyIntegrityMismatch
-				return result, errors.New("FAIL_INTEGRITY_MISMATCH: legacy baseline backfill refused by policy")
+				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
 			}
-			attestCount := uint64(0)
-			if outcome.AgentHashBaseline != nil {
-				attestCount = outcome.AgentHashBaseline.AttestCount
-			}
-			logging.Security(clog, "legacy baseline agent_hash backfilled",
+		}
+	}
+
+	outcome := atomicStore.CheckAndUpdateAttestation(
+		clientID, pcr14, report.System.AgentHash, bootPtr)
+
+	switch outcome.AgentHashResult {
+	case TOFUFirstUse:
+		clog.Info("TOFU: agent_hash baseline established",
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+	case TOFULegacyBackfill:
+		if v.rejectLegacyBaselines {
+			logging.Security(clog, "rejected legacy baseline agent_hash backfill",
 				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
-				"attest_count", attestCount,
-				"hint", "set RejectLegacyBaselines once the fleet rollout window has closed to refuse this branch")
-		case TOFUMatch:
-			if outcome.AgentHashBaseline != nil {
-				clog.Debug("agent_hash matches baseline",
-					"attest_count", outcome.AgentHashBaseline.AttestCount)
-			}
-		case TOFUMismatch:
-			stored := report.System.AgentHash
-			if outcome.AgentHashBaseline != nil {
-				stored = outcome.AgentHashBaseline.AgentHash
-			}
-			logging.Security(clog, "agent_hash drift detected",
-				"expected_agent_hash", hex.EncodeToString(stored[:]),
-				"actual_agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+				"hint", "remove --reject-legacy-baselines or clear the stale baseline row to allow this client through")
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
-			return result, errors.New("FAIL_INTEGRITY_MISMATCH: agent_hash changed from baseline")
-		case TOFUError:
-			clog.Error("agent_hash baseline store error, refusing attestation")
-			v.metrics.Rejections.Inc("baseline_error")
-			result.Result = types.VerifyIntegrityMismatch
-			return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
+			return result, errors.New("FAIL_INTEGRITY_MISMATCH: legacy baseline backfill refused by policy")
 		}
-
-		if outcome.BootProvided {
-			switch outcome.BootResult {
-			case TOFUFirstUse:
-				clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
-					"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
-					"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
-					"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
-
-				// capture the event log + firmware version alongside the boot
-				// baseline so a later self-service re-anchor can replay-diff
-				// PCR 7 and apply the firmware anti-rollback check
-				if rs, ok := v.baselineStore.(ReanchorStorer); ok {
-					var esrtVer uint32
-					esrtPresent := false
-					if report.ESRT != nil && report.ESRT.Present {
-						esrtVer = report.ESRT.FWVersion
-						esrtPresent = true
-					}
-					if err := rs.RecordBootEvidence(clientID, report.EventLog,
-						esrtVer, esrtPresent); err != nil {
-						clog.Warn("failed to record boot evidence for re-anchor",
-							"error", err)
-					}
-				}
-			case TOFUMatch:
-				clog.Debug("boot PCRs match baseline")
-			case TOFUMismatch:
-				// self-service re-anchor:
-				// if the drift preserves the Secure Boot root of trust,
-				// re-pin the baseline instead of rejecting.
-				// Returns true only on an actual re-pin.
-				if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
-					break
-				}
-				exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
-				if outcome.BootBaseline != nil {
-					exp0, exp1, exp7 = outcome.BootBaseline.PCR0,
-						outcome.BootBaseline.PCR1, outcome.BootBaseline.PCR7
-				}
-				logging.Security(clog, "firmware/SecureBoot PCR drift detected",
-					"actual_pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
-					"actual_pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
-					"actual_pcr7", hex.EncodeToString(bootPtr.PCR7[:]),
-					"expected_pcr0", hex.EncodeToString(exp0[:]),
-					"expected_pcr1", hex.EncodeToString(exp1[:]),
-					"expected_pcr7", hex.EncodeToString(exp7[:]))
-				v.metrics.Rejections.Inc("integrity_mismatch")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: firmware/SecureBoot PCRs changed from baseline")
-			case TOFUError:
-				clog.Error("boot baseline store error, refusing attestation")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
-			}
+		attestCount := uint64(0)
+		if outcome.AgentHashBaseline != nil {
+			attestCount = outcome.AgentHashBaseline.AttestCount
 		}
-	} else {
-		// Legacy non-FlagBootCommitment path: PCR14 TOFU plus, when the
-		// store supports it, a separate boot baseline pin. The two
-		// writes are not atomic across processes here, but legacy
-		// clients are being phased out under --reject-legacy-baselines
-		// once the rollout window closes; production fleets pass through
-		// the atomic branch above.
-		tofuResult, baseline := v.baselineStore.CheckAndUpdate(clientID, pcr14)
-		switch tofuResult {
+		logging.Security(clog, "legacy baseline agent_hash backfilled",
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+			"attest_count", attestCount,
+			"hint", "set RejectLegacyBaselines once the fleet rollout window has closed to refuse this branch")
+	case TOFUMatch:
+		if outcome.AgentHashBaseline != nil {
+			clog.Debug("agent_hash matches baseline",
+				"attest_count", outcome.AgentHashBaseline.AttestCount)
+		}
+	case TOFUMismatch:
+		stored := report.System.AgentHash
+		if outcome.AgentHashBaseline != nil {
+			stored = outcome.AgentHashBaseline.AgentHash
+		}
+		logging.Security(clog, "agent_hash drift detected",
+			"expected_agent_hash", hex.EncodeToString(stored[:]),
+			"actual_agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+		v.metrics.Rejections.Inc("integrity_mismatch")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_INTEGRITY_MISMATCH: agent_hash changed from baseline")
+	case TOFUError:
+		clog.Error("agent_hash baseline store error, refusing attestation")
+		v.metrics.Rejections.Inc("baseline_error")
+		result.Result = types.VerifyIntegrityMismatch
+		return result, errors.New("FAIL_BASELINE_ERROR: agent_hash baseline store unavailable")
+	}
+
+	if outcome.BootProvided {
+		switch outcome.BootResult {
 		case TOFUFirstUse:
-			clog.Info("TOFU: PCR14 baseline established", "pcr14", pcr14Hex)
+			clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
+				"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
+				"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
+				"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+
+			// capture the event log + firmware version alongside the boot
+			// baseline so later self-service re-anchor can replay-diff
+			// PCR 7 and apply the firmware anti-rollback check
+			if rs, ok := v.baselineStore.(ReanchorStorer); ok {
+				var esrtVer uint32
+				esrtPresent := false
+				if report.ESRT != nil && report.ESRT.Present {
+					esrtVer = report.ESRT.FWVersion
+					esrtPresent = true
+				}
+				if err := rs.RecordBootEvidence(clientID, report.EventLog,
+					esrtVer, esrtPresent); err != nil {
+					clog.Warn("failed to record boot evidence for re-anchor",
+						"error", err)
+				}
+			}
 		case TOFUMatch:
-			clog.Debug("PCR14 matches baseline", "attest_count", baseline.AttestCount)
+			clog.Debug("boot PCRs match baseline")
 		case TOFUMismatch:
-			logging.Security(clog, "potential agent tampering detected",
-				"expected_pcr14", FormatPCR14(baseline.PCR14), "actual_pcr14", pcr14Hex)
+			// self-service re-anchor:
+			// if the drift preserves the Secure Boot root of trust,
+			// re-pin the baseline instead of rejecting
+			// Returns true only on an actual re-pin
+			if v.tryReanchor(clog, clientID, tenant, bootPtr, report, bootFacts) {
+				break
+			}
+			exp0, exp1, exp7 := bootPtr.PCR0, bootPtr.PCR1, bootPtr.PCR7
+			if outcome.BootBaseline != nil {
+				exp0, exp1, exp7 = outcome.BootBaseline.PCR0,
+					outcome.BootBaseline.PCR1, outcome.BootBaseline.PCR7
+			}
+			logging.Security(clog, "firmware/SecureBoot PCR drift detected",
+				"actual_pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
+				"actual_pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
+				"actual_pcr7", hex.EncodeToString(bootPtr.PCR7[:]),
+				"expected_pcr0", hex.EncodeToString(exp0[:]),
+				"expected_pcr1", hex.EncodeToString(exp1[:]),
+				"expected_pcr7", hex.EncodeToString(exp7[:]))
 			v.metrics.Rejections.Inc("integrity_mismatch")
 			result.Result = types.VerifyIntegrityMismatch
-			return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: PCR14 changed from baseline")
+			return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: firmware/SecureBoot PCRs changed from baseline")
 		case TOFUError:
-			clog.Error("baseline store error, refusing attestation")
+			clog.Error("boot baseline store error, refusing attestation")
 			v.metrics.Rejections.Inc("baseline_error")
 			result.Result = types.VerifyIntegrityMismatch
-			return result, fmt.Errorf("FAIL_BASELINE_ERROR: baseline store unavailable")
-		}
-
-		if bootStoreOK && haveBootPCRs {
-			boot := BootBaseline{
-				PCR0: report.TPM.PCRValues[0],
-				PCR1: report.TPM.PCRValues[1],
-				PCR7: report.TPM.PCRValues[7],
-			}
-			bootResult, bootBaseline := bootStore.CheckAndUpdateBootPCRs(clientID, boot)
-			switch bootResult {
-			case TOFUFirstUse:
-				clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
-					"pcr0", hex.EncodeToString(boot.PCR0[:]),
-					"pcr1", hex.EncodeToString(boot.PCR1[:]),
-					"pcr7", hex.EncodeToString(boot.PCR7[:]))
-			case TOFUMatch:
-				clog.Debug("boot PCRs match baseline")
-			case TOFUMismatch:
-				exp0, exp1, exp7 := boot.PCR0, boot.PCR1, boot.PCR7
-				if bootBaseline != nil {
-					exp0, exp1, exp7 = bootBaseline.PCR0,
-						bootBaseline.PCR1, bootBaseline.PCR7
-				}
-				logging.Security(clog, "firmware/SecureBoot PCR drift detected",
-					"actual_pcr0", hex.EncodeToString(boot.PCR0[:]),
-					"actual_pcr1", hex.EncodeToString(boot.PCR1[:]),
-					"actual_pcr7", hex.EncodeToString(boot.PCR7[:]),
-					"expected_pcr0", hex.EncodeToString(exp0[:]),
-					"expected_pcr1", hex.EncodeToString(exp1[:]),
-					"expected_pcr7", hex.EncodeToString(exp7[:]))
-				v.metrics.Rejections.Inc("integrity_mismatch")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, fmt.Errorf("FAIL_INTEGRITY_MISMATCH: firmware/SecureBoot PCRs changed from baseline")
-			case TOFUError:
-				clog.Error("boot baseline store error, refusing attestation")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyIntegrityMismatch
-				return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
-			}
+			return result, fmt.Errorf("FAIL_BASELINE_ERROR: boot baseline store unavailable")
 		}
 	}
 

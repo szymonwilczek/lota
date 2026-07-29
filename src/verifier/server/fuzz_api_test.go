@@ -20,7 +20,7 @@ import (
 // or success, never a 5xx.
 func FuzzValidateSessionTokenEndpoint(f *testing.F) {
 	cfg := verify.DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)

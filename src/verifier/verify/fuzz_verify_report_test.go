@@ -28,7 +28,6 @@ import (
 func FuzzVerifyReport(f *testing.F) {
 	aikStore := newFuzzCertStore(f)
 	cfg := DefaultConfig()
-	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = time.Hour
 	v := NewVerifier(cfg, aikStore)
 	if err := v.AddPolicy(DefaultPolicy()); err != nil {

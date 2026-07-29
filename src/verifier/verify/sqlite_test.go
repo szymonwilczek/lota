@@ -599,7 +599,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -612,7 +612,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 
 	clientID := "sqlite-client"
-	pcr14 := [32]byte{0x14, 0x14}
+	pcr14 := sqliteFixturePCR14()
 
 	// first attestation (TOFU)
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -656,12 +656,12 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	}
 	defer db.Close()
 
-	pcr14 := [32]byte{0x14}
+	pcr14 := sqliteFixturePCR14()
 
 	// first verifier instance
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireInitramfsLock = false
+	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -685,8 +685,8 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireInitramfsLock = false
 
+	cfg2.RequireBootEnrollment = false
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -719,13 +719,13 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	}
 	defer db.Close()
 
-	originalPCR14 := [32]byte{0x22, 0x33}
+	originalPCR14 := sqliteFixturePCR14()
 	tamperedPCR14 := [32]byte{0xFF, 0xFF}
 
 	// establish baseline
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireInitramfsLock = false
+	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -748,8 +748,8 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireInitramfsLock = false
 
+	cfg2.RequireBootEnrollment = false
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -793,7 +793,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -814,7 +814,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			clientID := fmt.Sprintf("concurrent-sqlite-%d", n)
-			pcr14 := [32]byte{byte(n)}
+			pcr14 := sqliteFixturePCR14()
 			clientKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
 			if keyErr != nil {
 				errCh <- fmt.Errorf("client %d: keygen: %w", n, keyErr)
@@ -866,6 +866,14 @@ func init() {
 	}
 }
 
+// sqliteFixturePCR14 is the PCR14 a report from this builder must carry:
+// the locked boot-commitment chain over the zero agent_hash the builder
+// leaves in the system measurement.
+func sqliteFixturePCR14() [types.HashSize]byte {
+	var agentHash [types.HashSize]byte
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 0, 0)
+}
+
 func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
 	return createSQLiteTestReportWithKey(t, clientID, nonce, pcr14, sqliteTestKey)
 }
@@ -887,7 +895,7 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
+	binary.LittleEndian.PutUint32(buf[offset:], productionFlags)
 	offset += 4
 
 	// PCR values
@@ -911,7 +919,7 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 
 	// TPMS_ATTEST with binding nonce including security-relevant report fields
 	bindingReport := &types.AttestationReport{}
-	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingReport.Header.Flags = productionFlags
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07

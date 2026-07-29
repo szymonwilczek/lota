@@ -326,6 +326,16 @@ otherwise ask for: an agent that simply declined to quote the firmware and
 Secure Boot registers would bypass the pin while still presenting a
 well-formed, correctly signed report.
 
+The PCR 14 chain is mandatory on the same terms. A report must declare both
+the initramfs lock and the agent boot commitment; the verifier derives the
+expected PCR 14 as the lock value with the commitment chained on top and has
+no second derivation to fall back on. A host without the ``90lota`` dracut
+module therefore does not attest: without the initramfs lock, PCR 14 stays
+OS-writable between the kernel handoff and the agent's first extend, and any
+code running in that window could seed the value the baseline would pin. The
+agent refuses to build such a report locally, so the missing module is named
+on the host rather than surfacing as a remote rejection.
+
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the
 kernel from a CPU-rooted late launch into PCR 17-22, removing the firmware and

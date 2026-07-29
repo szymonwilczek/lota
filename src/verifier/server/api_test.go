@@ -54,10 +54,7 @@ func TestSessionValidateEndpoint_SuccessAndConsume(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 
-	var pcr14 [32]byte
-	for i := range pcr14 {
-		pcr14[i] = byte(0x21 ^ i)
-	}
+	pcr14 := serverFixturePCR14()
 
 	clientID := persistentClientID(challengeID)
 	key := getClientTestAIK(clientID)
@@ -125,7 +122,7 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	attLog := store.NewMemoryAttestationLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
@@ -256,7 +253,7 @@ func setupTestAPIWithKeys(t *testing.T, adminKey, readerKey string) (*http.Serve
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
@@ -297,7 +294,7 @@ func setupTestAPIListeningWithKeys(t *testing.T, adminKey, readerKey string) (*h
 	aikStore := newCertStore(t)
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)
@@ -352,6 +349,23 @@ func (d *dummyListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8443}
 }
 
+// serverFixtureFlags is the flag set a current agent emits;
+// both PCR14 derivation bits are mandatory on the wire.
+const serverFixtureFlags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce |
+	types.FlagBootCommitmentV1 | types.FlagInitramfsLockV1
+
+// serverFixturePCR14 is the only PCR14 a report from buildSignedReport can carry
+// and still verify: the initramfs lock chained with the boot commitment over
+// the fixture agent_hash and the zero ClockInfo counters, anchored on the 0^32
+// baseline the fixture event log replays to.
+func serverFixturePCR14() [32]byte {
+	var agentHash [32]byte
+	for i := range agentHash {
+		agentHash[i] = byte(0xBB ^ i)
+	}
+	return verify.DeriveLockedBootCommitmentPCR14([32]byte{}, agentHash, 0, 0)
+}
+
 // builds a complete attestation report with valid TPM quote signature
 func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	t.Helper()
@@ -368,7 +382,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
+	binary.LittleEndian.PutUint32(buf[offset:], serverFixtureFlags)
 	offset += 4
 
 	// TPM Evidence - PCR values
@@ -391,7 +405,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004083)
 
 	bindingReport := &types.AttestationReport{}
-	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingReport.Header.Flags = serverFixtureFlags
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
@@ -910,7 +924,7 @@ func TestIntegrationAPI_AttestationCounters(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "attest-counter-client"
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// successful attestation
 	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
@@ -983,7 +997,7 @@ func TestIntegrationAPI_NonceConsumedVisibleInStats(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "nonce-lifecycle"
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// before: 0 pending, 0 used
 	assertStats(t, mux, func(s statsResponse) {
@@ -1028,7 +1042,7 @@ func TestIntegrationAPI_ReplayAttackVisibleInStats(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "replay-stats-client"
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	challenge, _ := v.GenerateChallenge(clientID)
 	report := buildSignedReport(t, clientID, challenge.Nonce, pcr14, testAIK)
@@ -1071,7 +1085,7 @@ func TestIntegrationAPI_ClientInfoAfterAttestation(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "attested-client"
-	pcr14 := [32]byte{0x14, 0x15, 0x16}
+	pcr14 := serverFixturePCR14()
 
 	code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
 	if code != types.VerifyOK {
@@ -1120,7 +1134,7 @@ func TestIntegrationAPI_MultipleAttestationsSameClient(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "multi-attest"
-	pcr14 := [32]byte{0x44}
+	pcr14 := serverFixturePCR14()
 
 	for i := 0; i < 5; i++ {
 		code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14)
@@ -1170,7 +1184,7 @@ func TestIntegrationAPI_MultipleClientsListed(t *testing.T) {
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 
 	clients := []string{"client-alpha", "client-beta", "client-gamma"}
-	pcr14 := [32]byte{0x77}
+	pcr14 := serverFixturePCR14()
 
 	for _, c := range clients {
 		code := attestClient(t, v, c, getClientTestAIK(c), pcr14)
@@ -1211,7 +1225,7 @@ func TestIntegrationAPI_InvalidSignatureVisibleInStats(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "wrong-sig-client"
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// first a clean successful attestation
 	if code := attestClient(t, v, clientID, getClientTestAIK(clientID), pcr14); code != types.VerifyOK {
@@ -1253,7 +1267,7 @@ func TestIntegrationAPI_PCR14TamperingVisibleInStats(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "tamper-client"
-	originalPCR14 := [32]byte{0xAA, 0xBB, 0xCC}
+	originalPCR14 := serverFixturePCR14()
 
 	// establish baseline
 	code := attestClient(t, v, clientID, getClientTestAIK(clientID), originalPCR14)
@@ -1286,7 +1300,7 @@ func TestIntegrationAPI_PrometheusAfterAttestations(t *testing.T) {
 	t.Log("Verifies counter and gauge values match actual attestation outcomes")
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// 3 successful attestations from 2 clients
 	attestClient(t, v, "prom-client-1", getClientTestAIK("prom-client-1"), pcr14)
@@ -1318,7 +1332,7 @@ func TestIntegrationAPI_PendingChallengesNotLeak(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	clientID := "pending-leak-test"
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	challenges := make([][32]byte, 3)
 	for i := 0; i < 3; i++ {
@@ -1361,7 +1375,7 @@ func TestIntegrationAPI_ConcurrentAttestationsTracked(t *testing.T) {
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
 	numClients := 10
-	pcr14 := [32]byte{0xCC}
+	pcr14 := serverFixturePCR14()
 
 	done := make(chan bool, numClients)
 	for i := 0; i < numClients; i++ {
@@ -1416,7 +1430,7 @@ func TestIntegrationAPI_MixedSuccessFailureRatio(t *testing.T) {
 	t.Log("3 successful + 2 failed attestations = correct ratio in all endpoints")
 
 	mux, v := setupTestAPIListeningWithKeys(t, "", "")
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// 3 successful
 	for i := 0; i < 3; i++ {
@@ -1517,7 +1531,7 @@ func TestReanchorReviewEndpoints(t *testing.T) {
 
 	m := metrics.New()
 	cfg := verify.DefaultConfig()
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = bs
 	cfg.Metrics = m
 	v := verify.NewVerifier(cfg, aikStore)
@@ -1572,10 +1586,7 @@ func attestTestClient(t *testing.T, v *verify.Verifier, challengeID string) stri
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 
-	var pcr14 [32]byte
-	for i := range pcr14 {
-		pcr14[i] = byte(0x5A ^ i)
-	}
+	pcr14 := serverFixturePCR14()
 
 	clientID := persistentClientID(challengeID)
 	key := getClientTestAIK(clientID)

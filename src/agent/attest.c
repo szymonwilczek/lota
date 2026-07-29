@@ -394,25 +394,28 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	       sizeof(report->system.iommu));
 
 	/*
-	 * Advertise the PCR14 derivation before computing the quote
-	 * binding nonce. The verifier recomputes extraData from
-	 * report.Header.Flags with only TPM_QUOTE_OK masked out, so every
-	 * derivation flag that affects PCR14 semantics must be part of
-	 * signed_flags. Setting these after tpm_quote() would make honest
-	 * reports self-inconsistent and would also leave downgrade room for
-	 * a peer that tampers with the flag field.
+	 * Name the PCR14 derivation before computing the quote binding nonce.
+	 * Verifier recomputes extraData from report.Header.Flags with only
+	 * TPM_QUOTE_OK masked out, so every derivation flag that affects PCR14
+	 * semantics must be part of signed_flags.
+	 * Setting these after tpm_quote() would make honest reports
+	 * self-inconsistent and would also leave downgrade room for a peer that
+	 * tampers with the flag field.
+	 *
+	 * initramfs lock is not optional: without it PCR14 would be OS-writable
+	 * between the kernel handoff and the agent's first extend, so the verifier
+	 * has no derivation for the value and refuses the report.
+	 * Fail here instead, where the host can name the missing dracut module.
 	 */
-	if ((challenge->flags & LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V1) == 0) {
-		fprintf(stderr,
-			"Verifier challenge does not advertise PCR14 "
-			"boot-commitment v1 support; refusing to send a report "
-			"whose PCR14 cannot be interpreted safely\n");
-		ret = -EPROTONOSUPPORT;
+	if (!g_agent.tpm_ctx.boot_commitment_locked) {
+		fprintf(stderr, "PCR14 was not locked by the initramfs helper; "
+				"install the 90lota dracut module, rebuild the "
+				"initramfs and cold reboot before attesting\n");
+		ret = -EPROTO;
 		goto cleanup;
 	}
-	report->header.flags |= LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1;
-	if (g_agent.tpm_ctx.boot_commitment_locked)
-		report->header.flags |= LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1;
+	report->header.flags |= LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 |
+				LOTA_REPORT_FLAG_INITRAMFS_LOCK_V1;
 
 	/*
 	 * Compute remote-attestation binding nonce = SHA-256(
