@@ -25,8 +25,7 @@ swap:
   re-established before the agent will run under enforcement.
 
 This document is the operator runbook for rolling a new agent build across a
-fleet. It pairs with :doc:`Rolling verifier upgrades <rolling-upgrade>` (the
-verifier side) and the binary-replacement note in
+fleet. It pairs with the binary-replacement note in
 :doc:`../security/threat-model`.
 
 The verifier must trust the new hash first
@@ -37,13 +36,13 @@ The verifier pins the set of accepted agent self-hashes in its policy
 new binary before the verifier trusts that hash will **fail attestation**. Pin
 the new hash *before* the fleet reboots:
 
-#. Take the new agent's self-hash from the signed release (the same value
-   ``--print-versions``-style tooling and the release notes publish).
+#. Take the new agent's self-hash from the signed release, where the release
+   notes publish it alongside the artifacts.
 #. Add it to ``agent_hashes`` **alongside** the current hash -- both are pinned
    for the duration of the rollout -- re-sign the policy, and distribute it to
    the verifier tier. Policy is configuration, not database state, so push it to
-   every instance and reload them (rolling verifier restart per
-   :doc:`rolling-upgrade` if the instances read policy at start).
+   every instance and reload them (restart the instances one at a time if they
+   read policy at start).
 #. Leave ``--reject-legacy-baselines`` **off** during the rollout: it is what you
    turn on *after* the fleet has fully moved, to stop accepting the old
    pre-upgrade baseline.

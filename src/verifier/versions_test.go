@@ -21,7 +21,7 @@ func TestReportWireStringMatchesConstant(t *testing.T) {
 	}
 }
 
-func TestWriteVersionsReportsTargets(t *testing.T) {
+func TestWriteVersionsReportsProtocols(t *testing.T) {
 	var buf bytes.Buffer
 	writeVersions(&buf)
 	out := buf.String()

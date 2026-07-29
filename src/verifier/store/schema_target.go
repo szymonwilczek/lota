@@ -3,24 +3,21 @@
 // LOTA Verifier - Compiled-in schema targets
 //
 // SchemaVersion() reports the schema live database is already at;
-// Functions here report the schema given verifier binary was built to reach.
+// functions here report the schema given verifier binary was built to reach.
 //
-// Operators compare the two across a rolling upgrade:
-// 	binary whose target is below the live schema must be deliberate rollback,
-// 	never an accidental downgrade.
-// 	Old binaries keep operating a schema a newer peer migrated forward because
-// 	migrations stay additive (enforced in migrations_test.go).
+// The two differ only while database predates an appended migration:
+// target is what runMigrations brings it up to on start.
+// Operator reads both to see whether starting a binary touches the schema.
 //
-// SQLite and Postgres histories are versioned independently on purpose:
-// SQLite ships one consolidated schema for single-node deployments,
-// while Postgres carries the incremental history that multi-instance fleet
-// migrates through. There is deliberately no parity requirement between them.
+// SQLite and Postgres histories are versioned independently on purpose.
+// Each backend's number counts its own entries, so there is deliberately no
+// parity requirement between them.
 
 package store
 
 // PgTargetSchemaVersion returns the highest Postgres schema version this
 // binary knows how to apply.
-// Shared Postgres already at this version needs no migration from this instance;
+// Database already at this version needs no migration from this instance;
 // one below it is migrated forward on start.
 func PgTargetSchemaVersion() int {
 	return maxMigrationVersion(pgMigrations)
