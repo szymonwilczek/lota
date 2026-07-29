@@ -334,8 +334,11 @@ func (s *PostgresBanStore) CountBansE() (int, error) {
 }
 
 // PostgresAuditLog implements AuditLog using the audit_log table
+// No store-level lock:
+// every method is a single statement against the concurrency-safe *sql.DB,
+// and Log runs on operator actions and revocation events -- process-wide mutex
+// here only serializes callers for no correctness gain
 type PostgresAuditLog struct {
-	mu sync.Mutex
 	db *sql.DB
 }
 
@@ -346,9 +349,6 @@ func NewPostgresAuditLog(db *sql.DB) *PostgresAuditLog {
 }
 
 func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	_, err := l.db.Exec(
 		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES ($1, $2, $3, $4, $5, $6, $7)",
 		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
@@ -357,9 +357,6 @@ func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note str
 }
 
 func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	query := "SELECT id, timestamp, tenant, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
 	if limit > 0 {
 		query += " LIMIT $1"
@@ -389,8 +386,10 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 
 // PostgresAttestationLog implements AttestationLog using
 // the attestation_log table
+// No store-level lock:
+// Record is one INSERT on the attestation hot path (one call per verified report),
+// so process-wide mutex here caps fleet attestation throughput at one commit latency per report
 type PostgresAttestationLog struct {
-	mu sync.Mutex
 	db *sql.DB
 }
 
@@ -401,9 +400,6 @@ func NewPostgresAttestationLog(db *sql.DB) *PostgresAttestationLog {
 }
 
 func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	ts := entry.Timestamp
 	if ts.IsZero() {
 		ts = time.Now().UTC()
@@ -420,9 +416,6 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 }
 
 func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {

@@ -296,12 +296,16 @@ func (s *SQLiteBaselineStore) ClearBaseline(clientID string) error {
 }
 
 // SetClientTenant records the CA-assigned tenant on the baseline row
+// Called per verified report, so the UPDATE is conditional:
+// re-stamping tenant already in place matches no row and skips the disk write,
+// mirroring the Postgres store
 func (s *SQLiteBaselineStore) SetClientTenant(clientID, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	res, err := s.db.Exec(
-		"UPDATE baselines SET tenant = ? WHERE client_id = ?", tenant, clientID)
+		"UPDATE baselines SET tenant = ? WHERE client_id = ? AND tenant <> ?",
+		tenant, clientID, tenant)
 	if err != nil {
 		return fmt.Errorf("tenant UPDATE failed: %w", err)
 	}
@@ -310,7 +314,13 @@ func (s *SQLiteBaselineStore) SetClientTenant(clientID, tenant string) error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("no baseline row for client %q", clientID)
+		var one int
+		err := s.db.QueryRow(
+			"SELECT 1 FROM baselines WHERE client_id = ?", clientID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("no baseline row for client %q", clientID)
+		}
+		return err
 	}
 	return nil
 }

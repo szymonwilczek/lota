@@ -47,6 +47,39 @@ The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
 in-memory store is the contract reference exercised by ``boot_baseline_test.go``.
 
+Baseline store concurrency
+==========================
+
+The write fence of the Postgres baseline store is the **per-client**
+transaction-scoped advisory lock
+(``pg_advisory_xact_lock(hashtextextended(client_id, 0))``): every writer
+for one ``client_id`` serializes, and nothing wider does. Independent
+clients must commit concurrently -- that property is what lets a
+registration burst and steady-state attestation scale with the connection
+pool, and ``pg_integration_test.go``
+(``TestPostgresAttestationIndependentClientsDoNotSerialize``) enforces it
+mechanically: a store-level mutex around the transactions reintroduces a
+process-wide write lock and fails the test.
+
+The SQLite store is different by design, not by accident: SQLite's
+single-writer model serializes all writes in one file, so its throughput
+is a property of the backend, not a contract to fix. Deployments that
+need write concurrency use the Postgres backend (``--pg-dsn``).
+
+The nonce store follows the same rule: ``NonceStore`` (``verify/nonce.go``)
+holds its mutex only around the in-memory maps and calls the used-nonce
+backend -- a database round trip per call on the persistent backends --
+outside the lock, so ``UsedNonceBackend`` implementations must be safe for
+concurrent use, and consumption stays one-time because the pending-map
+delete under the mutex has exactly one winner
+(``TestNonceStore_IndependentVerificationsDoNotSerializeOnBackend``).
+
+Per-report bookkeeping writes must also be no-ops when nothing changed:
+the tenant stamp (``SetClientTenant``) runs on every verified report, and
+an unconditional row rewrite costs a WAL record and a commit fsync each
+time, so the UPDATE is conditional on a real tenant change
+(``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
+
 IPC token payload budget
 ========================
 
