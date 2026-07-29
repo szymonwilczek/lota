@@ -8,6 +8,8 @@ Operator
 Production operation starts with the bring-up document. The agent
 intentionally fails closed when required gates are missing.
 
+* :doc:`Platform support <platform-support>` -- which distributions, firmware
+  and TPM the agent targets, and at what support tier.
 * :doc:`Production bring-up <production-bringup/index>` -- the full manual
   reference for fleet hosts, CA, and verifier.
 * :doc:`Player install (lota-install) <player-install>` -- the guided,
@@ -51,6 +53,7 @@ Related deployment material lives next to the code:
 .. toctree::
    :hidden:
 
+   platform-support
    production-bringup/index
    player-install
    ha-deployment
