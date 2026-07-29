@@ -228,9 +228,9 @@ type VerifierConfig struct {
 	//     i.e. the host has been enrolled out-of-band.
 	// Without one of those, a first-attestation host that boots on
 	// already-compromised firmware would silently pin the attacker's
-	// PCR0/1/7 as the canonical baseline. The default (true) closes
-	// that branch; legacy fleets that depend on pure TOFU first use
-	// must set this to false explicitly.
+	// PCR0/1/7 as the canonical baseline.
+	// Default (true) closes that branch; deployment that wants pure TOFU
+	// first use must set this to false explicitly (--allow-tofu-boot-baseline)
 	RequireBootEnrollment bool
 
 	// EnableSelfServiceReanchor turns on self-service re-anchor:
@@ -690,6 +690,20 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, err
 	}
 
+	// UEFI gate.
+	// Every measurement below the quote comes from UEFI firmware:
+	// the PCR 0/1/7 pin, the Secure Boot state the policy gates on,
+	// and the PCR 14 baseline the boot commitment chains onto.
+	// Legacy BIOS/CSM measures none of it, so its reports would pin firmware
+	// baseline nothing authenticates.
+	if !UEFIAnchored(bootFacts) {
+		logging.Security(clog, "event log carries no UEFI firmware evidence",
+			"hint", "LOTA requires UEFI; switch the firmware out of legacy BIOS/CSM mode and reinstall")
+		v.metrics.Rejections.Inc("pcr_fail")
+		result.Result = types.VerifyPCRFail
+		return result, errors.New("FAIL_PCR_FAIL: event log proves no UEFI boot (no quote-authenticated SecureBoot variable measurement)")
+	}
+
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
@@ -849,7 +863,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			} else {
 				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
 					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, or enable require_secureboot for diverse fleets, or disable RequireBootEnrollment for legacy hosts")
+					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
 				v.metrics.Rejections.Inc("baseline_error")
 				result.Result = types.VerifyIntegrityMismatch
 				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")

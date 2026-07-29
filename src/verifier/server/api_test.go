@@ -386,11 +386,15 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	offset += 4
 
 	// TPM Evidence - PCR values
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -513,7 +517,7 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	eventLog := buildMinimalEventLog()
+	eventLog := buildUEFIEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
@@ -522,6 +526,78 @@ func buildSignedReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 }
 
 // minimal valid TCG event log: legacy Spec ID Event header, zero PCR_EVENT2 entries.
+// efiGlobalVariableGUID is EFI_GLOBAL_VARIABLE, the GUID the firmware stamps on
+// the SecureBoot variable measurement.
+var efiGlobalVariableGUID = [16]byte{
+	0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+}
+
+// secureBootVariableEvent is the UEFI_VARIABLE_DATA payload of
+// the EV_EFI_VARIABLE_DRIVER_CONFIG event that measures SecureBoot=1.
+func secureBootVariableEvent() []byte {
+	const name = "SecureBoot"
+
+	buf := make([]byte, 0, 32+2*len(name)+1)
+	buf = append(buf, efiGlobalVariableGUID[:]...)
+
+	lens := make([]byte, 16)
+	binary.LittleEndian.PutUint64(lens[0:8], uint64(len(name)))
+	binary.LittleEndian.PutUint64(lens[8:16], 1)
+	buf = append(buf, lens...)
+
+	// name is ASCII, so each byte widens into one UTF-16 code unit
+	for i := 0; i < len(name); i++ {
+		var u [2]byte
+		binary.LittleEndian.PutUint16(u[:], uint16(name[i]))
+		buf = append(buf, u[:]...)
+	}
+	return append(buf, 0x01)
+}
+
+// uefiPCR7 is the PCR 7 value buildUEFIEventLog replays to;
+// fixture report must carry it so the measurement is quote-authenticated
+func uefiPCR7() [32]byte {
+	digest := sha256.Sum256(secureBootVariableEvent())
+
+	var pcr7 [32]byte
+	h := sha256.New()
+	h.Write(pcr7[:])
+	h.Write(digest[:])
+	copy(pcr7[:], h.Sum(nil))
+	return pcr7
+}
+
+// buildUEFIEventLog appends the PCR 7 SecureBoot variable measurement
+// to the minimal log.
+// That event is the verifier's proof of a UEFI boot.
+func buildUEFIEventLog() []byte {
+	payload := secureBootVariableEvent()
+	digest := sha256.Sum256(payload)
+
+	entry := make([]byte, 0, 64+len(payload))
+	hdr := make([]byte, 8)
+	binary.LittleEndian.PutUint32(hdr[0:4], 7)          // pcr_index
+	binary.LittleEndian.PutUint32(hdr[4:8], 0x80000001) // EV_EFI_VARIABLE_DRIVER_CONFIG
+	entry = append(entry, hdr...)
+
+	count := make([]byte, 4)
+	binary.LittleEndian.PutUint32(count, 1)
+	entry = append(entry, count...)
+
+	alg := make([]byte, 2)
+	binary.LittleEndian.PutUint16(alg, 0x000B) // TPM2_ALG_SHA256
+	entry = append(entry, alg...)
+	entry = append(entry, digest[:]...)
+
+	size := make([]byte, 4)
+	binary.LittleEndian.PutUint32(size, uint32(len(payload)))
+	entry = append(entry, size...)
+	entry = append(entry, payload...)
+
+	return append(buildMinimalEventLog(), entry...)
+}
+
 func buildMinimalEventLog() []byte {
 	buf := make([]byte, 0, 64)
 

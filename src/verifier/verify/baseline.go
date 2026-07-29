@@ -39,13 +39,11 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 //	pcr14  = SHA256(baseline || commit)
 //
 // baseline is the PCR14 content present when the lock helper runs:
-// 0^32 on a legacy/BIOS host where nothing measured PCR14 before userspace,
-// or the firmware/shim MOK measurement (MokList, SbatLevel, MokListRT)
-// on a UEFI Secure Boot host.
+// shim MOK measurement (MokList, SbatLevel, MokListRT) on a shim-booted host,
+// or 0^32 on a UEFI host that boots without shim, since nothing else measures
+// PCR14 before userspace.
 //
-// Verifier reconstructs baseline from the TPM event log;
-// passing zero baseline reproduces the pre-baseline derivation for hosts
-// that never touched PCR14.
+// Verifier reconstructs baseline from the TPM event log.
 //
 // resetCount and restartCount are accepted for API symmetry with the
 // agent helper, but intentionally ignored. The initramfs lock runs long
@@ -116,8 +114,9 @@ const pcr14Index = 14
 // firmware log, so the replayed PCR14 is exactly the baseline the lock chain
 // anchors on.
 //
-// nil log, replay error, or no PCR14 events yields 0^32 - the legacy/BIOS host
-// that never touched PCR14.
+// nil log, replay error, or no PCR14 events yields 0^32 - UEFI host whose boot
+// chain never measured PCR14 (no shim).
+// The log is proven to be a UEFI one before this runs, see UEFIAnchored.
 //
 // baseline needs no separate trust:
 // it is authenticated by the quote, since forged event log makes Derive*(baseline, ...)

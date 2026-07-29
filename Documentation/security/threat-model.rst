@@ -330,6 +330,17 @@ otherwise ask for: an agent that simply declined to quote the firmware and
 Secure Boot registers would bypass the pin while still presenting a
 well-formed, correctly signed report.
 
+All of it presumes a UEFI firmware, and the verifier proves that rather
+than assuming it: a report is refused unless its event log carries the
+firmware's own measurement of the EFI global ``SecureBoot`` variable into a
+quote-authenticated PCR 7. Legacy BIOS/CSM has no EFI variables to measure,
+so it cannot produce that evidence and cannot attest. The check is about the
+firmware interface, not the Secure Boot setting -- whether Secure Boot must
+be *enabled* stays a policy question (``require_secureboot``). PCR 14 is not
+usable as the UEFI signal: it holds the shim MOK state, so it is zero both on
+BIOS and on a UEFI host that boots without shim (own PK/KEK/db, a directly
+signed systemd-boot or UKI), and that host attests normally.
+
 The PCR 14 chain is mandatory on the same terms. A report must declare both
 the initramfs lock and the agent boot commitment; the verifier derives the
 expected PCR 14 as the lock value with the commitment chained on top and has

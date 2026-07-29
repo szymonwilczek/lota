@@ -51,6 +51,36 @@ const (
 const productionFlags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce |
 	types.FlagBootCommitmentV1 | types.FlagInitramfsLockV1
 
+// uefiEventLog is the firmware log every fixture report carries:
+// one EV_EFI_VARIABLE_DRIVER_CONFIG measurement of the EFI global SecureBoot
+// variable on PCR 7.
+// That event is the verifier's proof of UEFI boot -- legacy BIOS log has no EFI
+// variable to measure.
+func uefiEventLog() []byte {
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	digest := sha256.Sum256(payload)
+	return buildTestEventLog([]EventLogEntry{{
+		PCRIndex:  7,
+		EventType: EvEFIVariableDriverConfig,
+		Digests:   map[uint16][]byte{AlgSHA256: digest[:]},
+		EventData: payload,
+	}})
+}
+
+// uefiPCR7 is the PCR 7 value uefiEventLog replays to.
+// Fixture report must carry it so the SecureBoot measurement is quote-authenticated
+func uefiPCR7() [types.HashSize]byte {
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	digest := sha256.Sum256(payload)
+
+	var pcr7 [types.HashSize]byte
+	h := sha256.New()
+	h.Write(pcr7[:])
+	h.Write(digest[:])
+	copy(pcr7[:], h.Sum(nil))
+	return pcr7
+}
+
 // fixtureAgentHash is the agent_hash every fixture report carries.
 func fixtureAgentHash() [types.HashSize]byte {
 	var agentHash [types.HashSize]byte
@@ -99,11 +129,15 @@ func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, p
 	offset += 4
 
 	// TPM Evidence - PCR values
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -231,8 +265,10 @@ func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, p
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	// append minimal valid TCG event log (Spec ID header, zero PCR_EVENT2 entries)
-	eventLog := buildTestEventLog(nil)
+	// append the fixture firmware log
+	// (Spec ID header + the PCR 7 SecureBoot variable measurement
+	// the UEFI gate requires)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
 
@@ -708,11 +744,15 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	offset += 4
 
 	// PCRs
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -822,7 +862,7 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	eventLog := buildTestEventLog(nil)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
@@ -927,6 +967,54 @@ func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg str
 	if !strings.Contains(err.Error(), wantMsg) {
 		t.Fatalf("expected error to mention %s, got: %v", wantMsg, err)
 	}
+}
+
+// TestVerify_RejectsNonUEFIBoot asserts the UEFI gate:
+// report whose event log carries no EFI variable measurement never came from
+// UEFI firmware (legacy BIOS/CSM has none to measure), so every firmware
+// measurement below it -- the PCR 0/1/7 pin, the Secure Boot state, PCR 14
+// baseline -- would be unauthenticated
+func TestVerify_RejectsNonUEFIBoot(t *testing.T) {
+	verifier := createTestVerifier(t, newCertStore(t))
+
+	clientID := "bios-host"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
+	reportData = stripEventLogEntries(t, reportData)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	if err == nil {
+		t.Fatal("expected rejection: event log carries no UEFI evidence")
+	}
+	if result.Result != types.VerifyPCRFail {
+		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
+	}
+	if !strings.Contains(err.Error(), "UEFI") {
+		t.Fatalf("expected the error to name UEFI, got: %v", err)
+	}
+}
+
+// stripEventLogEntries rewrites the report's event log, keeping the Spec ID header
+// and dropping every PCR_EVENT2 entry -- the shape legacy BIOS log has,
+// with no EFI variable measurement to offer.
+func stripEventLogEntries(t *testing.T, reportData []byte) []byte {
+	t.Helper()
+
+	bare := buildTestEventLog(nil)
+	logOffset := len(reportData) - int(binary.LittleEndian.Uint32(
+		reportData[types.MinReportSize-4:types.MinReportSize]))
+	if logOffset < types.MinReportSize {
+		t.Fatalf("event log offset %d precedes the fixed report", logOffset)
+	}
+
+	out := append(append([]byte{}, reportData[:logOffset]...), bare...)
+	binary.LittleEndian.PutUint32(out[types.MinReportSize-4:types.MinReportSize], uint32(len(bare)))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(len(out)))
+	return out
 }
 
 // TestVerify_BootEnrollmentGateRefusesTOFUFirstUse covers the default production

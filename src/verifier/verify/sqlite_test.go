@@ -886,11 +886,15 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	offset += 4
 
 	// PCR values
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -1001,7 +1005,7 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	eventLog := buildTestEventLog(nil)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
