@@ -33,11 +33,13 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -47,6 +49,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,6 +105,7 @@ var (
 	aikCACerts           stringSliceFlag
 	aikCRLs              stringSliceFlag
 	ekCRLsDeprecated     stringSliceFlag
+	pgShardDSNs          stringSliceFlag
 	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	scopedKeysFile       = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
@@ -110,6 +114,7 @@ var (
 )
 
 func main() {
+	flag.Var(&pgShardDSNs, "pg-shard-dsn", "PostgreSQL shard DSN (or LOTA_PG_SHARD_DSNS as a comma-separated list); may be repeated. Partitions per-client baseline, nonce and session state across the given databases by a stable hash of the key, so the durable write tier scales past one database host. Mutually exclusive with --pg-dsn and --db. Every instance must be given the same shard list in the same order. Enforcement, audit and attestation-log state lives on the first shard.")
 	flag.Var(&aikCACerts, "aik-ca-cert", "Trusted attestation-CA root (PEM) the AIK certificate must chain to; may be repeated")
 	flag.Var(&aikCRLs, "aik-crl", "CRL file (PEM or DER) used to revoke compromised AIK certificates; may be repeated. Each CRL must be signed by one of the --aik-ca-cert roots.")
 	flag.Var(&ekCRLsDeprecated, "ek-crl", "DEPRECATED alias for --aik-crl. The CRLs loaded here revoke AIK certificates issued by the deployment's attestation CA, not endorsement keys; the TPM-manufacturer EK revocation feed is the attestation CA's -ek-crl flag.")
@@ -205,18 +210,33 @@ func main() {
 		logger.Warn("INSECURE: --allow-unpinned-agent is set; a diverse-fleet policy may run with the agent self-hash on TOFU, so a modified non-enforcing agent could pin its own hash and attest without enforcing")
 	}
 
-	// resolve the Postgres DSN from flag or environment
+	// resolve the Postgres DSN(s) from flag or environment
 	// the env form keeps connection credentials out of the process argument list
 	dsn := *pgDSN
 	if dsn == "" {
 		dsn = os.Getenv("LOTA_PG_DSN")
 	}
-	if dsn != "" && *dbPath != "" {
-		logger.Error("choose one storage backend: --pg-dsn (Postgres) or --db (SQLite), not both")
+	shardDSNs := []string(pgShardDSNs)
+	if len(shardDSNs) == 0 {
+		if env := os.Getenv("LOTA_PG_SHARD_DSNS"); env != "" {
+			for _, d := range strings.Split(env, ",") {
+				if d = strings.TrimSpace(d); d != "" {
+					shardDSNs = append(shardDSNs, d)
+				}
+			}
+		}
+	}
+	if len(shardDSNs) > 0 && dsn != "" {
+		logger.Error("choose one Postgres form: --pg-dsn (single database) or --pg-shard-dsn (sharded), not both")
+		os.Exit(1)
+	}
+	usePostgres := dsn != "" || len(shardDSNs) > 0
+	if usePostgres && *dbPath != "" {
+		logger.Error("choose one storage backend: Postgres or --db (SQLite), not both")
 		os.Exit(1)
 	}
 
-	if dsn != "" {
+	if usePostgres {
 		// Postgres backend: shared, multi-instance state for deployments
 		// behind a load balancer.
 		// Mutable enforcement, baseline and nonce state lives in Postgres
@@ -225,16 +245,74 @@ func main() {
 		// Unlike the SQLite --db block, this path supports the
 		// certificate-backed AIK store, so a production --require-cert fleet
 		// can run several verifier instances against one database
-		db, err := store.OpenPostgresDB(dsn)
-		if err != nil {
-			logger.Error("failed to open Postgres database", "error", err)
+		//
+		// With --pg-shard-dsn the per-client baseline, nonce and session state
+		// is partitioned across the given databases;
+		// first shard is the control database for enforcement, audit and attestation state
+		/// (fleet-global, read-mostly, not on the per-report path)
+		if len(shardDSNs) == 0 {
+			shardDSNs = []string{dsn}
+		}
+		dbs := make([]*sql.DB, 0, len(shardDSNs))
+		for i, d := range shardDSNs {
+			sdb, err := store.OpenPostgresDB(d)
+			if err != nil {
+				logger.Error("failed to open Postgres database", "shard", i, "error", err)
+				os.Exit(1)
+			}
+			dbs = append(dbs, sdb)
+		}
+		closeShards := func() {
+			for _, sdb := range dbs {
+				_ = sdb.Close()
+			}
+		}
+
+		// pin the shard set against the control database before anything
+		// takes dependency on the pools
+		shardIDs := make([]string, len(dbs))
+		for i, sdb := range dbs {
+			id, err := store.ShardIdentity(context.Background(), sdb)
+			if err != nil {
+				logger.Error("failed to read shard identity", "shard", i, "error", err)
+				closeShards()
+				os.Exit(1)
+			}
+			shardIDs[i] = id
+		}
+		if err := store.AssertShardSet(context.Background(), dbs[0], shardIDs); err != nil {
+			logger.Error("shard set check failed", "error", err,
+				"hint", "give every instance the same databases in the same order; "+
+					"to change the set deliberately, migrate or re-enrol the fleet and "+
+					"clear the pin with DELETE FROM shard_set on the control database")
+			closeShards()
 			os.Exit(1)
 		}
-		defer db.Close()
 
-		verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
-		verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
-		verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
+		defer closeShards()
+		// control database also anchors the AIK/certificate flow below
+		db := dbs[0]
+
+		if len(dbs) == 1 {
+			verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
+			verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
+			verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
+		} else {
+			baselines := make([]verify.BaselineStorer, len(dbs))
+			nonces := make([]verify.UsedNonceBackend, len(dbs))
+			sessions := make([]verify.SessionTokenStore, len(dbs))
+			for i, sdb := range dbs {
+				baselines[i] = verify.NewPostgresBaselineStore(sdb)
+				nonces[i] = verify.NewPostgresUsedNonceBackend(sdb)
+				sessions[i] = verify.NewPostgresSessionTokenStore(sdb)
+			}
+			verifierCfg.BaselineStore = verify.NewShardedBaselineStore(baselines)
+			verifierCfg.UsedNonceBackend = verify.NewShardedUsedNonceBackend(nonces)
+			verifierCfg.SessionTokenStore = verify.NewShardedSessionTokenStore(sessions)
+			logger.Info("Postgres sharded storage enabled",
+				"shards", len(dbs),
+				"note", "per-client baseline/nonce/session partitioned; enforcement and audit on shard 0")
+		}
 
 		auditLog = store.NewPostgresAuditLog(db)
 		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
