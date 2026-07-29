@@ -3591,8 +3591,9 @@ static int tpm_aik_save_auth(struct tpm_context *ctx,
 /*
  * Load dispatcher.
  * With sealing on, the sealed copy is tried first.
- * In non-strict mode a missing or unusable sealed copy falls back to the
- * plaintext sidecar (supports migration and boot-state changes).
+ * In non-strict mode a missing or unusable sealed copy falls back to
+ * the plaintext sidecar: boot-state change moves the PCRs the blob was
+ * sealed to, so it stops unsealing and the sidecar is the way back in.
  * Default (flags off) goes straight to the plaintext path, unchanged.
  */
 static int tpm_aik_load_auth(struct tpm_context *ctx)
@@ -3825,7 +3826,7 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 
 	struct aik_metadata wire;
 	wire.magic = htole32(ctx->aik_meta.magic);
-	wire.version = htole32(ctx->aik_meta.version);
+	wire.version = htole32(TPM_AIK_META_VERSION);
 	wire.generation = htole64(ctx->aik_meta.generation);
 	wire.provisioned_at =
 		(int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);

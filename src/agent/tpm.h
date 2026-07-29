@@ -177,11 +177,10 @@ const char *tpm_strerror(int err);
 /*
  * PCR14 boot-commitment snapshot persisted across agent restarts.
  *
- * Layout is fixed and version-tagged. flags deliberately consumes the
- * first byte of the old 32-byte reserved tail; pre-initramfs-lock
- * snapshots zero-filled that area, so version 1 remains loadable
- * without a migration while new writers retain 31 bytes for future
- * extension.
+ * Layout is fixed and version-tagged:
+ * flags occupies the first byte of the reserved tail and 31 bytes stay reserved.
+ * Loader requires the current version, so snapshot it cannot read is discarded
+ * and the agent re-derives the state.
  */
 struct lota_clock_state {
 	uint32_t magic;
