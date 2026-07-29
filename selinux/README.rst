@@ -114,6 +114,17 @@ After installing the agent binary and BPF object:
    sudo restorecon -Rv /etc/lota
    sudo restorecon -Rv /var/lib/lota
 
+Cross-distribution portability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The module loads on both the Fedora and the RHEL family. Types that exist
+only on newer kernels are guarded so a base policy that lacks them still
+links the module: ``pidfs_t`` (pidfs, kernel 6.9+) is referenced inside an
+``optional_policy`` block, so on the RHEL family (el9, kernel 5.14, whose
+base policy has no ``pidfs_t``) the block is dropped and the rest of the
+module loads. Build the module against the target distribution's
+``selinux-policy-devel`` so the compiled ``lota.pp`` matches its policy.
+
 Configuration Tunables
 ----------------------
 
