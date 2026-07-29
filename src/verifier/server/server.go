@@ -117,8 +117,37 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 
-	// max concurrent attestation connections (0 = unlimited)
+	// max concurrent attestation connections.
+	// 0 (the zero value) means DefaultMaxConnections, not "unlimited":
+	// caller that forgets the field gets the bounded listener,
+	// and removing the bound takes UnlimitedConnections explicitly
 	MaxConnections int
+}
+
+const (
+	// DefaultMaxConnections bounds concurrent attestation connections when
+	// the config does not choose.
+	// Every accepted connection costs TLS handshake and full report verification,
+	// so the listener is never left unbounded by omission
+	DefaultMaxConnections = 256
+
+	// UnlimitedConnections disables the cap.
+	// Only for load rigs measuring the crypto ceiling
+	// -- production listener wants a bound
+	UnlimitedConnections = -1
+)
+
+// connectionCap resolves the configured value to a semaphore size,
+// 0 meaning "no semaphore"
+func connectionCap(configured int) int {
+	switch {
+	case configured == 0:
+		return DefaultMaxConnections
+	case configured < 0:
+		return 0
+	default:
+		return configured
+	}
 }
 
 func DefaultServerConfig() ServerConfig {
@@ -127,7 +156,7 @@ func DefaultServerConfig() ServerConfig {
 		HTTPAddress:    "",
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
-		MaxConnections: 256,
+		MaxConnections: DefaultMaxConnections,
 	}
 }
 
@@ -179,8 +208,11 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		logger.Info("scoped API keys loaded", "path", cfg.ScopedKeysFile, "keys", set.Len())
 	}
 
-	if cfg.MaxConnections > 0 {
-		s.connSem = make(chan struct{}, cfg.MaxConnections)
+	if n := connectionCap(cfg.MaxConnections); n > 0 {
+		s.connSem = make(chan struct{}, n)
+	} else {
+		logger.Warn("attestation listener running without a connection cap",
+			"hint", "set --max-connections to bound concurrent attestations")
 	}
 
 	return s, nil

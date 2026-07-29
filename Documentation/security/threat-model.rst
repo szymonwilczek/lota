@@ -268,6 +268,9 @@ STRIDE mapping
        | Reports should not expose EK material after enrollment.
    * - Denial of service
      - | Rate limits and nonce limits bound challenge pressure.
+       | The attestation listener bounds concurrent connections
+         (``--max-connections``, default 256), so a client stampede cannot
+         spend unbounded TLS handshakes and report verifications.
        | Local enforcement may intentionally fail closed when production gates are missing.
    * - Elevation of privilege
      - | LOTA reduces post-boot tamper paths through lockdown, module signing, BPF
