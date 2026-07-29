@@ -124,7 +124,12 @@ Rules for a sharded deployment:
 * **Give every instance the same shard list in the same order.** The shard
   index is positional; a divergent list would route the same client to
   different databases on different instances and break replay protection and
-  cross-instance session validation.
+  cross-instance session validation. The verifier enforces this: each shard
+  database carries its own identity and the control database pins the
+  fingerprint of the ordered list, so an instance whose list does not
+  reproduce it refuses to start instead of serving a routing its peers
+  disagree with. Listing the same database twice is refused for the same
+  reason.
 * **The first shard is the control database.** Fleet-global, read-mostly
   state -- revocations, hardware bans, the audit trail and the attestation
   decision log -- lives on shard 0, not on the per-report path.
@@ -146,7 +151,13 @@ Rules for a sharded deployment:
   Treat a shard-count change as a fleet-wide re-enrolment in a maintenance
   window -- migrate the baseline rows to their new shards first, or re-enrol
   the fleet -- not as a rolling capacity step. Size the shard count for the
-  fleet you expect, not the one you have.
+  fleet you expect, not the one you have. The pinned shard set makes this
+  explicit: a changed list is refused at startup until you clear the pin
+  with ``DELETE FROM shard_set;`` on the control database, which is the
+  point at which you confirm the migration is done. The same pin is
+  recorded for a single ``--pg-dsn`` database, so switching an existing
+  deployment to a sharded list is caught rather than silently re-routing
+  every client.
 
 Sharding composes with the multi-instance topology above: N stateless
 instances in front of M shard databases. The client-to-verifier load

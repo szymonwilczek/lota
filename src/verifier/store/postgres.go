@@ -185,6 +185,24 @@ var pgMigrations = []migration{
 			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
 		`,
 	},
+	{
+		version: 7,
+		description: "sharding: per-database identity and the control " +
+			"database's pinned shard set",
+		sql: `
+			CREATE TABLE shard_identity (
+				singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+				id         TEXT NOT NULL,
+				created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE TABLE shard_set (
+				singleton   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+				fingerprint TEXT NOT NULL,
+				shard_count INTEGER NOT NULL,
+				created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+		`,
+	},
 }
 
 // OpenPostgresDB opens a Postgres-backed store at the given DSN and applies
