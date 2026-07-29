@@ -935,3 +935,151 @@ func createMockAttestWithNonce(nonce []byte) []byte {
 
 	return buf.Bytes()
 }
+
+// blockingUsedBackend parks Record for one chosen nonce key until released,
+// standing in for slow used-nonce database write
+type blockingUsedBackend struct {
+	inner    UsedNonceBackend
+	blockKey string
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (b *blockingUsedBackend) Contains(key string) bool { return b.inner.Contains(key) }
+
+func (b *blockingUsedBackend) Record(key string, at time.Time) error {
+	if key == b.blockKey {
+		b.once.Do(func() { close(b.entered) })
+		<-b.release
+	}
+	return b.inner.Record(key, at)
+}
+
+func (b *blockingUsedBackend) Cleanup(olderThan time.Time) { b.inner.Cleanup(olderThan) }
+
+func (b *blockingUsedBackend) Count() int { return b.inner.Count() }
+
+// Nonce verifications for INDEPENDENT nonces must not serialize on the used-nonce backend:
+// with database-backed history, one slow write must not stall every other client's
+// challenge/verify path behind the store lock
+func TestNonceStore_IndependentVerificationsDoNotSerializeOnBackend(t *testing.T) {
+	backend := &blockingUsedBackend{
+		inner:   newMemoryUsedNonceBackend(100),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cfg := DefaultNonceStoreConfig()
+	cfg.UsedBackend = backend
+	ns := NewNonceStoreFromConfig(cfg)
+	defer ns.Close()
+
+	buildReport := func(ch *types.Challenge) *types.AttestationReport {
+		report := &types.AttestationReport{}
+		copy(report.TPM.Nonce[:], ch.Nonce[:])
+		attest := createMockAttestWithNonce(testBindingNonce(report, ch.Nonce))
+		report.TPM.AttestSize = uint16(len(attest))
+		copy(report.TPM.AttestData[:], attest)
+		return report
+	}
+
+	chA, err := ns.GenerateChallenge("bind-a", 0x4003)
+	if err != nil {
+		t.Fatalf("GenerateChallenge(A): %v", err)
+	}
+	chB, err := ns.GenerateChallenge("bind-b", 0x4003)
+	if err != nil {
+		t.Fatalf("GenerateChallenge(B): %v", err)
+	}
+	backend.blockKey = hex.EncodeToString(chA.Nonce[:])
+
+	aDone := make(chan error, 1)
+	go func() {
+		aDone <- ns.VerifyNonce(buildReport(chA), "bind-a", "identity-a")
+	}()
+	select {
+	case <-backend.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification A never reached the used-nonce backend")
+	}
+
+	bDone := make(chan error, 1)
+	go func() {
+		bDone <- ns.VerifyNonce(buildReport(chB), "bind-b", "identity-b")
+	}()
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("VerifyNonce(B): %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("independent nonce verification serialized behind a slow used-nonce write")
+	}
+
+	close(backend.release)
+	if err := <-aDone; err != nil {
+		t.Fatalf("VerifyNonce(A): %v", err)
+	}
+}
+
+// blockingCountBackend parks Count until released, standing in for the
+// SELECT COUNT(*) the persistent used-nonce backends issue
+type blockingCountBackend struct {
+	inner   UsedNonceBackend
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingCountBackend) Contains(key string) bool { return b.inner.Contains(key) }
+
+func (b *blockingCountBackend) Record(key string, at time.Time) error {
+	return b.inner.Record(key, at)
+}
+
+func (b *blockingCountBackend) Cleanup(olderThan time.Time) { b.inner.Cleanup(olderThan) }
+
+func (b *blockingCountBackend) Count() int {
+	close(b.entered)
+	<-b.release
+	return b.inner.Count()
+}
+
+// Monitoring path must obey the same rule as the hot path:
+// UsedCount is served from the stats API, and on the persistent backends
+// its COUNT(*) is full scan of the used-nonce table.
+// Holding the store lock across it would let single scrape stall every
+// challenge and verification in the process
+func TestNonceStore_UsedCountDoesNotBlockChallenges(t *testing.T) {
+	backend := &blockingCountBackend{
+		inner:   newMemoryUsedNonceBackend(100),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cfg := DefaultNonceStoreConfig()
+	cfg.UsedBackend = backend
+	ns := NewNonceStoreFromConfig(cfg)
+	defer ns.Close()
+
+	countDone := make(chan int, 1)
+	go func() { countDone <- ns.UsedCount() }()
+	<-backend.entered
+
+	issued := make(chan error, 1)
+	go func() {
+		_, err := ns.GenerateChallenge("bind-x", 0x4003)
+		issued <- err
+	}()
+	select {
+	case err := <-issued:
+		if err != nil {
+			close(backend.release)
+			t.Fatalf("GenerateChallenge: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		close(backend.release)
+		t.Fatal("challenge issuance serialized behind a used-nonce COUNT(*)")
+	}
+
+	close(backend.release)
+	<-countDone
+}

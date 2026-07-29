@@ -35,6 +35,10 @@ const maxNonceGenerationAttempts = 8
 // abstracts used nonce storage for anti-replay protection
 // memory backend is used by default; SQLite backend provides persistence
 // across verifier restarts for production deployments
+//
+// implementations must be safe for concurrent use:
+// nonce store calls the backend outside its own mutex so database round
+// trips do not serialize independent clients
 type UsedNonceBackend interface {
 	// stores a nonce key as used at the given time
 	Record(nonceKey string, usedAt time.Time) error
@@ -51,7 +55,9 @@ type UsedNonceBackend interface {
 
 // implements UsedNonceBackend using an in-memory map
 // bounded by maxSize - evicts oldest entries when capacity is reached
+// carries its own mutex: the nonce store calls backends unlocked
 type memoryUsedNonceBackend struct {
+	mu      sync.Mutex
 	index   map[string]*list.Element
 	order   list.List
 	maxSize int
@@ -73,6 +79,9 @@ func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error
 	if m.maxSize <= 0 {
 		return nil
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if elem, exists := m.index[nonceKey]; exists {
 		m.order.Remove(elem)
@@ -96,15 +105,21 @@ func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error
 }
 
 func (m *memoryUsedNonceBackend) Contains(nonceKey string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, exists := m.index[nonceKey]
 	return exists
 }
 
 func (m *memoryUsedNonceBackend) Count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return len(m.index)
 }
 
 func (m *memoryUsedNonceBackend) Cleanup(olderThan time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for elem := m.order.Front(); elem != nil; {
 		next := elem.Next()
 		entry, ok := elem.Value.(usedNonceEntry)
@@ -237,66 +252,61 @@ func NewNonceStore(lifetime time.Duration) *NonceStore {
 // bindingID is a transport-level identifier used to bind the issued nonce
 // to the request context. In the verifier TLS server this is a per-connection
 // random challengeID (not an IP and not a durable hardware identity)
+//
+// Used-nonce history probe (database round trip on the Postgres backend)
+// runs before the store mutex is taken so challenge issuance for independent
+// clients does not serialize on the backend;
+// pending-collision re-check, per-binding limit and the insert stay atomic under the mutex
 func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*types.Challenge, error) {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
-	// enforce per-binding pending bound (bindingID is challenge-scoped)
-	if err := ns.checkPendingLimit(bindingID); err != nil {
-		return nil, err
-	}
-
-	nonce, err := ns.generateUniqueNonceLocked()
-	if err != nil {
-		return nil, err
-	}
-
-	key := hex.EncodeToString(nonce[:])
-
-	// get and increment binding counters
-	cs := ns.bindingChallenges[bindingID]
-	cs.attestCounter++
-	cs.pendingCount++
-	ns.bindingChallenges[bindingID] = cs
-
-	const challengeFlags = types.ChallengeFlagBootCommitmentV1
-	ns.pending[key] = nonceEntry{
-		nonce:          nonce,
-		createdAt:      time.Now(),
-		bindingID:      bindingID,
-		counter:        cs.attestCounter,
-		challengeFlags: challengeFlags,
-	}
-
-	return &types.Challenge{
-		Magic:   types.ReportMagic,
-		Version: types.ReportVersion,
-		Nonce:   nonce,
-		PCRMask: pcrMask,
-		Flags:   challengeFlags,
-	}, nil
-}
-
-func (ns *NonceStore) generateUniqueNonceLocked() ([types.NonceSize]byte, error) {
-	var nonce [types.NonceSize]byte
-
-	for attempt := 0; attempt < maxNonceGenerationAttempts; attempt++ {
+	for range maxNonceGenerationAttempts {
+		var nonce [types.NonceSize]byte
 		if _, err := io.ReadFull(ns.randReader, nonce[:]); err != nil {
-			return nonce, fmt.Errorf("nonce generation failed: %w", err)
+			return nil, fmt.Errorf("nonce generation failed: %w", err)
 		}
 
 		key := hex.EncodeToString(nonce[:])
-		if _, exists := ns.pending[key]; exists {
-			continue
-		}
 		if ns.usedBackend.Contains(key) {
 			continue
 		}
 
-		return nonce, nil
+		ns.mu.Lock()
+		if _, exists := ns.pending[key]; exists {
+			ns.mu.Unlock()
+			continue
+		}
+
+		// enforce per-binding pending bound (bindingID is challenge-scoped)
+		if err := ns.checkPendingLimit(bindingID); err != nil {
+			ns.mu.Unlock()
+			return nil, err
+		}
+
+		// get and increment binding counters
+		cs := ns.bindingChallenges[bindingID]
+		cs.attestCounter++
+		cs.pendingCount++
+		ns.bindingChallenges[bindingID] = cs
+
+		const challengeFlags = types.ChallengeFlagBootCommitmentV1
+		ns.pending[key] = nonceEntry{
+			nonce:          nonce,
+			createdAt:      time.Now(),
+			bindingID:      bindingID,
+			counter:        cs.attestCounter,
+			challengeFlags: challengeFlags,
+		}
+		ns.mu.Unlock()
+
+		return &types.Challenge{
+			Magic:   types.ReportMagic,
+			Version: types.ReportVersion,
+			Nonce:   nonce,
+			PCRMask: pcrMask,
+			Flags:   challengeFlags,
+		}, nil
 	}
 
-	return nonce, errors.New("nonce generation failed: repeated collisions")
+	return nil, errors.New("nonce generation failed: repeated collisions")
 }
 
 // checks if the nonce in report matches an outstanding challenge
@@ -310,62 +320,71 @@ func (ns *NonceStore) generateUniqueNonceLocked() ([types.NonceSize]byte, error)
 // monotonic counters. It is supplied by the caller after the AIK
 // certificate has been verified, so the limit cannot be evaded by
 // rotating an agent-asserted hardware_id.
+//
+// VerifyNonce holds the store mutex only around the in-memory maps.
+// Used-nonce backend calls (database round trip each on the Postgres backend)
+// and the binding-nonce cryptography run unlocked so independent clients verify concurrently;
+// consumption stays atomic because the pending-map delete under the mutex has exactly
+// one winner, and only that winner reaches Record
 func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, identityID string) error {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
 	key := hex.EncodeToString(report.TPM.Nonce[:])
 
 	// check used nonce history first (detects replays after restart)
+	// unlocked: history only grows, and nonce enters it solely through
+	// the single consumer that won the pending-map delete
 	if ns.usedBackend.Contains(key) {
 		return errors.New("nonce already used - replay attack detected")
 	}
 
+	ns.mu.Lock()
 	entry, exists := ns.pending[key]
 	if !exists {
+		ns.mu.Unlock()
 		return errors.New("unknown nonce - possible replay attack")
 	}
 
 	// check lifetime
 	if time.Since(entry.createdAt) > ns.lifetime {
 		delete(ns.pending, key)
+		ns.mu.Unlock()
 		return errors.New("nonce expired")
 	}
 
 	// verify transport binding
 	if entry.bindingID != "" && entry.bindingID != bindingID {
+		ns.mu.Unlock()
 		return errors.New("nonce bound to different challenge")
 	}
 
 	// verify nonce matches whats in report header
 	if subtle.ConstantTimeCompare(entry.nonce[:], report.TPM.Nonce[:]) != 1 {
+		ns.mu.Unlock()
 		return errors.New("nonce mismatch in report header")
 	}
 
 	if err := verifyChallengeCapabilities(report, entry.challengeFlags); err != nil {
+		ns.mu.Unlock()
 		return err
 	}
 
 	if err := ns.checkIdentityRateLimit(identityID); err != nil {
-		delete(ns.pending, key)
+		ns.consumeLocked(key, entry.bindingID)
+		ns.mu.Unlock()
 		if recordErr := ns.usedBackend.Record(key, time.Now()); recordErr != nil {
 			return fmt.Errorf("%w; failed to record rejected nonce: %v", err, recordErr)
 		}
-		if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
-			cs.pendingCount--
-			if cs.pendingCount < 0 {
-				cs.pendingCount = 0
-			}
-			ns.bindingChallenges[entry.bindingID] = cs
-		}
 		return err
 	}
+	ns.mu.Unlock()
 
 	// verify nonce inside tpms_attest (signed by tpm)
 	// compute binding nonce =
 	// SHA-256(challenge_nonce || hardware_id || signed_flags ||
 	// kernel_hash || agent_hash || iommu_status)
 	// to verify that the TPM quote is bound to the reported hardware identity
+	//
+	// Pure computation on the copied entry
+	// Failure leaves the nonce pending
 	if report.TPM.AttestSize == 0 {
 		return errors.New("no attestation data - cannot verify nonce binding")
 	}
@@ -380,29 +399,43 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 		return fmt.Errorf("TPMS_ATTEST nonce verification failed: %w", err)
 	}
 
-	// all checks passed, consume nonce
-	delete(ns.pending, key)
-
-	// record as used
-	if err := ns.usedBackend.Record(key, time.Now()); err != nil {
-		return fmt.Errorf("failed to record used nonce: %w", err)
+	// all checks passed: consume the nonce
+	// re-check pending under the mutex -- concurrent presentation
+	// of the same nonce may have won the delete while the unlocked crypto ran
+	ns.mu.Lock()
+	if _, still := ns.pending[key]; !still {
+		ns.mu.Unlock()
+		return errors.New("unknown nonce - possible replay attack")
 	}
-
-	// update binding state
-	if cs, ok := ns.bindingChallenges[entry.bindingID]; ok {
-		cs.pendingCount--
-		if cs.pendingCount < 0 {
-			cs.pendingCount = 0
-		}
-		ns.bindingChallenges[entry.bindingID] = cs
-	}
+	ns.consumeLocked(key, entry.bindingID)
 
 	ics := ns.identityChallenges[identityID]
 	ics.attestCounter++
 	ics.lastAttestation = time.Now()
 	ns.identityChallenges[identityID] = ics
+	ns.mu.Unlock()
+
+	// record as used
+	// only the delete winner gets here for a given key
+	if err := ns.usedBackend.Record(key, time.Now()); err != nil {
+		return fmt.Errorf("failed to record used nonce: %w", err)
+	}
 
 	return nil
+}
+
+// consumeLocked removes pending nonce and releases its slot in
+// the per-binding pending budget.
+// Caller holds ns.mu
+func (ns *NonceStore) consumeLocked(key, bindingID string) {
+	delete(ns.pending, key)
+	if cs, ok := ns.bindingChallenges[bindingID]; ok {
+		cs.pendingCount--
+		if cs.pendingCount < 0 {
+			cs.pendingCount = 0
+		}
+		ns.bindingChallenges[bindingID] = cs
+	}
 }
 
 func verifyChallengeCapabilities(report *types.AttestationReport, challengeFlags uint32) error {
@@ -482,10 +515,9 @@ func (ns *NonceStore) cleanupLoop() {
 }
 
 func (ns *NonceStore) cleanup() {
-	ns.mu.Lock()
-	defer ns.mu.Unlock()
-
 	now := time.Now()
+
+	ns.mu.Lock()
 
 	// clean expired pending nonces
 	for key, entry := range ns.pending {
@@ -502,10 +534,6 @@ func (ns *NonceStore) cleanup() {
 		}
 	}
 
-	// clean old used nonce entries via backend
-	usedCutoff := now.Add(-ns.lifetime * 3) // keep used 3x longer than lifetime
-	ns.usedBackend.Cleanup(usedCutoff)
-
 	// evict stale client entries to bound map growth
 	clientCutoff := now.Add(-ns.lifetime * 3)
 	for id, cs := range ns.bindingChallenges {
@@ -519,6 +547,14 @@ func (ns *NonceStore) cleanup() {
 			delete(ns.identityChallenges, id)
 		}
 	}
+
+	ns.mu.Unlock()
+
+	// clean old used nonce entries via backend
+	// unlocked so Postgres DELETE round trip does not stall challenge
+	// and verify traffic
+	// keep used 3x longer than lifetime
+	ns.usedBackend.Cleanup(now.Add(-ns.lifetime * 3))
 }
 
 // returns number of outstanding challenges (for monitoring)
@@ -530,8 +566,6 @@ func (ns *NonceStore) PendingCount() int {
 
 // returns number of used nonces in history (for monitoring)
 func (ns *NonceStore) UsedCount() int {
-	ns.mu.RLock()
-	defer ns.mu.RUnlock()
 	return ns.usedBackend.Count()
 }
 

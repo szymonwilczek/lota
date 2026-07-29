@@ -13,6 +13,15 @@
 // no baseline row exists yet, which a bare SELECT ... FOR UPDATE cannot do
 // (there is no row to lock on first use).
 // Lock auto-releases on COMMIT/ROLLBACK.
+//
+// Advisory lock is the ONLY write fence, and it is deliberately per-client:
+// independent clients commit concurrently, which is what lets registration
+// bursts and steady-state attestation scale with the connection pool instead
+// of serializing process-wide.
+// Do not add a store-level mutex here -- *sql.DB is safe for concurrent use,
+// every method is single statement or single transaction, and the SQLite store's
+// process-wide write serialization is property of SQLite's single-writer model,
+// not of the store contract.
 
 package verify
 
@@ -22,7 +31,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
@@ -32,7 +40,6 @@ import (
 // BootBaselineStorer, BootBaselineReader and AtomicBaselineStorer
 // against a shared Postgres database
 type PostgresBaselineStore struct {
-	mu sync.RWMutex
 	db *sql.DB
 }
 
@@ -52,9 +59,6 @@ func lockClient(ctx context.Context, tx *sql.Tx, clientID string) error {
 }
 
 func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashSize]byte) (TOFUResult, *ClientBaseline) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	now := time.Now()
 
@@ -159,9 +163,6 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	now := time.Now()
 
@@ -283,9 +284,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 }
 
 func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var storedPCR14 []byte
 	var firstSeen, lastSeen time.Time
 	var attestCount uint64
@@ -316,9 +314,6 @@ func (s *PostgresBaselineStore) GetBaseline(clientID string) *ClientBaseline {
 // A row whose boot columns are still NULL counts as "not enrolled"
 // and returns nil.
 func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var (
 		pcr0, pcr1, pcr7    []byte
 		bootFirst, bootLast sql.NullTime
@@ -354,20 +349,19 @@ func (s *PostgresBaselineStore) GetBootBaseline(clientID string) *BootBaseline {
 }
 
 func (s *PostgresBaselineStore) ClearBaseline(clientID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	_, err := s.db.Exec("DELETE FROM baselines WHERE client_id = $1", clientID)
 	return err
 }
 
 // SetClientTenant records the CA-assigned tenant on the baseline row
+// Called per verified report, so the UPDATE is conditional:
+// re-stamping tenant already in place matches no row and produces no WAL write,
+// and the follow-up existence probe is a plain read.
+// Only real tenant change pays for row rewrite.
 func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	res, err := s.db.Exec(
-		"UPDATE baselines SET tenant = $1 WHERE client_id = $2", tenant, clientID)
+		"UPDATE baselines SET tenant = $1 WHERE client_id = $2 AND tenant <> $1",
+		tenant, clientID)
 	if err != nil {
 		return fmt.Errorf("tenant UPDATE failed: %w", err)
 	}
@@ -376,7 +370,13 @@ func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("no baseline row for client %q", clientID)
+		var one int
+		err := s.db.QueryRow(
+			"SELECT 1 FROM baselines WHERE client_id = $1", clientID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("no baseline row for client %q", clientID)
+		}
+		return err
 	}
 	return nil
 }
@@ -384,9 +384,6 @@ func (s *PostgresBaselineStore) SetClientTenant(clientID, tenant string) error {
 // ClientTenant returns the recorded tenant.
 // Client without baseline row or with pre-tenancy row is in the default tenant.
 func (s *PostgresBaselineStore) ClientTenant(clientID string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var tenant string
 	err := s.db.QueryRow(
 		"SELECT tenant FROM baselines WHERE client_id = $1", clientID).Scan(&tenant)
@@ -403,9 +400,6 @@ func (s *PostgresBaselineStore) ClientTenant(clientID string) (string, error) {
 }
 
 func (s *PostgresBaselineStore) ListClients() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	rows, err := s.db.Query("SELECT client_id FROM baselines ORDER BY client_id")
 	if err != nil {
 		return nil
@@ -424,9 +418,6 @@ func (s *PostgresBaselineStore) ListClients() []string {
 }
 
 func (s *PostgresBaselineStore) Stats() BaselineStats {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	stats := BaselineStats{}
 
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM baselines").Scan(&stats.TotalClients); err != nil {
@@ -456,9 +447,6 @@ func (s *PostgresBaselineStore) Stats() BaselineStats {
 // TOFU-establish the firmware baseline on their next attestation rather than
 // being rejected.
 func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	now := time.Now()
 
@@ -572,9 +560,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	pcr14, agentHash [types.HashSize]byte,
 	boot *BootBaseline,
 ) AttestationOutcome {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	outcome := AttestationOutcome{BootProvided: boot != nil}
 
@@ -841,9 +826,6 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 // GetReanchorState implements ReanchorStorer for Postgres.
 // Present is true only when a boot baseline (PCR0/1/7) has been pinned for the client.
 func (s *PostgresBaselineStore) GetReanchorState(clientID string) ReanchorState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	ctx := context.Background()
 	var (
 		pcr0, pcr1, pcr7 []byte
@@ -895,9 +877,6 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	boot BootBaseline, eventLog []byte, esrtVersion uint32,
 	esrtCapable, lfa bool, reason string, now time.Time,
 ) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	now = now.UTC()
 
@@ -971,9 +950,6 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 	eventLog []byte, esrtVersion uint32, esrtPresent bool,
 ) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx := context.Background()
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE baselines SET eventlog_baseline = $1, esrt_version = $2,
@@ -987,8 +963,6 @@ func (s *PostgresBaselineStore) RecordBootEvidence(clientID string,
 // ListLFAReviewPending returns clients with an unreviewed LFA re-anchor
 // (Postgres).
 func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	rows, err := s.db.QueryContext(context.Background(),
 		"SELECT client_id FROM baselines WHERE lfa_review_pending = TRUE ORDER BY client_id")
 	if err != nil {
@@ -1007,8 +981,6 @@ func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
 
 // AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
 func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.ExecContext(context.Background(),
 		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
 	return err
