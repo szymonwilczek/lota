@@ -109,6 +109,45 @@ Any new attestation-log backend implements ``BatchRecorder`` so a batch
 costs one round trip; a backend that does not is still correct through the
 per-record fallback, only slower.
 
+Store sharding
+==============
+
+When a deployment runs with ``--pg-shard-dsn`` the per-client write stores
+are partitioned across N databases (``verify/shard.go``,
+``verify/shard_baseline.go``). The contract every shard router upholds:
+
+- **Shard by the operation's own key.** The baseline routes by client ID,
+  a nonce by its key, a session token by its bytes. No operation needs
+  data from two shards, so there is never a cross-shard transaction.
+- **Deterministic, process-independent routing.** The index is
+  ``FNV-1a(key) mod N``. Two verifier instances given the same shard list
+  in the same order route every key identically -- this is what preserves
+  replay protection (a nonce's Record and Contains hit one shard) and the
+  cross-instance session guarantee (a token issued on one instance
+  validates on another).
+- **Per-client atomicity is preserved.** A client's baseline lives on
+  exactly one shard, so the underlying store's atomic read-modify-write
+  (``AtomicBaselineStorer``) is unchanged; sharding never splits one
+  client's decision across databases.
+- **No silent capability loss.** ``ShardedBaselineStore`` reproduces the
+  full baseline capability set and asserts every shard provides it at
+  construction, so boot-PCR pinning, tenancy and re-anchor keep working
+  under sharding. A compile-time check pins that the wrapper satisfies the
+  set the verifier probes.
+- **The shard set is pinned, not assumed.** Routing is positional, so a
+  divergent list is a correctness bug an operator cannot see: it breaks
+  replay protection and cross-instance sessions for whichever clients it
+  moves. Each database mints a stable identity (``shard_identity``) and the
+  control database records the fingerprint of the ordered list
+  (``shard_set``, ``store/shard_identity.go``); a mismatch fails startup
+  closed. Identity is per database rather than per DSN because the same
+  database is reachable under different credentials, hostnames or a pooler,
+  and none of that changes routing.
+
+Fleet-global, read-mostly state (revocations, bans, audit, attestation
+log) is not sharded; it lives on the first shard, the control database.
+The operator-facing side is :doc:`../../operator/ha-deployment`.
+
 IPC token payload budget
 ========================
 
