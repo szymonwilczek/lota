@@ -38,7 +38,8 @@
  *   lota-agent reads it to anchor its derivations, and the verifier
  *   independently reconstructs it from the signed event log, so forged handoff
  *   cannot move trust - it only fails closed.
- *   On a legacy/BIOS host the baseline is 0^32 and behaviour is unchanged.
+ *   UEFI host that boots without shim measures nothing into PCR14, so its
+ *   baseline is legitimately 0^32.
  *
  * Idempotency
  *   The helper is safe to run multiple times within a single boot session.
@@ -85,7 +86,7 @@
 /*
  * Baseline handoff.
  * Helper records the PCR14 value it observed before its own extend
- * (0^32 on legacy/BIOS, the firmware/shim MOK measurement on UEFI Secure Boot)
+ * (the shim MOK measurement, or 0^32 where no shim measured PCR14)
  * here, on the /run tmpfs that persists across the initramfs -> rootfs switch.
  * lota-agent reads it (LOTA_PCR14_BASELINE_PATH in src/agent/tpm.h) so its
  * boot-commitment derivations anchor on the same baseline, and re-runs of this
@@ -93,6 +94,22 @@
  */
 #define BASELINE_DIR "/run/lota"
 #define BASELINE_PATH "/run/lota/pcr14_baseline"
+
+/*
+ * UEFI firmware path.
+ *
+ * efivarfs exists only when the kernel booted from UEFI firmware, so its absence
+ * is legacy BIOS/CSM boot. LOTA requires UEFI:
+ * Verifier refuses a report whose event log proves no UEFI firmware ran,
+ * and PCR 0/1/7 carry nothing on such host.
+ * Refusing here aborts the boot transition (the initramfs unit is ordered before
+ * initrd-root-fs.target) instead of handing the agent a chain that can never attest.
+ *
+ * Deliberately duplicated rather than shared with the agent's check:
+ * this helper is standalone initramfs binary that links only tss2 and OpenSSL,
+ * so it pulls in nothing from the agent's translation units.
+ */
+#define UEFI_FIRMWARE_PATH "/sys/firmware/efi"
 
 #ifndef LOTA_INITRAMFS_LOCK_NO_MAIN
 static const char *device_path(void)
@@ -145,9 +162,9 @@ int lota_initramfs_lock_commit(uint32_t reset_count, uint32_t restart_count,
 /*
  * extend_over - SHA256(base || commit), the PCR14 value after extending
  * commit on top of base.
- * base is the pre-extend PCR14 content: 0^32 on a legacy/BIOS host,
- * or the firmware/shim MOK measurement on UEFI Secure Boot.
- * PCR14 is not pristine on Secure Boot, so the lock cannot assume zero base;
+ * base is the pre-extend PCR14 content: the shim MOK measurement,
+ * or 0^32 on UEFI host whose boot chain never touched PCR14.
+ * PCR14 is not pristine behind shim, so the lock cannot assume zero base;
  * it folds whatever the firmware left into the chain.
  */
 static int extend_over(const uint8_t base[HASH_SIZE],
@@ -274,6 +291,15 @@ int main(int argc, char **argv)
 {
 	(void)argc;
 	(void)argv;
+
+	if (access(UEFI_FIRMWARE_PATH, F_OK) != 0) {
+		fprintf(stderr,
+			"lota-pcr14-lock: this host did not boot via UEFI (%s "
+			"absent); LOTA requires UEFI measured boot and refuses "
+			"to lock PCR14 on legacy BIOS/CSM\n",
+			UEFI_FIRMWARE_PATH);
+		return 13;
+	}
 
 	TSS2_TCTI_CONTEXT *tcti = NULL;
 	ESYS_CONTEXT *esys = NULL;
@@ -410,8 +436,7 @@ int main(int argc, char **argv)
 		/*
 		 * First run this boot.
 		 * Whatever PCR14 holds now is the pre-LOTA baseline:
-		 * 0^32 on a legacy/BIOS host, or the firmware/shim MOK measurement
-		 * on UEFI Secure Boot.
+		 * the shim MOK measurement, or 0^32 where no shim ran.
 		 * Persist it for lota-agent and for idempotent re-runs, then extend
 		 * the lock commitment on top.
 		 */

@@ -164,10 +164,21 @@ the initramfs handoff). The agent reads that file so its derivations anchor on
 the same baseline, and the verifier reconstructs the baseline independently by
 replaying the signed TPM event log -- the LOTA extends happen after
 ExitBootServices and never enter that log, so the log's PCR14 events are exactly
-the firmware/shim baseline. A legacy/BIOS host that never measures PCR14 sees a
-``0^32`` baseline and behaves as before. Because the verifier derives the
-baseline from the signed log, a forged ``/run`` handoff cannot move trust: it
-only makes the host fail closed.
+the firmware/shim baseline. A UEFI host that boots without shim measures nothing
+into PCR14, so its baseline is legitimately ``0^32`` and the chain anchors on
+zero. Because the verifier derives the baseline from the signed log, a forged
+``/run`` handoff cannot move trust: it only makes the host fail closed.
+
+Both halves of that chain are mandatory, and both refuse a non-UEFI host before
+touching the TPM: the initramfs helper exits non-zero (which aborts the boot
+transition, its unit is ordered before ``initrd-root-fs.target``) and the agent
+returns ``ENOTSUP`` from its self-measurement, each naming the absent
+``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
+:doc:`../platform-support`. If PCR14 still holds the bare baseline when the
+agent runs, the initramfs lock did not run: install the ``90lota`` dracut
+module, ``dracut -f --add lota``, and cold reboot. The agent refuses to extend
+a commitment onto an unlocked register, because the verifier validates only the
+lock-then-commit chain.
 
 A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
 baseline and therefore the final PCR14, so an enrolled host reports an

@@ -103,15 +103,21 @@ Firmware and boot
        initramfs, and the boot commitment is baseline-aware over it (see
        :doc:`production-bringup/ca-enrollment`). The verifier replays the TPM
        event log and establishes Secure Boot from the log rather than the
-       self-report.
+       self-report. A boot chain without shim (own PK/KEK/db, a directly signed
+       systemd-boot or UKI) measures nothing into PCR 14; the boot commitment
+       then chains onto a zero baseline, which is supported.
    * - UEFI without Secure Boot
      - The agent runs, but the firmware root of trust is weaker. Pass
        ``lockdown=integrity`` on the kernel command line so the BPF-load gate is
        satisfied (see :doc:`production-bringup/gate-matrix`).
-   * - Legacy BIOS
-     - The agent runs with a reduced PCR set: without shim there is no PCR 14
-       MOK baseline and no Secure Boot event-log evidence, so the boot
-       commitment starts from a zero baseline.
+   * - Legacy BIOS / CSM
+     - **Unsupported.** BIOS measures neither the firmware and Secure Boot
+       state the verifier pins nor an EFI variable the event log can carry, so
+       a BIOS host cannot produce the evidence an attestation is built from.
+       The installer refuses such a host, the initramfs helper refuses to lock
+       PCR 14 on it, the agent refuses to form a boot commitment, and the
+       verifier rejects the report. Switch the firmware out of legacy/CSM mode
+       and reinstall.
 
 TPM
 ===
