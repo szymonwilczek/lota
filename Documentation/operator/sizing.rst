@@ -40,11 +40,12 @@ A verifier deployment saturates at one of three points, in this order:
      - RSA/SHA-256 report verification with in-memory stores; scales
        with cores. Not the practical limit -- the database is.
    * - Postgres durable writes
-     - ~1 100 verified reports/s
-     - Each verified report commits several WAL-flushed writes
-       (attestation log, used nonce, baseline counters, session
-       token). This is a property of the Postgres host's fsync rate,
-       shared by every verifier instance on that database.
+     - ~1 100 verified reports/s or better
+     - Each verified report commits several WAL-flushed writes (used
+       nonce, baseline counters, session token). A property of the
+       Postgres host's fsync rate, shared by every verifier instance on
+       that database. Measured before the attestation-log write moved
+       off the hot path, so treat it as a conservative floor.
    * - Registration (first attest)
      - ~350/s per instance
      - A client's first attestation additionally inserts its AIK
@@ -90,15 +91,18 @@ Verifiers per Postgres
 
 Verifier instances are stateless against ``--pg-dsn``; add instances
 for availability and connection fan-out, not for write throughput --
-the WAL ceiling (~1 100 verified reports/s on the reference rig)
-belongs to the database host and is shared by all instances. Two
+the WAL ceiling (~1 100 verified reports/s on the reference rig, a
+conservative floor measured before the audit write was batched off the
+hot path) belongs to the database host and is shared by all instances. Two
 instances splitting a 10 000-agent fleet were soaked for 18 minutes
 with mid-load failovers (below); the topology and health checks are in
 :doc:`ha-deployment`.
 
-Each instance opens at most 20 Postgres connections, so ``N instances
-x 20`` must fit the server's ``max_connections`` alongside anything
-else using the database.
+Each instance opens up to ``--pg-max-open-conns`` connections per
+database (default 20), so ``N instances x pool`` must fit the server's
+``max_connections`` alongside anything else using it -- and every shard
+that shares a server counts. Widening the pool lifts enrollment bursts
+(see below); raise ``max_connections`` with it.
 
 To raise a *single* database's write ceiling, tune the database, not the
 verifier count: faster fsync (NVMe, battery-backed cache),
