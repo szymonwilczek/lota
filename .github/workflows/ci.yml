@@ -312,6 +312,7 @@ jobs:
             scripts/lota-proton-hook \
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
+            scripts/check-license-boundary.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
             examples/demo/demo_tamper.sh \
@@ -333,6 +334,18 @@ jobs:
 
       - name: Compare the two package manifests
         run: make check-package-manifests
+
+  license-boundary:
+    name: license-boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the license boundary
+        run: make check-license-boundary
 
   yamllint:
     name: yamllint

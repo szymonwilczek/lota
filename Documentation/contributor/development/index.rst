@@ -27,6 +27,8 @@ Contents
   device/inode identity in the kernel programs.
 * :doc:`Cross-component contracts <contracts>` -- wire-format, store-migration,
   and installer-probe surfaces two components must keep in sync.
+* :doc:`The license boundary <license-boundary>` -- which zone each path
+  belongs to, and the one-way dependency rule the gate enforces.
 
 .. toctree::
    :hidden:
@@ -38,3 +40,4 @@ Contents
    release-flow
    bpf-coding
    contracts
+   license-boundary
