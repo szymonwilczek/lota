@@ -194,12 +194,59 @@ Scaling note
 
 Per-attestation verification (``VerifyToken`` / RSASSA verify) has no shared
 state, so it scales linearly across cores: ~41 k/sec/core x 16 cores giving
-about **~660 k attestations/sec** on this host, crypto-bound. The sqlite store
-serialises writes, so registration (enrollment commit) does **not** scale the
-same way -- it is gated by the DB write lock, not the CPU.
+about **~660 k attestations/sec** on this host, crypto-bound. Writes are the
+tier that does not scale with cores, and which backend bounds them differs:
+SQLite's single-writer model serialises every write in one file -- a property
+of that backend, suited to single-node deployments -- while the Postgres
+backend (``--pg-dsn``) commits independent clients concurrently under
+per-client advisory locks and is bounded by the database host's WAL fsync
+rate (measured below). The verifier itself holds no process-wide lock on the
+attestation path; the store-concurrency contract that keeps it that way is
+in the contributor documentation.
 
-L2 / L3 (TBA)
-=============
+L2 fleet scale (synthetic, measured)
+====================================
+
+Measured with :doc:`lota-loadgen <load-testing>` on the L1 host (8c/16t
+Ryzen 7 5700X, NVMe, Postgres 16 in a local container, TLS loopback),
+10 000-agent rig, production verifier configuration (certificate chain,
+strict policy):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 44 16 16 24
+
+   * - Run
+     - Rate
+     - p99
+     - Notes
+   * - Storm, in-memory/file stores
+     - 3 854/s
+     - 62 ms
+     - crypto tier; not the bottleneck
+   * - Storm, Postgres, first attest
+     - 350/s
+     - 843 ms
+     - registration commit per agent
+   * - Storm, Postgres, re-attest
+     - 1 124/s
+     - 260 ms
+     - WAL-fsync bound
+   * - Steady 10k @ 60 s, Postgres
+     - 166.6/s
+     - 931 ms
+     - 3 min; 29 998/29 998 verified, 0 timeouts
+
+An 18-minute dual-instance soak (2 x 5 000 agents at 60 s, one shared
+Postgres) held the same rate through a ``kill -9`` of one instance
+(only its agents affected; recovered next interval; 20/20 of its
+session tokens validated on the survivor) and a ~2 s Postgres restart
+(fail-closed rejections inside the window only; all 10 000
+registrations intact). Operator-facing conclusions from these runs are
+in :doc:`the sizing guide <../operator/sizing>`.
+
+L2 swtpm / L3 kernel (TBA)
+==========================
 
 * **L2 macro (swtpm):** ``--attest`` round-trip and enrollment ceremony
   wall-clock with ``hyperfine``. Includes the real TPM quote, IPC, and TLS --
