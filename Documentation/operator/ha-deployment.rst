@@ -73,8 +73,20 @@ Shared-state requirements
 
 * **One Postgres database, reachable from every instance.** Use TLS to the
   database (``sslmode=verify-full`` in the DSN) and a dedicated least-privilege
-  role. Each instance opens its own connection pool; size Postgres
-  ``max_connections`` for the instance count times the per-instance pool.
+  role. Each instance opens its own connection pool (``--pg-max-open-conns``,
+  default 20); size Postgres ``max_connections`` for the instance count times
+  the per-instance pool. Postgres group-commits concurrent transactions, so a
+  wider pool raises **enrollment-burst** throughput -- a fleet-wide first-boot
+  or game-launch storm enrolls faster with a larger pool -- up to the
+  ``max_connections`` budget. Raise the pool and ``max_connections`` together;
+  never let ``instances x pool`` exceed ``max_connections``. PostgreSQL ships
+  with ``max_connections = 100``, so the stock server is already short for two
+  instances at a raised pool: budget it before tuning, and count every shard
+  that shares a server. The verifier reads the server's ``max_connections`` at
+  startup and warns when the configured pool exceeds it, or leaves no room for
+  a second instance. The warning is advisory -- behind a connection pooler the
+  backend's limit is not the one that applies -- but a pool below 1 is refused
+  outright, since ``database/sql`` reads 0 as *unlimited*.
 * **Schema migrations are safe to race.** Every instance runs migrations at
   startup under a Postgres advisory lock, so the schema is created exactly once
   regardless of start order.
