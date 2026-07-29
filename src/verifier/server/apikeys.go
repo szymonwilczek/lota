@@ -18,7 +18,10 @@
 // Only the SHA-256 of each key is stored, never the key itself.
 // The file is reloaded on SIGHUP; file that fails to parse or validate leaves
 // the previously loaded set in place.
-// Environment keys keep working and stay global-scope for backwards compatibility.
+// Environment keys are the development default and are deliberately global-scope:
+// they carry no tenant list, so principal authenticated by one is scoped to every tenant.
+// Deployment that needs per-tenant scoping configures the key file, which is
+// the only way to express it.
 
 package server
 
