@@ -137,7 +137,14 @@ func enrollClient(t *testing.T, addr string, pool *x509.CertPool, ek tpmtest.EK,
 		secret = tpmtest.SoftwareActivate(t, ek.Priv, aikName, challenge.CredentialBlob, challenge.EncryptedSecret)
 	}
 
-	completeBody, err := wire.EncodeComplete(&wire.CompleteRequest{SessionID: challenge.SessionID, Secret: secret})
+	// real agent names its version on every frame
+	// (see enroll_encode_complete in src/agent/enroll.c),
+	// so the test client does the same rather than leaving the field unset
+	completeBody, err := wire.EncodeComplete(&wire.CompleteRequest{
+		SessionID: challenge.SessionID,
+		Secret:    secret,
+		Version:   wire.Version1,
+	})
 	if err != nil {
 		t.Fatalf("EncodeComplete: %v", err)
 	}

@@ -150,7 +150,12 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 	    token_len > LOTA_ENROLL_MAX_TOKEN)
 		return -EMSGSIZE;
 
-	/* a token-less request stays version 1 so old CA accepts it */
+	/*
+	 * token is what the two frame versions differ by:
+	 * untenanted request carries none and is version 1,
+	 * tenant request carries one and is version 2.
+	 * Both are current modes.
+	 */
 	ret = wr_preamble(&w, token_len > 0 ? LOTA_ENROLL_VERSION_TOKEN :
 					      LOTA_ENROLL_VERSION);
 	if (ret < 0)
