@@ -1,9 +1,9 @@
 # Continuously validate the packaging artifacts:
-# build the RPMs in Fedora chroot, lint and schema-check the Helm chart,
-# and build the container images locally (no registry push, no signing).
+# build the RPMs in Fedora chroot, build + install them on Rocky 9, lint
+# and schema-check the Helm chart, and build the container images locally
+# (no registry push, no signing).
+#
 # Signed, published variants run from the Release workflow on a tag.
-# This job needs the packaging make targets (packages, helm-lint, helm-template,
-# container-images), so it lands with the branches that add them.
 name: Packages
 
 on:
@@ -15,6 +15,7 @@ on:
       - 'Makefile'
       - 'src/**'
       - 'include/**'
+      - 'scripts/rhel-package-smoke.sh'
       - '.github/workflows/packages.yml'
   push:
     branches:
@@ -70,6 +71,29 @@ jobs:
         with:
           name: rpms
           path: build/packages/*.rpm
+
+  rhel-smoke:
+    name: build + install RPMs (Rocky 9)
+    runs-on: ubuntu-24.04
+    container:
+      image: quay.io/rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
+    steps:
+      - name: Install git for checkout
+        run: dnf -y install git tar
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build, install and smoke the RPMs on el9
+        env:
+          LOTA_SMOKE_IN_CONTAINER: '1'
+          LOTA_SMOKE_SRC: ${{ github.workspace }}
+        run: sh scripts/rhel-package-smoke.sh
 
   helm:
     name: lint Helm chart
