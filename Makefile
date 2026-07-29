@@ -538,6 +538,14 @@ packages: all selinux-pp
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
 
+# RHEL-family (Rocky 9 / el9) package build + install smoke.
+# Spawns rockylinux:9 podman container, builds RPMs off clean archive of HEAD,
+# installs agent+verifier+attest-ca and checks the binaries run and the units ship.
+# No attestation: container has no boot-measured trust chain.
+.PHONY: rhel-package-smoke
+rhel-package-smoke:
+	$(Q)scripts/rhel-package-smoke.sh
+
 # Container images (OCI, built with ko -> distroless static, no Docker daemon)
 # KO_DOCKER_REPO is the destination registry prefix
 # -B names the images <repo>/verifier and <repo>/attestca after the base of each import path.
@@ -1504,6 +1512,7 @@ help:
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
