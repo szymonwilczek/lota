@@ -141,8 +141,8 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 type principalCtxKey struct{}
 
 // requestPrincipal returns the authenticated principal of a request.
-// nil means the endpoint was served without authentication (loopback
-// dev default) and scopes as every-tenant for backwards compatibility.
+// nil means the endpoint was served without authentication
+// -- the loopback development default -- and scopes as every-tenant
 func requestPrincipal(r *http.Request) *Principal {
 	if p, ok := r.Context().Value(principalCtxKey{}).(*Principal); ok {
 		return p
@@ -190,7 +190,7 @@ func (h *APIHandler) scopedKeySet() *APIKeySet {
 }
 
 // resolvePrincipal authenticates bearer token against the env keys
-// (global scope, back-compat) and the scoped key file.
+// (global scope by design, the dev default) and the scoped key file.
 func (h *APIHandler) resolvePrincipal(token string) *Principal {
 	if h.adminAPIKey != "" && tokenMatchesHash(token, h.adminKeyHash) {
 		return &Principal{Role: RoleAdmin, AllTenants: true}
