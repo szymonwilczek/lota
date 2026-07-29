@@ -167,30 +167,11 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 		copy(stored[:], storedAgentHash)
 	}
 
-	if !hasStored {
-		// Legacy row from a pre-FlagBootCommitment attestation: the
-		// PCR14 baseline is pinned but agent_hash is NULL. Record the
-		// incoming hash so future rounds can verify it, but report the
-		// transition as TOFULegacyBackfill so the caller can audit
-		// (and, when configured, reject) the implicit trust upgrade.
-		newCount := attestCount + 1
-		if _, err := s.db.Exec(
-			"UPDATE baselines SET agent_hash = ?, last_seen = ?, attest_count = ? WHERE client_id = ?",
-			agentHash[:], now.UTC(), newCount, clientID,
-		); err != nil {
-			slog.Error("agent_hash backfill failed", "client_id", clientID, "error", err)
-			return TOFUError, nil
-		}
-		return TOFULegacyBackfill, &ClientBaseline{
-			PCR14:       pcr14,
-			AgentHash:   agentHash,
-			FirstSeen:   firstSeen,
-			LastSeen:    now,
-			AttestCount: newCount,
-		}
-	}
-
-	if stored != agentHash {
+	// NULL agent_hash can only come from an out-of-band PCR14 pin:
+	// every attestation writes the column
+	// Such a row is refused with the stored (zero) hash rather than
+	// adopting the incoming one
+	if !hasStored || stored != agentHash {
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   stored,
@@ -626,9 +607,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	switch {
-	case !hasStored:
-		outcome.AgentHashResult = TOFULegacyBackfill
-	case stored != agentHash:
+	case !hasStored || stored != agentHash:
 		// mismatch terminates the transaction without writes.
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &ClientBaseline{

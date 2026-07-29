@@ -450,17 +450,6 @@ const (
 
 	// Database or store error - must not be treated as first use
 	TOFUError
-
-	// TOFULegacyBackfill is returned by CheckAndUpdateAgentHash when a
-	// pre-existing baseline row carries no pinned agent_hash and the
-	// store accepts the incoming value as the canonical one. The
-	// transition can only happen once per client (subsequent rounds
-	// take the TOFUMatch / TOFUMismatch branch), but the row is
-	// indistinguishable from a real first-use after the write, so the
-	// verifier surfaces a security event and operators can opt to
-	// refuse the implicit trust upgrade via
-	// VerifierConfig.RejectLegacyBaselines.
-	TOFULegacyBackfill
 )
 
 // performs TOFU validation for PCR 14
@@ -730,20 +719,10 @@ func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 		return TOFUFirstUse, &out
 	}
 
-	var zero [types.HashSize]byte
-	if existing.AgentHash == zero {
-		// Legacy row from a pre-FlagBootCommitment attestation: the
-		// PCR14 baseline is pinned but agent_hash is not. Record the
-		// incoming hash so future rounds can verify it, but report the
-		// transition as TOFULegacyBackfill so the caller can audit
-		// (and, when configured, reject) the implicit trust upgrade.
-		existing.AgentHash = agentHash
-		existing.LastSeen = now
-		existing.AttestCount++
-		out := *existing
-		return TOFULegacyBackfill, &out
-	}
-
+	// row without a pinned agent_hash can only come from out-of-band PCR14 pin:
+	// every attestation writes the hash.
+	// Mismatch branch below therefore also covers it -- the verifier does not
+	// adopt whichever hash happens to arrive first.
 	if existing.AgentHash != agentHash {
 		out := *existing
 		return TOFUMismatch, &out
@@ -833,11 +812,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		return outcome
 	}
 
-	var zero [types.HashSize]byte
 	switch {
-	case existing.AgentHash == zero:
-		// legacy row backfill - tentative until the boot decision below.
-		outcome.AgentHashResult = TOFULegacyBackfill
 	case existing.AgentHash != agentHash:
 		// agent_hash mismatch terminates the transaction: leave the row
 		// untouched and return the stored snapshot for security logging.
@@ -874,9 +849,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	// --- commit phase: both components passed ---
-	if outcome.AgentHashResult == TOFULegacyBackfill {
-		existing.AgentHash = agentHash
-	}
 	existing.LastSeen = now
 	existing.AttestCount++
 	snap := *existing

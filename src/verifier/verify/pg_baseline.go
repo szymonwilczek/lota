@@ -229,30 +229,11 @@ func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 		copy(stored[:], storedAgentHash)
 	}
 
-	if !hasStored {
-		newCount := attestCount + 1
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE baselines SET agent_hash = $1, last_seen = $2, attest_count = $3 WHERE client_id = $4",
-			agentHash[:], now.UTC(), newCount, clientID,
-		); err != nil {
-			slog.Error("agent_hash backfill failed", "client_id", clientID, "error", err)
-			return TOFUError, nil
-		}
-		if err := tx.Commit(); err != nil {
-			slog.Error("agent_hash backfill commit failed", "client_id", clientID, "error", err)
-			return TOFUError, nil
-		}
-		committed = true
-		return TOFULegacyBackfill, &ClientBaseline{
-			PCR14:       pcr14,
-			AgentHash:   agentHash,
-			FirstSeen:   firstSeen,
-			LastSeen:    now,
-			AttestCount: newCount,
-		}
-	}
-
-	if stored != agentHash {
+	// NULL agent_hash can only come from an out-of-band PCR14 pin:
+	// every attestation writes the column
+	// Such row is refused with the stored (zero) hash rather than
+	// adopting the incoming one
+	if !hasStored || stored != agentHash {
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   stored,
@@ -684,9 +665,7 @@ func (s *PostgresBaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	switch {
-	case !hasStored:
-		outcome.AgentHashResult = TOFULegacyBackfill
-	case stored != agentHash:
+	case !hasStored || stored != agentHash:
 		// mismatch terminates the transaction without writes
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &ClientBaseline{

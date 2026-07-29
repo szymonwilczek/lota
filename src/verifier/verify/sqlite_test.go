@@ -258,13 +258,11 @@ func TestSQLiteBaseline_Persistence(t *testing.T) {
 	t.Log("✓ Baseline and counters persist across instances")
 }
 
-// TestSQLiteBaseline_LegacyBackfillSignal exercises the pre-FlagBootCommitment
-// migration path: a baseline row that was inserted by CheckAndUpdate (pre-v4
-// schema, no agent_hash column populated) must surface a TOFULegacyBackfill
-// signal the first time CheckAndUpdateAgentHash sees it, so the verifier can
-// audit and optionally reject the implicit trust upgrade. Subsequent rounds
-// must take the TOFUMatch branch.
-func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
+// TestSQLiteBaseline_RefusesUnpinnedRow mirrors the in-memory case on the SQL store:
+// a baselines row whose agent_hash column is NULL
+// (only an out-of-band CheckAndUpdate can produce one)
+// is refused instead of being backfilled with the hash the report happens to carry
+func TestSQLiteBaseline_RefusesUnpinnedRow(t *testing.T) {
 	db, err := store.OpenDB(":memory:")
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
@@ -274,7 +272,7 @@ func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
 	bs := NewSQLiteBaselineStore(db)
 
 	pcr14 := [types.HashSize]byte{0xAA, 0xBB, 0xCC}
-	if r, _ := bs.CheckAndUpdate("legacy-sqlite", pcr14); r != TOFUFirstUse {
+	if r, _ := bs.CheckAndUpdate("unpinned-sqlite", pcr14); r != TOFUFirstUse {
 		t.Fatalf("CheckAndUpdate seeding: expected TOFUFirstUse, got %v", r)
 	}
 
@@ -283,28 +281,17 @@ func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
 		agentHash[i] = 0x99
 	}
 
-	r1, snap := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, agentHash)
-	if r1 != TOFULegacyBackfill {
-		t.Fatalf("first agent_hash on legacy row: expected TOFULegacyBackfill, got %v", r1)
+	r1, snap := bs.CheckAndUpdateAgentHash("unpinned-sqlite", pcr14, agentHash)
+	if r1 != TOFUMismatch {
+		t.Fatalf("NULL agent_hash row: expected TOFUMismatch, got %v", r1)
 	}
-	if snap == nil || snap.AgentHash != agentHash {
-		t.Fatalf("returned snapshot must carry the freshly pinned agent_hash")
-	}
-
-	r2, _ := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, agentHash)
-	if r2 != TOFUMatch {
-		t.Fatalf("second round on backfilled row: expected TOFUMatch, got %v", r2)
+	var zero [types.HashSize]byte
+	if snap == nil || snap.AgentHash != zero {
+		t.Fatalf("refused round must not pin the incoming agent_hash")
 	}
 
-	// distinct agent_hash on a backfilled row must now mismatch, not
-	// reopen the backfill window.
-	var rogue [types.HashSize]byte
-	for i := range rogue {
-		rogue[i] = 0x77
-	}
-	r3, _ := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, rogue)
-	if r3 != TOFUMismatch {
-		t.Fatalf("post-backfill drift: expected TOFUMismatch, got %v", r3)
+	if r2, _ := bs.CheckAndUpdateAgentHash("unpinned-sqlite", pcr14, agentHash); r2 != TOFUMismatch {
+		t.Fatalf("second round: expected TOFUMismatch, got %v", r2)
 	}
 }
 

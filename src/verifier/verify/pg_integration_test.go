@@ -74,12 +74,13 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 		t.Fatal("GetBootBaseline")
 	}
 
-	// legacy backfill: PCR14-only row then agent_hash pin
+	// PCR14-only row carries no agent_hash pin,
+	// so the store refuses it instead of adopting the incoming hash
 	if r, _ := s.CheckAndUpdate("leg", fill(0x14)); r != TOFUFirstUse {
 		t.Fatal("PCR14 first use")
 	}
-	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFULegacyBackfill {
-		t.Fatalf("legacy backfill: got %v", r)
+	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFUMismatch {
+		t.Fatalf("unpinned row: got %v", r)
 	}
 }
 

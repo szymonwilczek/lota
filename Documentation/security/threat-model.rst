@@ -194,6 +194,10 @@ Active threats
          refuses a ``require_secureboot`` policy with empty ``agent_hashes``
          (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
          is set.
+       | The per-device pin is established once, on the client's first
+         attestation, and never re-opened: a stored baseline whose
+         ``agent_hash`` is absent is refused rather than adopted from the
+         report presenting it.
        | Official hash comes from the reproducible signed release.
      - Without a pinned ``agent_hash``, a first-use modified agent would TOFU its
        own hash and attest while skipping enforcement. Operator must populate

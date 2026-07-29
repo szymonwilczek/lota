@@ -131,7 +131,6 @@ type Verifier struct {
 	// policy enforcement
 	requireEventLog       bool
 	requireBootEnrollment bool
-	rejectLegacyBaselines bool
 	selfServiceReanchor   bool
 	maxRestartCountSkew   uint32
 }
@@ -234,18 +233,6 @@ type VerifierConfig struct {
 	// must set this to false explicitly.
 	RequireBootEnrollment bool
 
-	// RejectLegacyBaselines refuses any attestation whose
-	// CheckAndUpdateAgentHash result is TOFULegacyBackfill. The
-	// backfill branch fires once per client - when a baseline row
-	// was pinned before FlagBootCommitment existed and the current
-	// quote is the first to carry an agent_hash. An attacker that
-	// swapped the agent binary on a legacy host across two
-	// attestations would otherwise pin arbitrary bytes as the
-	// canonical hash. Default false keeps existing pre-v1.0
-	// fleets attestable; production deployments past their rollout
-	// grace period should set it to true.
-	RejectLegacyBaselines bool
-
 	// EnableSelfServiceReanchor turns on self-service re-anchor:
 	// on a firmware/Secure Boot PCR drift the verifier may re-pin the
 	// per-device boot baseline itself when the drift preserves the Secure Boot
@@ -339,7 +326,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		sessionTokenLife:      cfg.SessionTokenLife,
 		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
-		rejectLegacyBaselines: cfg.RejectLegacyBaselines,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
@@ -878,23 +864,6 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	case TOFUFirstUse:
 		clog.Info("TOFU: agent_hash baseline established",
 			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
-	case TOFULegacyBackfill:
-		if v.rejectLegacyBaselines {
-			logging.Security(clog, "rejected legacy baseline agent_hash backfill",
-				"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
-				"hint", "remove --reject-legacy-baselines or clear the stale baseline row to allow this client through")
-			v.metrics.Rejections.Inc("integrity_mismatch")
-			result.Result = types.VerifyIntegrityMismatch
-			return result, errors.New("FAIL_INTEGRITY_MISMATCH: legacy baseline backfill refused by policy")
-		}
-		attestCount := uint64(0)
-		if outcome.AgentHashBaseline != nil {
-			attestCount = outcome.AgentHashBaseline.AttestCount
-		}
-		logging.Security(clog, "legacy baseline agent_hash backfilled",
-			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
-			"attest_count", attestCount,
-			"hint", "set RejectLegacyBaselines once the fleet rollout window has closed to refuse this branch")
 	case TOFUMatch:
 		if outcome.AgentHashBaseline != nil {
 			clog.Debug("agent_hash matches baseline",

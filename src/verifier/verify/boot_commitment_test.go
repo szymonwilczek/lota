@@ -154,7 +154,12 @@ func TestAgentHashStore_MemoryFirstUseAndMatch(t *testing.T) {
 	}
 }
 
-func TestAgentHashStore_MemoryBackfillsLegacyRow(t *testing.T) {
+// TestAgentHashStore_MemoryRefusesUnpinnedRow covers a row that carries PCR14
+// pin but no agent_hash.
+// No attestation creates one -- every attestation writes the hash -- so it can
+// only come from an out-of-band PCR14 pin, and the store refuses rather than
+// adopting whichever hash arrives first.
+func TestAgentHashStore_MemoryRefusesUnpinnedRow(t *testing.T) {
 	bs := NewBaselineStore()
 
 	var pcr14, agentHash [types.HashSize]byte
@@ -165,22 +170,23 @@ func TestAgentHashStore_MemoryBackfillsLegacyRow(t *testing.T) {
 		agentHash[i] = 0x44
 	}
 
-	// simulate a legacy row created by CheckAndUpdate() with no AgentHash
-	bs.CheckAndUpdate("legacy", pcr14)
+	// row created by CheckAndUpdate() carries no AgentHash
+	bs.CheckAndUpdate("unpinned", pcr14)
 
-	res, snap := bs.CheckAndUpdateAgentHash("legacy", pcr14, agentHash)
-	if res != TOFULegacyBackfill {
-		t.Fatalf("legacy row must report TOFULegacyBackfill on first agent_hash, got %v", res)
+	res, snap := bs.CheckAndUpdateAgentHash("unpinned", pcr14, agentHash)
+	if res != TOFUMismatch {
+		t.Fatalf("row without a pinned agent_hash must mismatch, got %v", res)
 	}
-	if snap.AgentHash != agentHash {
-		t.Fatalf("backfilled agent_hash mismatch: got %x", snap.AgentHash)
+	var zero [types.HashSize]byte
+	if snap.AgentHash != zero {
+		t.Fatalf("refused round must not pin the incoming hash, got %x", snap.AgentHash)
 	}
 
-	// subsequent rounds must take the regular match branch, not another
-	// backfill, so the audit signal fires exactly once per client.
-	res2, _ := bs.CheckAndUpdateAgentHash("legacy", pcr14, agentHash)
-	if res2 != TOFUMatch {
-		t.Fatalf("second round must return TOFUMatch, got %v", res2)
+	// refusal is stable:
+	// nothing was written, so retry mismatches again instead of finding
+	// freshly adopted hash
+	if res2, _ := bs.CheckAndUpdateAgentHash("unpinned", pcr14, agentHash); res2 != TOFUMismatch {
+		t.Fatalf("second round must stay TOFUMismatch, got %v", res2)
 	}
 }
 

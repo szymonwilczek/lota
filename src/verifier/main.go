@@ -98,7 +98,6 @@ var (
 	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert and selects the certificate-verifying AIK store. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a certificate-verifying AIK store cannot attest any client)")
 	allowTOFUBoot       = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
 	maxRestartSkew      = flag.Uint("max-restart-count-skew", 64, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required. The default of 64 covers laptop suspend/resume cadences past any realistic operator interval; raising it grows the matcher's brute-force surface linearly without buying additional uptime.")
-	rejectLegacyBase    = flag.Bool("reject-legacy-baselines", false, "Reject attestations whose stored baseline row pre-dates FlagBootCommitment and would be silently backfilled with the current agent_hash. Enable once the agent rollout grace period has closed.")
 	selfServiceReanchor = flag.Bool("enable-self-service-reanchor", false, "Diverse-fleet only: on a firmware/Secure Boot PCR drift, let the verifier re-pin the per-device boot baseline itself when the drift preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only takes effect under a policy with require_secureboot; leave off for the enterprise profile.")
 	allowPermissive     = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	allowUnpinnedAgent  = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
@@ -252,10 +251,6 @@ func main() {
 		logger.Error("--max-restart-count-skew exceeds uint32 range",
 			"value", skew, "max", uint64(math.MaxUint32))
 		os.Exit(1)
-	}
-	verifierCfg.RejectLegacyBaselines = *rejectLegacyBase
-	if *rejectLegacyBase {
-		logger.Info("rejecting legacy baseline agent_hash backfills")
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
 	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
