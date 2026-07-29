@@ -148,6 +148,30 @@ Fleet-global, read-mostly state (revocations, bans, audit, attestation
 log) is not sharded; it lives on the first shard, the control database.
 The operator-facing side is :doc:`../../operator/ha-deployment`.
 
+Connection pool and group commit
+================================
+
+Postgres commits concurrent transactions in a single WAL fsync (group
+commit), so the per-instance connection pool ceiling
+(``--pg-max-open-conns``, ``store.DefaultPGMaxOpenConns``) is not just a
+resource cap -- it bounds how many enrollment/attestation writes coalesce
+per fsync. A wider pool therefore lifts burst throughput until it reaches
+the database's ``max_connections``, which is shared by every instance's
+pool (and every shard's, since each shard is a separate database). The
+default stays conservative (20) so an untuned multi-instance deployment
+cannot exhaust ``max_connections``; raising it is an operator trade against
+that budget, documented in :doc:`../../operator/ha-deployment`.
+
+The value is validated rather than trusted. A pool below 1 is refused at
+startup: ``database/sql`` reads 0 as *unlimited*, and the store's own
+non-positive fallback would otherwise hand back the default without the
+operator knowing. Against the server, ``store.ServerMaxConnections``
+reports the budget and the verifier warns when the pool exceeds it or
+leaves no room for a second instance. Those comparisons stay advisory, and
+an unreadable setting is treated as unknown: behind a connection pooler the
+backend's ``max_connections`` is not the limit that applies, so failing
+closed on it would refuse a legitimate topology.
+
 IPC token payload budget
 ========================
 

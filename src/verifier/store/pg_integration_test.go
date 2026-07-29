@@ -49,6 +49,43 @@ func pgTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestPostgresDBPoolCeiling(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+
+	// explicit ceiling is applied to the pool
+	db, err := OpenPostgresDBPool(dsn, 64)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool: %v", err)
+	}
+	defer db.Close()
+	if got := db.Stats().MaxOpenConnections; got != 64 {
+		t.Fatalf("MaxOpenConnections = %d, want 64", got)
+	}
+
+	// non-positive ceiling falls back to the default
+	dbDefault, err := OpenPostgresDBPool(dsn, 0)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool(0): %v", err)
+	}
+	defer dbDefault.Close()
+	if got := dbDefault.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("default MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
+
+	// plain constructor uses the default too
+	dbPlain, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	defer dbPlain.Close()
+	if got := dbPlain.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("OpenPostgresDB MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
+}
+
 func TestPostgresMigrationsIdempotent(t *testing.T) {
 	db := pgTestDB(t)
 	// second open over the same database must be a no-op
@@ -367,5 +404,28 @@ func TestPostgresAssertShardSet(t *testing.T) {
 	}
 	if err := AssertShardSet(ctx, db, []string{"shard-a", "shard-b"}); err != nil {
 		t.Fatalf("re-pin after clearing: %v", err)
+	}
+}
+
+// ServerMaxConnections reads the budget every instance's pool draws from,
+// so the verifier can tell operator that raised pool is already over it
+func TestPostgresServerMaxConnections(t *testing.T) {
+	db := pgTestDB(t)
+
+	got, err := ServerMaxConnections(db)
+	if err != nil {
+		t.Fatalf("ServerMaxConnections: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("max_connections = %d, want a positive setting", got)
+	}
+
+	// cross-check against the server's own view
+	var want int
+	if err := db.QueryRow("SHOW max_connections").Scan(&want); err != nil {
+		t.Fatalf("SHOW max_connections: %v", err)
+	}
+	if got != want {
+		t.Errorf("ServerMaxConnections = %d, server reports %d", got, want)
 	}
 }

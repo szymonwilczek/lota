@@ -107,6 +107,7 @@ var (
 	ekCRLsDeprecated     stringSliceFlag
 	pgShardDSNs          stringSliceFlag
 	pgDSN                = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. Mutually exclusive with --db.")
+	pgMaxOpenConns       = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
 	nonceDBPath          = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
 	scopedKeysFile       = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
 	allowMemNonces       = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
@@ -236,6 +237,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// mistyped pool is a silent misconfiguration otherwise:
+	// database/sql reads 0 as "unlimited" and the store's own fallback would
+	// quietly hand back the default, so neither reaches the operator
+	if usePostgres && *pgMaxOpenConns < 1 {
+		logger.Error("--pg-max-open-conns must be at least 1",
+			"value", *pgMaxOpenConns,
+			"hint", fmt.Sprintf("omit the flag for the default of %d", store.DefaultPGMaxOpenConns))
+		os.Exit(1)
+	}
+
 	if usePostgres {
 		// Postgres backend: shared, multi-instance state for deployments
 		// behind a load balancer.
@@ -255,10 +266,28 @@ func main() {
 		}
 		dbs := make([]*sql.DB, 0, len(shardDSNs))
 		for i, d := range shardDSNs {
-			sdb, err := store.OpenPostgresDB(d)
+			sdb, err := store.OpenPostgresDBPool(d, *pgMaxOpenConns)
 			if err != nil {
 				logger.Error("failed to open Postgres database", "shard", i, "error", err)
 				os.Exit(1)
+			}
+
+			// max_connections is the budget every instance's pool draws from,
+			// so pool sized against it alone is already over budget for the second
+			// instance.
+			// Advisory, not fatal: behind connection pooler the backend limit is not
+			// the one that applies
+			if serverMax, err := store.ServerMaxConnections(sdb); err != nil {
+				logger.Debug("could not read the database's max_connections",
+					"shard", i, "error", err)
+			} else if *pgMaxOpenConns > serverMax {
+				logger.Warn("connection pool exceeds the database's max_connections",
+					"shard", i, "pool", *pgMaxOpenConns, "max_connections", serverMax,
+					"hint", "this instance alone cannot open its pool; lower --pg-max-open-conns or raise max_connections")
+			} else if *pgMaxOpenConns > serverMax/2 {
+				logger.Warn("connection pool leaves no room for a second instance",
+					"shard", i, "pool", *pgMaxOpenConns, "max_connections", serverMax,
+					"hint", "instances times pool must stay under max_connections")
 			}
 			dbs = append(dbs, sdb)
 		}
