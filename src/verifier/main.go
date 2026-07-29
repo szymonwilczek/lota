@@ -16,6 +16,8 @@
 //                      (or LOTA_PG_DSN); mutually exclusive with --db
 //   --policy FILE      PCR policy file (YAML)
 //   --policy-pubkey FILE Ed25519 public key for policy signature verification
+//   --max-connections N Max concurrent attestation connections (default: 256;
+//                      -1 disables the cap)
 
 // Environment variables:
 //   LOTA_ADMIN_API_KEY  API key for admin endpoints (revoke, ban); required for mutation
@@ -73,7 +75,9 @@ func (s *stringSliceFlag) Set(v string) error {
 }
 
 var (
-	addr         = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
+	addr           = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
+	maxConnections = flag.Int("max-connections", server.DefaultMaxConnections,
+		"Maximum concurrent attestation connections. Each one costs a TLS handshake and a full report verification, so this bounds what a client stampede can spend; connections past the cap are refused at accept. -1 disables the cap (load rigs only).")
 	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
@@ -448,6 +452,7 @@ func main() {
 		ScopedKeysFile: *scopedKeysFile,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
+		MaxConnections: *maxConnections,
 	}
 
 	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {
