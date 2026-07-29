@@ -240,7 +240,9 @@ func main() {
 		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
 		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
 
-		attestLog = store.NewPostgresAttestationLog(db)
+		attestLog = store.NewBatchedAttestationLog(
+			store.NewPostgresAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger})
 		verifierCfg.AttestationLog = attestLog
 
 		// AIK store: certificate-backed when the deployment verifies chains
@@ -303,7 +305,9 @@ func main() {
 		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
 
 		// attestation decision log
-		attestLog = store.NewSQLiteAttestationLog(db)
+		attestLog = store.NewBatchedAttestationLog(
+			store.NewSQLiteAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger})
 		verifierCfg.AttestationLog = attestLog
 
 		ver, err := store.SchemaVersion(db)
@@ -513,6 +517,13 @@ func main() {
 		default:
 			logger.Info("shutting down", "signal", sig.String())
 			srv.Stop()
+			// flush any attestation records still buffered by the batched
+			// writer before the process exits
+			if c, ok := attestLog.(interface{ Close() error }); ok {
+				if err := c.Close(); err != nil {
+					logger.Warn("attestation-log flush on shutdown failed", "error", err)
+				}
+			}
 			logger.Info("LOTA Verifier stopped")
 			return
 		}
