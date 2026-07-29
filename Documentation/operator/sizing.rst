@@ -96,9 +96,11 @@ instances splitting a 10 000-agent fleet were soaked for 18 minutes
 with mid-load failovers (below); the topology and health checks are in
 :doc:`ha-deployment`.
 
-Each instance opens at most 20 Postgres connections, so ``N instances
-x 20`` must fit the server's ``max_connections`` alongside anything
-else using the database.
+Each instance opens up to ``--pg-max-open-conns`` connections per
+database (default 20), so ``N instances x pool`` must fit the server's
+``max_connections`` alongside anything else using it -- and every shard
+that shares a server counts. Widening the pool lifts enrollment bursts
+(see below); raise ``max_connections`` with it.
 
 To raise a *single* database's write ceiling, tune the database, not the
 verifier count: faster fsync (NVMe, battery-backed cache),
