@@ -250,10 +250,14 @@ gen_require(`
 ')
 allow lota_agent_t system_dbusd_t:dbus acquire_svc;
 
-gen_require(`
-	type pidfs_t;
+# optional_policy() drops the block when the type is absent and keeps it
+# on a policy new enough to define pidfs_t
+optional_policy(`
+	gen_require(`
+		type pidfs_t;
+	')
+	allow lota_agent_t pidfs_t:filesystem getattr;
 ')
-allow lota_agent_t pidfs_t:filesystem getattr;
 
 #
 # Type=notify in systemd/lota-agent.service requires the agent to
