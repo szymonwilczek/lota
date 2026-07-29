@@ -750,8 +750,13 @@ int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec);
 int tpm_rotate_aik(struct tpm_context *ctx);
 
 /*
- * tpm_aik_in_grace_period - Check if migration grace period is active
+ * tpm_aik_in_grace_period - Check if the rotation grace period is active
  * @ctx: TPM context
+ *
+ * Grace period is live feature of AIK rotation, not a version migration:
+ * for TPM_AIK_GRACE_PERIOD_SEC after a rotation the agent reports the previous
+ * public key alongside the new one so the verifier can confirm the same TPM
+ * rotated its own key.
  *
  * Returns: 1 if grace period is active, 0 otherwise
  */
