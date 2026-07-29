@@ -26,6 +26,9 @@ Backlog=16
 DirectoryMode=0750
 RuntimeDirectory=lota
 
+# Preserve /run/lota (and its contents) when the socket starts.
+RuntimeDirectoryPreserve=yes
+
 # remove socket file on stop
 RemoveOnStop=yes
 
