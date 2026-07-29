@@ -245,6 +245,62 @@ session tokens validated on the survivor) and a ~2 s Postgres restart
 registrations intact). Operator-facing conclusions from these runs are
 in :doc:`the sizing guide <../operator/sizing>`.
 
+L2 write-tier scaling (measured)
+======================================
+
+Three optimisations attack the per-database WAL-fsync ceiling above. All
+were measured on the same L1 host.
+
+* **Attestation-log batching.** The audit write, one of the per-report
+  durable writes, is moved off the hot path and flushed in batches (one
+  commit per flush). In isolation against real Postgres the audit write
+  went from ~110-590 rows/s (one fsync per row, highly variable with host
+  fsync latency) to ~18 000-66 000 rows/s batched (one fsync per ~256).
+  Both ends move with the host's fsync latency, so the ratio between a
+  given pair of runs spans ~30-600x; the structural change is the one
+  that holds -- the audit trail costs one fsync per batch, not per row.
+* **Connection-pool / enrollment scaling.** Baseline-insert (enrollment)
+  throughput scales with the pool because Postgres group-commits
+  concurrent transactions: ~496/s at pool 8, ~4 655/s at pool 20,
+  ~15 145/s at pool 64 (~3.3x); pool 128 hit the container's default
+  ``max_connections`` of 100. Enrollment is a pool/``max_connections``
+  knob, not a fixed 350/s limit.
+* **Sharding distribution and aggregate scaling.** Across four shard
+  databases, 8 000 clients routed exactly 25.0 % per shard
+  (2 000 each, deterministic, every client on its hash's shard, all
+  persisted). Aggregate write throughput over the four shards ran only
+  **1.1-2.4x** the single-shard rate on this single-NVMe host, because
+  the shards share one fsync device.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Measurement
+     - Result
+     - Status
+   * - Audit write, per-row vs batched
+     - ~110-590/s -> ~18k-66k/s (one fsync per ~256 rows)
+     - measured
+   * - Enrollment vs pool (8 / 20 / 64)
+     - ~496 / 4 655 / 15 145 inserts/s
+     - measured
+   * - Shard routing distribution (4 shards)
+     - 25.0 % each, exact, deterministic
+     - measured
+   * - Shard aggregate write scaling (1 disk)
+     - 1.1-2.4x at N=4 (ideal 4.0x)
+     - measured, storage-bound
+   * - Shard aggregate on independent storage
+     - ~Nx
+     - **extrapolated** (needs multi-host)
+
+The linear-to-Nx shard scaling and the one-million-agent envelope
+(16 shards + ~56 stateless instances) are honest arithmetic over these
+measured building blocks; the aggregate on independent storage is not yet
+measured (single-disk rig). A multi-host run will replace the 1.1-2.4x
+figure. The 1M reasoning is in :doc:`the sizing guide <../operator/sizing>`.
+
 L2 swtpm / L3 kernel (TBA)
 ==========================
 
