@@ -29,9 +29,11 @@ void setup_dbus(struct ipc_context *ctx);
 /*
  * @cfg: when non-NULL and container_listener_uid_count > 0, lay down
  *       one /run/user/<uid>/lota/lota.sock listener per configured UID.
- *       Otherwise fall back to the legacy XDG_RUNTIME_DIR-driven path
- *       (single secondary listener for the agent's own runtime dir,
- *       pinned by the systemd drop-in on single-operator hosts).
+ *       Otherwise take the single-operator mode: one secondary listener
+ *       in the agent's own XDG_RUNTIME_DIR, pinned by the documented
+ *       systemd drop-in. Both are current modes -- the multi-UID list is
+ *       for a host where several users launch games, the runtime-dir
+ *       listener for the single-operator host the SDK auto-detects.
  */
 void setup_container_listener(struct ipc_context *ctx,
 			      const struct lota_config *cfg);
