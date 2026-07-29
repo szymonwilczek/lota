@@ -80,6 +80,35 @@ an unconditional row rewrite costs a WAL record and a commit fsync each
 time, so the UPDATE is conditional on a real tenant change
 (``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
 
+Attestation log durability
+==========================
+
+The attestation decision log (``attestation_log`` table) is an append-only
+audit trail, not an attestation gate: a failed or delayed log write never
+changes a verdict. To keep the audit write off the verification hot path,
+the durable backends are wrapped in ``store.BatchedAttestationLog``
+(``src/verifier/store/attestation_batch.go``). ``Record`` only buffers the
+entry and returns; a background worker flushes the buffer to the backend as
+a single batch -- one commit fsync per flush instead of one per report --
+on a timer or once the buffer fills.
+
+The contract this creates:
+
+- **Eventual consistency, bounded.** A recorded decision becomes durable
+  within one flush interval (default one second). ``QueryAttestations``
+  flushes first, so the monitoring API always reads its own recent writes.
+- **Crash-loss bound.** An ungraceful stop loses at most the records
+  buffered since the last flush. This is acceptable precisely because the
+  log gates nothing; the anti-replay nonce, baseline and session writes
+  that *do* gate stay synchronous. A graceful shutdown flushes the tail.
+- **Bounded memory.** Under a stalled database the buffer drops its oldest
+  records past ``MaxBuffer`` rather than growing without limit, counting
+  the loss. The hot path is never blocked and never sees the error.
+
+Any new attestation-log backend implements ``BatchRecorder`` so a batch
+costs one round trip; a backend that does not is still correct through the
+per-record fallback, only slower.
+
 IPC token payload budget
 ========================
 

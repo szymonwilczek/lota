@@ -25,6 +25,7 @@ import (
 	"crypto/rsa"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -254,5 +255,40 @@ func TestPostgresAttestationLog(t *testing.T) {
 	rs = al.QueryAttestations(1)
 	if len(rs) != 1 || rs[0].Tenant != "acme" {
 		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
+	}
+}
+
+func TestPostgresAttestationLogRecordBatch(t *testing.T) {
+	db := pgTestDB(t)
+	al := NewPostgresAttestationLog(db)
+
+	if err := al.RecordBatch(nil); err != nil {
+		t.Fatalf("RecordBatch(nil): %v", err)
+	}
+
+	const n = 500
+	batch := make([]AttestationRecord, 0, n)
+	for i := range n {
+		batch = append(batch, AttestationRecord{
+			ClientID: fmt.Sprintf("batch-client-%03d", i),
+			Tenant:   "acme",
+			Result:   "VERIFY_OK",
+		})
+	}
+	if err := al.RecordBatch(batch); err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+
+	rs := al.QueryAttestations(n)
+	if len(rs) != n {
+		t.Fatalf("QueryAttestations returned %d records, want %d", len(rs), n)
+	}
+	for _, r := range rs {
+		if r.Timestamp.IsZero() {
+			t.Fatalf("record %s persisted with a zero timestamp", r.ClientID)
+		}
+		if r.Tenant != "acme" {
+			t.Fatalf("record %s tenant = %q, want acme", r.ClientID, r.Tenant)
+		}
 	}
 }
