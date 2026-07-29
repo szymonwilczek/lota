@@ -1688,26 +1688,6 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	return 0;
 }
 
-/*
- * Historical note: a SEC("fmod_ret/__ptrace_may_access") fallback used
- * to live here to cover credential checks reached via
- * process_vm_readv(2) / process_vm_writev(2) / /proc/PID/mem on kernels
- * where mm_access() -> __ptrace_may_access() did not re-enter the LSM
- * call chain. Linux 5.13+ routes every __ptrace_may_access() caller
- * through security_ptrace_access_check() at the tail of that function,
- * so the LSM hook (lota_ptrace_access_check above) covers the full
- * surface and the fallback is redundant. Beyond 6.4 the kernel also
- * marks __ptrace_may_access as non-attachable for fmod_ret programs
- * ("__ptrace_may_access() is not modifiable"), so keeping the fallback
- * would unconditionally fail bpf_object__load on stock Fedora 44 /
- * hosts. The agent's kernel-floor gate already refuses to load BPF
- * programs at all on kernels without LSM (lockdown + module-sig + IMA
- * appraisal must be live), which is the same set of hosts where the
- * LSM hook is missing, so the
- * "process_vm_* gap on a kernel with LSM disabled" scenario never
- * reaches this code.
- */
-
 /* ======================================================================
  * LSM hook: task_kill
  *
