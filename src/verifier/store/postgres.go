@@ -223,6 +223,20 @@ func OpenPostgresDB(dsn string) (*sql.DB, error) {
 	return OpenPostgresDBPool(dsn, DefaultPGMaxOpenConns)
 }
 
+// ServerMaxConnections reports the database server's max_connections,
+// the budget every instance's pool is drawn from.
+//
+// Connection pooler in front of the database may report its own backend limit
+// or refuse the query outright, so callers treat an error as "unknown" and carry
+// on rather than failing deployment that is fronted by one.
+func ServerMaxConnections(db *sql.DB) (int, error) {
+	var n int
+	if err := db.QueryRow("SELECT current_setting('max_connections')::int").Scan(&n); err != nil {
+		return 0, fmt.Errorf("read max_connections: %w", err)
+	}
+	return n, nil
+}
+
 // OpenPostgresDBPool opens the backend with an explicit max-open-connections pool ceiling
 // and applies pending schema migrations.
 // Non-positive value falls back to DefaultPGMaxOpenConns.

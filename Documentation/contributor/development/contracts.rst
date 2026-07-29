@@ -162,6 +162,16 @@ default stays conservative (20) so an untuned multi-instance deployment
 cannot exhaust ``max_connections``; raising it is an operator trade against
 that budget, documented in :doc:`../../operator/ha-deployment`.
 
+The value is validated rather than trusted. A pool below 1 is refused at
+startup: ``database/sql`` reads 0 as *unlimited*, and the store's own
+non-positive fallback would otherwise hand back the default without the
+operator knowing. Against the server, ``store.ServerMaxConnections``
+reports the budget and the verifier warns when the pool exceeds it or
+leaves no room for a second instance. Those comparisons stay advisory, and
+an unreadable setting is treated as unknown: behind a connection pooler the
+backend's ``max_connections`` is not the limit that applies, so failing
+closed on it would refuse a legitimate topology.
+
 IPC token payload budget
 ========================
 
