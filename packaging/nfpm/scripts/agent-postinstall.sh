@@ -7,6 +7,10 @@
 # trust material on its own.
 set -e
 
+# Create the 'lota' socket group from the shipped sysusers.d fragment.
+# socket's SocketGroup=lota resolves only once this group exists.
+systemd-sysusers /usr/lib/sysusers.d/lota-agent.conf >/dev/null 2>&1 || true
+
 systemctl daemon-reload >/dev/null 2>&1 || true
 
 cat <<'EOF'
