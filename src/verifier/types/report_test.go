@@ -11,6 +11,7 @@ package types
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -129,6 +130,27 @@ func createTestReportBytes() []byte {
 	binary.LittleEndian.PutUint64(buf[offset:], 1700000000) // last_event_ts
 
 	return buf
+}
+
+// TestParseReport_OversizedEventCountRejected pins the BPF event_count bound.
+// event_count is attacker-controlled u32; parser must reject count whose byte
+// span cannot fit the buffer without overflowing the size computation.
+// createTestReportBytes() lays event_count as the u32 at len-8
+// (event_log_size is the trailing u32), both zero in the valid baseline.
+func TestParseReport_OversizedEventCountRejected(t *testing.T) {
+	data := createTestReportBytes()
+	binary.LittleEndian.PutUint32(data[len(data)-8:], 0xFFFFFFFF)
+
+	report, err := ParseReport(data)
+	if err == nil {
+		t.Fatalf("oversized event_count accepted: report=%+v", report)
+	}
+	if !errors.Is(err, ErrInvalidSize) {
+		t.Fatalf("oversized event_count: got %v, want ErrInvalidSize", err)
+	}
+	if report != nil {
+		t.Fatal("ParseReport returned non-nil report with error")
+	}
 }
 
 func TestParseReport_ValidReport(t *testing.T) {

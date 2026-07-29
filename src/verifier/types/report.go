@@ -381,10 +381,11 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	eventCount := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
-	eventBytes := int(eventCount) * ExecEventSize
-	if len(data) < offset+eventBytes {
-		return nil, fmt.Errorf("%w: truncated at BPF events (need %d bytes)", ErrInvalidSize, eventBytes)
+	remaining := len(data) - offset
+	if remaining < 0 || uint64(eventCount)*ExecEventSize > uint64(remaining) {
+		return nil, fmt.Errorf("%w: truncated at BPF events (event_count %d)", ErrInvalidSize, eventCount)
 	}
+	eventBytes := int(eventCount) * ExecEventSize
 	offset += eventBytes // skip BPF events (not parsed yet)
 
 	// TPM event log section
