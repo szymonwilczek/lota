@@ -421,6 +421,51 @@ static void test_serialize_buffer_too_small(void)
 	}
 }
 
+/*
+ * Caller that zeroes its struct and forgets runtime_protect_version would otherwise
+ * get a token every parser refuses, and would only find out at the far end.
+ * Serializer names the fault at the point it is made.
+ */
+static void test_serialize_requires_protect_version(void)
+{
+	TEST("lota_token_serialize - unset runtime_protect_version rejected");
+
+	struct lota_token token;
+	memset(&token, 0, sizeof(token));
+	uint8_t fake[16] = { 0 };
+	token.attest_data = fake;
+	token.attest_size = 16;
+	token.signature = fake;
+	token.signature_len = 16;
+
+	uint8_t buf[512];
+	size_t written = 0;
+
+	/* left at 0 by the memset: refused */
+	if (lota_token_serialize(&token, buf, sizeof(buf), &written) !=
+	    LOTA_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_ERR_INVALID_ARG for an unset version");
+		return;
+	}
+
+	/* out of range: refused too */
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2 + 1;
+	if (lota_token_serialize(&token, buf, sizeof(buf), &written) !=
+	    LOTA_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_ERR_INVALID_ARG for an unknown version");
+		return;
+	}
+
+	/* named version serializes */
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
+	if (lota_token_serialize(&token, buf, sizeof(buf), &written) !=
+	    LOTA_OK) {
+		FAIL("v1 token failed to serialize");
+		return;
+	}
+	PASS();
+}
+
 static void test_serialize_total_size_within_u16(void)
 {
 	TEST("lota_token_serialize - total_size stays within uint16 wire field");
@@ -1171,6 +1216,7 @@ int main(void)
 
 	printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
 	test_malformed_inputs();
+	test_serialize_requires_protect_version();
 	test_unknown_hash_alg_rejected(key, aik_der, aik_len);
 	test_strerror();
 	test_strerror_new_codes();
