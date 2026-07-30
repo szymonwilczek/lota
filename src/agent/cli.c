@@ -17,14 +17,13 @@
 
 #include "../../include/lota.h"
 #include "agent.h"
+#include "attest.h"
 #include "config.h"
 #include "main_utils.h"
 #include "net.h"
 #include "parse_utils.h"
 #include "path_validate.h"
 #include "tpm.h"
-
-#define MIN_ATTEST_INTERVAL 30
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
 static uint32_t *g_protect_pids = NULL;

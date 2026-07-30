@@ -5,7 +5,16 @@
 
 #include <stdint.h>
 
-#define MIN_ATTEST_INTERVAL 10 /* 10 seconds */
+/*
+ * Operator-facing floor on the continuous-attestation interval,
+ * enforced where the interval is read and reported by --help
+ *
+ * Retry backoff below is separate quantity:
+ * it is the first delay after failed attestation,
+ * doubled per consecutive failure.
+ */
+#define MIN_ATTEST_INTERVAL 30 /* seconds */
+#define ATTEST_BACKOFF_BASE_SEC 10 /* first retry delay */
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 int export_policy(int mode);
