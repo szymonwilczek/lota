@@ -821,6 +821,8 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
 	printf("=== Remote Attestation ===\n\n");
 
+	paths = resolve_attest_profile(ca_cert, &storage);
+
 	/*
 	 * Long-running attestation path: install tracer refusal and the
 	 * seccomp blocklist before any TPM/IPC work. Diagnostic CLI paths
@@ -847,6 +849,18 @@ int do_attest(const char *server, int port, const char *ca_cert,
 			tpm_strerror(ret));
 		net_cleanup();
 		return 1;
+	}
+
+	if (paths) {
+		ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
+		if (ret < 0) {
+			fprintf(stderr,
+				"Failed to bind the publisher profile: %s\n",
+				strerror(-ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			net_cleanup();
+			return 1;
+		}
 	}
 
 	printf("Checking AIK...\n");
@@ -885,8 +899,6 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		net_cleanup();
 		return 1;
 	}
-
-	paths = resolve_attest_profile(ca_cert, &storage);
 
 	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, paths,
 			  1);
@@ -1052,6 +1064,19 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
+
+	if (paths) {
+		ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
+		if (ret < 0) {
+			lota_err("Failed to bind the publisher profile: %s",
+				 strerror(-ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			net_cleanup();
+			dbus_cleanup(g_agent.dbus_ctx);
+			ipc_cleanup(&g_agent.ipc_ctx);
+			return 1;
+		}
+	}
 
 	lota_info("Checking AIK");
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);

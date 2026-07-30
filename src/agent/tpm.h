@@ -24,6 +24,7 @@
 #include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/lota.h"
+#include "profile.h"
 #include "quote.h"
 
 struct tpm_quote_response;
@@ -94,13 +95,33 @@ const char *tpm_strerror(int err);
 #define TPM_EK_CERT_HANDLE 0x01c00002
 
 /*
- * Default AIK persistent handle.
+ * Default AIK persistent handle for a host with no publisher profile.
  * Configurable via lota.conf
  *
  * Handle 0x81010002 chosen to avoid conflicts with existing keys
  * (Windows Hello, BitLocker, etc. at 0x81010001).
  */
 #define TPM_AIK_HANDLE 0x81010002
+
+/*
+ * Persistent handles for per-publisher AIKs.
+ *
+ * Host that answers to several publishers holds one AIK per publisher
+ * -- shared key would let them correlate the same machine across titles
+ * -- and each of those keys needs its own persistent slot.
+ * Slots are a scarce, global TPM resource shared with everything else on
+ * the machine, so the range is bounded rather than open-ended, and slot already
+ * occupied by object this host did not record is skipped rather than evicted.
+ *
+ * The range starts above the handles LOTA already spends
+ * (EK 0x81010001, the profile-less AIK 0x81010002, the seal storage primary 0x81010003)
+ * so it stays contiguous as it grows.
+ * Which handle a profile holds is recorded in the profile, not derived from
+ * its position in lota.conf: removing profile would otherwise shift every later
+ * one onto another publisher's key.
+ */
+#define TPM_AIK_PROFILE_HANDLE_BASE 0x81010010
+#define TPM_AIK_PROFILE_HANDLE_COUNT LOTA_PROFILE_MAX_AIK_HANDLES
 
 /*
  * Optional persistent handle for the deterministic seal storage primary.
@@ -245,6 +266,9 @@ struct tpm_context {
 	struct aik_metadata aik_meta;
 	bool aik_meta_loaded;
 	char aik_meta_path[256];
+	/* set when LOTA_AIK_META_PATH chose the path above,
+	 * so binding publisher profile leaves developer's explicit override alone */
+	bool aik_meta_path_from_env;
 
 	/*
 	 * Persistent PCR14 clock-state snapshot path. Empty string selects
@@ -417,6 +441,29 @@ int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
  * Returns: 0 on success (or already exists), negative errno on failure
  */
 int tpm_provision_aik(struct tpm_context *ctx);
+
+/*
+ * tpm_bind_profile - Point the context at one publisher's AIK
+ * @ctx: Initialized TPM context (an ESYS connection is needed)
+ * @paths: The publisher profile, from profile_paths_from_anchor()
+ *
+ * Sends the AIK's rotation metadata -- and with it the userAuth sidecars,
+ * which are derived from the metadata's directory -- into the profile,
+ * and selects the persistent handle that profile's key lives at.
+ *
+ * Handle recorded in the profile is reused; profile provisioning for the first
+ * time takes the lowest handle in the profile range that no other profile has
+ * recorded and that this TPM has no object at, and records it.
+ *
+ * Call after tpm_init() and before tpm_provision_aik()
+ * LOTA_AIK_META_PATH override wins over the profile's metadata path,
+ * since it exists to point developer's one-shot somewhere else entirely.
+ *
+ * Returns: 0 on success, -ENOSPC when the profile range is exhausted,
+ * negative errno on failure.
+ */
+int tpm_bind_profile(struct tpm_context *ctx,
+		     const struct profile_paths *paths);
 
 /*
  * tpm_hash_fd - Calculate SHA-256 hash from an open regular file descriptor

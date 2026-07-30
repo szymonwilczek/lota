@@ -89,6 +89,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct lota_config *cfg;
 	sigset_t mask;
 	struct epoll_event ev;
+	struct profile_paths profile_storage;
+	const struct profile_paths *profile = NULL;
 
 	if (!params)
 		return -EINVAL;
@@ -107,6 +109,18 @@ static int run_daemon(const struct run_daemon_params *params)
 	cfg = params->cfg;
 
 	lota_info("LOTA agent starting");
+
+	if (cfg && cfg->ca_cert[0]) {
+		int prof_ret = profile_paths_from_anchor(cfg->ca_cert,
+							 &profile_storage);
+
+		if (prof_ret == 0)
+			profile = &profile_storage;
+		else
+			lota_warn("Cannot read the CA trust anchor %s (%s): "
+				  "running without a publisher profile",
+				  cfg->ca_cert, strerror(-prof_ret));
+	}
 
 	/*
 	 * Daemon-mode hardening: refuse to start under a tracer and install
@@ -222,6 +236,24 @@ static int run_daemon(const struct run_daemon_params *params)
 		status_flags |= LOTA_STATUS_TPM_OK;
 
 		/*
+		 * The AIK a token is quoted with has to be the one whose
+		 * certificate the relying party holds, so the daemon uses the same
+		 * publisher profile the enrollment did: the one the configured CA
+		 * trust anchor names.
+		 * With no anchor configured the host has no publisher and keeps
+		 * its own AIK.
+		 */
+		if (profile) {
+			ret = tpm_bind_profile(&g_agent.tpm_ctx, profile);
+			if (ret < 0) {
+				lota_err("Failed to bind the publisher "
+					 "profile: %s",
+					 strerror(-ret));
+				goto cleanup_tpm;
+			}
+		}
+
+		/*
 		 * load metadata BEFORE provisioning the AIK so a fresh
 		 * install (no /var/lib/lota/aik_meta and no persistent
 		 * AIK handle yet) takes the ENOENT branch that initialises
@@ -261,23 +293,11 @@ static int run_daemon(const struct run_daemon_params *params)
 
 			/*
 			 * surface the rotation state over D-Bus from
-			 * the loaded metadata, read against the profile
-			 * the configured CA trust anchor names
+			 * the loaded metadata, read against the same profile
 			 */
-			{
-				struct profile_paths paths;
-				const char *anchor =
-					params->cfg && params->cfg->ca_cert[0] ?
-						params->cfg->ca_cert :
-						NULL;
-				bool have = anchor &&
-					    profile_paths_from_anchor(
-						    anchor, &paths) == 0;
-
-				publish_rotation_state(
-					params->cfg ? params->cfg->aik_ttl : 0,
-					have ? &paths : NULL);
-			}
+			publish_rotation_state(
+				params->cfg ? params->cfg->aik_ttl : 0,
+				profile);
 		}
 
 		lota_info("Performing self-measurement");
