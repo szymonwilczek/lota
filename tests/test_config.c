@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 
+#include "../src/agent/attest.h"
 #include "../src/agent/config.h"
 
 static int tests_run;
@@ -279,7 +280,7 @@ static void test_config_load_basic_values(void)
 				   "mode = enforce\n"
 				   "strict_mmap = true\n"
 				   "block_ptrace = yes\n"
-				   "attest_interval = 600\n"
+				   "attest_interval = 300\n"
 				   "aik_ttl = 7200\n"
 				   "aik_handle = 0x81010003\n"
 				   "seal_aik_auth = true\n"
@@ -315,8 +316,8 @@ static void test_config_load_basic_values(void)
 		FAIL("block_ptrace != true");
 		return;
 	}
-	if (cfg.attest_interval != 600) {
-		FAIL("attest_interval != 600");
+	if (cfg.attest_interval != 300) {
+		FAIL("attest_interval != 300");
 		return;
 	}
 	if (cfg.aik_ttl != 7200) {
@@ -914,6 +915,86 @@ static void test_config_load_port_bounds(void)
 	PASS();
 }
 
+/*
+ * Interval above the ceiling mints tokens whose valid_until sits past every
+ * relying party's freshness window, so the agent runs and every token it produces
+ * is refused.
+ * The mistake has to be caught where it is made.
+ */
+static void test_config_load_attest_interval_bounds(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[64];
+	int ret;
+
+	TEST("config_load accepts attest_interval at the ceiling");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MAX_ATTEST_INTERVAL);
+	write_config("interval_max.conf", content);
+	config_path("interval_max.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.attest_interval != MAX_ATTEST_INTERVAL) {
+		FAIL("interval not applied");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects attest_interval above the ceiling");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MAX_ATTEST_INTERVAL + 1);
+	write_config("interval_high.conf", content);
+	config_path("interval_high.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.attest_interval != 0) {
+		FAIL("out-of-range interval was applied");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects attest_interval below the floor");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MIN_ATTEST_INTERVAL - 1);
+	write_config("interval_low.conf", content);
+	config_path("interval_low.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load accepts attest_interval = 0 (one-shot)");
+	write_config("interval_zero.conf", "attest_interval = 0\n");
+	config_path("interval_zero.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 static void test_config_load_rejects_group_writable(void)
 {
 	struct lota_config cfg;
@@ -1098,7 +1179,7 @@ static void test_config_load_all_known_keys(void)
 				 "mode = maintenance\n"
 				 "strict_mmap = true\n"
 				 "block_ptrace = true\n"
-				 "attest_interval = 999\n"
+				 "attest_interval = 240\n"
 				 "aik_ttl = 86400\n"
 				 "aik_handle = 0x81010005\n"
 				 "daemon = true\n"
@@ -1153,7 +1234,7 @@ static void test_config_load_all_known_keys(void)
 		FAIL("block_ptrace");
 		return;
 	}
-	if (cfg.attest_interval != 999) {
+	if (cfg.attest_interval != 240) {
 		FAIL("attest_interval");
 		return;
 	}
@@ -1333,6 +1414,7 @@ int main(void)
 		test_config_load_empty_key,
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
+		test_config_load_attest_interval_bounds,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,

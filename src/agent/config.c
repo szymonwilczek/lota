@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include "attest.h"
 #include "lota.h"
 #include "parse_utils.h"
 #include "path_validate.h"
@@ -427,6 +428,17 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		if (safe_parse_long(value, &v) != 0 || v < 0 || v > INT_MAX) {
 			fprintf(stderr, "%s:%d: invalid attest_interval '%s'\n",
 				filepath, lineno, value);
+			return -1;
+		}
+		if (v != 0 &&
+		    (v < MIN_ATTEST_INTERVAL || v > MAX_ATTEST_INTERVAL)) {
+			fprintf(stderr,
+				"%s:%d: attest_interval %ld out of range "
+				"(0 for one-shot, else %d-%d; above %d the "
+				"minted tokens outlive every relying party's "
+				"freshness window)\n",
+				filepath, lineno, v, MIN_ATTEST_INTERVAL,
+				MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
 			return -1;
 		}
 		cfg->attest_interval = (int)v;
