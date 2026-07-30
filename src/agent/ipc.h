@@ -18,6 +18,55 @@ struct dbus_context;
 struct ipc_client;
 
 /*
+ * Rate limiting for GET_TOKEN, in two layers that measure different things.
+ *
+ * Every GET_TOKEN costs fresh TPM quote, so the limiter exists to stop one
+ * caller monopolising the TPM.
+ *
+ * Connection is the session: title holds one, and the agent already authenticates
+ * its peer.
+ * So the per-session budget is what title spends, sized so no realistic heartbeat
+ * reaches it, and the per-UID ceiling stays as the bound on total TPM cost,
+ * sized for several titles at once.
+ *
+ * Neither alone is enough: without the session budget one title can spend the whole
+ * uid allowance, and without the uid ceiling a caller opens connections until
+ * the TPM is saturated.
+ */
+#define TOKEN_RATE_LIMIT_PER_SESSION 20 /* requests, ~3 s heartbeat */
+#define TOKEN_RATE_LIMIT 60 /* requests per uid, several titles */
+#define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
+
+/*
+ * The fastest heartbeat any reference integration uses, in seconds.
+ * Per-session budget is checked against it below so change to either one
+ * cannot quietly starve a title.
+ */
+#define LOTA_REFERENCE_HEARTBEAT_SEC 5
+
+/*
+ * Title on the reference cadence must fit inside its session budget with room
+ * to spare, or the limiter is throttling correct behaviour.
+ */
+_Static_assert(TOKEN_RATE_LIMIT_PER_SESSION >
+		       TOKEN_RATE_WINDOW_SEC / LOTA_REFERENCE_HEARTBEAT_SEC,
+	       "session token budget must exceed the reference heartbeat rate");
+
+/*
+ * The uid ceiling has to hold several sessions at once, or the second title
+ * player launches is refused for what the first one spent.
+ */
+_Static_assert(TOKEN_RATE_LIMIT >= 2 * TOKEN_RATE_LIMIT_PER_SESSION,
+	       "uid token ceiling must cover at least two concurrent sessions");
+
+/*
+ * The session budget is the inner bound; session may never outspend the uid
+ * it belongs to.
+ */
+_Static_assert(TOKEN_RATE_LIMIT_PER_SESSION < TOKEN_RATE_LIMIT,
+	       "session budget must be tighter than the uid ceiling");
+
+/*
  * fd -> client lookup table.
  */
 #define IPC_CLIENT_MAP_SIZE 4096 /* must be a power of two */
