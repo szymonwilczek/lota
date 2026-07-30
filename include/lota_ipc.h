@@ -15,7 +15,13 @@
 
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
-#define LOTA_IPC_VERSION 1
+/*
+ * Version 2 adds SET_PROFILE.
+ * Agent refuses any other version outright:
+ * this header is internal and the agent and the SDK that speaks to it ship
+ * together, so there is nothing to negotiate with.
+ */
+#define LOTA_IPC_VERSION 2
 /*
  * Practical per-frame payload cap enforced by the agent socket parser.
  * The largest production payload is GET_TOKEN: token header, protected PID
@@ -40,6 +46,8 @@ enum lota_ipc_cmd {
 		0x06, /* Hot-remove protected PID (requires privileged peer) */
 	LOTA_IPC_CMD_SHUTDOWN =
 		0x07, /* Graceful agent self-shutdown (requires privileged peer) */
+	LOTA_IPC_CMD_SET_PROFILE =
+		0x08, /* Bind this connection to one publisher profile */
 };
 
 /*
@@ -57,6 +65,7 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_BAD_VERSION = 0x08,
 	LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
 	LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS = 0x0A,
+	LOTA_IPC_ERR_UNKNOWN_PROFILE = 0x0B,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -124,6 +133,25 @@ struct lota_ipc_status {
 	uint32_t fail_count; /* Total failed attestations */
 	uint8_t mode; /* Current mode (enum lota_mode) */
 	uint8_t reserved[3];
+} __attribute__((packed));
+
+/*
+ * SET_PROFILE request payload
+ *
+ * Binds the connection to one publisher, named by the SHA-256 of that publisher's
+ * CA trust anchor SubjectPublicKeyInfo -- the same identity the host stores
+ * the publisher's enrollment under.
+ * The endpoint is not the identity: address is mutable and two publishers can
+ * share a hostname, while the anchor's key is what enrollment verifies against.
+ *
+ * Every later answer on the connection is that publisher's:
+ * GET_TOKEN quotes with their AIK, and GET_STATUS reports whether *their*
+ * verifier is satisfied rather than whether every publisher on the host is.
+ *
+ * Connection that never sends this keeps the host-wide answers.
+ */
+struct lota_ipc_set_profile {
+	uint8_t profile_id[32];
 } __attribute__((packed));
 
 /*

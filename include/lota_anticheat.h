@@ -124,6 +124,17 @@ struct lota_ac_config {
 	 * NULL -> default (/run/lota/lota.sock).
 	 */
 	const char *socket_path;
+
+	/*
+	 * For direct mode:
+	 * which publisher this session attests for, as the lowercase hex SHA-256
+	 * of that publisher's attestation-CA trust anchor SubjectPublicKeyInfo.
+	 * See struct lota_connect_opts, which this is passed through to.
+	 *
+	 * NULL on a single-publisher host.
+	 * Ignored in file mode, where the Wine hook owns the agent connection.
+	 */
+	const char *publisher_profile;
 };
 
 /*
@@ -131,8 +142,9 @@ struct lota_ac_config {
  * Caller passing less than this is refused;
  * Caller passing more has members this library does not read.
  */
-#define LOTA_AC_CONFIG_SIZE_MIN \
-	(offsetof(struct lota_ac_config, socket_path) + sizeof(const char *))
+#define LOTA_AC_CONFIG_SIZE_MIN                               \
+	(offsetof(struct lota_ac_config, publisher_profile) + \
+	 sizeof(const char *))
 
 /*
  * heartbeat wire format (little-endian, packed):

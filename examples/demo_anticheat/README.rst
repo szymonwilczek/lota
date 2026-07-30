@@ -41,6 +41,22 @@ first line with it:
 reason, on the rare path where a game opens the agent connection itself
 instead of letting ``lota_ac_init()`` do it.
 
+On a player's machine, which may hold enrollments with several publishers, set
+``publisher_profile`` to the lowercase hex SHA-256 of your own attestation CA's
+trust anchor SubjectPublicKeyInfo:
+
+.. code-block:: sh
+
+   openssl x509 -in ca-tls.crt -pubkey -noout \
+       | openssl pkey -pubin -outform der \
+       | sha256sum
+
+The session's tokens are then signed by the AIK that machine enrolled with
+*your* CA, and its attested state is your verifier's verdict rather than every
+publisher on the host agreeing. Leave it NULL on a single-publisher host. A
+machine that holds no enrollment for the named publisher fails the connection
+rather than answering with another publisher's evidence.
+
 Flags
 -----
 

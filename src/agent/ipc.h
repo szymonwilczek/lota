@@ -9,9 +9,12 @@
 
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
+
+#include "attest_targets.h"
 
 struct tpm_context;
 struct dbus_context;
@@ -142,6 +145,23 @@ struct ipc_context {
 	uint64_t aik_grace_deadline; /* end of post-rotation grace (0 if none) */
 	bool aik_reenroll_required; /* stored cert outdated by a rotation */
 
+	/*
+	 * Publisher profiles this host attests for, borrowed from the attestation
+	 * loop that owns them.
+	 *
+	 * Connection may bind itself to one of these with SET_PROFILE,
+	 * and every later answer is then that publisher's: its AIK signs the token,
+	 * and its verifier's verdict is the status.
+	 * Without the list the agent has nothing to bind to,
+	 * so SET_PROFILE is refused; that is the case for the diagnostic
+	 * IPC servers, which attest to nobody.
+	 *
+	 * Same borrowing rule as tpm above:
+	 * read from the single-threaded epoll loop that also owns the writes.
+	 */
+	struct attest_target *profiles;
+	size_t profile_count;
+
 	/* true when using socket activation (do not unlink socket) */
 	bool activated;
 };
@@ -224,6 +244,19 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
  * @mode: New mode (enum lota_mode)
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
+
+/*
+ * ipc_set_profiles - Hand the IPC layer the publisher profiles
+ * @ctx: Server context
+ * @profiles: Targets owned by the attestation loop, borrowed for the run
+ * @count: How many
+ *
+ * Until this is called a connection has no publisher to bind to
+ * and SET_PROFILE is refused.
+ * Passing NULL/0 clears the list.
+ */
+void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
+		      size_t count);
 
 /*
  * ipc_set_tpm - Set TPM context for token signing
