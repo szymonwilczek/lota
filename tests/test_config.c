@@ -995,6 +995,254 @@ static void test_config_load_attest_interval_bounds(void)
 	PASS();
 }
 
+static void test_config_load_profiles(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load parses a publisher profile list");
+	write_config("profiles.conf", "server = top.example\n"
+				      "\n"
+				      "[profile \"alpha\"]\n"
+				      "ca = ca.alpha.example\n"
+				      "ca_cert = /etc/lota/alpha.pem\n"
+				      "verifier = verifier.alpha.example\n"
+				      "interval = 60\n"
+				      "\n"
+				      "[profile \"beta\"]\n"
+				      "ca = ca.beta.example\n"
+				      "ca_port = 9444\n"
+				      "ca-cert = /etc/lota/beta.pem\n"
+				      "verifier = verifier.beta.example\n"
+				      "verifier_port = 9443\n");
+	config_path("profiles.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.profile_count != 2) {
+		FAIL("profile_count != 2");
+		return;
+	}
+	/* keys above the first section still reach the top level */
+	if (strcmp(cfg.server, "top.example") != 0) {
+		FAIL("top-level key not applied");
+		return;
+	}
+	if (strcmp(cfg.profiles[0].name, "alpha") != 0 ||
+	    strcmp(cfg.profiles[0].ca, "ca.alpha.example") != 0 ||
+	    strcmp(cfg.profiles[0].ca_cert, "/etc/lota/alpha.pem") != 0 ||
+	    strcmp(cfg.profiles[0].verifier, "verifier.alpha.example") != 0 ||
+	    cfg.profiles[0].attest_interval != 60) {
+		FAIL("profile 'alpha' mismatch");
+		return;
+	}
+	/* unset ports fall back to the defaults, not to zero */
+	if (cfg.profiles[0].ca_port != LOTA_DEFAULT_CA_PORT ||
+	    cfg.profiles[0].verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
+		FAIL("profile 'alpha' default ports");
+		return;
+	}
+	if (strcmp(cfg.profiles[1].name, "beta") != 0 ||
+	    cfg.profiles[1].ca_port != 9444 ||
+	    cfg.profiles[1].verifier_port != 9443 ||
+	    strcmp(cfg.profiles[1].ca_cert, "/etc/lota/beta.pem") != 0) {
+		FAIL("profile 'beta' mismatch");
+		return;
+	}
+	/* unset interval means "inherit", not "one-shot" */
+	if (cfg.profiles[1].attest_interval != 0) {
+		FAIL("profile 'beta' interval");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_incomplete(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load rejects a profile with no trust anchor");
+	write_config("profile_noanchor.conf", "[profile \"alpha\"]\n"
+					      "ca = ca.alpha.example\n"
+					      "verifier = v.alpha.example\n");
+	config_path("profile_noanchor.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a profile with no verifier");
+	write_config("profile_noverifier.conf",
+		     "[profile \"alpha\"]\n"
+		     "ca = ca.alpha.example\n"
+		     "ca_cert = /etc/lota/alpha.pem\n");
+	config_path("profile_noverifier.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects an empty profile section");
+	write_config("profile_empty.conf", "[profile \"alpha\"]\n");
+	config_path("profile_empty.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_malformed(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+	size_t i;
+	static const char *const bad[] = {
+		"[profile alpha]\n",	      "[profile \"alpha]\n",
+		"[profile \"alpha\"] junk\n", "[publisher \"alpha\"]\n",
+		"[profile \"\"]\n",
+	};
+
+	for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		char name[64];
+
+		TEST("config_load rejects a malformed profile header");
+		snprintf(name, sizeof(name), "profile_bad_%zu.conf", i);
+		write_config(name, bad[i]);
+		config_path(name, path, sizeof(path));
+		config_init(&cfg);
+		ret = config_load(&cfg, path);
+		if (ret != -EINVAL) {
+			char msg[64];
+			snprintf(msg, sizeof(msg), "expected -EINVAL, got %d",
+				 ret);
+			FAIL(msg);
+			return;
+		}
+		if (cfg.profile_count != 0) {
+			FAIL("malformed header opened a profile");
+			return;
+		}
+		PASS();
+	}
+
+	TEST("config_load rejects a duplicate profile name");
+	write_config("profile_dup.conf", "[profile \"alpha\"]\n"
+					 "ca = ca.alpha.example\n"
+					 "ca_cert = /etc/lota/alpha.pem\n"
+					 "verifier = v.alpha.example\n"
+					 "[profile \"alpha\"]\n"
+					 "ca = ca.other.example\n"
+					 "ca_cert = /etc/lota/other.pem\n"
+					 "verifier = v.other.example\n");
+	config_path("profile_dup.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	if (cfg.profile_count != 1) {
+		FAIL("duplicate name opened a second profile");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a top-level key inside a profile");
+	write_config("profile_toplevel.conf", "[profile \"alpha\"]\n"
+					      "ca = ca.alpha.example\n"
+					      "ca_cert = /etc/lota/alpha.pem\n"
+					      "verifier = v.alpha.example\n"
+					      "mode = enforce\n");
+	config_path("profile_toplevel.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a per-profile interval above the ceiling");
+	{
+		char content[256];
+		snprintf(content, sizeof(content),
+			 "[profile \"alpha\"]\n"
+			 "ca = ca.alpha.example\n"
+			 "ca_cert = /etc/lota/alpha.pem\n"
+			 "verifier = v.alpha.example\n"
+			 "interval = %d\n",
+			 MAX_ATTEST_INTERVAL + 1);
+		write_config("profile_interval.conf", content);
+	}
+	config_path("profile_interval.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_overflow(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[4096];
+	size_t off = 0;
+	int ret;
+
+	TEST("config_load rejects more profiles than there are slots");
+	for (int i = 0; i <= LOTA_CONFIG_MAX_PROFILES; i++) {
+		int n = snprintf(content + off, sizeof(content) - off,
+				 "[profile \"p%d\"]\n"
+				 "ca = ca%d.example\n"
+				 "ca_cert = /etc/lota/p%d.pem\n"
+				 "verifier = v%d.example\n",
+				 i, i, i, i);
+		if (n < 0 || (size_t)n >= sizeof(content) - off) {
+			FAIL("fixture too large");
+			return;
+		}
+		off += (size_t)n;
+	}
+	write_config("profile_overflow.conf", content);
+	config_path("profile_overflow.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.profile_count != LOTA_CONFIG_MAX_PROFILES) {
+		FAIL("profile_count past the cap");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_load_rejects_group_writable(void)
 {
 	struct lota_config cfg;
@@ -1079,6 +1327,17 @@ static void test_config_dump_roundtrip(void)
 	cfg1.container_listener_uid_count = 2;
 	cfg1.container_listener_uids[0] = 1000;
 	cfg1.container_listener_uids[1] = 1001;
+	cfg1.profile_count = 1;
+	snprintf(cfg1.profiles[0].name, sizeof(cfg1.profiles[0].name), "alpha");
+	snprintf(cfg1.profiles[0].ca, sizeof(cfg1.profiles[0].ca),
+		 "ca.alpha.example");
+	cfg1.profiles[0].ca_port = 9444;
+	snprintf(cfg1.profiles[0].ca_cert, sizeof(cfg1.profiles[0].ca_cert),
+		 "/etc/lota/alpha.pem");
+	snprintf(cfg1.profiles[0].verifier, sizeof(cfg1.profiles[0].verifier),
+		 "v.alpha.example");
+	cfg1.profiles[0].verifier_port = 9443;
+	cfg1.profiles[0].attest_interval = 90;
 
 	/* dump to file */
 	snprintf(dump_path, sizeof(dump_path), "%s/dumped.conf", tmpdir);
@@ -1147,6 +1406,17 @@ static void test_config_dump_roundtrip(void)
 	    cfg2.container_listener_uids[0] != 1000 ||
 	    cfg2.container_listener_uids[1] != 1001) {
 		FAIL("container_listener_uids mismatch");
+		return;
+	}
+	if (cfg2.profile_count != 1 ||
+	    strcmp(cfg2.profiles[0].name, "alpha") != 0 ||
+	    strcmp(cfg2.profiles[0].ca, "ca.alpha.example") != 0 ||
+	    cfg2.profiles[0].ca_port != 9444 ||
+	    strcmp(cfg2.profiles[0].ca_cert, "/etc/lota/alpha.pem") != 0 ||
+	    strcmp(cfg2.profiles[0].verifier, "v.alpha.example") != 0 ||
+	    cfg2.profiles[0].verifier_port != 9443 ||
+	    cfg2.profiles[0].attest_interval != 90) {
+		FAIL("profile mismatch");
 		return;
 	}
 	PASS();
@@ -1415,6 +1685,10 @@ int main(void)
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
+		test_config_load_profiles,
+		test_config_load_profile_incomplete,
+		test_config_load_profile_malformed,
+		test_config_load_profile_overflow,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,

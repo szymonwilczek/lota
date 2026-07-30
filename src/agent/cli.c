@@ -264,9 +264,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	memset(opts, 0, sizeof(*opts));
 	opts->bpf_path = LOTA_CLI_DEFAULT_BPF_PATH;
 	opts->server_addr = "localhost";
-	opts->server_port = LOTA_CLI_DEFAULT_VERIFIER_PORT;
+	opts->server_port = LOTA_DEFAULT_VERIFIER_PORT;
 	opts->aik_ttl = LOTA_CLI_DEFAULT_AIK_TTL;
-	opts->ca_port = LOTA_CLI_DEFAULT_CA_PORT;
+	opts->ca_port = LOTA_DEFAULT_CA_PORT;
 	opts->config_file_mode = -1;
 
 	/* Pre-scan for --config so config_load() runs before option defaults.
@@ -556,7 +556,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		case 'h':
 		default:
 			print_usage(argv[0], LOTA_CLI_DEFAULT_BPF_PATH,
-				    LOTA_CLI_DEFAULT_VERIFIER_PORT);
+				    LOTA_DEFAULT_VERIFIER_PORT);
 			return (opt == 'h') ? -1 : 1;
 		}
 	}

@@ -5,6 +5,11 @@
 # Keys accept both underscore and hyphen forms (e.g: ca_cert, ca-cert).
 # CLI flags override any value set here.
 #
+# [profile "name"] header opens a publisher profile and every key after it belongs
+# to that profile, so the top-level keys go above the first profile and the profiles
+# go last.
+# See the end of this file.
+#
 # To dump the effective configuration after loading this file:
 #   lota-agent --dump-config
 #   lota-agent --config /path/to/file --dump-config
@@ -132,3 +137,39 @@ log_level = info
 # Multiple protect_pid entries are allowed (one per line).
 # protect_pid = 1234
 # protect_pid = 5678
+
+# ---- Publisher profiles (must stay last) ---------------------------------
+# One machine, several publishers.
+# Each profile names the attestation CA it enrolls against, the trust anchor
+# that CA is verified with, and the verifier it reports to.
+# The publisher's policy is entirely on their side: profile grants no publisher
+# any say over this host's enforcement.
+#
+# The section name is label for the operator.
+# Profile is identified by the SHA-256 of its ca_cert trust anchor's
+# SubjectPublicKeyInfo, which is why the anchor is required and why moving CA
+# to new address keeps the profile.
+#
+# ca_cert must be readable by the hardened lota-attest.service, exactly as the
+# top-level ca_cert above.
+#
+# ca_port defaults to 8444 and verifier_port to 8443.
+# interval defaults to the attest_interval above; set it only where publisher
+# wants different cadence, and keep it inside the range lota-agent --help prints
+#
+# Every key below a header belongs to that profile, so nothing top-level may
+# follow.
+# `lota-agent --dump-config` prints profiles last for the same reason.
+#
+# [profile "publisher-a"]
+# ca = ca.publisher-a.example
+# ca_cert = /etc/lota/publisher-a.pem
+# verifier = verifier.publisher-a.example
+#
+# [profile "publisher-b"]
+# ca = ca.publisher-b.example
+# ca_port = 9444
+# ca_cert = /etc/lota/publisher-b.pem
+# verifier = verifier.publisher-b.example
+# verifier_port = 9443
+# interval = 120

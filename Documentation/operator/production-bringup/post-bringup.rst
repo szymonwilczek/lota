@@ -119,6 +119,26 @@ there, for example::
    sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
    # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
 
+A host that answers to more than one publisher lists them as ``[profile "name"]``
+sections instead. Each section names the attestation CA it enrolls against, the
+trust anchor that CA is verified with, the verifier it reports to, and
+optionally its own cadence; ``ca_port`` and ``verifier_port`` default to the
+same ports as the top-level keys. A profile missing the CA, the anchor or the
+verifier is refused at load, and every anchor has to satisfy the same
+readability constraint as the top-level ``ca_cert`` above.
+
+Every key below a section header belongs to that section, so the top-level keys
+go above the first profile and nothing top-level may follow one.
+``lota-agent --dump-config`` prints profiles last for the same reason, which is
+also what makes its output loadable again. See :ghsrc:`configs/lota.conf.example`
+for a worked pair of profiles.
+
+The section name is a label for the operator. A profile is identified by its
+trust anchor's public key, so a publisher moving their CA to another address
+keeps the same profile, and two publishers sharing a hostname cannot collide.
+Publisher policy stays with the publisher: a profile grants no publisher any
+say over this host's enforcement.
+
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
 the operator's first ``lota-agent --enroll`` records that state; afterwards the
