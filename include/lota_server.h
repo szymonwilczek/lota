@@ -104,27 +104,33 @@ struct lota_server_claims {
  * @aik_pub_len:    Length of aik_pub_der
  * @expected_nonce: Required 32-byte nonce expected by the server for this
  *                  verification attempt
- * @max_age_sec:    Maximum acceptable token age in seconds.
- *                  0 -> use LOTA_TOKEN_DEFAULT_MAX_AGE (300s).
- * @claims:         Output claims structure (always populated when the
- *                  return code is OK, TOO_OLD, EXPIRED, or FUTURE so
- *                  the caller can inspect age_seconds on rejection)
+ * @claims:         Output claims structure, populated whenever the token
+ *                  parses far enough to fill it -- including on EXPIRED,
+ *                  so the caller can report valid_until
  *
  * Verification steps:
  *  1. Parse token wire format
- *  2. Verify RSA signature over attest_data using AIK public key
- *  3. Parse TPMS_ATTEST and extract extraData
- *  4. extraData == SHA256(issued_at || valid_until || flags || nonce)
- *  5. Verify client nonce matches expected_nonce
- *  6. Check token expiry against current time
- *  7. Hard freshness check: reject if age > max_age_sec
- *  8. Hard future check: reject if issued_at > now + MAX_CLOCK_SKEW
- *  9. Extract PCR digest from TPMS_ATTEST QuoteInfo
+ *  2. Verify the TPM signature over attest_data with the AIK public key
+ *  3. Parse TPMS_ATTEST, extract extraData and the quoted PCR mask
+ *  4. Quoted PCR mask == the mask the token header claims
+ *  5. extraData == SHA256(valid_until || flags || pcr_mask || nonce ||
+ *     policy_digest || runtime_protect_digest || runtime_protect_epoch),
+ *     so every field the caller acts on is inside the TPM signature
+ *  6. Token nonce == expected_nonce
+ *  7. valid_until is not further ahead than
+ *     LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC, and has not passed
+ *  8. Extract the PCR digest from the TPMS_ATTEST QuoteInfo
+ *
+ * There is no token-age parameter:
+ * Token carries an expiry, not an issue time, so freshness beyond `valid_until`
+ * is the relying party's policy to apply.
+ * Bind each verification to a nonce this server issued and treat
+ * `claims.valid_until` as the outer bound.
  *
  * Returns: LOTA_SERVER_OK on success.
  *          LOTA_SERVER_ERR_EXPIRED if now > valid_until.
- *          LOTA_SERVER_ERR_TOO_OLD if token age > max_age_sec.
- *          LOTA_SERVER_ERR_FUTURE if token issued in the future.
+ *          LOTA_SERVER_ERR_FUTURE if valid_until is too far ahead.
+ *          LOTA_SERVER_ERR_NONCE_FAIL if either nonce check fails.
  *          Other negative error codes on verification failure.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,

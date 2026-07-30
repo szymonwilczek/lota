@@ -268,6 +268,31 @@ ceiling must cover at least two sessions, and the session budget must stay
 the tighter of the two. Changing either constant without the other fails the
 build rather than starving a title at runtime.
 
+Attestation token quote binding
+===============================
+
+The token's TPM quote signs one 32-byte value, its ``extraData``, and that
+value is what ties every other field in the token to the signature:
+
+.. code-block:: text
+
+   extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
+                      policy_digest || runtime_protect_digest ||
+                      runtime_protect_epoch)
+
+Integers are little-endian. Three implementations must agree on it byte for
+byte: the agent that builds the quote
+(``include/lota_token_quote_nonce.h``), the C verifier
+(``lota_server_verify_token()`` in ``src/sdk/lota_server.c``) and the Go one
+(``ComputeTokenQuoteNonce`` in ``sdk/server/verify.go``). A field that is not
+in this digest is *not* signed, however trustworthy it looks in the struct,
+so adding one to the token means adding it here in all three places.
+
+A relying party should call one of the two verifiers rather than
+reimplement the binding. There is no token age parameter: the token carries
+an expiry, not an issue time, so freshness beyond ``valid_until`` is the
+relying party's policy, applied against a nonce it issued itself.
+
 IPC token payload budget
 ========================
 
