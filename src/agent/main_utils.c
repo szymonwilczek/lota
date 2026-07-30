@@ -113,8 +113,8 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
 	printf("  --reenroll        Re-enroll using the endpoint saved by the\n");
-	printf("                    last --enroll (no CA arguments needed), "
-	       "then exit\n");
+	printf("                    last --enroll against the same --ca-cert,\n");
+	printf("                    then exit\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
@@ -139,9 +139,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "localhost)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",
 	       default_verifier_port);
-	printf("  --ca-cert PATH    CA certificate for verifier TLS "
-	       "verification\n");
-	printf("                    (default: use system CA store)\n");
+	printf("  --ca-cert PATH    CA trust anchor, PEM or DER. Verifies the\n");
+	printf("                    TLS peer (default: system CA store) and\n");
+	printf("                    names the publisher profile the AIK\n");
+	printf("                    certificate and enrollment record live\n");
+	printf("                    in, so --enroll and --reenroll require "
+	       "it\n");
 	printf("  --no-verify-tls   Disable TLS certificate verification "
 	       "(INSECURE)\n");
 	printf("                    Only for development/testing!\n");

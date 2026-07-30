@@ -23,6 +23,7 @@
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../src/agent/profile.h"
 
 static int file_exists(const char *path)
 {
@@ -757,11 +758,44 @@ static int st_agent_apply(struct install_ctx *ctx)
 
 /* stage 10: enrollment */
 
+/*
+ * Locate the publisher profile this host enrolls into.
+ *
+ * CA trust anchor names it (see src/agent/profile.h), so the installer cannot
+ * say whether the host is enrolled until the operator has named the anchor
+ * -- there is no host-wide certificate to look at.
+ */
+static int enroll_profile(const struct install_ctx *ctx,
+			  struct profile_paths *paths)
+{
+	if (!ctx->opts.ca_cert)
+		return -EINVAL;
+	return profile_paths_from_anchor(ctx->opts.ca_cert, paths);
+}
+
 static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
 {
+	struct profile_paths paths;
 	int days = 0;
-	int rc = probe_cert_days_left(PATH_AIK_CERT, &days);
+	int rc;
+
+	rc = enroll_profile(ctx, &paths);
+	if (rc == -EINVAL) {
+		snprintf(note, cap,
+			 "No CA trust anchor was given. Re-run with --ca-cert "
+			 "(and --ca-server) from the operator's install "
+			 "instructions: the anchor names the publisher this "
+			 "host enrolls with.");
+		return STAGE_BLOCKED;
+	}
+	if (rc < 0) {
+		snprintf(note, cap, "Cannot read the CA trust anchor %s (%s)",
+			 ctx->opts.ca_cert, strerror(-rc));
+		return STAGE_ERROR;
+	}
+
+	rc = probe_cert_days_left(paths.aik_cert, &days);
 
 	if (rc == 0 && days > 0) {
 		snprintf(note, cap,
@@ -783,7 +817,7 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 		return STAGE_PENDING;
 	}
 	if (rc != -ENOENT) {
-		snprintf(note, cap, "Cannot parse %s (%s)", PATH_AIK_CERT,
+		snprintf(note, cap, "Cannot parse %s (%s)", paths.aik_cert,
 			 strerror(-rc));
 		return STAGE_ERROR;
 	}
@@ -805,14 +839,22 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 static int st_enroll_apply(struct install_ctx *ctx)
 {
 	const char *argv[12];
+	struct profile_paths paths;
 	int days = 0;
 	int n = 0;
 	int rc;
 
-	if (probe_cert_days_left(PATH_AIK_CERT, &days) == 0) {
-		/* expired certificate: the agent recorded the CA endpoint
-		 * at first enrollment, so the guided path needs no flags */
-		const char *const rv[] = { PATH_AGENT_BIN, "--reenroll", NULL };
+	rc = enroll_profile(ctx, &paths);
+	if (rc < 0)
+		return rc;
+
+	if (probe_cert_days_left(paths.aik_cert, &days) == 0) {
+		/* expired certificate:
+		 * the profile recorded the CA endpoint at first enrollment,
+		 * so the guided path needs only the anchor that names the profile */
+		const char *const rv[] = { PATH_AGENT_BIN, "--reenroll",
+					   "--ca-cert", ctx->opts.ca_cert,
+					   NULL };
 
 		rc = run_cmd(&ctx->ui,
 			     "Refreshing the AIK certificate "
@@ -829,10 +871,8 @@ static int st_enroll_apply(struct install_ctx *ctx)
 		argv[n++] = "--ca-port";
 		argv[n++] = ctx->opts.ca_port;
 	}
-	if (ctx->opts.ca_cert) {
-		argv[n++] = "--ca-cert";
-		argv[n++] = ctx->opts.ca_cert;
-	}
+	argv[n++] = "--ca-cert";
+	argv[n++] = ctx->opts.ca_cert;
 	argv[n] = NULL;
 
 	rc = run_cmd(&ctx->ui,
@@ -867,6 +907,7 @@ static const char telemetry_summary[] =
 int install_self_check(struct install_ctx *ctx)
 {
 	struct floor_state st;
+	struct profile_paths paths;
 	int days = 0;
 	int ok = 1;
 	int rc_cert;
@@ -893,7 +934,9 @@ int install_self_check(struct install_ctx *ctx)
 	if (!agent_service_active())
 		ok = 0;
 
-	rc_cert = probe_cert_days_left(PATH_AIK_CERT, &days);
+	rc_cert = enroll_profile(ctx, &paths);
+	if (rc_cert == 0)
+		rc_cert = probe_cert_days_left(paths.aik_cert, &days);
 	if (rc_cert == 0 && days > 0) {
 		char buf[64];
 

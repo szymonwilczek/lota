@@ -111,13 +111,3 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	*out = st;
 	return 0;
 }
-
-int enroll_state_save(const struct enroll_state *st)
-{
-	return enroll_state_save_path(LOTA_ENROLL_STATE_PATH, st);
-}
-
-int enroll_state_load(struct enroll_state *out)
-{
-	return enroll_state_load_path(LOTA_ENROLL_STATE_PATH, out);
-}

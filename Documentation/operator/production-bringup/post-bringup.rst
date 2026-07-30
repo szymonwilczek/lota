@@ -140,9 +140,10 @@ Publisher policy stays with the publisher: a profile grants no publisher any
 say over this host's enforcement.
 
 First enrollment stays operator-driven. ``lota-attest.service`` carries
-``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
-the operator's first ``lota-agent --enroll`` records that state; afterwards the
-loop renews the certificate automatically. Start it after the first enrollment
+``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until
+the operator's first ``lota-agent --enroll`` creates a profile there (the
+directory itself ships with the package, so only its contents say anything);
+afterwards the loop renews the certificate automatically. Start it after the first enrollment
 (or it activates on the next boot):
 
 .. code-block:: sh

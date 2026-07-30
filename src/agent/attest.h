@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+#include "profile.h"
+
 /*
  * Operator-facing floor on the continuous-attestation interval,
  * enforced where the interval is read and reported by --help
@@ -65,7 +67,12 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
  * from the loaded AIK metadata. Safe to call once the IPC context exists and
  * the AIK metadata is loaded; a no-op until then.
  * aik_ttl mirrors the -aik-ttl / config value (0 selects the default).
+ * paths names the publisher profile whose enrollment is compared against the
+ * live AIK;
+ * NULL when no CA trust anchor is configured and there is therefore no enrollment
+ * to compare.
  */
-void publish_rotation_state(uint32_t aik_ttl);
+void publish_rotation_state(uint32_t aik_ttl,
+			    const struct profile_paths *paths);
 
 #endif /* LOTA_ATTEST_H */

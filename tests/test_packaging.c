@@ -159,8 +159,8 @@ static void test_attest_unit_isolated(void)
 		     strstr(line, "CAP_PERFMON") ||
 		     strstr(line, "CAP_SYS_RAWIO")))
 			powerful_cap = true;
-		if (strstr(line, "ConditionPathExists=") &&
-		    strstr(line, "/var/lib/lota/enroll_state.dat"))
+		if (strstr(line, "ConditionDirectoryNotEmpty=") &&
+		    strstr(line, "/var/lib/lota/profiles"))
 			enroll_gate = true;
 	}
 	fclose(fp);
@@ -170,7 +170,7 @@ static void test_attest_unit_isolated(void)
 		return;
 	}
 	if (!enroll_gate) {
-		FAIL("attest unit must gate on enroll_state.dat");
+		FAIL("attest unit must gate on a non-empty profiles directory");
 		return;
 	}
 	PASS();

@@ -261,8 +261,14 @@ int export_policy(int mode)
 	return 0;
 }
 
+/*
+ * @aik_cert_path: the enrolling profile's certificate, or NULL when no CA
+ *                 trust anchor is configured and the host therefore has no
+ *                 profile to read one from.
+ */
 static int build_attestation_report(const struct verifier_challenge *challenge,
-				    struct lota_attestation_report *report)
+				    struct lota_attestation_report *report,
+				    const char *aik_cert_path)
 {
 	struct tpm_quote_response quote_resp;
 	struct iommu_status iommu_status;
@@ -539,14 +545,19 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	report->tpm.ek_cert_size = 0;
 
 	/*
-	 * include the CA-issued AIK certificate from the last --enroll. The
-	 * verifier chains it to the attestation CA root to authenticate the
-	 * AIK; an unenrolled host carries no certificate and is rejected
-	 * under the production require-cert default
+	 * Include the CA-issued AIK certificate from the last --enroll against
+	 * this profile.
+	 * Verifier chains it to the attestation CA root to authenticate the AIK;
+	 * unenrolled host carries no certificate and is rejected under
+	 * the production require-cert default
 	 */
-	{
+	if (!aik_cert_path) {
+		report->tpm.aik_cert_size = 0;
+		lota_dbg("No CA trust anchor configured, so no profile to read "
+			 "an AIK certificate from");
+	} else {
 		size_t aik_cert_size = 0;
-		int aret = lota_read_file_bounded(LOTA_AIK_CERT_PATH,
+		int aret = lota_read_file_bounded(aik_cert_path,
 						  report->tpm.aik_certificate,
 						  LOTA_MAX_AIK_CERT_SIZE,
 						  &aik_cert_size);
@@ -603,7 +614,8 @@ cleanup:
  * Returns: 0 on success, negative errno on failure
  */
 static int attest_once(const char *server, int port, const char *ca_cert,
-		       int skip_verify, const uint8_t *pin_sha256, int verbose)
+		       int skip_verify, const uint8_t *pin_sha256,
+		       const struct profile_paths *paths, int verbose)
 {
 	struct net_context net_ctx;
 	int net_ctx_inited = 0;
@@ -660,7 +672,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		print_hex("  Nonce", challenge.nonce, LOTA_NONCE_SIZE);
 	}
 
-	ret = build_attestation_report(&challenge, &report);
+	ret = build_attestation_report(&challenge, &report,
+				       paths ? paths->aik_cert : NULL);
 	if (ret < 0) {
 		if (verbose)
 			fprintf(stderr, "Failed to build report: %s\n",
@@ -764,9 +777,46 @@ cleanup:
 	return ret;
 }
 
+/*
+ * Resolve the publisher profile the CA trust anchor names, into storage
+ * the caller owns for the lifetime of the attestation.
+ *
+ * Host attesting without an anchor has no profile, so it has no enrolled
+ * certificate to present and verifier refuses it under the production
+ * require-cert default.
+ *
+ * Say that here, where the anchor is missing, rather than leaving operator
+ * to read it off a rejection.
+ */
+static const struct profile_paths *
+resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
+{
+	int ret;
+
+	if (!ca_cert) {
+		lota_warn("No CA trust anchor configured: attesting without a "
+			  "publisher profile, so no CA-issued AIK certificate "
+			  "is presented");
+		return NULL;
+	}
+
+	ret = profile_paths_from_anchor(ca_cert, storage);
+	if (ret < 0) {
+		lota_warn("Cannot read the CA trust anchor %s (%s): attesting "
+			  "without a publisher profile",
+			  ca_cert, strerror(-ret));
+		return NULL;
+	}
+
+	lota_dbg("Publisher profile %s", storage->id);
+	return storage;
+}
+
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256)
 {
+	struct profile_paths storage;
+	const struct profile_paths *paths;
 	int ret;
 
 	printf("=== Remote Attestation ===\n\n");
@@ -836,7 +886,10 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 
-	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 1);
+	paths = resolve_attest_profile(ca_cert, &storage);
+
+	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, paths,
+			  1);
 
 	printf("\n=== Attestation %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
@@ -892,8 +945,12 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
  * whether the issued certificate has been outdated by a local rotation
  * (the enrolled generation no longer matching the live one), which an
  * operator clears with a guided lota-agent --reenroll.
+ *
+ * paths names the profile whose enrollment is compared against the live AIK;
+ * NULL when no CA trust anchor is configured, in which case there is no enrollment
+ * to compare and the flag stays clear.
  */
-void publish_rotation_state(uint32_t aik_ttl)
+void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 {
 	struct tpm_context *tpm = &g_agent.tpm_ctx;
 	struct enroll_state st;
@@ -913,7 +970,7 @@ void publish_rotation_state(uint32_t aik_ttl)
 	 * rotation has outdated the stored certificate.
 	 * With no record there is no way to tell, so do not raise the flag
 	 */
-	if (enroll_state_load(&st) == 0)
+	if (paths && enroll_state_load_path(paths->enroll_state, &st) == 0)
 		reenroll_required = st.aik_generation !=
 				    tpm->aik_meta.generation;
 
@@ -931,6 +988,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 			 int skip_verify, const uint8_t *pin_sha256,
 			 int interval_sec, uint32_t aik_ttl)
 {
+	struct profile_paths storage;
+	const struct profile_paths *paths;
 	int ret;
 	int consecutive_failures = 0;
 	int backoff_sec = 0;
@@ -947,6 +1006,8 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	lota_info("Continuous attestation starting");
 	lota_info("Server: %s:%d, interval: %d seconds", server, port,
 		  interval_sec);
+
+	paths = resolve_attest_profile(ca_cert, &storage);
 
 	/*
 	 * Long-running attestation loop: install tracer refusal and the
@@ -1052,19 +1113,20 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 	ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
 			  0);
-	publish_rotation_state(aik_ttl);
+	publish_rotation_state(aik_ttl, paths);
 
 	/*
 	 * Auto-renew the CA-issued AIK certificate:
 	 * it is short-lived (24h by default) and would otherwise lapse a day
 	 * after install.
-	 * Enabled whenever a CA endpoint was recorded at enroll time.
+	 * Enabled whenever this profile recorded a CA endpoint at enroll time.
 	 * Manual -reenroll stays the fallback when no endpoint is on disk.
 	 */
 	{
 		struct enroll_state est;
 
-		auto_renew = enroll_state_load(&est) == 0;
+		auto_renew = paths && enroll_state_load_path(
+					      paths->enroll_state, &est) == 0;
 		if (auto_renew)
 			lota_info("AIK certificate auto-renewal enabled");
 		else
@@ -1105,7 +1167,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 				 * and the now-required re-enrollment surface
 				 * over D-Bus immediately
 				 */
-				publish_rotation_state(aik_ttl);
+				publish_rotation_state(aik_ttl, paths);
 			}
 		}
 
@@ -1129,17 +1191,19 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 				  (uint64_t)mono.tv_nsec / 1000000;
 
 			if (mono_ms >= next_renew_ms &&
-			    aik_cert_lifetime(&remaining, &total) == 0 &&
+			    aik_cert_lifetime_path(paths->aik_cert, &remaining,
+						   &total) == 0 &&
 			    aik_cert_renew_due(remaining, total)) {
 				lota_info("AIK certificate renewal due "
 					  "(%lld s left of %lld s)",
 					  (long long)remaining,
 					  (long long)total);
-				ret = enroll_renew_cert(&g_agent.tpm_ctx);
+				ret = enroll_renew_cert(&g_agent.tpm_ctx,
+							paths);
 				if (ret == 0) {
 					renew_backoff = 0;
 					lota_info("AIK certificate renewed");
-					publish_rotation_state(aik_ttl);
+					publish_rotation_state(aik_ttl, paths);
 				} else {
 					int shift = renew_backoff;
 					int delay;
@@ -1169,7 +1233,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 		lota_dbg("Attestation round starting");
 		ret = attest_once(server, port, ca_cert, skip_verify,
-				  pin_sha256, 0);
+				  pin_sha256, paths, 0);
 
 		if (ret == 0) {
 			lota_info("Attestation successful");

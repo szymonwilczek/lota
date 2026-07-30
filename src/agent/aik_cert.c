@@ -18,7 +18,6 @@
 #include <openssl/types.h>
 
 #include "aik_cert.h"
-#include "enroll.h"
 #include "io_utils.h"
 #include "../../include/lota_enroll.h"
 
@@ -84,10 +83,4 @@ out:
 	*total_sec = total;
 	*remaining_sec = remaining;
 	return 0;
-}
-
-int aik_cert_lifetime(int64_t *remaining_sec, int64_t *total_sec)
-{
-	return aik_cert_lifetime_path(LOTA_AIK_CERT_PATH, remaining_sec,
-				      total_sec);
 }
