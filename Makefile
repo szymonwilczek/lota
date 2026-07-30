@@ -79,8 +79,13 @@ SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 # Shared-library ABI version. The soname carries the major only (bumped on an
 # incompatible ABI change); the on-disk file carries the full version and the
 # soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
-# layout. Independent of the release VERSION -- pre-1.0 ABI starts at 0.
-LOTA_ABI_MAJOR := 0
+# layout.
+#
+# Independent of the release VERSION: it moves when the ABI moves, not when the product does.
+#
+# Major 1 is the frozen surface
+# -- see Documentation/contributor/development/api-stability.rst.
+LOTA_ABI_MAJOR := 1
 LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
 
 # Detect target architecture (overridable)
@@ -319,8 +324,9 @@ $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
-$(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) | $(BUILD_DIR)
+$(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
 		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SDK_OBJS)
@@ -333,8 +339,10 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build server SDK shared library (versioned)
-$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) | $(BUILD_DIR)
+$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) \
+		Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
 		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SERVER_SDK_OBJS) -lcrypto
@@ -347,8 +355,10 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
 		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
@@ -358,8 +368,9 @@ $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(WINE
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
-		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) | $(BUILD_DIR)
+		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
 		$(call VERSION_SCRIPT_LDFLAGS,$@) \
 		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \

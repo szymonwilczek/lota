@@ -52,6 +52,21 @@ The filter applies to the shared libraries only. ``liblotagaming.a`` and
 whichever objects it references, including symbols that are not API. Static
 linking opts out of the ABI guarantee along with it.
 
+Soname and ABI version
+======================
+
+``LOTA_ABI_MAJOR`` in the top-level ``Makefile`` is the soname major every
+installed library carries, and it is **1**. It tracks the ABI, not the
+release: a 1.x product release does not move it, and it moves on the first
+incompatible change whether or not the release number moves with it.
+
+A ``.so.0`` soname tells a distribution packager the library may break at
+will, which is the opposite of what a declared surface says. The libraries
+are installed as
+``libX.so.MAJOR.MINOR.PATCH`` with the soname and the unversioned linker name
+as symlinks onto it, so two majors can coexist on a host when one eventually
+arrives.
+
 Adding and removing symbols
 ---------------------------
 
@@ -61,8 +76,8 @@ to a new version node below the current one, for example ``LOTAGAMING_1.1
 older node keeps running against the newer library.
 
 Removing a function, renaming it, or changing its signature or the layout of a
-struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR`` in the top-level
-``Makefile``, which changes every soname, and the old library can no longer be
-replaced in place. Do not work around a break by leaving the symbol in the
+struct it takes is an ABI break. It bumps ``LOTA_ABI_MAJOR``, which changes
+every soname, and the old library can no longer be replaced in place. Do not
+work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
 version script cannot catch.
