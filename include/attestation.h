@@ -144,10 +144,15 @@ struct lota_tpm_evidence {
 	uint8_t nonce[LOTA_NONCE_SIZE];
 
 	/*
-	 * Hardware identity derived from Endorsement Key.
-	 * SHA-256(EK public key) provides a unique, stable identifier
-	 * that is bound to the physical TPM and cannot be forged.
-	 * Used by verifier to detect hardware changes or cloning attempts.
+	 * Hardware identity derived from the Endorsement Key:
+	 * SHA-256(EK public key), stable per TPM.
+	 *
+	 * Verifier does not use it to identify the host -- that is the CA-assigned
+	 * device pseudonym in the AIK certificate subject, which the verifier can
+	 * check without ever seeing an EK.
+	 * What this field still does is enter the attestation binding nonce
+	 * (ComputeAttestationBindingNonce), so it is covered by the quote signature
+	 * and report cannot be replayed with it altered.
 	 */
 	uint8_t hardware_id[LOTA_HARDWARE_ID_SIZE];
 
