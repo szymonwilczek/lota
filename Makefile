@@ -947,6 +947,8 @@ install: check-version-tag all
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_anticheat.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_token.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_snapshot.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries

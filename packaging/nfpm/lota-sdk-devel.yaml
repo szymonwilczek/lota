@@ -59,6 +59,14 @@ contents:
     dst: /usr/include/lota/lota_anticheat.h
     file_info:
       mode: 0644
+  - src: ./include/lota_token.h
+    dst: /usr/include/lota/lota_token.h
+    file_info:
+      mode: 0644
+  - src: ./include/lota_snapshot.h
+    dst: /usr/include/lota/lota_snapshot.h
+    file_info:
+      mode: 0644
   - src: ./scripts/lota-proton-hook
     dst: /usr/bin/lota-proton-hook
     file_info:
