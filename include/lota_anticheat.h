@@ -198,7 +198,17 @@ struct lota_ac_info {
 	uint64_t session_start; /* epoch */
 	uint64_t last_heartbeat; /* epoch */
 	uint32_t heartbeat_seq; /* current counter */
-	uint32_t lota_flags; /* last known attestation flags */
+	/*
+	 * Last known attestation flags (LOTA_FLAG_* from lota_gaming.h)
+	 *
+	 * LOTA_FLAG_UPDATE_PENDING may be set on perfectly healthy session:
+	 * it says a package update replaced the agent binary and takes effect
+	 * on the next cold boot, not that anything is wrong now.
+	 * Surface it to the player if you like, but do not fold it into trust
+	 * decision -- the state field and the heartbeat verification remain
+	 * the only answers to whether this session is trustworthy.
+	 */
+	uint32_t lota_flags;
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
 	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from

@@ -1287,6 +1287,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		{ LOTA_FLAG_IOMMU_OK, "IOMMU_OK" },
 		{ LOTA_FLAG_BPF_LOADED, "BPF_LOADED" },
 		{ LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT" },
+		{ LOTA_FLAG_UPDATE_PENDING, "UPDATE_PENDING" },
 		/*
 		 * The flag this branch exists for.
 		 * Title that renders the decoded string is showing player why

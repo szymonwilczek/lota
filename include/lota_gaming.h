@@ -80,6 +80,20 @@ enum lota_error {
 #define LOTA_FLAG_SECURE_BOOT (1 << 4)
 
 /*
+ * Package update replaced the agent binary and takes effect on the next cold boot.
+ * Attestation is NOT failing: PCR 14 commits to the build that is still running
+ * and the token names that build, so everything continues to work.
+ *
+ * What the flag says is that the machine will present a different agent after
+ * its next restart, and that PCR 14 cannot be re-extended without hardware reset.
+ *
+ * It exists so a title can say that in one sentence at a moment of its choosing,
+ * instead of the player meeting it as a launch failure later.
+ * The flag is informational and never a reason to refuse a session on its own.
+ */
+#define LOTA_FLAG_UPDATE_PENDING (1 << 7)
+
+/*
  * The publisher this connection named verifies tokens itself.
  *
  * Publisher can run verifier, which judges the full attestation report and gives
@@ -95,7 +109,7 @@ enum lota_error {
  * The token's TPM signature, its nonce binding and its PCR digest are the evidence
  * in that arrangement.
  */
-#define LOTA_FLAG_TOKEN_ONLY (1 << 7)
+#define LOTA_FLAG_TOKEN_ONLY (1 << 8)
 
 /*
  * Subscription event types

@@ -66,6 +66,12 @@ On each host, once the new hash is pinned in the verifier tier:
    re-signed with the operator IMA key. One of the two is mandatory: without
    either, the agent refuses to start under enforcement, so a host that skips
    this comes back from its reboot with no agent at all.
+
+   While the host waits for that reboot the agent reports
+   ``LOTA_FLAG_UPDATE_PENDING`` alongside its normal flags, so a title can tell
+   the player a restart is coming rather than letting them meet it as a launch
+   failure. Attestation is unaffected until the reboot: PCR 14 commits to the
+   build still running and the token names that build.
 #. **Stop the running daemon.** ``lota-agent --shutdown`` -- ``systemctl stop``
    cannot, because the LSM hook blocks the kill.
 #. **Cold-reboot the host.** A full power cycle, not a warm reboot: PCR 14 only
