@@ -9,6 +9,47 @@ LOTA is a framework, so parts of it are surface an integrator builds against
 and the rest is implementation. Only what this page names is public. Anything
 else may change in any release, whatever its linkage says.
 
+Installed headers
+=================
+
+``lota-sdk-devel`` installs six headers into ``/usr/include/lota``, and that
+set is the public C API:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Header
+     - What it declares
+   * - ``lota_gaming.h``
+     - The client API: connect to the agent, query status, fetch and
+       serialize a token, subscribe to events.
+   * - ``lota_server.h``
+     - The verification API a game or workload server links: parse and
+       verify a token against an AIK.
+   * - ``lota_anticheat.h``
+     - The session and heartbeat layer an anti-cheat provider consumes.
+   * - ``lota_wine_hook.h``
+     - The ``LD_PRELOAD`` hook's state accessors and the paths and names of
+       the files it writes.
+   * - ``lota_token.h``
+     - The token struct ``lota_server_parse_token()`` fills.
+   * - ``lota_snapshot.h``
+     - The header of the atomic snapshot file, for a reader that parses it
+       rather than calling the SDK.
+
+Each must compile on its own against the installed set alone. A public
+header that pulls in one that is not installed builds in tree, where
+everything is under ``-Iinclude``, and fails for the integrator.
+
+``include/lota_ipc.h`` is deliberately **not** installed. It is the wire
+between the agent and the SDK that ships with it, so a caller that speaks
+the socket directly is pinned to the agent build it compiled against, and
+the protocol changes whenever both sides change together. The gaming SDK
+owns that protocol and offers the same capability behind an ABI that does
+carry a promise. Every other header under ``include/`` is agent, verifier
+or BPF internals.
+
 Shared-library symbols
 ======================
 
