@@ -1052,9 +1052,24 @@ static int persistent_handle_in_use(struct tpm_context *ctx, uint32_t handle)
 	return found;
 }
 
+/*
+ * Forget the AIK material cached for whichever profile was bound before.
+ * The rotation record and the userAuth belong to one key; carrying either across
+ * rebind would quote one publisher's key with another's auth.
+ */
+static void tpm_forget_bound_aik(struct tpm_context *ctx)
+{
+	memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+	ctx->aik_meta_loaded = false;
+	secure_bzero(ctx->aik_auth, sizeof(ctx->aik_auth));
+	ctx->aik_auth_loaded = false;
+}
+
 int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
+	char previous_meta_path[sizeof(ctx->aik_meta_path)];
+	uint32_t previous_handle;
 	size_t candidate_count = 0;
 	uint32_t handle = 0;
 	int ret;
@@ -1062,15 +1077,23 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 	if (!ctx || !ctx->initialized || !paths || !paths->aik_meta[0])
 		return -EINVAL;
 
+	previous_handle = ctx->aik_handle;
+	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
+		 ctx->aik_meta_path);
+
 	if (!ctx->aik_meta_path_from_env) {
 		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
 			     "%s", paths->aik_meta) >=
 		    (int)sizeof(ctx->aik_meta_path))
 			return -ENAMETOOLONG;
+		if (strcmp(previous_meta_path, ctx->aik_meta_path) != 0)
+			tpm_forget_bound_aik(ctx);
 	}
 
 	ret = profile_aik_handle_load(paths, &handle);
 	if (ret == 0) {
+		if (handle != previous_handle)
+			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = handle;
 		return 0;
 	}
@@ -1101,6 +1124,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		ret = profile_aik_handle_save(paths, candidates[i]);
 		if (ret < 0)
 			return ret;
+		if (candidates[i] != previous_handle)
+			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = candidates[i];
 		return 0;
 	}
