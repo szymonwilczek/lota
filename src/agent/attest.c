@@ -1147,7 +1147,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 					if (shift > 5)
 						shift = 5;
 					renew_backoff++;
-					delay = MIN_ATTEST_INTERVAL *
+					delay = ATTEST_BACKOFF_BASE_SEC *
 						(1 << shift);
 					if (delay > MAX_BACKOFF_SECONDS)
 						delay = MAX_BACKOFF_SECONDS;
@@ -1196,7 +1196,7 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 					shift = 5; /* 10 * 2^5 = 320 >
 						      MAX_BACKOFF_SECONDS */
 				backoff_sec =
-					MIN_ATTEST_INTERVAL * (1 << shift);
+					ATTEST_BACKOFF_BASE_SEC * (1 << shift);
 			}
 			if (backoff_sec > MAX_BACKOFF_SECONDS)
 				backoff_sec = MAX_BACKOFF_SECONDS;
