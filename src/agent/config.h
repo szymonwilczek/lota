@@ -24,6 +24,15 @@
 /* Default config file path */
 #define LOTA_CONFIG_DEFAULT_PATH "/etc/lota/lota.conf"
 
+/*
+ * Default endpoints.
+ * Stated here rather than beside the CLI because the config file, the CLI
+ * and every publisher profile all need the same two numbers, and config.h
+ * is the header they can all reach.
+ */
+#define LOTA_DEFAULT_VERIFIER_PORT 8443
+#define LOTA_DEFAULT_CA_PORT 8444
+
 /* Maximum line length in config file */
 #define LOTA_CONFIG_MAX_LINE 1024
 
@@ -43,6 +52,45 @@
  * struct ipc_context.extra[]. Asserted in main_utils.c.
  */
 #define LOTA_CONFIG_MAX_CONTAINER_LISTENERS 4
+
+/*
+ * Publisher profiles.
+ *
+ * Player's machine has one state and several publishers judging it, each with
+ * its own attestation CA, its own verifier and its own cadence.
+ *
+ * Profile list is how the agent is told about more than one of them, so that
+ * buying a second game does not mean re-provisioning the host.
+ *
+ * The section name is an operator-facing label only.
+ * Profile's identity is the SHA-256 of its CA trust anchor's SubjectPublicKeyInfo
+ * -- the endpoint is mutable and spoofable, while the anchor is what enrollment
+ *  actually verifies against, so it survives an address change and cannot collide
+ *  between two publishers sharing a hostname.
+ */
+#define LOTA_CONFIG_MAX_PROFILES 8
+#define LOTA_CONFIG_MAX_PROFILE_NAME 64
+
+struct lota_profile {
+	char name[LOTA_CONFIG_MAX_PROFILE_NAME];
+
+	/* Attestation CA the profile enrolls against */
+	char ca[256];
+	int ca_port;
+
+	/*
+	 * Trust anchor for both the CA and the verifier connection.
+	 * Required: it is what the profile's identity is derived from
+	 */
+	char ca_cert[PATH_MAX];
+
+	/* Verifier the profile reports to */
+	char verifier[256];
+	int verifier_port;
+
+	/* 0 = inherit the top-level attest_interval */
+	int attest_interval;
+};
 
 struct lota_config {
 	/* Verifier connection */
@@ -116,6 +164,10 @@ struct lota_config {
 	uint32_t container_listener_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int container_listener_uid_count;
 
+	/* Publisher profiles, in the order the config file lists them. */
+	struct lota_profile profiles[LOTA_CONFIG_MAX_PROFILES];
+	int profile_count;
+
 	/* Log level: "debug", "info", "warn", "error" */
 	char log_level[16];
 };
@@ -136,6 +188,11 @@ void config_init(struct lota_config *cfg);
  *
  * Unknown keys are logged to stderr and cause an error return (fail-closed).
  * Malformed lines are logged but do not stop parsing.
+ *
+ * Line of the form [profile "name"] opens a publisher profile.
+ * Every key after it belongs to that profile until the next section header
+ * or the end of the file; there is no way back to the top level,
+ * so the top-level keys belong above the first profile.
  */
 int config_load(struct lota_config *cfg, const char *path);
 

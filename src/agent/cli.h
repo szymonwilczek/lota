@@ -23,8 +23,6 @@
 #include "net.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
-#define LOTA_CLI_DEFAULT_VERIFIER_PORT 8443
-#define LOTA_CLI_DEFAULT_CA_PORT 8444
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 struct cli_options {

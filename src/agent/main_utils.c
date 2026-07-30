@@ -14,7 +14,6 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
-#include "cli.h"
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
@@ -119,7 +118,7 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
-	       LOTA_CLI_DEFAULT_CA_PORT);
+	       LOTA_DEFAULT_CA_PORT);
 	printf("  --enroll-token-file PATH\n");
 	printf("                    File holding a per-tenant enrollment "
 	       "token to\n");
