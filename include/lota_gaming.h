@@ -150,11 +150,33 @@ struct lota_token {
 
 /*
  * Connection options
+ *
+ * struct_size is set by the caller to sizeof(struct lota_connect_opts)
+ * and is how this structure grows without second entry point:
+ * the library reads only the members the caller's build knew about, and caller
+ * built against a newer header than the library it links keeps working because
+ * the library ignores what it does not understand.
+ * Same contract as statx(2) and sched_setattr(2).
+ *
+ *     struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+ *
+ * Zero struct_size is refused rather than guessed at: it means the caller zeroed
+ * the structure and never set the field, and guessing size would read members
+ * the caller never wrote.
  */
 struct lota_connect_opts {
+	size_t struct_size; /* sizeof(struct lota_connect_opts) */
 	const char *socket_path; /* Custom socket path (NULL = default) */
 	int timeout_ms; /* Connection timeout in ms (0 = default 5000) */
 };
+
+/*
+ * Size of the structure as of the 1.0 surface.
+ * Caller passing less than this is refused;
+ * Caller passing more has members this library does not read.
+ */
+#define LOTA_CONNECT_OPTS_SIZE_MIN \
+	(offsetof(struct lota_connect_opts, timeout_ms) + sizeof(int))
 
 /*
  * lota_connect - Connect to the LOTA agent

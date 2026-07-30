@@ -16,6 +16,31 @@ Build with ``make examples`` from the repository root. The binary lands at
 ``build/examples/demo_anticheat`` and links against the gaming + anticheat +
 server SDKs that ``make all`` already produces under ``build/``.
 
+Configuring the session
+-----------------------
+
+``struct lota_ac_config`` starts with ``struct_size``, which the caller sets to
+its own ``sizeof``. That is what lets the structure gain members after 1.0
+without a second entry point: the library reads only the members the caller's
+size covers, so a game built against a newer header than the library it links
+keeps working. A configuration that leaves the field zero is refused rather
+than guessed at -- reading members the caller never wrote is what the field
+exists to prevent -- so an integrator copying this reference should copy the
+first line with it:
+
+.. code-block:: c
+
+   struct lota_ac_config cfg = {
+           .struct_size = sizeof(cfg),
+           .provider = LOTA_AC_PROVIDER_EAC,
+           .game_id = "trust-pong",
+           .direct = 1,
+   };
+
+``struct lota_connect_opts`` carries the same first member for the same
+reason, on the rare path where a game opens the agent connection itself
+instead of letting ``lota_ac_init()`` do it.
+
 Flags
 -----
 

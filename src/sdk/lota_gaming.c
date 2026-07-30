@@ -448,6 +448,15 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	int timeout_ms;
 	int fd = -1;
 
+	/*
+	 * Caller that passes options has to say how big they are.
+	 * Refusing zero here costs integrator one assignment and buys every
+	 * later member of this structure way in;
+	 * guessing would read memory the caller never wrote
+	 */
+	if (opts && opts->struct_size < LOTA_CONNECT_OPTS_SIZE_MIN)
+		return NULL;
+
 	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms :
 						      DEFAULT_TIMEOUT_MS;
 
@@ -595,8 +604,11 @@ int lota_get_status(struct lota_client *client, struct lota_status *status)
 	if (!status)
 		return LOTA_ERR_INVALID_ARG;
 
+	memset(status, 0, sizeof(*status));
+
 	/* build request */
 	memset(&req, 0, sizeof(req));
+	memset(&ipc_status, 0, sizeof(ipc_status));
 	req.magic = LOTA_IPC_MAGIC;
 	req.version = LOTA_IPC_VERSION;
 	req.cmd = LOTA_IPC_CMD_GET_STATUS;

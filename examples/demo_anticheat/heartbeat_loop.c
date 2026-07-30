@@ -473,6 +473,7 @@ int main(int argc, char **argv)
 	}
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = opt.provider,
 		.game_id = opt.game_id,
 		.direct = 1,
