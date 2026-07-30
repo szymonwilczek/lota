@@ -326,6 +326,148 @@ out:
 	EVP_PKEY_free(key);
 }
 
+/*
+ * Handle allocation.
+ * Record is what keeps a publisher on its own key across config edit,
+ * so what is pinned here is that a recorded handle is never handed out again
+ * and that the order does not depend on the order profiles were created in.
+ */
+static void write_handle_record(const char *base, const char *profile_id,
+				const char *contents)
+{
+	char dir[PATH_MAX];
+	char path[PATH_MAX + 64];
+	FILE *f;
+
+	snprintf(dir, sizeof(dir), "%s/%s", base, profile_id);
+	mkdir(base, 0700);
+	mkdir(dir, 0700);
+	snprintf(path, sizeof(path), "%s/%s", dir,
+		 LOTA_PROFILE_AIK_HANDLE_FILE);
+	f = fopen_priv(path, "w");
+	if (!f) {
+		CHECK(0, "write a sibling handle record");
+		return;
+	}
+	fputs(contents, f);
+	fclose(f);
+}
+
+static void remove_profile_dir(const char *base, const char *profile_id)
+{
+	char path[PATH_MAX + 64];
+
+	snprintf(path, sizeof(path), "%s/%s/%s", base, profile_id,
+		 LOTA_PROFILE_AIK_HANDLE_FILE);
+	unlink(path);
+	snprintf(path, sizeof(path), "%s/%s", base, profile_id);
+	rmdir(path);
+}
+
+static void test_handle_record_round_trip(void)
+{
+	char der_path[256];
+	char base[256];
+	struct profile_paths paths;
+	uint32_t handle = 0;
+	EVP_PKEY *key = EVP_EC_gen("P-256");
+	X509 *cert = NULL;
+
+	tmp_path(der_path, sizeof(der_path), "handle.der");
+	snprintf(base, sizeof(base), "/tmp/lota-profile-hbase.%d", getpid());
+
+	if (!key) {
+		CHECK(0, "key generation");
+		goto out;
+	}
+	cert = mint_cert(key, "publisher-a", 1);
+	if (!cert || write_cert_der(der_path, cert) != 0 ||
+	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
+		CHECK(0, "profile setup");
+		goto out;
+	}
+
+	CHECK(profile_aik_handle_load(&paths, &handle) == -ENOENT,
+	      "a profile that has not provisioned records no handle");
+
+	CHECK(profile_dir_ensure(&paths) == 0, "profile directory");
+	CHECK(profile_aik_handle_save(&paths, 0x81010011) == 0,
+	      "handle is recorded");
+	CHECK(profile_aik_handle_load(&paths, &handle) == 0 &&
+		      handle == 0x81010011,
+	      "recorded handle reads back");
+	CHECK(profile_aik_handle_save(&paths, 0) == -EINVAL,
+	      "handle 0 is not a handle");
+
+	unlink(paths.aik_handle);
+	rmdir(paths.dir);
+	rmdir(base);
+
+out:
+	unlink(der_path);
+	X509_free(cert);
+	EVP_PKEY_free(key);
+}
+
+static void test_handle_candidates(void)
+{
+	const uint32_t base_handle = 0x81010010;
+	uint32_t out[LOTA_PROFILE_MAX_AIK_HANDLES];
+	char base[256];
+	size_t n = 0;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-cbase.%d", getpid());
+
+	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+					    LOTA_PROFILE_MAX_AIK_HANDLES,
+					    &n) == 0 &&
+		      n == 4 && out[0] == base_handle &&
+		      out[3] == base_handle + 3,
+	      "with no profiles the whole range is free");
+
+	/* two publishers hold the first and the third slot */
+	write_handle_record(base, "aaaa", "0x81010010\n");
+	write_handle_record(base, "cccc", "0x81010012\n");
+
+	/* profile that exists but has not provisioned records nothing */
+	{
+		char dir[PATH_MAX];
+
+		snprintf(dir, sizeof(dir), "%s/%s", base, "bbbb");
+		mkdir(dir, 0700);
+	}
+
+	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+					    LOTA_PROFILE_MAX_AIK_HANDLES,
+					    &n) == 0 &&
+		      n == 2 && out[0] == base_handle + 1 &&
+		      out[1] == base_handle + 3,
+	      "recorded handles are skipped, the rest stays in order");
+
+	write_handle_record(base, "dddd", "0x81010011\n");
+	write_handle_record(base, "eeee", "0x81010013\n");
+	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+					    LOTA_PROFILE_MAX_AIK_HANDLES,
+					    &n) == 0 &&
+		      n == 0,
+	      "a full range offers nothing rather than reusing a handle");
+
+	/* unreadable record must not silently free the slot it names */
+	write_handle_record(base, "cccc", "not-a-handle\n");
+	CHECK(profile_aik_handle_candidates(base, base_handle, 4, out,
+					    LOTA_PROFILE_MAX_AIK_HANDLES,
+					    &n) == 0 &&
+		      n == 1 && out[0] == base_handle + 2,
+	      "a corrupt record frees its slot for reallocation");
+
+	remove_profile_dir(base, "aaaa");
+	remove_profile_dir(base, "bbbb");
+	remove_profile_dir(base, "cccc");
+	remove_profile_dir(base, "dddd");
+	remove_profile_dir(base, "eeee");
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -333,6 +475,8 @@ int main(void)
 	test_identity_follows_the_key();
 	test_unusable_anchor_is_refused();
 	test_paths_and_directory();
+	test_handle_record_round_trip();
+	test_handle_candidates();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

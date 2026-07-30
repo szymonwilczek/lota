@@ -9,10 +9,14 @@
  * the TPM and network stack the enrollment ceremony pulls in.
  */
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -157,6 +161,12 @@ int profile_paths_from_anchor_base(const char *base_dir,
 	if (snprintf(p.aik_cert, sizeof(p.aik_cert), "%s/%s", p.dir,
 		     LOTA_PROFILE_AIK_CERT_FILE) >= (int)sizeof(p.aik_cert))
 		return -ENAMETOOLONG;
+	if (snprintf(p.aik_meta, sizeof(p.aik_meta), "%s/%s", p.dir,
+		     LOTA_PROFILE_AIK_META_FILE) >= (int)sizeof(p.aik_meta))
+		return -ENAMETOOLONG;
+	if (snprintf(p.aik_handle, sizeof(p.aik_handle), "%s/%s", p.dir,
+		     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(p.aik_handle))
+		return -ENAMETOOLONG;
 
 	*out = p;
 	return 0;
@@ -191,5 +201,151 @@ int profile_dir_ensure(const struct profile_paths *paths)
 	if (mkdir(paths->dir, 0700) != 0 && errno != EEXIST)
 		return -errno;
 
+	return 0;
+}
+
+/* Read recorded handle out of one profile directory's aik_handle file */
+static int handle_read(const char *path, uint32_t *out)
+{
+	char buf[32];
+	unsigned long v;
+	char *end;
+	ssize_t n;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno; /* -ENOENT: nothing allocated yet */
+
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n < 0)
+		return -errno;
+	buf[n] = '\0';
+
+	errno = 0;
+	v = strtoul(buf, &end, 0);
+	if (errno != 0 || end == buf || v == 0 || v > UINT32_MAX)
+		return -EINVAL;
+	/* only whitespace may follow the number */
+	for (; *end; end++) {
+		if (*end != '\n' && *end != '\r' && *end != ' ' && *end != '\t')
+			return -EINVAL;
+	}
+
+	*out = (uint32_t)v;
+	return 0;
+}
+
+int profile_aik_handle_load(const struct profile_paths *paths, uint32_t *out)
+{
+	if (!paths || !out || paths->aik_handle[0] == '\0')
+		return -EINVAL;
+	return handle_read(paths->aik_handle, out);
+}
+
+int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle)
+{
+	char tmp[PATH_MAX];
+	char line[32];
+	int len, fd, ret;
+
+	if (!paths || paths->aik_handle[0] == '\0' || handle == 0)
+		return -EINVAL;
+
+	if (snprintf(tmp, sizeof(tmp), "%s.tmp", paths->aik_handle) >=
+	    (int)sizeof(tmp))
+		return -ENAMETOOLONG;
+
+	len = snprintf(line, sizeof(line), "0x%08X\n", handle);
+	if (len <= 0 || len >= (int)sizeof(line))
+		return -EINVAL;
+
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -errno;
+	if (write(fd, line, (size_t)len) != len) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp);
+		return ret;
+	}
+	if (fsync(fd) < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp);
+		return ret;
+	}
+	if (close(fd) < 0) {
+		ret = -errno;
+		unlink(tmp);
+		return ret;
+	}
+	if (rename(tmp, paths->aik_handle) < 0) {
+		ret = -errno;
+		unlink(tmp);
+		return ret;
+	}
+	return 0;
+}
+
+int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
+				  uint32_t count, uint32_t *out, size_t out_max,
+				  size_t *out_count)
+{
+	uint32_t taken[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t taken_count = 0;
+	struct dirent *ent;
+	size_t written = 0;
+	DIR *dir;
+
+	if (!base_dir || !out || !out_count || count == 0 ||
+	    count > LOTA_PROFILE_MAX_AIK_HANDLES)
+		return -EINVAL;
+
+	*out_count = 0;
+
+	dir = opendir(base_dir);
+	if (!dir) {
+		/* no profile has ever been created, so nothing is taken */
+		if (errno == ENOENT)
+			goto emit;
+		return -errno;
+	}
+
+	while ((ent = readdir(dir)) != NULL) {
+		char path[PATH_MAX];
+		uint32_t handle = 0;
+
+		if (ent->d_name[0] == '.')
+			continue;
+		if (snprintf(path, sizeof(path), "%s/%s/%s", base_dir,
+			     ent->d_name,
+			     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(path))
+			continue;
+		/* profile that has not provisioned records nothing */
+		if (handle_read(path, &handle) < 0)
+			continue;
+		if (taken_count < LOTA_PROFILE_MAX_AIK_HANDLES)
+			taken[taken_count++] = handle;
+	}
+	closedir(dir);
+
+emit:
+	for (uint32_t i = 0; i < count && written < out_max; i++) {
+		uint32_t handle = base + i;
+		bool used = false;
+
+		for (size_t j = 0; j < taken_count; j++) {
+			if (taken[j] == handle) {
+				used = true;
+				break;
+			}
+		}
+		if (!used)
+			out[written++] = handle;
+	}
+
+	*out_count = written;
 	return 0;
 }

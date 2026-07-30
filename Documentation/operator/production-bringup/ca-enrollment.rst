@@ -136,6 +136,17 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+The AIK is part of the profile, not shared across it. Each publisher's
+enrollment provisions its own key, in its own TPM persistent slot, with its own
+rotation metadata and userAuth -- a shared key would be a stable handle two
+publishers could correlate the same machine through. The slot is taken from a
+bounded range (``0x81010010`` upwards, sized to the profile limit), recorded in
+the profile so a config edit cannot shift a publisher onto another one's key,
+and a slot already holding an object the host did not record is skipped rather
+than evicted. A host that runs out of the range refuses the enrollment instead
+of reusing a key; persistent slots are shared with everything else on the
+machine, so raising the ceiling is a deliberate act, not an automatic one.
+
 The first enrollment records the CA endpoint in that profile, so the running
 agent renews the certificate on its own against that endpoint as it nears
 expiry (it re-enrolls once the cert enters its final third of validity, backing

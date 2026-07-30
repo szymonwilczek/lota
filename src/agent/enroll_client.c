@@ -369,6 +369,19 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 		return ret;
 	}
 
+	ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
+	if (ret < 0) {
+		fprintf(stderr,
+			ret == -ENOSPC ?
+				"No TPM persistent handle left for another "
+				"publisher: %s\n" :
+				"Failed to bind the publisher profile: %s\n",
+			strerror(-ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		return ret;
+	}
+
 	printf("Checking AIK...\n");
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {

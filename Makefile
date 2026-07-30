@@ -1009,15 +1009,15 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
@@ -1118,11 +1118,11 @@ $(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 

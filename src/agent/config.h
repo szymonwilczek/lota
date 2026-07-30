@@ -20,6 +20,7 @@
 #include <stdio.h>
 
 #include "../../include/lota.h"
+#include "profile.h"
 
 /* Default config file path */
 #define LOTA_CONFIG_DEFAULT_PATH "/etc/lota/lota.conf"
@@ -70,6 +71,10 @@
  */
 #define LOTA_CONFIG_MAX_PROFILES 8
 #define LOTA_CONFIG_MAX_PROFILE_NAME 64
+
+/* Every configured profile has to have an AIK handle to be given */
+_Static_assert(LOTA_PROFILE_MAX_AIK_HANDLES >= LOTA_CONFIG_MAX_PROFILES,
+	       "the AIK handle range must cover every configurable profile");
 
 struct lota_profile {
 	char name[LOTA_CONFIG_MAX_PROFILE_NAME];
