@@ -319,6 +319,8 @@ jobs:
             examples/cs2/scenarios/verify-attested.sh \
             tests/integration/test_bpf_gates.sh \
             src/initramfs/90lota/module-setup.sh
+          shellcheck -s sh -S error \
+            packaging/nfpm/scripts/agent-postinstall.sh
 
   package-manifests:
     name: package manifests (nfpm vs spec)

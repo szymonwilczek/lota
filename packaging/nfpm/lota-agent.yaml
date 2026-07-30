@@ -37,6 +37,7 @@ overrides:
       - libseccomp
       - systemd
       - dracut
+      - fsverity-utils
 
 contents:
   - src: ./build/lota-agent
