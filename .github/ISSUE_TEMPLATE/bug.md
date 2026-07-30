@@ -29,7 +29,7 @@ What should happen, and what happens instead. Quote errors verbatim.
 - Version / commit:
 - Component (agent / verifier / attest-CA / SDK / fleet CLI / something else):
 - Kernel and distro:
-- TPM (hardware / swtpm / vTPM), firmware (UEFI+SB / BIOS legacy):
+- TPM (hardware / swtpm / vTPM), Secure Boot on/off:
 
 ## Logs
 
