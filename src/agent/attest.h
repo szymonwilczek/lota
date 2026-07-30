@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+#include "config.h"
 #include "profile.h"
 
 /*
@@ -57,9 +58,20 @@ _Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);
-int do_continuous_attest(const char *server, int port, const char *ca_cert,
-			 int skip_verify, const uint8_t *pin_sha256,
-			 int interval_sec, uint32_t aik_ttl);
+/*
+ * Continuous attestation.
+ *
+ * @cfg names the publisher profiles to report to; with profile list configured
+ * it is the target list, each profile reporting to its own verifier on its own
+ * cadence and signing with its own AIK.
+ * With no profiles (or no config) the single server/port/ca_cert the caller
+ * resolved is the only target.
+ * @interval_sec is the cadence a profile that states none inherits.
+ */
+int do_continuous_attest(const struct lota_config *cfg, const char *server,
+			 int port, const char *ca_cert, int skip_verify,
+			 const uint8_t *pin_sha256, int interval_sec,
+			 uint32_t aik_ttl);
 
 /*
  * Publish the current AIK rotation state (generation, provisioned time,

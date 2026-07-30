@@ -194,9 +194,37 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				"the publisher profile the AIK certificate is "
 				"read from\n");
 		}
+		/*
+		 * profile list is the target list, so the single-verifier flags
+		 * no longer have one target to apply to.
+		 * Refusing beats ignoring them: operator who passed --server means it
+		 */
+		if (cfg && cfg->profile_count > 0) {
+			if (opts->server_overridden) {
+				fprintf(stderr,
+					"ERROR: --server names one verifier, "
+					"but %d publisher profile(s) are "
+					"configured.\nRemove the flag, or the "
+					"profiles, so there is one answer to "
+					"where this host reports.\n",
+					cfg->profile_count);
+				return 1;
+			}
+			if (opts->has_pin) {
+				fprintf(stderr,
+					"ERROR: --pin-sha256 pins one "
+					"verifier's certificate, but %d "
+					"publisher profile(s) are "
+					"configured.\nEach profile is anchored "
+					"by its own ca_cert instead.\n",
+					cfg->profile_count);
+				return 1;
+			}
+		}
+
 		if (opts->attest_interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
-				opts->server_addr, opts->server_port,
+				cfg, opts->server_addr, opts->server_port,
 				opts->ca_cert_path, opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
 				opts->attest_interval, opts->aik_ttl));

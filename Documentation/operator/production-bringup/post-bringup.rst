@@ -139,6 +139,22 @@ keeps the same profile, and two publishers sharing a hostname cannot collide.
 Publisher policy stays with the publisher: a profile grants no publisher any
 say over this host's enforcement.
 
+The list is what the attestation loop reports to. Every profile's verifier gets
+its own report on that profile's cadence, signed with that publisher's own AIK,
+and each profile carries its own failure state -- one unreachable verifier
+backs off its own reporting and leaves the others on schedule. Since the list
+replaces the single verifier rather than adding to it, ``--server`` and
+``--pin-sha256`` are refused while profiles are configured; each profile is
+anchored by its own ``ca_cert``.
+
+The host still gives one answer to "is this machine attested": the status the
+SDK reports is asserted only while **every** configured publisher is satisfied,
+and the validity window closes at the earliest of theirs. A title cannot yet
+say which publisher it is asking about, so the conservative answer is the only
+honest one. For the same reason, tokens issued over IPC are signed by the first
+profile's AIK and another publisher's relying party will refuse them; the agent
+says so at startup when more than one profile is configured.
+
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until
 the operator's first ``lota-agent --enroll`` creates a profile there (the

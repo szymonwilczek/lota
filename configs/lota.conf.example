@@ -161,6 +161,13 @@ log_level = info
 # follow.
 # `lota-agent --dump-config` prints profiles last for the same reason.
 #
+# Profile list is the attestation loop's target list:
+# the agent reports to every profile's verifier on that profile's cadence,
+# signing each report with that publisher's own AIK, and one unreachable verifier
+# backs off only its own reporting.
+# Because the list replaces the single verifier above, --server and --pin-sha256
+# are refused while profiles are configured.
+#
 # [profile "publisher-a"]
 # ca = ca.publisher-a.example
 # ca_cert = /etc/lota/publisher-a.pem
