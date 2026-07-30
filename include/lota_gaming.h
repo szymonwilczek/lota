@@ -14,14 +14,18 @@
  *       return;
  *   }
  *
+ *   Pass the 32-byte challenge the server issued,
+ *   never NULL in production:
+ *   it is what stops the server accepting a replayed token.
+ *
  *   if (lota_is_attested(client)) {
  *       struct lota_token token;
- *       if (lota_get_token(client, NULL, &token) == LOTA_OK) {
- *           Serialize token and send to game server.
+ *       if (lota_get_token(client, nonce, &token) == LOTA_OK) {
  *           size_t sz = lota_token_serialized_size(&token);
  *           uint8_t *buf = malloc(sz);
- *           lota_token_serialize(&token, buf, sz);
- *           Send buf (sz bytes) to game server.
+ *           size_t written = 0;
+ *           if (lota_token_serialize(&token, buf, sz, &written) == LOTA_OK)
+ *               Send buf (written bytes) to the game server.
  *           free(buf);
  *           lota_token_free(&token);
  *       }

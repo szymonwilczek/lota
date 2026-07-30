@@ -334,6 +334,7 @@ jobs:
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
+            examples/ci-gate/run.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \
