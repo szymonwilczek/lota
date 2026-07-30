@@ -60,7 +60,6 @@ func wipeReportSensitive(report *types.AttestationReport) {
 	wipeBytes(report.TPM.AttestData[:])
 	wipeBytes(report.TPM.AIKPublic[:])
 	wipeBytes(report.TPM.AIKCertificate[:])
-	wipeBytes(report.TPM.EKCertificate[:])
 	wipeBytes(report.TPM.Nonce[:])
 	wipeBytes(report.TPM.PrevAIKPublic[:])
 	wipeBytes(report.EventLog)
@@ -165,9 +164,6 @@ func validateTPMFieldSizes(report *types.AttestationReport) error {
 	}
 	if int(report.TPM.AIKCertSize) > len(report.TPM.AIKCertificate) {
 		return fmt.Errorf("invalid aik_cert_size: %d > %d", report.TPM.AIKCertSize, len(report.TPM.AIKCertificate))
-	}
-	if int(report.TPM.EKCertSize) > len(report.TPM.EKCertificate) {
-		return fmt.Errorf("invalid ek_cert_size: %d > %d", report.TPM.EKCertSize, len(report.TPM.EKCertificate))
 	}
 	if int(report.TPM.AttestSize) > len(report.TPM.AttestData) {
 		return fmt.Errorf("invalid attest_size: %d > %d", report.TPM.AttestSize, len(report.TPM.AttestData))

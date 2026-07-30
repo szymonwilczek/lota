@@ -19,8 +19,17 @@
 #include <stdbool.h>
 #endif
 
-/* Protocol version */
-#define LOTA_VERSION_MAJOR 1
+/*
+ * Attestation report wire version.
+ * Major changes on breaking report layout change, which is a flag-day:
+ * the verifier accepts exactly one version, so agents and verifiers cross
+ * the boundary together.
+ *
+ * Major 2 dropped the always-empty ek_certificate field and made the trailing
+ * ESRT section mandatory.
+ * See Documentation/operator/version-compatibility.rst
+ */
+#define LOTA_VERSION_MAJOR 2
 #define LOTA_VERSION_MINOR 0
 #define LOTA_VERSION ((LOTA_VERSION_MAJOR << 16) | LOTA_VERSION_MINOR)
 

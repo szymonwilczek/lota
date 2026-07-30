@@ -194,7 +194,9 @@ func encodeFuzzReportSpec(s *fuzzReportSpec) []byte {
 // driven by its trust logic rather than by malformed-input rejection
 func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types.NonceSize]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))
-	buf := make([]byte, types.MinReportSize)
+	// fixed struct plus the two variable-section length prefixes;
+	// mandatory ESRT section is appended at the end
+	buf := make([]byte, types.FixedReportSize+8)
 	offset := 0
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.ReportMagic)
@@ -261,11 +263,6 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
-	// EK certificate left empty
-	offset += types.MaxEKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
-
 	copy(buf[offset:], challengeNonce[:])
 	offset += types.NonceSize
 	copy(buf[offset:offset+types.HardwareIDSize], hwID[:])
@@ -311,6 +308,11 @@ func buildSignedReport(s *fuzzReportSpec, clientID string, challengeNonce [types
 	eventLog := buildTestEventLog(nil)
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
+
+	// mandatory trailing ESRT section
+	// all-zero means present == false,
+	// which is what a platform with no ESRT System Firmware entry reports
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf

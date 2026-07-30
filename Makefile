@@ -970,6 +970,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_client \
 	$(TEST_BIN_DIR)/test_ipc_payload_len \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
+	$(TEST_BIN_DIR)/test_cross_lang_report_gen \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_flag_names \
 	$(TEST_BIN_DIR)/test_runtime_measure \
@@ -1215,6 +1216,13 @@ $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+# C half of the report layout cross-check:
+# serializes fully patterned report with the production serializer
+# for report_verify.go to parse
+$(TEST_BIN_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
 $(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotaserver -Wl,-rpath,$(abspath $(BUILD_DIR)) -lcrypto
@@ -1323,6 +1331,14 @@ test-unit: all $(TEST_BINS)
 		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
 	else \
 		echo "SKIP: test_gen.go (go not installed)"; \
+	fi
+	@echo ""
+	@$(BUILD_DIR)/test_cross_lang_report_gen
+	@if command -v go >/dev/null 2>&1; then \
+		cd $(SRC_DIR)/verifier && \
+		go run ../../tests/cross_lang/report_verify.go; \
+	else \
+		echo "SKIP: report_verify.go (go not installed)"; \
 	fi
 	@echo ""
 	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."

@@ -133,15 +133,12 @@ struct lota_tpm_evidence {
 	uint16_t aik_cert_size;
 
 	/*
-	 * EK certificate in DER-encoded X.509 format.
-	 * Required under the production verifier default
-	 * (VerifierConfig.RequireCert=true). The verifier binds
-	 * SHA-256(EK modulus) as the host hardware identifier and accepts a
-	 * new AIK registration only when the EK certificate chains to the
-	 * configured TPM manufacturer trust anchors.
+	 * No EK certificate travels in an attestation report.
+	 * Under the Privacy CA model the EK is presented once, to the attestation
+	 * CA during enrollment; the verifier authenticates the AIK through its
+	 * CA-issued certificate alone and never sees the EK,
+	 * which is what keeps attestations unlinkable to the hardware.
 	 */
-	uint8_t ek_certificate[LOTA_MAX_EK_CERT_SIZE];
-	uint16_t ek_cert_size;
 
 	/* Nonce from server */
 	uint8_t nonce[LOTA_NONCE_SIZE];
@@ -232,8 +229,9 @@ struct lota_esrt {
  *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
- *   [lota_esrt: 28 bytes]   (optional trailing section; absent for legacy
- *                            agents, which the verifier treats as no-ESRT)
+ *   [lota_esrt: 28 bytes]   (always present; esrt.present == 0 is how a
+ *                            platform without an ESRT System Firmware entry
+ *                            is reported)
  */
 struct lota_attestation_report {
 	struct lota_report_header header;
@@ -251,7 +249,9 @@ struct lota_attestation_report {
  * @event_count: Number of events
  * @event_log: TPM event log (can be NULL)
  * @event_log_size: Size of event log
- * @esrt: ESRT System Firmware descriptor (can be NULL to omit the section)
+ * @esrt: ESRT System Firmware descriptor; mandatory,
+ * 	  NULL is rejected with -EINVAL
+ * 	  (present == 0 is how a platform without an entry reports)
  * @out_buf: Output buffer (caller allocates)
  * @out_buf_size: Size of output buffer
  *
@@ -267,11 +267,11 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
  * calculate_report_size - Calculate serialized report size
  * @event_count: Number of BPF events
  * @event_log_size: Size of TPM event log
- * @with_esrt: non-zero to include the trailing ESRT section
+ *
+ * Trailing ESRT section is always counted: it is mandatory on the wire.
  *
  * Returns: Total size in bytes
  */
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
-			     int with_esrt);
+size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size);
 
 #endif /* LOTA_ATTESTATION_H */

@@ -12,10 +12,10 @@ import (
 )
 
 func TestReportWireStringMatchesConstant(t *testing.T) {
-	// 0x00010000 must render as 1.0.0
+	// 0x00020000 must render as 2.0.0
 	// bump to the report wire must move this string so the operator doc
 	// and --print-versions stay truthful
-	if got, want := reportWireString(), "1.0.0"; got != want {
+	if got, want := reportWireString(), "2.0.0"; got != want {
 		t.Errorf("reportWireString() = %q, want %q (ReportVersion=%#08x)",
 			got, want, types.ReportVersion)
 	}

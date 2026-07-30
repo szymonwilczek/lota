@@ -13,14 +13,41 @@ Attestation report wire format
 ==============================
 
 The attestation report (``include/attestation.h``, serialized by
-``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) ends with
-optional variable-length sections. A new trailing section must be appended
-after the existing ones and parsed defensively -- absent for older agents -- so
-a mixed-version fleet keeps interoperating without a wire-version bump. The
-ESRT firmware-version section (``src/agent/esrt.c``, ``test_esrt``) follows
-that pattern.
+``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) has a fixed
+struct followed by variable-length sections: the BPF event array, the TPM event
+log, and the ESRT firmware-version descriptor.
 
-Keep the C serializer and the Go parser in lockstep when the layout changes.
+**Every section is mandatory.** The verifier accepts exactly one report wire
+version and rejects any other, so there is no mixed-version fleet to parse
+defensively for: a report that stops before a section is truncated, not old. A
+platform with nothing to report says so in the section's own fields -- the ESRT
+descriptor carries ``present = 0`` where the firmware exposes no System
+Firmware entry.
+
+A breaking layout change -- adding, removing or reordering a field, or adding a
+section -- bumps ``LOTA_VERSION_MAJOR`` in ``include/lota.h`` and
+``ReportVersion`` in ``types/report.go`` together. That is a flag-day: roll the
+verifier tier first, then the agents. Version 2 dropped the always-empty
+``ek_certificate`` field (the Privacy CA model means the verifier never sees an
+EK) and made the ESRT section mandatory.
+
+Nothing links the C serializer and the Go parser at build time: the serializer
+``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Three
+checks stand in for that missing link, and a layout change must satisfy all
+three:
+
+* ``src/agent/report.c`` pins ``sizeof`` for each wire struct with
+  ``_Static_assert``, so a field added or removed on the C side fails the build
+  with the name of the constant to update.
+* ``TestParseReport_FieldOffsetsMatchCLayout`` (``types/report_test.go``)
+  writes a distinct marker at each expected offset and requires the parsed
+  report to expose it in the matching field -- a positive check, not a bounds
+  test.
+* ``make test`` runs the pair
+  ``tests/cross_lang/report_gen.c`` -> ``report_verify.go``: C serializes a
+  report whose every field carries a position-derived pattern, Go parses it
+  with the production parser and checks each field against the same patterns.
+  The patterns are restated in both files on purpose.
 
 Baseline store migrations
 =========================
