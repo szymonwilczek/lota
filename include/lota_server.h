@@ -59,6 +59,19 @@ extern "C" {
 #define LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC (2 * 3600U)
 
 /*
+ * Freshness window.
+ * Token carries an expiry and no issue time, so valid_until is the only temporal
+ * anchor: agent on the default attestation interval mints one expiring that
+ * interval from now, and token claiming to live much longer is either from
+ * misconfigured agent or replayed from elsewhere.
+ *
+ * sdk/server bounds valid_until by these two values;
+ * verification here must accept the same set of tokens.
+ */
+#define LOTA_SERVER_MAX_TOKEN_AGE_SEC 300U
+#define LOTA_SERVER_MAX_CLOCK_SKEW_SEC 60U
+
+/*
  * Server-side error codes
  */
 enum lota_server_error {

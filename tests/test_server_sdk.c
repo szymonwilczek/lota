@@ -1015,6 +1015,77 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 	PASS();
 }
 
+/*
+ * The freshness window is the SDK's, not the caller's, and both implementations
+ * of it have to accept the same set: token whose expiry is beyond one attestation
+ * interval plus clock skew is refused here exactly as sdk/server refuses it in Go.
+ * Sized just past the window so token that legitimate agent would mint still passes.
+ */
+static void test_verify_beyond_freshness_window(EVP_PKEY *key,
+						const uint8_t *aik_der,
+						size_t aik_len)
+{
+	TEST("lota_server_verify_token - beyond freshness window -> ERR_FUTURE");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(
+		key,
+		now + (uint64_t)LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+			(uint64_t)LOTA_SERVER_MAX_CLOCK_SKEW_SEC + 60ULL,
+		0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
+
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret != LOTA_SERVER_ERR_FUTURE) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+/* Token an agent on the default interval mints must stay acceptable */
+static void test_verify_at_freshness_window(EVP_PKEY *key,
+					    const uint8_t *aik_der,
+					    size_t aik_len)
+{
+	TEST("lota_server_verify_token - default agent interval -> OK");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(
+		key, now + (uint64_t)LOTA_SERVER_MAX_TOKEN_AGE_SEC + 60ULL, 0,
+		nonce, tokbuf, sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
+
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret != LOTA_SERVER_OK) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected OK, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 static void test_strerror_new_codes(void)
 {
 	TEST("lota_server_strerror - TOO_OLD and FUTURE codes");
@@ -1213,6 +1284,8 @@ int main(void)
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
 	test_verify_expired(key, aik_der, aik_len);
 	test_verify_far_future_valid_until(key, aik_der, aik_len);
+	test_verify_beyond_freshness_window(key, aik_der, aik_len);
+	test_verify_at_freshness_window(key, aik_der, aik_len);
 
 	printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
 	test_malformed_inputs();
