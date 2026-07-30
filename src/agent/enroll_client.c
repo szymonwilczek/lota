@@ -518,6 +518,35 @@ int do_reenroll(const char *ca_cert)
 	return ret == 0 ? 0 : 1;
 }
 
+int enroll_profile_now(struct tpm_context *tpm,
+		       const struct profile_paths *paths, const char *ca_server,
+		       int ca_port, const char *ca_cert)
+{
+	int ret;
+
+	if (!tpm || !paths || !ca_server || !ca_cert)
+		return -EINVAL;
+
+	ret = profile_dir_ensure(paths);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * No enrollment token:
+	 * publisher admitting players cannot hand each of them a secret in advance,
+	 * so the CA admits on the EK's chain to a pinned root instead.
+	 * Operator fleet that does use tokens enrolls with --enroll before
+	 * the loop ever reaches this path.
+	 */
+	ret = enroll_to_ca(tpm, ca_server, ca_port, ca_cert, 0, NULL, NULL,
+			   paths->aik_cert);
+	if (ret < 0)
+		return ret;
+
+	persist_enroll_state(paths, ca_server, ca_port, ca_cert, 0, NULL, NULL);
+	return 0;
+}
+
 int enroll_renew_cert(struct tpm_context *tpm,
 		      const struct profile_paths *paths)
 {

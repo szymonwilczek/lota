@@ -164,6 +164,22 @@ host has one publisher -- gets the first profile's token and the host-wide
 answer: attested only while **every** configured publisher is satisfied, with
 the window closing at the earliest of theirs.
 
+**Enrollment with a profile's publisher is a runtime action.** A profile that
+names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
+enrolled by the agent itself: when the loop first reaches that publisher, and
+immediately when a title selects it, which is the moment that matters on a
+player's machine. Until it completes, that publisher's status is not attested
+and the agent sends no report to their verifier -- evidence with no certificate
+to chain is refused anyway. A failing CA backs off rather than being retried
+every round, and the other publishers keep their cadence throughout.
+
+Operator fleets that enroll at install time are unaffected: ``lota-agent
+--enroll`` writes the same record, and a profile that already has one is never
+re-enrolled. An enrollment token cannot be presented on the runtime path (a
+publisher admitting players has no way to hand each of them a secret in
+advance), so a CA that requires one has to be enrolled against with
+``--enroll --enroll-token-file``.
+
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until
 the operator's first ``lota-agent --enroll`` creates a profile there (the

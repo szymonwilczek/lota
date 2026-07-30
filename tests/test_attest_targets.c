@@ -138,6 +138,9 @@ static void test_profiles_replace_the_single_verifier(void)
 	cfg.profiles[0].verifier_port = 8443;
 	snprintf(cfg.profiles[0].ca_cert, sizeof(cfg.profiles[0].ca_cert), "%s",
 		 anchor);
+	snprintf(cfg.profiles[0].ca, sizeof(cfg.profiles[0].ca), "%s",
+		 "ca.a.example");
+	cfg.profiles[0].ca_port = 8444;
 	cfg.profiles[0].attest_interval = 60;
 
 	snprintf(cfg.profiles[1].name, sizeof(cfg.profiles[1].name), "%s",
@@ -171,6 +174,17 @@ static void test_profiles_replace_the_single_verifier(void)
 	CHECK(!targets[1].has_profile && targets[1].profile_error == -ENOENT,
 	      "an unreadable anchor still reports, and says why it has no "
 	      "profile");
+
+	/*
+	 * CA travels with the target because enrollment is runtime action:
+	 * host that meets publisher for the first time while title is running
+	 * has to know where to enroll without being told again.
+	 */
+	CHECK(strcmp(targets[0].ca, "ca.a.example") == 0 &&
+		      targets[0].ca_port == 8444,
+	      "a target carries the CA its publisher enrolls against");
+	CHECK(targets[1].ca[0] == '\0',
+	      "a profile that names no CA carries none");
 
 	unlink(anchor);
 }

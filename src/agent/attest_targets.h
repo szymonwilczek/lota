@@ -30,6 +30,11 @@ struct attest_target {
 	char ca_cert[PATH_MAX];
 	int interval;
 
+	/* the attestation CA this publisher enrolls against,
+	 * empty when the target came from the single-verifier path */
+	char ca[256];
+	int ca_port;
+
 	struct profile_paths paths;
 	bool has_profile;
 	/* why the anchor produced no profile, 0 when it did or none was set */
@@ -49,6 +54,17 @@ struct attest_target {
 	bool auto_renew;
 	int renew_backoff;
 	uint64_t next_renew_ms;
+
+	/*
+	 * First enrollment, which happens while the host runs rather than while
+	 * it is installed: player has no CA endpoint to type in at install time,
+	 * and the publisher they buy from is not known until title of theirs runs.
+	 * enroll_pending is raised by title selecting this publisher,
+	 * so the loop stops sleeping and enrolls now.
+	 */
+	bool enroll_pending;
+	int enroll_backoff;
+	uint64_t next_enroll_ms;
 };
 
 /*
