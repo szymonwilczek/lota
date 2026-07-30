@@ -227,8 +227,8 @@ against a known-good baseline. Three paths satisfy that contract:
 
    Because the per-device PCR 0/1/7 row is a rollback anchor, a later
    *legitimate* firmware update (BIOS) also shifts PCR 0/1 and would reject the
-   device until an operator clears its row. Start the verifier with
-   ``-enable-self-service-reanchor`` to let it re-pin the baseline itself when
+   device until an operator clears its row. Declare ``profile: consumer`` in
+   the policy to let the verifier re-pin the baseline itself when
    the drift preserves the Secure Boot root of trust (PK/KEK/db unchanged,
    ``dbx`` append-only, Secure Boot still on, firmware version not rolled
    back); a host with no ESRT firmware version takes a Low-Firmware-Assurance
@@ -238,6 +238,42 @@ against a known-good baseline. Three paths satisfy that contract:
    ``POST /api/v1/clients/{id}/reanchor-review-ack``). See
    `Production Bringup <../Documentation/operator/production-bringup/index.rst>`_.
    This is a diverse-fleet convenience only; do not enable it where raw PCR 0/1/7 are pinned in policy.
+
+Fleet profile
+-------------
+
+``profile`` names the kind of fleet a policy governs, and it is what decides
+whether a firmware drift stops the device or re-anchors itself.
+
+===================== ==========================================================
+Value                 Firmware/Secure Boot drift
+===================== ==========================================================
+``enterprise``        Refused until an operator clears the row. The default,
+                      and what an unset ``profile`` means, so a policy written
+                      before profiles existed keeps the stricter handling.
+``consumer``          Re-anchored by the verifier itself when the drift
+                      preserves the Secure Boot root of trust.
+===================== ==========================================================
+
+The distinction is who owns the machine. On a fleet you own, an unexplained
+PCR 0/1/7 change is a finding and stopping is right. On machines you do not
+own, the same change is a player installing a BIOS update, and stopping means
+a game that refuses to start for a reason nobody on either side chose. **A
+diverse consumer fleet must declare** ``profile: consumer``; left on the
+default, every firmware update turns into a support ticket the player cannot
+resolve.
+
+The setting lives in the policy rather than on the command line because it
+describes the fleet, not the deployment, and one verifier can serve several
+tenants and therefore several fleets. ``--enable-self-service-reanchor``
+remains as an override in both directions for an operator who has to
+contradict a policy they cannot immediately re-sign; left unset, each policy
+decides for itself. An unknown value is refused at load rather than read as
+"not consumer", so a typo cannot silently leave a diverse fleet on the
+enterprise handling.
+
+Whatever turns it on, the discriminator still requires ``require_secureboot``
+and a quote-authenticated Secure Boot anchor before anything moves.
 
 A short-lived ``--allow-tofu-boot-baseline`` switch on the verifier exists for
 closed test fixtures. It explicitly weakens the contract above by accepting

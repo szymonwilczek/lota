@@ -156,8 +156,8 @@ Self-service re-anchor (diverse-fleet profile)
 
 On the diverse-fleet profile (a policy with ``require_secureboot``), a
 legitimate firmware update shifts PCR 0/1 and would otherwise reject the host
-until an operator clears its baseline. ``-enable-self-service-reanchor`` lets the
-verifier re-pin the per-device baseline itself when the drift preserves the
+until an operator clears its baseline. ``profile: consumer`` in the policy lets
+the verifier re-pin the per-device baseline itself when the drift preserves the
 Secure Boot root of trust (PK/KEK/db unchanged, ``dbx`` append-only, Secure Boot
 still on, firmware version not rolled back); a hardware platform that reports no
 firmware version (``ESRT``, common on DIY boards flashed with the vendor tool
@@ -168,9 +168,15 @@ devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
 with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (each LFA re-anchor
 is also logged at security level and counted in the ``lfa`` re-anchor metric).
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
-existing endpoints. Leave the flag off for the enterprise profile, where
-firmware drift is a feature and re-baselining stays a deliberate operator
-action.
+existing endpoints.
+
+The profile lives in the policy because it describes the fleet, not the
+deployment, and one verifier can serve several tenants and therefore several
+fleets. ``enterprise`` (and an unset profile) leaves the path off, which is
+right where firmware drift is a finding and re-baselining stays a deliberate
+operator action. ``--enable-self-service-reanchor`` remains as an override in
+both directions for an operator who has to contradict a policy they cannot
+immediately re-sign; left unset, each policy decides for itself.
 
 Operator-forced re-anchor and client removal
 ============================================

@@ -131,7 +131,7 @@ type Verifier struct {
 	// policy enforcement
 	requireEventLog       bool
 	requireBootEnrollment bool
-	selfServiceReanchor   bool
+	selfServiceReanchor   *bool
 	maxRestartCountSkew   uint32
 }
 
@@ -233,15 +233,22 @@ type VerifierConfig struct {
 	// first use must set this to false explicitly (--allow-tofu-boot-baseline)
 	RequireBootEnrollment bool
 
-	// EnableSelfServiceReanchor turns on self-service re-anchor:
-	// on a firmware/Secure Boot PCR drift the verifier may re-pin the
-	// per-device boot baseline itself when the drift preserves the Secure Boot
-	// root of trust (see reanchorDecision), instead of rejecting until
-	// operator clears the row.
-	// Only takes effect for the diverse-fleet profile (a policy with require_secureboot);
-	// off by default and intended to stay off for the enterprise profile,
-	// which treats drift as a feature.
-	EnableSelfServiceReanchor bool
+	// EnableSelfServiceReanchor overrides the fleet profile declared by
+	// the policy, in either direction.
+	// Nil means the policy decides:
+	// `profile: consumer` turns self-service re-anchor on and anything
+	// else leaves it off.
+	//
+	// Knob belongs to the policy rather than to the command line because
+	// it describes the fleet, not the deployment, and because verifier
+	// serving several tenants serves several fleets.
+	// Override exists for the case where an operator has to contradict
+	// policy they cannot immediately re-sign.
+	//
+	// Whatever turns it on, the re-anchor discriminator still requires
+	// policy with require_secureboot and a quote-authenticated Secure Boot
+	// anchor before anything moves (see reanchorDecision).
+	EnableSelfServiceReanchor *bool
 
 	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
 	// the verifier tolerates when matching the PCR14 boot-commitment
@@ -1229,11 +1236,27 @@ func (v *Verifier) ListActiveClients() []string {
 // treats the attestation as a match instead of rejecting.
 // Pending or escalated outcome returns false and the caller rejects as before.
 // Decision itself lives in reanchorDecision.
+//
+// selfServiceReanchorForTenant resolves who decides whether drifted boot baseline
+// may be re-anchored without operator: the command line when it says anything,
+// the tenant's policy profile otherwise.
+//
+// Policy is the primary source because the answer describes the fleet rather than
+// the deployment, and one verifier can serve several fleets.
+// Flag stays as override for the operator who has to contradict a policy they cannot
+// immediately re-sign.
+func (v *Verifier) selfServiceReanchorForTenant(tenant string) bool {
+	if v.selfServiceReanchor != nil {
+		return *v.selfServiceReanchor
+	}
+	return v.pcrVerifier.PolicyEnablesSelfServiceReanchorForTenant(tenant)
+}
+
 func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 	boot *BootBaseline, report *types.AttestationReport,
 	bootFacts *BootFacts,
 ) bool {
-	if !v.selfServiceReanchor {
+	if !v.selfServiceReanchorForTenant(tenant) {
 		return false
 	}
 	// diverse-fleet profile only:

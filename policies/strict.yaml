@@ -17,6 +17,12 @@
 name: strict
 description: "Strict security policy - all protections required"
 
+# Owned fleet:
+# firmware drift is a finding, so drifted boot baseline waits for operator rather
+# than re-anchoring itself.
+# Set `consumer` for fleet of machines you do not own (see policies/README.rst)
+profile: enterprise
+
 # Critical PCR values that MUST match.
 #
 # All three boot PCRs are REQUIRED under VerifierConfig.RequireBootEnrollment=true
