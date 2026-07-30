@@ -245,6 +245,12 @@ ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
 ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
+# Linker version script per shared library:
+# exports the functions the installed header declares and makes every other symbol local.
+# Named $(notdir $(lib)).map next to the sources it filters.
+SDK_VERSION_SCRIPT = $(SDK_DIR)/$(basename $(notdir $(1))).map
+VERSION_SCRIPT_LDFLAGS = -Wl,--version-script=$(call SDK_VERSION_SCRIPT,$(1))
+
 # Default target
 .PHONY: all
 all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
@@ -313,10 +319,11 @@ $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
-$(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
+$(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SDK_OBJS)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -326,10 +333,11 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build server SDK shared library (versioned)
-$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -339,18 +347,23 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lpthread
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(WINE_HOOK_OBJS) $(SDK_OBJS) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
-$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) | $(BUILD_DIR)
 	$(QUIET_LD)
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 

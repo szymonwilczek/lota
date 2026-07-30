@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Exported ABI of liblota_anticheat.so.
+ *
+ * The list is the set of functions include/lota_anticheat.h declares.
+ * The library links the gaming and server SDK objects in statically so
+ * studio can embed one file, but those symbols stay local: second definition
+ * of lota_connect() in the process would interpose over liblotagaming.so
+ * and decide, by link order, which copy every caller reaches.
+ * Integrator that wants the gaming or the verification API links that library
+ * and gets it from there.
+ *
+ * Adding a function means a new version node (LOTA_ANTICHEAT_1.1) below this one;
+ * removing or changing one is an ABI break and bumps LOTA_ABI_MAJOR.
+ * See Documentation/contributor/development/api-stability.rst
+ *
+ * Copyright (C) 2026 Szymon Wilczek
+ */
+
+LOTA_ANTICHEAT_1.0 {
+	global:
+		lota_ac_compute_expected_runtime_measure;
+		lota_ac_compute_expected_runtime_measure_set;
+		lota_ac_compute_game_binding_hash;
+		lota_ac_compute_runtime_measure;
+		lota_ac_get_info;
+		lota_ac_get_state;
+		lota_ac_heartbeat;
+		lota_ac_init;
+		lota_ac_list_runtime_objects;
+		lota_ac_provider_str;
+		lota_ac_shutdown;
+		lota_ac_state_str;
+		lota_ac_tick;
+		lota_ac_verify_heartbeat;
+
+	local:
+		*;
+};
