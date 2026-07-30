@@ -161,6 +161,12 @@ log_level = info
 # follow.
 # `lota-agent --dump-config` prints profiles last for the same reason.
 #
+# Profile whose CA this host has never enrolled with is enrolled by the agent itself
+# -- when the loop first reaches it, and immediately when a title selects that
+# publisher. That is why `ca` and `ca_cert` belong in the profile:
+# on player's machine there is no install-time step at which the publisher is
+# even known yet.
+#
 # Profile list is the attestation loop's target list:
 # the agent reports to every profile's verifier on that profile's cadence,
 # signing each report with that publisher's own AIK, and one unreachable verifier

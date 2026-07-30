@@ -5,6 +5,7 @@
  * Unix socket server for local attestation queries.
  */
 
+#include "enroll.h"
 #include "ipc.h"
 #include "protect_pids.h"
 
@@ -1180,6 +1181,26 @@ static void handle_set_profile(struct ipc_context *ctx,
 		client->profile = &ctx->profiles[i];
 		lota_dbg("connection pid=%d bound to publisher %s",
 			 client->peer_pid, want);
+
+		/*
+		 * Title asking for a publisher this host has never enrolled with
+		 * is the trigger the runtime enrollment exists for.
+		 * Ask the attestation loop to run it -- the ceremony is TLS round
+		 * trip and TPM credential activation, which is not something
+		 * to do inside an IPC reply -- and answer now.
+		 * The connection reads not-attested until it completes,
+		 * which is the truth.
+		 */
+		{
+			struct enroll_state st;
+
+			if (enroll_state_load_path(
+				    ctx->profiles[i].paths.enroll_state, &st) ==
+			    -ENOENT)
+				ctx->profiles[i].enroll_pending = true;
+			else
+				ipc_secure_bzero(&st, sizeof(st));
+		}
 
 		resp->magic = LOTA_IPC_MAGIC;
 		resp->version = LOTA_IPC_VERSION;

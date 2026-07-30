@@ -39,6 +39,8 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 			out[n].port = p->verifier_port;
 			snprintf(out[n].ca_cert, sizeof(out[n].ca_cert), "%s",
 				 p->ca_cert);
+			snprintf(out[n].ca, sizeof(out[n].ca), "%s", p->ca);
+			out[n].ca_port = p->ca_port;
 			/* profile without its own cadence keeps the host's */
 			out[n].interval = p->attest_interval ?
 						  p->attest_interval :

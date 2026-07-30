@@ -159,4 +159,21 @@ int do_reenroll(const char *ca_cert);
 int enroll_renew_cert(struct tpm_context *tpm,
 		      const struct profile_paths *paths);
 
+/*
+ * First enrollment for a publisher, from inside a running agent.
+ *
+ * Same ceremony as --enroll, minus the process-level bring-up:
+ * the caller already holds an initialised TPM with the profile bound
+ * and initialised net layer, which is what makes this callable from attestation
+ * loop when a title asks for a publisher this host has never enrolled with.
+ *
+ * Creates the profile directory, stores the issued certificate in it
+ * and records the endpoint, so later renewal needs no arguments.
+ *
+ * Returns 0 on success, or a negative errno.
+ */
+int enroll_profile_now(struct tpm_context *tpm,
+		       const struct profile_paths *paths, const char *ca_server,
+		       int ca_port, const char *ca_cert);
+
 #endif /* LOTA_AGENT_ENROLL_H */

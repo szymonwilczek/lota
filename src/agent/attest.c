@@ -1036,6 +1036,88 @@ static int bind_target(struct attest_target *t)
 	return 0;
 }
 
+/*
+ * Has this publisher ever enrolled?
+ *
+ * Record is written by the enrollment ceremony, whether that ran as -enroll
+ * at install time or on demand here, so its absence is what "never enrolled" means.
+ */
+static bool target_is_enrolled(const struct attest_target *t)
+{
+	struct enroll_state st;
+	bool ok;
+
+	if (!t->has_profile)
+		return false;
+
+	ok = enroll_state_load_path(t->paths.enroll_state, &st) == 0;
+	OPENSSL_cleanse(&st, sizeof(st));
+	return ok;
+}
+
+/*
+ * Enroll a publisher this host has never enrolled with.
+ *
+ * This is the install step player cannot perform:
+ * at install time there is no publisher yet, and the CA belongs to whoever they
+ * buy a title from.
+ * Profile carries the CA endpoint and its anchor, so the first time the loop
+ * reaches an unenrolled publisher -- or a title asks for one -- the ceremony runs
+ * here instead.
+ *
+ * Failure backs off: CA that is down must not be hammered once per round,
+ * and the host keeps working for every other publisher meanwhile.
+ */
+static bool enroll_target_if_needed(struct attest_target *t)
+{
+	uint64_t now_ms = monotonic_ms();
+	int ret;
+
+	if (!t->has_profile || target_is_enrolled(t))
+		return true;
+
+	t->enroll_pending = false;
+
+	if (t->ca[0] == '\0') {
+		lota_warn("%s:%d has no enrollment and its profile names no "
+			  "attestation CA; run --enroll for it",
+			  t->server, t->port);
+		return false;
+	}
+	if (now_ms < t->next_enroll_ms)
+		return false;
+
+	lota_info("Enrolling with %s:%d for publisher %s (first time this "
+		  "host has attested for them)",
+		  t->ca, t->ca_port, t->paths.id);
+
+	ret = bind_target(t);
+	if (ret == 0)
+		ret = enroll_profile_now(&g_agent.tpm_ctx, &t->paths, t->ca,
+					 t->ca_port, t->ca_cert);
+	if (ret == 0) {
+		t->enroll_backoff = 0;
+		lota_info("Enrolled with %s:%d", t->ca, t->ca_port);
+		return true;
+	}
+
+	{
+		int shift = t->enroll_backoff;
+		int delay;
+
+		if (shift > 5)
+			shift = 5;
+		t->enroll_backoff++;
+		delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+		if (delay > MAX_BACKOFF_SECONDS)
+			delay = MAX_BACKOFF_SECONDS;
+		t->next_enroll_ms = now_ms + (uint64_t)delay * 1000;
+		lota_warn("Enrollment with %s:%d failed (%s); retry in %ds",
+			  t->ca, t->ca_port, strerror(-ret), delay);
+	}
+	return false;
+}
+
 /* Rotate the bound AIK when its TTL has elapsed */
 static void rotate_bound_aik_if_due(const struct attest_target *t,
 				    uint32_t aik_ttl)
@@ -1122,6 +1204,16 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 {
 	time_t now = time(NULL);
 	int ret;
+
+	if (!enroll_target_if_needed(t)) {
+		/* Nothing to report with:
+		 * no certificate, so every verifier refuses.
+		 * Wait for the enrollment backoff instead of sending evidence
+		 * nobody can chain. */
+		t->attested = false;
+		t->valid_until = 0;
+		return t->interval;
+	}
 
 	ret = bind_target(t);
 	if (ret == 0) {
@@ -1489,9 +1581,25 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 
 		while (g_agent.running) {
 			uint64_t current_ms = monotonic_ms();
+			bool asked = false;
 			int timeout_ms;
 
 			if (current_ms >= wake_ms)
+				break;
+
+			/*
+			 * title selected a publisher this host has never
+			 * enrolled with.
+			 * That is the moment the enrollment exists to serve,
+			 * so stop sleeping through it
+			 */
+			for (size_t i = 0; i < target_count; i++) {
+				if (targets[i].enroll_pending) {
+					targets[i].next_due_ms = current_ms;
+					asked = true;
+				}
+			}
+			if (asked)
 				break;
 
 			timeout_ms = (int)(wake_ms - current_ms);
