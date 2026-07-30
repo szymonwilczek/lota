@@ -1220,6 +1220,52 @@ static void test_sdk_version(void)
 	}
 }
 
+/*
+ * Both libraries report the build they were compiled from,
+ * so they must report the same one.
+ * Caller correlating a heartbeat with the client that produced it reads one of
+ * these and cannot tell which.
+ */
+static void test_sdk_version_agrees_across_libraries(void)
+{
+	TEST("SDK version - gaming and server report the same build");
+
+	const char *gaming = lota_sdk_version();
+	const char *server = lota_server_sdk_version();
+
+	if (!gaming || !server) {
+		FAIL("NULL version string");
+		return;
+	}
+	if (strcmp(gaming, server) != 0) {
+		FAIL("gaming and server report different versions");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Version identifies a build for an advisory, a support ticket
+ * or reproducible-build check, so library that cannot name its build is worse
+ * than one that fails to compile.
+ */
+static void test_sdk_version_is_a_real_build(void)
+{
+	TEST("SDK version - names a build, not a placeholder");
+
+	const char *v = lota_server_sdk_version();
+
+	if (!v || v[0] == '\0') {
+		FAIL(v ? "empty" : "NULL");
+		return;
+	}
+	if (strcmp(v, "unknown") == 0) {
+		FAIL("built without a version string");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
@@ -1274,6 +1320,8 @@ int main(void)
 	test_strerror();
 	test_strerror_new_codes();
 	test_sdk_version();
+	test_sdk_version_agrees_across_libraries();
+	test_sdk_version_is_a_real_build();
 
 	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
 	if (tests_fail > 0) {
