@@ -102,7 +102,10 @@ is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rej
 so a misconfigured or compromised agent cannot mint an effectively immortal token.
 
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
-window -- keep the agent ``attest_interval`` at or below ``DefaultMaxTokenAge``.
+window. The agent enforces this where the interval is read: an ``attest_interval``
+past ``DefaultMaxTokenAge`` is refused by the config parser and by
+``--attest-interval``, because every token such an agent mints would be rejected by
+every relying party while the agent itself kept running and reporting success.
 
 Active threats
 ==============

@@ -331,6 +331,17 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 					MIN_ATTEST_INTERVAL);
 				opts->attest_interval = MIN_ATTEST_INTERVAL;
 			}
+			if (opts->attest_interval > MAX_ATTEST_INTERVAL) {
+				fprintf(stderr,
+					"Invalid interval: %d exceeds the "
+					"maximum of %d seconds; beyond it "
+					"every minted token outlives the "
+					"freshness window a relying party "
+					"accepts\n",
+					opts->attest_interval,
+					MAX_ATTEST_INTERVAL);
+				return 1;
+			}
 			break;
 		case 's':
 			opts->server_addr = optarg;

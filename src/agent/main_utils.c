@@ -130,9 +130,12 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    certificate renewal)\n");
 	printf("  --attest-interval SECS\n");
 	printf("                    Continuous attestation interval in seconds\n");
-	printf("                    (default: 0=one-shot, min: %d for "
-	       "continuous)\n",
-	       MIN_ATTEST_INTERVAL);
+	printf("                    (default: 0=one-shot, else %d-%d; above "
+	       "%d\n",
+	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
+	printf("                    the minted tokens outlive every relying "
+	       "party's\n");
+	printf("                    freshness window)\n");
 	printf("  --server HOST     Verifier server address (default: "
 	       "localhost)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",

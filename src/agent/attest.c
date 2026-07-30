@@ -1179,8 +1179,9 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 			/* update ipc: attestation successful */
 			status_flags |= LOTA_STATUS_ATTESTED;
-			valid_until = (uint64_t)(now + interval_sec +
-						 60); /* buffer */
+			valid_until =
+				(uint64_t)(now + interval_sec +
+					   ATTEST_TOKEN_VALIDITY_SLACK_SEC);
 			ipc_update_status(&g_agent.ipc_ctx,
 					  reconcile_tpm_lockout(status_flags),
 					  valid_until);
