@@ -1352,7 +1352,7 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
 	fi
 	@if command -v go >/dev/null 2>&1; then \
-		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang/test_gen.go && \
+		cd sdk/server && go run ../../tests/cross_lang/test_gen.go && \
 		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
 	else \
 		echo "SKIP: test_gen.go (go not installed)"; \
@@ -1752,7 +1752,7 @@ help:
 BENCH_DIR := benchmarks
 BENCH_RESULTS := $(BENCH_DIR)/results
 BENCH_C_BIN := $(BUILD_DIR)/bench_sdk
-GO_BENCH_MODULES := $(SRC_DIR)/verifier $(SRC_DIR)/sdk/server $(SRC_DIR)/attestca
+GO_BENCH_MODULES := $(SRC_DIR)/verifier sdk/server $(SRC_DIR)/attestca
 # -count feeds benchstat
 BENCH_COUNT ?= 6
 BENCH_TIME ?= 1s

@@ -122,3 +122,30 @@ every soname, and the old library can no longer be replaced in place. Do not
 work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
 version script cannot catch.
+
+Go modules
+==========
+
+The repository is a Go workspace of six modules. **One is public:**
+
+.. code-block:: text
+
+    github.com/szymonwilczek/lota/sdk/server   ->  sdk/server
+
+It is the server-side counterpart of ``liblotaserver.so``: a game or workload
+server imports it to verify an attestation token against an AIK.
+``examples/demo_server`` is the worked example.
+
+The other five -- ``src/verifier``, ``src/attestca``, ``src/crl``,
+``src/fleetctl`` and ``examples/demo_server`` -- are internal to this
+repository's own binaries. They are ordinary Go modules so the workspace can
+build them separately, not an invitation to import them; their exported
+identifiers change without a major bump.
+
+That is enforced by construction rather than by convention. A module is
+fetchable only when its declared path matches its directory in the
+repository, and the internal five declare paths without their ``src/``
+prefix, so ``go get`` cannot resolve any of them. Do not "fix" those paths:
+the mismatch is what keeps the internal surface internal. The public module
+is the one whose path and directory agree, which is why ``sdk/server`` sits
+at the top level rather than under ``src/`` with the C SDK.

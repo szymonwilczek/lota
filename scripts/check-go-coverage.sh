@@ -17,7 +17,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASELINE="${1:-$ROOT/.github/go-coverage-baseline}"
-MODULES=(src/verifier src/attestca src/sdk/server src/crl src/fleetctl)
+MODULES=(src/verifier src/attestca sdk/server src/crl src/fleetctl)
 
 if [[ ! -f "$BASELINE" ]]; then
 	echo "baseline file not found: $BASELINE" >&2
