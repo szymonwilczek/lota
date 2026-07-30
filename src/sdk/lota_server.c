@@ -562,13 +562,23 @@ int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
 	/* check expiry */
 	uint64_t now = (uint64_t)time(NULL);
 
+	/*
+	 * Freshness:
+	 * the token has no issue time, so valid_until is the only temporal anchor.
+	 * An agent on the default interval mints a token expiring one interval
+	 * from now; one claiming to live much longer is either misconfigured
+	 * or replayed from somewhere else.
+	 * sdk/server computes this bound from the same two values,
+	 * so both verifiers accept the same tokens.
+	 */
 	{
-		uint64_t future_cutoff = now;
-		if (future_cutoff <=
-		    UINT64_MAX -
-			    (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC)
-			future_cutoff += (uint64_t)
-				LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC;
+		const uint64_t window =
+			(uint64_t)LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+			(uint64_t)LOTA_SERVER_MAX_CLOCK_SKEW_SEC;
+		uint64_t future_cutoff;
+
+		if (now <= UINT64_MAX - window)
+			future_cutoff = now + window;
 		else
 			future_cutoff = UINT64_MAX;
 

@@ -11,6 +11,7 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
+#include "../../include/lota_server.h"
 #include "agent.h"
 #include "dbus.h"
 #include "ipc.h"
@@ -34,7 +35,12 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
-	valid_until = (uint64_t)(time(NULL) + 3600);
+	/*
+	 * Size the token the way the attestation loop does, so relying party
+	 * verifies what the test server hands out instead of refusing it as
+	 * living implausibly long.
+	 */
+	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
@@ -112,7 +118,12 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 		    (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF));
 
-	valid_until = (uint64_t)(time(NULL) + 3600);
+	/*
+	 * size the token the way the attestation loop does, so relying party
+	 * verifies what the test server hands out instead of refusing it as
+	 * living implausibly long
+	 */
+	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,

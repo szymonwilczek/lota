@@ -55,18 +55,18 @@ extern "C" {
 /* TPM2 PCR composite digest can be SHA-256, SHA-384, or SHA-512. */
 #define LOTA_SERVER_MAX_PCR_DIGEST_SIZE 64
 
-/* Reject tokens whose valid_until is unreasonably far in the future. */
-#define LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC (2 * 3600U)
-
 /*
  * Freshness window.
  * Token carries an expiry and no issue time, so valid_until is the only temporal
  * anchor: agent on the default attestation interval mints one expiring that
  * interval from now, and token claiming to live much longer is either from
  * misconfigured agent or replayed from elsewhere.
+ * Verification refuses one whose expiry is beyond the interval plus allowance
+ * for clock skew between the agent and the relying party.
  *
- * sdk/server bounds valid_until by these two values;
- * verification here must accept the same set of tokens.
+ * sdk/server computes the same bound from the same two values,
+ * so the C and Go verifiers accept exactly the same set of tokens.
+ * Keep the agent's attest_interval at or below LOTA_SERVER_MAX_TOKEN_AGE_SEC.
  */
 #define LOTA_SERVER_MAX_TOKEN_AGE_SEC 300U
 #define LOTA_SERVER_MAX_CLOCK_SKEW_SEC 60U
@@ -130,15 +130,14 @@ struct lota_server_claims {
  *     policy_digest || runtime_protect_digest || runtime_protect_epoch),
  *     so every field the caller acts on is inside the TPM signature
  *  6. Token nonce == expected_nonce
- *  7. valid_until is not further ahead than
- *     LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC, and has not passed
+ *  7. valid_until has not passed and is not further ahead than
+ *     LOTA_SERVER_MAX_TOKEN_AGE_SEC + LOTA_SERVER_MAX_CLOCK_SKEW_SEC
  *  8. Extract the PCR digest from the TPMS_ATTEST QuoteInfo
  *
  * There is no token-age parameter:
- * Token carries an expiry, not an issue time, so freshness beyond `valid_until`
- * is the relying party's policy to apply.
- * Bind each verification to a nonce this server issued and treat
- * `claims.valid_until` as the outer bound.
+ * Token carries an expiry and no issue time, so the freshness window is expressed
+ * as a bound on `valid_until` and applied here rather than passed in.
+ * Relying party that wants a tighter one applies it to `claims.valid_until` itself.
  *
  * Returns: LOTA_SERVER_OK on success.
  *          LOTA_SERVER_ERR_EXPIRED if now > valid_until.
