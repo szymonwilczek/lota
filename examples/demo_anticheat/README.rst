@@ -13,8 +13,23 @@ EAC- or BattlEye-style integrator: every production-relevant decision (provider
 id, game id, socket path, heartbeat interval) is a flag.
 
 Build with ``make examples`` from the repository root. The binary lands at
-``build/examples/demo_anticheat`` and links against the gaming + anticheat +
-server SDKs that ``make all`` already produces under ``build/``.
+``build/examples/demo_anticheat``.
+
+It builds the way a studio's build does: through ``pkg-config`` against the
+**installed** SDK, never against the build tree. ``make examples`` first
+lays the package contents out under ``build/stage`` (the ``sdk-stage``
+target), so the flags come from the same ``.pc`` files ``lota-sdk-devel``
+ships:
+
+.. code:: sh
+
+   cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
+      $(pkg-config --libs lota-anticheat) $(pkg-config --libs libcurl)
+
+``lota-anticheat`` is the only LOTA module on that line: the library
+carries the gaming and server SDK inside it, so a producer that only calls
+``lota_ac_*`` links one thing. Add ``lota-gaming`` or ``lota-server`` when
+the same binary also calls those APIs directly.
 
 Which half of the evidence you run
 ----------------------------------

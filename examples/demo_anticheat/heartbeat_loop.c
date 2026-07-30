@@ -27,7 +27,7 @@
 
 #include <curl/curl.h>
 
-#include "lota_anticheat.h"
+#include <lota/lota_anticheat.h>
 
 #define DEMO_DEFAULT_URL "http://127.0.0.1:7443/heartbeat"
 #define DEMO_DEFAULT_GAME_ID "trust-pong"
