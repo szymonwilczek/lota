@@ -45,10 +45,6 @@
 #define SOCKET_DIR "/run/lota"
 #define LOTA_GROUP_NAME "lota"
 
-/* Rate limiting: max GET_TOKEN requests per UID per window */
-#define TOKEN_RATE_LIMIT 10 /* requests */
-#define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
-
 /* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
 #define PROTECT_PID_RATE_LIMIT 60 /* requests */
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
@@ -199,8 +195,55 @@ struct ipc_client {
 	bool notify_pending; /* notification queued behind current send */
 	uint32_t pending_events; /* accumulated LOTA_IPC_EVENT_* while busy */
 	bool shutdown_on_flush; /* trigger graceful daemon stop after reply */
+
+	/*
+	 * Per-session GET_TOKEN budget.
+	 * Fixed window like the per-UID table, but held on the connection,
+	 * so two titles from one user cannot throttle each other.
+	 * It dies with the connection.
+	 */
+	int token_count;
+	uint64_t token_window_start_sec;
+
 	struct ipc_client *next;
 };
+
+/*
+ * Per-session fixed-window budget for GET_TOKEN.
+ * Returns 0 if allowed, -1 if rate limited.
+ *
+ * No table and no eviction, unlike the per-UID limiter:
+ * the state lives on the connection, so there is nothing for caller to exhaust
+ * and nothing to reclaim.
+ * Opening more connections to get more budget is what the per-UID ceiling
+ * is there to stop.
+ */
+static int check_session_token_rate_limit(struct ipc_client *client)
+{
+	uint64_t now = monotonic_now_sec();
+
+	if (!client)
+		return -1;
+
+	/*
+	 * Backwards clock is treated as new window, matching the per-UID limiter.
+	 * CLOCK_MONOTONIC does not go backwards, so this only covers the fallback
+	 * path in monotonic_now_sec()
+	 */
+	if (now < client->token_window_start_sec ||
+	    now - client->token_window_start_sec >=
+		    (uint64_t)TOKEN_RATE_WINDOW_SEC) {
+		client->token_count = 1;
+		client->token_window_start_sec = now;
+		return 0;
+	}
+
+	if (client->token_count >= TOKEN_RATE_LIMIT_PER_SESSION)
+		return -1;
+
+	client->token_count++;
+	return 0;
+}
 
 static int read_pid_start_time_ticks(pid_t pid, uint64_t *start_time_ticks)
 {
@@ -766,7 +809,21 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
-	/* rate limit GET_TOKEN per peer UID */
+	/*
+	 * Session budget first:
+	 * it is the one a well-behaved title can hit by asking too fast,
+	 * and charging the uid ceiling for request the session was never going
+	 * to be allowed would let one title spend another title's allowance
+	 */
+	if (check_session_token_rate_limit(client) < 0) {
+		lota_warn("rate limited GET_TOKEN for session pid=%d uid=%d",
+			  client->peer_pid, client->peer_uid);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_RATE_LIMITED;
+		goto out;
+	}
+
+	/* uid ceiling: the bound on how much TPM one user can consume */
 	if (check_get_token_rate_limit(client->peer_uid) < 0) {
 		lota_warn("rate limited GET_TOKEN for uid=%d pid=%d",
 			  client->peer_uid, client->peer_pid);
