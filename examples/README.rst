@@ -49,6 +49,10 @@ once every piece is in tree.
 |                     | validates on the other.                               |
 +---------------------+-------------------------------------------------------+
 
+``anticheat-integration.rst`` is the map for a studio forking the
+game-side material: what to copy, what to consume, what must change, and
+where the licence line falls.
+
 The whole tree is built with ``make examples`` from the repository root. The
 target is opt-in: ``make all`` does not depend on it, so the agent build stays
 the same speed it has always been.
