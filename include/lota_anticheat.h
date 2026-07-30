@@ -86,6 +86,15 @@ enum {
 };
 
 struct lota_ac_config {
+	/*
+	 * sizeof(struct lota_ac_config), set by the caller.
+	 * See the same member on struct lota_connect_opts for what it buys.
+	 * Zero is refused rather than guessed at.
+	 *
+	 *     struct lota_ac_config cfg = { .struct_size = sizeof(cfg) };
+	 */
+	size_t struct_size;
+
 	enum lota_ac_provider provider;
 	const char *game_id; /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
 	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
@@ -116,6 +125,14 @@ struct lota_ac_config {
 	 */
 	const char *socket_path;
 };
+
+/*
+ * Size of the structure as of the 1.0 surface.
+ * Caller passing less than this is refused;
+ * Caller passing more has members this library does not read.
+ */
+#define LOTA_AC_CONFIG_SIZE_MIN \
+	(offsetof(struct lota_ac_config, socket_path) + sizeof(const char *))
 
 /*
  * heartbeat wire format (little-endian, packed):
