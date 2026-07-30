@@ -43,13 +43,6 @@
 extern "C" {
 #endif
 
-/*
- * Server SDK version
- */
-#define LOTA_SERVER_SDK_VERSION_MAJOR 1
-#define LOTA_SERVER_SDK_VERSION_MINOR 0
-#define LOTA_SERVER_SDK_VERSION_PATCH 0
-
 #include "lota_token.h"
 
 /* TPM2 PCR composite digest can be SHA-256, SHA-384, or SHA-512. */
@@ -166,6 +159,19 @@ int lota_server_parse_token(const uint8_t *token_data, size_t token_len,
 
 const char *lota_server_strerror(int error);
 
+/*
+ * Identify the build this library came from.
+ *
+ * Returns static string naming the LOTA release the library was compiled from,
+ * the same one lota_sdk_version() reports, so relying party and the client it
+ * verifies name their builds the same way.
+ * Treat it as opaque: the format carries no promise, so match it, do not parse it.
+ *
+ * It is NOT the answer to "what may I link against".
+ * Binary compatibility is the soname the loader resolves and the ABI version
+ * the pkg-config module reports;
+ * see Documentation/contributor/development/api-stability.rst.
+ */
 const char *lota_server_sdk_version(void);
 
 #ifdef __cplusplus
