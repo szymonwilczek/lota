@@ -295,9 +295,12 @@ func (s *Service) sweepLocked(now time.Time) {
 // by a verifier that only sees the issued certificate.
 // Mixing the tenant in keeps one TPM enrolling into two tenants from colliding
 // on a single device ID, which the per-tenant state model requires.
-// Default tenant keeps the historical EK-only MAC input, so a device enrolled
-// before tenant assignment re-enrolls under the same pseudonym and its
-// standing verifier state (baselines, revocations) stays attached.
+//
+// Default tenant has no name to mix in, so its MAC input is the EK alone.
+// That is the structural reason, not compatibility one:
+// device does not keep its pseudonym when it moves into a named tenant,
+// and it is not meant to -- the per-tenant state model requires the two to differ.
+//
 // NUL byte separates a named tenant from the modulus;
 // Valid tenant name never contains NUL, so the split is unambiguous and no two
 // (tenant, EK) pairs share MAC input.
