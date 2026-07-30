@@ -123,6 +123,34 @@ work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
 version script cannot catch.
 
+The gate
+========
+
+``make check-abi`` compares the surface against the baseline checked in under
+``packaging/abi``: the exported symbols of each library, the soname each one
+carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
+three places that must agree -- ``packaging/abi/public-headers.list``, the
+``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``. It then
+compiles every public header on its own against a prefix holding the
+installed set and nothing else.
+
+``scripts/check-patch`` runs it on every patch and CI runs it as its own
+``abi`` job, which is what makes it blocking: CI drives selected gates
+directly rather than the whole of ``check-patch``.
+
+When the gate fires, the question is which kind of change it caught:
+
+* **An accident** -- a helper that stopped being static, a header added to
+  the package but not to the list. Fix the code, not the baseline.
+* **A deliberate addition.** Declare it in the header, add it to the version
+  script under a new node, then ``make abi-baseline`` and commit the diff
+  alongside the change.
+* **A deliberate break.** The same, plus the ``LOTA_ABI_MAJOR`` bump and a
+  release note. The baseline diff is the record of what broke.
+
+There is no way to silence the gate for one file, which is deliberate: the
+baseline diff in a patch is exactly the review signal a surface change needs.
+
 Go modules
 ==========
 

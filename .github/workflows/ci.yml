@@ -241,6 +241,24 @@ jobs:
         # runner does not have)
         run: make check-includes
 
+  abi:
+    name: abi
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev binutils
+
+      - name: Check the public API and ABI
+        run: make check-abi
+
   benchmarks:
     name: benchmarks (C + Go smoke)
     runs-on: ubuntu-24.04
@@ -313,6 +331,7 @@ jobs:
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
             scripts/check-license-boundary.sh \
+            scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
             examples/demo/demo_tamper.sh \

@@ -389,7 +389,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -763,6 +763,17 @@ check-includes:
 # See Documentation/contributor/development/license-boundary.rst
 check-license-boundary:
 	@scripts/check-license-boundary.sh
+
+# Public API/ABI gate
+# Compares the SDK's exported symbols, sonames and installed header set against
+# the baseline in packaging/abi/, and compiles every public header against the installed set alone.
+# abi-baseline rewrites the symbol lists after deliberate surface change;
+# see Documentation/contributor/development/api-stability.rst
+check-abi:
+	@scripts/check-abi.sh
+
+abi-baseline:
+	@scripts/check-abi.sh --update
 
 # Combined lint:
 # clang-format style check on the C sources and headers plus golangci-lint
@@ -1693,6 +1704,8 @@ help:
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
+	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
