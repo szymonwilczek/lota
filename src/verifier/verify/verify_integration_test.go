@@ -81,13 +81,26 @@ func uefiPCR7() [types.HashSize]byte {
 	return pcr7
 }
 
-// fixtureAgentHash is the agent_hash every fixture report carries.
+// fixtureAgentHash is the agent_hash every fixture report carries
+// unless test asks for another build
 func fixtureAgentHash() [types.HashSize]byte {
+	return fixtureAgentHashSeed(0xBB)
+}
+
+// fixtureAgentHashSeed builds distinct agent_hash, so test can stand client
+// on one build and then report another the way a package update does
+func fixtureAgentHashSeed(seed byte) [types.HashSize]byte {
 	var agentHash [types.HashSize]byte
 	for i := range agentHash {
-		agentHash[i] = byte(0xBB ^ i)
+		agentHash[i] = seed ^ byte(i)
 	}
 	return agentHash
+}
+
+// fixturePCR14Seed is the PCR14 a report carrying the seeded agent hash must present:
+// the register content is derived from the agent hash, so the two move together.
+func fixturePCR14Seed(seed byte) [types.HashSize]byte {
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed), 0, 0)
 }
 
 // fixturePCR14 is the only PCR14 a fixture report can carry and still verify:
@@ -110,6 +123,17 @@ func createValidReportWithMask(t *testing.T, clientID string, nonce [32]byte, pc
 
 func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
 	pcrMask, flags uint32,
+) []byte {
+	t.Helper()
+	return createValidReportWithAgentHash(t, clientID, nonce, pcr14, pcrMask, flags,
+		fixtureAgentHash())
+}
+
+// createValidReportWithAgentHash is the builder the others delegate to.
+// Agent hash is a parameter because it is bound into the quote nonce and written
+// into the report body, so test that varies it must vary both.
+func createValidReportWithAgentHash(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
+	pcrMask, flags uint32, agentHash [types.HashSize]byte,
 ) []byte {
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
@@ -156,8 +180,8 @@ func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, p
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
-		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
 	}
+	bindingReport.System.AgentHash = agentHash
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07
 	bindingReport.System.IOMMU.UnitCount = 2
@@ -234,9 +258,7 @@ func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, p
 	}
 	offset += types.HashSize
 	// agent_hash
-	for i := 0; i < types.HashSize; i++ {
-		buf[offset+i] = byte(0xBB ^ i)
-	}
+	copy(buf[offset:], agentHash[:])
 	offset += types.HashSize
 	// kernel_path
 	copy(buf[offset:], "/boot/vmlinuz-6.12.0-lota")

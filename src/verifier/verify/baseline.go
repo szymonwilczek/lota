@@ -243,6 +243,14 @@ type ClientBaseline struct {
 
 	// number of successful attestations
 	AttestCount uint64
+
+	// how many times the pinned agent hash has moved to a build the policy
+	// allow-list names, and when it last moved.
+	// Together they are the rate limit on ArchiveAndRepinAgentHash;
+	// Zero LastAgentHashRepinAt means the client has never re-pinned,
+	// so its first update is never rate limited.
+	AgentHashRepinCount  int
+	LastAgentHashRepinAt time.Time
 }
 
 // boot-chain PCR values that must remain stable across reboots.
@@ -415,6 +423,40 @@ type ReanchorStorer interface {
 	AcknowledgeLFAReview(clientID string) error
 }
 
+// AgentHashRepinState is the per-client bookkeeping behind the agent-hash
+// re-pin rate limit.
+// Present is false when the client has no baseline row.
+type AgentHashRepinState struct {
+	Present     bool
+	RepinCount  int
+	LastRepinAt time.Time
+}
+
+// AgentHashRepinStorer is optionally implemented by baseline stores that support
+// moving client's pinned agent hash after a package update.
+//
+// Boot re-anchor above answers "the firmware moved".
+// This answers "the agent binary moved".
+// They are separate because their authorities are separate:
+// boot re-anchor is judged from the event log and the Secure Boot root of trust,
+// while a re-pin is judged from the policy's agent_hashes allow-list,
+// which names the builds the relying party already trusts.
+//
+//   - GetAgentHashRepinState returns the bookkeeping for a client.
+//   - ArchiveAndRepinAgentHash atomically copies the outgoing hash into
+//     the archive table and replaces the pinned agent_hash and PCR14 with
+//     the reported pair, bumping agent_hash_repin_count / last_agent_hash_repin_at.
+//     now is the re-pin clock: the implementation re-reads last_agent_hash_repin_at
+//     under the same lock or transaction as the write and returns
+//     ErrAgentHashRepinRateLimited when now is still inside AgentHashRepinMinInterval,
+//     so concurrent attestations for one client cannot race the cheap-path gate
+//     in agentHashDecision.
+type AgentHashRepinStorer interface {
+	GetAgentHashRepinState(clientID string) AgentHashRepinState
+	ArchiveAndRepinAgentHash(clientID string,
+		agentHash, pcr14 [types.HashSize]byte, now time.Time) error
+}
+
 // manages per-client PCR baselines (TOFU)
 type BaselineStore struct {
 	mu            sync.RWMutex
@@ -564,6 +606,51 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ReanchorCount++
 	st.LastReanchorAt = now
 	s.reanchor[clientID] = st
+	return nil
+}
+
+// GetAgentHashRepinState returns the in-memory re-pin bookkeeping
+func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	b, ok := s.baselines[clientID]
+	if !ok {
+		return AgentHashRepinState{}
+	}
+	return AgentHashRepinState{
+		Present:     true,
+		RepinCount:  b.AgentHashRepinCount,
+		LastRepinAt: b.LastAgentHashRepinAt,
+	}
+}
+
+// ArchiveAndRepinAgentHash moves the pinned agent hash
+// and PCR14 to the reported pair.
+// In-memory store keeps no archive table;
+// the outgoing hash is simply overwritten (durable backends persist it).
+// Refuses when the client has no baseline row:
+// re-pin replaces a pin, and establishing one is TOFU's job, not this path's.
+func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
+	agentHash, pcr14 [types.HashSize]byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.baselines[clientID]
+	if !ok {
+		return errors.New("agent-hash re-pin: no baseline row for client")
+	}
+	if !b.LastAgentHashRepinAt.IsZero() &&
+		now.Sub(b.LastAgentHashRepinAt) < AgentHashRepinMinInterval {
+		return ErrAgentHashRepinRateLimited
+	}
+
+	b.AgentHash = agentHash
+	b.PCR14 = pcr14
+	b.LastSeen = now
+	b.AgentHashRepinCount++
+	b.LastAgentHashRepinAt = now
 	return nil
 }
 

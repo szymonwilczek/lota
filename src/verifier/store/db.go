@@ -113,25 +113,27 @@ var migrations = []migration{
 			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
 
 			CREATE TABLE baselines (
-				client_id          TEXT PRIMARY KEY,
-				pcr14              BLOB NOT NULL CHECK(length(pcr14) = 32),
-				first_seen         TIMESTAMP NOT NULL,
-				last_seen          TIMESTAMP NOT NULL,
-				attest_count       INTEGER NOT NULL DEFAULT 1,
-				pcr0               BLOB,
-				pcr1               BLOB,
-				pcr7               BLOB,
-				boot_first_seen    TIMESTAMP,
-				boot_last_seen     TIMESTAMP,
-				agent_hash         BLOB,
-				eventlog_baseline  BLOB,
-				esrt_version       INTEGER,
-				esrt_capable       INTEGER DEFAULT 0,
-				lfa                INTEGER DEFAULT 0,
-				reanchor_count     INTEGER DEFAULT 0,
-				last_reanchor_at   TIMESTAMP,
-				lfa_review_pending INTEGER DEFAULT 0,
-				tenant             TEXT NOT NULL DEFAULT 'default'
+				client_id                TEXT PRIMARY KEY,
+				pcr14                    BLOB NOT NULL CHECK(length(pcr14) = 32),
+				first_seen               TIMESTAMP NOT NULL,
+				last_seen                TIMESTAMP NOT NULL,
+				attest_count             INTEGER NOT NULL DEFAULT 1,
+				pcr0                     BLOB,
+				pcr1                     BLOB,
+				pcr7                     BLOB,
+				boot_first_seen          TIMESTAMP,
+				boot_last_seen           TIMESTAMP,
+				agent_hash               BLOB,
+				eventlog_baseline        BLOB,
+				esrt_version             INTEGER,
+				esrt_capable             INTEGER DEFAULT 0,
+				lfa                      INTEGER DEFAULT 0,
+				reanchor_count           INTEGER DEFAULT 0,
+				last_reanchor_at         TIMESTAMP,
+				lfa_review_pending       INTEGER DEFAULT 0,
+				tenant                   TEXT NOT NULL DEFAULT 'default',
+				agent_hash_repin_count   INTEGER DEFAULT 0,
+				last_agent_hash_repin_at TIMESTAMP
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
@@ -206,6 +208,7 @@ var migrations = []migration{
 				pcr0         BLOB,
 				pcr1         BLOB,
 				pcr7         BLOB,
+				agent_hash   BLOB,
 				esrt_version INTEGER,
 				reason       TEXT
 			);

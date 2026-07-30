@@ -35,6 +35,7 @@ type baselineShard interface {
 	AgentHashStorer
 	TenantStorer
 	ReanchorStorer
+	AgentHashRepinStorer
 }
 
 // ShardedBaselineStore routes per-client baseline operations across set of baseline shards.
@@ -143,6 +144,16 @@ func (s *ShardedBaselineStore) ArchiveAndReanchor(clientID string, boot BootBase
 ) error {
 	return s.shardFor(clientID).ArchiveAndReanchor(clientID, boot, eventLog,
 		esrtVersion, esrtCapable, lfa, reason, now)
+}
+
+func (s *ShardedBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
+	return s.shardFor(clientID).GetAgentHashRepinState(clientID)
+}
+
+func (s *ShardedBaselineStore) ArchiveAndRepinAgentHash(clientID string,
+	agentHash, pcr14 [types.HashSize]byte, now time.Time,
+) error {
+	return s.shardFor(clientID).ArchiveAndRepinAgentHash(clientID, agentHash, pcr14, now)
 }
 
 func (s *ShardedBaselineStore) RecordBootEvidence(clientID string, eventLog []byte,

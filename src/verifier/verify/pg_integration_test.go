@@ -11,6 +11,7 @@ package verify
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -582,4 +583,38 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 		t.Fatalf("release blocker lock: %v", err)
 	}
 	<-blockedDone
+}
+
+// The agent-update re-pin against real database:
+// the archive insert, the counter bump and the rate-limit read that must happen
+// under the row lock
+func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
+	bs := pgBaselineStore(t)
+	const clientID = "pg-repin"
+
+	oldHash := fill(0xBB)
+	newHash := fill(0xC7)
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x14), oldHash, nil); r.AgentHashResult != TOFUFirstUse {
+		t.Fatalf("expected TOFUFirstUse, got %v", r.AgentHashResult)
+	}
+
+	now := time.Now()
+	if err := bs.ArchiveAndRepinAgentHash(clientID, newHash, fill(0x15), now); err != nil {
+		t.Fatalf("re-pin: %v", err)
+	}
+
+	st := bs.GetAgentHashRepinState(clientID)
+	if !st.Present || st.RepinCount != 1 {
+		t.Fatalf("expected one re-pin on a present row, got present=%v count=%d",
+			st.Present, st.RepinCount)
+	}
+
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x15), newHash, nil); r.AgentHashResult != TOFUMatch {
+		t.Fatalf("expected TOFUMatch after the re-pin, got %v", r.AgentHashResult)
+	}
+
+	if err := bs.ArchiveAndRepinAgentHash(clientID, fill(0xD3), fill(0x16),
+		now.Add(AgentHashRepinMinInterval-time.Minute)); !errors.Is(err, ErrAgentHashRepinRateLimited) {
+		t.Fatalf("expected ErrAgentHashRepinRateLimited, got %v", err)
+	}
 }

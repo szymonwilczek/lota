@@ -923,6 +923,108 @@ func (s *PostgresBaselineStore) ArchiveAndReanchor(clientID string,
 	return nil
 }
 
+// GetAgentHashRepinState returns the re-pin bookkeeping (Postgres)
+func (s *PostgresBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
+	ctx := context.Background()
+
+	var (
+		count     sql.NullInt64
+		lastRepin sql.NullTime
+	)
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT agent_hash_repin_count, last_agent_hash_repin_at
+		   FROM baselines WHERE client_id = $1`,
+		clientID,
+	).Scan(&count, &lastRepin); err != nil {
+		// missing row is Present=false,
+		// which the caller treats as "no pin to move";
+		// store error is reported the same way so the decision fails
+		// closed rather than on stale bookkeeping
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Warn("agent-hash re-pin state read failed",
+				"client_id", clientID, "error", err)
+		}
+		return AgentHashRepinState{}
+	}
+	st := AgentHashRepinState{Present: true, RepinCount: int(count.Int64)}
+	if lastRepin.Valid {
+		st.LastRepinAt = lastRepin.Time.UTC()
+	}
+	return st
+}
+
+// ArchiveAndRepinAgentHash archives the outgoing agent hash
+// and moves the pin to the reported (agent_hash, PCR14) pair (Postgres)
+//
+// PCR14 moves with the hash because the two are one statement:
+// the expected register content is derived from the pinned hash,
+// so leaving the old PCR14 behind would pin a value the new binary can
+// never reproduce.
+func (s *PostgresBaselineStore) ArchiveAndRepinAgentHash(clientID string,
+	agentHash, pcr14 [types.HashSize]byte, now time.Time,
+) error {
+	ctx := context.Background()
+	now = now.UTC()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if err := tx.Rollback(); err != nil {
+				slog.Warn("agent-hash re-pin tx rollback failed",
+					"client_id", clientID, "error", err)
+			}
+		}
+	}()
+	if err := lockClient(ctx, tx, clientID); err != nil {
+		return err
+	}
+
+	var (
+		oldAgentHash []byte
+		lastRepin    sql.NullTime
+	)
+	// FOR UPDATE locks the row, and last_agent_hash_repin_at is read under
+	// that lock, so the rate-limit guard cannot be raced by concurrent re-pin
+	// running on another verifier instance
+	if err := tx.QueryRowContext(ctx,
+		`SELECT agent_hash, last_agent_hash_repin_at
+		   FROM baselines WHERE client_id = $1 FOR UPDATE`,
+		clientID,
+	).Scan(&oldAgentHash, &lastRepin); err != nil {
+		return err
+	}
+	if lastRepin.Valid &&
+		now.Sub(lastRepin.Time.UTC()) < AgentHashRepinMinInterval {
+		return ErrAgentHashRepinRateLimited
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO baseline_archive
+		   (client_id, archived_at, agent_hash, reason)
+		 VALUES ($1, $2, $3, $4)`,
+		clientID, now, oldAgentHash, "agent-update",
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE baselines SET agent_hash = $1, pcr14 = $2, last_seen = $3,
+		   agent_hash_repin_count = agent_hash_repin_count + 1,
+		   last_agent_hash_repin_at = $4
+		 WHERE client_id = $5`,
+		agentHash[:], pcr14[:], now, now, clientID,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 // RecordBootEvidence stores the event log + ESRT version for a first-use
 // boot baseline (Postgres).
 // Idempotent UPDATE; esrt_capable kept sticky.
