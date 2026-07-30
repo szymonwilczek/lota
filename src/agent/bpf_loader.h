@@ -264,11 +264,13 @@ int bpf_loader_secure_boot_enabled(void);
  * Returns: 0 on success, negative errno on failure
  */
 /*
- * @allow_mutable_rootfs: when true, the agent-binary fs-verity self
+ * @allow_mutable_rootfs: when true, the agent-binary immutability self
  *   check is skipped (the function still requires lockdown, module
- *   signature enforcement, and IMA appraisal). Reserved for legacy
- *   hosts whose rootfs cannot yet ship fs-verity; the call site logs
- *   the deviation so the dirty-shutdown coverage gap stays visible.
+ *   signature enforcement, and IMA appraisal).
+ *   It is for host whose rootfs offers neither proof:
+ *   no fs-verity, which XFS and ZFS do not have, and no signed security.ima
+ *   xattr either.
+ *   Call site logs the deviation so the dirty-shutdown coverage gap stays visible.
  */
 int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 
