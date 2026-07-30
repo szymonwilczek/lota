@@ -52,9 +52,11 @@ new CA key, then a re-enrollment pass within one certificate lifetime.
 #. Distribute the new CA certificate to every verifier. ``--aik-ca-cert`` is
    repeatable, so during the overlap a verifier trusts **both** the old and the
    new CA certificate and accepts AIK certificates from either.
-#. Re-enroll hosts against the new CA (the agent's guided ``--reenroll``).
-   Within one ``-aik-cert-ttl`` window every live host holds an AIK certificate
-   signed by the new key.
+#. Re-enroll hosts against the new CA. A new CA key is a new publisher
+   identity, so this is a fresh ``--enroll`` against the new trust anchor
+   rather than a ``--reenroll`` of the old profile: the profile is named after
+   the anchor's public key. Within one ``-aik-cert-ttl`` window every live host
+   holds an AIK certificate signed by the new key.
 #. Drop the old CA certificate from the verifiers once no unexpired AIK
    certificate was issued by the old key.
 

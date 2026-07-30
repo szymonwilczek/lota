@@ -70,8 +70,8 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # the AIK certificate before it expires), while 0 attests once and exits.
 #
 # Set `server`, `port` and `ca_cert` above to the verifier the loop should reach.
-# Service stays inactive until the first `lota-agent --enroll` records
-# /var/lib/lota/enroll_state.dat.
+# Service stays inactive until the first `lota-agent --enroll` creates publisher
+# profile under /var/lib/lota/profiles/
 attest_interval = 300
 
 # AIK key lifetime in seconds before rotation (0 = default 30 days)

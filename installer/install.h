@@ -37,7 +37,6 @@
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
 #define PATH_POLICY_PUB_DEFAULT "/etc/lota/policy.pub"
 #define PATH_LOTA_STATE_DIR "/var/lib/lota"
-#define PATH_AIK_CERT "/var/lib/lota/aik_cert.der"
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 
 struct install_opts {

@@ -217,6 +217,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/enroll_state.c \
+              $(AGENT_DIR)/profile.c \
               $(AGENT_DIR)/aik_cert.c \
               $(AGENT_DIR)/attest.c
 
@@ -270,10 +271,16 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # (PCR14 lock-constant derivation + AIK certificate expiry)
 # Every privileged action shells out to the same tooling the documentation names
 # (dracut, grubby, systemctl, ...)
+#
+# profile.c comes from the agent on purpose:
+# the installer has to name the same publisher profile directory the agent enrolls
+# into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
-	installer/ui.c installer/run.c installer/probe.c
+	installer/ui.c installer/run.c installer/probe.c \
+	$(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
-		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
+		installer/run.h installer/tui.h installer/ui.h \
+		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
@@ -820,6 +827,7 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
+	install -d $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
@@ -895,6 +903,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
+	$(TEST_BIN_DIR)/test_profile_id \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
@@ -1019,6 +1028,10 @@ $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c
 $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1166,6 +1179,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
+	@$(BUILD_DIR)/test_profile_id
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_path_sanitize
@@ -1256,7 +1270,8 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_event_budget \
-	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
+	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
+	test_profile_id
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="

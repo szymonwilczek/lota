@@ -42,6 +42,7 @@
 #include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"
+#include "profile.h"
 #include "sdnotify.h"
 #include "selftest.h"
 #include "shutdown.h"
@@ -260,10 +261,23 @@ static int run_daemon(const struct run_daemon_params *params)
 
 			/*
 			 * surface the rotation state over D-Bus from
-			 * the loaded metadata
+			 * the loaded metadata, read against the profile
+			 * the configured CA trust anchor names
 			 */
-			publish_rotation_state(
-				params->cfg ? params->cfg->aik_ttl : 0);
+			{
+				struct profile_paths paths;
+				const char *anchor =
+					params->cfg && params->cfg->ca_cert[0] ?
+						params->cfg->ca_cert :
+						NULL;
+				bool have = anchor &&
+					    profile_paths_from_anchor(
+						    anchor, &paths) == 0;
+
+				publish_rotation_state(
+					params->cfg ? params->cfg->aik_ttl : 0,
+					have ? &paths : NULL);
+			}
 		}
 
 		lota_info("Performing self-measurement");

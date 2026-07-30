@@ -128,9 +128,9 @@ What the stages do
    socket.
 #. **Enrollment** -- the TPM proves itself to the operator's attestation CA
    (credential activation) and receives a short-lived AIK certificate. The
-   running agent renews that certificate on its own against the recorded
-   endpoint as it nears expiry, so no terminal is needed after install;
-   ``lota-agent --reenroll`` stays as a manual fallback.
+   running agent renews that certificate on its own against the endpoint
+   recorded in the publisher profile, so no terminal is needed after install;
+   ``lota-agent --reenroll --ca-cert ...`` stays as a manual fallback.
 
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
 and -- when ``--verifier`` is given -- a full attestation round-trip) and a
@@ -144,7 +144,9 @@ A player install needs four operator-provided inputs, all fail-closed:
 * **BPF signing public key** (default ``/etc/lota/policy.pub``, override with
   ``--policy-pubkey``) and the matching ``.sig`` next to
   ``/usr/lib/lota/lota_lsm.bpf.o``;
-* **attestation CA endpoint** (``--ca-server``, ``--ca-port``, ``--ca-cert``);
+* **attestation CA endpoint** (``--ca-server``, ``--ca-port``) and its
+  **trust anchor** (``--ca-cert``), which is required: the anchor's public key
+  names the publisher profile this host enrolls into;
 * optionally the **verifier endpoint** (``--verifier``) for the final
   round-trip check;
 * compiled **SELinux module** (``lota.pp``, default

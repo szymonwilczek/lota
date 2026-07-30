@@ -153,7 +153,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
 	if (opts->reenroll_flag)
-		return diagnostic_exit_code(do_reenroll());
+		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
 
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {
@@ -188,8 +188,11 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			return 1;
 		}
 		if (opts->no_verify_tls && opts->ca_cert_path) {
-			fprintf(stderr, "Warning: --ca-cert ignored when "
-					"--no-verify-tls is set\n");
+			fprintf(stderr,
+				"Warning: --ca-cert is not verified against "
+				"when --no-verify-tls is set; it still names "
+				"the publisher profile the AIK certificate is "
+				"read from\n");
 		}
 		if (opts->attest_interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(

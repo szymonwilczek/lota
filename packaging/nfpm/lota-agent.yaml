@@ -113,6 +113,10 @@ contents:
     type: dir
     file_info:
       mode: 0700
+  - dst: /var/lib/lota/profiles
+    type: dir
+    file_info:
+      mode: 0700
   - src: ./LICENSE
     dst: /usr/share/licenses/lota-agent/LICENSE
     type: license
