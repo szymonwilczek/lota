@@ -177,3 +177,61 @@ prefix, so ``go get`` cannot resolve any of them. Do not "fix" those paths:
 the mismatch is what keeps the internal surface internal. The public module
 is the one whose path and directory agree, which is why ``sdk/server`` sits
 at the top level rather than under ``src/`` with the C SDK.
+
+Wire protocols
+==============
+
+The libraries are one surface; the messages LOTA's own programs exchange are
+another, and they version separately from both the release and the ABI. Each
+carries its version in the message:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 22 54
+
+   * - Protocol
+     - Version constant
+     - Rule
+   * - Attestation report
+     - ``LOTA_VERSION_MAJOR`` / ``types.ReportVersion``
+     - Exact match. The verifier refuses a report from a wire it was not
+       built to parse rather than guessing at the layout of the message
+       every trust decision rests on, so a layout change is a flag day for
+       the agent fleet and the verifier tier together.
+   * - Enrollment
+     - ``LOTA_ENROLL_VERSION``, ``LOTA_ENROLL_VERSION_TOKEN``
+     - Additive and negotiated. Both frame versions are current modes, and
+       the CA answers in the version of the request it received.
+   * - Session token
+     - ``LOTA_TOKEN_VERSION``
+     - Public API, because ``lota_token.h`` is installed and a server links
+       ``lota_server_parse_token()`` against that layout. A change to it is
+       an ABI break like any other struct change.
+   * - Runtime protection
+     - ``LOTA_RUNTIME_PROTECT_V1``
+     - Names the identity a protected PID set commits to. New semantics
+       allocate the next value rather than redefining this one.
+
+The report and enrollment wires are between LOTA's own programs, so their
+versions constrain which agent, verifier and CA builds interoperate rather
+than what an integrator may link against.
+
+What a release promises
+=======================
+
+From 1.0, within a major release series:
+
+* A program built against an earlier 1.x SDK runs against a later 1.x
+  library without recompiling. Symbols are added under new version nodes,
+  never removed or redefined.
+* A public header keeps its declarations, and a struct an installed
+  function takes keeps its layout. New fields go in new structs.
+* The installed header set only grows.
+* A wire protocol changes only under its own rule above, independently of
+  the release number.
+
+A major bump is what may break each of those, and it must say which in the
+release notes. Nothing outside this page carries a promise: the agent's
+command-line flags, its configuration keys, the verifier's HTTP endpoints
+and its database schema are operator surfaces documented elsewhere, and
+the internals behind any of them may change in a patch release.
