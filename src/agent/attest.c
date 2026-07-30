@@ -1275,14 +1275,14 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	/*
-	 * Which publisher's AIK signs a GET_TOKEN is not yet something title can
-	 * choose, so it stays the first target's for the whole run and every other
-	 * publisher's relying party will refuse those tokens
+	 * Title that names its publisher gets that publisher's AIK
+	 * and that publisher's verdict.
+	 * One that names none gets the first profile's token and the host-wide
+	 * verdict, which is every publisher agreeing.
 	 */
 	if (target_count > 1)
-		lota_warn("Tokens issued over IPC are signed by the first "
-			  "publisher's AIK (%s:%d); a title attesting to "
-			  "another publisher cannot use them yet",
+		lota_info("A title that does not select a publisher is "
+			  "answered for %s:%d and with the host-wide verdict",
 			  targets[0].server, targets[0].port);
 
 	/*
@@ -1384,6 +1384,14 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 		    LOTA_TOKEN_QUOTE_PCR_MASK);
+
+	/*
+	 * Hand the publishers to the IPC layer so title can name the one
+	 * it plays for.
+	 * The list outlives every connection: it is on this stack frame,
+	 * and ipc_cleanup() runs before this function returns.
+	 */
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 	if (ret < 0) {

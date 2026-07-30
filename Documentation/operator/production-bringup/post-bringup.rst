@@ -147,13 +147,22 @@ replaces the single verifier rather than adding to it, ``--server`` and
 ``--pin-sha256`` are refused while profiles are configured; each profile is
 anchored by its own ``ca_cert``.
 
-The host still gives one answer to "is this machine attested": the status the
-SDK reports is asserted only while **every** configured publisher is satisfied,
-and the validity window closes at the earliest of theirs. A title cannot yet
-say which publisher it is asking about, so the conservative answer is the only
-honest one. For the same reason, tokens issued over IPC are signed by the first
-profile's AIK and another publisher's relying party will refuse them; the agent
-says so at startup when more than one profile is configured.
+A title says which publisher it plays for, and gets that publisher's answers.
+It names the profile by the lowercase hex SHA-256 of that publisher's CA trust
+anchor SubjectPublicKeyInfo -- the identity the profile directory is named
+after, which the publisher knows about their own CA -- through
+``publisher_profile`` in ``struct lota_connect_opts`` or
+``struct lota_ac_config``. The connection's tokens are then signed by that
+publisher's AIK, and the attested state it reads is that publisher's verifier's
+verdict rather than every publisher on the host agreeing. Naming a publisher
+this machine holds no enrollment for fails the connection: handing a title
+another publisher's evidence under its own name would be worse than telling it
+plainly.
+
+A title that names nobody -- which is every enterprise integration, where the
+host has one publisher -- gets the first profile's token and the host-wide
+answer: attested only while **every** configured publisher is satisfied, with
+the window closing at the earliest of theirs.
 
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until

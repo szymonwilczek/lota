@@ -63,6 +63,8 @@ enum lota_error {
 	LOTA_ERR_NO_MEMORY = -9,
 	LOTA_ERR_RATE_LIMITED = -10,
 	LOTA_ERR_ACCESS_DENIED = -11,
+	/* the agent holds no enrollment for the requested publisher */
+	LOTA_ERR_UNKNOWN_PROFILE = -12,
 };
 
 /*
@@ -168,15 +170,37 @@ struct lota_connect_opts {
 	size_t struct_size; /* sizeof(struct lota_connect_opts) */
 	const char *socket_path; /* Custom socket path (NULL = default) */
 	int timeout_ms; /* Connection timeout in ms (0 = default 5000) */
+
+	/*
+	 * Which publisher this connection attests for:
+	 * the lowercase hex SHA-256 of that publisher's attestation-CA trust
+	 * anchor SubjectPublicKeyInfo (64 characters).
+	 * Publisher knows this about their own CA and ships it in the title.
+	 *
+	 * Player's machine holds one enrollment per publisher, so naming one
+	 * selects the AIK that signs this connection's tokens and makes
+	 * lota_is_attested() report that publisher's verdict instead of every
+	 * publisher on the host agreeing.
+	 *
+	 * NULL on a single-publisher host, which is every enterprise fleet:
+	 * the agent then answers with its first profile and the host-wide verdict.
+	 * Naming a publisher the machine has no enrollment for fails
+	 * the connection rather than falling back to another publisher's evidence.
+	 */
+	const char *publisher_profile;
 };
+
+/* hex SHA-256, without a terminator */
+#define LOTA_PUBLISHER_PROFILE_LEN 64
 
 /*
  * Size of the structure as of the 1.0 surface.
  * Caller passing less than this is refused;
  * Caller passing more has members this library does not read.
  */
-#define LOTA_CONNECT_OPTS_SIZE_MIN \
-	(offsetof(struct lota_connect_opts, timeout_ms) + sizeof(int))
+#define LOTA_CONNECT_OPTS_SIZE_MIN                               \
+	(offsetof(struct lota_connect_opts, publisher_profile) + \
+	 sizeof(const char *))
 
 /*
  * lota_connect - Connect to the LOTA agent

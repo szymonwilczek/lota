@@ -273,6 +273,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_RATE_LIMITED;
 	case LOTA_IPC_ERR_ACCESS_DENIED:
 		return LOTA_ERR_ACCESS_DENIED;
+	case LOTA_IPC_ERR_UNKNOWN_PROFILE:
+		return LOTA_ERR_UNKNOWN_PROFILE;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -441,6 +443,51 @@ static int build_discovery_paths(char paths[][PATH_MAX], int max)
 	return n;
 }
 
+/*
+ * Bind the connection to one publisher, named by the hex SHA-256 of its CA trust
+ * anchor's SubjectPublicKeyInfo.
+ * Returns 0, or negative errno when the name is malformed
+ * or the agent has no profile for it.
+ */
+static int select_publisher(struct lota_client *client, const char *hex)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	size_t payload_len = 0;
+	size_t i;
+	int ret;
+
+	if (strlen(hex) != LOTA_PUBLISHER_PROFILE_LEN)
+		return -EINVAL;
+
+	for (i = 0; i < sizeof(payload.profile_id); i++) {
+		unsigned int byte;
+
+		if (sscanf(hex + i * 2, "%2x", &byte) != 1)
+			return -EINVAL;
+		payload.profile_id[i] = (uint8_t)byte;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_SET_PROFILE;
+	req.payload_len = (uint32_t)sizeof(payload);
+
+	ret = send_request(client, &req, &payload, sizeof(payload));
+	if (ret < 0)
+		return ret;
+
+	ret = recv_response(client, &resp, NULL, 0, &payload_len);
+	if (ret < 0)
+		return ret;
+	if (resp.result != LOTA_IPC_OK)
+		return -ENOENT;
+
+	return 0;
+}
+
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 {
 	struct lota_client *client;
@@ -494,6 +541,19 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 
 	client->fd = fd;
 	client->timeout_ms = timeout_ms;
+
+	if (opts && opts->publisher_profile &&
+	    select_publisher(client, opts->publisher_profile) < 0) {
+		/*
+		 * caller asked to attest for a specific publisher and the agent
+		 * cannot answer for that one.
+		 * Failing the connection is the point:
+		 * falling back would hand the title another publisher's evidence
+		 * under its own name
+		 */
+		lota_disconnect(client);
+		return NULL;
+	}
 
 	return client;
 }
@@ -1156,6 +1216,8 @@ const char *lota_strerror(int error)
 		return "Request rate limited";
 	case LOTA_ERR_ACCESS_DENIED:
 		return "Access denied";
+	case LOTA_ERR_UNKNOWN_PROFILE:
+		return "This machine holds no enrollment for that publisher";
 	default:
 		return "Unknown error";
 	}
