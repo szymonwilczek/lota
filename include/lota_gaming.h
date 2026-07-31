@@ -65,6 +65,12 @@ enum lota_error {
 	LOTA_ERR_ACCESS_DENIED = -11,
 	/* the agent holds no enrollment for the requested publisher */
 	LOTA_ERR_UNKNOWN_PROFILE = -12,
+	/*
+	 * Nobody on this machine has agreed to answer to that publisher yet.
+	 * The player decides, not the title: show what the publisher would
+	 * learn and let them accept, then connect again.
+	 */
+	LOTA_ERR_CONSENT_REQUIRED = -13,
 };
 
 /*
@@ -219,6 +225,22 @@ struct lota_client *lota_connect(void);
  * and timeout.
  */
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
+
+/*
+ * lota_connect_last_error - Why the last connect on this thread failed
+ *
+ * lota_connect() and lota_connect_opts() return NULL for several reasons
+ * and title has to tell them apart: LOTA_ERR_CONNECTION_FAILED is "no agent here",
+ * LOTA_ERR_UNKNOWN_PROFILE is
+ * "this machine has no enrollment with the publisher you named",
+ * and LOTA_ERR_CONSENT_REQUIRED is "nobody here has agreed to answer to them yet",
+ * which is a screen to show rather than error to report.
+ *
+ * Set by every connect attempt on the calling thread, including successful ones
+ * (LOTA_OK).
+ * Reading it after anything else is meaningless.
+ */
+int lota_connect_last_error(void);
 
 /*
  * lota_disconnect - Disconnect from the LOTA agent

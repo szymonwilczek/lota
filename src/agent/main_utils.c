@@ -119,6 +119,14 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
 	       LOTA_DEFAULT_CA_PORT);
+	printf("  --allow-publisher HEX\n");
+	printf("                    Record that this machine may answer to "
+	       "one\n");
+	printf("                    publisher, named by the SHA-256 of their "
+	       "CA\n");
+	printf("                    trust anchor's public key. Nothing "
+	       "enrolls\n");
+	printf("                    with a publisher before this\n");
 	printf("  --enroll-token-file PATH\n");
 	printf("                    File holding a per-tenant enrollment "
 	       "token to\n");

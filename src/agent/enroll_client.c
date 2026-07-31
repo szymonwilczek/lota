@@ -447,6 +447,18 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	}
 	printf("Publisher profile: %s\n", paths.id);
 
+	/*
+	 * Running --enroll is the consent:
+	 * somebody with root named this CA and asked for the key.
+	 * Recording it here keeps one rule for the agent to enforce,
+	 * rather than one for operators and one for players
+	 */
+	if (profile_consent_record(&paths, getuid()) < 0)
+		fprintf(stderr,
+			"Warning: could not record consent for %s; the loop "
+			"may refuse to re-enroll later\n",
+			paths.id);
+
 	token[0] = '\0';
 	if (token_file) {
 		ret = enroll_token_from_file(token_file, token, sizeof(token));
@@ -516,6 +528,71 @@ int do_reenroll(const char *ca_cert)
 	printf("\n=== Re-enrollment %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
 	return ret == 0 ? 0 : 1;
+}
+
+/*
+ * Build the profile paths for a publisher named by its identity.
+ * --allow-publisher runs before anything has enrolled, so there is no anchor
+ *  on disk to derive the identity from:
+ *  the title (or the publisher's own instructions) supplies the hex directly.
+ */
+static int paths_from_id(const char *profile_id, struct profile_paths *out)
+{
+	size_t len;
+
+	if (!profile_id || !out)
+		return -EINVAL;
+
+	len = strlen(profile_id);
+	if (len != LOTA_PROFILE_ID_LEN - 1)
+		return -EINVAL;
+	if (strspn(profile_id, "0123456789abcdef") != len)
+		return -EINVAL;
+
+	memset(out, 0, sizeof(*out));
+	snprintf(out->id, sizeof(out->id), "%s", profile_id);
+	if (snprintf(out->dir, sizeof(out->dir), "%s/%s", LOTA_PROFILE_BASE_DIR,
+		     out->id) >= (int)sizeof(out->dir))
+		return -ENAMETOOLONG;
+	if (snprintf(out->consent, sizeof(out->consent), "%s/%s", out->dir,
+		     LOTA_PROFILE_CONSENT_FILE) >= (int)sizeof(out->consent))
+		return -ENAMETOOLONG;
+	return 0;
+}
+
+int do_allow_publisher(const char *profile_id)
+{
+	struct profile_paths paths;
+	time_t agreed = 0;
+	int ret;
+
+	ret = paths_from_id(profile_id, &paths);
+	if (ret < 0) {
+		fprintf(stderr,
+			"ERROR: '%s' is not a publisher identity.\n"
+			"It is the lowercase hex SHA-256 (64 characters) of "
+			"the publisher's CA trust anchor "
+			"SubjectPublicKeyInfo.\n",
+			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	if (profile_consent_time(&paths, &agreed) == 0) {
+		printf("Publisher %s was already agreed to.\n", paths.id);
+		return 0;
+	}
+
+	ret = profile_consent_record(&paths, getuid());
+	if (ret < 0) {
+		fprintf(stderr, "Failed to record consent for %s: %s\n",
+			paths.id, strerror(-ret));
+		return 1;
+	}
+
+	printf("Publisher %s may now enroll with this machine.\n", paths.id);
+	printf("They will hold one attestation key here, unlinkable to the "
+	       "one any other publisher holds.\n");
+	return 0;
 }
 
 int enroll_profile_now(struct tpm_context *tpm,

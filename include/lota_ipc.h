@@ -66,6 +66,8 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
 	LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS = 0x0A,
 	LOTA_IPC_ERR_UNKNOWN_PROFILE = 0x0B,
+	/* nobody on this machine has agreed to answer to that publisher */
+	LOTA_IPC_ERR_CONSENT_REQUIRED = 0x0C,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 

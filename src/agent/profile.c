@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <openssl/bio.h>
@@ -166,6 +167,9 @@ int profile_paths_from_anchor_base(const char *base_dir,
 		return -ENAMETOOLONG;
 	if (snprintf(p.aik_handle, sizeof(p.aik_handle), "%s/%s", p.dir,
 		     LOTA_PROFILE_AIK_HANDLE_FILE) >= (int)sizeof(p.aik_handle))
+		return -ENAMETOOLONG;
+	if (snprintf(p.consent, sizeof(p.consent), "%s/%s", p.dir,
+		     LOTA_PROFILE_CONSENT_FILE) >= (int)sizeof(p.consent))
 		return -ENAMETOOLONG;
 
 	*out = p;
@@ -347,5 +351,82 @@ emit:
 	}
 
 	*out_count = written;
+	return 0;
+}
+
+int profile_consent_record(const struct profile_paths *paths, uid_t by)
+{
+	char line[160];
+	int len, fd, ret;
+
+	if (!paths || paths->consent[0] == '\0')
+		return -EINVAL;
+
+	ret = profile_dir_ensure(paths);
+	if (ret < 0)
+		return ret;
+
+	len = snprintf(line, sizeof(line),
+		       "lota-consent 1\nprofile %s\nrecorded %lld\nby-uid %u\n",
+		       paths->id, (long long)time(NULL), (unsigned int)by);
+	if (len <= 0 || len >= (int)sizeof(line))
+		return -EINVAL;
+
+	fd = open(paths->consent, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+		  0600);
+	if (fd < 0)
+		return -errno;
+	if (write(fd, line, (size_t)len) != len) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+	if (fsync(fd) < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+	return close(fd) < 0 ? -errno : 0;
+}
+
+int profile_consent_time(const struct profile_paths *paths, time_t *out)
+{
+	char buf[160];
+	const char *p;
+	ssize_t n;
+	int fd;
+
+	if (!paths || !out || paths->consent[0] == '\0')
+		return -EINVAL;
+
+	fd = open(paths->consent, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno; /* -ENOENT: nobody agreed to this publisher */
+
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n < 0)
+		return -errno;
+	buf[n] = '\0';
+
+	if (strncmp(buf, "lota-consent 1\n", strlen("lota-consent 1\n")) != 0)
+		return -EINVAL;
+
+	p = strstr(buf, "\nrecorded ");
+	if (!p)
+		return -EINVAL;
+	p += strlen("\nrecorded ");
+
+	errno = 0;
+	*out = (time_t)strtoll(p, NULL, 10);
+	return errno == 0 ? 0 : -EINVAL;
+}
+
+int profile_consent_forget(const struct profile_paths *paths)
+{
+	if (!paths || paths->consent[0] == '\0')
+		return -EINVAL;
+	if (unlink(paths->consent) != 0 && errno != ENOENT)
+		return -errno;
 	return 0;
 }
