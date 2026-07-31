@@ -721,24 +721,34 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
 /*
  * SYNC_ATTEST comes from the agent's other unit, not from a title.
  *
- * ipc_client_is_privileged() cannot express that:
+ * The boundary this holds is the socket's own:
+ * /run/lota/lota.sock is opened to group `lota` so titles can reach it,
+ * and no member of that group may write a publisher's verdict into the answer
+ * other titles read.
+ *
+ * Peer uid, authenticated by the kernel through SO_PEERCRED, is what says that,
+ * and the live PID identity is re-checked so a recycled PID cannot inherit
+ * the answer.
+ *
+ * It does not hold against uid 0, and nothing this process can ask would.
+ * Comparing the peer's executable to our own is the natural check and is not
+ * available: the peer runs with dumpable cleared by its own hardening,
+ * so /proc/<pid>/exe is refused to anything without CAP_SYS_PTRACE,
+ * and the enforcement daemon deliberately does not carry that capability.
+ *
+ * Root already owns enforcement here: it can stop this unit, load its own BPF,
+ * or run its own loop, so check that pretends otherwise would be decoration.
+ *
+ * ipc_client_is_privileged() is not the gate either:
  * it asks whether the peer's executable is on the operator's verity allowlist,
- * which is empty on a host that configured none
- * -- so it would refuse the attestation loop on a default install.
+ * which is empty on default install, so it would refuse the attestation loop
+ * on every stock host.
  *
- * ipc_client_is_agent_self() cannot either:
- * the loop is a different process by design.
- *
- * The honest question is whether the peer is running *this* binary,
- * so that is what gets asked:
- * same user, and /proc/<pid>/exe resolving to the same inode as our own.
- * Replaced on-disk binary is a different inode, and the live PID identity
- * is re-checked so recycled PID cannot inherit the answer.
+ * ipc_client_is_agent_self() asks for one process, which the two units are not
+ * by design.
  */
 static int ipc_client_is_agent_peer(const struct ipc_client *client)
 {
-	char exe_path[64];
-	struct stat peer_st, self_st;
 	uint64_t current_ticks = 0;
 
 	if (!client)
@@ -753,18 +763,7 @@ static int ipc_client_is_agent_peer(const struct ipc_client *client)
 	if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
 		return 0;
 
-	if (current_ticks != client->peer_start_time_ticks)
-		return 0;
-
-	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe",
-		 (int)client->peer_pid);
-
-	if (stat(exe_path, &peer_st) < 0 ||
-	    stat("/proc/self/exe", &self_st) < 0)
-		return 0;
-
-	return peer_st.st_dev == self_st.st_dev &&
-	       peer_st.st_ino == self_st.st_ino;
+	return current_ticks == client->peer_start_time_ticks;
 }
 
 /*
