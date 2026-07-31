@@ -27,6 +27,7 @@
 #include <openssl/x509.h>
 
 #include "../src/agent/profile.h"
+#include "../src/agent/publishers.h"
 
 static int g_failures;
 
@@ -537,6 +538,78 @@ out:
 	EVP_PKEY_free(key);
 }
 
+/*
+ * The inventory is what a player checks and what revocation acts on,
+ * so what matters is that a half-finished profile is still listed
+ * -- "agreed to, not enrolled" is the state between accepting and title running,
+ * and hiding it would hide the answer to "why is this not working yet"
+ * -- and that forgetting leaves nothing behind.
+ */
+static void test_publisher_inventory(void)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	const char *id_a =
+		"1111111111111111111111111111111111111111111111111111111111111111";
+	const char *id_b =
+		"2222222222222222222222222222222222222222222222222222222222222222";
+	struct profile_paths paths;
+	char base[256];
+	size_t count = 0;
+	struct stat st;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-inv.%d", getpid());
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 0,
+	      "a host that answered to nobody lists nobody");
+
+	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
+	      "paths derive from an identity");
+	CHECK(profile_consent_record(&paths, 0) == 0, "publisher A agreed to");
+	CHECK(profile_aik_handle_save(&paths, 0x81010010) == 0,
+	      "publisher A holds a key");
+
+	/* directory whose name is not an identity is not a publisher */
+	{
+		char junk[PATH_MAX];
+
+		snprintf(junk, sizeof(junk), "%s/%s", base, "not-a-profile");
+		mkdir(junk, 0700);
+	}
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 1,
+	      "only directories named by an identity are publishers");
+	CHECK(strcmp(entries[0].id, id_a) == 0 && entries[0].consented &&
+		      entries[0].has_aik_handle &&
+		      entries[0].aik_handle == 0x81010010,
+	      "the entry says what is stored for that publisher");
+	CHECK(!entries[0].enrolled && !entries[0].has_cert,
+	      "agreed to but not enrolled is a state, not an omission");
+
+	CHECK(publishers_forget(&paths) == 0, "a publisher can be forgotten");
+	CHECK(stat(paths.dir, &st) != 0,
+	      "forgetting leaves no directory behind");
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 0,
+	      "a forgotten publisher is gone from the inventory");
+
+	CHECK(profile_paths_from_id(base, "not-hex", &paths) == -EINVAL &&
+		      profile_paths_from_id(base, id_b + 1, &paths) == -EINVAL,
+	      "an identity that is not one cannot become a path");
+
+	{
+		char junk[PATH_MAX];
+
+		snprintf(junk, sizeof(junk), "%s/%s", base, "not-a-profile");
+		rmdir(junk);
+	}
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -547,6 +620,7 @@ int main(void)
 	test_handle_record_round_trip();
 	test_handle_candidates();
 	test_consent_record();
+	test_publisher_inventory();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

@@ -173,6 +173,26 @@ int enroll_renew_cert(struct tpm_context *tpm,
 int do_allow_publisher(const char *profile_id);
 
 /*
+ * Show every publisher this host stores anything for, and what it stores.
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_list_publishers(void);
+
+/*
+ * Take publisher back: destroy the AIK they can recognise this machine by,
+ * delete their enrollment, certificate and consent, and leave nothing that
+ * could hand them the same identity again.
+ *
+ * A profile still configured in lota.conf will enroll again
+ * -- with a *new* key -- the next time a title of theirs runs and somebody
+ * agrees to it, which is the point: forgetting is about the identity,
+ * not about refusing the publisher forever.
+ *
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_forget_publisher(const char *profile_id);
+
+/*
  * First enrollment for a publisher, from inside a running agent.
  *
  * Same ceremony as --enroll, minus the process-level bring-up:

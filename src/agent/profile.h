@@ -97,6 +97,15 @@ int profile_paths_from_anchor_base(const char *base_dir,
 				   struct profile_paths *out);
 
 /*
+ * Lay out a profile from its identity rather than from an anchor,
+ * for the paths that meet a publisher by name: title handing over the hex,
+ * and the inventory reading directories that are already there.
+ * Identity is validated -- 64 lowercase hex characters -- because it becomes path.
+ */
+int profile_paths_from_id(const char *base_dir, const char *id,
+			  struct profile_paths *out);
+
+/*
  * Create the profile directory and its parent if they are missing,
  * 0700: the enrollment record carries the tenant admission token, and the directory
  * name itself says which publisher this host answers to.

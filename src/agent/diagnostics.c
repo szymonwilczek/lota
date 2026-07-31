@@ -152,6 +152,13 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	if (opts->list_publishers_flag)
+		return diagnostic_exit_code(do_list_publishers());
+
+	if (opts->forget_publisher)
+		return diagnostic_exit_code(
+			do_forget_publisher(opts->forget_publisher));
+
 	if (opts->allow_publisher)
 		return diagnostic_exit_code(
 			do_allow_publisher(opts->allow_publisher));

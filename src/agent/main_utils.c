@@ -127,6 +127,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    trust anchor's public key. Nothing "
 	       "enrolls\n");
 	printf("                    with a publisher before this\n");
+	printf("  --list-publishers Show every publisher this machine "
+	       "answers to,\n");
+	printf("                    what it stores for each and when it was "
+	       "agreed to\n");
+	printf("  --forget-publisher HEX\n");
+	printf("                    Destroy that publisher's attestation key "
+	       "and\n");
+	printf("                    everything stored for them. They can ask "
+	       "again\n");
+	printf("                    and would need consent and a new key\n");
 	printf("  --enroll-token-file PATH\n");
 	printf("                    File holding a per-tenant enrollment "
 	       "token to\n");

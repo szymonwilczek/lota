@@ -217,6 +217,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/enroll_state.c \
+              $(AGENT_DIR)/publishers.c \
               $(AGENT_DIR)/profile.c \
               $(AGENT_DIR)/aik_cert.c \
               $(AGENT_DIR)/attest_targets.c \
@@ -1058,7 +1059,9 @@ $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c \
+		$(AGENT_DIR)/publishers.c $(AGENT_DIR)/enroll_state.c \
+		$(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 

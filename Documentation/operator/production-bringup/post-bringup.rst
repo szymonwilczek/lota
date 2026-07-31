@@ -201,6 +201,18 @@ distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
 screen to show the player rather than a fault to report. Whatever shows that
 screen calls ``--allow-publisher`` when they accept.
 
+**What this machine holds for whom is inspectable, and revocable.**
+``lota-agent --list-publishers`` shows every publisher with anything stored
+here: when it was agreed to, where it enrolled, which TPM handle holds its
+attestation key and how much validity that key's certificate has left.
+``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
+in that order -- a key with no directory left to name it would be worse than
+either state alone, so nothing is deleted if the eviction fails.
+
+Forgetting is about the identity, not about refusing the publisher. A profile
+still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
+that the old evidence cannot be linked to.
+
 **Enrollment with a profile's publisher is a runtime action.** A profile that
 names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
 enrolled by the agent itself: when the loop first reaches that publisher, and
