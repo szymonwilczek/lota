@@ -62,6 +62,31 @@ int main(void)
 				     sizeof(struct lota_ipc_set_profile) + 1),
 	      "SET_PROFILE with a longer payload is refused");
 
+	/*
+	 * SYNC_ATTEST is variable-length:
+	 * the attestation loop reports one verdict per publisher it holds,
+	 * and host that answers to nobody still syncs so the socket owner
+	 * learns the list is empty.
+	 */
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
+				    sizeof(struct lota_ipc_attest_sync)),
+	      "SYNC_ATTEST with no verdicts is allowed");
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
+				    sizeof(struct lota_ipc_attest_sync) +
+					    sizeof(struct lota_ipc_attest_verdict)),
+	      "SYNC_ATTEST with one verdict is allowed");
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
+				    LOTA_IPC_ATTEST_SYNC_MAX_SIZE),
+	      "SYNC_ATTEST with every publisher is allowed");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
+				     LOTA_IPC_ATTEST_SYNC_MAX_SIZE + 1),
+	      "SYNC_ATTEST past the publisher cap is refused");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST, 0),
+	      "SYNC_ATTEST without its header is refused");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
+				     sizeof(struct lota_ipc_attest_sync) + 1),
+	      "SYNC_ATTEST with a partial verdict is refused");
+
 	CHECK(!ipc_payload_len_valid(0xdead, 4),
 	      "an unknown command may not carry a payload");
 	CHECK(ipc_payload_len_valid(0xdead, 0),

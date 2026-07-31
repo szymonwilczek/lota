@@ -470,6 +470,18 @@ _Static_assert(LOTA_IPC_MAX_PAYLOAD <= UINT16_MAX,
 _Static_assert(LOTA_IPC_TOKEN_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 	       "maximum GET_TOKEN payload must fit the IPC parser buffer");
 
+/*
+ * Two agent units trade one state entry per configured publisher,
+ * and the public IPC header sizes that frame without seeing the configuration
+ * parser.
+ */
+_Static_assert(LOTA_IPC_MAX_PROFILES == LOTA_CONFIG_MAX_PROFILES,
+	       "the IPC profile cap must match the configurable profile count");
+_Static_assert(LOTA_IPC_ATTEST_SYNC_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
+	       "maximum SYNC_ATTEST payload must fit the IPC parser buffer");
+_Static_assert(LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
+	       "maximum SYNC_ATTEST response must fit the IPC parser buffer");
+
 static int set_nonblocking(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);

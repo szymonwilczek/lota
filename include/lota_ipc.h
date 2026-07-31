@@ -48,7 +48,18 @@ enum lota_ipc_cmd {
 		0x07, /* Graceful agent self-shutdown (requires privileged peer) */
 	LOTA_IPC_CMD_SET_PROFILE =
 		0x08, /* Bind this connection to one publisher profile */
+	LOTA_IPC_CMD_SYNC_ATTEST =
+		0x09, /* Exchange state with the attestation loop (agent peer only) */
 };
+
+/*
+ * How many publishers one host answers to.
+ *
+ * Mirrors LOTA_CONFIG_MAX_PROFILES, which this header cannot include:
+ * the SDK ships it and the agent's configuration parser is not public surface.
+ * The agent asserts the two against each other.
+ */
+#define LOTA_IPC_MAX_PROFILES 8
 
 /*
  * Response codes
@@ -256,6 +267,15 @@ struct lota_ipc_token {
 	(1U << 1) /* Attestation completed (pass/fail)     \
 				       */
 #define LOTA_IPC_EVENT_MODE (1U << 2) /* Enforcement mode changed */
+
+/*
+ * Title opened or closed session with publisher, or selected one this host has
+ * never enrolled with.
+ * Only the attestation loop subscribes: it acts on the change, and waiting out
+ * its sleep would make title that has just launched wait an interval for its
+ * first report.
+ */
+#define LOTA_IPC_EVENT_PROFILE (1U << 3)
 #define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
 
 /*
@@ -287,6 +307,67 @@ struct lota_ipc_notify {
 	uint8_t mode; /* Current mode (enum lota_mode) */
 	uint8_t reserved[3];
 } __attribute__((packed));
+
+/*
+ * SYNC_ATTEST -- the state exchange between the two agent units.
+ *
+ * Enforcement and attestation run as separate processes so a network-facing
+ * TLS client cannot reach the BPF policy, and only one of them can own
+ * LOTA_IPC_SOCKET_PATH.
+ * Enforcement daemon owns it: it is the always-on unit, it is what the packaged
+ * socket unit activates, and it is the one holding the BPF context,
+ * the enforcement policy digest and the boot state a title asks about.
+ * What it does not have is a verifier's verdict.
+ *
+ * So the attestation loop connects to that socket as a local peer and trades what
+ * each side knows in one round trip: it sends the verdict it holds for every
+ * publisher, and reads back which publishers a title is currently playing for
+ * and which one a title has asked this host to enrol with.
+ *
+ * Not public surface -- the SDK never sends this, and the daemon refuses it
+ * from anything but the agent binary running as the agent's own user.
+ */
+struct lota_ipc_attest_verdict {
+	uint8_t profile_id[32]; /* SHA-256 of the publisher CA anchor SPKI */
+	uint8_t attested; /* the verifier accepted the last report */
+	uint8_t reserved[7];
+	uint64_t valid_until; /* Unix timestamp the verdict lapses at */
+} __attribute__((packed));
+
+struct lota_ipc_attest_sync {
+	uint32_t count; /* verdicts that follow */
+	uint32_t attest_count; /* successful rounds since the loop started */
+	uint32_t fail_count;
+	uint32_t _reserved1;
+	uint64_t last_attest_time;
+	/* struct lota_ipc_attest_verdict verdicts[count] follows */
+} __attribute__((packed));
+
+/*
+ * What a publisher is owed, as only the socket owner can know it:
+ * title holding session with them, or title having selected a publisher this
+ * host has never enrolled with.
+ */
+struct lota_ipc_profile_demand {
+	uint8_t profile_id[32];
+	uint32_t sessions; /* connections currently bound to this publisher */
+	uint8_t enroll_pending; /* title asked for publisher with no enrollment */
+	uint8_t reserved[3];
+} __attribute__((packed));
+
+struct lota_ipc_attest_sync_response {
+	uint32_t count; /* demands that follow */
+	uint32_t _reserved1;
+	/* struct lota_ipc_profile_demand demands[count] follows */
+} __attribute__((packed));
+
+#define LOTA_IPC_ATTEST_SYNC_MAX_SIZE          \
+	(sizeof(struct lota_ipc_attest_sync) + \
+	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_attest_verdict))
+
+#define LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE          \
+	(sizeof(struct lota_ipc_attest_sync_response) + \
+	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_profile_demand))
 
 /* PROTECT_PID / UNPROTECT_PID request payload */
 struct lota_ipc_pid_request {
