@@ -1279,6 +1279,15 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		{ LOTA_FLAG_IOMMU_OK, "IOMMU_OK" },
 		{ LOTA_FLAG_BPF_LOADED, "BPF_LOADED" },
 		{ LOTA_FLAG_SECURE_BOOT, "SECURE_BOOT" },
+		/*
+		 * The flag this branch exists for.
+		 * Title that renders the decoded string is showing player why
+		 * the machine reads the way it does, and "nobody verifies here"
+		 * is the one answer that is not failure
+		 * -- leaving it out of the table turns it back into bare
+		 *  NOT ATTESTED, which is the confusion the flag was added to remove
+		 */
+		{ LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY" },
 	};
 	size_t pos = 0;
 	int first = 1;
