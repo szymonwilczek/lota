@@ -111,6 +111,10 @@ build a proprietary product on top.
 install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
 
 %post agent
+# lota-agent.socket sets SocketGroup=lota on the IPC socket, which resolves only
+# once that group exists.
+# Package ships the fragment; applying it is what creates the group
+systemd-sysusers %{_sysusersdir}/lota-agent.conf >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
 cat <<'EOF'
 lota-agent installed. The agent fails closed until host bring-up completes.
@@ -134,6 +138,7 @@ EOF
 %dir %{_prefix}/lib/dracut/modules.d/90lota
 %{_prefix}/lib/dracut/modules.d/90lota/module-setup.sh
 %{_prefix}/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
+%{_sysusersdir}/lota-agent.conf
 %{_unitdir}/lota-agent.service
 %{_unitdir}/lota-agent.socket
 %{_unitdir}/lota-attest.service
