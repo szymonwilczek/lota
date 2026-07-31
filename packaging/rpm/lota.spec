@@ -83,9 +83,18 @@ Self-hosted enrollment service that proves an AIK lives in a genuine TPM
 through credential activation and issues short-lived AIK certificates that
 the fleet verifier trusts.
 
+%package sdk
+Summary:        LOTA SDK runtime libraries
+License:        MIT
+
+%description sdk
+Versioned shared libraries for the gaming, anti-cheat and server SDKs and the
+Proton/Steam hook. Install lota-sdk-devel to build against them.
+
 %package sdk-devel
 Summary:        LOTA SDK headers and shared libraries
 License:        MIT
+Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
 
 %description sdk-devel
 Headers and shared libraries for the gaming, anti-cheat and server SDKs,
@@ -162,6 +171,13 @@ EOF
 %files attest-ca
 %license LICENSE
 %{_bindir}/lota-attest-ca
+
+%files sdk
+%license LICENSE
+%{_libdir}/liblotagaming.so.*
+%{_libdir}/liblotaserver.so.*
+%{_libdir}/liblota_wine_hook.so.*
+%{_libdir}/liblota_anticheat.so.*
 
 %files sdk-devel
 %license LICENSE
