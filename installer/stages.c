@@ -782,12 +782,20 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 
 	rc = enroll_profile(ctx, &paths);
 	if (rc == -EINVAL) {
+		/*
+		 * No publisher named at install time, which is the normal case
+		 * for player:
+		 * the publisher is whoever they buy title from, and the agent
+		 * enrolls with each of them the first time title asks.
+		 * Operator installing fleet names the CA here and gets
+		 * the enrollment done before the machine is handed over.
+		 */
 		snprintf(note, cap,
-			 "No CA trust anchor was given. Re-run with --ca-cert "
-			 "(and --ca-server) from the operator's install "
-			 "instructions: the anchor names the publisher this "
-			 "host enrolls with.");
-		return STAGE_BLOCKED;
+			 "No attestation CA named, so nothing to enroll with "
+			 "yet. The agent enrolls with each publisher the first "
+			 "time a title asks for one. Pass --ca-server and "
+			 "--ca-cert to enroll here instead.");
+		return STAGE_DONE;
 	}
 	if (rc < 0) {
 		snprintf(note, cap, "Cannot read the CA trust anchor %s (%s)",
@@ -824,10 +832,9 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 
 	if (!ctx->opts.ca_server) {
 		snprintf(note, cap,
-			 "This host has never enrolled and no attestation CA "
-			 "endpoint was given. Re-run with --ca-server (and "
-			 "usually --ca-cert) from the operator's install "
-			 "instructions.");
+			 "A CA trust anchor was given but no --ca-server to "
+			 "enroll against. Pass both, or neither and let the "
+			 "agent enroll when a title first asks.");
 		return STAGE_BLOCKED;
 	}
 	snprintf(note, cap,
@@ -935,6 +942,16 @@ int install_self_check(struct install_ctx *ctx)
 		ok = 0;
 
 	rc_cert = enroll_profile(ctx, &paths);
+	if (rc_cert == -EINVAL) {
+		/*
+		 * Nothing was enrolled because no publisher was named.
+		 * Not a failure: the machine is ready and the enrollment happens
+		 * when a title brings a publisher with it.
+		 */
+		ui_kv(&ctx->ui, "AIK certificate",
+		      "None yet (enrolled when a title first asks)");
+		goto after_cert;
+	}
 	if (rc_cert == 0)
 		rc_cert = probe_cert_days_left(paths.aik_cert, &days);
 	if (rc_cert == 0 && days > 0) {
@@ -959,6 +976,8 @@ int install_self_check(struct install_ctx *ctx)
 		ui_kv(&ctx->ui, "AIK certificate", "NOT valid");
 		ok = 0;
 	}
+
+after_cert:
 
 	/* Informational:
 	 * tells the player which firmware-update recovery path this machine
@@ -1131,14 +1150,18 @@ const struct stage install_stages[] = {
 		.apply = st_agent_apply,
 	},
 	{
-		.title = "Enrollment with the operator's attestation CA",
+		.title = "Enrollment with a publisher's attestation CA",
 		.explain =
-			"TPM proves to the operator's CA that it is a genuine "
+			"TPM proves to a publisher's CA that it is a genuine "
 			"hardware TPM (credential activation) and receives a "
 			"short-lived certificate for its attestation key.\n"
 			"The CA sees the TPM's endorsement key certificate once, during "
 			"this step.\nGame servers only ever see a pseudonym.\n"
-			"The certificate lands in /var/lib/lota/aik_cert.der.",
+			"Each publisher gets its own key and certificate, under "
+			"/var/lib/lota/profiles/.\n"
+			"Naming a CA here enrolls with it now; naming none leaves it "
+			"to the agent, which enrolls the first time a title asks for "
+			"a publisher.",
 		.probe = st_enroll_probe,
 		.apply = st_enroll_apply,
 	},
