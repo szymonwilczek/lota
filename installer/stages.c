@@ -141,24 +141,41 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 
 /* stage 3: enforcement trust material */
 
+/*
+ * Which key the agent will verify the enforcement object against.
+ *
+ * Reported, not decided: the agent owns the order, and this only says which
+ * file the operator should look at when the signature does not verify.
+ */
+static const char *trust_key_in_use(const struct install_ctx *ctx)
+{
+	if (ctx->opts.policy_pubkey)
+		return ctx->opts.policy_pubkey;
+	if (file_exists(PATH_POLICY_PUB_OVERRIDE))
+		return PATH_POLICY_PUB_OVERRIDE;
+	return PATH_ENFORCEMENT_PUB;
+}
+
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
+	const char *key = trust_key_in_use(ctx);
 	char sig[512];
 	char out[4096];
 	int rc;
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
-	if (!file_exists(ctx->opts.policy_pubkey)) {
+	if (!file_exists(key)) {
 		snprintf(note, cap,
-			 "Public key %s is missing. It ships with the agent "
-			 "package, alongside the enforcement object whoever "
-			 "built that package signed - the installer never "
-			 "generates trust material on this machine, since a "
-			 "locally generated key would let local malware "
-			 "re-sign a tampered object.",
-			 ctx->opts.policy_pubkey);
+			 "No key to verify the enforcement object against. "
+			 "One ships with the agent package at %s, beside the "
+			 "object whoever built that package signed - the "
+			 "installer never generates trust material on this "
+			 "machine, since a locally generated key would let "
+			 "local malware re-sign a tampered object. A fleet "
+			 "that signs enforcement itself puts its key at %s.",
+			 PATH_ENFORCEMENT_PUB, PATH_POLICY_PUB_OVERRIDE);
 		return STAGE_BLOCKED;
 	}
 	if (!file_exists(sig)) {
@@ -172,40 +189,51 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 	}
 
 	{
-		const char *const argv[] = { PATH_AGENT_BIN,
-					     "--verify-policy",
-					     PATH_BPF_OBJ,
-					     "--policy-pubkey",
-					     ctx->opts.policy_pubkey,
-					     NULL };
+		/*
+		 * No --policy-pubkey unless the operator named one:
+		 * the agent resolves the key, and asking it rather than deciding
+		 * here is what keeps the installer and the daemon from answering
+		 * that differently.
+		 */
+		const char *argv[6] = { PATH_AGENT_BIN, "--verify-policy",
+					PATH_BPF_OBJ,	NULL,
+					NULL,		NULL };
 
+		if (ctx->opts.policy_pubkey) {
+			argv[3] = "--policy-pubkey";
+			argv[4] = ctx->opts.policy_pubkey;
+		}
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
 		snprintf(note, cap,
 			 "The BPF object signature does not verify against "
-			 "%s. Object and key come from the same package and an "
-			 "upgrade replaces both, so this means one of them was "
-			 "replaced on its own: reinstall the agent package, or "
-			 "if this fleet signs enforcement itself, re-sign with "
-			 "its key (lota-agent --sign-policy %s --signing-key "
-			 "<key>). The installer never signs on this host by "
-			 "design.",
-			 ctx->opts.policy_pubkey, PATH_BPF_OBJ);
+			 "%s. The package ships object, signature and key "
+			 "together and replaces all three on an upgrade, so "
+			 "this means they no longer belong to each other: "
+			 "either this host carries an operator key at %s that "
+			 "did not sign the shipped object - move it aside to "
+			 "fall back to the packaged one - or the fleet signs "
+			 "enforcement itself and has to re-sign this object "
+			 "(lota-agent --sign-policy %s --signing-key <key>). "
+			 "The installer never signs on this host by design.",
+			 key, PATH_POLICY_PUB_OVERRIDE, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
+	if (!ctx->opts.policy_pubkey) {
+		snprintf(note, cap, "Signature verifies against %s.", key);
+		return STAGE_DONE;
+	}
 	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
 	if (rc == 1) {
-		snprintf(note, cap,
-			 "Signature verifies, %s references the "
-			 "operator key",
+		snprintf(note, cap, "Signature verifies, %s names the key",
 			 PATH_LOTA_CONF);
 		return STAGE_DONE;
 	}
 	snprintf(note, cap,
-		 "Signature verifies. %s still needs the "
-		 "policy_pubkey reference.",
+		 "Signature verifies against the key you named. %s still needs "
+		 "the policy_pubkey reference.",
 		 PATH_LOTA_CONF);
 	return STAGE_PENDING;
 }
@@ -216,6 +244,15 @@ static int st_trust_apply(struct install_ctx *ctx)
 	int fresh;
 	int fd;
 	FILE *f;
+
+	/*
+	 * Only a key the operator named outright is written into lota.conf.
+	 * Recording the resolved default would pin a path the agent already
+	 * decides, and would survive a later decision to sign enforcement
+	 * with a fleet key.
+	 */
+	if (!ctx->opts.policy_pubkey)
+		return 0;
 
 	if (mkdir("/etc/lota", 0755) != 0 && errno != EEXIST)
 		return -errno;
@@ -235,7 +272,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 		fprintf(f, "# LOTA agent configuration (created by "
 			   "lota-install)\n");
 	fprintf(f,
-		"\n# Operator key the BPF object signature is verified "
+		"\n# Key the enforcement object's signature is verified "
 		"against.\npolicy_pubkey = %s\n",
 		ctx->opts.policy_pubkey);
 	fclose(f);
