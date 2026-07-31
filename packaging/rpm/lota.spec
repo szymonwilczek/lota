@@ -189,8 +189,9 @@ EOF
 %{_includedir}/lota/lota_gaming.h
 %{_includedir}/lota/lota_wine_hook.h
 %{_includedir}/lota/lota_server.h
-%{_includedir}/lota/lota_ipc.h
 %{_includedir}/lota/lota_anticheat.h
+%{_includedir}/lota/lota_token.h
+%{_includedir}/lota/lota_snapshot.h
 %{_libdir}/liblotagaming.so
 %{_libdir}/liblotaserver.so
 %{_libdir}/liblota_wine_hook.so
