@@ -956,6 +956,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_payload_len \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
+	$(TEST_BIN_DIR)/test_flag_names \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
@@ -1191,6 +1192,10 @@ $(TEST_BIN_DIR)/test_ipc_payload_len: tests/test_ipc_payload_len.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_flag_names: tests/test_flag_names.c $(SDK_LIB) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
+
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1263,6 +1268,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
+	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
 	@$(BUILD_DIR)/test_runtime_protect_digest
