@@ -89,6 +89,7 @@ remains outside this repository.
 * Example index: :ghsrc:`examples/README.rst`
 * Reference server: :ghsrc:`examples/demo_server/README.rst`
 * Anti-cheat heartbeat producer: :ghsrc:`examples/demo_anticheat/README.rst`
+* Proton and Wine titles: :ghsrc:`examples/cs2/README.rst`
 * Demo game client: :ghsrc:`examples/demo_game/README.rst`
 * End-to-end demo: :ghsrc:`examples/demo/README.rst`
 * mTLS example: :ghsrc:`examples/mtls/README.rst`

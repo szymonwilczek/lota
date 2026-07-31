@@ -188,6 +188,52 @@ Wire it into CS2
 
 4. Close the dialog. The next CS2 launch is hooked.
 
+Why this is a launch option
+---------------------------
+
+It is the one place in the player journey that asks somebody to type, so the
+reason is worth stating rather than apologising for.
+
+The bridge has to run on the **Linux** side of the process tree Steam starts.
+A Windows DLL inside the Wine prefix cannot open a host ``AF_UNIX`` socket, so
+the hook is a Linux ``.so`` preloaded into the process that goes on to run the
+game, and something has to put it there before Proton starts.
+
+Steam offers two documented ways to influence that process tree: the
+per-title launch options, and a compatibility tool in
+``compatibilitytools.d``. Three alternatives to the paste were examined and
+none of them is shipped:
+
+* **A compatibility tool.** Steam composes compat tools as layers, and a tool
+  states what it sits on with ``require_tool_appid`` -- Proton's own
+  ``toolmanifest.vdf`` names the Steam Linux Runtime that way. That names one
+  build, so a LOTA layer written like this would pin the player's Proton
+  version to whatever the package shipped against. A tool that instead located
+  and executed whichever Proton the player had selected would be
+  re-implementing Steam's compatibility manager against a private, unversioned
+  contract, and nothing in this tree could tell when a Steam update broke it.
+* **Writing the launch option into Steam's configuration.** ``LaunchOptions``
+  lives in ``userdata/<id>/config/localconfig.vdf``, which Steam owns and
+  rewrites when it exits. A third party editing it has to first be sure Steam
+  is not running and loses the edit whenever Steam decides to rewrite. A fix
+  that depends on somebody else's private file format is a fix that breaks
+  silently, on their release schedule.
+* **A machine-wide preload** (``/etc/ld.so.preload``, or the variable exported
+  from a login profile). This puts the bridge into every process on the
+  machine, including every process that never asked for it. It is wrong by
+  construction, not merely risky.
+
+What would remove the paste is Steam-side cooperation: a compat-tool layer
+that **composes with** the player's Proton choice instead of replacing it.
+Until that exists, this is one field, filled once per title, and
+``lota-steam-setup`` prints the exact string so it is a copy rather than a
+composition.
+
+A publisher who ships their own launcher needs none of this. That launcher
+starts the game itself, so it sets ``LD_PRELOAD`` and
+``PRESSURE_VESSEL_FILESYSTEMS_RW`` in the environment of the child it spawns,
+and the player sees nothing at all.
+
 For a one-off verification without persisting the launch option, the same
 wiring is reachable from the command line:
 
