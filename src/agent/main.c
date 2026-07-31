@@ -26,7 +26,6 @@
 #include <stdint.h>
 
 #include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
 #include "bpf_loader.h"
@@ -47,6 +46,7 @@
 #include "selftest.h"
 #include "shutdown.h"
 #include "startup_policy.h"
+#include "status_flags.h"
 #include "tpm.h"
 
 /* Global state */
@@ -109,7 +109,7 @@ static void republish_rotation_state(void *user)
 static int run_daemon(const struct run_daemon_params *params)
 {
 	int ret, epoll_fd, sfd;
-	uint32_t status_flags = 0;
+	struct agent_boot_state boot_state = { 0 };
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
 	bool strict_mmap;
@@ -288,8 +288,19 @@ static int run_daemon(const struct run_daemon_params *params)
 	if (ret != 0) {
 		lota_warn("IOMMU verification failed");
 	} else {
-		status_flags |= LOTA_STATUS_IOMMU_OK;
+		boot_state.iommu_ok = true;
 	}
+
+	/*
+	 * Secure Boot, read straight off efivarfs.
+	 *
+	 * Title asks this process because this process is the one that booted
+	 * with the machine.
+	 */
+	boot_state.secure_boot = bpf_loader_secure_boot_enabled() == 0;
+	lota_info("Secure Boot: %s", boot_state.secure_boot ?
+					     "enabled" :
+					     "disabled or unreadable");
 
 	lota_info("Initializing TPM");
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -298,7 +309,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		goto cleanup_tpm;
 	} else {
 		lota_info("TPM initialized");
-		status_flags |= LOTA_STATUS_TPM_OK;
+		boot_state.tpm_ok = true;
 
 		/*
 		 * The AIK a token is quoted with has to be the one whose
@@ -422,7 +433,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 	lota_info("BPF program loaded (attach deferred until startup policy "
 		  "applied)");
-	status_flags |= LOTA_STATUS_BPF_LOADED;
+	boot_state.bpf_loaded = true;
 
 	struct agent_startup_policy startup_policy = {
 		.mode = g_agent.mode,
@@ -477,7 +488,8 @@ static int run_daemon(const struct run_daemon_params *params)
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
 	}
 
-	ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
+	boot_state.tpm_lockout = tpm_is_locked_out(&g_agent.tpm_ctx);
+	ipc_update_status(&g_agent.ipc_ctx, agent_status_flags(&boot_state), 0);
 
 	sdnotify_ready();
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
