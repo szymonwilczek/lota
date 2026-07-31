@@ -56,6 +56,15 @@ contents:
     dst: /usr/lib/lota/lota_lsm.bpf.o
     file_info:
       mode: 0644
+  - src: ./build/lota_lsm.bpf.o.sig
+    dst: /usr/lib/lota/lota_lsm.bpf.o.sig
+    file_info:
+      mode: 0644
+  - src: ./build/lota-enforcement.pub
+    dst: /etc/lota/policy.pub
+    type: "config|noreplace"
+    file_info:
+      mode: 0644
   - src: ./selinux/lota.pp
     dst: /usr/share/lota/selinux/lota.pp
     file_info:

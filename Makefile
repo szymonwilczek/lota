@@ -529,7 +529,29 @@ $(SELINUX_PP):
 .PHONY: selinux-pp
 selinux-pp: $(SELINUX_PP)
 
+# Enforcement object ships signed, and the key it is verified against ships with it.
+# Enforcement is host-owned singleton -- one kernel, one LSM, so no publisher pushes
+# kernel policy -- which makes signing it the job of whoever builds the package:
+# the distribution, or this project for its own releases.
+# Package built without that step installs an object the agent refuses to load,
+# so the machine stops enforcing for reason nobody chose; refuse to build it instead.
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 packages: all selinux-pp
+	$(Q)test -r $(BPF_OBJ).sig || { \
+		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
+		echo "  The enforcement object must be signed by whoever builds" >&2; \
+		echo "  the package: make sign-bpf SIGNING_KEY=<release key>" >&2; \
+		exit 1; \
+	}
+	$(Q)test -r $(SIGNING_PUBKEY) || { \
+		echo "packages: $(SIGNING_PUBKEY) is missing." >&2; \
+		echo "  The public half of the signing key ships with the object" >&2; \
+		echo "  so the host can verify it; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	$(Q)mkdir -p $(PKG_DIR)
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \

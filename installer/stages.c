@@ -139,7 +139,7 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 	return STAGE_DONE;
 }
 
-/* stage 3: operator trust material */
+/* stage 3: enforcement trust material */
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
@@ -152,20 +152,21 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 
 	if (!file_exists(ctx->opts.policy_pubkey)) {
 		snprintf(note, cap,
-			 "Operator public key %s is missing. The key that "
-			 "signed the BPF enforcement object must come from "
-			 "the operator's install bundle - the installer "
-			 "never generates trust material on this machine "
-			 "(a locally generated key would let local malware "
-			 "re-sign a tampered object).",
+			 "Public key %s is missing. It ships with the agent "
+			 "package, alongside the enforcement object whoever "
+			 "built that package signed - the installer never "
+			 "generates trust material on this machine, since a "
+			 "locally generated key would let local malware "
+			 "re-sign a tampered object.",
 			 ctx->opts.policy_pubkey);
 		return STAGE_BLOCKED;
 	}
 	if (!file_exists(sig)) {
 		snprintf(note, cap,
-			 "BPF object signature %s is missing from the "
-			 "operator bundle. The agent refuses to load an "
-			 "unsigned enforcement object.",
+			 "BPF object signature %s is missing. It ships with "
+			 "the object; a package built without the signing "
+			 "step installs enforcement the agent refuses to "
+			 "load.",
 			 sig);
 		return STAGE_BLOCKED;
 	}
@@ -181,15 +182,16 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(
-			note, cap,
-			"The BPF object signature does not verify against "
-			"%s. Expected after a package upgrade replaces the "
-			"unsigned BPF object: re-sign it with the operator key "
-			"(lota-agent --sign-policy %s --signing-key <key>), or "
-			"obtain a matching signed bundle from the operator. The "
-			"installer never signs on this host by design.",
-			ctx->opts.policy_pubkey, PATH_BPF_OBJ);
+		snprintf(note, cap,
+			 "The BPF object signature does not verify against "
+			 "%s. Object and key come from the same package and an "
+			 "upgrade replaces both, so this means one of them was "
+			 "replaced on its own: reinstall the agent package, or "
+			 "if this fleet signs enforcement itself, re-sign with "
+			 "its key (lota-agent --sign-policy %s --signing-key "
+			 "<key>). The installer never signs on this host by "
+			 "design.",
+			 ctx->opts.policy_pubkey, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
@@ -1065,11 +1067,13 @@ const struct stage install_stages[] = {
 		.probe = st_artifacts_probe,
 	},
 	{
-		.title = "Operator trust material",
+		.title = "Enforcement trust material",
 		.explain =
-			"The agent only loads a BPF enforcement object signed by "
-			"the game operator's key. "
-			"This step records the operator public key location in "
+			"The agent only loads a BPF enforcement object it can "
+			"verify. Enforcement is host-owned -- one kernel, one "
+			"LSM -- so the object is signed by whoever built the "
+			"agent package, never by a game publisher.\n"
+			"This step records the public key location in "
 			"/etc/lota/lota.conf so the agent knows what to verify against."
 			" Nothing is downloaded and no key is generated on this machine.",
 		.probe = st_trust_probe,

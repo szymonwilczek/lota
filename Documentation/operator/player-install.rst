@@ -146,9 +146,10 @@ What the operator must ship
 
 A player install needs these inputs, all fail-closed:
 
-* **BPF signing public key** (default ``/etc/lota/policy.pub``, override with
-  ``--policy-pubkey``) and the matching ``.sig`` next to
-  ``/usr/lib/lota/lota_lsm.bpf.o``;
+* nothing for **enforcement**: the agent package ships the BPF object, its
+  ``.sig`` and the public key at ``/etc/lota/policy.pub``, because enforcement
+  is host-owned and signed by whoever built the package. A fleet that signs it
+  with its own key replaces both files and passes ``--policy-pubkey``;
 * optionally an **attestation CA endpoint** (``--ca-server``, ``--ca-port``)
   and its **trust anchor** (``--ca-cert``), to enroll during the install. Both
   or neither: an anchor without an endpoint has nothing to enroll against. A
