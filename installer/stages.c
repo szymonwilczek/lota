@@ -709,6 +709,21 @@ static int st_agent_apply(struct install_ctx *ctx)
 		run_cmd(&ctx->ui, "Collecting the agent's startup log", argv);
 		return rc != 0 ? (rc > 0 ? -EIO : rc) : -EAGAIN;
 	}
+	{
+		/*
+		 * attestation loop is enabled here rather than by package:
+		 * installing enforcement is not the same act as deciding a machine
+		 * should start reporting.
+		 * Its own condition keeps it inactive until this host has publisher,
+		 * so enabling it before there is one starts nothing.
+		 */
+		const char *const argv[] = { "systemctl", "enable", "--now",
+					     "lota-attest.service", NULL };
+
+		rc = run_cmd(&ctx->ui, "Enabling the attestation loop", argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+	}
 	return 0;
 }
 
