@@ -35,7 +35,14 @@
 #define PATH_UDEV_RULE "/usr/lib/udev/rules.d/99-lota-tpm.rules"
 #define PATH_DRACUT_MODULE "/usr/lib/dracut/modules.d/90lota/module-setup.sh"
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
-#define PATH_POLICY_PUB_DEFAULT "/etc/lota/policy.pub"
+
+/*
+ * Enforcement key paths, in the order the agent resolves them:
+ * fleet that signs enforcement itself owns the /etc file,
+ * and the package owns the other.
+ */
+#define PATH_POLICY_PUB_OVERRIDE "/etc/lota/policy.pub"
+#define PATH_ENFORCEMENT_PUB "/usr/lib/lota/enforcement.pub"
 #define PATH_LOTA_STATE_DIR "/var/lib/lota"
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 
@@ -45,7 +52,7 @@ struct install_opts {
 	const char *ca_cert; /* CA TLS certificate (PEM) */
 	const char *verifier; /* Verifier host for the self-check */
 	const char *verifier_port; /* Verifier port */
-	const char *policy_pubkey; /* Operator BPF signing public key */
+	const char *policy_pubkey; /* Key named with --policy-pubkey, or NULL */
 	const char *selinux_module; /* Compiled lota.pp policy package */
 	int yes; /* Skip confirmations */
 	int plain; /* Force non-TUI output */

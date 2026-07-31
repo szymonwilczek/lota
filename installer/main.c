@@ -38,8 +38,10 @@ static void usage(FILE *out)
 		"                         publisher this host enrolls with\n"
 		"  --verifier HOST        Verifier for the final self-check\n"
 		"  --verifier-port PORT   Verifier port\n"
-		"  --policy-pubkey FILE   Operator BPF signing public key\n"
-		"                         (default %s)\n"
+		"  --policy-pubkey FILE   Key the enforcement object is verified\n"
+		"                         against. Default: %s when a fleet\n"
+		"                         put its own key there, otherwise the\n"
+		"                         key the package shipped at %s\n"
 		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
 		"                         (default %s)\n"
 		"\n"
@@ -58,7 +60,8 @@ static void usage(FILE *out)
 		"\n"
 		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
 		"            10 reboot required (re-run to resume).\n",
-		PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
+		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
+		PATH_SELINUX_PP_DEFAULT);
 }
 
 static int parse_args(int argc, char **argv, struct install_opts *opts)
@@ -83,7 +86,7 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	int c;
 
 	memset(opts, 0, sizeof(*opts));
-	opts->policy_pubkey = PATH_POLICY_PUB_DEFAULT;
+	opts->policy_pubkey = NULL;
 	opts->selinux_module = PATH_SELINUX_PP_DEFAULT;
 
 	while ((c = getopt_long(argc, argv, "yh", longopts, NULL)) != -1) {
