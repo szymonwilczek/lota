@@ -36,12 +36,13 @@ cat <<EOF
 lota-agent installed. Agent fails closed until host bring-up completes.
 
 The BPF enforcement object ships signed, next to its signature and the public
-key it verifies against (/etc/lota/policy.pub). An upgrade replaces object and
-signature together, so enforcement still arms after one.
+key it verifies against (/usr/lib/lota/enforcement.pub). All three are
+replaced together by an upgrade, so enforcement still arms after one.
 
-A fleet that signs enforcement with its own key replaces both files and points
-policy_pubkey at its key; /etc/lota/policy.pub is kept across upgrades once
-edited. lota-install verifies the signature and never signs on this host.
+A fleet that signs enforcement with its own key re-signs the object and puts
+its key at /etc/lota/policy.pub, which no package owns and no upgrade
+touches; the agent prefers it whenever it is there. lota-install verifies the
+signature and never signs on this host.
 
 Then run \`lota-install\` (or the documented operator bring-up) to install the
 90lota dracut module, arm the PCR14 boot commitment and enable fs-verity. The

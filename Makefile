@@ -867,6 +867,12 @@ install: check-version-tag all
 	@if [ -f $(BPF_OBJ).sig ]; then \
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
 	fi
+	@# Same for the public half of the key it was signed with:
+	@# it is the other end of that signature, so it ships beside it or not at all
+	@if [ -f $(PKG_ENFORCEMENT_PUB) ]; then \
+		install -m 644 $(PKG_ENFORCEMENT_PUB) \
+			$(DESTDIR)/usr/lib/lota/enforcement.pub; \
+	fi
 	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
 	for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
 		install -m 755 $(BUILD_DIR)/$$l.so.$(LOTA_ABI_VERSION) \

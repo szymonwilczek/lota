@@ -61,8 +61,7 @@ contents:
     file_info:
       mode: 0644
   - src: ./build/lota-enforcement.pub
-    dst: /etc/lota/policy.pub
-    type: "config|noreplace"
+    dst: /usr/lib/lota/enforcement.pub
     file_info:
       mode: 0644
   - src: ./selinux/lota.pp

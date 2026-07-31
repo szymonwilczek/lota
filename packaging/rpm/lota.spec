@@ -144,6 +144,8 @@ EOF
 %dir %{_prefix}/lib/lota
 %{_prefix}/lib/lota/lota-pcr14-lock
 %{_prefix}/lib/lota/lota_lsm.bpf.o
+%{_prefix}/lib/lota/lota_lsm.bpf.o.sig
+%{_prefix}/lib/lota/enforcement.pub
 %dir %{_prefix}/lib/dracut/modules.d/90lota
 %{_prefix}/lib/dracut/modules.d/90lota/module-setup.sh
 %{_prefix}/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
@@ -162,6 +164,7 @@ EOF
 %dir %{_datadir}/lota/systemd
 %{_datadir}/lota/systemd/10-xdg-runtime.conf.example
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
+%dir %attr(0700,root,root) %{_sharedstatedir}/lota/profiles
 
 %files verifier
 %license LICENSE
