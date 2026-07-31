@@ -151,7 +151,6 @@ EOF
 %{_unitdir}/lota-agent.service
 %{_unitdir}/lota-agent.socket
 %{_unitdir}/lota-attest.service
-%{_presetdir}/85-lota.preset
 %{_prefix}/lib/udev/rules.d/99-lota-tpm.rules
 %config(noreplace) %{_sysconfdir}/dbus-1/system.d/org.lota.Agent1.conf
 %dir %{_datadir}/lota
