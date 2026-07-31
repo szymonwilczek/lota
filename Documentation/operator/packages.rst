@@ -69,16 +69,32 @@ package from EPEL rather than from baseos, appstream or crb::
 
    sudo dnf install epel-release
 
-The agent **fails closed** and is not started by the package: a fresh install
-only places files and refreshes systemd. Complete the host bring-up with::
+The agent **fails closed** and is not started by the package. The post-install
+hook runs ``lota-install --unattended``, which does the host-local half of
+bring-up: it verifies the shipped BPF object against the public key beside it,
+records that key in ``/etc/lota/lota.conf``, restores fs-verity on the binary
+the package just wrote, and loads the SELinux fence. Each of those is
+reversible and none of them changes how the machine boots.
+
+What it deliberately leaves alone is the boot path -- the 90lota initramfs
+module and the kernel integrity floor on the command line -- and it says so
+before exiting. Finish with::
 
    sudo lota-install
 
-which signs the BPF object with the host's signing key, installs the 90lota
-module into the initramfs and arms the PCR14 boot commitment. The package ships
-the BPF object **unsigned** on purpose -- each adopter signs it with their own
-key during bring-up, and the agent refuses to load an unsigned object.
+The hook's failure is never the transaction's failure: the package installs
+either way and the run reports what is left. A host that wants the boot-path
+stages unattended as well opts in **before** installing, by creating
+``/etc/lota/auto-bringup`` or setting ``LOTA_AUTO_BRINGUP=1``; that is the
+image-build and managed-fleet case, where whoever builds the image is the
+person making that decision.
 
-Package upgrades deliberately do not rewrite the boot path; re-run the
-documented bring-up after an agent upgrade (the agent binary is measured, so a
-new binary needs the initramfs and PCR14 commitment refreshed).
+The BPF object ships **signed** by whoever built the package, with the public
+key at ``/etc/lota/policy.pub`` (a config file, so a fleet that re-signs with
+its own key keeps its copy across upgrades). The agent refuses to load an
+unsigned object, and nothing signs one on the player's machine.
+
+Package upgrades follow the same rule and do not rewrite the boot path. An
+agent upgrade still needs the initramfs and the PCR 14 commitment refreshed,
+since the binary is measured; ``sudo lota-install`` after the upgrade does
+that.

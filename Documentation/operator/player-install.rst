@@ -184,9 +184,11 @@ A player install needs these inputs, all fail-closed:
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.
 
-Distro-native packaging (RPM/DEB whose post-install hooks drive the same stage
-engine) is the planned follow-up. Until then the package step is
-``sudo make install`` from a release tree plus the operator's bundle.
+The RPM and DEB post-install hook drives this same stage engine
+(``lota-install --unattended``), so installing the package leaves the
+host-local half of bring-up already done and this command finishes the boot
+path. Building from a release tree instead (``sudo make install``) does none of
+it, and every stage below is then this command's work.
 
 Pausing and removing
 ====================
