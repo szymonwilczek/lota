@@ -100,6 +100,31 @@ int main(void)
 	CHECK(!agg.attested && agg.considered == 0,
 	      "a host with no title running holds no live verdict");
 
+	/*
+	 * Publisher who verifies tokens in their own backend is never reported to,
+	 * so this host holds no verdict of theirs to fold in.
+	 */
+	memset(targets, 0, sizeof(targets));
+	targets[0].attested = true;
+	targets[0].valid_until = 1000;
+	targets[1].token_only = true;
+	targets[1].attested = false;
+	attest_aggregate_compute(targets, 2, &agg);
+	CHECK(agg.attested && agg.considered == 1 && agg.reporting == 1,
+	      "a token-only publisher contributes no verdict");
+
+	/*
+	 * Every publisher running light is different answer from failed one:
+	 * the host reports to nobody, which is what the caller turns into
+	 * TOKEN_ONLY rather than bare NOT ATTESTED.
+	 */
+	memset(targets, 0, sizeof(targets));
+	targets[0].token_only = true;
+	targets[1].token_only = true;
+	attest_aggregate_compute(targets, 2, &agg);
+	CHECK(!agg.attested && agg.considered == 0 && agg.reporting == 0,
+	      "a host whose every publisher runs light reports to nobody");
+
 	/* stale verdict is still the caller's to time out, not this fold's */
 	memset(targets, 0, sizeof(targets));
 	targets[0].attested = true;

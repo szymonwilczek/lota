@@ -27,6 +27,8 @@ struct attest_aggregate {
 	uint64_t valid_until;
 	/* publishers that contributed a verdict */
 	size_t considered;
+	/* publishers this host reports to at all, token-only ones excluded */
+	size_t reporting;
 };
 
 /*
@@ -56,9 +58,19 @@ static inline void attest_aggregate_compute(const struct attest_target *targets,
 	out->attested = false;
 	out->valid_until = 0;
 	out->considered = 0;
+	out->reporting = 0;
 
 	if (!targets)
 		return;
+
+	/*
+	 * Counted apart from the verdict below,
+	 * which stops at the first publisher that is not satisfied
+	 */
+	for (size_t i = 0; i < count; i++) {
+		if (!targets[i].token_only)
+			out->reporting++;
+	}
 
 	for (size_t i = 0; i < count; i++) {
 		if (targets[i].session_gated && targets[i].sessions == 0)

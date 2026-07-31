@@ -503,6 +503,46 @@ static void test_consent_required_is_distinguishable(void)
  * Nothing here needs agent: the size is settled before socket is touched, which
  * is also why caller that gets it wrong sees the same NULL on every machine.
  */
+static void server_status_token_only(int client_fd)
+{
+	struct lota_ipc_set_profile profile;
+	struct lota_ipc_response resp;
+	struct lota_ipc_status status;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (req.cmd != LOTA_IPC_CMD_SET_PROFILE)
+		_exit(3);
+	if (read_exact(client_fd, &profile, sizeof(profile)) < 0)
+		_exit(4);
+	if (send_result(client_fd, LOTA_IPC_OK) < 0)
+		_exit(5);
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(6);
+	if (req.cmd != LOTA_IPC_CMD_GET_STATUS)
+		_exit(7);
+
+	memset(&resp, 0, sizeof(resp));
+	resp.magic = LOTA_IPC_MAGIC;
+	resp.version = LOTA_IPC_VERSION;
+	resp.result = LOTA_IPC_OK;
+	resp.payload_len = sizeof(status);
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_STATUS_TPM_OK | LOTA_STATUS_TOKEN_ONLY;
+
+	if (write(client_fd, &resp, sizeof(resp)) != (ssize_t)sizeof(resp) ||
+	    write(client_fd, &status, sizeof(status)) !=
+		    (ssize_t)sizeof(status))
+		_exit(8);
+
+	usleep(50000);
+}
+
+typedef void (*scenario_fn)(int client_fd);
+
 static void test_connect_struct_size(void)
 {
 	struct lota_client *client;
@@ -576,6 +616,78 @@ static void test_connect_struct_size(void)
 	PASS();
 }
 
+static void test_token_only_publisher_is_distinguishable(void)
+{
+	struct lota_connect_opts opts = { 0 };
+	struct lota_status status;
+	struct lota_client *client;
+	pid_t server;
+
+	TEST("a publisher who runs no verifier is reported as token-only");
+
+	server = start_mock_agent(server_status_token_only);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.struct_size = sizeof(opts);
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 2000;
+	opts.publisher_profile = PROFILE_HEX;
+
+	client = lota_connect_opts(&opts);
+	if (!client) {
+		FAIL("connection failed although the agent accepted the "
+		     "publisher");
+		wait_agent(server);
+		return;
+	}
+
+	memset(&status, 0, sizeof(status));
+	if (lota_get_status(client, &status) != LOTA_OK) {
+		FAIL("status request failed");
+		lota_disconnect(client);
+		wait_agent(server);
+		return;
+	}
+	lota_disconnect(client);
+	wait_agent(server);
+
+	/*
+	 * Title has to be able to tell "nobody verifies here, check the token yourself"
+	 * from "this machine failed something"
+	 * and both look like clear ATTESTED bit...
+	 */
+	if (!(status.flags & LOTA_FLAG_TOKEN_ONLY)) {
+		FAIL("the token-only publisher was not surfaced as one");
+		return;
+	}
+	if (status.flags & LOTA_FLAG_ATTESTED) {
+		FAIL("a verdict was claimed for a publisher nobody reports to");
+		return;
+	}
+	PASS();
+}
+
+/* two headers state the same bits;
+ * title reads the SDK name for what the agent set under the IPC name */
+
+static void test_flag_constants_agree(void)
+{
+	TEST("the token-only flag is the same bit on both sides");
+	if (LOTA_FLAG_TOKEN_ONLY != LOTA_STATUS_TOKEN_ONLY ||
+	    LOTA_FLAG_ATTESTED != LOTA_STATUS_ATTESTED) {
+		FAIL("IPC and SDK status flags disagree");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== Publisher selection tests ===\n\n");
@@ -590,6 +702,8 @@ int main(void)
 	test_no_publisher_sends_nothing();
 	test_consent_required_is_distinguishable();
 	test_connect_struct_size();
+	test_token_only_publisher_is_distinguishable();
+	test_flag_constants_agree();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -238,7 +238,9 @@ host has one publisher -- gets the first profile's token and the host-wide
 answer: attested only while **every** configured publisher is satisfied, with
 the window closing at the earliest of theirs. Publishers who run no verifier
 are left out of that answer, since a host holds no verdict for a publisher it
-never reports to.
+never reports to. On a host where no publisher runs one, that answer carries
+``LOTA_FLAG_TOKEN_ONLY`` so a title reads "nothing is verified here, check the
+token you fetched" rather than "this machine failed".
 
 **A profile reports only while a title of its publisher is running.** That is
 what ``reporting`` selects, and ``session`` is a profile's default: a report is

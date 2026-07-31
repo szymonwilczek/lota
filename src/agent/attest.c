@@ -1360,6 +1360,17 @@ static void publish_aggregate_status(const struct attest_target *targets,
 
 	attest_aggregate_compute(targets, count, &agg);
 
+	/*
+	 * host whose every publisher runs light never reports at all,
+	 * so the host-wide answer says which case it is:
+	 * title that names nobody would otherwise read a bare NOT ATTESTED
+	 * and conclude the machine failed something
+	 */
+	if (agg.reporting == 0 && count > 0)
+		*status_flags |= LOTA_STATUS_TOKEN_ONLY;
+	else
+		*status_flags &= ~(uint32_t)LOTA_STATUS_TOKEN_ONLY;
+
 	if (agg.attested)
 		*status_flags |= LOTA_STATUS_ATTESTED;
 	else
