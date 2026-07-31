@@ -23,9 +23,12 @@ enrollment and sealed keys are covered in their own documents
     sudo /usr/bin/lota-agent --sign-policy /usr/lib/lota/lota_lsm.bpf.o \
         --signing-key /etc/lota/policy.key
 
-Add ``policy_pubkey = /etc/lota/policy.pub`` to ``/etc/lota/lota.conf`` (or copy
-:ghsrc:`configs/lota.conf.example` and edit). The agent reads this file by default;
-pass ``--config /path`` if the operator policy lives elsewhere.
+A key at ``/etc/lota/policy.pub`` is used without being named: the agent
+prefers it over the key the package shipped, and no package owns that path, so
+it survives every upgrade. ``policy_pubkey`` in ``/etc/lota/lota.conf`` (copy
+:ghsrc:`configs/lota.conf.example` and edit) is only needed to name a key
+somewhere else. The agent reads that file by default; pass ``--config /path``
+if the operator policy lives elsewhere.
 
 The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
 call into the build system for CI / packaging.

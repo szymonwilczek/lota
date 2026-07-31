@@ -34,6 +34,19 @@
 #define LOTA_DEFAULT_VERIFIER_PORT 8443
 #define LOTA_DEFAULT_CA_PORT 8444
 
+/*
+ * The key the enforcement object's signature is verified against.
+ *
+ * The packaged key is data, not configuration: it ships beside the object
+ * and its signature, and an upgrade replaces all three together, so key can never
+ * be left behind by the object it verifies.
+ * Fleet that signs enforcement itself puts its own key at the override path
+ * (or names one with policy_pubkey), and that answer survives every upgrade
+ * because the package does not own that file.
+ */
+#define LOTA_ENFORCEMENT_PUBKEY_PATH "/usr/lib/lota/enforcement.pub"
+#define LOTA_POLICY_PUBKEY_OVERRIDE "/etc/lota/policy.pub"
+
 /* Maximum line length in config file */
 #define LOTA_CONFIG_MAX_LINE 1024
 
@@ -236,5 +249,23 @@ int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
  * can be fed back into config_load().
  */
 void config_dump(const struct lota_config *cfg, FILE *fp);
+
+/*
+ * config_resolve_policy_pubkey - Which key verifies the enforcement object.
+ *
+ * @configured:    policy_pubkey from the config file or the CLI, or NULL.
+ * @override_path: operator-owned key, used when it exists (no package owns it).
+ * @packaged_path: key the agent package shipped beside the object.
+ *
+ * Returns the path to use, or NULL when nothing readable was found
+ * -- which the caller must treat as fatal, since an object nobody can verify
+ *  is an object the agent refuses to load.
+ *
+ * The paths are arguments rather than constants so the order can be tested
+ * without writing to /usr or /etc.
+ */
+const char *config_resolve_policy_pubkey(const char *configured,
+					 const char *override_path,
+					 const char *packaged_path);
 
 #endif /* LOTA_CONFIG_H */
