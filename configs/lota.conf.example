@@ -157,6 +157,13 @@ log_level = info
 # interval defaults to the attest_interval above; set it only where publisher
 # wants different cadence, and keep it inside the range lota-agent --help prints
 #
+# reporting = session (the default) sends reports only while a title of that
+# publisher's is running -- report is the only thing that leaves this machine,
+# and closed game has no reason to produce one.
+# reporting = continuous keeps the always-on stream, which is what an operator-owned
+# fleet wants.
+# Enforcement and the PCR 14 boot commitment are always-on either way and send nothing.
+#
 # Every key below a header belongs to that profile, so nothing top-level may
 # follow.
 # `lota-agent --dump-config` prints profiles last for the same reason.
@@ -180,6 +187,7 @@ log_level = info
 # verifier = verifier.publisher-a.example
 #
 # [profile "publisher-b"]
+# reporting = continuous
 # ca = ca.publisher-b.example
 # ca_port = 9444
 # ca_cert = /etc/lota/publisher-b.pem

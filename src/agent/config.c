@@ -303,6 +303,21 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		p->verifier_port = (int)v;
 		return 0;
 	}
+	if (strcmp(key, "reporting") == 0) {
+		if (strcmp(value, "session") == 0) {
+			p->session_gated = true;
+			return 0;
+		}
+		if (strcmp(value, "continuous") == 0) {
+			p->session_gated = false;
+			return 0;
+		}
+		fprintf(stderr,
+			"%s:%d: invalid reporting '%s' (expected session or "
+			"continuous)\n",
+			filepath, lineno, value);
+		return -1;
+	}
 	if (strcmp(key, "interval") == 0) {
 		long v;
 		if (safe_parse_long(value, &v) != 0 || v < 0 || v > INT_MAX) {
@@ -405,6 +420,7 @@ static int open_profile_section(struct lota_config *cfg, char *line,
 	set_str(prof->name, sizeof(prof->name), name);
 	prof->ca_port = LOTA_DEFAULT_CA_PORT;
 	prof->verifier_port = LOTA_DEFAULT_VERIFIER_PORT;
+	prof->session_gated = true;
 
 	*out = prof;
 	return 0;
@@ -1061,6 +1077,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		fprintf(fp, "ca_cert = %s\n", p->ca_cert);
 		fprintf(fp, "verifier = %s\n", p->verifier);
 		fprintf(fp, "verifier_port = %d\n", p->verifier_port);
+		fprintf(fp, "reporting = %s\n",
+			p->session_gated ? "session" : "continuous");
 		if (p->attest_interval)
 			fprintf(fp, "interval = %d\n", p->attest_interval);
 	}

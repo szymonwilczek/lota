@@ -208,10 +208,11 @@ struct ipc_client {
 
 	/*
 	 * The publisher this connection speaks for, set by SET_PROFILE.
-	 * Borrowed from ctx->profiles, which the attestation loop owns for longer
-	 * than any connection lives.
+	 * Borrowed from ctx->profiles, which the attestation loop owns for
+	 * longer than any connection lives.
+	 * Not const: binding and unbinding maintain that publisher's session count.
 	 */
-	const struct attest_target *profile;
+	struct attest_target *profile;
 
 	struct ipc_client *next;
 };
@@ -579,6 +580,18 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 	struct ipc_client **pp = &ctx->client_list;
 
 	client_map_remove(ctx, client->fd);
+
+	/*
+	 * session ends when its connection does -- which is the right lifetime
+	 * whether the title exited cleanly or was killed, and is why session-gated
+	 * reporting needs nothing from the title to stop
+	 */
+	if (client->profile) {
+		if (client->profile->sessions > 0)
+			client->profile->sessions--;
+		client->profile->session_changed = true;
+		client->profile = NULL;
+	}
 
 	while (*pp) {
 		if (*pp == client) {
@@ -1179,8 +1192,12 @@ static void handle_set_profile(struct ipc_context *ctx,
 			continue;
 
 		client->profile = &ctx->profiles[i];
-		lota_dbg("connection pid=%d bound to publisher %s",
-			 client->peer_pid, want);
+		ctx->profiles[i].sessions++;
+		ctx->profiles[i].session_changed = true;
+		lota_dbg(
+			"connection pid=%d bound to publisher %s (%d session%s)",
+			client->peer_pid, want, ctx->profiles[i].sessions,
+			ctx->profiles[i].sessions == 1 ? "" : "s");
 
 		/*
 		 * Title asking for a publisher this host has never enrolled with
@@ -2421,6 +2438,8 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 	 */
 	for (struct ipc_client *c = ctx->client_list; c; c = c->next)
 		c->profile = NULL;
+	for (size_t i = 0; i < ctx->profile_count; i++)
+		ctx->profiles[i].sessions = 0;
 }
 
 /*

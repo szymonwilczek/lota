@@ -95,6 +95,22 @@ struct lota_profile {
 
 	/* 0 = inherit the top-level attest_interval */
 	int attest_interval;
+
+	/*
+	 * Report to this publisher only while a title of theirs is running.
+	 *
+	 * Player's machine is not a fleet asset:
+	 * Verifier receiving quote every five minutes from boot to poweroff
+	 * learns when the machine is on, and learns it for a publisher whose
+	 * game is closed.
+	 * Enforcement and the PCR 14 boot commitment stay always-on either way
+	 * and never send a byte, which is what keeps a session's quote able to
+	 * prove the whole boot-to-now window.
+	 *
+	 * Default for a profile; Operator fleet that wants continuous stream
+	 * sets `reporting = continuous`
+	 */
+	bool session_gated;
 };
 
 struct lota_config {

@@ -35,6 +35,19 @@ struct attest_target {
 	char ca[256];
 	int ca_port;
 
+	/*
+	 * Report only while a title of this publisher's is running.
+	 *
+	 * sessions counts the connections currently bound to this publisher,
+	 * maintained by the IPC layer.
+	 * Reporting is exfiltration and closed game has no reason to produce any;
+	 * enforcement and the boot commitment are local and never stop,
+	 * which is what lets session's first quote still prove the whole
+	 * boot-to-now window.
+	 */
+	bool session_gated;
+	int sessions;
+
 	struct profile_paths paths;
 	bool has_profile;
 	/* why the anchor produced no profile, 0 when it did or none was set */
@@ -65,6 +78,10 @@ struct attest_target {
 	bool enroll_pending;
 	int enroll_backoff;
 	uint64_t next_enroll_ms;
+
+	/* session has just opened or closed;
+	 * the loop reacts on its next pass instead of sleeping through the change */
+	bool session_changed;
 };
 
 /*
