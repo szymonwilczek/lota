@@ -57,6 +57,26 @@ publisher on the host agreeing. Leave it NULL on a single-publisher host. A
 machine that holds no enrollment for the named publisher fails the connection
 rather than answering with another publisher's evidence.
 
+Nothing enrolls with a publisher until somebody on that machine agrees to it,
+so a first run there fails the connection with ``LOTA_ERR_CONSENT_REQUIRED``
+(read it with ``lota_connect_last_error()``; ``lota_ac_init()`` returns NULL
+and the same call answers why). That is a screen to show, not an error to
+report: say what your verifier would receive, and call ``lota-agent
+--allow-publisher <your hex>`` when the player accepts. Distinguish it from
+``LOTA_ERR_CONNECTION_FAILED``, which means no agent is installed at all::
+
+   struct lota_client *c = lota_connect_opts(&opts);
+
+   if (!c) {
+           switch (lota_connect_last_error()) {
+           case LOTA_ERR_CONSENT_REQUIRED:  /* ask the player */
+           case LOTA_ERR_UNKNOWN_PROFILE:   /* consented, not enrolled yet */
+           case LOTA_ERR_CONNECTION_FAILED: /* no agent on this machine */
+           default:
+                   break;
+           }
+   }
+
 Flags
 -----
 

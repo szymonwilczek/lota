@@ -380,6 +380,64 @@ static void test_no_publisher_sends_nothing(void)
 	PASS();
 }
 
+/*
+ * "Nobody here has agreed to that publisher" is a screen for the player,
+ * not error to log, so the title has to be able to tell it from every other
+ * reason a connection fails.
+ */
+static void server_consent_required(int client_fd)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (read_exact(client_fd, &payload, sizeof(payload)) < 0)
+		_exit(3);
+	if (send_result(client_fd, LOTA_IPC_ERR_CONSENT_REQUIRED) < 0)
+		_exit(4);
+
+	usleep(50000);
+}
+
+static void test_consent_required_is_distinguishable(void)
+{
+	struct lota_connect_opts opts = { 0 };
+	struct lota_client *client;
+	pid_t server;
+
+	TEST("a publisher nobody agreed to is reported as needing consent");
+
+	server = start_mock_agent(server_consent_required);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.struct_size = sizeof(opts);
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 2000;
+	opts.publisher_profile = PROFILE_HEX;
+
+	client = lota_connect_opts(&opts);
+	wait_agent(server);
+
+	if (client) {
+		FAIL("connected to a publisher nobody agreed to");
+		lota_disconnect(client);
+		return;
+	}
+	if (lota_connect_last_error() != LOTA_ERR_CONSENT_REQUIRED) {
+		FAIL("the title cannot tell consent from any other failure");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== Publisher selection tests ===\n\n");
@@ -391,6 +449,7 @@ int main(void)
 	test_unknown_publisher_fails_the_connection();
 	test_malformed_publisher_is_refused();
 	test_no_publisher_sends_nothing();
+	test_consent_required_is_distinguishable();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -1078,6 +1078,25 @@ static bool enroll_target_if_needed(struct attest_target *t)
 
 	t->enroll_pending = false;
 
+	{
+		time_t agreed = 0;
+		int cret = profile_consent_time(&t->paths, &agreed);
+
+		if (cret == -ENOENT) {
+			lota_warn("%s:%d has no enrollment and nobody has "
+				  "agreed to answer to publisher %s; run "
+				  "--allow-publisher %s to record that",
+				  t->server, t->port, t->paths.id, t->paths.id);
+			return false;
+		}
+		if (cret < 0) {
+			lota_warn("Consent record for publisher %s is "
+				  "unreadable (%s); refusing to enroll",
+				  t->paths.id, strerror(-cret));
+			return false;
+		}
+	}
+
 	if (t->ca[0] == '\0') {
 		lota_warn("%s:%d has no enrollment and its profile names no "
 			  "attestation CA; run --enroll for it",

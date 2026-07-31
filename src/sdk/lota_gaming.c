@@ -275,6 +275,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_ACCESS_DENIED;
 	case LOTA_IPC_ERR_UNKNOWN_PROFILE:
 		return LOTA_ERR_UNKNOWN_PROFILE;
+	case LOTA_IPC_ERR_CONSENT_REQUIRED:
+		return LOTA_ERR_CONSENT_REQUIRED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -482,10 +484,24 @@ static int select_publisher(struct lota_client *client, const char *hex)
 	ret = recv_response(client, &resp, NULL, 0, &payload_len);
 	if (ret < 0)
 		return ret;
+	if (resp.result == LOTA_IPC_ERR_CONSENT_REQUIRED)
+		return -EACCES;
 	if (resp.result != LOTA_IPC_OK)
 		return -ENOENT;
 
 	return 0;
+}
+
+/*
+ * Why the last connect on this thread failed.
+ * Thread-local so two titles in one process (or title and its launcher) cannot
+ * read each other's answer.
+ */
+static _Thread_local int g_connect_error = LOTA_OK;
+
+int lota_connect_last_error(void)
+{
+	return g_connect_error;
 }
 
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
@@ -501,8 +517,12 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	 * later member of this structure way in;
 	 * guessing would read memory the caller never wrote
 	 */
-	if (opts && opts->struct_size < LOTA_CONNECT_OPTS_SIZE_MIN)
+	g_connect_error = LOTA_OK;
+
+	if (opts && opts->struct_size < LOTA_CONNECT_OPTS_SIZE_MIN) {
+		g_connect_error = LOTA_ERR_INVALID_ARG;
 		return NULL;
+	}
 
 	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms :
 						      DEFAULT_TIMEOUT_MS;
@@ -530,11 +550,14 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		}
 	}
 
-	if (fd < 0)
+	if (fd < 0) {
+		g_connect_error = LOTA_ERR_CONNECTION_FAILED;
 		return NULL;
+	}
 
 	client = calloc(1, sizeof(*client));
 	if (!client) {
+		g_connect_error = LOTA_ERR_NO_MEMORY;
 		close(fd);
 		return NULL;
 	}
@@ -542,17 +565,23 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 	client->fd = fd;
 	client->timeout_ms = timeout_ms;
 
-	if (opts && opts->publisher_profile &&
-	    select_publisher(client, opts->publisher_profile) < 0) {
-		/*
-		 * caller asked to attest for a specific publisher and the agent
+	if (opts && opts->publisher_profile) {
+		int sel = select_publisher(client, opts->publisher_profile);
+
+		/* Caller asked to attest for a specific publisher and the agent
 		 * cannot answer for that one.
 		 * Failing the connection is the point:
 		 * falling back would hand the title another publisher's evidence
 		 * under its own name
 		 */
-		lota_disconnect(client);
-		return NULL;
+		if (sel < 0) {
+			g_connect_error =
+				sel == -EACCES ? LOTA_ERR_CONSENT_REQUIRED :
+				sel == -EINVAL ? LOTA_ERR_INVALID_ARG :
+						 LOTA_ERR_UNKNOWN_PROFILE;
+			lota_disconnect(client);
+			return NULL;
+		}
 	}
 
 	return client;
@@ -1215,6 +1244,8 @@ const char *lota_strerror(int error)
 		return "Access denied";
 	case LOTA_ERR_UNKNOWN_PROFILE:
 		return "This machine holds no enrollment for that publisher";
+	case LOTA_ERR_CONSENT_REQUIRED:
+		return "Nobody on this machine has agreed to answer to that publisher";
 	default:
 		return "Unknown error";
 	}

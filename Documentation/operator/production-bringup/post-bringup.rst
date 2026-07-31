@@ -186,6 +186,21 @@ them. A title that names no publisher reads the host-wide answer, which is now
 every *currently reporting* publisher agreeing -- and not attested when nothing
 is reporting at all, since nothing is being checked.
 
+**Nothing enrolls with a publisher until somebody here agrees to it.** An
+attestation key is a stable handle that publisher can recognise this machine
+by, so the decision to hand one out is recorded before the key exists, in the
+profile directory. ``lota-agent --allow-publisher <hex>`` writes it, naming the
+publisher by the SHA-256 of their CA anchor's SubjectPublicKeyInfo -- the same
+identity everything else uses. ``lota-agent --enroll`` records it too: somebody
+with root named that CA and asked for the key, which is the same decision made
+a different way, and it keeps one rule for the agent to enforce.
+
+A title that selects a publisher nobody has agreed to is refused with a
+distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
+``lota_connect_last_error()``) rather than a generic failure, because it is a
+screen to show the player rather than a fault to report. Whatever shows that
+screen calls ``--allow-publisher`` when they accept.
+
 **Enrollment with a profile's publisher is a runtime action.** A profile that
 names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
 enrolled by the agent itself: when the loop first reaches that publisher, and

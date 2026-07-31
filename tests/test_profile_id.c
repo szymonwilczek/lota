@@ -455,6 +455,75 @@ static void test_handle_candidates(void)
 	rmdir(base);
 }
 
+/*
+ * Consent is what stands between a title asking and this machine holding key
+ * that publisher can recognise it by, so what matters is that its absence is
+ * unambiguous and that recording it does not depend on enrollment that has not
+ * happened yet.
+ */
+static void test_consent_record(void)
+{
+	char der_path[256];
+	char base[256];
+	struct profile_paths paths;
+	time_t agreed = 0;
+	EVP_PKEY *key = EVP_EC_gen("P-256");
+	X509 *cert = NULL;
+	struct stat st;
+
+	tmp_path(der_path, sizeof(der_path), "consent.der");
+	snprintf(base, sizeof(base), "/tmp/lota-profile-consent.%d", getpid());
+
+	if (!key) {
+		CHECK(0, "key generation");
+		goto out;
+	}
+	cert = mint_cert(key, "publisher-a", 1);
+	if (!cert || write_cert_der(der_path, cert) != 0 ||
+	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
+		CHECK(0, "profile setup");
+		goto out;
+	}
+
+	CHECK(profile_consent_time(&paths, &agreed) == -ENOENT,
+	      "a publisher nobody agreed to has no consent");
+
+	CHECK(profile_consent_record(&paths, 0) == 0,
+	      "consent is recorded before anything enrolled");
+	CHECK(stat(paths.dir, &st) == 0,
+	      "recording consent creates the profile directory");
+	CHECK(profile_consent_time(&paths, &agreed) == 0 && agreed > 0 &&
+		      agreed <= time(NULL),
+	      "the record says when the decision was made");
+
+	/* record that is not one must not read as consent */
+	{
+		FILE *f = fopen(paths.consent, "w");
+
+		if (f) {
+			fputs("yes please\n", f);
+			fclose(f);
+		}
+		CHECK(profile_consent_time(&paths, &agreed) == -EINVAL,
+		      "a file that is not a consent record is refused");
+	}
+
+	CHECK(profile_consent_forget(&paths) == 0 &&
+		      profile_consent_time(&paths, &agreed) == -ENOENT,
+	      "consent can be withdrawn");
+	CHECK(profile_consent_forget(&paths) == 0,
+	      "withdrawing consent twice is not an error");
+
+	unlink(paths.aik_handle);
+	rmdir(paths.dir);
+	rmdir(base);
+
+out:
+	unlink(der_path);
+	X509_free(cert);
+	EVP_PKEY_free(key);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -464,6 +533,7 @@ int main(void)
 	test_paths_and_directory();
 	test_handle_record_round_trip();
 	test_handle_candidates();
+	test_consent_record();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

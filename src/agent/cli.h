@@ -78,6 +78,9 @@ struct cli_options {
 	const char *ca_server;
 	int ca_port;
 	const char *enroll_token_file; /* --enroll-token-file: tenant token */
+	/* --allow-publisher: record consent to answer to one publisher,
+	 * named by the hex SHA-256 of its CA anchor's SPKI */
+	const char *allow_publisher;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;

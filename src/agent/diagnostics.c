@@ -152,6 +152,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	if (opts->allow_publisher)
+		return diagnostic_exit_code(
+			do_allow_publisher(opts->allow_publisher));
+
 	if (opts->reenroll_flag)
 		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
 

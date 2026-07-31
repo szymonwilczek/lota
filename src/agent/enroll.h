@@ -160,6 +160,19 @@ int enroll_renew_cert(struct tpm_context *tpm,
 		      const struct profile_paths *paths);
 
 /*
+ * Record that somebody on this machine agreed to answer to a publisher,
+ * named by the hex SHA-256 of its CA trust anchor's SubjectPublicKeyInfo.
+ *
+ * Nothing enrolls without this: AIK is stable handle a publisher can recognise
+ * the machine by, so the decision to hand one out is the player's (or the operator's)
+ * and is recorded before the key exists.
+ * Whatever shows the player what publisher would learn calls this when they accept.
+ *
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_allow_publisher(const char *profile_id);
+
+/*
  * First enrollment for a publisher, from inside a running agent.
  *
  * Same ceremony as --enroll, minus the process-level bring-up:

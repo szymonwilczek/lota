@@ -25,6 +25,8 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
+#include <time.h>
 
 /* Parent of the per-publisher directories */
 #define LOTA_PROFILE_BASE_DIR "/var/lib/lota/profiles"
@@ -46,6 +48,7 @@
 #define LOTA_PROFILE_AIK_CERT_FILE "aik_cert.der"
 #define LOTA_PROFILE_AIK_META_FILE "aik_meta.dat"
 #define LOTA_PROFILE_AIK_HANDLE_FILE "aik_handle"
+#define LOTA_PROFILE_CONSENT_FILE "consent"
 
 struct profile_paths {
 	char id[LOTA_PROFILE_ID_LEN];
@@ -61,6 +64,13 @@ struct profile_paths {
 	 */
 	char aik_meta[PATH_MAX];
 	char aik_handle[PATH_MAX];
+
+	/*
+	 * The record that somebody on this machine agreed to answer to this publisher.
+	 * Written before the enrollment it authorises, which is what makes it
+	 * decision rather than note about one.
+	 */
+	char consent[PATH_MAX];
 };
 
 /*
@@ -123,5 +133,22 @@ int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle);
 int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  uint32_t count, uint32_t *out, size_t out_max,
 				  size_t *out_count);
+
+/*
+ * Consent to answer to a publisher.
+ *
+ * Minting AIK for publisher gives them stable handle on this machine,
+ * so the host records that somebody agreed to it before the key exists rather
+ * than after.
+ * Record is plain text, root-only like the directory holding it, and states when
+ * it was made and by whom -- audit note, not secret: anyone who could forge it
+ * could delete the profile instead.
+ *
+ * profile_consent_record() creates the profile directory if needed.
+ * profile_consent_time() returns -ENOENT when this publisher has no consent.
+ */
+int profile_consent_record(const struct profile_paths *paths, uid_t by);
+int profile_consent_time(const struct profile_paths *paths, time_t *out);
+int profile_consent_forget(const struct profile_paths *paths);
 
 #endif /* LOTA_AGENT_PROFILE_H */

@@ -1186,10 +1186,28 @@ static void handle_set_profile(struct ipc_context *ctx,
 		snprintf(want + i * 2, 3, "%02x", req.profile_id[i]);
 
 	for (size_t i = 0; i < ctx->profile_count; i++) {
+		time_t agreed = 0;
+
 		if (!ctx->profiles[i].has_profile)
 			continue;
 		if (strcmp(ctx->profiles[i].paths.id, want) != 0)
 			continue;
+
+		/*
+		 * Answering to publisher hands them stable handle on this machine,
+		 * so somebody here has to have agreed to it.
+		 * The title is told which case it is, because "nobody agreed yet"
+		 * is a screen to show, not a failure to report
+		 */
+		if (profile_consent_time(&ctx->profiles[i].paths, &agreed) ==
+		    -ENOENT) {
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which nobody on this machine has agreed to",
+				  client->peer_pid, want);
+			build_error_response(client,
+					     LOTA_IPC_ERR_CONSENT_REQUIRED);
+			return;
+		}
 
 		client->profile = &ctx->profiles[i];
 		ctx->profiles[i].sessions++;
