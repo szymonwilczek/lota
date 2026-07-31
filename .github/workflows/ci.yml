@@ -312,12 +312,25 @@ jobs:
             scripts/lota-proton-hook \
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
+            scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \
             tests/integration/test_bpf_gates.sh \
             src/initramfs/90lota/module-setup.sh
+
+  package-manifests:
+    name: package manifests (nfpm vs spec)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Compare the two package manifests
+        run: make check-package-manifests
 
   yamllint:
     name: yamllint
