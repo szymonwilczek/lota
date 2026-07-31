@@ -1663,10 +1663,26 @@ static void test_config_resolve_policy_pubkey(void)
 		return;
 	}
 
-	got = config_resolve_policy_pubkey("/etc/lota/named.pub", override_path,
+	got = config_resolve_policy_pubkey(override_path, override_path,
 					   packaged_path);
-	if (!got || strcmp(got, "/etc/lota/named.pub") != 0) {
+	if (!got || strcmp(got, override_path) != 0) {
 		FAIL("policy_pubkey names the key outright");
+		return;
+	}
+
+	/*
+	 * Named key that is no longer on disk is a leftover, not a choice:
+	 * older installer wrote this line, and the file it named is one upgrade
+	 * can take away.
+	 * Falling back keeps enforcement armed on host whose package brought
+	 * key of its own.
+	 */
+	got = config_resolve_policy_pubkey("/nonexistent/named.pub",
+					   "/nonexistent/override.pub",
+					   packaged_path);
+	if (!got || strcmp(got, packaged_path) != 0) {
+		FAIL("a named key that no longer exists falls back to the "
+		     "packaged one");
 		return;
 	}
 

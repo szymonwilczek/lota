@@ -1088,7 +1088,15 @@ const char *config_resolve_policy_pubkey(const char *configured,
 					 const char *override_path,
 					 const char *packaged_path)
 {
-	if (configured && configured[0])
+	/*
+	 * Named key wins -- but only while it is there.
+	 * Path that has stopped resolving is not an operator's choice any more,
+	 * it is leftover: the installer used to write this key into lota.conf,
+	 * and the file it named is one an upgrade can take away.
+	 * Treating that as "verify against nothing" would stop enforcement on
+	 * host whose package brought a perfectly good key with it.
+	 */
+	if (configured && configured[0] && access(configured, R_OK) == 0)
 		return configured;
 
 	/*

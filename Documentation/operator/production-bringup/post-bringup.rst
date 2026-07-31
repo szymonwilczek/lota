@@ -22,7 +22,10 @@ The most common failures, with the gate that produced them:
   re-sign the binary into its ``security.ima`` xattr and confirm
   ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
 * ``BPF object signature verification failed``. The object and the key no
-  longer belong to each other. The packaged key at
+  longer belong to each other. A ``policy_pubkey`` line naming a file that is
+  no longer there does not cause this: the agent treats a key that has stopped
+  resolving as absent and falls back, so a host an older installer configured
+  keeps enforcing after an upgrade moved the key. The packaged key at
   ``/usr/lib/lota/enforcement.pub`` always matches the packaged object, so this
   means a key at ``/etc/lota/policy.pub`` (or one named by ``policy_pubkey``)
   is taking precedence and did not sign this object: move it aside to fall back
