@@ -45,6 +45,27 @@ static int tool_exists(const char *name)
 	return 0;
 }
 
+/*
+ * 1 when this host is a guest.
+ *
+ * systemd-detect-virt answers it from the CPUID hypervisor bit, DMI,
+ * the container environment and several more signals, and exits 0 only when it
+ * found one -- which is why the output is ignored here.
+ * Vendor table over DMI strings would be this project maintaining a worse
+ * copy of that.
+ *
+ * Missing tool, or spawn failure, reads as bare metal:
+ * those instructions are the ones a guest can most safely be given by mistake,
+ * since they send the reader to firmware menu instead of to the wrong machine.
+ */
+static int host_is_virtual(void)
+{
+	const char *const argv[] = { "systemd-detect-virt", "-q", NULL };
+	char out[64];
+
+	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
 /* stage 1: preflight */
 
 static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
@@ -79,12 +100,11 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 		return STAGE_BLOCKED;
 	}
 	if (sb == 0) {
-		snprintf(note, cap,
-			 "Secure Boot is disabled. The verifier rejects "
-			 "hosts that boot with Secure Boot off (it is the "
-			 "machine-independent kernel-trust anchor). Enable "
-			 "it in firmware setup and re-run. Custom MOK-signed "
-			 "kernels keep working with Secure Boot on.");
+		/* most common reason an install stops, and the one thing here
+		 * LOTA cannot do on the player's behalf:
+		 * name the setting, this machine's way into firmware setup,
+		 * and the menu it lives under */
+		probe_secureboot_guidance(host_is_virtual(), note, cap);
 		return STAGE_BLOCKED;
 	}
 	if (sb < 0) {

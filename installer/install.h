@@ -77,7 +77,10 @@ enum stage_state {
 	STAGE_ERROR, /* the probe itself failed */
 };
 
-#define STAGE_NOTE_CAP 512
+/* Holds the longest note stage produces:
+ * the Secure-Boot remediation, which names the setting, the route into this
+ * machine's firmware setup and what enabling it does not break */
+#define STAGE_NOTE_CAP 1024
 
 struct stage {
 	const char *title;

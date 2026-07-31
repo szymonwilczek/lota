@@ -6,6 +6,7 @@
 
 #include "probe.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -202,27 +203,278 @@ int probe_file_ima_signed(const char *path)
  * EFI global variable GUID
  * 4-byte attribute header precedes the payload in efivarfs
  */
-#define SECUREBOOT_EFIVAR            \
-	"/sys/firmware/efi/efivars/" \
-	"SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+#define EFI_GLOBAL_GUID "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+#define EFIVARS_DIR "/sys/firmware/efi/efivars/"
+#define SECUREBOOT_EFIVAR EFIVARS_DIR "SecureBoot-" EFI_GLOBAL_GUID
+#define SETUPMODE_EFIVAR EFIVARS_DIR "SetupMode-" EFI_GLOBAL_GUID
+#define OSINDICATIONS_SUPPORTED_EFIVAR \
+	EFIVARS_DIR "OsIndicationsSupported-" EFI_GLOBAL_GUID
+
+#define EFIVAR_ATTR_LEN 4
+
+/* Reads the payload of an efivarfs variable, dropping the attribute header.
+ * Byte count (>= 1) or -errno;
+ * -EBADMSG when the file is shorter than the header plus one payload byte.
+ * A failure never encodes as 0, which the callers would read as a clear flag */
+static int read_efivar_payload(const char *path, uint8_t *out, size_t cap)
+{
+	uint8_t raw[EFIVAR_ATTR_LEN + 8];
+	ssize_t got;
+	int err;
+	int fd;
+
+	if (!path || !out || cap == 0 || cap > sizeof(raw) - EFIVAR_ATTR_LEN)
+		return -EINVAL;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		err = errno;
+		return err > 0 ? -err : -EIO;
+	}
+
+	got = read(fd, raw, EFIVAR_ATTR_LEN + cap);
+	err = got < 0 ? errno : 0;
+	close(fd);
+	if (got < 0)
+		return err > 0 ? -err : -EIO;
+	if (got <= EFIVAR_ATTR_LEN)
+		return -EBADMSG;
+
+	got -= EFIVAR_ATTR_LEN;
+	memcpy(out, raw + EFIVAR_ATTR_LEN, (size_t)got);
+	return (int)got;
+}
+
+int probe_efivar_flag_at(const char *path)
+{
+	uint8_t val;
+	int ret = read_efivar_payload(path, &val, sizeof(val));
+
+	if (ret < 0)
+		return ret;
+	return val == 1 ? 1 : 0;
+}
+
+/* UEFI bitmask variables are little-endian UINT64,
+ * so the flag this cares about lives in the first payload byte whatever
+ * the firmware wrote above it */
+int probe_efivar_bit0_at(const char *path)
+{
+	uint8_t val;
+	int ret = read_efivar_payload(path, &val, sizeof(val));
+
+	if (ret < 0)
+		return ret;
+	return val & 1U ? 1 : 0;
+}
 
 int probe_secureboot(void)
 {
-	uint8_t raw[5];
-	ssize_t got;
-	int fd;
+	return probe_efivar_flag_at(SECUREBOOT_EFIVAR);
+}
 
-	fd = open(SECUREBOOT_EFIVAR, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
+int probe_secureboot_setup_mode(void)
+{
+	return probe_efivar_flag_at(SETUPMODE_EFIVAR);
+}
 
-	got = read(fd, raw, sizeof(raw));
-	close(fd);
-	if (got < 0)
-		return -errno;
-	if (got != 5)
-		return -EBADMSG;
-	return raw[4] == 1 ? 1 : 0;
+/* EFI_OS_INDICATIONS_BOOT_TO_FW_UI is bit 0 of OsIndicationsSupported */
+int probe_firmware_setup_supported(void)
+{
+	return probe_efivar_bit0_at(OSINDICATIONS_SUPPORTED_EFIVAR);
+}
+
+static int str_starts_with_ci(const char *s, const char *prefix)
+{
+	size_t i;
+
+	if (!s || !prefix)
+		return 0;
+	for (i = 0; prefix[i]; i++) {
+		if (tolower((unsigned char)s[i]) !=
+		    tolower((unsigned char)prefix[i]))
+			return 0;
+	}
+	return 1;
+}
+
+#define DMI_ID_DIR "/sys/class/dmi/id"
+
+/* Reads one DMI field, leaving out an empty string on any failure */
+static void read_dmi_field(const char *dmi_dir, const char *field, char *out,
+			   size_t cap)
+{
+	char path[512];
+
+	out[0] = '\0';
+	if (!dmi_dir)
+		return;
+	snprintf(path, sizeof(path), "%s/%s", dmi_dir, field);
+	if (probe_read_text(path, out, cap) < 0)
+		out[0] = '\0';
+}
+
+/*
+ * Placeholders a board ships when nobody filled the DMI field in.
+ * Reading one back describes no machine anybody owns.
+ */
+static int dmi_is_placeholder(const char *s)
+{
+	static const char *const junk[] = {
+		"To Be Filled",
+		"System Product Name",
+		"System manufacturer",
+		"Default string",
+		"Not Applicable",
+		"Not Specified",
+		"INVALID",
+		"None",
+		"OEM",
+		"Unknown",
+	};
+	size_t i;
+
+	if (!s || !*s)
+		return 1;
+	for (i = 0; i < sizeof(junk) / sizeof(junk[0]); i++) {
+		if (str_starts_with_ci(s, junk[i]))
+			return 1;
+	}
+	return 0;
+}
+
+void probe_machine_description_at(const char *dmi_dir, char *out, size_t cap)
+{
+	char vendor[128];
+	char product[128];
+	int have_vendor;
+	int have_product;
+
+	if (!out || cap == 0)
+		return;
+	out[0] = '\0';
+
+	read_dmi_field(dmi_dir, "sys_vendor", vendor, sizeof(vendor));
+	read_dmi_field(dmi_dir, "product_name", product, sizeof(product));
+	have_vendor = !dmi_is_placeholder(vendor);
+	have_product = !dmi_is_placeholder(product);
+
+	if (have_vendor && have_product)
+		snprintf(out, cap, "%s %s", vendor, product);
+	else if (have_vendor)
+		snprintf(out, cap, "%s", vendor);
+	else if (have_product)
+		snprintf(out, cap, "%s", product);
+}
+
+void probe_machine_description(char *out, size_t cap)
+{
+	probe_machine_description_at(DMI_ID_DIR, out, cap);
+}
+
+void probe_secureboot_remediation(const char *machine, int is_virtual,
+				  int setup_mode, int firmware_setup_supported,
+				  char *out, size_t cap)
+{
+	size_t used;
+
+	if (!out || cap == 0)
+		return;
+
+	used = (size_t)snprintf(
+		out, cap,
+		"Secure Boot is off. It is a firmware setting, so LOTA cannot "
+		"turn it on for you -- and it cannot be worked around either: "
+		"Secure Boot is the machine-independent anchor a verifier uses "
+		"to conclude the kernel it is talking to is the one the "
+		"distribution signed. ");
+	if (used >= cap)
+		return;
+
+	if (is_virtual == 1) {
+		snprintf(out + used, cap - used,
+			 "This is a virtual machine, where Secure Boot belongs "
+			 "to the VM definition rather than to a menu inside "
+			 "the guest. Give it an OVMF/EDK II image with Secure "
+			 "Boot enabled (libvirt: a q35 machine with SMM and "
+			 "<loader secure='yes'>), boot it once, then re-run "
+			 "lota-install.");
+		return;
+	}
+
+	if (machine && *machine) {
+		used += (size_t)snprintf(out + used, cap - used,
+					 "The firmware to change is the one on "
+					 "this %s. ",
+					 machine);
+		if (used >= cap)
+			return;
+	}
+
+	/*
+	 * reboot-to-setup request is the only route this can state with certainty,
+	 * and the firmware itself says whether it honours it.
+	 * Where it does not, the firmware's own splash screen names its key
+	 * -- which is a better source than a table here could be, since the menu
+	 * layout and the key differ between revisions of a single model.
+	 */
+	if (firmware_setup_supported == 1) {
+		used += (size_t)snprintf(
+			out + used, cap - used,
+			"Run 'systemctl reboot --firmware-setup' to reboot "
+			"straight into firmware setup -- this firmware accepts "
+			"that request, so no key has to be caught at the right "
+			"moment. ");
+	} else {
+		used += (size_t)snprintf(
+			out + used, cap - used,
+			"This firmware does not take a reboot-into-setup "
+			"request, so enter setup the way its startup screen "
+			"says (commonly Del, F2, F10 or Esc, held while the "
+			"vendor logo is up). ");
+	}
+	if (used >= cap)
+		return;
+
+	used += (size_t)snprintf(
+		out + used, cap - used,
+		"The setting is called Secure Boot and usually sits under a "
+		"Security or Boot heading; set it to Enabled, save, and re-run "
+		"lota-install. ");
+	if (used >= cap)
+		return;
+
+	if (setup_mode == 1) {
+		/*
+		 * With no platform key installed there is nothing for Secure Boot
+		 * to enforce against, and firmware commonly leaves the switch
+		 * unselectable until the factory keys are restored.
+		 */
+		used += (size_t)snprintf(
+			out + used, cap - used,
+			"This firmware currently holds no platform keys (setup "
+			"mode), so restore the default or factory keys in the "
+			"same menu first -- the switch does nothing without "
+			"them. ");
+		if (used >= cap)
+			return;
+	}
+
+	snprintf(out + used, cap - used,
+		 "Turning it on keeps distribution kernels bootable; only "
+		 "modules built locally (DKMS, akmods) need their key enrolled "
+		 "once with 'mokutil --import'.");
+}
+
+void probe_secureboot_guidance(int is_virtual, char *out, size_t cap)
+{
+	char machine[192];
+
+	probe_machine_description(machine, sizeof(machine));
+	probe_secureboot_remediation(machine, is_virtual,
+				     probe_secureboot_setup_mode(),
+				     probe_firmware_setup_supported(), out,
+				     cap);
 }
 
 int probe_cmdline_ima_ok(const char *cmdline)
