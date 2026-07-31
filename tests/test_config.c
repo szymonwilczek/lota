@@ -1060,6 +1060,53 @@ static void test_config_load_profiles(void)
 		FAIL("profile 'beta' interval");
 		return;
 	}
+	/* profile reports while a title of its publisher runs, by default */
+	if (!cfg.profiles[0].session_gated || !cfg.profiles[1].session_gated) {
+		FAIL("a profile should default to session-gated reporting");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Fleet whose publishers are all its own wants the continuous stream that session
+ * gating exists to stop, so the profile can say so -- and nothing else may.
+ */
+static void test_config_profile_reporting(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load reads a profile's reporting mode");
+	write_config("reporting.conf", "[profile \"fleet\"]\n"
+				       "ca = ca.example\n"
+				       "ca_cert = /etc/lota/ca.pem\n"
+				       "verifier = verifier.example\n"
+				       "reporting = continuous\n");
+	config_path("reporting.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		FAIL("continuous reporting rejected");
+		return;
+	}
+	if (cfg.profiles[0].session_gated) {
+		FAIL("reporting = continuous not applied");
+		return;
+	}
+
+	write_config("reporting-bad.conf", "[profile \"fleet\"]\n"
+					   "ca = ca.example\n"
+					   "ca_cert = /etc/lota/ca.pem\n"
+					   "verifier = verifier.example\n"
+					   "reporting = sometimes\n");
+	config_path("reporting-bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("an unknown reporting mode was accepted");
+		return;
+	}
 	PASS();
 }
 
@@ -1686,6 +1733,7 @@ int main(void)
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
 		test_config_load_profiles,
+		test_config_profile_reporting,
 		test_config_load_profile_incomplete,
 		test_config_load_profile_malformed,
 		test_config_load_profile_overflow,

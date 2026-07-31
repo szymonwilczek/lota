@@ -1196,6 +1196,29 @@ static void renew_target_cert_if_due(struct attest_target *t, uint32_t aik_ttl)
 }
 
 /*
+ * Is this publisher owed a report right now?
+ *
+ * Session-gated target reports only while a title of that publisher's is running.
+ * When the last one exits, reporting stops and the verdict is dropped:
+ * claiming machine is attested for publisher nobody is reporting to would be
+ * asserting something no longer being checked.
+ */
+static bool target_reporting_now(struct attest_target *t)
+{
+	if (!t->session_gated || t->sessions > 0)
+		return true;
+
+	if (t->attested) {
+		lota_info("No session left for %s:%d; reporting stops until a "
+			  "title of theirs runs again",
+			  t->server, t->port);
+		t->attested = false;
+		t->valid_until = 0;
+	}
+	return false;
+}
+
+/*
  * One round against one target: how long to wait before the next one.
  * Failure backs this target off; the other publishers keep their cadence.
  */
@@ -1204,6 +1227,9 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 {
 	time_t now = time(NULL);
 	int ret;
+
+	if (!target_reporting_now(t))
+		return t->interval;
 
 	if (!enroll_target_if_needed(t)) {
 		/* Nothing to report with:
@@ -1291,9 +1317,21 @@ static void publish_aggregate_status(const struct attest_target *targets,
 				     size_t count, uint32_t *status_flags)
 {
 	uint64_t valid_until = 0;
+	size_t considered = 0;
 	bool all = true;
 
 	for (size_t i = 0; i < count; i++) {
+		/*
+		 * Publisher nobody is playing for is not reporting, so it has
+		 * no verdict to contribute.
+		 * Counting its silence as failure would leave a consumer host
+		 * permanently unattested; counting it as success would assert
+		 * something nothing is checking
+		 */
+		if (targets[i].session_gated && targets[i].sessions == 0)
+			continue;
+
+		considered++;
 		if (!targets[i].attested) {
 			all = false;
 			break;
@@ -1301,6 +1339,10 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		if (valid_until == 0 || targets[i].valid_until < valid_until)
 			valid_until = targets[i].valid_until;
 	}
+
+	/* nobody is reporting, so there is no live verdict to report either */
+	if (considered == 0)
+		all = false;
 
 	if (all)
 		*status_flags |= LOTA_STATUS_ATTESTED;
@@ -1313,8 +1355,10 @@ static void publish_aggregate_status(const struct attest_target *targets,
 
 	if (all)
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
-				count, count == 1 ? "" : "s",
+				considered, considered == 1 ? "" : "s",
 				(unsigned long)valid_until);
+	else if (considered == 0)
+		sdnotify_status("Idle: no title running, nothing reported");
 	else
 		sdnotify_status("Attestation incomplete");
 }
@@ -1348,9 +1392,12 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	for (size_t i = 0; i < target_count; i++) {
-		lota_info("Target %zu: %s:%d every %d seconds", i + 1,
+		lota_info("Target %zu: %s:%d every %d seconds%s", i + 1,
 			  targets[i].server, targets[i].port,
-			  targets[i].interval);
+			  targets[i].interval,
+			  targets[i].session_gated ?
+				  ", while a title of theirs runs" :
+				  "");
 		if (targets[i].profile_error)
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
 				  "attesting to %s:%d without a publisher "
@@ -1589,12 +1636,16 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 
 			/*
 			 * title selected a publisher this host has never
-			 * enrolled with.
-			 * That is the moment the enrollment exists to serve,
-			 * so stop sleeping through it
+			 * enrolled with, or session opened or closed.
+			 * Both are moments this loop exists to serve,
+			 * so stop sleeping through them:
+			 * title that just launched wants its first report now,
+			 * not one interval from now
 			 */
 			for (size_t i = 0; i < target_count; i++) {
-				if (targets[i].enroll_pending) {
+				if (targets[i].enroll_pending ||
+				    targets[i].session_changed) {
+					targets[i].session_changed = false;
 					targets[i].next_due_ms = current_ms;
 					asked = true;
 				}

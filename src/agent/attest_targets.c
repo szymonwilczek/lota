@@ -41,6 +41,7 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 				 p->ca_cert);
 			snprintf(out[n].ca, sizeof(out[n].ca), "%s", p->ca);
 			out[n].ca_port = p->ca_port;
+			out[n].session_gated = p->session_gated;
 			/* profile without its own cadence keeps the host's */
 			out[n].interval = p->attest_interval ?
 						  p->attest_interval :
@@ -57,6 +58,7 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 			snprintf(out[n].ca_cert, sizeof(out[n].ca_cert), "%s",
 				 ca_cert);
 		out[n].interval = interval_sec;
+		out[n].session_gated = false;
 		n++;
 	}
 

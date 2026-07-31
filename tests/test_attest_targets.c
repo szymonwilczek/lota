@@ -102,6 +102,8 @@ static void test_single_verifier(void)
 	      "the single target carries the caller's endpoint and cadence");
 	CHECK(!targets[0].has_profile && targets[0].profile_error == 0,
 	      "no anchor is not an error, it is a host without a publisher");
+	CHECK(!targets[0].session_gated,
+	      "the single verifier keeps the continuous stream it always had");
 
 	CHECK(attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
@@ -142,6 +144,7 @@ static void test_profiles_replace_the_single_verifier(void)
 		 "ca.a.example");
 	cfg.profiles[0].ca_port = 8444;
 	cfg.profiles[0].attest_interval = 60;
+	cfg.profiles[0].session_gated = true;
 
 	snprintf(cfg.profiles[1].name, sizeof(cfg.profiles[1].name), "%s",
 		 "publisher-b");
@@ -185,6 +188,16 @@ static void test_profiles_replace_the_single_verifier(void)
 	      "a target carries the CA its publisher enrolls against");
 	CHECK(targets[1].ca[0] == '\0',
 	      "a profile that names no CA carries none");
+
+	/*
+	 * Reporting is exfiltration, so publisher gets it only while title of
+	 * theirs runs.
+	 * Fleet that wants the continuous stream says so per profile;
+	 * the single-verifier path keeps it, because that is the deployment
+	 * the stream was the feature for
+	 */
+	CHECK(targets[0].session_gated && !targets[1].session_gated,
+	      "each profile carries its own reporting mode");
 
 	unlink(anchor);
 }

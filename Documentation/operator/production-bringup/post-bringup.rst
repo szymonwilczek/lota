@@ -164,6 +164,28 @@ host has one publisher -- gets the first profile's token and the host-wide
 answer: attested only while **every** configured publisher is satisfied, with
 the window closing at the earliest of theirs.
 
+**A profile reports only while a title of its publisher is running.** That is
+what ``reporting`` selects, and ``session`` is a profile's default: a report is
+the only thing that leaves the machine, and a verifier receiving one every few
+minutes from boot to poweroff learns when the player's machine is on, for a
+game that is closed. A session is a title's connection to the agent, so it ends
+when the process does, whether it exited or was killed. Set
+``reporting = continuous`` on a profile whose fleet the operator owns and whose
+continuous stream is the point; the single-verifier configuration keeps that
+behaviour unchanged.
+
+Enforcement and the PCR 14 boot commitment are never gated. They are local,
+they send nothing, and they are what lets a session's first quote still prove
+the whole boot-to-now window: the quote is a fresh signed read of state that
+already existed. On-demand *enforcement* would prove nothing, which is why only
+reporting follows the session.
+
+While no title of a publisher's is running, that publisher has no live verdict:
+the agent stops reporting to them and reports the host as not attested for
+them. A title that names no publisher reads the host-wide answer, which is now
+every *currently reporting* publisher agreeing -- and not attested when nothing
+is reporting at all, since nothing is being checked.
+
 **Enrollment with a profile's publisher is a runtime action.** A profile that
 names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
 enrolled by the agent itself: when the loop first reaches that publisher, and
