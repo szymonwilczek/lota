@@ -22,6 +22,7 @@
 #include "enroll.h"
 #include "net.h"
 #include "profile.h"
+#include "publishers.h"
 #include "tpm.h"
 #include "lota_enroll.h"
 
@@ -538,26 +539,7 @@ int do_reenroll(const char *ca_cert)
  */
 static int paths_from_id(const char *profile_id, struct profile_paths *out)
 {
-	size_t len;
-
-	if (!profile_id || !out)
-		return -EINVAL;
-
-	len = strlen(profile_id);
-	if (len != LOTA_PROFILE_ID_LEN - 1)
-		return -EINVAL;
-	if (strspn(profile_id, "0123456789abcdef") != len)
-		return -EINVAL;
-
-	memset(out, 0, sizeof(*out));
-	snprintf(out->id, sizeof(out->id), "%s", profile_id);
-	if (snprintf(out->dir, sizeof(out->dir), "%s/%s", LOTA_PROFILE_BASE_DIR,
-		     out->id) >= (int)sizeof(out->dir))
-		return -ENAMETOOLONG;
-	if (snprintf(out->consent, sizeof(out->consent), "%s/%s", out->dir,
-		     LOTA_PROFILE_CONSENT_FILE) >= (int)sizeof(out->consent))
-		return -ENAMETOOLONG;
-	return 0;
+	return profile_paths_from_id(LOTA_PROFILE_BASE_DIR, profile_id, out);
 }
 
 int do_allow_publisher(const char *profile_id)
@@ -592,6 +574,126 @@ int do_allow_publisher(const char *profile_id)
 	printf("Publisher %s may now enroll with this machine.\n", paths.id);
 	printf("They will hold one attestation key here, unlinkable to the "
 	       "one any other publisher holds.\n");
+	return 0;
+}
+
+static void print_publisher(const struct publisher_entry *e)
+{
+	printf("%s\n", e->id);
+
+	if (e->consented) {
+		char when[32];
+		struct tm tm;
+
+		gmtime_r(&e->consented_at, &tm);
+		strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%SZ", &tm);
+		printf("  agreed to      %s\n", when);
+	} else {
+		printf("  agreed to      no (nothing enrolls until it is)\n");
+	}
+
+	if (e->enrolled)
+		printf("  enrolled with  %s:%d\n", e->ca_server, e->ca_port);
+	else
+		printf("  enrolled with  not yet\n");
+
+	if (e->has_aik_handle)
+		printf("  attestation key at TPM handle 0x%08X\n",
+		       e->aik_handle);
+	else
+		printf("  attestation key none\n");
+
+	if (e->has_cert)
+		printf("  certificate    %lld s of validity left\n",
+		       (long long)e->cert_remaining_sec);
+	else
+		printf("  certificate    none stored\n");
+}
+
+int do_list_publishers(void)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	int ret;
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
+
+	if (count == 0) {
+		printf("This machine answers to no publisher.\n");
+		return 0;
+	}
+
+	printf("Publishers this machine answers to:\n\n");
+	for (size_t i = 0; i < count; i++) {
+		print_publisher(&entries[i]);
+		printf("\n");
+	}
+	printf("Each holds its own attestation key, so none of them can tell "
+	       "from the evidence\nthat this is the same machine another one "
+	       "sees. What every report contains is\nthe same for all of "
+	       "them and is listed in the operator documentation.\n");
+	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
+	return 0;
+}
+
+int do_forget_publisher(const char *profile_id)
+{
+	struct profile_paths paths;
+	uint32_t handle = 0;
+	bool had_key = false;
+	int ret;
+
+	ret = paths_from_id(profile_id, &paths);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: '%s' is not a publisher identity.\n",
+			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	if (profile_aik_handle_load(&paths, &handle) == 0) {
+		ret = tpm_init(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr,
+				"Failed to initialize TPM: %s\n"
+				"The key stays where it is; nothing was "
+				"deleted.\n",
+				tpm_strerror(ret));
+			return 1;
+		}
+		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
+		tpm_cleanup(&g_agent.tpm_ctx);
+		if (ret == 0) {
+			had_key = true;
+		} else if (ret != -ENOENT) {
+			fprintf(stderr,
+				"Failed to destroy the attestation key at "
+				"0x%08X: %s\n"
+				"Nothing was deleted: an orphaned key is "
+				"worse than a listed one.\n",
+				handle, tpm_strerror(ret));
+			return 1;
+		}
+	}
+
+	ret = publishers_forget(&paths);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to remove %s: %s\n", paths.dir,
+			strerror(-ret));
+		return 1;
+	}
+
+	printf("Publisher %s forgotten.\n", paths.id);
+	if (had_key)
+		printf("Its attestation key is destroyed; that identity "
+		       "cannot be handed back.\n");
+	printf("A title of theirs can ask again, and will need consent and a "
+	       "new key.\n");
 	return 0;
 }
 

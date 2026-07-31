@@ -136,6 +136,26 @@ int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len)
 	return 0;
 }
 
+static int profile_paths_fill(const char *base_dir, struct profile_paths *tmp,
+			      struct profile_paths *out);
+
+int profile_paths_from_id(const char *base_dir, const char *id,
+			  struct profile_paths *out)
+{
+	struct profile_paths p;
+
+	if (!base_dir || !id || !out)
+		return -EINVAL;
+	if (strlen(id) != LOTA_PROFILE_ID_LEN - 1)
+		return -EINVAL;
+	if (strspn(id, "0123456789abcdef") != LOTA_PROFILE_ID_LEN - 1)
+		return -EINVAL;
+
+	memset(&p, 0, sizeof(p));
+	snprintf(p.id, sizeof(p.id), "%s", id);
+	return profile_paths_fill(base_dir, &p, out);
+}
+
 int profile_paths_from_anchor_base(const char *base_dir,
 				   const char *ca_cert_path,
 				   struct profile_paths *out)
@@ -151,6 +171,15 @@ int profile_paths_from_anchor_base(const char *base_dir,
 	ret = profile_id_from_anchor(ca_cert_path, p.id, sizeof(p.id));
 	if (ret < 0)
 		return ret;
+
+	return profile_paths_fill(base_dir, &p, out);
+}
+
+/* lay out one profile's files under @base_dir from the identity in @tmp */
+static int profile_paths_fill(const char *base_dir, struct profile_paths *tmp,
+			      struct profile_paths *out)
+{
+	struct profile_paths p = *tmp;
 
 	if (snprintf(p.dir, sizeof(p.dir), "%s/%s", base_dir, p.id) >=
 	    (int)sizeof(p.dir))

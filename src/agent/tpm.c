@@ -5021,6 +5021,41 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 	return 0;
 }
 
+int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
+{
+	ESYS_TR existing = ESYS_TR_NONE;
+	ESYS_TR persistent = ESYS_TR_NONE;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
+		return -EINVAL;
+
+	ret = persistent_handle_in_use(ctx, handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx, handle,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, &existing));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					 existing, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE, handle,
+					 &persistent));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	return 0;
+}
+
 int tpm_seal_evict_primary(struct tpm_context *ctx)
 {
 	ESYS_TR existing = ESYS_TR_NONE;

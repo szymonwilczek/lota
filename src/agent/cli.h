@@ -81,6 +81,9 @@ struct cli_options {
 	/* --allow-publisher: record consent to answer to one publisher,
 	 * named by the hex SHA-256 of its CA anchor's SPKI */
 	const char *allow_publisher;
+	int list_publishers_flag; /* --list-publishers */
+	/* --forget-publisher: destroy one publisher's key and stored state */
+	const char *forget_publisher;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;

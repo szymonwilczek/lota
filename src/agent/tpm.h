@@ -984,6 +984,19 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
 int tpm_seal_evict_primary(struct tpm_context *ctx);
 
 /*
+ * tpm_evict_profile_aik - Destroy the AIK a publisher's profile holds
+ * @ctx: Initialized TPM context
+ * @handle: The persistent handle recorded in that profile
+ *
+ * Frees the slot and, more to the point, destroys the key: publisher who has
+ * been revoked must not be able to be handed the same identity again,
+ * and a key that still exists in the TPM could be.
+ *
+ * Returns -ENOENT when the handle holds nothing, which is the case after a wipe.
+ */
+int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle);
+
+/*
  * tpm_aik_reseal_auth - re-seal the current AIK userAuth to the current PCR
  * state so an already-enrolled host can adopt at-rest sealing without
  * re-enrolling. Loads the auth if needed, writes aik_auth.sealed, and (in
