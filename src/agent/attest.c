@@ -1249,6 +1249,25 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	time_t now = time(NULL);
 	int ret;
 
+	/*
+	 * Publisher who runs no verifier still needs everything a round does
+	 * except the report:
+	 * the enrollment their backend's trust starts at, the AIK rotation,
+	 * and the certificate renewal that keeps the key token is signed
+	 * with chainable.
+	 * Skipping the target entirely would let that certificate lapse under
+	 * a player who is playing.
+	 */
+	if (t->token_only) {
+		if (!enroll_target_if_needed(t))
+			return t->interval;
+		if (bind_target(t) == 0) {
+			rotate_bound_aik_if_due(aik_ttl);
+			renew_target_cert_if_due(t);
+		}
+		return t->interval;
+	}
+
 	if (!target_reporting_now(t))
 		return t->interval;
 
@@ -1392,11 +1411,19 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	for (size_t i = 0; i < target_count; i++) {
-		lota_info("Target %zu: %s every %d seconds%s", i + 1,
-			  targets[i].label, targets[i].interval,
-			  targets[i].session_gated ?
-				  ", while a title of theirs runs" :
-				  "");
+		if (targets[i].token_only)
+			lota_info("Target %zu: %s -- nothing is reported to "
+				  "them; their backend verifies the tokens "
+				  "titles fetch. Checked every %d seconds for "
+				  "enrollment, AIK rotation and certificate "
+				  "renewal",
+				  i + 1, targets[i].label, targets[i].interval);
+		else
+			lota_info("Target %zu: %s every %d seconds%s", i + 1,
+				  targets[i].label, targets[i].interval,
+				  targets[i].session_gated ?
+					  ", while a title of theirs runs" :
+					  "");
 		if (targets[i].profile_error)
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
 				  "attesting to %s without a publisher "

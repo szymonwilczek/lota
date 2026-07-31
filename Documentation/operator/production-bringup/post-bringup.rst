@@ -162,6 +162,16 @@ same ports as the top-level keys. A profile missing the CA, the anchor or the
 verifier is refused at load, and every anchor has to satisfy the same
 readability constraint as the top-level ``ca_cert`` above.
 
+``verifier = none`` is how a profile says that publisher runs no verifier and
+checks the tokens their titles fetch in their own backend. Nothing is reported
+to them and this host holds no verdict of theirs, so their titles read the
+token rather than the attested bit; the profile still enrolls, holds its own
+AIK and renews that key's certificate, which is what the publisher's backend
+chains a token to. It has to be said rather than left out -- an omitted
+``verifier`` stays a refused config, so a typo cannot turn a publisher who
+expects reports into one who silently receives none -- and ``verifier_port``
+must not accompany it.
+
 Adding a publisher does not have to be a text edit. ``lota-agent
 --add-publisher`` writes the section, which is how a game's installer registers
 the publisher it ships for::
@@ -226,7 +236,9 @@ plainly.
 A title that names nobody -- which is every enterprise integration, where the
 host has one publisher -- gets the first profile's token and the host-wide
 answer: attested only while **every** configured publisher is satisfied, with
-the window closing at the earliest of theirs.
+the window closing at the earliest of theirs. Publishers who run no verifier
+are left out of that answer, since a host holds no verdict for a publisher it
+never reports to.
 
 **A profile reports only while a title of its publisher is running.** That is
 what ``reporting`` selects, and ``session`` is a profile's default: a report is

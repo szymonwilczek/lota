@@ -190,6 +190,16 @@ log_level = info
 # Because the list replaces the single verifier above, --server and --pin-sha256
 # are refused while profiles are configured.
 #
+# verifier = none is for a publisher who runs no verifier and checks the tokens
+# their titles fetch in their own backend instead. Nothing is reported to them:
+# no attestation report, no event log and no runtime manifest leaves this
+# machine for that publisher, and this host holds no verdict of theirs.
+# Their profile still enrolls, holds its own AIK and renews that key's certificate,
+# because the certificate is what their backend chains a token to.
+# Saying it is required -- omitted verifier key is refused, so typo cannot quietly
+# turn a publisher who expects reports into one who receives none.
+# verifier_port must not be set alongside it.
+#
 # [profile "publisher-a"]
 # ca = ca.publisher-a.example
 # ca_cert = /etc/lota/publisher-a.pem
@@ -203,3 +213,8 @@ log_level = info
 # verifier = verifier.publisher-b.example
 # verifier_port = 9443
 # interval = 120
+#
+# [profile "publisher-c"]
+# ca = ca.publisher-c.example
+# ca_cert = /etc/lota/publisher-c.pem
+# verifier = none

@@ -44,6 +44,16 @@ struct attest_target {
 	int ca_port;
 
 	/*
+	 * This publisher runs no verifier:
+	 * their backend checks the tokens a title fetches, so nothing is reported here.
+	 * The target still exists because everything else about it does
+	 * -- it enrolls, it holds an AIK, that key rotates and its certificate
+	 * is renewed, and dropping it from the list would let the certificate
+	 * the publisher's backend chains against lapse while the player is playing.
+	 */
+	bool token_only;
+
+	/*
 	 * Report only while a title of this publisher's is running.
 	 *
 	 * sessions counts the connections currently bound to this publisher,

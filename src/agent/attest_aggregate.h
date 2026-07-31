@@ -64,6 +64,14 @@ static inline void attest_aggregate_compute(const struct attest_target *targets,
 		if (targets[i].session_gated && targets[i].sessions == 0)
 			continue;
 
+		/*
+		 * Publisher who verifies tokens in their own backend never reports
+		 * here, so this host holds no verdict of theirs to fold in.
+		 * Their titles read the token they fetched, not this bit.
+		 */
+		if (targets[i].token_only)
+			continue;
+
 		out->considered++;
 		if (!targets[i].attested) {
 			all = false;
