@@ -95,6 +95,7 @@ Proton/Steam hook. Install lota-sdk-devel to build against them.
 Summary:        LOTA SDK headers and shared libraries
 License:        MIT
 Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
+Requires:       pkgconfig(libcrypto)
 
 %description sdk-devel
 Headers and shared libraries for the gaming, anti-cheat and server SDKs,

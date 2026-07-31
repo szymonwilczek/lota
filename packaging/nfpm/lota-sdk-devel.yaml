@@ -25,6 +25,7 @@ overrides:
   rpm:
     depends:
       - lota-sdk
+      - pkgconfig(libcrypto)
 
 contents:
   # unversioned libX.so linker symlinks only;
