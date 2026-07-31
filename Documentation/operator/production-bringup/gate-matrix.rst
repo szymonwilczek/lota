@@ -44,9 +44,10 @@ current tree.
    * - BPF object Ed25519 signature
      - ``src/agent/bpf_loader.c::verify_bpf_object_signature()``
      - Ships signed: the agent package carries ``lota_lsm.bpf.o``, its
-       ``.sig`` and the public key at ``/etc/lota/policy.pub``. A fleet that
-       signs enforcement itself replaces both files and points
-       ``policy_pubkey`` at its own PEM.
+       ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, all
+       replaced together on upgrade. A fleet that signs enforcement itself
+       re-signs the object and puts its key at ``/etc/lota/policy.pub``, which
+       the agent prefers over the packaged one.
    * - AIK persistent handle + metadata in sync
      - ``src/agent/tpm.c::tpm_aik_load_metadata()``
      - Evict any stale persistent handle (``tpm2_evictcontrol``) before first
