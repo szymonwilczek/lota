@@ -1084,8 +1084,11 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 	if (!ctx->aik_meta_path_from_env) {
 		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
 			     "%s", paths->aik_meta) >=
-		    (int)sizeof(ctx->aik_meta_path))
-			return -ENAMETOOLONG;
+		    (int)sizeof(ctx->aik_meta_path)) {
+			/* truncated path is already in the context */
+			ret = -ENAMETOOLONG;
+			goto restore;
+		}
 		if (strcmp(previous_meta_path, ctx->aik_meta_path) != 0)
 			tpm_forget_bound_aik(ctx);
 	}
@@ -1098,7 +1101,7 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		return 0;
 	}
 	if (ret != -ENOENT)
-		return ret;
+		goto restore;
 
 	/*
 	 * First provisioning for this publisher.
@@ -1112,25 +1115,39 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		TPM_AIK_PROFILE_HANDLE_COUNT, candidates,
 		sizeof(candidates) / sizeof(candidates[0]), &candidate_count);
 	if (ret < 0)
-		return ret;
+		goto restore;
 
 	for (size_t i = 0; i < candidate_count; i++) {
 		ret = persistent_handle_in_use(ctx, candidates[i]);
 		if (ret < 0)
-			return ret;
+			goto restore;
 		if (ret == 1)
 			continue;
 
 		ret = profile_aik_handle_save(paths, candidates[i]);
 		if (ret < 0)
-			return ret;
+			goto restore;
 		if (candidates[i] != previous_handle)
 			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = candidates[i];
 		return 0;
 	}
 
-	return -ENOSPC;
+	ret = -ENOSPC;
+
+restore:
+	/*
+	 * Caller that survives a failed bind -- the daemon does, since enforcement
+	 * is host-owned and needs no publisher -- must be left pointing at the key
+	 * it had.
+	 * Half a bind would send it to write this publisher's metadata under
+	 * the previous publisher's handle.
+	 */
+	snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path), "%s",
+		 previous_meta_path);
+	ctx->aik_handle = previous_handle;
+	tpm_forget_bound_aik(ctx);
+	return ret;
 }
 
 static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
