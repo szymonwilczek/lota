@@ -741,7 +741,11 @@ check-includes:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl
+# Every Go module in the tree.
+# SDK and the examples are the code an integrator copies,
+# so they are linted at least as strictly as the rest
+LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
+	src/sdk/server examples/demo_server
 
 lint: lint-c lint-go
 

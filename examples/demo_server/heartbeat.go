@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -278,6 +279,7 @@ func runtimeObjectDigest(path string) (digest [32]byte, hasExec bool, err error)
 	h := sha256.New()
 	_, _ = h.Write([]byte(runtimeObjectDomain))
 	var le4 [4]byte
+	// #nosec G115 -- ELF program-header count, a uint16 field on the wire
 	binary.LittleEndian.PutUint32(le4[:], uint32(len(segs)))
 	_, _ = h.Write(le4[:])
 	var le8 [8]byte
@@ -288,6 +290,11 @@ func runtimeObjectDigest(path string) (digest [32]byte, hasExec bool, err error)
 		_, _ = h.Write(le8[:])
 		binary.LittleEndian.PutUint64(le8[:], p.Filesz)
 		_, _ = h.Write(le8[:])
+		if p.Filesz > math.MaxInt64 {
+			return digest, false, fmt.Errorf(
+				"segment of %s claims %d bytes", path, p.Filesz)
+		}
+		// #nosec G115 -- bounded immediately above
 		if _, err := io.CopyN(h, p.Open(), int64(p.Filesz)); err != nil {
 			return digest, false, fmt.Errorf("read segment of %s: %w",
 				path, err)
@@ -333,9 +340,11 @@ func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
 	h := sha256.New()
 	_, _ = h.Write([]byte(runtimeMeasureDomain))
 	var le4 [4]byte
+	// #nosec G115 -- one entry per shared object of a running process
 	binary.LittleEndian.PutUint32(le4[:], uint32(len(objs)))
 	_, _ = h.Write(le4[:])
 	for _, o := range objs {
+		// #nosec G115 -- an soname read from a loaded ELF
 		binary.LittleEndian.PutUint32(le4[:], uint32(len(o.soname)))
 		_, _ = h.Write(le4[:])
 		_, _ = h.Write([]byte(o.soname))
@@ -345,23 +354,23 @@ func computeExpectedRuntimeMeasureSet(paths []string) ([32]byte, error) {
 	return out, nil
 }
 
-// computeExpectedRuntimeMeasure is the single-object convenience: the
-// combined measurement for an image made of one object (a statically
-// linked producer, or when verifying the main executable alone).
-func computeExpectedRuntimeMeasure(path string) ([32]byte, error) {
-	return computeExpectedRuntimeMeasureSet([]string{path})
-}
-
 // checkFreshness enforces the demo's monotonic-sequence and bounded-
 // age contract. The wire-format checks are best-effort: a real anti-
 // cheat would also need replay protection across server restarts,
 // which is out of scope here.
 func (s *demoServer) checkFreshness(hdr *lachHeader) (string, bool) {
+	// #nosec G115 -- a clock before 1970 is not a case this demo serves
 	now := uint64(time.Now().Unix())
 	if hdr.timestamp > now+60 {
 		return "timestamp in the future", false
 	}
-	maxAge := uint64(s.maxHeartbeatAge / time.Second)
+	// negative window would wrap into enormous one and accept every heartbeat
+	// ever minted, so it reads as "no age limit" instead
+	maxAge := uint64(0)
+	if s.maxHeartbeatAge > 0 {
+		// #nosec G115 -- positive, and capped where the flag is parsed
+		maxAge = uint64(s.maxHeartbeatAge / time.Second)
+	}
 	if maxAge > 0 && now-hdr.timestamp > maxAge {
 		return "heartbeat too old", false
 	}
