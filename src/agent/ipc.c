@@ -491,6 +491,40 @@ _Static_assert(LOTA_IPC_ATTEST_SYNC_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 _Static_assert(LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE <= LOTA_IPC_MAX_PAYLOAD,
 	       "maximum SYNC_ATTEST response must fit the IPC parser buffer");
 
+/*
+ * Whether a process is still answering on @path.
+ *
+ * Stale socket file survives an unclean stop, so its presence says nothing;
+ * a connect() that is accepted or queued does.
+ * ECONNREFUSED is the leftover, ENOENT is a clean slate, and anything else is
+ * treated as occupied because failing to take a socket costs a restart while
+ * taking somebody else's costs a title the half of the answer they hold.
+ */
+static bool socket_has_live_listener(const char *path)
+{
+	struct sockaddr_un addr;
+	int fd, ret;
+
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return false;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+
+	ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+	if (ret == 0) {
+		close(fd);
+		return true;
+	}
+
+	ret = errno;
+	close(fd);
+
+	return ret != ECONNREFUSED && ret != ENOENT;
+}
+
 static int set_nonblocking(int fd)
 {
 	int flags = fcntl(fd, F_GETFL, 0);
@@ -933,7 +967,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * second-class error to the client. Fail closed with a dedicated
 	 * status code so SDK consumers can back off coherently.
 	 */
-	if (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) {
+	if ((ctx->tpm && tpm_is_locked_out(ctx->tpm)) ||
+	    (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
 		goto out;
@@ -1484,6 +1519,9 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	ctx->fail_count = hdr.fail_count;
 	if (hdr.last_attest_time)
 		ctx->last_attest_time = hdr.last_attest_time;
+
+	if (ctx->on_attest_sync)
+		ctx->on_attest_sync(ctx->on_attest_sync_user);
 }
 
 /*
@@ -2322,6 +2360,21 @@ int ipc_init(struct ipc_context *ctx)
 		return ret;
 	}
 
+	/*
+	 * Unlink below is what makes a second server silently replace the first,
+	 * and a title reaching the replacement gets whichever half of the answer
+	 * that process happens to hold.
+	 * So the path is probed first: socket somebody is still answering on is
+	 * not ours to take.
+	 * One that refuses the connection is a leftover, and unlinking that is
+	 * what lets a host recover from an unclean stop.
+	 */
+	if (socket_has_live_listener(LOTA_IPC_SOCKET_PATH)) {
+		lota_err("%s already has a listener; refusing to take it over",
+			 LOTA_IPC_SOCKET_PATH);
+		return -EADDRINUSE;
+	}
+
 	unlink(LOTA_IPC_SOCKET_PATH);
 
 	ctx->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -2655,6 +2708,16 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 {
 	ctx->tpm = tpm;
 	ctx->quote_pcr_mask = pcr_mask;
+}
+
+void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
+			      void *user)
+{
+	if (!ctx)
+		return;
+
+	ctx->on_attest_sync = fn;
+	ctx->on_attest_sync_user = user;
 }
 
 void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,

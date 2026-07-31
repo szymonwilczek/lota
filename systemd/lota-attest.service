@@ -14,6 +14,14 @@
 # BPF policy, and the verifier still notices a host that stops sending fresh
 # attestations.
 #
+# This loop serves no IPC socket.
+# /run/lota/lota.sock belongs to lota-agent.service, which is the always-on unit
+# and the one holding the BPF state, the enforcement policy digest and the publisher
+# list a title asks after.
+# Loop connects to it as a local peer and trades state once per round:
+# verdicts out, sessions and enrollment requests in.
+# Daemon that is not up costs the loop session gating, not reporting.
+#
 # First enrollment is operator-driven (lota-agent --enroll), which creates publisher
 # profile under /var/lib/lota/profiles/<sha256-of-ca-spki>/ and records the endpoint
 # inside it.

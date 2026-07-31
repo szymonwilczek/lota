@@ -72,6 +72,40 @@ struct run_daemon_params {
 	struct lota_config *cfg;
 };
 
+/*
+ * What republish_rotation_state() needs to answer:
+ * "which AIK, measured against whose enrollment"
+ * Outlives the daemon's frame: the IPC context that holds the pointer
+ * is global, so the object it points at cannot be one the frame owns.
+ */
+struct rotation_hook_ctx {
+	uint32_t aik_ttl;
+	const struct profile_paths *profile;
+};
+
+static struct rotation_hook_ctx g_rotation_hook;
+
+/*
+ * Re-read the AIK rotation record and publish it.
+ *
+ * Called when the attestation loop syncs.
+ * Loop rotates the key and writes the record;
+ * this process serves D-Bus, so it has to pick the change up from the file rather
+ * than from its own copy, which was loaded at startup.
+ */
+static void republish_rotation_state(void *user)
+{
+	const struct rotation_hook_ctx *hook = user;
+
+	if (!hook)
+		return;
+
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
+		return;
+
+	publish_rotation_state(hook->aik_ttl, hook->profile);
+}
+
 static int run_daemon(const struct run_daemon_params *params)
 {
 	int ret, epoll_fd, sfd;
@@ -347,6 +381,19 @@ static int run_daemon(const struct run_daemon_params *params)
 			publish_rotation_state(
 				params->cfg ? params->cfg->aik_ttl : 0,
 				profile);
+
+			/*
+			 * attestation loop is the process that rotates the AIK,
+			 * and it writes the record to disk
+			 * sync from it says a round has just finished,
+			 * which is exactly when that record is worth re-reading
+			 */
+			g_rotation_hook.aik_ttl =
+				params->cfg ? params->cfg->aik_ttl : 0;
+			g_rotation_hook.profile = profile;
+			ipc_set_attest_sync_hook(&g_agent.ipc_ctx,
+						 republish_rotation_state,
+						 &g_rotation_hook);
 		}
 
 		lota_info("Performing self-measurement");

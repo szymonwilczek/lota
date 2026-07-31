@@ -221,6 +221,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/profile.c \
               $(AGENT_DIR)/aik_cert.c \
               $(AGENT_DIR)/attest_targets.c \
+              $(AGENT_DIR)/attest_peer.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))

@@ -2,6 +2,16 @@
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Agent - IPC Server Module
+ *
+ * One process serves LOTA_IPC_SOCKET_PATH: the enforcement daemon.
+ * It is the unit systemd's socket activation starts, the one that stays up whether
+ * or not a publisher is configured, and the one holding the BPF context,
+ * the enforcement policy digest and the boot state a title asks about.
+ *
+ * The attestation loop is a client of this server, not a second one.
+ * It sends SYNC_ATTEST with the verdict it holds for each publisher and reads
+ * back the sessions and enrollment requests only the socket owner can see.
+ * Two servers on one path meant whichever bound last answered, with half the state.
  */
 
 #ifndef LOTA_AGENT_IPC_H
@@ -171,6 +181,18 @@ struct ipc_context {
 	 */
 	bool profiles_changed;
 
+	/*
+	 * Called once the attestation loop has synced.
+	 *
+	 * Loop is the process that rotates the AIK and it writes the rotation
+	 * record to disk, so the socket owner republishes that state by
+	 * re-reading the file rather than carrying it on the wire:
+	 * the file is the source both processes already share,
+	 * and a wire field would be a second copy to keep true.
+	 */
+	void (*on_attest_sync)(void *user);
+	void *on_attest_sync_user;
+
 	/* true when using socket activation (do not unlink socket) */
 	bool activated;
 };
@@ -266,6 +288,19 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
  */
 void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 		      size_t count);
+
+/*
+ * ipc_set_attest_sync_hook - Run @fn after the attestation loop syncs
+ * @ctx: Server context
+ * @fn: Callback, or NULL to clear
+ * @user: Opaque argument handed back to @fn
+ *
+ * The socket owner learns from a sync that the loop has been round the course,
+ * which is the moment any state the loop keeps on disk -- the AIK rotation
+ * record -- is worth re-reading.
+ */
+void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
+			      void *user);
 
 /*
  * ipc_set_tpm - Set TPM context for token signing

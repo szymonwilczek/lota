@@ -71,9 +71,10 @@ int main(void)
 	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
 				    sizeof(struct lota_ipc_attest_sync)),
 	      "SYNC_ATTEST with no verdicts is allowed");
-	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
-				    sizeof(struct lota_ipc_attest_sync) +
-					    sizeof(struct lota_ipc_attest_verdict)),
+	CHECK(ipc_payload_len_valid(
+		      LOTA_IPC_CMD_SYNC_ATTEST,
+		      sizeof(struct lota_ipc_attest_sync) +
+			      sizeof(struct lota_ipc_attest_verdict)),
 	      "SYNC_ATTEST with one verdict is allowed");
 	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_SYNC_ATTEST,
 				    LOTA_IPC_ATTEST_SYNC_MAX_SIZE),
