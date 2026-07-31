@@ -1005,14 +1005,31 @@ func stripEventLogEntries(t *testing.T, reportData []byte) []byte {
 	t.Helper()
 
 	bare := buildTestEventLog(nil)
-	logOffset := len(reportData) - int(binary.LittleEndian.Uint32(
-		reportData[types.MinReportSize-4:types.MinReportSize]))
-	if logOffset < types.MinReportSize {
-		t.Fatalf("event log offset %d precedes the fixed report", logOffset)
-	}
 
-	out := append(append([]byte{}, reportData[:logOffset]...), bare...)
-	binary.LittleEndian.PutUint32(out[types.MinReportSize-4:types.MinReportSize], uint32(len(bare)))
+	// Walk to the length field:
+	// the BPF event array before it is variable, and the wire may carry
+	// mandatory section after the log, so neither end is fixed distance
+	// from it
+	off := types.FixedReportSize
+	if len(reportData) < off+4 {
+		t.Fatalf("report of %d bytes stops before event_count", len(reportData))
+	}
+	eventCount := binary.LittleEndian.Uint32(reportData[off : off+4])
+	off += 4 + int(eventCount)*types.ExecEventSize
+	if len(reportData) < off+4 {
+		t.Fatalf("report of %d bytes stops before event_log_size", len(reportData))
+	}
+	logSize := int(binary.LittleEndian.Uint32(reportData[off : off+4]))
+	logStart := off + 4
+	if len(reportData) < logStart+logSize {
+		t.Fatalf("event log of %d bytes does not fit the report", logSize)
+	}
+	tail := reportData[logStart+logSize:]
+
+	out := append([]byte{}, reportData[:logStart]...)
+	out = append(out, bare...)
+	out = append(out, tail...)
+	binary.LittleEndian.PutUint32(out[off:off+4], uint32(len(bare)))
 	binary.LittleEndian.PutUint32(out[8:12], uint32(len(out)))
 	return out
 }
