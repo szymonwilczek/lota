@@ -842,6 +842,9 @@ install: check-version-tag all
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
+	install -d $(DESTDIR)/usr/lib/sysusers.d
+	install -m 644 systemd/lota-sysusers.conf \
+		$(DESTDIR)/usr/lib/sysusers.d/lota-agent.conf
 	install -d $(DESTDIR)/usr/lib/systemd/system
 	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-attest.service $(DESTDIR)/usr/lib/systemd/system/
