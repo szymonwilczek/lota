@@ -497,6 +497,85 @@ static void test_consent_required_is_distinguishable(void)
 	PASS();
 }
 
+/*
+ * struct_size is what lets these options grow without second entry point,
+ * so caller that never set it has to be refused rather than guessed at.
+ * Nothing here needs agent: the size is settled before socket is touched, which
+ * is also why caller that gets it wrong sees the same NULL on every machine.
+ */
+static void test_connect_struct_size(void)
+{
+	struct lota_client *client;
+
+	TEST("connect: unset struct_size -> NULL with INVALID_ARG");
+	{
+		struct lota_connect_opts zero = {
+			.socket_path = test_socket,
+			.timeout_ms = 100,
+		};
+
+		client = lota_connect_opts(&zero);
+		if (client) {
+			FAIL("options that never stated their size were "
+			     "accepted");
+			lota_disconnect(client);
+			return;
+		}
+		if (lota_connect_last_error() != LOTA_ERR_INVALID_ARG) {
+			FAIL("the caller cannot tell a bad struct from a "
+			     "missing agent");
+			return;
+		}
+	}
+	PASS();
+
+	TEST("connect: undersized struct_size -> NULL");
+	{
+		struct lota_connect_opts small = {
+			.struct_size = LOTA_CONNECT_OPTS_SIZE_MIN - 1,
+			.socket_path = test_socket,
+			.timeout_ms = 100,
+		};
+
+		client = lota_connect_opts(&small);
+		if (client) {
+			FAIL("options smaller than the 1.0 surface were "
+			     "accepted");
+			lota_disconnect(client);
+			return;
+		}
+		if (lota_connect_last_error() != LOTA_ERR_INVALID_ARG) {
+			FAIL("an undersized struct was not reported as one");
+			return;
+		}
+	}
+	PASS();
+
+	TEST("connect: struct_size from a newer caller reaches the socket");
+	{
+		/* caller built against later header passes a size this build
+		 * does not know; it is answered by the members it does */
+		struct lota_connect_opts bigger = {
+			.struct_size = sizeof(bigger) + 64,
+			.socket_path = "/nonexistent/lota-agent.sock",
+			.timeout_ms = 100,
+		};
+
+		client = lota_connect_opts(&bigger);
+		if (client) {
+			FAIL("connected to a socket that does not exist");
+			lota_disconnect(client);
+			return;
+		}
+		if (lota_connect_last_error() == LOTA_ERR_INVALID_ARG) {
+			FAIL("a caller built against a newer header was "
+			     "refused");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== Publisher selection tests ===\n\n");
@@ -510,6 +589,7 @@ int main(void)
 	test_bad_request_is_not_an_unknown_publisher();
 	test_no_publisher_sends_nothing();
 	test_consent_required_is_distinguishable();
+	test_connect_struct_size();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
