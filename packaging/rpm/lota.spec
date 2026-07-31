@@ -196,6 +196,10 @@ EOF
 %{_libdir}/liblotaserver.so
 %{_libdir}/liblota_wine_hook.so
 %{_libdir}/liblota_anticheat.so
+%{_libdir}/pkgconfig/lota-gaming.pc
+%{_libdir}/pkgconfig/lota-server.pc
+%{_libdir}/pkgconfig/lota-anticheat.pc
+%{_libdir}/pkgconfig/lota-wine-hook.pc
 
 %changelog
 * Sun Jun 21 2026 Szymon Wilczek <swilczek.lx@gmail.com> - 0.4.0~rc2-1
