@@ -474,6 +474,15 @@ func SerializeTokenV2(validUntil uint64, flags uint32, nonce [32]byte,
 	return buf, nil
 }
 
+// ComputeRuntimeProtectDigest exposes the v1 protect-digest fold.
+// v1 token built with SerializeToken has to bind this value under the quote,
+// so every relying party's own test suite needs it -- and without it exported,
+// each one re-derives a domain-separated hash by hand, which is exactly the drift
+// the domain string exists to prevent.
+func ComputeRuntimeProtectDigest(pids []uint32) [32]byte {
+	return computeRuntimeProtectDigest(pids)
+}
+
 // ComputeRuntimeProtectDigestV2 exposes the v2 protect-digest fold so callers
 // that build v2 tokens can compute the value to bind under the quote.
 func ComputeRuntimeProtectDigestV2(pids []uint32, imageDigests [][32]byte) [32]byte {

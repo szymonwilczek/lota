@@ -701,6 +701,18 @@ func TestVerifyToken_V2_TamperedImageDigest(t *testing.T) {
 	}
 }
 
+func TestRuntimeProtectDigest_KAT(t *testing.T) {
+	// cross-language known-answer vector shared with the C unit test
+	// test_runtime_protect_digest.c
+	// Relying party binds this value under the quote of every v1 token it mints,
+	// so the two implementations of the fold have to stay one answer.
+	got := ComputeRuntimeProtectDigest([]uint32{1, 2})
+	want := "35e77d3b26cae89df46673a3ccec9b85cc707ab6941a83bf299885441245be02"
+	if hex.EncodeToString(got[:]) != want {
+		t.Fatalf("v1 KAT = %s, want %s", hex.EncodeToString(got[:]), want)
+	}
+}
+
 func TestRuntimeProtectDigestV2_KAT(t *testing.T) {
 	// cross-language known-answer vector shared with the C unit test
 	// test_runtime_protect_digest.c.
