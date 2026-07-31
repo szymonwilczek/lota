@@ -7,6 +7,7 @@
 
 #include "enroll.h"
 #include "ipc.h"
+#include "ipc_payload.h"
 #include "protect_pids.h"
 
 #include <errno.h>
@@ -1785,42 +1786,6 @@ static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
 		    client->peer_uid, client->peer_pid);
 }
 
-static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len)
-{
-	switch (cmd) {
-	case LOTA_IPC_CMD_PING:
-	case LOTA_IPC_CMD_GET_STATUS:
-	case LOTA_IPC_CMD_SHUTDOWN:
-		return payload_len == 0;
-
-	case LOTA_IPC_CMD_GET_TOKEN:
-		return payload_len == 0 ||
-		       payload_len == sizeof(struct lota_ipc_token_request);
-
-	case LOTA_IPC_CMD_SUBSCRIBE:
-		return payload_len == sizeof(struct lota_ipc_subscribe_request);
-
-	case LOTA_IPC_CMD_PROTECT_PID:
-	case LOTA_IPC_CMD_UNPROTECT_PID:
-		return payload_len == sizeof(struct lota_ipc_pid_request);
-
-	default:
-		/*
-		 * Unknown command. The dispatcher returns
-		 * LOTA_IPC_ERR_UNKNOWN_CMD regardless of payload contents, but
-		 * a non-zero payload still consumed up to LOTA_IPC_MAX_PAYLOAD
-		 * bytes of recv_buf on the way in. A malicious local client
-		 * could pump 64 KiB of payload per unknown command and force
-		 * the agent to copy and discard it indefinitely. Require zero
-		 * payload here so the bad request is rejected as soon as the
-		 * IPC header is parsed; the client gets the same
-		 * LOTA_IPC_ERR_BAD_REQUEST it would get for any other malformed
-		 * length, and the agent never reads the body off the socket.
-		 */
-		return payload_len == 0;
-	}
-}
-
 static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 {
 	struct lota_ipc_request req;
@@ -1840,7 +1805,7 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 		return;
 	}
 
-	if (!validate_request_payload_len(req.cmd, payload_len)) {
+	if (!ipc_payload_len_valid(req.cmd, payload_len)) {
 		lota_warn("invalid payload length for cmd=0x%X from pid=%d "
 			  "uid=%d (len=%u)",
 			  req.cmd, client->peer_pid, client->peer_uid,
