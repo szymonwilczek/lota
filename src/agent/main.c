@@ -89,8 +89,13 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct lota_config *cfg;
 	sigset_t mask;
 	struct epoll_event ev;
-	struct profile_paths profile_storage;
 	const struct profile_paths *profile = NULL;
+	/*
+	 * IPC context is global and keeps this list for as long as it serves
+	 * titles, so the list cannot be one the frame owns
+	 */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count = 0;
 
 	if (!params)
 		return -EINVAL;
@@ -110,17 +115,42 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	lota_info("LOTA agent starting");
 
-	if (cfg && cfg->ca_cert[0]) {
-		int prof_ret = profile_paths_from_anchor(cfg->ca_cert,
-							 &profile_storage);
+	{
+		int t_ret = attest_targets_build(
+			cfg, (cfg && cfg->server[0]) ? cfg->server : NULL,
+			cfg ? cfg->port : 0, cfg ? cfg->ca_cert : NULL,
+			cfg ? cfg->attest_interval : 0, targets,
+			sizeof(targets) / sizeof(targets[0]), &target_count);
 
-		if (prof_ret == 0)
-			profile = &profile_storage;
-		else
-			lota_warn("Cannot read the CA trust anchor %s (%s): "
-				  "running without a publisher profile",
-				  cfg->ca_cert, strerror(-prof_ret));
+		if (t_ret < 0) {
+			/*
+			 * No publisher is configured at all, which is a fresh
+			 * consumer install before any title has run.
+			 * Not a reason to stop: enforcement is host-owned
+			 * and no publisher grants it.
+			 */
+			target_count = 0;
+			lota_info("No publisher configured; enforcing for the "
+				  "host and answering titles for nobody");
+		}
 	}
+
+	for (size_t i = 0; i < target_count; i++) {
+		if (targets[i].profile_error)
+			lota_warn("Cannot read the CA trust anchor %s (%s): "
+				  "answering for %s:%d without a publisher "
+				  "profile",
+				  targets[i].ca_cert,
+				  strerror(-targets[i].profile_error),
+				  targets[i].server, targets[i].port);
+	}
+
+	/*
+	 * Connection that names no publisher gets the first one's AIK,
+	 * which is the same choice the attestation loop makes between rounds.
+	 */
+	if (target_count > 0 && targets[0].has_profile)
+		profile = &targets[0].paths;
 
 	/*
 	 * Daemon-mode hardening: refuse to start under a tracer and install
@@ -198,6 +228,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
