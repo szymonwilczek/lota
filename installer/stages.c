@@ -1191,6 +1191,7 @@ const struct stage install_stages[] = {
 			"take effect.",
 		.probe = st_initrd_probe,
 		.apply = st_initrd_apply,
+		.boot_path = 1,
 	},
 	{
 		.title = "Kernel integrity floor on the cmdline",
@@ -1206,6 +1207,7 @@ const struct stage install_stages[] = {
 			"Removing them restores the previous behaviour.",
 		.probe = st_cmdline_probe,
 		.apply = st_cmdline_apply,
+		.boot_path = 1,
 	},
 	{
 		.title = "SELinux fence on the TPM device",

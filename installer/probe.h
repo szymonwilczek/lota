@@ -218,4 +218,12 @@ int probe_conf_buf_has_key(const char *buf, const char *key);
  * 1/0 or -errno */
 int probe_conf_has_key(const char *conf_path, const char *key);
 
+/* 1 when this host has opted into unattended boot-path bring-up,
+ * either by the marker file at path or by LOTA_AUTO_BRINGUP=1 in the environment.
+ *
+ * Exactly "1": package hook runs with whatever environment the transaction had,
+ * and reading "0" or "false" as consent is how a host ends up with boot path
+ * nobody chose. */
+int probe_auto_bringup_at(const char *path);
+
 #endif /* LOTA_INSTALL_PROBE_H */

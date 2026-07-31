@@ -47,7 +47,17 @@ install instructions (see "What the operator must ship" below).
 changing anything.
 
 * ``--yes`` skips the per-stage prompts,
-* ``--plain`` disables the TUI for logs and scripting.
+* ``--plain`` disables the TUI for logs and scripting,
+* ``--unattended`` is the mode a package post-install hook runs in. It implies
+  ``--yes --plain``, does nothing at all inside a container or image build (the
+  host that eventually boots the image is the one bring-up belongs to), and
+  **leaves the two boot-path stages alone** -- the initramfs PCR 14 lock and
+  the kernel integrity floor -- stopping at the reboot checkpoint with the one
+  command that finishes the job. A host that wants those unattended as well
+  says so before installing, with ``/etc/lota/auto-bringup`` or
+  ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since a hook inherits whatever
+  environment the transaction had and reading ``0`` as consent is how a
+  machine ends up with a boot path nobody chose.
 
 On an interactive terminal ``lota-install`` is a full-screen application
 (alternate screen): a stage list on the left, a details pane explaining the selected

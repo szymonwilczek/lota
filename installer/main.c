@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "install.h"
+#include "probe.h"
 #include "run.h"
 #include "tui.h"
 #include "ui.h"
@@ -50,6 +51,12 @@ static void usage(FILE *out)
 		"                         change nothing\n"
 		"  --yes                  Do not ask for confirmation\n"
 		"  --plain                Plain log output (no TUI)\n"
+		"  --unattended           For a package post-install hook:\n"
+		"                         implies --yes --plain, leaves the\n"
+		"                         boot path alone unless this host\n"
+		"                         opted in (%s)\n"
+		"                         or LOTA_AUTO_BRINGUP=1), and stops\n"
+		"                         at the reboot checkpoint\n"
 		"  --help, --version\n"
 		"\n"
 		"Lifecycle (after install):\n"
@@ -61,7 +68,7 @@ static void usage(FILE *out)
 		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
 		"            10 reboot required (re-run to resume).\n",
 		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
-		PATH_SELINUX_PP_DEFAULT);
+		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }
 
 static int parse_args(int argc, char **argv, struct install_opts *opts)
@@ -81,6 +88,7 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		{ "version", no_argument, 0, 10 },
 		{ "pause", no_argument, 0, 11 },
 		{ "resume", no_argument, 0, 12 },
+		{ "unattended", no_argument, 0, 13 },
 		{ 0, 0, 0, 0 },
 	};
 	int c;
@@ -133,6 +141,12 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		case 12:
 			opts->resume = 1;
 			break;
+		case 13:
+			opts->unattended = 1;
+			/* nobody is watching: never prompt, never redraw */
+			opts->yes = 1;
+			opts->plain = 1;
+			break;
 		default:
 			usage(stderr);
 			exit(EXIT_INSTALL_USAGE);
@@ -141,6 +155,13 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	if (optind < argc) {
 		fprintf(stderr, "lota-install: Unexpected argument '%s'\n",
 			argv[optind]);
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	if (opts->unattended &&
+	    (opts->pause || opts->resume || opts->status_only)) {
+		fprintf(stderr, "lota-install: --unattended cannot be combined "
+				"with --pause, --resume or --status\n");
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
@@ -289,14 +310,40 @@ static int do_resume(struct install_ctx *ctx)
 		       EXIT_INSTALL_FAIL;
 }
 
+int install_auto_bringup_opted_in(void)
+{
+	return probe_auto_bringup_at(PATH_AUTO_BRINGUP);
+}
+
+/*
+ * Image being built in a chroot or a container has no firmware, no TPM and no
+ * boot entries of its own, and the package hook runs there exactly as it does
+ * on a machine.
+ * Bring-up belongs to the host that eventually boots the image, so a run there
+ * is a no-op rather than a wall of blocked stages.
+ */
+static int not_a_running_host(void)
+{
+	const char *const argv[] = { "systemd-detect-virt", "--container", "-q",
+				     NULL };
+	char out[64];
+
+	if (run_capture(argv, out, sizeof(out)) == 0)
+		return 1;
+	return access("/sys/firmware/efi", F_OK) != 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct install_ctx ctx;
 	char note[STAGE_NOTE_CAP];
+	int deferred_boot_path = 0;
+	int auto_bringup;
 	int i;
 
 	memset(&ctx, 0, sizeof(ctx));
 	parse_args(argc, argv, &ctx.opts);
+	auto_bringup = install_auto_bringup_opted_in();
 	ui_init(&ctx.ui, ctx.opts.plain);
 
 	ui_banner(&ctx.ui, "LOTA Guided Install", LOTA_INSTALL_VERSION,
@@ -315,6 +362,13 @@ int main(int argc, char **argv)
 				  "must run as root (use --status for a "
 				  "read-only report)");
 		return EXIT_INSTALL_USAGE;
+	}
+	if (ctx.opts.unattended && not_a_running_host()) {
+		ui_text(&ctx.ui,
+			"Not a running host (container or image build): "
+			"leaving bring-up to the machine that boots this "
+			"image.");
+		return EXIT_INSTALL_OK;
 	}
 	if (!ctx.opts.yes && !isatty(STDIN_FILENO)) {
 		ui_error(&ctx.ui, "No terminal to confirm stages on. Re-run "
@@ -341,6 +395,34 @@ int main(int argc, char **argv)
 		enum stage_state st = s->probe(&ctx, note, sizeof(note));
 
 		ui_stage_begin(&ctx.ui, i + 1, install_stage_count, s->title);
+
+		/*
+		 * Everything a package may do on its own is behind us;
+		 * the checkpoint exists to be crossed by whoever chose
+		 * the boot-path change, so unattended run stops here rather than
+		 * reporting reboot nobody asked for.
+		 */
+		if (ctx.opts.unattended && deferred_boot_path && s->barrier) {
+			ui_text(&ctx.ui,
+				"Host-local setup is done. What is left "
+				"changes how this machine boots -- the "
+				"initramfs PCR 14 lock and the kernel "
+				"integrity floor -- so it waits for a person: "
+				"run 'sudo lota-install'. To have a package "
+				"install do it too, create %s (or set "
+				"LOTA_AUTO_BRINGUP=1) before installing.",
+				PATH_AUTO_BRINGUP);
+			return EXIT_INSTALL_OK;
+		}
+
+		if (ctx.opts.unattended && s->boot_path && !auto_bringup &&
+		    st != STAGE_DONE) {
+			ui_stage_result(&ctx.ui, UI_PENDING, s->title,
+					"left to a person: this changes how "
+					"the machine boots");
+			deferred_boot_path = 1;
+			continue;
+		}
 
 		if (st == STAGE_PENDING && s->apply) {
 			ui_explain(&ctx.ui, s->explain);
@@ -383,6 +465,11 @@ int main(int argc, char **argv)
 		case STAGE_BLOCKED:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title, NULL);
 			ui_text(&ctx.ui, "%s.", note);
+			if (ctx.opts.unattended)
+				ui_text(&ctx.ui,
+					"Package install itself succeeded. "
+					"Resolve the above and run "
+					"'sudo lota-install'.");
 			return EXIT_INSTALL_FAIL;
 		case STAGE_ERROR:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title, note);
