@@ -949,6 +949,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_server_sdk \
 	$(TEST_BIN_DIR)/demo_sdk \
 	$(TEST_BIN_DIR)/test_ipc_client \
+	$(TEST_BIN_DIR)/test_ipc_payload_len \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_runtime_measure \
@@ -1167,6 +1168,11 @@ $(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_
 $(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+
+$(TEST_BIN_DIR)/test_ipc_payload_len: tests/test_ipc_payload_len.c \
+		$(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
