@@ -837,7 +837,6 @@ install: check-version-tag all
 	done
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
-	install -m 755 scripts/lota-dev-bringup.sh $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
