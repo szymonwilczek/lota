@@ -1083,3 +1083,23 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 			fprintf(fp, "interval = %d\n", p->attest_interval);
 	}
 }
+
+const char *config_resolve_policy_pubkey(const char *configured,
+					 const char *override_path,
+					 const char *packaged_path)
+{
+	if (configured && configured[0])
+		return configured;
+
+	/*
+	 * Operator's own key wins over the packaged one whenever it is there.
+	 * No package owns that path, so fleet that signs enforcement itself
+	 * keeps its answer across every upgrade, and host that never made that
+	 * choice follows the object the package installed.
+	 */
+	if (override_path && access(override_path, R_OK) == 0)
+		return override_path;
+	if (packaged_path && access(packaged_path, R_OK) == 0)
+		return packaged_path;
+	return NULL;
+}

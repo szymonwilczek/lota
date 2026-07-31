@@ -162,8 +162,9 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
 	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
-	opts->policy_pubkey_path = cfg->policy_pubkey[0] ? cfg->policy_pubkey :
-							   NULL;
+	opts->policy_pubkey_path = config_resolve_policy_pubkey(
+		cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL,
+		LOTA_POLICY_PUBKEY_OVERRIDE, LOTA_ENFORCEMENT_PUBKEY_PATH);
 
 	g_protect_pid_count = 0;
 	if (cfg->protect_pid_count > 0) {

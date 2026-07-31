@@ -1629,6 +1629,59 @@ static void test_config_load_override_order(void)
 	PASS();
 }
 
+/*
+ * Which key verifies the enforcement object.
+ *
+ * The order is what keeps fleet that signs enforcement itself from being
+ * overwritten by an upgrade, and host that made no such choice from being left
+ * with key the object no longer matches.
+ * Both are silent failures if the order is wrong, so it is pinned here rather
+ * than left to the two callers to agree on.
+ */
+static void test_config_resolve_policy_pubkey(void)
+{
+	char override_path[PATH_MAX];
+	char packaged_path[PATH_MAX];
+	const char *got;
+
+	TEST("config_resolve_policy_pubkey follows configured, override, packaged");
+
+	config_path("override.pub", override_path, sizeof(override_path));
+	config_path("packaged.pub", packaged_path, sizeof(packaged_path));
+	write_config("packaged.pub", "packaged\n");
+
+	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	if (!got || strcmp(got, packaged_path) != 0) {
+		FAIL("with no operator key the packaged one is used");
+		return;
+	}
+
+	write_config("override.pub", "operator\n");
+	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	if (!got || strcmp(got, override_path) != 0) {
+		FAIL("an operator key present on disk wins over the packaged one");
+		return;
+	}
+
+	got = config_resolve_policy_pubkey("/etc/lota/named.pub", override_path,
+					   packaged_path);
+	if (!got || strcmp(got, "/etc/lota/named.pub") != 0) {
+		FAIL("policy_pubkey names the key outright");
+		return;
+	}
+
+	got = config_resolve_policy_pubkey(NULL, "/nonexistent/override.pub",
+					   "/nonexistent/packaged.pub");
+	if (got != NULL) {
+		FAIL("no readable key resolves to nothing, not to a guess");
+		return;
+	}
+
+	unlink(override_path);
+	unlink(packaged_path);
+	PASS();
+}
+
 static void test_config_load_mixed_comments(void)
 {
 	struct lota_config cfg;
@@ -1743,6 +1796,7 @@ int main(void)
 		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
+		test_config_resolve_policy_pubkey,
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
 	};

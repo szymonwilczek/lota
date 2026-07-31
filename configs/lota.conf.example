@@ -120,7 +120,11 @@ pid_file = /run/lota/lota-agent.pid
 # Ed25519 private key for signing policies
 # signing_key = /etc/lota/policy.key
 
-# Ed25519 public key for verifying policy signatures
+# Ed25519 public key the enforcement object's signature is verified against.
+# Unset is the normal case: the agent uses /etc/lota/policy.pub when fleet put
+# its own key there, and otherwise the key the package shipped beside the object
+# at /usr/lib/lota/enforcement.pub.
+# Set this only to name a third path.
 # policy_pubkey = /etc/lota/policy.pub
 
 # ---- Logging -------------------------------------------------------------

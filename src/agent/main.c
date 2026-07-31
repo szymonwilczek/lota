@@ -569,10 +569,15 @@ int main(int argc, char *argv[])
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		fprintf(stderr, "ERROR: BPF object signature verification "
-				"requires --policy-pubkey\n"
-				"Set policy_pubkey in config or pass "
-				"--policy-pubkey PATH.\n");
+		fprintf(stderr,
+			"ERROR: no key to verify the enforcement object "
+			"against.\n"
+			"The agent package ships one at " LOTA_ENFORCEMENT_PUBKEY_PATH
+			";\n"
+			"a fleet that signs enforcement itself puts its key at " LOTA_POLICY_PUBKEY_OVERRIDE
+			"\n"
+			"or names one with policy_pubkey / "
+			"--policy-pubkey PATH.\n");
 		pidfile_remove(opts.pid_file_path, pid_fd);
 		return 1;
 	}

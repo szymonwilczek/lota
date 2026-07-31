@@ -21,9 +21,12 @@ The most common failures, with the gate that produced them:
   and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
   re-sign the binary into its ``security.ima`` xattr and confirm
   ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
-* ``BPF object signature verification failed``. The ``.sig`` is from a different
-  key. Re-sign with the key that ``policy_pubkey`` points at, or update
-  ``policy_pubkey`` to match the signing key.
+* ``BPF object signature verification failed``. The object and the key no
+  longer belong to each other. The packaged key at
+  ``/usr/lib/lota/enforcement.pub`` always matches the packaged object, so this
+  means a key at ``/etc/lota/policy.pub`` (or one named by ``policy_pubkey``)
+  is taking precedence and did not sign this object: move it aside to fall back
+  to the packaged one, or re-sign the object with the fleet key.
 * ``Failed to load AIK metadata: Key has been revoked``. The TPM has a
   persistent AIK but the operator wiped ``/var/lib/lota``. Either restore the
   metadata backup or evict the AIK handle and reboot so the agent re-provisions
