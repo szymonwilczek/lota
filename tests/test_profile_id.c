@@ -328,6 +328,58 @@ out:
 }
 
 /*
+ * Publisher named in lota.conf exists before anything enrolls with it,
+ * and the first thing written under it is the handle its AIK will live at
+ * -- the daemon binds the profile at startup, and enrollment is what happens later.
+ * Recording that handle therefore has to create the layout it writes into rather
+ * than assume an enrollment already did: without this, configured publisher
+ * that has never enrolled fails the bind with ENOENT and takes the host's
+ * enforcement down with it.
+ */
+static void test_handle_record_first_use(void)
+{
+	char der_path[256];
+	char base[256];
+	struct profile_paths paths;
+	uint32_t handle = 0;
+	EVP_PKEY *key = EVP_EC_gen("P-256");
+	X509 *cert = NULL;
+	struct stat st;
+
+	tmp_path(der_path, sizeof(der_path), "firstuse.der");
+	snprintf(base, sizeof(base), "/tmp/lota-profile-fbase.%d", getpid());
+
+	if (!key) {
+		CHECK(0, "key generation");
+		goto out;
+	}
+	cert = mint_cert(key, "publisher-first-use", 1);
+	if (!cert || write_cert_der(der_path, cert) != 0 ||
+	    profile_paths_from_anchor_base(base, der_path, &paths) != 0) {
+		CHECK(0, "profile setup");
+		goto out;
+	}
+
+	CHECK(profile_aik_handle_save(&paths, 0x81010012) == 0,
+	      "a handle is recorded for a publisher that has never enrolled");
+	CHECK(stat(paths.dir, &st) == 0 && S_ISDIR(st.st_mode) &&
+		      (st.st_mode & 0777) == 0700,
+	      "recording the handle creates the profile directory root-only");
+	CHECK(profile_aik_handle_load(&paths, &handle) == 0 &&
+		      handle == 0x81010012,
+	      "the recorded handle reads back");
+
+	unlink(paths.aik_handle);
+	rmdir(paths.dir);
+	rmdir(base);
+
+out:
+	unlink(der_path);
+	X509_free(cert);
+	EVP_PKEY_free(key);
+}
+
+/*
  * Handle allocation.
  * Record is what keeps a publisher on its own key across config edit,
  * so what is pinned here is that a recorded handle is never handed out again
@@ -618,6 +670,7 @@ int main(void)
 	test_unusable_anchor_is_refused();
 	test_paths_and_directory();
 	test_handle_record_round_trip();
+	test_handle_record_first_use();
 	test_handle_candidates();
 	test_consent_record();
 	test_publisher_inventory();
