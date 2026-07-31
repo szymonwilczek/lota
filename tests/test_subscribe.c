@@ -458,7 +458,7 @@ static void test_subscribe_and_poll(void)
 {
 	pid_t server;
 	struct lota_client *client;
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	int ret;
 
 	TEST("subscribe + poll_events receives notifications");
@@ -544,7 +544,7 @@ static void test_interleaved_notification(void)
 {
 	pid_t server;
 	struct lota_client *client;
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	int counter = 0;
 	uint64_t uptime = 0;
 	int ret;
@@ -634,7 +634,7 @@ static void test_unsubscribe(void)
 {
 	pid_t server;
 	struct lota_client *client;
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	int ret;
 
 	TEST("unsubscribe clears subscription");
@@ -708,7 +708,7 @@ static void test_subscribe_no_callback(void)
 {
 	TEST("subscribe(mask!=0, NULL callback) -> INVALID_ARG");
 
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	opts.socket_path = "/nonexistent";
 	opts.timeout_ms = 100;
 	struct lota_client *c = lota_connect_opts(&opts);
@@ -745,7 +745,7 @@ static void test_poll_no_data(void)
 {
 	pid_t server;
 	struct lota_client *client;
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	int ret;
 
 	TEST("poll_events with no data -> 0 dispatched");
@@ -797,7 +797,7 @@ static void test_poll_infinite_wait(void)
 {
 	pid_t server;
 	struct lota_client *client;
-	struct lota_connect_opts opts;
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
 	int ret;
 
 	TEST("poll_events(-1) blocks until delayed notification");
