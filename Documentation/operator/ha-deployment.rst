@@ -20,14 +20,22 @@ Single node (default)
 
 One verifier process owns its state. Two equivalent storage layouts exist:
 
-* **File + SQLite (production default).** The certificate-backed AIK store lives
-  under ``--aik-store``; used nonces persist to a SQLite database
-  (``--nonce-db``); revocation, ban, audit and attestation state are in-memory.
-  This is what a ``--require-cert`` deployment runs today without ``--db`` or
-  ``--pg-dsn``.
-* **SQLite** (``--db``). All of the above persist to one SQLite file. This path
-  does not verify AIK certificate chains (``--require-cert`` is refused), so it
-  suits TOFU-only test fleets, not production.
+* **File + SQLite.** The certificate-backed AIK store lives under
+  ``--aik-store``; used nonces persist to a SQLite database (``--nonce-db``);
+  the per-device boot baseline, revocation, ban, audit and attestation state
+  are in-memory. A restart therefore drops the baselines and the next report
+  from each device re-pins them.
+* **SQLite (production default).** ``--db`` persists all of the above to one
+  SQLite file. The certificate-backed AIK store sits beside it under
+  ``--aik-store`` exactly as above, so ``--require-cert`` belongs here: this is
+  the single-node layout that both verifies AIK certificate chains and keeps
+  its baselines across a restart.
+
+The AIK store and the state backend are separate choices. ``--require-cert``
+and ``--aik-ca-cert`` select the certificate-verifying AIK store, which is
+file-backed under ``--aik-store`` on every backend; ``--db`` and ``--pg-dsn``
+decide where the baseline, nonce and enforcement state lives. Neither
+constrains the other.
 
 Single node is the simplest topology and needs no external database. Its
 ceiling is one process: there is no failover, and the in-memory enforcement
@@ -63,10 +71,10 @@ revocation, ban, audit, attestation and session-token state. The consequences:
 * A session token issued by one instance validates on every instance, and a
   single-use token (``consume=true``) is consumed exactly once across the fleet.
 
-Unlike the SQLite ``--db`` path, the Postgres path supports the
-certificate-backed AIK store, so a production ``--require-cert`` fleet can run
-multiple instances. Run each instance with identical policy, CA roots and
-storage configuration.
+What Postgres adds over ``--db`` is the shared state above, not certificate
+verification: every backend selects the certificate-backed AIK store the same
+way. Run each instance with identical policy, CA roots and storage
+configuration.
 
 Shared-state requirements
 -------------------------
@@ -188,6 +196,6 @@ Choosing a topology
    * - Test fleet, single host, no external DB
      - Single node (file + SQLite)
    * - Production, single verifier host
-     - Single node (file + SQLite, ``--require-cert``)
+     - Single node (``--db``, ``--require-cert``)
    * - Production, failover or horizontal scale
      - N instances + Postgres (``--pg-dsn``, ``--require-cert``)
