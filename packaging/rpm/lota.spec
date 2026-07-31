@@ -128,7 +128,6 @@ EOF
 %license LICENSE LICENSE.GPL-2.0-only
 %{_bindir}/lota-agent
 %{_bindir}/lota-install
-%{_bindir}/lota-dev-bringup.sh
 %dir %{_prefix}/lib/lota
 %{_prefix}/lib/lota/lota-pcr14-lock
 %{_prefix}/lib/lota/lota_lsm.bpf.o
