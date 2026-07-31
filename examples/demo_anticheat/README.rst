@@ -72,10 +72,17 @@ report: say what your verifier would receive, and call ``lota-agent
            case LOTA_ERR_CONSENT_REQUIRED:  /* ask the player */
            case LOTA_ERR_UNKNOWN_PROFILE:   /* consented, not enrolled yet */
            case LOTA_ERR_CONNECTION_FAILED: /* no agent on this machine */
+           case LOTA_ERR_INVALID_ARG:       /* this title's request was bad */
            default:
                    break;
            }
    }
+
+``LOTA_ERR_INVALID_ARG`` is the one that is not about the player: the identity
+was malformed, the options were not sized, or the agent refused the request
+itself. It never means the publisher is unknown to that machine, so a title
+that hits it should report a fault rather than send the player to a consent
+screen.
 
 Flags
 -----

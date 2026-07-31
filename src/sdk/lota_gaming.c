@@ -486,8 +486,17 @@ static int select_publisher(struct lota_client *client, const char *hex)
 		return ret;
 	if (resp.result == LOTA_IPC_ERR_CONSENT_REQUIRED)
 		return -EACCES;
-	if (resp.result != LOTA_IPC_OK)
+	/*
+	 * Only the agent's "no such publisher" reads as one.
+	 * Anything else -- malformed request, agent that refused the command
+	 * outright -- is fault on this side of the socket, and reporting it as
+	 * unknown publisher sends integrator to check the identity they sent,
+	 * which is not where the problem is.
+	 */
+	if (resp.result == LOTA_IPC_ERR_UNKNOWN_PROFILE)
 		return -ENOENT;
+	if (resp.result != LOTA_IPC_OK)
+		return -EINVAL;
 
 	return 0;
 }
