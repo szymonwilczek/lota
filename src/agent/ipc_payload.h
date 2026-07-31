@@ -41,6 +41,22 @@ static inline bool ipc_payload_len_valid(uint32_t cmd, uint32_t payload_len)
 	case LOTA_IPC_CMD_SET_PROFILE:
 		return payload_len == sizeof(struct lota_ipc_set_profile);
 
+	case LOTA_IPC_CMD_SYNC_ATTEST:
+		/*
+		 * One verdict per publisher, and a host that answers to nobody
+		 * still syncs so the socket owner learns the list is empty.
+		 * The cap is the configurable publisher count,
+		 * NOT LOTA_IPC_MAX_PAYLOAD,
+		 * so peer cannot claim a longer list than a host can hold.
+		 */
+		if (payload_len < sizeof(struct lota_ipc_attest_sync))
+			return false;
+		if (payload_len > LOTA_IPC_ATTEST_SYNC_MAX_SIZE)
+			return false;
+		return (payload_len - sizeof(struct lota_ipc_attest_sync)) %
+			       sizeof(struct lota_ipc_attest_verdict) ==
+		       0;
+
 	default:
 		/*
 		 * Unknown command.

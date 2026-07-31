@@ -29,6 +29,7 @@
 #include "agent.h"
 #include "aik_cert.h"
 #include "attest.h"
+#include "attest_aggregate.h"
 #include "attest_targets.h"
 #include "bpf_loader.h"
 #include "dbus.h"
@@ -1335,48 +1336,24 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 static void publish_aggregate_status(const struct attest_target *targets,
 				     size_t count, uint32_t *status_flags)
 {
-	uint64_t valid_until = 0;
-	size_t considered = 0;
-	bool all = true;
+	struct attest_aggregate agg;
 
-	for (size_t i = 0; i < count; i++) {
-		/*
-		 * Publisher nobody is playing for is not reporting, so it has
-		 * no verdict to contribute.
-		 * Counting its silence as failure would leave a consumer host
-		 * permanently unattested; counting it as success would assert
-		 * something nothing is checking
-		 */
-		if (targets[i].session_gated && targets[i].sessions == 0)
-			continue;
+	attest_aggregate_compute(targets, count, &agg);
 
-		considered++;
-		if (!targets[i].attested) {
-			all = false;
-			break;
-		}
-		if (valid_until == 0 || targets[i].valid_until < valid_until)
-			valid_until = targets[i].valid_until;
-	}
-
-	/* nobody is reporting, so there is no live verdict to report either */
-	if (considered == 0)
-		all = false;
-
-	if (all)
+	if (agg.attested)
 		*status_flags |= LOTA_STATUS_ATTESTED;
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
 
 	ipc_update_status(&g_agent.ipc_ctx,
 			  reconcile_tpm_lockout(*status_flags),
-			  all ? valid_until : 0);
+			  agg.valid_until);
 
-	if (all)
+	if (agg.attested)
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
-				considered, considered == 1 ? "" : "s",
-				(unsigned long)valid_until);
-	else if (considered == 0)
+				agg.considered, agg.considered == 1 ? "" : "s",
+				(unsigned long)agg.valid_until);
+	else if (agg.considered == 0)
 		sdnotify_status("Idle: no title running, nothing reported");
 	else
 		sdnotify_status("Attestation incomplete");

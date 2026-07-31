@@ -162,6 +162,15 @@ struct ipc_context {
 	struct attest_target *profiles;
 	size_t profile_count;
 
+	/*
+	 * Session opened or closed, or title asked for a publisher this host
+	 * has not enrolled with.
+	 * Raised where it happens and acted on once the epoll pass is over,
+	 * because both places run with a client being created or destroyed
+	 * underneath them.
+	 */
+	bool profiles_changed;
+
 	/* true when using socket activation (do not unlink socket) */
 	bool activated;
 };

@@ -5,6 +5,7 @@
  * Unix socket server for local attestation queries.
  */
 
+#include "attest_aggregate.h"
 #include "enroll.h"
 #include "ipc.h"
 #include "ipc_payload.h"
@@ -214,6 +215,14 @@ struct ipc_client {
 	 * Not const: binding and unbinding maintain that publisher's session count.
 	 */
 	struct attest_target *profile;
+
+	/*
+	 * This connection is the agent's own attestation loop, established by
+	 * SYNC_ATTEST it was allowed to send.
+	 * It is subscribed to publisher events so it learns about a session
+	 * the moment one opens, rather than on its next scheduled sync.
+	 */
+	bool attest_peer;
 
 	struct ipc_client *next;
 };
@@ -604,6 +613,7 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 			client->profile->sessions--;
 		client->profile->session_changed = true;
 		client->profile = NULL;
+		ctx->profiles_changed = true;
 	}
 
 	while (*pp) {
@@ -672,6 +682,55 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
 		return 0;
 
 	return 1;
+}
+
+/*
+ * SYNC_ATTEST comes from the agent's other unit, not from a title.
+ *
+ * ipc_client_is_privileged() cannot express that:
+ * it asks whether the peer's executable is on the operator's verity allowlist,
+ * which is empty on a host that configured none
+ * -- so it would refuse the attestation loop on a default install.
+ *
+ * ipc_client_is_agent_self() cannot either:
+ * the loop is a different process by design.
+ *
+ * The honest question is whether the peer is running *this* binary,
+ * so that is what gets asked:
+ * same user, and /proc/<pid>/exe resolving to the same inode as our own.
+ * Replaced on-disk binary is a different inode, and the live PID identity
+ * is re-checked so recycled PID cannot inherit the answer.
+ */
+static int ipc_client_is_agent_peer(const struct ipc_client *client)
+{
+	char exe_path[64];
+	struct stat peer_st, self_st;
+	uint64_t current_ticks = 0;
+
+	if (!client)
+		return 0;
+
+	if (client->peer_uid != geteuid())
+		return 0;
+
+	if (client->peer_start_time_ticks == 0)
+		return 0;
+
+	if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
+		return 0;
+
+	if (current_ticks != client->peer_start_time_ticks)
+		return 0;
+
+	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe",
+		 (int)client->peer_pid);
+
+	if (stat(exe_path, &peer_st) < 0 ||
+	    stat("/proc/self/exe", &self_st) < 0)
+		return 0;
+
+	return peer_st.st_dev == self_st.st_dev &&
+	       peer_st.st_ino == self_st.st_ino;
 }
 
 /*
@@ -1225,6 +1284,7 @@ static void handle_set_profile(struct ipc_context *ctx,
 		client->profile = &ctx->profiles[i];
 		ctx->profiles[i].sessions++;
 		ctx->profiles[i].session_changed = true;
+		ctx->profiles_changed = true;
 		lota_dbg(
 			"connection pid=%d bound to publisher %s (%d session%s)",
 			client->peer_pid, want, ctx->profiles[i].sessions,
@@ -1244,9 +1304,10 @@ static void handle_set_profile(struct ipc_context *ctx,
 
 			if (enroll_state_load_path(
 				    ctx->profiles[i].paths.enroll_state, &st) ==
-			    -ENOENT)
+			    -ENOENT) {
 				ctx->profiles[i].enroll_pending = true;
-			else
+				ctx->profiles_changed = true;
+			} else
 				ipc_secure_bzero(&st, sizeof(st));
 		}
 
@@ -1263,6 +1324,166 @@ static void handle_set_profile(struct ipc_context *ctx,
 		  "has no profile for",
 		  client->peer_pid, want);
 	build_error_response(client, LOTA_IPC_ERR_UNKNOWN_PROFILE);
+}
+
+static void profile_id_to_hex(const uint8_t id[32], char *out, size_t out_len)
+{
+	for (size_t i = 0; i < 32 && (i * 2 + 3) <= out_len; i++)
+		snprintf(out + i * 2, 3, "%02x", id[i]);
+}
+
+/* Reverse of the above;
+ * malformed stored id yields zeros, which match no publisher a peer can name */
+static void profile_id_from_hex(const char *hex, uint8_t out[32])
+{
+	memset(out, 0, 32);
+
+	if (!hex || strlen(hex) < 64)
+		return;
+
+	for (size_t i = 0; i < 32; i++) {
+		unsigned int byte;
+
+		if (sscanf(hex + i * 2, "%2x", &byte) != 1) {
+			memset(out, 0, 32);
+			return;
+		}
+		out[i] = (uint8_t)byte;
+	}
+}
+
+/* Fold every publisher's verdict into the one answer title
+ * that named no publisher reads */
+static void recompute_host_attestation(struct ipc_context *ctx)
+{
+	struct attest_aggregate agg;
+	uint32_t flags = ctx->status_flags;
+
+	attest_aggregate_compute(ctx->profiles, ctx->profile_count, &agg);
+
+	if (agg.attested)
+		flags |= LOTA_STATUS_ATTESTED;
+	else
+		flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
+
+	ipc_update_status(ctx, flags, agg.valid_until);
+}
+
+/*
+ * Handle SYNC_ATTEST -- the state exchange with the agent's attestation loop.
+ *
+ * One round trip, both directions:
+ * the loop hands over the verdict it holds for each publisher, and reads back
+ * the sessions and the enrollment request that only the socket owner sees.
+ * Neither process can answer a title on its own, and only one of them can own
+ * the socket.
+ *
+ * enroll_pending is cleared as it is handed over:
+ * it is a request, not a state, and the loop carries its own backoff for ceremony
+ * that fails. A later SET_PROFILE raises it again.
+ */
+static void handle_sync_attest(struct ipc_context *ctx,
+			       struct ipc_client *client,
+			       const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_attest_sync_response *out;
+	struct lota_ipc_profile_demand *demand;
+	struct lota_ipc_attest_sync hdr;
+	uint32_t verdicts;
+	uint32_t emitted = 0;
+
+	if (!ipc_client_is_agent_peer(client)) {
+		lota_warn("SYNC_ATTEST denied for uid=%d pid=%d: not this "
+			  "agent binary",
+			  client->peer_uid, client->peer_pid);
+		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	if (payload_len < sizeof(hdr)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&hdr, payload, sizeof(hdr));
+
+	verdicts = (uint32_t)((payload_len - sizeof(hdr)) /
+			      sizeof(struct lota_ipc_attest_verdict));
+	if (hdr.count != verdicts) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	for (uint32_t i = 0; i < verdicts; i++) {
+		struct lota_ipc_attest_verdict v;
+		char id[LOTA_PROFILE_ID_LEN];
+
+		memcpy(&v, payload + sizeof(hdr) + i * sizeof(v), sizeof(v));
+		profile_id_to_hex(v.profile_id, id, sizeof(id));
+
+		for (size_t j = 0; j < ctx->profile_count; j++) {
+			if (!ctx->profiles[j].has_profile)
+				continue;
+			if (strcmp(ctx->profiles[j].paths.id, id) != 0)
+				continue;
+
+			ctx->profiles[j].attested = v.attested != 0;
+			ctx->profiles[j].valid_until = v.valid_until;
+			break;
+		}
+	}
+
+	/*
+	 * Loop is the process that attests, so its tallies are the host's.
+	 * Assigned after the response is built and the status recomputed,
+	 * because ipc_update_status() stamps last_attest_time with now
+	 */
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+
+	out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	demand = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE +
+			  sizeof(*out));
+
+	for (size_t j = 0; j < ctx->profile_count; j++) {
+		if (!ctx->profiles[j].has_profile)
+			continue;
+
+		profile_id_from_hex(ctx->profiles[j].paths.id,
+				    demand[emitted].profile_id);
+		demand[emitted].sessions = (uint32_t)ctx->profiles[j].sessions;
+		demand[emitted].enroll_pending =
+			ctx->profiles[j].enroll_pending ? 1 : 0;
+		memset(demand[emitted].reserved, 0,
+		       sizeof(demand[emitted].reserved));
+		ctx->profiles[j].enroll_pending = false;
+		emitted++;
+	}
+
+	out->count = emitted;
+	out->_reserved1 = 0;
+
+	resp->payload_len =
+		(uint32_t)(sizeof(*out) + (size_t)emitted * sizeof(*demand));
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + resp->payload_len;
+	client->send_offset = 0;
+
+	/*
+	 * Loop is subscribed by the act of syncing, to publisher events only:
+	 * session opening is what it must not sleep through,
+	 * and it has no use for the status changes it is itself the source of
+	 */
+	client->attest_peer = true;
+	client->subscribed = true;
+	client->event_mask = LOTA_IPC_EVENT_PROFILE;
+
+	recompute_host_attestation(ctx);
+
+	ctx->attest_count = hdr.attest_count;
+	ctx->fail_count = hdr.fail_count;
+	if (hdr.last_attest_time)
+		ctx->last_attest_time = hdr.last_attest_time;
 }
 
 /*
@@ -1857,6 +2078,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 					  false);
 		break;
 
+	case LOTA_IPC_CMD_SYNC_ATTEST:
+		handle_sync_attest(ctx, client, payload, payload_len);
+		break;
+
 	case LOTA_IPC_CMD_SHUTDOWN:
 		handle_shutdown(ctx, client, payload, payload_len);
 		break;
@@ -2335,6 +2560,22 @@ int ipc_process(struct ipc_context *ctx, int timeout_ms)
 
 			processed++;
 		}
+	}
+
+	/*
+	 * Session opened or closed during the pass above.
+	 * Both change which publishers hold a live verdict, and both are what
+	 * the attestation loop must not sleep through -- title that has just
+	 * launched wants its first report now, not one interval from now.
+	 *
+	 * Done here rather than at the point of change:
+	 * those run with a client being created or destroyed underneath them,
+	 * and this walks the client list.
+	 */
+	if (ctx->profiles_changed) {
+		ctx->profiles_changed = false;
+		recompute_host_attestation(ctx);
+		notify_subscribers(ctx, LOTA_IPC_EVENT_PROFILE);
 	}
 
 	return processed;
