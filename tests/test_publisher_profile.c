@@ -147,6 +147,22 @@ static void server_refuse_profile(int client_fd)
 	usleep(50000);
 }
 
+/* the agent refused the command itself, not the publisher */
+static void server_bad_request(int client_fd)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+
+	if (read_exact(client_fd, &req, sizeof(req)) < 0)
+		_exit(2);
+	if (read_exact(client_fd, &payload, sizeof(payload)) < 0)
+		_exit(3);
+	if (send_result(client_fd, LOTA_IPC_ERR_BAD_REQUEST) < 0)
+		_exit(4);
+
+	usleep(50000);
+}
+
 /* title that names nobody must not send SET_PROFILE at all */
 static void server_expect_no_profile(int client_fd)
 {
@@ -307,6 +323,49 @@ static void test_unknown_publisher_fails_the_connection(void)
 	PASS();
 }
 
+/*
+ * Refusal of the command is not refusal of the publisher.
+ * Agent rejects malformed SET_PROFILE before any handler sees it, and reporting
+ * that as unknown publisher sends integrator to check an identity that was
+ * never the problem.
+ */
+static void test_bad_request_is_not_an_unknown_publisher(void)
+{
+	struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+	struct lota_client *client;
+	pid_t server;
+
+	TEST("a refused command does not read as an unknown publisher");
+
+	server = start_mock_agent(server_bad_request);
+	if (server < 0) {
+		if (socket_errno_is_sandbox(mock_errno)) {
+			SKIP("no unix sockets in this sandbox");
+			return;
+		}
+		FAIL("could not start the mock agent");
+		return;
+	}
+
+	opts.socket_path = test_socket;
+	opts.timeout_ms = 1000;
+	opts.publisher_profile = PROFILE_HEX;
+
+	client = lota_connect_opts(&opts);
+	wait_agent(server);
+
+	if (client) {
+		FAIL("a refused SET_PROFILE still produced a connection");
+		lota_disconnect(client);
+		return;
+	}
+	if (lota_connect_last_error() != LOTA_ERR_INVALID_ARG) {
+		FAIL("a bad request was reported as something else");
+		return;
+	}
+	PASS();
+}
+
 static void test_malformed_publisher_is_refused(void)
 {
 	struct lota_connect_opts opts = { 0 };
@@ -448,6 +507,7 @@ int main(void)
 	test_named_publisher_reaches_the_agent();
 	test_unknown_publisher_fails_the_connection();
 	test_malformed_publisher_is_refused();
+	test_bad_request_is_not_an_unknown_publisher();
 	test_no_publisher_sends_nothing();
 	test_consent_required_is_distinguishable();
 
