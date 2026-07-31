@@ -192,13 +192,16 @@ static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 	 * the agent is up before the SDL2 window opens.
 	 */
 	struct lota_connect_opts copts = {
+		.struct_size = sizeof(copts),
 		.socket_path = opts->socket_path,
 		.timeout_ms = 1500,
 	};
 	struct lota_client *client = lota_connect_opts(&copts);
 	if (!client) {
 		fprintf(stderr,
-			"trust_pong: lota_connect failed (agent down)\n");
+			"trust_pong: lota_connect failed (agent down, or "
+			"error %d)\n",
+			lota_connect_last_error());
 		return -ENOTCONN;
 	}
 	int attested = lota_is_attested(client);
