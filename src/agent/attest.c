@@ -1027,22 +1027,22 @@ static int bind_target(struct attest_target *t)
 
 	ret = tpm_bind_profile(&g_agent.tpm_ctx, &t->paths);
 	if (ret < 0) {
-		lota_err("Cannot bind the publisher profile for %s:%d: %s",
-			 t->server, t->port, strerror(-ret));
+		lota_err("Cannot bind the publisher profile for %s: %s",
+			 t->label, strerror(-ret));
 		return ret;
 	}
 
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		lota_err("AIK unavailable for %s:%d: %s", t->server, t->port,
+		lota_err("AIK unavailable for %s: %s", t->label,
 			 tpm_strerror(ret));
 		return ret;
 	}
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		lota_err("Cannot load AIK metadata for %s:%d: %s", t->server,
-			 t->port, tpm_strerror(ret));
+		lota_err("Cannot load AIK metadata for %s: %s", t->label,
+			 tpm_strerror(ret));
 		return ret;
 	}
 	return 0;
@@ -1095,10 +1095,10 @@ static bool enroll_target_if_needed(struct attest_target *t)
 		int cret = profile_consent_time(&t->paths, &agreed);
 
 		if (cret == -ENOENT) {
-			lota_warn("%s:%d has no enrollment and nobody has "
+			lota_warn("%s has no enrollment and nobody has "
 				  "agreed to answer to publisher %s; run "
 				  "--allow-publisher %s to record that",
-				  t->server, t->port, t->paths.id, t->paths.id);
+				  t->label, t->paths.id, t->paths.id);
 			return false;
 		}
 		if (cret < 0) {
@@ -1110,9 +1110,9 @@ static bool enroll_target_if_needed(struct attest_target *t)
 	}
 
 	if (t->ca[0] == '\0') {
-		lota_warn("%s:%d has no enrollment and its profile names no "
+		lota_warn("%s has no enrollment and its profile names no "
 			  "attestation CA; run --enroll for it",
-			  t->server, t->port);
+			  t->label);
 		return false;
 	}
 	if (now_ms < t->next_enroll_ms)
@@ -1185,15 +1185,13 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	if (!aik_cert_renew_due(remaining, total))
 		return;
 
-	lota_info("AIK certificate renewal due for %s:%d (%lld s left of "
-		  "%lld s)",
-		  t->server, t->port, (long long)remaining, (long long)total);
+	lota_info("AIK certificate renewal due for %s (%lld s left of %lld s)",
+		  t->label, (long long)remaining, (long long)total);
 
 	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths);
 	if (ret == 0) {
 		t->renew_backoff = 0;
-		lota_info("AIK certificate renewed for %s:%d", t->server,
-			  t->port);
+		lota_info("AIK certificate renewed for %s", t->label);
 		return;
 	}
 
@@ -1208,13 +1206,13 @@ static void renew_target_cert_if_due(struct attest_target *t)
 		if (delay > MAX_BACKOFF_SECONDS)
 			delay = MAX_BACKOFF_SECONDS;
 		t->next_renew_ms = mono_ms + (uint64_t)delay * 1000;
-		lota_warn("AIK certificate renewal failed for %s:%d (%s); "
+		lota_warn("AIK certificate renewal failed for %s (%s); "
 			  "retry in %ds, cert expires in %lld s",
-			  t->server, t->port, strerror(-ret), delay,
+			  t->label, strerror(-ret), delay,
 			  (long long)remaining);
 		sdnotify_status("AIK cert renewal failing for %s, expires in "
 				"%lld s",
-				t->server, (long long)remaining);
+				t->label, (long long)remaining);
 	}
 }
 
@@ -1232,9 +1230,9 @@ static bool target_reporting_now(struct attest_target *t)
 		return true;
 
 	if (t->attested) {
-		lota_info("No session left for %s:%d; reporting stops until a "
+		lota_info("No session left for %s; reporting stops until a "
 			  "title of theirs runs again",
-			  t->server, t->port);
+			  t->label);
 		t->attested = false;
 		t->valid_until = 0;
 	}
@@ -1269,8 +1267,7 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		rotate_bound_aik_if_due(aik_ttl);
 		renew_target_cert_if_due(t);
 
-		lota_dbg("Attestation round starting for %s:%d", t->server,
-			 t->port);
+		lota_dbg("Attestation round starting for %s", t->label);
 		ret = attest_once(t->server, t->port,
 				  t->ca_cert[0] ? t->ca_cert : NULL,
 				  skip_verify, pin_sha256,
@@ -1278,7 +1275,7 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	}
 
 	if (ret == 0) {
-		lota_info("Attestation successful (%s:%d)", t->server, t->port);
+		lota_info("Attestation successful (%s)", t->label);
 		t->consecutive_failures = 0;
 		t->backoff_sec = 0;
 		t->last_success = now;
@@ -1301,11 +1298,11 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (t->backoff_sec > MAX_BACKOFF_SECONDS)
 		t->backoff_sec = MAX_BACKOFF_SECONDS;
 
-	lota_err("Attestation FAILED for %s:%d (attempt %d, backoff %ds)",
-		 t->server, t->port, t->consecutive_failures, t->backoff_sec);
+	lota_err("Attestation FAILED for %s (attempt %d, backoff %ds)",
+		 t->label, t->consecutive_failures, t->backoff_sec);
 	if (t->last_success > 0)
-		lota_warn("Last success for %s:%d: %ld seconds ago", t->server,
-			  t->port, (long)(now - t->last_success));
+		lota_warn("Last success for %s: %ld seconds ago", t->label,
+			  (long)(now - t->last_success));
 
 	/* one round may be a blip; three in a row is a host nobody trusts */
 	if (t->consecutive_failures >= 3) {
@@ -1395,25 +1392,24 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	}
 
 	for (size_t i = 0; i < target_count; i++) {
-		lota_info("Target %zu: %s:%d every %d seconds%s", i + 1,
-			  targets[i].server, targets[i].port,
-			  targets[i].interval,
+		lota_info("Target %zu: %s every %d seconds%s", i + 1,
+			  targets[i].label, targets[i].interval,
 			  targets[i].session_gated ?
 				  ", while a title of theirs runs" :
 				  "");
 		if (targets[i].profile_error)
 			lota_warn("Cannot read the CA trust anchor %s (%s): "
-				  "attesting to %s:%d without a publisher "
+				  "attesting to %s without a publisher "
 				  "profile, so no CA-issued AIK certificate is "
 				  "presented",
 				  targets[i].ca_cert,
 				  strerror(-targets[i].profile_error),
-				  targets[i].server, targets[i].port);
+				  targets[i].label);
 		else if (!targets[i].has_profile)
-			lota_warn("No CA trust anchor for %s:%d: attesting "
+			lota_warn("No CA trust anchor for %s: attesting "
 				  "without a publisher profile, so no "
 				  "CA-issued AIK certificate is presented",
-				  targets[i].server, targets[i].port);
+				  targets[i].label);
 	}
 
 	/*
@@ -1552,14 +1548,14 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 			enroll_state_load_path(targets[i].paths.enroll_state,
 					       &est) == 0;
 		if (targets[i].auto_renew)
-			lota_info("AIK certificate auto-renewal enabled for "
-				  "%s:%d",
-				  targets[i].server, targets[i].port);
+			lota_info("AIK certificate auto-renewal enabled for %s",
+				  targets[i].label);
 		else
-			lota_info("AIK certificate auto-renewal off for %s:%d: "
-				  "no recorded CA endpoint (run --enroll to "
-				  "record one)",
-				  targets[i].server, targets[i].port);
+			lota_info(
+				"AIK certificate auto-renewal off for %s: no "
+				"recorded CA endpoint (run --enroll to record "
+				"one)",
+				targets[i].label);
 	}
 
 	sdnotify_ready();

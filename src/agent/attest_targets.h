@@ -27,6 +27,14 @@
 struct attest_target {
 	char server[256];
 	int port;
+
+	/*
+	 * How this target is named in log line, built once by attest_targets_build()
+	 * Every message about a target says which one it means, and deriving
+	 * that at each site made the identity of target formatting decision
+	 * repeated fifteen times.
+	 */
+	char label[288];
 	char ca_cert[PATH_MAX];
 	int interval;
 

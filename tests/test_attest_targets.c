@@ -105,6 +105,8 @@ static void test_single_verifier(void)
 	      "no anchor is not an error, it is a host without a publisher");
 	CHECK(!targets[0].session_gated,
 	      "the single verifier keeps the continuous stream it always had");
+	CHECK(strcmp(targets[0].label, "verifier.example:8443") == 0,
+	      "the target names itself the way its log lines will");
 
 	CHECK(attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,

@@ -65,6 +65,9 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 	for (size_t i = 0; i < n; i++) {
 		int ret;
 
+		snprintf(out[i].label, sizeof(out[i].label), "%s:%d",
+			 out[i].server, out[i].port);
+
 		if (out[i].ca_cert[0] == '\0')
 			continue; /* no anchor, so no publisher profile */
 
