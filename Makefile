@@ -926,6 +926,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_config \
+	$(TEST_BIN_DIR)/test_config_add_profile \
 	$(TEST_BIN_DIR)/test_subscribe \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
@@ -1030,6 +1031,10 @@ $(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AG
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1231,6 +1236,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_signal_shutdown
 	@$(BUILD_DIR)/test_daemon_loop
 	@$(BUILD_DIR)/test_config
+	@$(BUILD_DIR)/test_config_add_profile
 	@$(BUILD_DIR)/test_subscribe
 	@$(BUILD_DIR)/test_policy_sign
 	@$(BUILD_DIR)/test_policy_export
