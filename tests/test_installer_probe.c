@@ -447,6 +447,31 @@ static void test_efivar_payload(void)
 	snprintf(dir, sizeof(dir), "/tmp/lota-inst-efivar.%d", (int)getpid());
 	mkdir(dir, 0755);
 
+	/*
+	 * missing SecureBoot variable has two causes and they need different
+	 * instructions: legacy BIOS boot, where "switch the firmware to UEFI mode"
+	 * is the fix, and UEFI firmware built without Secure Boot support,
+	 * where the machine is *already* in UEFI mode and that instruction
+	 * is dead end.
+	 * Telling the second case to do the first is the kind of confidently
+	 * wrong step this project refuses to ship.
+	 */
+	TEST("UEFI is detected from the firmware directory, not from SecureBoot");
+	if (probe_firmware_is_uefi_at(dir) != 1) {
+		FAIL("an existing firmware directory not read as UEFI");
+		goto cleanup;
+	}
+	{
+		char absent[380];
+
+		snprintf(absent, sizeof(absent), "%s/no-such-firmware", dir);
+		if (probe_firmware_is_uefi_at(absent) != 0) {
+			FAIL("a missing firmware directory not read as legacy BIOS");
+			goto cleanup;
+		}
+	}
+	PASS();
+
 	TEST("efivar flag reads past the attribute header");
 	write_efivar(dir, "on", &one, sizeof(one));
 	write_efivar(dir, "off", &zero, sizeof(zero));
