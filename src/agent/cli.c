@@ -224,6 +224,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "reenroll", no_argument, 0, 1014 },
 		{ "enroll-token-file", required_argument, 0, 1015 },
 		{ "allow-publisher", required_argument, 0, 1016 },
+		{ "add-publisher", required_argument, 0, 1040 },
+		{ "publisher-name", required_argument, 0, 1041 },
 		{ "list-publishers", no_argument, 0, 1017 },
 		{ "forget-publisher", required_argument, 0, 1018 },
 		{ "seal", no_argument, 0, 1007 },
@@ -374,6 +376,12 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1016:
 			opts->allow_publisher = optarg;
+			break;
+		case 1040:
+			opts->add_publisher = optarg;
+			break;
+		case 1041:
+			opts->publisher_name = optarg;
 			break;
 		case 1017:
 			opts->list_publishers_flag = 1;

@@ -81,6 +81,19 @@ struct cli_options {
 	/* --allow-publisher: record consent to answer to one publisher,
 	 * named by the hex SHA-256 of its CA anchor's SPKI */
 	const char *allow_publisher;
+
+	/*
+	 * --add-publisher writes a [profile] section into lota.conf
+	 * so game's installer can register its publisher without asking
+	 * the player to edit a file.
+	 *
+	 * It records no consent:
+	 * that stays separate, deliberate act, because installer must not be
+	 * able to agree on the player's behalf to publisher holding a key
+	 * on their machine.
+	 */
+	const char *add_publisher; /* CA host, or host:port */
+	const char *publisher_name; /* --publisher-name, the section label */
 	int list_publishers_flag; /* --list-publishers */
 	/* --forget-publisher: destroy one publisher's key and stored state */
 	const char *forget_publisher;

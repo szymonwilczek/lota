@@ -577,6 +577,140 @@ int do_allow_publisher(const char *profile_id)
 	return 0;
 }
 
+/*
+ * Register a publisher in lota.conf so a title of theirs can name it.
+ *
+ * This is the step that used to be a text editor.
+ * Game's installer runs it with the publisher's CA endpoint, the trust anchor it
+ * ships, and where that publisher's verifier lives; the agent picks the change
+ * up on its next start or reload.
+ *
+ * It records no consent.
+ * That stays a separate act by the person at the machine, because installer must
+ * not be able to agree on their behalf to publisher holding an attestation key
+ * on their hardware -- the whole point of the consent gate.
+ * The message says so, and names the command.
+ */
+int do_add_publisher(const char *config_path, const char *name,
+		     const char *ca_server, int ca_port, const char *ca_cert,
+		     const char *verifier, int verifier_port, int interval,
+		     bool session_gated)
+{
+	struct profile_paths paths;
+	struct lota_profile p;
+	int ret;
+
+	if (!ca_server || !ca_server[0] || !ca_cert || !ca_cert[0]) {
+		fprintf(stderr,
+			"ERROR: --add-publisher needs the CA host and "
+			"--ca-cert PATH, the publisher's trust anchor.\n");
+		return 1;
+	}
+
+	/*
+	 * Anchor is the publisher's identity, so it has to be readable
+	 * and parseable here rather than at the next start:
+	 * installer that wrote a profile naming a file that is not a certificate
+	 * would leave a host that refuses to start.
+	 */
+	ret = profile_paths_from_anchor(ca_cert, &paths);
+	if (ret < 0) {
+		fprintf(stderr,
+			"ERROR: cannot read a publisher identity from %s: "
+			"%s\n",
+			ca_cert, strerror(-ret));
+		return 1;
+	}
+
+	/*
+	 * Text-level check in the writer compares anchor paths, which misses
+	 * the same key reached by a second path -- copied PEM, symlink,
+	 * per-title install directory.
+	 * The identity is the key, and it is already resolved here, so compare
+	 * that against what the file configures before adding anything.
+	 */
+	{
+		struct lota_config existing;
+		int i;
+
+		config_init(&existing);
+		if (config_load(&existing,
+				config_path ? config_path :
+					      LOTA_CONFIG_DEFAULT_PATH) == 0) {
+			for (i = 0; i < existing.profile_count; i++) {
+				struct profile_paths other;
+
+				if (profile_paths_from_anchor(
+					    existing.profiles[i].ca_cert,
+					    &other) < 0)
+					continue;
+				if (strcmp(other.id, paths.id) != 0)
+					continue;
+
+				printf("Publisher %s is already configured as "
+				       "\"%s\"; nothing to do.\n",
+				       paths.id, existing.profiles[i].name);
+				return 0;
+			}
+		}
+	}
+
+	memset(&p, 0, sizeof(p));
+	/* Identity is 64 hex characters and the label field is shorter,
+	 * so unnamed publisher is labelled by a readable prefix of it rather
+	 * than a silently cut one */
+	if (name && name[0])
+		snprintf(p.name, sizeof(p.name), "%s", name);
+	else
+		snprintf(p.name, sizeof(p.name), "publisher-%.16s", paths.id);
+	snprintf(p.ca, sizeof(p.ca), "%s", ca_server);
+	p.ca_port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
+	snprintf(p.ca_cert, sizeof(p.ca_cert), "%s", ca_cert);
+	if (verifier && verifier[0])
+		snprintf(p.verifier, sizeof(p.verifier), "%s", verifier);
+	p.verifier_port = verifier_port > 0 ? verifier_port :
+					      LOTA_DEFAULT_VERIFIER_PORT;
+	p.attest_interval = interval;
+	p.session_gated = session_gated;
+
+	ret = config_profile_append(
+		config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH, &p);
+	switch (ret) {
+	case 1:
+		printf("Publisher %s added to %s as \"%s\".\n", paths.id,
+		       config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
+		       p.name);
+		printf("Nothing enrols with them until somebody at this "
+		       "machine agrees:\n");
+		printf("  lota-agent --allow-publisher %s\n", paths.id);
+		return 0;
+	case 0:
+		printf("Publisher %s is already configured as \"%s\"; "
+		       "nothing to do.\n",
+		       paths.id, p.name);
+		return 0;
+	case -EEXIST:
+		fprintf(stderr,
+			"ERROR: a different publisher is already configured "
+			"as \"%s\". Pass --publisher-name to choose another "
+			"label.\n",
+			p.name);
+		return 1;
+	case -E2BIG:
+		fprintf(stderr,
+			"ERROR: this host already answers to %d publishers, "
+			"which is the maximum. Free a slot with "
+			"'lota-agent --forget-publisher <id>' and remove its "
+			"section from the configuration.\n",
+			LOTA_CONFIG_MAX_PROFILES);
+		return 1;
+	default:
+		fprintf(stderr, "ERROR: could not add the publisher: %s\n",
+			strerror(-ret));
+		return 1;
+	}
+}
+
 static void print_publisher(const struct publisher_entry *e)
 {
 	printf("%s\n", e->id);

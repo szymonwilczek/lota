@@ -163,6 +163,13 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		return diagnostic_exit_code(
 			do_allow_publisher(opts->allow_publisher));
 
+	if (opts->add_publisher)
+		return diagnostic_exit_code(do_add_publisher(
+			opts->config_path, opts->publisher_name,
+			opts->add_publisher, opts->ca_port, opts->ca_cert_path,
+			opts->server_addr, opts->server_port,
+			opts->attest_interval, true));
+
 	if (opts->reenroll_flag)
 		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
 

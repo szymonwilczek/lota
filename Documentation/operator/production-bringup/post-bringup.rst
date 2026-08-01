@@ -162,6 +162,26 @@ same ports as the top-level keys. A profile missing the CA, the anchor or the
 verifier is refused at load, and every anchor has to satisfy the same
 readability constraint as the top-level ``ca_cert`` above.
 
+Adding a publisher does not have to be a text edit. ``lota-agent
+--add-publisher`` writes the section, which is how a game's installer registers
+the publisher it ships for::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem \
+        --server verifier.studio.example --port 8443 \
+        --publisher-name studio
+
+The rest of the file is copied through untouched and the section is appended,
+so whatever the operator put there survives. A publisher is its trust anchor
+rather than its label: adding the same anchor again is a no-op whichever name
+it carries, and a label already spoken for by a different anchor is refused
+with a note to pass another ``--publisher-name``.
+
+**It records no consent.** Nothing enrols with the publisher until somebody at
+the machine runs the ``--allow-publisher`` command it prints. That separation
+is deliberate: an installer must not be able to agree, on the player's behalf,
+to a publisher holding an attestation key on their hardware.
+
 Every key below a section header belongs to that section, so the top-level keys
 go above the first profile and nothing top-level may follow one.
 ``lota-agent --dump-config`` prints profiles last for the same reason, which is

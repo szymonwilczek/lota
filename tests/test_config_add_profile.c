@@ -81,6 +81,22 @@ int main(void)
 	}
 
 	{
+		/* the same publisher under a different label is still the same publisher:
+		 * it resolves to one profile directory and one AIK,
+		 * so a second section would burn a slot and attest twice to the same place */
+		char once[16384];
+		struct lota_profile same;
+
+		config_profile_append_text("", &p, once, sizeof(once));
+		same = mkprofile("studio-a-again", "ca.studio-a.example",
+				 "/etc/lota/studio-a.pem",
+				 "verifier.studio-a.example");
+		rc = config_profile_append_text(once, &same, out, sizeof(out));
+		CHECK(rc == 0,
+		      "the same anchor under a different label is a no-op");
+	}
+
+	{
 		/* two publishers cannot share a name:
 		 * the name is how operator reads the file,
 		 * and the second would shadow the first */
@@ -104,11 +120,16 @@ int main(void)
 		snprintf(acc, sizeof(acc), "%s", "");
 		for (i = 0; i < LOTA_CONFIG_MAX_PROFILES; i++) {
 			char nm[32];
+			char anchor[64];
 			struct lota_profile f;
 
+			/* distinct publishers need distinct anchors:
+			 * the anchor is the identity, so eight sections sharing
+			 * one would be one publisher eight times */
 			snprintf(nm, sizeof(nm), "pub%d", i);
-			f = mkprofile(nm, "ca.example", "/etc/lota/a.pem",
-				      "v.example");
+			snprintf(anchor, sizeof(anchor), "/etc/lota/pub%d.pem",
+				 i);
+			f = mkprofile(nm, "ca.example", anchor, "v.example");
 			rc = config_profile_append_text(acc, &f, next,
 							sizeof(next));
 			if (rc != 1)
