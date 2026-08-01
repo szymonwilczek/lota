@@ -88,7 +88,7 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	}
 
 	sb = probe_secureboot();
-	if (sb == -ENOENT) {
+	if (sb == -ENOENT && !probe_firmware_is_uefi()) {
 		snprintf(note, cap,
 			 "This host booted via legacy BIOS/CSM, not UEFI. "
 			 "BIOS is unsupported: it measures neither the "
@@ -97,6 +97,35 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 			 "the initramfs helper, the agent and the verifier "
 			 "each refuse such a host. Switch the firmware to "
 			 "UEFI mode and reinstall.");
+		return STAGE_BLOCKED;
+	}
+	if (sb == -ENOENT) {
+		/* UEFI, but the firmware carries no SecureBoot variable at all:
+		 * the feature is absent from this build rather than turned off.
+		 * Telling this machine to switch to UEFI mode would send player
+		 * after something already true, so name what is actually missing
+		 * and where it comes from. */
+		if (host_is_virtual())
+			snprintf(note, cap,
+				 "This guest booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from the firmware build "
+				 "rather than switched off. Give the VM a "
+				 "Secure Boot capable firmware -- on libvirt "
+				 "that is an OVMF secboot build with enrolled "
+				 "keys -- and boot it again. The verifier pins "
+				 "the Secure Boot state, so a guest without it "
+				 "cannot attest.");
+		else
+			snprintf(note, cap,
+				 "This host booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from this firmware build "
+				 "rather than switched off. A firmware update "
+				 "from the board vendor is what adds it; there "
+				 "is no setting to change on the running "
+				 "build. The verifier pins the Secure Boot "
+				 "state, so a host without it cannot attest.");
 		return STAGE_BLOCKED;
 	}
 	if (sb == 0) {

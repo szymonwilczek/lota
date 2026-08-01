@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <sys/xattr.h>
@@ -204,6 +205,7 @@ int probe_file_ima_signed(const char *path)
  * 4-byte attribute header precedes the payload in efivarfs
  */
 #define EFI_GLOBAL_GUID "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+#define EFI_FIRMWARE_DIR "/sys/firmware/efi"
 #define EFIVARS_DIR "/sys/firmware/efi/efivars/"
 #define SECUREBOOT_EFIVAR EFIVARS_DIR "SecureBoot-" EFI_GLOBAL_GUID
 #define SETUPMODE_EFIVAR EFIVARS_DIR "SetupMode-" EFI_GLOBAL_GUID
@@ -266,6 +268,29 @@ int probe_efivar_bit0_at(const char *path)
 	if (ret < 0)
 		return ret;
 	return val & 1U ? 1 : 0;
+}
+
+/* Whether the machine booted through UEFI at all.
+ *
+ * Asked apart from Secure Boot because missing SecureBoot variable does not say
+ * which of two machines this is: legacy BIOS boot, or UEFI firmware built without
+ * Secure Boot support.
+ * Firmware directory exists in the second case and not in the first,
+ * and the two need opposite instructions.
+ */
+int probe_firmware_is_uefi_at(const char *dir)
+{
+	struct stat st;
+
+	if (!dir)
+		return 0;
+
+	return stat(dir, &st) == 0 && S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+int probe_firmware_is_uefi(void)
+{
+	return probe_firmware_is_uefi_at(EFI_FIRMWARE_DIR);
 }
 
 int probe_secureboot(void)

@@ -84,6 +84,15 @@ enum probe_fstype probe_path_fstype(const char *path);
  * 0 when it has none or only a bare digest, errno on read failure. */
 int probe_file_ima_signed(const char *path);
 
+/* 1 when the machine booted through UEFI, 0 when it did not.
+ *
+ * Separate from probe_secureboot(): missing SecureBoot variable is either legacy
+ * BIOS boot or UEFI firmware without Secure Boot support, and the two get
+ * different instructions.
+ * _at form takes the firmware directory so the decision is testable without reboot */
+int probe_firmware_is_uefi(void);
+int probe_firmware_is_uefi_at(const char *dir);
+
 /* 1 = Secure Boot enabled, 0 = disabled/setup mode,
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
 int probe_secureboot(void);
