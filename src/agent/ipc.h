@@ -139,6 +139,18 @@ struct ipc_context {
 	struct dbus_context *dbus;
 	int dbus_fd;
 
+	/*
+	 * Protected process was ended here for its owner.
+	 *
+	 * Sticky for the boot and kept beside status_flags rather than in it,
+	 * because that word is republished wholesale on every attestation round
+	 * and would drop the bit.
+	 *
+	 * ipc_update_status folds it back in, so the status answer, the token
+	 * and the D-Bus property carry it from one source.
+	 */
+	bool protected_terminated;
+
 	/* Attestation state */
 	uint32_t status_flags;
 	uint64_t last_attest_time;

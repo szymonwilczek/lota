@@ -2247,8 +2247,6 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 	int pidfd;
 	int uid_ret;
 
-	(void)ctx;
-
 	if (payload_len < sizeof(req)) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
 		return;
@@ -2339,6 +2337,25 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 		    "the request of uid=%d pid=%d",
 		    req.pid, target_uid, req.signal, client->peer_uid,
 		    client->peer_pid);
+
+	/*
+	 * What the publisher gets in exchange for what the player got back:
+	 * the host says for the rest of the boot that a protected process was
+	 * ended here, so session closed locally is not the same silence as process
+	 * that vanished.
+	 * Published through the status word, which the token is built from,
+	 * so both readings agree -- the anti-cheat heartbeat binds the flags it
+	 * read from the status into the nonce the token is quoted over.
+	 *
+	 * Set here rather than through ipc_update_status, which stamps
+	 * the last attestation time: nothing was attested by ending a process.
+	 */
+	ctx->protected_terminated = true;
+	if (!(ctx->status_flags & LOTA_STATUS_PROTECTED_TERMINATED)) {
+		ctx->status_flags |= LOTA_STATUS_PROTECTED_TERMINATED;
+		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
+		dbus_emit_status_changed(ctx->dbus, ctx->status_flags);
+	}
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
@@ -2978,6 +2995,13 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 		return;
 
 	uint32_t old_flags = ctx->status_flags;
+
+	/*
+	 * termination that happened cannot be un-happened by the next attestation
+	 * round, which publishes this word from scratch.
+	 */
+	if (ctx->protected_terminated)
+		flags |= LOTA_STATUS_PROTECTED_TERMINATED;
 
 	ctx->status_flags = flags;
 	ctx->valid_until = valid_until;
