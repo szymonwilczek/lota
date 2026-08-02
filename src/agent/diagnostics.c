@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -75,6 +76,96 @@ static int ipc_request_shutdown(void)
 	return 0;
 }
 
+/*
+ * Ask the agent to end a protected process.
+ *
+ * Socket owner is the only thing on the machine that can:
+ * protected task takes no signal from a terminal, task manager or a root shell.
+ * The agent answers for a caller kill(2) would already have allowed,
+ * so this runs as the player who owns the title, without sudo.
+ *
+ * @out_count receives the protected-set size the agent reported,
+ * which is what the caller can observe rather than a promise the process has gone.
+ */
+static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
+					   uint32_t *out_count)
+{
+	struct sockaddr_un addr;
+	struct lota_ipc_request req = {
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.cmd = LOTA_IPC_CMD_TERMINATE_PROTECTED,
+		.payload_len = sizeof(struct lota_ipc_terminate_request),
+	};
+	struct lota_ipc_terminate_request payload = {
+		.pid = pid,
+		.signal = sig,
+	};
+	struct lota_ipc_terminate_response body;
+	struct lota_ipc_response resp;
+	int fd;
+	int ret;
+
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -errno;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+
+	ret = lota_write_full(fd, &req, sizeof(req));
+	if (ret == 0)
+		ret = lota_write_full(fd, &payload, sizeof(payload));
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
+
+	ret = lota_read_full(fd, &resp, sizeof(resp));
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
+
+	if (resp.magic != LOTA_IPC_MAGIC || resp.version != LOTA_IPC_VERSION) {
+		close(fd);
+		return -EPROTO;
+	}
+
+	if (resp.result != LOTA_IPC_OK) {
+		close(fd);
+		/*
+		 * Agent's journal names which boundary refused this.
+		 * Map the two the caller can act on: target nobody protected
+		 * is an ordinary process the caller can signal themselves.
+		 */
+		return resp.result == LOTA_IPC_ERR_BAD_REQUEST ? -EINVAL :
+								 -EACCES;
+	}
+
+	if (resp.payload_len != sizeof(body)) {
+		close(fd);
+		return -EPROTO;
+	}
+
+	ret = lota_read_full(fd, &body, sizeof(body));
+	close(fd);
+	if (ret < 0)
+		return ret;
+
+	if (out_count)
+		*out_count = body.protect_pid_count;
+
+	return 0;
+}
+
 static int diagnostic_exit_code(int ret)
 {
 	if (ret < 0)
@@ -100,6 +191,42 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				strerror(-sret));
 			return 1;
 		}
+		return 0;
+	}
+
+	if (opts->terminate_protected_flag) {
+		uint32_t sig = opts->force_flag ? SIGKILL : SIGTERM;
+		uint32_t count = 0;
+		int tret = ipc_request_terminate_protected(
+			opts->terminate_protected_pid, sig, &count);
+
+		if (tret == -EINVAL) {
+			fprintf(stderr,
+				"PID %u is not a protected process, so an "
+				"ordinary kill reaches it.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -EACCES) {
+			fprintf(stderr,
+				"The agent refused to end PID %u. Its journal "
+				"names why; a process belonging to another "
+				"user needs root.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret < 0) {
+			fprintf(stderr,
+				"Could not ask the agent to end PID %u: %s\n",
+				opts->terminate_protected_pid, strerror(-tret));
+			return 1;
+		}
+
+		printf("Sent %s to protected PID %u; %u process%s still "
+		       "protected.\n",
+		       opts->force_flag ? "SIGKILL" : "SIGTERM",
+		       opts->terminate_protected_pid, count,
+		       count == 1 ? "" : "es");
 		return 0;
 	}
 

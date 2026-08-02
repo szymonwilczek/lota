@@ -217,6 +217,8 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "test-ipc", no_argument, 0, 'c' },
 		{ "test-signed", no_argument, 0, 'S' },
 		{ "shutdown", no_argument, 0, 1001 },
+		{ "terminate-protected", required_argument, 0, 1042 },
+		{ "force", no_argument, 0, 1043 },
 		{ "export-policy", no_argument, 0, 'E' },
 		{ "attest", no_argument, 0, 'a' },
 		{ "attest-interval", required_argument, 0, 'I' },
@@ -376,6 +378,19 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1016:
 			opts->allow_publisher = optarg;
+			break;
+		case 1042: {
+			uint32_t v;
+
+			if (safe_parse_u32_dec(optarg, &v) < 0 || v == 0) {
+				fprintf(stderr, "Invalid PID: %s\n", optarg);
+				return 1;
+			}
+			opts->terminate_protected_pid = v;
+			opts->terminate_protected_flag = 1;
+		} break;
+		case 1043:
+			opts->force_flag = 1;
 			break;
 		case 1040:
 			opts->add_publisher = optarg;
