@@ -130,6 +130,25 @@ enum lota_error {
 #define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
 
 /*
+ * Protected process was ended locally on this host since it booted.
+ *
+ * Process that asked to be protected takes no signal from anything but itself,
+ * the agent or the kernel, so a title that hangs can only be closed by asking
+ * the agent to end it -- and the agent does that for whoever kill(2) would have
+ * allowed, the owner of the process or root.
+ * The player gets their machine back; this bit is what the publisher gets,
+ * and it stays set until the host reboots.
+ *
+ * It says a session was ended on the machine rather than a process quietly
+ * disappearing.
+ *
+ * It is not an accusation: closing a hung game is the ordinary reason for it.
+ * What pairs with it is the protected set the token carries -- publisher that
+ * knows which of its processes should be in that set can see which one left.
+ */
+#define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

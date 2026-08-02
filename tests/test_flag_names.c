@@ -64,6 +64,20 @@ int main(void)
 	CHECK(strstr(buf, "TOKEN_ONLY") && !strstr(buf, "ATTESTED"),
 	      "a token-only host decodes as healthy and unjudged");
 
+	/*
+	 * Protected process ended locally is a thing a player did, so the title
+	 * showing them why the machine reads as it does has to be able to say it.
+	 * Undecoded, the same host looks unexplained.
+	 */
+	CHECK(names(LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED"),
+	      "PROTECTED_TERMINATED is named");
+
+	lota_flags_to_string(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK |
+				     LOTA_FLAG_PROTECTED_TERMINATED,
+			     buf, sizeof(buf));
+	CHECK(strstr(buf, "ATTESTED") && strstr(buf, "PROTECTED_TERMINATED"),
+	      "an attested host that ended a protected process decodes as both");
+
 	CHECK(lota_flags_to_string(LOTA_FLAG_ATTESTED, buf, 2) ==
 		      LOTA_ERR_BUFFER_TOO_SMALL,
 	      "a buffer too small is refused rather than truncated silently");

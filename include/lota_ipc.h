@@ -124,6 +124,13 @@ enum lota_ipc_result {
 		  object could not be measured and is absent from the fold;   \
 		  what that is worth is the relying party's policy */
 
+#define LOTA_STATUS_PROTECTED_TERMINATED \
+	(1                               \
+	 << 10) /* the agent ended a protected process for its owner since    \
+		   this host booted. Sticky until the next boot, and carried  \
+		   by the status word and the token alike, so session ended   \
+		   locally is visible rather than a process that vanished */
+
 /*
  * Request header
  *
