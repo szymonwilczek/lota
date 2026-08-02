@@ -1226,8 +1226,12 @@ static void renew_target_cert_if_due(struct attest_target *t)
  */
 static bool target_reporting_now(struct attest_target *t)
 {
-	if (!t->session_gated || t->sessions > 0)
+	if (attest_target_reports(t))
 		return true;
+
+	/* publisher who runs no verifier holds no verdict to lose */
+	if (t->token_only)
+		return false;
 
 	if (t->attested) {
 		lota_info("No session left for %s; reporting stops until a "
@@ -1250,27 +1254,19 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	int ret;
 
 	/*
-	 * Publisher who runs no verifier still needs everything a round does
-	 * except the report:
-	 * the enrollment their backend's trust starts at, the AIK rotation,
-	 * and the certificate renewal that keeps the key token is signed
-	 * with chainable.
-	 * Skipping the target entirely would let that certificate lapse under
-	 * a player who is playing.
+	 * Every publisher this host answers to needs the same ceremony,
+	 * whether or not a title of theirs is running and whether or not they
+	 * run a verifier: the enrollment their trust starts at, the AIK rotation,
+	 * and the certificate renewal that keeps the key a token is signed with
+	 * chainable. It runs before either gate below.
+	 *
+	 * Gating it on a session would leave a session-gated publisher unreachable
+	 * for good: the ceremony would wait for a title, and a title cannot select
+	 * a publisher this host never enrolled with -- SET_PROFILE refuses one.
+	 *
+	 * Gating it on verifier would let the certificate lapse under player
+	 * who is playing.
 	 */
-	if (t->token_only) {
-		if (!enroll_target_if_needed(t))
-			return t->interval;
-		if (bind_target(t) == 0) {
-			rotate_bound_aik_if_due(aik_ttl);
-			renew_target_cert_if_due(t);
-		}
-		return t->interval;
-	}
-
-	if (!target_reporting_now(t))
-		return t->interval;
-
 	if (!enroll_target_if_needed(t)) {
 		/* Nothing to report with:
 		 * no certificate, so every verifier refuses.
@@ -1285,7 +1281,12 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (ret == 0) {
 		rotate_bound_aik_if_due(aik_ttl);
 		renew_target_cert_if_due(t);
+	}
 
+	if (!target_reporting_now(t))
+		return t->interval;
+
+	if (ret == 0) {
 		lota_dbg("Attestation round starting for %s", t->label);
 		ret = attest_once(t->server, t->port,
 				  t->ca_cert[0] ? t->ca_cert : NULL,

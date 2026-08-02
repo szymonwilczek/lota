@@ -258,6 +258,13 @@ the whole boot-to-now window: the quote is a fresh signed read of state that
 already existed. On-demand *enforcement* would prove nothing, which is why only
 reporting follows the session.
 
+Neither is the enrollment ceremony. Every configured publisher is enrolled
+with, has its AIK rotated and its certificate renewed on the host's cadence,
+whether or not a title of theirs is running. Waiting for a session would leave
+a session-gated publisher unreachable: a title cannot select a publisher this
+machine never enrolled with, so the session that would trigger the enrollment
+could never be opened. What the gate withholds is the report, not the key.
+
 While no title of a publisher's is running, that publisher has no live verdict:
 the agent stops reporting to them and reports the host as not attested for
 them. A title that names no publisher reads the host-wide answer, which is now

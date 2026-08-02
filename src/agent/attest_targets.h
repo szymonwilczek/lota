@@ -103,6 +103,25 @@ struct attest_target {
 };
 
 /*
+ * Whether this round sends report for @t.
+ *
+ * Two publishers are not reported to: one who verifies tokens in their own backend
+ * (nothing here holds verdict of theirs), and session-gated one with no title
+ * of theirs running (reporting follows the session).
+ * Neither is a reason to skip the round's enrollment, AIK rotation and certificate
+ * renewal -- those run for every configured publisher, which is what keeps
+ * session-gated one reachable at all.
+ *
+ * Pure so both gates are pinned without a TPM, a verifier or a live title.
+ */
+static inline bool attest_target_reports(const struct attest_target *t)
+{
+	if (!t || t->token_only)
+		return false;
+	return !t->session_gated || t->sessions > 0;
+}
+
+/*
  * Build the target list.
  *
  * Configured profile list is the target list:

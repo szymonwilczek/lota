@@ -284,6 +284,46 @@ static void test_effective_interval(void)
 	      "a configured cadence runs the loop without profiles too");
 }
 
+/*
+ * The two gates that decide whether a round reports.
+ * Neither may gate the round's enrollment: session-gated publisher that has
+ * never enrolled cannot be selected by a title (SET_PROFILE refuses one),
+ * so waiting for session before enrolling would leave that profile unreachable
+ * for good.
+ */
+static void test_target_reports(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_reports(&t),
+	      "a plain publisher is reported to every round");
+
+	memset(&t, 0, sizeof(t));
+	t.token_only = true;
+	CHECK(!attest_target_reports(&t),
+	      "a publisher who runs no verifier is never reported to");
+
+	memset(&t, 0, sizeof(t));
+	t.session_gated = true;
+	t.sessions = 0;
+	CHECK(!attest_target_reports(&t),
+	      "a session-gated publisher with no title running is not reported to");
+
+	t.sessions = 1;
+	CHECK(attest_target_reports(&t),
+	      "the same publisher is reported to while a title of theirs runs");
+
+	memset(&t, 0, sizeof(t));
+	t.token_only = true;
+	t.session_gated = true;
+	t.sessions = 3;
+	CHECK(!attest_target_reports(&t),
+	      "running no verifier outranks a live session");
+
+	CHECK(!attest_target_reports(NULL), "no target is reported to");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -293,6 +333,7 @@ int main(void)
 	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
+	test_target_reports();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
