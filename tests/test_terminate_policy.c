@@ -153,6 +153,29 @@ int main(void)
 	CHECK(terminate_policy_decide(NULL) == TERMINATE_DENY_TARGET,
 	      "a missing request is refused rather than assumed");
 
+	/*
+	 * Caller sees a wire code, not the sentence, so the code has to separate
+	 * the cases a player can act on.
+	 * One code for all of them makes a refusal say the wrong thing:
+	 * live run had the agent's own PID and PID 1 both reported as
+	 * "belongs to another user"
+	 */
+	CHECK(terminate_decision_result(TERMINATE_DENY_NOT_PROTECTED) ==
+		      LOTA_IPC_ERR_NOT_PROTECTED,
+	      "an unprotected target has a code of its own");
+	CHECK(terminate_decision_result(TERMINATE_DENY_TARGET) ==
+		      LOTA_IPC_ERR_TARGET_REFUSED,
+	      "a target this verb does not speak for has a code of its own");
+	CHECK(terminate_decision_result(TERMINATE_DENY_AGENT) ==
+		      LOTA_IPC_ERR_TARGET_REFUSED,
+	      "the agent is refused as a target, not as a caller");
+	CHECK(terminate_decision_result(TERMINATE_DENY_OWNER) ==
+		      LOTA_IPC_ERR_ACCESS_DENIED,
+	      "a caller who does not own the process is denied access");
+	CHECK(terminate_decision_result(TERMINATE_DENY_SIGNAL) ==
+		      LOTA_IPC_ERR_ACCESS_DENIED,
+	      "a signal outside the two relayed is denied access");
+
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
 }
