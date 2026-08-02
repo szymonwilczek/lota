@@ -189,6 +189,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	}
 
 	if (opts->attest_flag) {
+		int interval;
+
 		if (opts->no_verify_tls &&
 		    !opts->insecure_allow_no_verify_tls) {
 			fprintf(stderr, "ERROR: --no-verify-tls is INSECURE "
@@ -233,12 +235,24 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			}
 		}
 
-		if (opts->attest_interval > 0)
+		/*
+		 * Profile list is the target list, so host that names publishers
+		 * attests to them continuously.
+		 * Unset cadence says the host never chose one, not that it wants
+		 * the single-verifier one-shot below:
+		 * that path has no target list and would attest to the top-level
+		 * verifier -- unset on consumer install -- while every configured
+		 * publisher waited.
+		 */
+		interval = attest_effective_interval(
+			opts->attest_interval, cfg ? cfg->profile_count : 0);
+
+		if (interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
 				cfg, opts->server_addr, opts->server_port,
 				opts->ca_cert_path, opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
-				opts->attest_interval, opts->aik_ttl));
+				interval, opts->aik_ttl));
 		return diagnostic_exit_code(
 			do_attest(opts->server_addr, opts->server_port,
 				  opts->ca_cert_path, opts->no_verify_tls,
