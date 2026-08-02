@@ -236,6 +236,21 @@ allow lota_agent_t file_type:file { getattr open read ioctl };
 # /proc/<pid>/map_files of a process the agent did not spawn
 domain_read_all_domains_state(lota_agent_t)
 
+# Ending a protected process on its owner's behalf
+#
+# Protected task takes no signal from anything but itself, the agent
+# or the kernel, so a hung title can be closed only by asking the agent
+# to deliver one.
+# The agent answers for a caller kill(2) would already have allowed, which means
+# it signals processes of another uid and needs the kill capability for it.
+#
+# The target's domain is not knowable here for the same reason the measurement
+# rules above are open: title runs as whatever the distribution confines it to.
+# Only signal and sigkill are granted, which is what SIGTERM and SIGKILL need;
+# the agent relays nothing else.
+allow lota_agent_t self:capability kill;
+allow lota_agent_t domain:process { signal sigkill };
+
 # /boot/vmlinuz-*
 files_read_boot_files(lota_agent_t)
 files_read_boot_symlinks(lota_agent_t)

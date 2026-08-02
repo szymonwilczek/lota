@@ -10,10 +10,14 @@
 #include "ipc.h"
 #include "ipc_payload.h"
 #include "protect_pids.h"
+#include "terminate_policy.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <limits.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include <openssl/crypto.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -2172,6 +2176,185 @@ rollback_bpf:
 	build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 }
 
+/*
+ * The real uid of @pid, from /proc/<pid>/status.
+ *
+ * Caller holds a pidfd on the same process, which pins the PID number against
+ * reuse, so the line read here belongs to the process that will be signalled
+ * and not to a successor wearing its number.
+ */
+static int read_pid_real_uid(pid_t pid, uint32_t *out_uid)
+{
+	char path[64];
+	FILE *fp;
+	char line[512];
+	int ret = -ESRCH;
+
+	if (!out_uid || pid <= 0)
+		return -EINVAL;
+
+	snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+	fp = fopen(path, "r");
+	if (!fp)
+		return -errno;
+
+	while (fgets(line, sizeof(line), fp)) {
+		unsigned int real_uid;
+
+		if (strncmp(line, "Uid:", 4) != 0)
+			continue;
+		if (sscanf(line + 4, "%u", &real_uid) != 1)
+			break;
+		*out_uid = (uint32_t)real_uid;
+		ret = 0;
+		break;
+	}
+
+	fclose(fp);
+	return ret;
+}
+
+/*
+ * End a protected process on behalf of its owner.
+ *
+ * Protected task takes no signal from anything but itself, the agent
+ * or the kernel, which is what stops a cheat from killing the process being
+ * measured and also what leaves a player with a hung title and no way out but
+ * a reboot.
+ *
+ * The agent holds the identity the LSM accepts, so it delivers the signal for
+ * caller kill(2) would already have allowed -- the owner of the process,
+ * or root -- and refuses everything past that.
+ *
+ * There is no operator privilege gate here on purpose.
+ * Requiring a verity-allowlisted caller, as UNPROTECT_PID does, would reproduce
+ * the dead end on the machines this exists for: that list is empty on a default
+ * install.
+ * What keeps the widening honest is that the request cannot be made anywhere but
+ * here, so nothing ends a protected process without the agent recording it.
+ */
+static void handle_terminate_protected(struct ipc_context *ctx,
+				       struct ipc_client *client,
+				       const uint8_t *payload,
+				       uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_terminate_request req;
+	struct lota_ipc_terminate_response *out;
+	struct terminate_request decision_input = { 0 };
+	enum terminate_decision decision;
+	uint32_t target_uid = 0;
+	int pidfd;
+	int uid_ret;
+
+	(void)ctx;
+
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+
+	if (req.pid == 0 || req.pid > INT_MAX) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	/*
+	 * Hold the process open before anything is read or decided.
+	 * pidfd pins the PID number for as long as it is open,
+	 * so the /proc entry consulted below and the kill() issued after it
+	 * address one process, even if that process exits in between.
+	 */
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+	pidfd = (int)syscall(SYS_pidfd_open, (pid_t)req.pid, 0);
+	if (pidfd < 0) {
+		lota_warn("TERMINATE_PROTECTED for pid=%u from uid=%d: %s",
+			  req.pid, client->peer_uid, strerror(errno));
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	uid_ret = read_pid_real_uid((pid_t)req.pid, &target_uid);
+	if (uid_ret < 0) {
+		close(pidfd);
+		lota_warn("TERMINATE_PROTECTED for pid=%u from uid=%d: cannot "
+			  "read the owner of that process (%s)",
+			  req.pid, client->peer_uid, strerror(-uid_ret));
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+
+	/* judge membership against the processes that are actually running */
+	runtime_protect_reap_exited();
+
+	agent_globals_lock(&g_agent);
+	decision_input.target_is_protected =
+		pid_set_contains(g_agent.policy_protect_pids,
+				 g_agent.policy_protect_pid_count,
+				 req.pid) != 0;
+	agent_globals_unlock(&g_agent);
+
+	decision_input.target_pid = req.pid;
+	decision_input.target_uid = target_uid;
+	decision_input.caller_uid = (uint32_t)client->peer_uid;
+	decision_input.caller_pid = (uint32_t)client->peer_pid;
+	decision_input.agent_pid = (uint32_t)getpid();
+	decision_input.signal = (int)req.signal;
+
+	decision = terminate_policy_decide(&decision_input);
+	if (decision != TERMINATE_ALLOW) {
+		close(pidfd);
+		lota_warn("TERMINATE_PROTECTED denied for uid=%d pid=%d "
+			  "target=%u sig=%u: %s",
+			  client->peer_uid, client->peer_pid, req.pid,
+			  req.signal, terminate_decision_reason(decision));
+		build_error_response(client,
+				     decision == TERMINATE_DENY_NOT_PROTECTED ?
+					     LOTA_IPC_ERR_BAD_REQUEST :
+					     LOTA_IPC_ERR_ACCESS_DENIED);
+		return;
+	}
+
+	if (kill((pid_t)req.pid, (int)req.signal) < 0) {
+		int err = errno;
+
+		close(pidfd);
+		lota_err("TERMINATE_PROTECTED failed for pid=%u sig=%u: %s",
+			 req.pid, req.signal, strerror(err));
+		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
+		return;
+	}
+	close(pidfd);
+
+	/*
+	 * Recorded at notice level rather than info:
+	 * this is the one path on the machine that ends a measured process,
+	 * and the operator reading back a session wants it beside
+	 * the attestation rounds.
+	 */
+	lota_notice("Protected pid=%u (uid=%u) terminated with signal %u at "
+		    "the request of uid=%d pid=%d",
+		    req.pid, target_uid, req.signal, client->peer_uid,
+		    client->peer_pid);
+
+	resp->magic = LOTA_IPC_MAGIC;
+	resp->version = LOTA_IPC_VERSION;
+	resp->result = LOTA_IPC_OK;
+	resp->payload_len = sizeof(*out);
+	out = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
+	out->pid = req.pid;
+	out->signal = req.signal;
+	agent_globals_lock(&g_agent);
+	out->protect_pid_count = (uint32_t)g_agent.policy_protect_pid_count;
+	agent_globals_unlock(&g_agent);
+	out->_reserved1 = 0;
+	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*out);
+	client->send_offset = 0;
+}
+
 static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
 			    const uint8_t *payload, uint32_t payload_len)
 {
@@ -2263,6 +2446,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_SYNC_ATTEST:
 		handle_sync_attest(ctx, client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_TERMINATE_PROTECTED:
+		handle_terminate_protected(ctx, client, payload, payload_len);
 		break;
 
 	case LOTA_IPC_CMD_SHUTDOWN:

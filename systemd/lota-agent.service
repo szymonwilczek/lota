@@ -95,7 +95,14 @@ DeviceAllow=/dev/tpm0 rw
 # is missing must never be issued as trusted one, so every token on the host is refused.
 # It buys no debugger: attaching is denied to the agent as well, by the agent's
 # own LSM hook, which exempts it for read access only.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG CAP_SYS_PTRACE
+#
+# CAP_KILL is what lets the agent end a protected process for its owner.
+# Such a process takes no signal from anything but itself, the agent
+# or the kernel, so a hung title would otherwise cost the player a reboot;
+# the agent relays SIGTERM or SIGKILL for a caller kill(2) would have allowed,
+# and a title runs as the player rather than as root, so signalling it crosses
+# a uid boundary and needs the capability.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG CAP_SYS_PTRACE CAP_KILL
 AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_SYS_PTRACE
 
 # prevent acquiring new privileges via execve
