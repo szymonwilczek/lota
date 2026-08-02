@@ -36,6 +36,15 @@
 #define RELYING_PARTY_TOKEN_WINDOW_SEC (300 + 60)
 
 /*
+ * Cadence a host attests at when it names publishers but not an interval.
+ * It matches the value configs/lota.conf.example ships, so host that took
+ * the default and a host that copied the example behave the same, and it sits
+ * at the ceiling below -- the widest spacing whose tokens every relying party
+ * still accepts.
+ */
+#define DEFAULT_ATTEST_INTERVAL 300
+
+/*
  * Ceiling on the continuous-attestation interval.
  * Above it the loop mints tokens no relying party accepts, which is running agent
  * whose every token is refused.
@@ -47,6 +56,11 @@
 _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,
 	       "attestation interval floor must stay below the ceiling");
 
+/* The default a host falls back to has to be one an operator could have set */
+_Static_assert(DEFAULT_ATTEST_INTERVAL >= MIN_ATTEST_INTERVAL &&
+		       DEFAULT_ATTEST_INTERVAL <= MAX_ATTEST_INTERVAL,
+	       "the default attestation interval must lie between the bounds");
+
 /*
  * Slack is charged against the same window the ceiling is derived from,
  * so token minted at the ceiling still lands inside it.
@@ -54,6 +68,24 @@ _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,
 _Static_assert(MAX_ATTEST_INTERVAL + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
 		       RELYING_PARTY_TOKEN_WINDOW_SEC,
 	       "a token minted at the interval ceiling must stay verifiable");
+
+/*
+ * The cadence --attest runs at:
+ * what the host configured, the default when it named publishers but no interval,
+ * and 0 when it named neither -- the only case that still belongs to the
+ * single-verifier one-shot.
+ *
+ * Pure function so the choice is testable without a TPM or a verifier:
+ * it decides whether a configured publisher list is attested to at all.
+ */
+static inline int attest_effective_interval(int configured, int profile_count)
+{
+	if (configured > 0)
+		return configured;
+	if (profile_count > 0)
+		return DEFAULT_ATTEST_INTERVAL;
+	return 0;
+}
 
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,

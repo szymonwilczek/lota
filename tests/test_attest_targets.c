@@ -24,6 +24,7 @@
 #include <openssl/types.h>
 #include <openssl/x509.h>
 
+#include "../src/agent/attest.h"
 #include "../src/agent/attest_targets.h"
 
 static int g_failures;
@@ -222,6 +223,27 @@ static void test_more_profiles_than_room(void)
 	      "a list that does not fit is refused rather than truncated");
 }
 
+/*
+ * Configured publisher list has to be attested to.
+ * The cadence is what decides whether the loop runs at all, so host that named
+ * publishers and no interval must not fall through to the single-verifier
+ * one-shot -- that path has no target list and reports to a verifier a consumer
+ * install never set.
+ */
+static void test_effective_interval(void)
+{
+	CHECK(attest_effective_interval(0, 0) == 0,
+	      "no publishers and no interval stays a one-shot");
+	CHECK(attest_effective_interval(0, 1) == DEFAULT_ATTEST_INTERVAL,
+	      "one publisher and no interval attests at the default cadence");
+	CHECK(attest_effective_interval(0, 8) == DEFAULT_ATTEST_INTERVAL,
+	      "several publishers and no interval do the same");
+	CHECK(attest_effective_interval(45, 3) == 45,
+	      "a configured cadence wins over the default");
+	CHECK(attest_effective_interval(45, 0) == 45,
+	      "a configured cadence runs the loop without profiles too");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -229,6 +251,7 @@ int main(void)
 	test_single_verifier();
 	test_profiles_replace_the_single_verifier();
 	test_more_profiles_than_room();
+	test_effective_interval();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
