@@ -43,13 +43,19 @@ static int tests_passed;
 	} while (0)
 
 /* fill a module with a soname and a verity digest of byte value `fill` */
-static void make_module(struct lota_runtime_image_module *m, const char *soname,
-			uint8_t fill)
+static void make_module_len(struct lota_runtime_image_module *m,
+			    const char *soname, uint8_t fill, uint32_t len)
 {
 	memset(m, 0, sizeof(*m));
 	strncpy(m->soname, soname, LOTA_RUNTIME_IMAGE_SONAME_MAX - 1);
-	m->verity.len = LOTA_VERITY_DIGEST_SHA512_SIZE;
-	memset(m->verity.digest, fill, LOTA_VERITY_DIGEST_SHA512_SIZE);
+	m->verity.len = len;
+	memset(m->verity.digest, fill, len);
+}
+
+static void make_module(struct lota_runtime_image_module *m, const char *soname,
+			uint8_t fill)
+{
+	make_module_len(m, soname, fill, LOTA_VERITY_DIGEST_SHA512_SIZE);
 }
 
 /*
@@ -176,13 +182,39 @@ int main(void)
 	else
 		FAIL("accepted duplicate");
 
-	TEST("validator rejects non-SHA-512 verity length");
-	make_module(&mods[0], "a.out", 0x11);
-	mods[0].verity.len = 32;
+	TEST("validator accepts a SHA-256 verity length");
+	make_module_len(&mods[0], "a.out", 0x11,
+			LOTA_VERITY_DIGEST_SHA256_SIZE);
+	if (lota_validate_runtime_image_modules(mods, 1) == 0)
+		PASS();
+	else
+		FAIL("rejected a SHA-256 fs-verity digest");
+
+	TEST("validator rejects an unsupported verity length");
+	make_module_len(&mods[0], "a.out", 0x11, 48);
 	if (lota_validate_runtime_image_modules(mods, 1) == -EINVAL)
 		PASS();
 	else
-		FAIL("accepted short verity digest");
+		FAIL("accepted a 48-byte verity digest");
+
+	TEST("validator rejects a zero verity length");
+	make_module_len(&mods[0], "a.out", 0x11, 0);
+	if (lota_validate_runtime_image_modules(mods, 1) == -EINVAL)
+		PASS();
+	else
+		FAIL("accepted an empty verity digest");
+
+	TEST("verity length is bound into the digest");
+	make_module_len(&mods[0], "a.out", 0x11,
+			LOTA_VERITY_DIGEST_SHA256_SIZE);
+	make_module_len(&mods[1], "libc.so.6", 0x22,
+			LOTA_VERITY_DIGEST_SHA256_SIZE);
+	if (lota_compute_runtime_image_digest(mods, 2, b) == 0 &&
+	    reference_digest(mods, 2, ref) == 0 && memcmp(b, ref, 32) == 0 &&
+	    memcmp(a, b, 32) != 0)
+		PASS();
+	else
+		FAIL("SHA-256 set folds like the SHA-512 one");
 
 	TEST("validator rejects empty soname");
 	make_module(&mods[0], "a.out", 0x11);

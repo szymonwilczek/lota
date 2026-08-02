@@ -100,7 +100,16 @@ enum lota_mode {
 #define LOTA_CFG_LOCK_BPF 6 /* 1 = block non-agent writes to LOTA BPF maps */
 #define LOTA_CFG_MAX_ENTRIES 9
 
-/* fs-verity digest format required by LOTA policy enforcement */
+/*
+ * fs-verity digest sizes LOTA policy enforcement accepts.
+ *
+ * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce
+ * by default, so it is the size a distribution-signed object carries;
+ * SHA-512 is the stronger option an operator may choose.
+ * Key always states its own length, and the map key stays SHA-512 wide with
+ * the unused tail zeroed, so both sizes share one map.
+ */
+#define LOTA_VERITY_DIGEST_SHA256_SIZE 32
 #define LOTA_VERITY_DIGEST_SHA512_SIZE 64
 #define LOTA_VERITY_DIGEST_MAX_SIZE LOTA_VERITY_DIGEST_SHA512_SIZE
 
