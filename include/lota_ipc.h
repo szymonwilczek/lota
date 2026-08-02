@@ -57,6 +57,8 @@ enum lota_ipc_cmd {
 		0x08, /* Bind this connection to one publisher profile */
 	LOTA_IPC_CMD_SYNC_ATTEST =
 		0x09, /* Exchange state with the attestation loop (agent peer only) */
+	LOTA_IPC_CMD_TERMINATE_PROTECTED =
+		0x0A, /* End a protected process on behalf of its owner */
 };
 
 /*
@@ -403,6 +405,34 @@ struct lota_ipc_pid_request {
 /* PROTECT_PID / UNPROTECT_PID response payload */
 struct lota_ipc_policy_update {
 	uint8_t policy_digest[32];
+	uint32_t protect_pid_count;
+	uint32_t _reserved1;
+} __attribute__((packed));
+
+/*
+ * TERMINATE_PROTECTED request payload
+ *
+ * Protected process takes no signal from anything but itself, the agent
+ * or the kernel, so its owner asks the agent to deliver one.
+ * Only SIGTERM and SIGKILL are relayed: the verb ends a process,
+ * it does not drive one.
+ */
+struct lota_ipc_terminate_request {
+	uint32_t pid;
+	uint32_t signal;
+} __attribute__((packed));
+
+/*
+ * TERMINATE_PROTECTED response payload
+ *
+ * @protect_pid_count is the set as it stands when the answer is written.
+ * SIGKILL'd process is usually still in it: the kernel drops the task
+ * and the agent reaps it on the next round, so the count is what the caller
+ * can observe, not a promise that the process has gone.
+ */
+struct lota_ipc_terminate_response {
+	uint32_t pid;
+	uint32_t signal;
 	uint32_t protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));
