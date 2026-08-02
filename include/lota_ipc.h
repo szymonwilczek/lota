@@ -88,6 +88,10 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_UNKNOWN_PROFILE = 0x0B,
 	/* nobody on this machine has agreed to answer to that publisher */
 	LOTA_IPC_ERR_CONSENT_REQUIRED = 0x0C,
+	/* nobody protected that process, so an ordinary kill(2) reaches it */
+	LOTA_IPC_ERR_NOT_PROTECTED = 0x0D,
+	/* PID 0, PID 1 or the agent: not a process this verb speaks for */
+	LOTA_IPC_ERR_TARGET_REFUSED = 0x0E,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 

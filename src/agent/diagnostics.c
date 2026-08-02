@@ -142,12 +142,22 @@ static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 	if (resp.result != LOTA_IPC_OK) {
 		close(fd);
 		/*
-		 * Agent's journal names which boundary refused this.
-		 * Map the two the caller can act on: target nobody protected
-		 * is an ordinary process the caller can signal themselves.
+		 * Each refusal keeps its own errno so the caller can say what
+		 * happened rather than guessing:
+		 * a process nobody protected, a target no caller may end this way,
+		 * one that is not there at all,
+		 * and a request that is not this caller's to make.
 		 */
-		return resp.result == LOTA_IPC_ERR_BAD_REQUEST ? -EINVAL :
-								 -EACCES;
+		switch (resp.result) {
+		case LOTA_IPC_ERR_NOT_PROTECTED:
+			return -EINVAL;
+		case LOTA_IPC_ERR_TARGET_REFUSED:
+			return -EPERM;
+		case LOTA_IPC_ERR_BAD_REQUEST:
+			return -ESRCH;
+		default:
+			return -EACCES;
+		}
 	}
 
 	if (resp.payload_len != sizeof(body)) {
@@ -207,11 +217,26 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				opts->terminate_protected_pid);
 			return 1;
 		}
+		if (tret == -ESRCH) {
+			fprintf(stderr,
+				"No process with PID %u, or it is out of this "
+				"agent's reach.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -EPERM) {
+			fprintf(stderr,
+				"PID %u is not a process this verb ends. The "
+				"agent stops with --shutdown, and PID 1 stops "
+				"by rebooting.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
 		if (tret == -EACCES) {
 			fprintf(stderr,
-				"The agent refused to end PID %u. Its journal "
-				"names why; a process belonging to another "
-				"user needs root.\n",
+				"The agent refused to end PID %u: it belongs "
+				"to another user, so ending it needs root. Its "
+				"journal names the reason.\n",
 				opts->terminate_protected_pid);
 			return 1;
 		}

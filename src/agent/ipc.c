@@ -2310,9 +2310,7 @@ static void handle_terminate_protected(struct ipc_context *ctx,
 			  client->peer_uid, client->peer_pid, req.pid,
 			  req.signal, terminate_decision_reason(decision));
 		build_error_response(client,
-				     decision == TERMINATE_DENY_NOT_PROTECTED ?
-					     LOTA_IPC_ERR_BAD_REQUEST :
-					     LOTA_IPC_ERR_ACCESS_DENIED);
+				     terminate_decision_result(decision));
 		return;
 	}
 

@@ -268,6 +268,17 @@ set; a target nobody protected, which the caller can already signal; PID 1 and
 PID 0; and the agent itself, whose stopping is ``--shutdown``'s business
 because PCR 14 commits for the whole boot.
 
+Each of those answers with its own result code, because the code is all the
+caller gets and the sentence it turns into has to match what happened:
+``LOTA_IPC_ERR_NOT_PROTECTED`` for a process nobody protected, which an
+ordinary ``kill`` reaches; ``LOTA_IPC_ERR_TARGET_REFUSED`` for a target the
+command does not speak for at all, PID 0, PID 1 and the agent;
+``LOTA_IPC_ERR_ACCESS_DENIED`` for a request that is not this caller's to
+make, which covers both the wrong signal and the wrong owner; and
+``LOTA_IPC_ERR_BAD_REQUEST`` for a target that is not there. Collapsing them
+misdirects: with one code, ending the agent's own PID reads back as a
+permission problem with somebody else's process.
+
 The handler opens a pidfd on the target before reading its owner or sending
 anything. A pidfd pins the PID number for as long as it is held, so the
 ``/proc`` entry consulted and the signal delivered address one process and not

@@ -34,6 +34,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../../include/lota_ipc.h"
+
 enum terminate_decision {
 	TERMINATE_ALLOW = 0,
 	/* the target is not a process this verb speaks for */
@@ -96,6 +98,36 @@ terminate_policy_decide(const struct terminate_request *req)
 		return TERMINATE_DENY_OWNER;
 
 	return TERMINATE_ALLOW;
+}
+
+/*
+ * The wire code a denial answers with.
+ *
+ * The caller sees this and not the sentence below, so the families a player can
+ * act on stay apart:
+ * a process nobody protected is one an ordinary kill reaches,
+ * a target the verb does not speak for is one no caller can end this way,
+ * and the rest is the request not being theirs to make.
+ *
+ * Collapsing them makes the message wrong -- with one code, ending the agent's
+ * own PID reads as a permission problem with someone else's process.
+ */
+static inline enum lota_ipc_result
+terminate_decision_result(enum terminate_decision d)
+{
+	switch (d) {
+	case TERMINATE_DENY_NOT_PROTECTED:
+		return LOTA_IPC_ERR_NOT_PROTECTED;
+	case TERMINATE_DENY_TARGET:
+	case TERMINATE_DENY_AGENT:
+		return LOTA_IPC_ERR_TARGET_REFUSED;
+	case TERMINATE_DENY_SIGNAL:
+	case TERMINATE_DENY_OWNER:
+		return LOTA_IPC_ERR_ACCESS_DENIED;
+	case TERMINATE_ALLOW:
+		break;
+	}
+	return LOTA_IPC_OK;
 }
 
 /* One sentence per denial, for the journal and for the caller's stderr */
