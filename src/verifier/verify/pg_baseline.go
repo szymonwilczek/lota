@@ -424,9 +424,9 @@ func (s *PostgresBaselineStore) Stats() BaselineStats {
 
 // CheckAndUpdateBootPCRs persists PCR0/PCR1/PCR7 alongside the existing
 // PCR14 baseline.
-// Boot columns are nullable so existing PCR14-only rows from older deployments
-// TOFU-establish the firmware baseline on their next attestation rather than
-// being rejected.
+// Boot columns are nullable because the PCR14 row is written first:
+// client whose firmware baseline is not pinned yet TOFU-establishes it on
+// its next attestation rather than being rejected.
 func (s *PostgresBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
 	ctx := context.Background()
 	now := time.Now()
