@@ -243,7 +243,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 			ret = -errno;
 			goto out;
 		}
-		if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+		if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(d.hdr.digest_size)) {
 			ret = -EINVAL;
 			goto out;
 		}

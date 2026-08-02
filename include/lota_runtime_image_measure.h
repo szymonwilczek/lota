@@ -70,7 +70,7 @@ lota__runtime_image_module_cmp(const struct lota_runtime_image_module *a,
 
 /*
  * Validate the module set: each soname NUL-terminated and non-empty, each
- * verity digest SHA-512 sized, and the set strictly increasing in canonical
+ * verity digest a supported size, and the set strictly increasing in canonical
  * order (which also rejects duplicates).
  */
 static inline int
@@ -89,7 +89,7 @@ lota_validate_runtime_image_modules(const struct lota_runtime_image_module *m,
 			strnlen(m[i].soname, LOTA_RUNTIME_IMAGE_SONAME_MAX);
 		if (slen == 0 || slen >= LOTA_RUNTIME_IMAGE_SONAME_MAX)
 			return -EINVAL;
-		if (m[i].verity.len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+		if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(m[i].verity.len))
 			return -EINVAL;
 		if (i > 0 &&
 		    lota__runtime_image_module_cmp(&m[i - 1], &m[i]) >= 0)

@@ -116,12 +116,19 @@ enum lota_mode {
 /*
  * fs-verity allowlist key used by BPF map and user-space loader.
  *
- * len must be LOTA_VERITY_DIGEST_SHA512_SIZE.
+ * len must be one of the sizes above;
+ * the bytes past len are zero, so key built from either algorithm compares
+ * and hashes as one map key.
  */
 struct lota_verity_digest_key {
 	__u32 len;
 	__u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 };
+
+/* whether a measured digest length is one LOTA policy enforcement takes */
+#define LOTA_VERITY_DIGEST_LEN_SUPPORTED(len)       \
+	((len) == LOTA_VERITY_DIGEST_SHA256_SIZE || \
+	 (len) == LOTA_VERITY_DIGEST_SHA512_SIZE)
 
 _Static_assert(LOTA_VERITY_DIGEST_MAX_SIZE == LOTA_VERITY_DIGEST_SHA512_SIZE,
 	       "fs-verity key width must remain SHA-512 sized");
