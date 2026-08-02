@@ -182,6 +182,15 @@ the machine runs the ``--allow-publisher`` command it prints. That separation
 is deliberate: an installer must not be able to agree, on the player's behalf,
 to a publisher holding an attestation key on their hardware.
 
+**A running agent has to be told.** The daemon answers titles from the
+publisher list it read when it started, so one added since is unknown to it and
+a title naming it is refused with ``LOTA_ERR_UNKNOWN_PROFILE``. ``systemctl
+reload lota-agent`` (SIGHUP) re-reads ``lota.conf`` and hands the new list to
+the socket, with no effect on enforcement, PCR 14 or any existing enrollment --
+the command ``--add-publisher`` prints alongside the consent line. A rebuild
+that fails leaves the previous list in place rather than answering no title at
+all.
+
 Every key below a section header belongs to that section, so the top-level keys
 go above the first profile and nothing top-level may follow one.
 ``lota-agent --dump-config`` prints profiles last for the same reason, which is

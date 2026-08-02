@@ -86,6 +86,47 @@ static void poll_ringbuf_drops(struct agent_loop_ctx *ctx, uint64_t *last_drops,
 		ctx->ipc_ctx->status_flags | LOTA_STATUS_RINGBUF_DROPS, 0);
 }
 
+/*
+ * Re-read the publisher list the IPC layer answers titles from.
+ *
+ * lota.conf gains publishers while the daemon runs
+ * -- `lota-agent -add-publisher` is what game's installer calls --
+ *  and the list handed to the IPC layer at startup does not grow with it.
+ * Title naming publisher added since would be refused as unknown until the next
+ * boot, which is the re-provisioning the profile list exists to avoid.
+ *
+ * Rebuild that fails leaves the previous list in place:
+ * answering titles from stale list beats answering none.
+ */
+static void agent_reload_publishers(struct agent_loop_ctx *ctx)
+{
+	size_t count = 0;
+	int ret;
+
+	if (!ctx->targets || !ctx->target_count || ctx->target_max == 0)
+		return;
+
+	ret = attest_targets_build(
+		ctx->cfg,
+		(ctx->cfg && ctx->cfg->server[0]) ? ctx->cfg->server : NULL,
+		ctx->cfg ? ctx->cfg->port : 0,
+		ctx->cfg ? ctx->cfg->ca_cert : NULL,
+		ctx->cfg ? ctx->cfg->attest_interval : 0, ctx->targets,
+		ctx->target_max, &count);
+	if (ret < 0) {
+		/* no publisher configured at all is valid state,
+		 * and the only one that legitimately empties the list */
+		if (ret == -EINVAL)
+			count = 0;
+		else
+			return;
+	}
+
+	*ctx->target_count = count;
+	ipc_set_profiles(ctx->ipc_ctx, ctx->targets, count);
+	lota_info("Publisher list reloaded: %zu publisher(s)", count);
+}
+
 int agent_run_event_loop(struct agent_loop_ctx *ctx)
 {
 	struct epoll_event events[16];
@@ -143,6 +184,7 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 						ctx->protect_pid_count,
 						ctx->trust_libs,
 						ctx->trust_lib_count);
+					agent_reload_publishers(ctx);
 				}
 			} else if (events[i].data.fd ==
 				   ipc_get_fd(ctx->ipc_ctx)) {

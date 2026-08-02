@@ -683,6 +683,8 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Nothing enrols with them until somebody at this "
 		       "machine agrees:\n");
 		printf("  lota-agent --allow-publisher %s\n", paths.id);
+		printf("A running agent picks the publisher up on reload:\n");
+		printf("  systemctl reload lota-agent\n");
 		return 0;
 	case 0:
 		printf("Publisher %s is already configured as \"%s\"; "
