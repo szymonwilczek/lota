@@ -467,7 +467,7 @@ func TestVerifyEventLog_EmptyLog(t *testing.T) {
 
 	report := &types.AttestationReport{}
 
-	err := VerifyEventLog(report)
+	_, err := VerifyEventLogWithPolicy(report, false)
 	if err == nil {
 		t.Error("Empty event log should produce error")
 	}
@@ -517,7 +517,7 @@ func TestVerifyEventLog_FullPipeline(t *testing.T) {
 	report.TPM.PCRMask = (1 << 0) | (1 << 1)
 	report.EventLog = logData
 
-	err := VerifyEventLog(report)
+	_, err := VerifyEventLogWithPolicy(report, false)
 	if err != nil {
 		t.Errorf("Full pipeline verification should pass: %v", err)
 	}
