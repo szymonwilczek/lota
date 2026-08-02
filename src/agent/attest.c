@@ -1340,44 +1340,6 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 }
 
 /*
- * Returns true when the agent binary on disk is no longer the one this process
- * is running, ie a package update has landed and its effect is waiting on cold boot.
- *
- * The distinction matters to whoever is looking at a screen.
- * Attestation keeps succeeding here, and correctly so:
- * PCR 14 commits to the running build and the report carries that build's hash,
- * so the machine is exactly what it claims to be.
- *
- * What has changed is that the *next* boot will present a different one,
- * and PCR 14 cannot be re-extended without a hardware reset.
- *
- * Saying so while everything still works is the difference between player
- * rebooting when it suits them and a player discovering it when a game refuses
- * to start.
- *
- * /proc/self/exe still resolves to the replaced inode, which is the whole reason
- * the running hash stays valid, so the readlink target carries " (deleted)" suffix
- * once the package manager has swapped the file.
- * That suffix is the cheapest reliable signal available: hashing the path again
- * would re-read the same unlinked inode.
- */
-static bool agent_binary_replaced_on_disk(void)
-{
-	char exe_path[LOTA_MAX_PATH_LEN];
-	static const char deleted_suffix[] = " (deleted)";
-	ssize_t len;
-	size_t suffix_len = sizeof(deleted_suffix) - 1;
-
-	len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-	if (len < 0 || (size_t)len < suffix_len)
-		return false;
-	exe_path[len] = '\0';
-
-	return memcmp(exe_path + (size_t)len - suffix_len, deleted_suffix,
-		      suffix_len) == 0;
-}
-
-/*
  * Host's single answer to "is this machine attested".
  *
  * Every configured publisher has to be satisfied, and the window closes at
@@ -1394,16 +1356,6 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		*status_flags |= LOTA_STATUS_ATTESTED;
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
-
-	/*
-	 * Re-checked every round rather than once at startup:
-	 * the update lands while the daemon runs,
-	 * and the point is to say so from the moment it does.
-	 */
-	if (agent_binary_replaced_on_disk())
-		*status_flags |= LOTA_STATUS_UPDATE_PENDING;
-	else
-		*status_flags &= ~(uint32_t)LOTA_STATUS_UPDATE_PENDING;
 
 	ipc_update_status(&g_agent.ipc_ctx,
 			  reconcile_tpm_lockout(*status_flags),
