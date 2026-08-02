@@ -4,7 +4,9 @@
  * lota-install - Guided, reboot-resumable Player Install
  */
 
+#include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +59,13 @@ static void usage(FILE *out)
 		"                         opted in (%s)\n"
 		"                         or LOTA_AUTO_BRINGUP=1), and stops\n"
 		"                         at the reboot checkpoint\n"
+		"  --verity-manifest FILE Enable fs-verity on every object\n"
+		"                         listed in FILE (one absolute path\n"
+		"                         per line, '#' comments), then stop.\n"
+		"                         A title's runtime measurement covers\n"
+		"                         only objects that carry a digest,\n"
+		"                         and this is how its own binaries\n"
+		"                         get one\n"
 		"  --help, --version\n"
 		"\n"
 		"Lifecycle (after install):\n"
@@ -89,6 +98,7 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		{ "pause", no_argument, 0, 11 },
 		{ "resume", no_argument, 0, 12 },
 		{ "unattended", no_argument, 0, 13 },
+		{ "verity-manifest", required_argument, 0, 14 },
 		{ 0, 0, 0, 0 },
 	};
 	int c;
@@ -147,6 +157,9 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 			opts->yes = 1;
 			opts->plain = 1;
 			break;
+		case 14:
+			opts->verity_manifest = optarg;
+			break;
 		default:
 			usage(stderr);
 			exit(EXIT_INSTALL_USAGE);
@@ -162,6 +175,15 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	    (opts->pause || opts->resume || opts->status_only)) {
 		fprintf(stderr, "lota-install: --unattended cannot be combined "
 				"with --pause, --resume or --status\n");
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	if (opts->verity_manifest && (opts->pause || opts->resume ||
+				      opts->status_only || opts->unattended)) {
+		fprintf(stderr,
+			"lota-install: --verity-manifest runs on its own and "
+			"cannot be combined with --pause, --resume, --status "
+			"or --unattended\n");
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
@@ -276,6 +298,110 @@ static int do_pause(struct install_ctx *ctx)
 	return EXIT_INSTALL_OK;
 }
 
+/*
+ * Make a title's own objects measurable.
+ *
+ * Runtime measurement folded into every token covers a mapped object only when
+ * the kernel holds an fs-verity digest for it.
+ * Title's binaries belong to whoever ships the title, so this walks the object
+ * list they capture and enables verity on each.
+ * Objects belonging to the distribution are deliberately not this tool's business:
+ * enabling verity on packaged file lasts until the next update of that package.
+ *
+ * List is the title's, the privilege is root's and a digest is permanent,
+ * so a line only names an object when probe_manifest_line() takes it:
+ * absolute, no '..' walking it somewhere else.
+ */
+static int do_verity_manifest(struct install_ctx *ctx)
+{
+	unsigned enabled = 0, already = 0, failed = 0;
+	char line[PATH_MAX];
+	char path[PATH_MAX];
+	char note[STAGE_NOTE_CAP];
+	int lineno = 0;
+	FILE *f;
+
+	if (geteuid() != 0) {
+		ui_error(&ctx->ui, "--verity-manifest enables fs-verity and "
+				   "must run as root");
+		return EXIT_INSTALL_USAGE;
+	}
+
+	f = fopen(ctx->opts.verity_manifest, "re");
+	if (!f) {
+		snprintf(note, sizeof(note), "Cannot read %s: %s",
+			 ctx->opts.verity_manifest, strerror(errno));
+		ui_error(&ctx->ui, "%s", note);
+		return EXIT_INSTALL_FAIL;
+	}
+
+	while (fgets(line, sizeof(line), f)) {
+		int rc, state;
+
+		lineno++;
+		rc = probe_manifest_line(line, path, sizeof(path));
+		if (rc == 0)
+			continue;
+		if (rc < 0) {
+			snprintf(note, sizeof(note),
+				 "%s:%d is not an absolute path free of '..'",
+				 ctx->opts.verity_manifest, lineno);
+			ui_error(&ctx->ui, "%s", note);
+			failed++;
+			continue;
+		}
+
+		state = probe_fsverity_state(path);
+		if (state == PROBE_VERITY_ENABLED) {
+			already++;
+			continue;
+		}
+		if (state == PROBE_VERITY_UNSUPPORTED) {
+			snprintf(note, sizeof(note),
+				 "%.512s: the filesystem has no fs-verity "
+				 "support, so this object cannot be measured "
+				 "here",
+				 path);
+			ui_error(&ctx->ui, "%s", note);
+			failed++;
+			continue;
+		}
+
+		rc = probe_fsverity_enable(path);
+		if (rc == 0) {
+			enabled++;
+			continue;
+		}
+
+		/*
+		 * digest already set under another hash algorithm cannot be changed
+		 * in place -- it is property of the inode -- so the route is fresh
+		 * copy of the file, which is the operator's call and not something
+		 * to do behind their back.
+		 */
+		snprintf(note, sizeof(note), "%.512s: %s%s", path,
+			 strerror(-rc),
+			 rc == -EEXIST ? " (fs-verity is already enabled under "
+					 "a different hash algorithm; replace "
+					 "the file to change it)" :
+					 "");
+		ui_error(&ctx->ui, "%s", note);
+		failed++;
+	}
+	fclose(f);
+
+	snprintf(note, sizeof(note),
+		 "fs-verity: %u object%s enabled, %u already had a digest, "
+		 "%u could not be done",
+		 enabled, enabled == 1 ? "" : "s", already, failed);
+	ui_text(&ctx->ui, "%s", note);
+	ui_text(&ctx->ui,
+		"A digest lives on the inode, so replacing a file drops it: "
+		"re-run this after updating any object listed here.");
+
+	return failed == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
+}
+
 /* Lifecycle veneer: resuming after a pause is a reboot, by design. */
 static int do_resume(struct install_ctx *ctx)
 {
@@ -356,6 +482,9 @@ int main(int argc, char **argv)
 
 	if (ctx.opts.status_only)
 		return run_status(&ctx);
+
+	if (ctx.opts.verity_manifest)
+		return do_verity_manifest(&ctx);
 
 	if (geteuid() != 0) {
 		ui_error(&ctx.ui, "lota-install changes system state and "

@@ -68,6 +68,13 @@ struct install_opts {
 	 * and stops at the reboot checkpoint.
 	 */
 	int unattended;
+	/*
+	 * Enable fs-verity on every object named by a runtime manifest,
+	 * then stop.
+	 * Title's own binaries are what its publisher can make measurable,
+	 * and this is the step that does it.
+	 */
+	const char *verity_manifest;
 };
 
 /* Has this host opted into unattended boot-path changes?
