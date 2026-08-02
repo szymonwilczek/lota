@@ -49,6 +49,10 @@ Flags
 |                                  |                                    | per line) for the       |
 |                                  |                                    | runtime measurement     |
 +----------------------------------+------------------------------------+-------------------------+
+| ``--require-full-image``         | off                                | refuse a token without  |
+|                                  |                                    | the full-coverage flag  |
+|                                  |                                    | (see below)             |
++----------------------------------+------------------------------------+-------------------------+
 | ``--tls-cert`` / ``--tls-key``   | (none)                             | PEM server keypair;     |
 |                                  |                                    | enables HTTPS           |
 +----------------------------------+------------------------------------+-------------------------+
@@ -193,3 +197,18 @@ TRUSTED, UNTRUSTED-on-bad-signature, UNTRUSTED-on-unknown-game,
 UNTRUSTED-on-tampered-header, UNTRUSTED-on-flag-mismatch, UNTRUSTED-on-replay,
 REJECT-on-bad-magic, REJECT-on-unsupported-domain, REJECT-on-truncated-token,
 plus ``/nonce`` and ``/state`` happy paths and failure modes.
+
+Runtime coverage as a policy
+----------------------------
+
+A token states whether the agent's runtime measurement covered every object
+the producer maps (``LOTA_FLAG_IMAGE_FULLY_MEASURED``) or only those the
+kernel holds an fs-verity digest for. The bit is inside the signed token, so
+it cannot be claimed by a client that did not earn it.
+
+``--require-full-image`` makes this server demand it: a heartbeat without the
+bit is ``UNTRUSTED`` with the missing flags named. On a host whose
+distribution ships libraries without fs-verity that refuses every heartbeat,
+which is the point -- the choice belongs to the publisher, and this is what
+choosing it looks like. Left off, partial coverage is accepted and the bit is
+still reported, so a backend can log or score it instead.

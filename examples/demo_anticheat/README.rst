@@ -267,10 +267,20 @@ full coverage is the publisher's policy call:
 .. code:: sh
 
    # accept partial coverage (default here)
-   demo_anticheat --once
+   demo_anticheat --once --protect-self
 
-   # demand that every mapped object was measured
-   demo_anticheat --once --require-full-image
+   # the producer refuses to call itself trusted without full coverage
+   demo_anticheat --once --protect-self --require-full-image
+
+   # the publisher refuses it, which is where the decision belongs
+   demo_server --require-full-image ...
+
+The two are different statements. ``--require-full-image`` on the producer
+sets ``required_flags``, so the *client's* own session state reads
+``UNTRUSTED`` -- useful for a launcher that wants to say so before a round
+starts. The verdict a backend acts on is the server's, so a publisher that
+means it sets the flag on the server: the token carries the coverage bit, the
+signature covers it, and the reason names the missing flag.
 
 Two properties are not a policy choice, and the agent refuses a token when
 either fails: something has to have been measured, and the producer's **own

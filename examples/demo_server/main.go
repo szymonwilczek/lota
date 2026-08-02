@@ -94,6 +94,13 @@ func main() {
 		"path to AIK public key (DER or PEM). Required outside test mode.")
 	gamesSpec := flag.String("expected-games", defaultGameID+"="+defaultLicense,
 		"comma-separated list of game_id=license entries the server accepts")
+	requireFullImage := flag.Bool("require-full-image", false,
+		"refuse a heartbeat whose token does not carry "+
+			"LOTA_FLAG_IMAGE_FULLY_MEASURED: the runtime measurement "+
+			"has to have covered every object the producer maps. On a "+
+			"host whose distribution ships libraries without fs-verity "+
+			"that refuses every heartbeat, which is the publisher "+
+			"policy choice this flag exists to make explicit.")
 	maxAgeSec := flag.Uint("max-age", 300,
 		"maximum heartbeat age in seconds")
 	tlsCert := flag.String("tls-cert", "",
@@ -180,8 +187,18 @@ func main() {
 			*maxAgeSec, maxHeartbeatAgeSecCap)
 		os.Exit(2)
 	}
+
+	// LOTA_FLAG_IMAGE_FULLY_MEASURED, from include/lota_gaming.h
+	const flagImageFullyMeasured uint32 = 1 << 9
+
+	var requiredFlags uint32
+	if *requireFullImage {
+		requiredFlags |= flagImageFullyMeasured
+	}
+
 	// #nosec G115 -- bounded by maxHeartbeatAgeSecCap above
-	srv, err := newServer(aik, games, time.Duration(*maxAgeSec)*time.Second)
+	srv, err := newServer(aik, games, time.Duration(*maxAgeSec)*time.Second,
+		requiredFlags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "demo_server: %v\n", err)
 		os.Exit(2)

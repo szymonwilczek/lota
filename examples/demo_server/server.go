@@ -61,13 +61,21 @@ type demoServer struct {
 	gamesByHash     map[[32]byte]gameBinding
 	maxHeartbeatAge time.Duration
 
+	/*
+	 * Flags this publisher demands of the token.
+	 * Heartbeat missing one is UNTRUSTED, which is where a coverage policy lives:
+	 * the machine reports what its runtime measurement covered,
+	 * and the party relying on it decides whether that is enough.
+	 */
+	requiredFlags uint32
+
 	mu       sync.Mutex
 	sessions map[string]*sessionState // keyed by hex(session_id)
 	verdict  map[string]*sessionState // keyed by hex(game_id_hash)
 }
 
 func newServer(aik *rsa.PublicKey, games map[string]gameBinding,
-	maxAge time.Duration,
+	maxAge time.Duration, requiredFlags uint32,
 ) (*demoServer, error) {
 	if len(games) == 0 {
 		return nil, errors.New("no expected games configured")
@@ -84,6 +92,7 @@ func newServer(aik *rsa.PublicKey, games map[string]gameBinding,
 		games:           games,
 		gamesByHash:     byHash,
 		maxHeartbeatAge: maxAge,
+		requiredFlags:   requiredFlags,
 		sessions:        make(map[string]*sessionState),
 		verdict:         make(map[string]*sessionState),
 	}, nil

@@ -52,6 +52,16 @@ var testRuntimeMeasure = [32]byte{
 	0x0F, 0x1E, 0x2D, 0x3C, 0x4B, 0x5A, 0x69, 0x78,
 }
 
+func newTestServerFlags(t *testing.T, key *rsa.PrivateKey,
+	requiredFlags uint32,
+) *demoServer {
+	t.Helper()
+
+	s := newTestServer(t, key)
+	s.requiredFlags = requiredFlags
+	return s
+}
+
 func newTestServer(t *testing.T, key *rsa.PrivateKey) *demoServer {
 	t.Helper()
 	games, err := parseExpectedGames(testGameID+"="+testLicense,
@@ -63,7 +73,7 @@ func newTestServer(t *testing.T, key *rsa.PrivateKey) *demoServer {
 	if key != nil {
 		pub = &key.PublicKey
 	}
-	s, err := newServer(pub, games, 5*time.Minute)
+	s, err := newServer(pub, games, 5*time.Minute, 0)
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
@@ -398,5 +408,45 @@ func TestState_TracksMostRecentVerdict(t *testing.T) {
 	}
 	if st.State != verdictTrusted || st.License != testLicense {
 		t.Fatalf("state=%s license=%s", st.State, st.License)
+	}
+}
+
+/*
+ * Publisher that demands full runtime coverage is demanding a flag,
+ * and the machine reports whether it earned it.
+ * Token without that bit is UNTRUSTED for a reason that names the flags
+ * rather than the signature.
+ */
+func TestHeartbeat_RequiredFlagMissingIsUntrusted(t *testing.T) {
+	const flagImageFullyMeasured uint32 = 1 << 9
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	s := newTestServerFlags(t, key, flagImageFullyMeasured)
+	body := newSignedHeartbeat(t, key, nil)
+
+	got := decodeVerdict(t, postHeartbeat(s, body))
+	if got.State != verdictUntrust {
+		t.Fatalf("state = %q, want %q", got.State, verdictUntrust)
+	}
+	if !strings.Contains(got.Reason, "required attestation flags") {
+		t.Fatalf("reason = %q, want the missing-flag reason", got.Reason)
+	}
+}
+
+func TestHeartbeat_RequiredFlagPresentIsTrusted(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa: %v", err)
+	}
+	/* nothing demanded: the same heartbeat is trusted */
+	s := newTestServerFlags(t, key, 0)
+	body := newSignedHeartbeat(t, key, nil)
+
+	got := decodeVerdict(t, postHeartbeat(s, body))
+	if got.State != verdictTrusted {
+		t.Fatalf("state = %q, want %q", got.State, verdictTrusted)
 	}
 }
