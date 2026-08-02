@@ -6,7 +6,8 @@
 // (the Go mirror of include/attestation.h)
 // and signs the quote so the report passes the production verification path:
 // binding nonce, PCR digest, PCR14 boot-commitment derivation (initramfs lock
-// + boot commitment over zero baseline, the legacy/BIOS event-log shape),
+// + boot commitment over zero baseline, the shape a UEFI host that boots
+// without shim reports),
 // and the AIK certificate chain.
 
 package synth

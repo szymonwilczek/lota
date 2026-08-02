@@ -546,7 +546,8 @@ func TestDerivePCR14_BaselineAware(t *testing.T) {
 // (shim/MOK on UEFI Secure Boot) by replaying the firmware event log, and that
 // the reconstructed baseline feeds the boot-commitment derivation
 func TestPCR14BaselineFromEventLog(t *testing.T) {
-	// nil log -> zero baseline (legacy/BIOS host that never touched PCR14)
+	// nil log -> zero baseline (UEFI host booting without shim, so nothing
+	// ever extended PCR14 before LOTA)
 	if PCR14BaselineFromEventLog(nil) != zeroBaseline {
 		t.Fatal("nil event log must yield a zero baseline")
 	}
