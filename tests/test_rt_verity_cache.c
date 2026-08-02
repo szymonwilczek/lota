@@ -36,9 +36,8 @@ static int tests_passed;
 		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
-static struct lota_rt_verity_key make_key(uint64_t dev, uint64_t ino,
-					  uint64_t size, int64_t sec,
-					  int64_t nsec)
+static struct lota_rt_verity_key
+make_key(uint64_t dev, uint64_t ino, uint64_t size, int64_t sec, int64_t nsec)
 {
 	struct lota_rt_verity_key k = { 0 };
 
@@ -77,9 +76,10 @@ int main(void)
 		FAIL("hit on an empty cache");
 
 	TEST("a stored digest is served back");
-	lota_rt_verity_cache_put(&cache, &key,
-				 &(struct lota_verity_digest_key){
-					 .len = LOTA_VERITY_DIGEST_SHA256_SIZE });
+	lota_rt_verity_cache_put(
+		&cache, &key,
+		&(struct lota_verity_digest_key){
+			.len = LOTA_VERITY_DIGEST_SHA256_SIZE });
 	{
 		struct lota_verity_digest_key d =
 			make_digest(0xAB, LOTA_VERITY_DIGEST_SHA512_SIZE);
@@ -95,7 +95,8 @@ int main(void)
 	/* every identity field has to be part of what "the same object" means */
 	TEST("a different inode misses");
 	{
-		struct lota_rt_verity_key other = make_key(64, 1001, 4096, 100, 200);
+		struct lota_rt_verity_key other =
+			make_key(64, 1001, 4096, 100, 200);
 		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
 			PASS();
 		else
@@ -104,7 +105,8 @@ int main(void)
 
 	TEST("a different device misses");
 	{
-		struct lota_rt_verity_key other = make_key(65, 1000, 4096, 100, 200);
+		struct lota_rt_verity_key other =
+			make_key(65, 1000, 4096, 100, 200);
 		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
 			PASS();
 		else
@@ -113,7 +115,8 @@ int main(void)
 
 	TEST("a changed size misses");
 	{
-		struct lota_rt_verity_key other = make_key(64, 1000, 8192, 100, 200);
+		struct lota_rt_verity_key other =
+			make_key(64, 1000, 8192, 100, 200);
 		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0)
 			PASS();
 		else
@@ -122,8 +125,10 @@ int main(void)
 
 	TEST("a changed mtime misses");
 	{
-		struct lota_rt_verity_key other = make_key(64, 1000, 4096, 101, 200);
-		struct lota_rt_verity_key ns = make_key(64, 1000, 4096, 100, 201);
+		struct lota_rt_verity_key other =
+			make_key(64, 1000, 4096, 101, 200);
+		struct lota_rt_verity_key ns =
+			make_key(64, 1000, 4096, 100, 201);
 		if (lota_rt_verity_cache_get(&cache, &other, &got) == 0 &&
 		    lota_rt_verity_cache_get(&cache, &ns, &got) == 0)
 			PASS();
@@ -147,7 +152,8 @@ int main(void)
 
 	TEST("a digest of unsupported length is not stored");
 	{
-		struct lota_rt_verity_key bad = make_key(64, 2000, 4096, 100, 200);
+		struct lota_rt_verity_key bad =
+			make_key(64, 2000, 4096, 100, 200);
 		struct lota_verity_digest_key d = make_digest(0xEE, 48);
 		d.len = 48;
 		lota_rt_verity_cache_put(&cache, &bad, &d);
@@ -162,14 +168,16 @@ int main(void)
 		int served = 0;
 
 		lota_rt_verity_cache_clear(&cache);
-		for (uint64_t i = 0; i < LOTA_RT_VERITY_CACHE_ENTRIES * 4; i++) {
+		for (uint64_t i = 0; i < LOTA_RT_VERITY_CACHE_ENTRIES * 4;
+		     i++) {
 			struct lota_rt_verity_key k =
 				make_key(64, 5000 + i, 4096, 100, 200);
 			struct lota_verity_digest_key d = make_digest(
 				(uint8_t)i, LOTA_VERITY_DIGEST_SHA256_SIZE);
 			lota_rt_verity_cache_put(&cache, &k, &d);
 		}
-		for (uint64_t i = 0; i < LOTA_RT_VERITY_CACHE_ENTRIES * 4; i++) {
+		for (uint64_t i = 0; i < LOTA_RT_VERITY_CACHE_ENTRIES * 4;
+		     i++) {
 			struct lota_rt_verity_key k =
 				make_key(64, 5000 + i, 4096, 100, 200);
 			if (lota_rt_verity_cache_get(&cache, &k, &got) == 1)

@@ -113,7 +113,8 @@ static inline int lota_rt_verity_cache_get(struct lota_rt_verity_cache *cache,
 	start = lota_rt_verity_slot(key);
 	for (size_t i = 0; i < 8; i++) {
 		struct lota_rt_verity_entry *e =
-			&cache->entries[(start + i) % LOTA_RT_VERITY_CACHE_ENTRIES];
+			&cache->entries[(start + i) %
+					LOTA_RT_VERITY_CACHE_ENTRIES];
 
 		if (e->used_at == 0)
 			continue;
@@ -150,7 +151,8 @@ lota_rt_verity_cache_put(struct lota_rt_verity_cache *cache,
 	start = lota_rt_verity_slot(key);
 	for (size_t i = 0; i < 8; i++) {
 		struct lota_rt_verity_entry *e =
-			&cache->entries[(start + i) % LOTA_RT_VERITY_CACHE_ENTRIES];
+			&cache->entries[(start + i) %
+					LOTA_RT_VERITY_CACHE_ENTRIES];
 
 		if (e->used_at == 0 || lota_rt_verity_key_eq(&e->key, key)) {
 			victim = e;
@@ -165,7 +167,8 @@ lota_rt_verity_cache_put(struct lota_rt_verity_cache *cache,
 	victim->used_at = ++cache->clock;
 }
 
-static inline void lota_rt_verity_cache_clear(struct lota_rt_verity_cache *cache)
+static inline void
+lota_rt_verity_cache_clear(struct lota_rt_verity_cache *cache)
 {
 	if (!cache)
 		return;
