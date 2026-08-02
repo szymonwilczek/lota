@@ -62,6 +62,33 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 			      size_t max, size_t *n_out);
 
 /*
+ * Why a runtime image measurement failed, so the caller can name the object
+ * instead of printing a bare errno.
+ *
+ * soname is the basename of the object that stopped the measurement
+ * and is empty when the measurement failed before any object was reached.
+ *
+ * reported_len is the digest length the kernel returned for that object:
+ * zero when it carries no fs-verity digest at all, otherwise a length LOTA
+ * does not take.
+ */
+struct lota_runtime_measure_failure {
+	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
+	unsigned long long ino;
+	uint32_t reported_len;
+	int err;
+};
+
+/*
+ * Render a failure as one operator-readable sentence naming
+ * the object and the reason, into buf.
+ * Always NUL-terminates.
+ * Safe with a NULL failure, which renders the errno alone.
+ */
+void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
+			    int err, char *buf, size_t buflen);
+
+/*
  * Measure the kernel fs-verity digest of one enumerated mapping.
  *
  * Opens the exact backing inode through /proc/<pid>/map_files/<range> (a

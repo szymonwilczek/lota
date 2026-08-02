@@ -260,6 +260,50 @@ out:
 	return ret;
 }
 
+void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
+			    int err, char *buf, size_t buflen)
+{
+	const char *soname;
+
+	if (!buf || buflen == 0)
+		return;
+
+	if (err < 0)
+		err = -err;
+
+	if (!fail || fail->soname[0] == '\0') {
+		snprintf(buf, buflen, "%s", strerror(err));
+		return;
+	}
+
+	soname = fail->soname;
+
+	/*
+	 * two measurable-object cases are what integrator hits,
+	 * so both name the object and the action that fixes it;
+	 * anything else is ordinary errno against a named object.
+	 */
+	if (err == ENODATA) {
+		snprintf(buf, buflen,
+			 "%s carries no fs-verity digest (enable fs-verity on "
+			 "it, or drop the process from the protected set)",
+			 soname);
+		return;
+	}
+
+	if (err == EINVAL && fail->reported_len != 0) {
+		snprintf(buf, buflen,
+			 "%s carries a %u-byte fs-verity digest; LOTA takes "
+			 "SHA-256 (%d) or SHA-512 (%d)",
+			 soname, fail->reported_len,
+			 LOTA_VERITY_DIGEST_SHA256_SIZE,
+			 LOTA_VERITY_DIGEST_SHA512_SIZE);
+		return;
+	}
+
+	snprintf(buf, buflen, "%s: %s", soname, strerror(err));
+}
+
 /* qsort comparator over the canonical module order */
 static int rt_module_qsort_cmp(const void *a, const void *b)
 {
