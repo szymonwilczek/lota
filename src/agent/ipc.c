@@ -1414,6 +1414,17 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 	else
 		flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
 
+	/*
+	 * host whose every publisher runs light never reports at all,
+	 * so the host-wide answer says which case it is:
+	 * title that names nobody would otherwise read a bare NOT ATTESTED
+	 * and conclude the machine failed something
+	 */
+	if (ctx->profile_count > 0 && agg.reporting == 0)
+		flags |= LOTA_STATUS_TOKEN_ONLY;
+	else
+		flags &= ~(uint32_t)LOTA_STATUS_TOKEN_ONLY;
+
 	ipc_update_status(ctx, flags, agg.valid_until);
 }
 
