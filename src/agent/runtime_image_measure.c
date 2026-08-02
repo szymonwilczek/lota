@@ -387,6 +387,45 @@ static int rt_err_is_unmeasurable(int err)
 	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL;
 }
 
+int lota_runtime_coverage_pid(pid_t pid,
+			      struct lota_runtime_measure_coverage *cov)
+{
+	struct lota_rt_map_entry *entries = NULL;
+	size_t n = 0;
+	int ret;
+
+	if (!cov)
+		return -EINVAL;
+	memset(cov, 0, sizeof(*cov));
+
+	entries = calloc(LOTA_RUNTIME_IMAGE_MAX_MODULES, sizeof(*entries));
+	if (!entries)
+		return -ENOMEM;
+
+	ret = lota_rt_collect_exec_maps(pid, entries,
+					LOTA_RUNTIME_IMAGE_MAX_MODULES, &n);
+	if (ret != 0)
+		goto out;
+
+	for (size_t i = 0; i < n; i++) {
+		struct lota_verity_digest_key key;
+
+		ret = lota_rt_measure_entry_verity(pid, &entries[i], &key,
+						   NULL);
+		if (ret == 0) {
+			cov->measured++;
+			continue;
+		}
+		if (!rt_err_is_unmeasurable(ret))
+			goto out;
+		cov->unmeasurable++;
+	}
+	ret = 0;
+out:
+	free(entries);
+	return ret;
+}
+
 int lota_runtime_measure_pid(pid_t pid,
 			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
 			     struct lota_runtime_measure_coverage *cov,
