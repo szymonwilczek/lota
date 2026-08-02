@@ -28,6 +28,7 @@
 #include <curl/curl.h>
 
 #include <lota/lota_anticheat.h>
+#include <lota/lota_gaming.h>
 
 #define DEMO_DEFAULT_URL "http://127.0.0.1:7443/heartbeat"
 #define DEMO_DEFAULT_GAME_ID "trust-pong"
@@ -54,6 +55,7 @@ struct demo_options {
 	unsigned int interval_sec;
 	bool once;
 	bool print_runtime_objects;
+	bool require_full_image;
 };
 
 struct response_buf {
@@ -75,6 +77,7 @@ static void print_usage(const char *argv0)
 		"Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
 		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
+		"          [--require-full-image]\n"
 		"          [--ca-cert PATH] [--client-cert PATH] [--client-key "
 		"PATH]\n"
 		"\n"
@@ -92,6 +95,12 @@ static void print_usage(const char *argv0)
 		"process maps and that the runtime measurement covers,\n"
 		"then exits. Redirect it into a file to capture the trusted\n"
 		"runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
+		"\n"
+		"--require-full-image demands LOTA_FLAG_IMAGE_FULLY_MEASURED,\n"
+		"so a heartbeat is TRUSTED only when the agent measured every\n"
+		"object the process maps. On a host whose libraries carry no\n"
+		"fs-verity digest that makes every heartbeat UNTRUSTED, which\n"
+		"is the publisher policy choice this flag exists to show.\n"
 		"\n"
 		"When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
 		"exported) and the named path exists at heartbeat time, the\n"
@@ -155,6 +164,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
 	opt->print_runtime_objects = false;
+	opt->require_full_image = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
 	if (env_interval && *env_interval) {
@@ -176,6 +186,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "once", no_argument, NULL, '1' },
 		{ "tamper-marker", required_argument, NULL, 'T' },
 		{ "print-runtime-objects", no_argument, NULL, 'O' },
+		{ "require-full-image", no_argument, NULL, 'F' },
 		{ "ca-cert", required_argument, NULL, 'A' },
 		{ "client-cert", required_argument, NULL, 'E' },
 		{ "client-key", required_argument, NULL, 'K' },
@@ -184,7 +195,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OA:E:K:h", long_opts,
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OFA:E:K:h", long_opts,
 				NULL)) != -1) {
 		switch (c) {
 		case 's':
@@ -213,6 +224,9 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		}
 		case '1':
 			opt->once = true;
+			break;
+		case 'F':
+			opt->require_full_image = true;
 			break;
 		case 'O':
 			opt->print_runtime_objects = true;
@@ -475,12 +489,23 @@ int main(int argc, char **argv)
 		return DEMO_EXIT_TRANSPORT;
 	}
 
+	/*
+	 * Publisher who requires the runtime measurement to cover every mapped
+	 * object asks for the flag that says it did.
+	 * Which side of that choice a title sits on is the publisher's policy,
+	 * so it is a flag here rather than a default:
+	 * on a host whose distribution ships its libraries without fs-verity,
+	 * requiring it makes every heartbeat UNTRUSTED.
+	 */
 	struct lota_ac_config cfg = {
 		.struct_size = sizeof(cfg),
 		.provider = opt.provider,
 		.game_id = opt.game_id,
 		.direct = 1,
 		.socket_path = opt.socket_path,
+		.required_flags = opt.require_full_image ?
+					  LOTA_FLAG_IMAGE_FULLY_MEASURED :
+					  0,
 	};
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {

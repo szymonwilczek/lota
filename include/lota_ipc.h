@@ -114,6 +114,14 @@ enum lota_ipc_result {
 		  so ATTESTED carries no verdict of theirs and the token is   \
 		  the evidence */
 
+#define LOTA_STATUS_IMAGE_FULLY_MEASURED \
+	(1                               \
+	 << 9) /* every file-backed executable mapping of every protected     \
+		  process carried an fs-verity digest, so the runtime image   \
+		  measurement covers all of their code. Clear means some      \
+		  object could not be measured and is absent from the fold;   \
+		  what that is worth is the relying party's policy */
+
 /*
  * Request header
  *

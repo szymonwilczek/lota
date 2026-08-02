@@ -139,7 +139,14 @@ Worth being precise about, because it decides what you can build on it:
   A replayed or borrowed token fails, and so does one from a different
   machine.
 * The producer process was in the protected set at the time, and the
-  runtime measurement covers its loaded objects.
+  runtime measurement covers its loaded objects -- every one of them when
+  the token carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, and otherwise the
+  subset the kernel holds an fs-verity digest for. A stock distribution
+  ships its libraries without one, so partial coverage is the normal case
+  and full coverage is something a platform provides. Whether you require
+  it is your policy; what the agent guarantees either way is that the
+  producer's own executable was measured, and that nothing unmeasured was
+  folded in as if it had been.
 
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat

@@ -50,13 +50,14 @@ int main(void)
 {
 	uint8_t digest[32];
 	struct lota_runtime_measure_failure mfail;
+	struct lota_runtime_measure_coverage cov;
 	int ret;
 
 	printf("Kernel-anchored per-process measurement tests:\n");
 
 	TEST("measure_pid never reports success with an absent digest");
 	memset(digest, 0, sizeof(digest));
-	ret = lota_runtime_measure_pid(getpid(), digest, &mfail);
+	ret = lota_runtime_measure_pid(getpid(), digest, &cov, &mfail);
 	/*
 	 * Without fs-verity on the freshly built test binary the call fails
 	 * closed; with fs-verity it must yield a non-zero digest.
@@ -79,13 +80,13 @@ int main(void)
 		FAIL("refused with no object named");
 
 	TEST("measure_pid rejects a nonexistent process");
-	if (lota_runtime_measure_pid(-1, digest, NULL) < 0)
+	if (lota_runtime_measure_pid(-1, digest, NULL, NULL) < 0)
 		PASS();
 	else
 		FAIL("accepted bad pid");
 
 	TEST("measure_pid rejects NULL output");
-	if (lota_runtime_measure_pid(getpid(), NULL, NULL) < 0)
+	if (lota_runtime_measure_pid(getpid(), NULL, NULL, NULL) < 0)
 		PASS();
 	else
 		FAIL("accepted NULL output");

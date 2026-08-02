@@ -101,6 +101,52 @@ int main(void)
 	else
 		FAIL(buf);
 
+	/*
+	 * Coverage is the relying party's call, but two properties are the host's:
+	 * something was measured, and the process's own executable is part of it.
+	 */
+	{
+		struct lota_runtime_measure_coverage cov;
+
+		TEST("full coverage is issuable");
+		cov.measured = 37;
+		cov.unmeasurable = 0;
+		if (lota_rt_coverage_verdict(&cov, 1) == 0)
+			PASS();
+		else
+			FAIL("refused a complete measurement");
+
+		TEST("partial coverage is issuable");
+		cov.measured = 3;
+		cov.unmeasurable = 34;
+		if (lota_rt_coverage_verdict(&cov, 1) == 0)
+			PASS();
+		else
+			FAIL("refused a partial measurement");
+
+		TEST("nothing measured is refused");
+		cov.measured = 0;
+		cov.unmeasurable = 37;
+		if (lota_rt_coverage_verdict(&cov, 0) == -ENODATA)
+			PASS();
+		else
+			FAIL("issued an empty measurement");
+
+		TEST("an unmeasurable executable is refused");
+		cov.measured = 36;
+		cov.unmeasurable = 1;
+		if (lota_rt_coverage_verdict(&cov, 0) == -ENODATA)
+			PASS();
+		else
+			FAIL("issued without the title's own code");
+
+		TEST("a NULL coverage is refused");
+		if (lota_rt_coverage_verdict(NULL, 1) == -EINVAL)
+			PASS();
+		else
+			FAIL("accepted NULL coverage");
+	}
+
 	TEST("a short buffer is still NUL-terminated");
 	char small[16];
 	make_failure(&f, "libcurl.so.4", 0, ENODATA);

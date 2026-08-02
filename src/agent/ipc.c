@@ -961,6 +961,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	int ret;
 	bool fail = false;
 	bool rebound = false;
+	bool image_fully_measured = true;
 	uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
 
 	memset(&quote, 0, sizeof(quote));
@@ -1097,9 +1098,15 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * fold the per-PID image digest into the protect digest. The
 	 * measurement is taken by the agent across the IPC boundary, never by
 	 * the measured process, so a process cannot forge its own measurement.
-	 * Fail closed if any protected PID cannot be measured (for example its
-	 * executable objects are not fs-verity protected): a missing
-	 * measurement must never be issued as a trusted one.
+	 *
+	 * Object the kernel holds no fs-verity digest for is absent from the fold
+	 * and counted instead, and the token says so through
+	 * LOTA_STATUS_IMAGE_FULLY_MEASURED:
+	 * missing measurement is never issued as a complete one, and how much
+	 * coverage a publisher requires is theirs to decide.
+	 * The round still fails closed when nothing could be measured or when
+	 * protected process's own executable could not be, which is the part
+	 * its publisher controls.
 	 */
 	if (runtime_pid_count > 0) {
 		image_list_size = (size_t)runtime_pid_count *
@@ -1113,10 +1120,11 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		}
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
 			struct lota_runtime_measure_failure mfail;
+			struct lota_runtime_measure_coverage cov;
 			char reason[320];
 
 			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
-						       image_digests[i],
+						       image_digests[i], &cov,
 						       &mfail);
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
@@ -1127,6 +1135,17 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 				fail = true;
 				fail_code = LOTA_IPC_ERR_INTERNAL;
 				goto out;
+			}
+			if (cov.unmeasurable > 0) {
+				lota_rt_failure_reason(&mfail, mfail.err,
+						       reason, sizeof(reason));
+				lota_warn(
+					"runtime image measurement for pid=%u covers "
+					"%u object%s and misses %u: %s",
+					runtime_pids[i], cov.measured,
+					cov.measured == 1 ? "" : "s",
+					cov.unmeasurable, reason);
+				image_fully_measured = false;
 			}
 		}
 	}
@@ -1142,6 +1161,17 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		fail_code = LOTA_IPC_ERR_INTERNAL;
 		goto out;
 	}
+
+	/*
+	 * Coverage is a property of this measurement round, not of the host,
+	 * so it is set on the token and never on the status word.
+	 * Host with no protected process has nothing left unmeasured,
+	 * which is the empty case of the same statement.
+	 */
+	if (image_fully_measured)
+		token->flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	else
+		token->flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));

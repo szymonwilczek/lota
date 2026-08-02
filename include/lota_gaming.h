@@ -112,6 +112,24 @@ enum lota_error {
 #define LOTA_FLAG_TOKEN_ONLY (1 << 8)
 
 /*
+ * Runtime image measurement covered every object the protected processes map.
+ *
+ * Each token folds a kernel-anchored measurement of the live code of every process
+ * in the protected set, and that measurement can only cover an object the kernel
+ * holds an fs-verity digest for.
+ * On a host where a distribution ships its libraries without one, some objects
+ * are absent from the fold: the measurement is honest about what it saw,
+ * and this bit says whether it saw everything.
+ *
+ * It is a policy input, not a verdict.
+ * Publisher who requires full coverage puts this bit in the flags their backend
+ * demands, and one who does not ignores it; either way what a title's own binary
+ * maps is the publisher's to make measurable, and the agent refuses token
+ * outright when the title's own executable cannot be measured.
+ */
+#define LOTA_FLAG_IMAGE_FULLY_MEASURED (1 << 9)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.
