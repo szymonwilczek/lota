@@ -1112,12 +1112,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			goto out;
 		}
 		for (uint32_t i = 0; i < runtime_pid_count; i++) {
+			struct lota_runtime_measure_failure mfail;
+			char reason[320];
+
 			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
-						       image_digests[i]);
+						       image_digests[i],
+						       &mfail);
 			if (ret < 0) {
+				lota_rt_failure_reason(&mfail, ret, reason,
+						       sizeof(reason));
 				lota_err("runtime image measurement failed for "
 					 "pid=%u: %s",
-					 runtime_pids[i], strerror(-ret));
+					 runtime_pids[i], reason);
 				fail = true;
 				fail_code = LOTA_IPC_ERR_INTERNAL;
 				goto out;

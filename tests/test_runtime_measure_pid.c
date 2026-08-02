@@ -49,13 +49,14 @@ static int digest_is_zero(const uint8_t d[32])
 int main(void)
 {
 	uint8_t digest[32];
+	struct lota_runtime_measure_failure mfail;
 	int ret;
 
 	printf("Kernel-anchored per-process measurement tests:\n");
 
 	TEST("measure_pid never reports success with an absent digest");
 	memset(digest, 0, sizeof(digest));
-	ret = lota_runtime_measure_pid(getpid(), digest);
+	ret = lota_runtime_measure_pid(getpid(), digest, &mfail);
 	/*
 	 * Without fs-verity on the freshly built test binary the call fails
 	 * closed; with fs-verity it must yield a non-zero digest.
@@ -67,14 +68,24 @@ int main(void)
 	else
 		FAIL("success with zero digest");
 
+	/*
+	 * The failure integrator reads has to say which object stopped measurement;
+	 * refusal with no object named is the state this test exists to keep out.
+	 */
+	TEST("a refused measurement names the object that stopped it");
+	if (ret == 0 || mfail.soname[0] != '\0')
+		PASS();
+	else
+		FAIL("refused with no object named");
+
 	TEST("measure_pid rejects a nonexistent process");
-	if (lota_runtime_measure_pid(-1, digest) < 0)
+	if (lota_runtime_measure_pid(-1, digest, NULL) < 0)
 		PASS();
 	else
 		FAIL("accepted bad pid");
 
 	TEST("measure_pid rejects NULL output");
-	if (lota_runtime_measure_pid(getpid(), NULL) < 0)
+	if (lota_runtime_measure_pid(getpid(), NULL, NULL) < 0)
 		PASS();
 	else
 		FAIL("accepted NULL output");
@@ -85,7 +96,7 @@ int main(void)
 		struct lota_verity_digest_key v;
 		memset(&e, 0, sizeof(e));
 		strcpy(e.soname, "none");
-		if (lota_rt_measure_entry_verity(getpid(), &e, &v) < 0)
+		if (lota_rt_measure_entry_verity(getpid(), &e, &v, NULL) < 0)
 			PASS();
 		else
 			FAIL("accepted unbacked range");

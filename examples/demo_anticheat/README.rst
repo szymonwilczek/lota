@@ -231,6 +231,29 @@ Each heartbeat carries a runtime measurement of the producer's live image
    demo_anticheat --print-runtime-objects > runtime-manifest.txt
    demo_server --anticheat-runtime-manifest runtime-manifest.txt ...
 
+When a measurement is refused
+-----------------------------
+
+The agent measures the producer's mapped objects from the kernel side, and
+refuses to issue a token when one of them cannot be measured -- a missing
+measurement is never handed out as a trusted one. The agent log names the
+object rather than the process, so the fix is directed rather than guessed:
+
+.. code:: text
+
+   runtime image measurement failed for pid=2039:
+     libcurl.so.4 carries no fs-verity digest
+     (enable fs-verity on it, or drop the process from the protected set)
+
+   runtime image measurement failed for pid=2039:
+     libfoo.so.1 carries a 48-byte fs-verity digest;
+     LOTA takes SHA-256 (32) or SHA-512 (64)
+
+The heartbeat surfaces the same condition as ``-ENODATA``, which the producer
+prints as ``lota_ac_heartbeat: No data available``. That errno also covers a
+host that is simply not attested yet for the publisher in question, so read
+the agent log before converting anything.
+
 Exit codes
 ----------
 
