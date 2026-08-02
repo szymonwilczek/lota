@@ -56,6 +56,7 @@ struct demo_options {
 	bool once;
 	bool print_runtime_objects;
 	bool require_full_image;
+	bool protect_self;
 };
 
 struct response_buf {
@@ -77,7 +78,7 @@ static void print_usage(const char *argv0)
 		"Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
 		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
-		"          [--require-full-image]\n"
+		"          [--require-full-image] [--protect-self]\n"
 		"          [--ca-cert PATH] [--client-cert PATH] [--client-key "
 		"PATH]\n"
 		"\n"
@@ -95,6 +96,12 @@ static void print_usage(const char *argv0)
 		"process maps and that the runtime measurement covers,\n"
 		"then exits. Redirect it into a file to capture the trusted\n"
 		"runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
+		"\n"
+		"--protect-self puts this process in the agent's protected set,\n"
+		"so its live code is measured from the kernel side and folded\n"
+		"into every token it fetches. That is what an anti-cheat wants\n"
+		"and it is opt-in here, because it needs the objects this\n"
+		"process maps to carry fs-verity digests (see the README).\n"
 		"\n"
 		"--require-full-image demands LOTA_FLAG_IMAGE_FULLY_MEASURED,\n"
 		"so a heartbeat is TRUSTED only when the agent measured every\n"
@@ -165,6 +172,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->once = false;
 	opt->print_runtime_objects = false;
 	opt->require_full_image = false;
+	opt->protect_self = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
 	if (env_interval && *env_interval) {
@@ -187,6 +195,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "tamper-marker", required_argument, NULL, 'T' },
 		{ "print-runtime-objects", no_argument, NULL, 'O' },
 		{ "require-full-image", no_argument, NULL, 'F' },
+		{ "protect-self", no_argument, NULL, 'P' },
 		{ "ca-cert", required_argument, NULL, 'A' },
 		{ "client-cert", required_argument, NULL, 'E' },
 		{ "client-key", required_argument, NULL, 'K' },
@@ -195,8 +204,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OFA:E:K:h", long_opts,
-				NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OFPA:E:K:h",
+				long_opts, NULL)) != -1) {
 		switch (c) {
 		case 's':
 			opt->server_url = optarg;
@@ -227,6 +236,9 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 			break;
 		case 'F':
 			opt->require_full_image = true;
+			break;
+		case 'P':
+			opt->protect_self = true;
 			break;
 		case 'O':
 			opt->print_runtime_objects = true;
@@ -507,6 +519,46 @@ int main(int argc, char **argv)
 					  LOTA_FLAG_IMAGE_FULLY_MEASURED :
 					  0,
 	};
+
+	/*
+	 * Joining the protected set is a second call on the gaming API:
+	 * the anti-cheat session owns its own agent connection,
+	 * and protection is a property of this process rather than of that
+	 * session, so any connection this process holds can claim it.
+	 */
+	struct lota_client *protect_client = NULL;
+
+	if (opt.protect_self) {
+		struct lota_connect_opts popts = {
+			.struct_size = sizeof(popts),
+			.timeout_ms = 8000,
+			.socket_path = opt.socket_path,
+		};
+
+		protect_client = lota_connect_opts(&popts);
+		if (!protect_client) {
+			fprintf(stderr,
+				"demo_anticheat: --protect-self: cannot reach the "
+				"agent (%d)\n",
+				lota_connect_last_error());
+			curl_global_cleanup();
+			return DEMO_EXIT_TRANSPORT;
+		}
+		int prc = lota_protect_self(protect_client);
+		if (prc != 0) {
+			fprintf(stderr,
+				"demo_anticheat: --protect-self refused: %s\n",
+				lota_strerror(prc));
+			lota_disconnect(protect_client);
+			curl_global_cleanup();
+			return DEMO_EXIT_TRANSPORT;
+		}
+		fprintf(stderr,
+			"demo_anticheat: protected (pid=%d); every token now "
+			"folds this process's measured code\n",
+			(int)getpid());
+	}
+
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {
 		fprintf(stderr,
@@ -514,6 +566,8 @@ int main(int argc, char **argv)
 			"unreachable at %s)\n",
 			opt.socket_path ? opt.socket_path :
 					  "/run/lota/lota.sock");
+		if (protect_client)
+			lota_disconnect(protect_client);
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
@@ -522,6 +576,8 @@ int main(int argc, char **argv)
 	if (!curl) {
 		fprintf(stderr, "demo_anticheat: curl_easy_init failed\n");
 		lota_ac_shutdown(session);
+		if (protect_client)
+			lota_disconnect(protect_client);
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
@@ -558,6 +614,8 @@ int main(int argc, char **argv)
 
 	curl_easy_cleanup(curl);
 	lota_ac_shutdown(session);
+	if (protect_client)
+		lota_disconnect(protect_client);
 	curl_global_cleanup();
 	return exit_code;
 }

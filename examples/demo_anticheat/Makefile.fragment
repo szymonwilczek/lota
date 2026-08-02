@@ -13,7 +13,7 @@ STAGE_DIR ?= $(TOP_DIR)/build/stage
 export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
 
 CFLAGS := -Wall -Wextra -Werror -O2 -g
-CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-anticheat)
+CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-anticheat lota-gaming)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong -fstack-clash-protection
 CFLAGS += -fcf-protection=full
@@ -32,7 +32,7 @@ LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 ifdef SANITIZE
 LDFLAGS += -fsanitize=$(SANITIZE)
 endif
-LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-anticheat)
+LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-anticheat lota-gaming)
 LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
 LDLIBS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs libcurl)
 
