@@ -243,6 +243,44 @@ failed verification, and the two call for opposite behaviour. It is set on a
 connection bound to such a publisher, and on the host-wide answer when no
 configured publisher runs a verifier at all.
 
+Ending a protected process
+--------------------------
+
+``LOTA_IPC_CMD_TERMINATE_PROTECTED`` is the only way a protected process can
+be signalled. ``lota_task_kill`` passes a signal to such a task from the task
+itself, from the agent, from a holder of ``LOTA_TASK_AUTH_ADMIN`` or from the
+kernel; that flag is set on the agent's PID before the map is frozen, so
+nothing else on the machine holds it and root is no exception. Without the
+command a hung title costs a reboot.
+
+The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
+-- and nothing wider. It deliberately does **not** call
+``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:
+that gate demands a caller whose executable is on the operator's verity
+allowlist, which is empty on a default install, so requiring it here would
+reproduce the dead end the command exists to end. What keeps the widening
+bounded is that no route to a protected process avoids the agent, so every
+termination is recorded rather than silent.
+
+Four refusals sit around that rule: a signal other than ``SIGTERM`` or
+``SIGKILL``, so the command cannot drive a process that stays in the measured
+set; a target nobody protected, which the caller can already signal; PID 1 and
+PID 0; and the agent itself, whose stopping is ``--shutdown``'s business
+because PCR 14 commits for the whole boot.
+
+The handler opens a pidfd on the target before reading its owner or sending
+anything. A pidfd pins the PID number for as long as it is held, so the
+``/proc`` entry consulted and the signal delivered address one process and not
+a successor that inherited the number.
+
+``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot. It
+is kept beside ``status_flags`` rather than inside it, because that word is
+republished wholesale on every attestation round; ``ipc_update_status`` folds
+it back in, so the status answer, the token and the D-Bus property carry it
+from one source. That agreement is load-bearing: the anti-cheat heartbeat
+binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
+over, so a bit set in one and not the other surfaces as a nonce mismatch.
+
 GET_TOKEN rate limits
 =====================
 

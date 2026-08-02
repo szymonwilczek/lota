@@ -207,6 +207,35 @@ their own launcher avoids it entirely by setting the same variables on the
 process they spawn. The reasoning, and the three alternatives that were
 examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
 
+When a title will not close
+===========================
+
+A game that asks to be protected (``lota_protect_self()``) is taken out of
+reach of every signal on the machine: the LSM passes one only from the process
+itself, from the agent or from the kernel. That is what stops a cheat from
+killing the process being measured, and it also means a hung title survives a
+terminal, a desktop task manager and a root shell alike.
+
+The agent holds the identity the kernel accepts, so it delivers the signal on
+request::
+
+    lota-agent --terminate-protected <pid>
+    lota-agent --terminate-protected <pid> --force   # SIGKILL
+
+It answers for whoever ``kill(2)`` would already have allowed -- the owner of
+the process, or root -- so a player ends their own game as themselves, with no
+``sudo``. Nothing else widens: only ``SIGTERM`` and ``SIGKILL`` are relayed, a
+process nobody protected is refused because an ordinary ``kill`` reaches it,
+and the agent will not end itself this way.
+
+The exchange is that the host says so. Every relayed termination is journalled
+with the target, its owner and the caller, and the host reports
+``PROTECTED_TERMINATED`` in its status and in every token until it reboots.
+A publisher then sees a session that was ended on the machine rather than a
+process that silently disappeared -- closing a hung game is the ordinary reason
+for it, and what says *which* process left is the protected set the token
+already carries.
+
 Pausing and removing
 ====================
 
