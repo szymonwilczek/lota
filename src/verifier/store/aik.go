@@ -13,10 +13,8 @@
 //
 // Registration/rotation surface (RegisterAIK*, RotateAIK, RegisterHardwareID)
 // is NOT called by the verifier runtime.
-// It remains for the in-memory/unit-test stores, for external provisioning tooling
-// that pre-loads a store out-of-band, and for legacy pre-Privacy-CA deployments
-// whose stores still carry registrations.
-// Such records also feed the client-existence check.
+// It remains for the in-memory/unit-test stores and for external provisioning
+// tooling that pre-loads store out-of-band; such records also feed the client-existence check.
 
 package store
 
@@ -542,11 +540,11 @@ func writeKeyPEM(path string, flag int, block *pem.Block, removeOnError bool) (e
 	return pem.Encode(f, block)
 }
 
-// FileStore has no embedded CA roots, so it cannot verify the
-// AIK/EK certificate chain. The legacy TOFU registration path is
-// used as the implementation; production deployments are expected
-// to use CertificateStore (cert-backed) and reach this branch only
-// in tests or under an explicit --no-require-cert configuration.
+// FileStore has no embedded CA roots, so it cannot verify the AIK/EK certificate
+// chain and records the key as presented.
+// It is the store for tests and for out-of-band provisioning.
+// Verifier runtime uses CertificateStore, and attestation rejects report with no
+// AIK certificate regardless of which store is configured.
 func (fs *FileStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return fs.RegisterAIK(clientID, pubKey)
 }
@@ -713,11 +711,11 @@ func (ms *MemoryStore) CountClients() int {
 	return len(ms.keys)
 }
 
-// MemoryStore is the in-process test store; it has no trust anchors
-// and therefore cannot verify the AIK/EK chain. Falls through to
-// the legacy TOFU registration path so unit tests can drive the
-// register/rotate code without provisioning a fake CA. Production
-// stores (CertificateStore) override this with chain verification.
+// MemoryStore is the in-process test store.
+// It has no trust anchors and therefore cannot verify the AIK/EK chain.
+// It records the key as presented so unit tests can drive the register/rotate
+// code without provisioning fake CA.
+// CertificateStore, the store the verifier runtime uses, verifies the chain instead.
 func (ms *MemoryStore) RegisterAIKWithCert(clientID string, pubKey *rsa.PublicKey, aikCert, ekCert []byte) error {
 	return ms.RegisterAIK(clientID, pubKey)
 }
@@ -986,17 +984,12 @@ func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
 	return cs.fileStore.GetAIK(clientID)
 }
 
+// RegisterAIK on the cert-backed store has no certificate to verify, so it refuses.
+// CA-issued certificate is the anchor, and attestation rejects report without one in any case.
+// Callers that legitimately hold no chain (tests, out-of-band provisioning) use
+// MemoryStore or FileStore directly.
 func (cs *CertificateStore) RegisterAIK(clientID string, pubKey *rsa.PublicKey) error {
-	// Cert-less registration entry. Production deployments run with
-	// cs.requireCerts == true (the default carried from the
-	// --require-cert flag) so this branch is the canonical
-	// reject path. The legacy TOFU fall-through under
-	// requireCerts == false remains only for hosts that
-	// intentionally opted out via the operator-facing CLI.
-	if cs.requireCerts {
-		return ErrNoCertificate
-	}
-	return cs.fileStore.RegisterAIK(clientID, pubKey)
+	return ErrNoCertificate
 }
 
 // verifies AIK certificate chain before registering
@@ -1007,13 +1000,11 @@ func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Pub
 		}
 	}
 
-	// No certs supplied. Under cs.requireCerts the if-block above
-	// already rejected, so this fall-through is only reachable
-	// when the operator explicitly opted out of --require-cert;
-	// the legacy registration path then records the key without
-	// chain verification.
+	// No certs supplied:
+	// there is nothing to chain-verify, and this store exists to chain-verify.
+	// Refuse
 	if len(aikCertDER) == 0 && len(ekCertDER) == 0 {
-		return cs.RegisterAIK(clientID, pubKey)
+		return ErrNoCertificate
 	}
 
 	// parse and verify AIK certificate if provided

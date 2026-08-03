@@ -1238,9 +1238,9 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		ClientID: clientID,
 	}
 
-	// AIK store carries registrations only on legacy deployments;
+	// AIK store carries registrations only from out-of-band provisioning;
 	// under the Privacy CA flow the per-report certificate is
-	// the AIK trust anchor and this lookup never hits
+	// the AIK trust anchor and the verifier runtime registers nothing
 	_, err := v.aikStore.GetAIK(clientID)
 	hasAIK := err == nil
 

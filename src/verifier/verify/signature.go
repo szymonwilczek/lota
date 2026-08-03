@@ -12,9 +12,10 @@
 //     the AIK and EK certificates have already been chain-verified
 //     against the configured trust roots and the hardware ID has been
 //     bound to the EK modulus before the signature is checked.
-//   - Legacy TOFU pin via MemoryStore / FileStore for hosts that
-//     opted out of --require-cert. The AIK was pinned on first use
-//     and subsequent quotes must verify against the same key.
+//   - Key pinned in MemoryStore / FileStore, which carry no trust anchors.
+//     Those stores serve tests and out-of-band provisioning;
+//     they are not a way to attest without a certificate, because VerifyReport
+//     rejects report that carries none.
 //   - Optional future Privacy CA / DAA flow. The interface stays
 //     intentionally minimal so a new strategy can be plugged in
 //     without touching the quote-verification fast path.
@@ -40,9 +41,9 @@ type SignatureVerifier interface {
 	// attestData: raw TPMS_ATTEST from TPM
 	// signature: signature over attestData
 	// aikPubKey: AIK public key; provided by the caller after it
-	//   has been resolved through the active trust model (cert
-	//   chain on the production path, legacy TOFU pin under
-	//   --no-require-cert).
+	//   has been resolved through the active trust model:
+	//   the AIK certificate chain, or key pinned in one of
+	//   the anchorless stores used by tests and provisioning.
 	VerifyQuoteSignature(attestData, signature []byte, aikPubKey *rsa.PublicKey) error
 
 	// returns verifier name for logging

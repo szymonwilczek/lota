@@ -63,6 +63,12 @@ The attestation CA verifies the EK certificate chain, runs credential
 activation against the TPM, and issues a short-lived AIK certificate. Verifiers
 trust the CA certificate, not an agent-asserted public key.
 
+That is the only AIK trust model. A report with no AIK certificate is rejected
+at verification, and the certificate-backed AIK store refuses to record a bare
+public key at all, so an AIK cannot become trusted by being seen first. The
+anchorless stores exist for unit tests and for out-of-band provisioning that
+loads a store from material the operator already trusts.
+
 The CA key is a high-value fleet secret. It is loaded as a ``crypto.Signer``,
 so both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11
 token (HSM or SoftHSM, built with the ``pkcs11`` tag) are supported. Production
