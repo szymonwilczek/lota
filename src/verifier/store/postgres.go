@@ -25,11 +25,13 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx"
 )
 
-// holds the Postgres schema history
+// Holds the Postgres schema history.
+// One consolidated schema: verifier creates the database at its final shape.
+// runPgMigrations stays so post-1.0 change can append entry.
 var pgMigrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log",
+		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sessions, sharding",
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
@@ -41,18 +43,28 @@ var pgMigrations = []migration{
 			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
 
 			CREATE TABLE baselines (
-				client_id       TEXT PRIMARY KEY,
-				pcr14           BYTEA NOT NULL CHECK(octet_length(pcr14) = 32),
-				first_seen      TIMESTAMPTZ NOT NULL,
-				last_seen       TIMESTAMPTZ NOT NULL,
-				attest_count    BIGINT NOT NULL DEFAULT 1,
-				pcr0            BYTEA,
-				pcr1            BYTEA,
-				pcr7            BYTEA,
-				boot_first_seen TIMESTAMPTZ,
-				boot_last_seen  TIMESTAMPTZ,
-				agent_hash      BYTEA
+				client_id          TEXT PRIMARY KEY,
+				pcr14              BYTEA NOT NULL CHECK(octet_length(pcr14) = 32),
+				first_seen         TIMESTAMPTZ NOT NULL,
+				last_seen          TIMESTAMPTZ NOT NULL,
+				attest_count       BIGINT NOT NULL DEFAULT 1,
+				pcr0               BYTEA,
+				pcr1               BYTEA,
+				pcr7               BYTEA,
+				boot_first_seen    TIMESTAMPTZ,
+				boot_last_seen     TIMESTAMPTZ,
+				agent_hash         BYTEA,
+				eventlog_baseline  BYTEA,
+				esrt_version       BIGINT,
+				esrt_capable       BOOLEAN NOT NULL DEFAULT FALSE,
+				lfa                BOOLEAN NOT NULL DEFAULT FALSE,
+				reanchor_count     BIGINT NOT NULL DEFAULT 0,
+				last_reanchor_at   TIMESTAMPTZ,
+				lfa_review_pending BOOLEAN NOT NULL DEFAULT FALSE,
+				tenant             TEXT NOT NULL DEFAULT 'default'
 			);
+
+			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
 
 			CREATE TABLE used_nonces (
 				nonce_hash TEXT PRIMARY KEY,
@@ -66,15 +78,20 @@ var pgMigrations = []migration{
 				reason     TEXT NOT NULL,
 				revoked_at TIMESTAMPTZ NOT NULL,
 				revoked_by TEXT NOT NULL DEFAULT '',
-				note       TEXT NOT NULL DEFAULT ''
+				note       TEXT NOT NULL DEFAULT '',
+				tenant     TEXT NOT NULL DEFAULT 'default'
 			);
 
+			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
+
 			CREATE TABLE hardware_bans (
-				hardware_id BYTEA PRIMARY KEY CHECK(octet_length(hardware_id) = 32),
+				tenant      TEXT NOT NULL DEFAULT 'default',
+				hardware_id BYTEA NOT NULL CHECK(octet_length(hardware_id) = 32),
 				reason      TEXT NOT NULL,
 				banned_at   TIMESTAMPTZ NOT NULL,
 				banned_by   TEXT NOT NULL DEFAULT '',
-				note        TEXT NOT NULL DEFAULT ''
+				note        TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY (tenant, hardware_id)
 			);
 
 			CREATE TABLE audit_log (
@@ -84,11 +101,13 @@ var pgMigrations = []migration{
 				target_id TEXT NOT NULL,
 				reason    TEXT NOT NULL DEFAULT '',
 				actor     TEXT NOT NULL DEFAULT '',
-				note      TEXT NOT NULL DEFAULT ''
+				note      TEXT NOT NULL DEFAULT '',
+				tenant    TEXT NOT NULL DEFAULT 'default'
 			);
 
 			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
 			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
+			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
 
 			CREATE TABLE attestation_log (
 				id          BIGSERIAL PRIMARY KEY,
@@ -99,12 +118,14 @@ var pgMigrations = []migration{
 				duration_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
 				pcr14       TEXT NOT NULL DEFAULT '',
 				details     TEXT NOT NULL DEFAULT '',
-				remote_addr TEXT NOT NULL DEFAULT ''
+				remote_addr TEXT NOT NULL DEFAULT '',
+				tenant      TEXT NOT NULL DEFAULT 'default'
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);
 			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
+			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
 
 			CREATE TABLE session_tokens (
 				token_hash  BYTEA PRIMARY KEY CHECK(octet_length(token_hash) = 32),
@@ -114,23 +135,11 @@ var pgMigrations = []migration{
 				result_code BIGINT NOT NULL,
 				flags       BIGINT NOT NULL,
 				pcr_mask    BIGINT NOT NULL,
-				consumed    BOOLEAN NOT NULL DEFAULT FALSE
+				consumed    BOOLEAN NOT NULL DEFAULT FALSE,
+				tenant      TEXT NOT NULL DEFAULT 'default'
 			);
 
 			CREATE INDEX idx_session_tokens_valid_until ON session_tokens(valid_until);
-		`,
-	},
-	{
-		version: 2,
-		description: "Self-service re-anchor: event-log baseline, ESRT " +
-			"firmware version, assurance/rate-limit state, archive table",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN eventlog_baseline BYTEA;
-			ALTER TABLE baselines ADD COLUMN esrt_version BIGINT;
-			ALTER TABLE baselines ADD COLUMN esrt_capable BOOLEAN NOT NULL DEFAULT FALSE;
-			ALTER TABLE baselines ADD COLUMN lfa BOOLEAN NOT NULL DEFAULT FALSE;
-			ALTER TABLE baselines ADD COLUMN reanchor_count BIGINT NOT NULL DEFAULT 0;
-			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMPTZ;
 
 			CREATE TABLE baseline_archive (
 				id           BIGSERIAL PRIMARY KEY,
@@ -144,57 +153,13 @@ var pgMigrations = []migration{
 			);
 
 			CREATE INDEX idx_baseline_archive_client ON baseline_archive(client_id);
-		`,
-	},
-	{
-		version:     3,
-		description: "re-anchor: post-fact LFA review flag",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN lfa_review_pending BOOLEAN NOT NULL DEFAULT FALSE;
-		`,
-	},
-	{
-		version:     4,
-		description: "multi-tenancy: CA-assigned tenant on the baseline row",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
-		`,
-	},
-	{
-		version: 5,
-		description: "multi-tenancy: tenant on revocations, per-tenant " +
-			"hardware bans keyed (tenant, hardware_id)",
-		sql: `
-			ALTER TABLE revocations ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
-			ALTER TABLE hardware_bans ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			ALTER TABLE hardware_bans DROP CONSTRAINT hardware_bans_pkey;
-			ALTER TABLE hardware_bans ADD PRIMARY KEY (tenant, hardware_id);
-		`,
-	},
-	{
-		version: 6,
-		description: "multi-tenancy: tenant on the audit and attestation " +
-			"logs and on session tokens",
-		sql: `
-			ALTER TABLE audit_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			ALTER TABLE attestation_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			ALTER TABLE session_tokens ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
-			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
-		`,
-	},
-	{
-		version: 7,
-		description: "sharding: per-database identity and the control " +
-			"database's pinned shard set",
-		sql: `
+
 			CREATE TABLE shard_identity (
 				singleton  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
 				id         TEXT NOT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 			);
+
 			CREATE TABLE shard_set (
 				singleton   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
 				fingerprint TEXT NOT NULL,
