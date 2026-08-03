@@ -95,12 +95,13 @@ type migration struct {
 	sql         string
 }
 
-// schema migration history
-// Pre-v1.0: single consolidated schema, no incremental migrations needed.
+// Schema migration history
+// One consolidated schema: verifier creates the database at its final shape.
+// runMigrations stays so post-1.0 change can append entry.
 var migrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log",
+		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, baseline archive",
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
@@ -109,13 +110,31 @@ var migrations = []migration{
 				created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			);
 
+			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
+
 			CREATE TABLE baselines (
-				client_id    TEXT PRIMARY KEY,
-				pcr14        BLOB NOT NULL CHECK(length(pcr14) = 32),
-				first_seen   TIMESTAMP NOT NULL,
-				last_seen    TIMESTAMP NOT NULL,
-				attest_count INTEGER NOT NULL DEFAULT 1
+				client_id          TEXT PRIMARY KEY,
+				pcr14              BLOB NOT NULL CHECK(length(pcr14) = 32),
+				first_seen         TIMESTAMP NOT NULL,
+				last_seen          TIMESTAMP NOT NULL,
+				attest_count       INTEGER NOT NULL DEFAULT 1,
+				pcr0               BLOB,
+				pcr1               BLOB,
+				pcr7               BLOB,
+				boot_first_seen    TIMESTAMP,
+				boot_last_seen     TIMESTAMP,
+				agent_hash         BLOB,
+				eventlog_baseline  BLOB,
+				esrt_version       INTEGER,
+				esrt_capable       INTEGER DEFAULT 0,
+				lfa                INTEGER DEFAULT 0,
+				reanchor_count     INTEGER DEFAULT 0,
+				last_reanchor_at   TIMESTAMP,
+				lfa_review_pending INTEGER DEFAULT 0,
+				tenant             TEXT NOT NULL DEFAULT 'default'
 			);
+
+			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
 
 			CREATE TABLE used_nonces (
 				nonce_hash TEXT PRIMARY KEY,
@@ -129,16 +148,23 @@ var migrations = []migration{
 				reason     TEXT NOT NULL,
 				revoked_at TIMESTAMP NOT NULL,
 				revoked_by TEXT NOT NULL DEFAULT '',
-				note       TEXT NOT NULL DEFAULT ''
+				note       TEXT NOT NULL DEFAULT '',
+				tenant     TEXT NOT NULL DEFAULT 'default'
 			);
 
+			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
+
 			CREATE TABLE hardware_bans (
-				hardware_id BLOB PRIMARY KEY CHECK(length(hardware_id) = 32),
+				tenant      TEXT NOT NULL,
+				hardware_id BLOB NOT NULL CHECK(length(hardware_id) = 32),
 				reason      TEXT NOT NULL,
 				banned_at   TIMESTAMP NOT NULL,
 				banned_by   TEXT NOT NULL DEFAULT '',
-				note        TEXT NOT NULL DEFAULT ''
+				note        TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY (tenant, hardware_id)
 			);
+
+			CREATE INDEX idx_hardware_bans_tenant ON hardware_bans(tenant);
 
 			CREATE TABLE audit_log (
 				id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,11 +173,13 @@ var migrations = []migration{
 				target_id TEXT NOT NULL,
 				reason    TEXT NOT NULL DEFAULT '',
 				actor     TEXT NOT NULL DEFAULT '',
-				note      TEXT NOT NULL DEFAULT ''
+				note      TEXT NOT NULL DEFAULT '',
+				tenant    TEXT NOT NULL DEFAULT 'default'
 			);
 
 			CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
 			CREATE INDEX idx_audit_log_target ON audit_log(target_id);
+			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
 
 			CREATE TABLE attestation_log (
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,50 +190,15 @@ var migrations = []migration{
 				duration_ms REAL NOT NULL DEFAULT 0,
 				pcr14       TEXT NOT NULL DEFAULT '',
 				details     TEXT NOT NULL DEFAULT '',
-				remote_addr TEXT NOT NULL DEFAULT ''
+				remote_addr TEXT NOT NULL DEFAULT '',
+				tenant      TEXT NOT NULL DEFAULT 'default'
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);
 			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
-		`,
-	},
-	{
-		version:     2,
-		description: "enforce global AIK uniqueness across clients",
-		sql: `
-			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
-		`,
-	},
-	{
-		version:     3,
-		description: "pin firmware / SecureBoot PCRs (0, 1, 7) on baselines",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN pcr0 BLOB;
-			ALTER TABLE baselines ADD COLUMN pcr1 BLOB;
-			ALTER TABLE baselines ADD COLUMN pcr7 BLOB;
-			ALTER TABLE baselines ADD COLUMN boot_first_seen TIMESTAMP;
-			ALTER TABLE baselines ADD COLUMN boot_last_seen  TIMESTAMP;
-		`,
-	},
-	{
-		version:     4,
-		description: "pin agent self-hash for PCR14 boot-commitment derivation",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN agent_hash BLOB;
-		`,
-	},
-	{
-		version: 5,
-		description: "Self-service re-anchor: event-log baseline, ESRT " +
-			"firmware version, assurance/rate-limit state, archive table",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN eventlog_baseline BLOB;
-			ALTER TABLE baselines ADD COLUMN esrt_version INTEGER;
-			ALTER TABLE baselines ADD COLUMN esrt_capable INTEGER DEFAULT 0;
-			ALTER TABLE baselines ADD COLUMN lfa INTEGER DEFAULT 0;
-			ALTER TABLE baselines ADD COLUMN reanchor_count INTEGER DEFAULT 0;
-			ALTER TABLE baselines ADD COLUMN last_reanchor_at TIMESTAMP;
+			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
+
 			CREATE TABLE baseline_archive (
 				id           INTEGER PRIMARY KEY AUTOINCREMENT,
 				client_id    TEXT NOT NULL,
@@ -216,56 +209,8 @@ var migrations = []migration{
 				esrt_version INTEGER,
 				reason       TEXT
 			);
+
 			CREATE INDEX idx_baseline_archive_client ON baseline_archive(client_id);
-		`,
-	},
-	{
-		version:     6,
-		description: "re-anchor: post-fact LFA review flag",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN lfa_review_pending INTEGER DEFAULT 0;
-		`,
-	},
-	{
-		version:     7,
-		description: "multi-tenancy: CA-assigned tenant on the baseline row",
-		sql: `
-			ALTER TABLE baselines ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
-		`,
-	},
-	{
-		version: 8,
-		description: "multi-tenancy: tenant on revocations, per-tenant " +
-			"hardware bans keyed (tenant, hardware_id)",
-		sql: `
-			ALTER TABLE revocations ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_revocations_tenant ON revocations(tenant);
-			CREATE TABLE hardware_bans_new (
-				tenant      TEXT NOT NULL,
-				hardware_id BLOB NOT NULL CHECK(length(hardware_id) = 32),
-				reason      TEXT NOT NULL,
-				banned_at   TIMESTAMP NOT NULL,
-				banned_by   TEXT NOT NULL DEFAULT '',
-				note        TEXT NOT NULL DEFAULT '',
-				PRIMARY KEY (tenant, hardware_id)
-			);
-			INSERT INTO hardware_bans_new (tenant, hardware_id, reason, banned_at, banned_by, note)
-				SELECT 'default', hardware_id, reason, banned_at, banned_by, note FROM hardware_bans;
-			DROP TABLE hardware_bans;
-			ALTER TABLE hardware_bans_new RENAME TO hardware_bans;
-			CREATE INDEX idx_hardware_bans_tenant ON hardware_bans(tenant);
-		`,
-	},
-	{
-		version: 9,
-		description: "multi-tenancy: tenant on the audit and attestation " +
-			"logs",
-		sql: `
-			ALTER TABLE audit_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			ALTER TABLE attestation_log ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default';
-			CREATE INDEX idx_audit_log_tenant ON audit_log(tenant);
-			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
 		`,
 	},
 }
