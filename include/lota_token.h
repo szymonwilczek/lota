@@ -66,9 +66,7 @@ extern "C" {
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 
 /* runtime_protect_version values */
-#define LOTA_RUNTIME_PROTECT_V1 \
-	1 /* PID set identity only (0 also accepted)   \
-				   */
+#define LOTA_RUNTIME_PROTECT_V1 1 /* PID set identity only */
 #define LOTA_RUNTIME_PROTECT_V2 2 /* PID set + per-PID kernel image digest */
 
 /*
