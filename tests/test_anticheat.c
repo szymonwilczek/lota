@@ -140,6 +140,7 @@ static size_t build_mock_token(uint8_t *buf, size_t buflen, uint32_t flags,
 	tok.sig_alg = 0x0014;
 	tok.hash_alg = 0x000B;
 	tok.pcr_mask = 0x4001;
+	tok.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 
 	uint8_t attest[16] = { 0xAA };
 	uint8_t sig[8] = { 0xCC };
