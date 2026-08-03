@@ -33,6 +33,7 @@ func TestChallengeRoundTrip(t *testing.T) {
 		SessionID:       "abc123",
 		CredentialBlob:  bytes.Repeat([]byte{0x01}, 200),
 		EncryptedSecret: bytes.Repeat([]byte{0x02}, 256),
+		Version:         Version1,
 	}
 	enc, err := EncodeChallenge(in)
 	if err != nil {
@@ -50,7 +51,11 @@ func TestChallengeRoundTrip(t *testing.T) {
 }
 
 func TestCompleteRoundTrip(t *testing.T) {
-	in := &CompleteRequest{SessionID: "session-xyz", Secret: bytes.Repeat([]byte{0x09}, 32)}
+	in := &CompleteRequest{
+		SessionID: "session-xyz",
+		Secret:    bytes.Repeat([]byte{0x09}, 32),
+		Version:   Version1,
+	}
 	enc, err := EncodeComplete(in)
 	if err != nil {
 		t.Fatalf("EncodeComplete: %v", err)
@@ -69,6 +74,7 @@ func TestResultRoundTrip(t *testing.T) {
 		Status:     StatusOK,
 		AIKCertDER: bytes.Repeat([]byte{0x77}, 1500),
 		DeviceID:   "device-deadbeef",
+		Version:    Version1,
 	}
 	enc, err := EncodeResult(in)
 	if err != nil {
@@ -81,6 +87,26 @@ func TestResultRoundTrip(t *testing.T) {
 	if out.Status != in.Status || out.DeviceID != in.DeviceID ||
 		!bytes.Equal(out.AIKCertDER, in.AIKCertDER) {
 		t.Fatal("result round trip mismatch")
+	}
+}
+
+// TestEncodeRejectsUnsetVersion covers the reply encoders:
+// version selects the frame layout, so an unset field is refused rather
+// than resolved to Version1 on the caller's behalf.
+func TestEncodeRejectsUnsetVersion(t *testing.T) {
+	if _, err := EncodeChallenge(&ChallengeReply{SessionID: "s"}); err != ErrBadVersion {
+		t.Fatalf("EncodeChallenge with no version: want ErrBadVersion, got %v", err)
+	}
+	if _, err := EncodeComplete(&CompleteRequest{SessionID: "s"}); err != ErrBadVersion {
+		t.Fatalf("EncodeComplete with no version: want ErrBadVersion, got %v", err)
+	}
+	if _, err := EncodeResult(&ResultReply{DeviceID: "d"}); err != ErrBadVersion {
+		t.Fatalf("EncodeResult with no version: want ErrBadVersion, got %v", err)
+	}
+
+	// out-of-range version is refused the same way
+	if _, err := EncodeResult(&ResultReply{DeviceID: "d", Version: 9}); err != ErrBadVersion {
+		t.Fatalf("EncodeResult with version 9: want ErrBadVersion, got %v", err)
 	}
 }
 
@@ -101,7 +127,7 @@ func TestDecodeRejectsBadVersion(t *testing.T) {
 }
 
 func TestDecodeRejectsTruncated(t *testing.T) {
-	enc, _ := EncodeChallenge(&ChallengeReply{SessionID: "x", CredentialBlob: []byte{1, 2}})
+	enc, _ := EncodeChallenge(&ChallengeReply{SessionID: "x", CredentialBlob: []byte{1, 2}, Version: Version1})
 	if _, err := DecodeChallenge(enc[:len(enc)-1]); err == nil {
 		t.Fatal("accepted truncated frame")
 	}

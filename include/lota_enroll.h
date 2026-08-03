@@ -18,9 +18,10 @@
 /*
  * Version 1 frames carry no enrollment token;
  * Version 2 appends one to BeginRequest.
- * Agent emits version 1 unless it presents token, so it stays compatible
- * with old CA, and the CA mirrors the version of the request in its replies,
- * so old agent never sees version 2.
+ * Version states what the frame carries, not how old the peer is:
+ * untenanted enrollment sends version 1, tenant enrollment sends
+ * version 2, and the CA answers in the version it received.
+ * Both are current modes.
  */
 #define LOTA_ENROLL_VERSION 1u
 #define LOTA_ENROLL_VERSION_TOKEN 2u

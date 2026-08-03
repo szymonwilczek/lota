@@ -32,8 +32,10 @@ const (
 
 	// Version1 frames carry no enrollment token;
 	// Version2 appends one to BeginRequest.
-	// Agent emits Version1 unless it presents token, and the CA mirrors
-	// the version of the request in its replies.
+	// Both are current modes: untenanted enrollment is Version1,
+	// tenant enrollment presents its token and is Version2.
+	// Agent picks by whether it holds a token;
+	// CA mirrors the version of the request in its replies.
 	Version1 uint16 = 1
 	Version2 uint16 = 2
 
@@ -96,10 +98,10 @@ type ChallengeReply struct {
 	CredentialBlob  []byte
 	EncryptedSecret []byte
 
-	// Version selects the version of the encoded frame;
-	// Zero means Version1.
-	// Server sets it to the version of the request it answers
-	// so an old agent never sees a version it rejects.
+	// Version selects the version of the encoded frame and must be set:
+	// encoder refuses an unset field rather than guessing version.
+	// Server sets it to the version of the request it answers,
+	// so reply never carries a version the requesting agent did not use.
 	Version uint16
 }
 
@@ -108,9 +110,9 @@ type CompleteRequest struct {
 	SessionID string
 	Secret    []byte
 
-	// Version selects the version of the encoded frame;
-	// Zero means Version1.
-	// Agent keeps one version for a whole exchange.
+	// Version selects the version of the encoded frame and must be set
+	// (see ChallengeReply.Version)
+	// Agent keeps one version for whole exchange.
 	Version uint16
 }
 
@@ -120,8 +122,8 @@ type ResultReply struct {
 	AIKCertDER []byte
 	DeviceID   string
 
-	// Version selects the version of the encoded frame;
-	// Zero means Version1 (see ChallengeReply.Version).
+	// Version selects the version of the encoded frame and must be set
+	// (see ChallengeReply.Version)
 	Version uint16
 }
 
@@ -130,11 +132,14 @@ type encoder struct {
 	err error
 }
 
-// frameVersion normalizes a message's Version field:
-// zero selects Version1 for compatibility with callers that never set it.
+// frameVersion validates a message's Version field.
+// Unset field is refused: the version selects the frame layout, so guessing one
+// for a caller that never set it would encode a frame the caller did not ask for.
+// Every server reply mirrors the version of the request it answers, so real encode
+// path always has one to pass.
 func frameVersion(v uint16) (uint16, error) {
 	switch v {
-	case 0, Version1:
+	case Version1:
 		return Version1, nil
 	case Version2:
 		return Version2, nil
@@ -182,9 +187,9 @@ func (e *encoder) result() ([]byte, error) {
 }
 
 // EncodeBegin serializes a BeginRequest.
-// Frame version is derived from the token:
-// request with no token stays a Version1 frame an old CA accepts,
-// one with a token becomes Version2.
+// Frame version follows the token, because the token is what the two versions
+// differ by: untenanted request has none and is Version1, a tenant request carries
+// one and is Version2.
 func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize ||
 		len(r.Token) > MaxEnrollTokenSize {
