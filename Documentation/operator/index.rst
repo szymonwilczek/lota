@@ -22,10 +22,9 @@ intentionally fails closed when required gates are missing.
   one verifier with per-tenant bans, policies, and scoped API keys.
 * :doc:`Observability <observability>` -- Prometheus scraping, the reference
   Grafana dashboard, alert rules, and per-alert runbooks.
-* :doc:`Version compatibility <version-compatibility>` -- which agent, verifier
-  and CA versions interoperate, and why.
-* :doc:`Rolling verifier upgrades <rolling-upgrade>` -- zero-downtime upgrade of
-  the verifier tier against Postgres.
+* :doc:`Protocol versions <protocol-versions>` -- how the attestation,
+  enrollment and schema surfaces are versioned, and which agent, verifier and CA
+  releases interoperate.
 * :doc:`Agent updates and the reboot requirement <agent-update-reboot>` -- why an
   agent update needs a cold reboot and a pre-pinned hash.
 * :doc:`RPM packages <packages>` -- the native packages and how to install
@@ -60,8 +59,7 @@ Related deployment material lives next to the code:
    sizing
    multi-tenancy
    observability
-   version-compatibility
-   rolling-upgrade
+   protocol-versions
    agent-update-reboot
    packages
    container-images

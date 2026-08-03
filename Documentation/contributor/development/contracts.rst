@@ -26,22 +26,25 @@ Baseline store migrations
 =========================
 
 The verifier's per-client baseline lives in the ``baselines`` table
-(``src/verifier/store/db.go``) and evolves through append-only migrations:
-never edit a shipped migration, add a new one, so a database at any
-intermediate revision still upgrades cleanly.
+(``src/verifier/store/db.go``). Both backends ship **one consolidated
+migration**: a fresh database is created at its final shape in a single step,
+and there is no incremental history to walk.
 
-New migrations must also be **additive**: add a table, a column, or an index,
-but never drop or rename one or retype a column in place.
+The migration list stays because the schema evolves the same way from here:
+never edit the shipped entry, append a new one, so a database already in
+service reaches the current shape by applying what it is missing.
 
-Multi-instance fleet rolls new verifier binaries in against one shared Postgres
-while old binaries keep serving, so the old binary must still read and write
-a schema a newer peer has already migrated forward. ``migrations_test.go`` enforces
-this mechanically -- a destructive migration fails the build -- and
-``PgTargetSchemaVersion`` / ``SQLiteTargetSchemaVersion`` report the schema
-a binary targets (surfaced to operators by ``lota-verifier --print-versions``).
+An appended migration must also be **additive**: add a table, a column, or an
+index, but never drop or rename one or retype a column in place. A live
+database is migrated by whichever instance starts first, under an advisory
+lock, while the rest of the fleet keeps operating it -- only an additive change
+is invisible to them. ``migrations_test.go`` enforces this mechanically: a
+destructive migration fails the build, and ``PgTargetSchemaVersion`` /
+``SQLiteTargetSchemaVersion`` report the schema a binary builds up to (surfaced
+to operators by ``lota-verifier --print-versions``).
 
 The operator-facing side of this contract is
-:doc:`../../operator/rolling-upgrade`.
+:doc:`../../operator/protocol-versions`.
 
 The ``ReanchorStorer`` interface (``verify/baseline.go``) has three backends
 (in-memory, SQLite, Postgres) that must stay behaviourally identical; the
