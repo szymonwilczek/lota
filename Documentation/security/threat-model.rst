@@ -384,9 +384,11 @@ resource outside the key's tenant set is answered as if it did not exist (404),
 never 403, so the key cannot even probe another tenant's namespace. The
 fleet-wide surfaces that carry no tenant dimension are withheld from scoped
 keys entirely: ``/api/v1/stats`` omits the fleet-wide counters and ``/metrics``
-is refused. Environment
-keys (``LOTA_ADMIN_API_KEY`` / ``LOTA_READER_API_KEY``) remain global-scope for
-backwards compatibility. See
+is refused. Environment keys (``LOTA_ADMIN_API_KEY`` /
+``LOTA_READER_API_KEY``) are global-scope by construction: the variable carries
+a key and nothing else, so there is nowhere to express a tenant list and the
+principal it authenticates is unscoped. Delegating a tenant therefore means
+issuing a key in the key file, not narrowing an environment key. See
 :doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
 
 Operational requirements

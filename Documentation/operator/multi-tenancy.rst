@@ -129,10 +129,13 @@ A scoped key sees only its tenants' resources:
   exposition is fleet-wide and carries no tenant dimension, so only a
   global-scope key (environment key or ``tenants: ["*"]``) can scrape it.
 
-The environment keys ``LOTA_ADMIN_API_KEY`` and ``LOTA_READER_API_KEY`` keep
-working and are **global-scope**: they see every tenant. A scoped key file may
-be used alone, without either environment key, and is sufficient to satisfy the
-authentication requirement that a non-loopback API bind enforces.
+The environment keys ``LOTA_ADMIN_API_KEY`` and ``LOTA_READER_API_KEY`` are
+**global-scope** by design: they carry no tenant list, so they see every
+tenant. That makes them the convenient single-operator default and the wrong
+tool for delegating a tenant -- per-tenant scoping is expressible only in the
+key file. A scoped key file may be used alone, without either environment key,
+and is sufficient to satisfy the authentication requirement that a non-loopback
+API bind enforces.
 
 Enrollment
 ==========

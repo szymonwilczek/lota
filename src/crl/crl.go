@@ -54,8 +54,13 @@ var (
 
 // allowedSignatureAlgorithms enumerates the signature algorithms a CRL
 // signature MUST use to be honored.
-// Go's x509.CheckSignatureFrom already refuses MD5 and RSA-SHA1, but it
-// still accepts ECDSA-SHA1 and other legacy combinations.
+// Nothing below is SHA-1: CRL signature decides whether revocation is visible
+// at all, so collision-prone digest is not acceptable there.
+//
+// The list exists because Go's own check is more permissive than that.
+// x509.CheckSignatureFrom refuses MD5 and RSA-SHA1, but it still accepts ECDSA-SHA1,
+// so relying on it alone would honor CRL LOTA should not.
+// This allow-list is the narrower gate, not compatibility shim.
 var allowedSignatureAlgorithms = map[x509.SignatureAlgorithm]struct{}{
 	x509.SHA256WithRSA:    {},
 	x509.SHA384WithRSA:    {},
