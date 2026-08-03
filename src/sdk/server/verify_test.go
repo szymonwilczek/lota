@@ -717,3 +717,26 @@ func TestRuntimeProtectDigestV2_KAT(t *testing.T) {
 		t.Fatalf("v2 KAT = %s, want %s", hex.EncodeToString(got[:]), want)
 	}
 }
+
+// zero runtime_protect_version used to fall through the "is it v2" checks
+// and be handled as v1.
+// The field now has to say which version it is, so token that leaves it unset
+// is refused.
+func TestVerifyToken_ZeroRuntimeProtectVersionRejected(t *testing.T) {
+	priv := generateTestKey(t)
+	var nonce [32]byte
+	pcrDigest := make([]byte, 32)
+	tok := buildTestToken(t, priv, uint64(time.Now().Add(time.Hour).Unix()),
+		0, nonce, 0x00000001, pcrDigest)
+
+	// serializer writes v1
+	// force the field back to the unset value
+	if got := binary.LittleEndian.Uint16(tok[142:144]); got != runtimeProtectV1 {
+		t.Fatalf("serializer wrote runtime_protect_version %d, want %d", got, runtimeProtectV1)
+	}
+	binary.LittleEndian.PutUint16(tok[142:144], 0)
+
+	if _, err := ParseToken(tok); err == nil {
+		t.Fatal("ParseToken accepted a zero runtime_protect_version")
+	}
+}

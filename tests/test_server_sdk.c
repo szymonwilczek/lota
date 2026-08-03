@@ -315,6 +315,7 @@ static int build_full_token(EVP_PKEY *key, uint16_t hash_alg, const EVP_MD *md,
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = valid_until;
 	token.flags = flags;
 	memcpy(token.nonce, nonce, 32);
@@ -357,6 +358,7 @@ static void test_serialize_basic(void)
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = 1700003600;
 	token.flags = 0x07;
 	token.sig_alg = 0x0014;
@@ -403,6 +405,7 @@ static void test_serialize_buffer_too_small(void)
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	uint8_t fake[16] = { 0 };
 	token.attest_data = fake;
 	token.attest_size = 16;
@@ -424,6 +427,7 @@ static void test_serialize_total_size_within_u16(void)
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = 1700003600;
 	token.flags = 0x07;
 	token.sig_alg = 0x0014;
@@ -469,6 +473,7 @@ static void test_parse_untrusted(void)
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = 1700003600;
 	token.flags = 0x1F;
 	memset(token.nonce, 0x42, 32);
@@ -857,6 +862,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 
 	struct lota_token token;
 	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V1;
 	token.valid_until = valid_until;
 	token.flags = flags;
 	memcpy(token.nonce, nonce, sizeof(token.nonce));

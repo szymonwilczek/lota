@@ -199,7 +199,7 @@ struct lota_ipc_token {
 	(LOTA_IPC_TOKEN_MAX_PROTECT_PIDS * LOTA_IPC_TOKEN_IMAGE_DIGEST_SIZE)
 
 /* runtime_protect_version values (mirror of lota_token.h) */
-#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only (0 = legacy) */
+#define LOTA_IPC_RUNTIME_PROTECT_V1 1 /* PID set identity only */
 #define LOTA_IPC_RUNTIME_PROTECT_V2 \
 	2 /* PID set + per-PID kernel image digest */
 
