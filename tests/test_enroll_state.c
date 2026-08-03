@@ -83,10 +83,12 @@ static void test_missing_is_enoent(void)
 	CHECK(ret == -ENOENT, "absent state load returns -ENOENT");
 }
 
-static void test_accepts_v1_record(void)
+static void test_rejects_v1_record(void)
 {
 	/* record written before the token field existed:
-	 * version 1, ending where enroll_token begins */
+	 * version 1, ending where enroll_token begins
+	 * loader requires the current record,
+	 * so the host re-enrolls instead of running on state it cannot fully read */
 	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
 	const char *path = tmp_path();
 	struct enroll_state in, out;
@@ -107,22 +109,20 @@ static void test_accepts_v1_record(void)
 	}
 
 	memset(&out, 0xFF, sizeof(out));
-	CHECK(enroll_state_load_path(path, &out) == 0, "v1 record loads");
-	CHECK(out.ca_port == 8444 && strcmp(out.ca_server, "ca.example") == 0,
-	      "v1 endpoint survives");
-	CHECK(out.enroll_token[0] == '\0', "v1 record has an empty token");
+	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
+	      "v1 record rejected");
 
-	/* v1-sized record must still claim version 1 */
+	/* short record claiming the current version is refused too */
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	CHECK(fd >= 0, "reopen for bad version");
+	CHECK(fd >= 0, "reopen for short current-version record");
 	if (fd >= 0) {
-		in.version = 2;
+		in.version = LOTA_ENROLL_STATE_VERSION;
 		CHECK(write(fd, &in, v1_size) == (ssize_t)v1_size,
-		      "write truncated v2 record");
+		      "write truncated current record");
 		close(fd);
 	}
 	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "truncated v2 record rejected");
+	      "truncated current record rejected");
 
 	unlink(path);
 }
@@ -185,7 +185,7 @@ static void test_null_args(void)
 int main(void)
 {
 	test_roundtrip();
-	test_accepts_v1_record();
+	test_rejects_v1_record();
 	test_missing_is_enoent();
 	test_rejects_bad_magic();
 	test_rejects_truncated();
