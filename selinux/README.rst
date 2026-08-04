@@ -342,6 +342,20 @@ Network attestation blocked
    # Verify port definition
    sudo semanage port -l | grep lota
 
+The policy allows ``lota_agent_t`` to reach ``lota_port_t``, and a loadable
+module cannot carry port contexts, so the type is assigned at bring-up:
+``lota-install`` labels the CA and verifier ports it was given. An endpoint
+added later has to be labelled too, or the agent is refused at connect and the
+operator sees a connection error against a server that is running:
+
+.. code:: bash
+
+   sudo semanage port -a -t lota_port_t -p tcp 8473
+
+Port 8443 is an exception that hides the rule: the base policy already labels
+it ``http_port_t``, which ``lota_agent_t`` may also reach, so a deployment on
+the default port works without any of this.
+
 Interface Reference
 -------------------
 
