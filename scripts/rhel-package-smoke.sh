@@ -90,6 +90,9 @@ smoke() {
 	echo "== RPMs built =="
 	ls -1 "$pkgdir"/*.rpm
 
+	echo "== enabling EPEL for the agent's runtime dependencies =="
+	dnf -y install epel-release
+
 	echo "== dnf install agent + verifier + attest-ca =="
 	dnf -y install \
 		"$pkgdir"/lota-agent-*.rpm \
