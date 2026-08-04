@@ -42,9 +42,33 @@ Testing policy
    * - Includes
      - every header used directly, no transitive deps
      - ``make check-includes``
+   * - Packaging
+     - the nfpm configs and the RPM spec ship the same files
+     - ``make check-package-manifests``
 
 A fuzz crash leaves a reproducer under ``testdata/fuzz/<Target>/``. Commit it
 so the regression is locked in.
+
+Package manifests
+=================
+
+LOTA describes its packages twice: the nfpm configs under ``packaging/nfpm``,
+which ``make packages`` and the release workflow build, and
+``packaging/rpm/lota.spec``, which COPR builds. A host gets whichever one
+produced the package it installed, so a file listed by only one is absent on
+half the fleet with nothing to report it.
+
+``make check-package-manifests`` compares the set of installed paths per
+package. Directories that only hold other listed paths are ignored on both
+sides -- rpm needs a ``%dir`` line where nfpm creates the directory along the
+way -- so a directory a package deliberately ships empty is still compared.
+Modes and ownership are not: the two manifests express them too differently,
+so a path that carries permissions worth having still needs a human to read
+both entries.
+
+Adding a file to a package therefore means adding it in three places: the
+install rule in the ``Makefile``, the nfpm config for its package, and the
+matching ``%files`` section of the spec.
 
 Include hygiene
 ===============

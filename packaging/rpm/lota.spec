@@ -83,9 +83,18 @@ Self-hosted enrollment service that proves an AIK lives in a genuine TPM
 through credential activation and issues short-lived AIK certificates that
 the fleet verifier trusts.
 
+%package sdk
+Summary:        LOTA SDK runtime libraries
+License:        MIT
+
+%description sdk
+Versioned shared libraries for the gaming, anti-cheat and server SDKs and the
+Proton/Steam hook. Install lota-sdk-devel to build against them.
+
 %package sdk-devel
 Summary:        LOTA SDK headers and shared libraries
 License:        MIT
+Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
 
 %description sdk-devel
 Headers and shared libraries for the gaming, anti-cheat and server SDKs,
@@ -111,6 +120,10 @@ build a proprietary product on top.
 install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
 
 %post agent
+# lota-agent.socket sets SocketGroup=lota on the IPC socket, which resolves only
+# once that group exists.
+# Package ships the fragment; applying it is what creates the group
+systemd-sysusers %{_sysusersdir}/lota-agent.conf >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
 cat <<'EOF'
 lota-agent installed. The agent fails closed until host bring-up completes.
@@ -128,17 +141,16 @@ EOF
 %license LICENSE LICENSE.GPL-2.0-only
 %{_bindir}/lota-agent
 %{_bindir}/lota-install
-%{_bindir}/lota-dev-bringup.sh
 %dir %{_prefix}/lib/lota
 %{_prefix}/lib/lota/lota-pcr14-lock
 %{_prefix}/lib/lota/lota_lsm.bpf.o
 %dir %{_prefix}/lib/dracut/modules.d/90lota
 %{_prefix}/lib/dracut/modules.d/90lota/module-setup.sh
 %{_prefix}/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
+%{_sysusersdir}/lota-agent.conf
 %{_unitdir}/lota-agent.service
 %{_unitdir}/lota-agent.socket
 %{_unitdir}/lota-attest.service
-%{_presetdir}/85-lota.preset
 %{_prefix}/lib/udev/rules.d/99-lota-tpm.rules
 %config(noreplace) %{_sysconfdir}/dbus-1/system.d/org.lota.Agent1.conf
 %dir %{_datadir}/lota
@@ -158,6 +170,13 @@ EOF
 %files attest-ca
 %license LICENSE
 %{_bindir}/lota-attest-ca
+
+%files sdk
+%license LICENSE
+%{_libdir}/liblotagaming.so.*
+%{_libdir}/liblotaserver.so.*
+%{_libdir}/liblota_wine_hook.so.*
+%{_libdir}/liblota_anticheat.so.*
 
 %files sdk-devel
 %license LICENSE

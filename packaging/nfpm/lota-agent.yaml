@@ -84,6 +84,10 @@ contents:
     dst: /usr/lib/systemd/system/lota-agent.socket
     file_info:
       mode: 0644
+  - src: ./systemd/lota-attest.service
+    dst: /usr/lib/systemd/system/lota-attest.service
+    file_info:
+      mode: 0644
   - src: ./systemd/lota-agent.service.d/10-xdg-runtime.conf.example
     dst: /usr/share/lota/systemd/10-xdg-runtime.conf.example
     file_info:

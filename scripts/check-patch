@@ -700,6 +700,34 @@ check_bpf_mirror() {
 	fi
 }
 
+# Package-manifest parity:
+# nfpm configs and the RPM spec must ship the same files per package,
+# since a host gets whichever one built its package.
+# Only runs when the patch touches manifest, the make install rule or the check itself
+check_package_manifests() {
+	local path touched=1 out
+	for path in "$@"; do
+		case "$path" in
+		packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
+			scripts/check-package-manifests.sh)
+			touched=0
+			;;
+		esac
+	done
+	if ((touched != 0)); then
+		pass "package-manifests"
+		return
+	fi
+
+	if out=$(make check-package-manifests 2>&1); then
+		pass "package-manifests"
+	else
+		printf '%s\n' "$out" | grep -v '^make'
+		fail "package-manifests" \
+			"the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
+	fi
+}
+
 main() {
 	local base=""
 	local head="HEAD"
@@ -757,6 +785,7 @@ main() {
 	check_smatch "${changed_files[@]}"
 	check_coccinelle "${changed_files[@]}"
 	check_bpf_mirror "${changed_files[@]}"
+	check_package_manifests "${changed_files[@]}"
 
 	if ((FAILURES != 0)); then
 		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"
