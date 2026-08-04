@@ -171,7 +171,7 @@ type tokenWire struct {
 
 // runtime_protect_version wire values.
 const (
-	runtimeProtectV1 = 1 // PID set identity only (0 also accepted as v1)
+	runtimeProtectV1 = 1 // PID set identity only
 	runtimeProtectV2 = 2 // PID set + per-PID kernel image digest
 	imageDigestSize  = 32
 )
@@ -394,7 +394,7 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))
 	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData)))
 	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))
-	binary.LittleEndian.PutUint16(buf[142:144], 0)
+	binary.LittleEndian.PutUint16(buf[142:144], runtimeProtectV1)
 
 	// variable data
 	off := TokenHeaderSize
@@ -520,7 +520,8 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	hdr.attestSize = binary.LittleEndian.Uint16(data[138:140])
 	hdr.sigSize = binary.LittleEndian.Uint16(data[140:142])
 	hdr.runtimeProtectVersion = binary.LittleEndian.Uint16(data[142:144])
-	if hdr.runtimeProtectVersion > runtimeProtectV2 {
+	if hdr.runtimeProtectVersion < runtimeProtectV1 ||
+		hdr.runtimeProtectVersion > runtimeProtectV2 {
 		return nil, fmt.Errorf("%w: unsupported runtime protect version", ErrBadToken)
 	}
 	if hdr.protectPIDCount > MaxProtectPIDs {

@@ -85,8 +85,18 @@ DeviceAllow=/dev/tpm0 rw
 # TPM + BPF + raw I/O + kernel log (SYSLOG_ACTION_READ_ALL for
 # iommu_check_dmesg; CAP_SYS_ADMIN alone covers it today but the
 # klogctl(3) dependency is declared explicitly).
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG
-AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON
+#
+# CAP_SYS_PTRACE is what lets the agent read another process's /proc entries.
+# Title that calls lota_protect_self() is measured from the kernel side
+# -- /proc/<pid>/maps walked, each file-backed executable mapping opened through
+# /proc/<pid>/map_files and measured with FS_IOC_MEASURE_VERITY -- and every one
+# of those reads costs PTRACE_MODE_READ check.
+# Without the capability the measurement cannot be taken, and measurement that
+# is missing must never be issued as trusted one, so every token on the host is refused.
+# It buys no debugger: attaching is denied to the agent as well, by the agent's
+# own LSM hook, which exempts it for read access only.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG CAP_SYS_PTRACE
+AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_SYS_PTRACE
 
 # prevent acquiring new privileges via execve
 NoNewPrivileges=yes
@@ -96,6 +106,9 @@ SystemCallFilter=@system-service @io-event @network-io
 
 # BPF and perf syscalls required for LSM program
 SystemCallFilter=bpf perf_event_open
+
+# seccomp(2) so the agent can install its own libseccomp hardening filter
+SystemCallFilter=seccomp
 
 SystemCallArchitectures=native
 SystemCallErrorNumber=EPERM

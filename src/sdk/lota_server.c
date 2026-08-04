@@ -376,7 +376,8 @@ static int parse_wire_header(const uint8_t *data, size_t len,
 
 	if (hash_alg_digest_len(hdr->hash_alg) == 0)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
-	if (hdr->runtime_protect_version > LOTA_RUNTIME_PROTECT_V2)
+	if (hdr->runtime_protect_version < LOTA_RUNTIME_PROTECT_V1 ||
+	    hdr->runtime_protect_version > LOTA_RUNTIME_PROTECT_V2)
 		return LOTA_SERVER_ERR_BAD_TOKEN;
 	if (hdr->protect_pid_count > LOTA_TOKEN_MAX_PROTECT_PIDS)
 		return LOTA_SERVER_ERR_BAD_TOKEN;

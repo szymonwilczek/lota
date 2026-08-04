@@ -547,6 +547,24 @@ static __always_inline int is_protected_current_task(void)
 	return is_protected_task(task);
 }
 
+/*
+ * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
+ * Mirrored rather than included: this object builds against vmlinux.h,
+ * which carries types and not the uapi-adjacent flag definitions.
+ */
+#define LOTA_PTRACE_MODE_ATTACH 0x02
+
+static __always_inline int is_current_lota_agent_task(void)
+{
+	struct task_struct *task;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return 0;
+
+	return has_task_auth_flag(task, LOTA_TASK_AUTH_AGENT);
+}
+
 static __always_inline int is_lota_agent_task(struct task_struct *task)
 {
 	if (!task)
@@ -1629,11 +1647,32 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 	if (ret != 0)
 		return -EPERM;
 
-	inc_stat(STAT_PTRACE_ATTEMPTS);
-
 	lota_mode = get_mode();
 
 	child_pid = BPF_CORE_READ(child, pid);
+
+	/*
+	 * Agent measures protected process's live code from the kernel side,
+	 * and procfs authorises that read through this hook:
+	 * reading /proc/<pid>/exe or /proc/<pid>/maps costs PTRACE_MODE_READ check.
+	 *
+	 * Denying it to the agent makes protecting a process and issuing token for
+	 * it mutually exclusive -- measurement cannot be taken, and measurement that
+	 * is missing must never be issued as trusted one, so GET_TOKEN fails closed.
+	 * On the shipped defaults, enforce mode with global ptrace blocking on,
+	 * that is every host.
+	 *
+	 * Read access only.
+	 * PTRACE_MODE_ATTACH stays denied to everyone including the agent, so nothing
+	 * here opens debugger onto protected task; and the agent is identified by
+	 * the same task auth flag the rest of this file trusts, not by pid a caller
+	 * could claim.
+	 */
+	if ((mode & LOTA_PTRACE_MODE_ATTACH) == 0 &&
+	    is_current_lota_agent_task()) {
+		inc_stat(STAT_PTRACE_ATTEMPTS);
+		return 0;
+	}
 
 	if (is_lota_agent_task(child)) {
 		blocked = 1;
@@ -1687,26 +1726,6 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
 	return 0;
 }
-
-/*
- * Historical note: a SEC("fmod_ret/__ptrace_may_access") fallback used
- * to live here to cover credential checks reached via
- * process_vm_readv(2) / process_vm_writev(2) / /proc/PID/mem on kernels
- * where mm_access() -> __ptrace_may_access() did not re-enter the LSM
- * call chain. Linux 5.13+ routes every __ptrace_may_access() caller
- * through security_ptrace_access_check() at the tail of that function,
- * so the LSM hook (lota_ptrace_access_check above) covers the full
- * surface and the fallback is redundant. Beyond 6.4 the kernel also
- * marks __ptrace_may_access as non-attachable for fmod_ret programs
- * ("__ptrace_may_access() is not modifiable"), so keeping the fallback
- * would unconditionally fail bpf_object__load on stock Fedora 44 /
- * hosts. The agent's kernel-floor gate already refuses to load BPF
- * programs at all on kernels without LSM (lockdown + module-sig + IMA
- * appraisal must be live), which is the same set of hosts where the
- * LSM hook is missing, so the
- * "process_vm_* gap on a kernel with LSM disabled" scenario never
- * reaches this code.
- */
 
 /* ======================================================================
  * LSM hook: task_kill

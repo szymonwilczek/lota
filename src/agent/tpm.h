@@ -177,11 +177,10 @@ const char *tpm_strerror(int err);
 /*
  * PCR14 boot-commitment snapshot persisted across agent restarts.
  *
- * Layout is fixed and version-tagged. flags deliberately consumes the
- * first byte of the old 32-byte reserved tail; pre-initramfs-lock
- * snapshots zero-filled that area, so version 1 remains loadable
- * without a migration while new writers retain 31 bytes for future
- * extension.
+ * Layout is fixed and version-tagged:
+ * flags occupies the first byte of the reserved tail and 31 bytes stay reserved.
+ * Loader requires the current version, so snapshot it cannot read is discarded
+ * and the agent re-derives the state.
  */
 struct lota_clock_state {
 	uint32_t magic;
@@ -751,8 +750,13 @@ int tpm_aik_needs_rotation(struct tpm_context *ctx, uint32_t max_age_sec);
 int tpm_rotate_aik(struct tpm_context *ctx);
 
 /*
- * tpm_aik_in_grace_period - Check if migration grace period is active
+ * tpm_aik_in_grace_period - Check if the rotation grace period is active
  * @ctx: TPM context
+ *
+ * Grace period is live feature of AIK rotation, not a version migration:
+ * for TPM_AIK_GRACE_PERIOD_SEC after a rotation the agent reports the previous
+ * public key alongside the new one so the verifier can confirm the same TPM
+ * rotated its own key.
  *
  * Returns: 1 if grace period is active, 0 otherwise
  */

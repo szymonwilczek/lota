@@ -594,6 +594,31 @@ static int st_selinux_apply(struct install_ctx *ctx)
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
+	/*
+	 * Label the endpoints this host was given.
+	 * Policy lets the agent reach lota_port_t and a loadable module cannot
+	 * carry port contexts, so unlabelled port is one the agent is refused
+	 * at connect -- failure that reads as server being down.
+	 * Ports the base policy already covers (8443 is http_port_t) are left alone:
+	 * -a fails on port that has a type, and that failure is not this stage's problem
+	 */
+	{
+		const char *const ports[] = { ctx->opts.ca_port,
+					      ctx->opts.verifier_port };
+
+		for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++) {
+			const char *const argv[] = { "semanage",    "port",
+						     "-a",	    "-t",
+						     "lota_port_t", "-p",
+						     "tcp",	    ports[i],
+						     NULL };
+
+			if (!ports[i] || !ports[i][0])
+				continue;
+			(void)run_cmd(&ctx->ui,
+				      "Labelling the attestation port", argv);
+		}
+	}
 	if (file_exists(PATH_LOTA_STATE_DIR)) {
 		const char *const argv[] = { "restorecon", "-R",
 					     PATH_LOTA_STATE_DIR, NULL };
@@ -708,6 +733,21 @@ static int st_agent_apply(struct install_ctx *ctx)
 
 		run_cmd(&ctx->ui, "Collecting the agent's startup log", argv);
 		return rc != 0 ? (rc > 0 ? -EIO : rc) : -EAGAIN;
+	}
+	{
+		/*
+		 * attestation loop is enabled here rather than by package:
+		 * installing enforcement is not the same act as deciding a machine
+		 * should start reporting.
+		 * Its own condition keeps it inactive until this host has publisher,
+		 * so enabling it before there is one starts nothing.
+		 */
+		const char *const argv[] = { "systemctl", "enable", "--now",
+					     "lota-attest.service", NULL };
+
+		rc = run_cmd(&ctx->ui, "Enabling the attestation loop", argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
 	}
 	return 0;
 }

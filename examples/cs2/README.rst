@@ -52,14 +52,17 @@ Prerequisites
 One-time host setup
 -------------------
 
-1. **Create the** ``lota`` **group** and add the operator user to it. The agent
-   socket is owned ``root:lota mode 0660``, and the Steam pressure-vessel
-   container inherits the launching user's supplementary group set, so the hook
-   can only ``connect()`` to the socket when the user is in the ``lota`` group:
+1. **Add the operator user to the** ``lota`` **group.** The agent socket is
+   owned ``root:lota mode 0660``, and the Steam pressure-vessel container
+   inherits the launching user's supplementary group set, so the hook can only
+   ``connect()`` to the socket when the user is in the ``lota`` group. The
+   agent package creates the group from its ``sysusers.d`` fragment, so only
+   the membership is left to do:
 
    .. code:: sh
 
-      sudo groupadd --system lota
+      # from a source install the group may be absent; the package creates it
+      getent group lota >/dev/null || sudo groupadd --system lota
       sudo usermod -aG lota "$USER"
       # newgrp lota - activates the group in the current shell without a full re-login
       # restart Steam from that shell so CS2 inherits the new group

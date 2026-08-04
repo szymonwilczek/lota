@@ -114,6 +114,17 @@ After installing the agent binary and BPF object:
    sudo restorecon -Rv /etc/lota
    sudo restorecon -Rv /var/lib/lota
 
+Cross-distribution portability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The module loads on both the Fedora and the RHEL family. Types that exist
+only on newer kernels are guarded so a base policy that lacks them still
+links the module: ``pidfs_t`` (pidfs, kernel 6.9+) is referenced inside an
+``optional_policy`` block, so on the RHEL family (el9, kernel 5.14, whose
+base policy has no ``pidfs_t``) the block is dropped and the rest of the
+module loads. Build the module against the target distribution's
+``selinux-policy-devel`` so the compiled ``lota.pp`` matches its policy.
+
 Configuration Tunables
 ----------------------
 
@@ -330,6 +341,20 @@ Network attestation blocked
 
    # Verify port definition
    sudo semanage port -l | grep lota
+
+The policy allows ``lota_agent_t`` to reach ``lota_port_t``, and a loadable
+module cannot carry port contexts, so the type is assigned at bring-up:
+``lota-install`` labels the CA and verifier ports it was given. An endpoint
+added later has to be labelled too, or the agent is refused at connect and the
+operator sees a connection error against a server that is running:
+
+.. code:: bash
+
+   sudo semanage port -a -t lota_port_t -p tcp 8473
+
+Port 8443 is an exception that hides the rule: the base policy already labels
+it ``http_port_t``, which ``lota_agent_t`` may also reach, so a deployment on
+the default port works without any of this.
 
 Interface Reference
 -------------------

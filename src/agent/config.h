@@ -108,8 +108,10 @@ struct lota_config {
 	 * Operator UIDs that receive an additional listener under
 	 * /run/user/<uid>/lota/lota.sock. Steam pressure-vessel only
 	 * mounts /run/user/<uid> into the container, so each user that
-	 * launches games needs a per-UID secondary socket. Empty list
-	 * falls back to the legacy XDG_RUNTIME_DIR-driven single listener.
+	 * launches games needs a per-UID secondary socket.
+	 * Empty list selects the single-operator mode instead: one secondary
+	 * listener in the agent's own XDG_RUNTIME_DIR, which is what
+	 * the documented systemd drop-in pins and what the SDK auto-detects.
 	 */
 	uint32_t container_listener_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int container_listener_uid_count;

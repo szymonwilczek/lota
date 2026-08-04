@@ -126,9 +126,11 @@ loop renews the certificate automatically. Start it after the first enrollment
 
    sudo systemctl enable --now lota-attest.service
 
-The shipped ``85-lota.preset`` enables both ``lota-agent.service`` and
-``lota-attest.service`` by default, so a packaged install only needs the first
-enrollment to begin attesting.
+Installing the package enables nothing. ``lota-install`` enables the units it
+brings up -- the agent socket, the enforcement daemon and the attestation
+loop -- so a host that has not been through bring-up runs neither, and a
+``dnf install`` on a machine nobody is sitting at cannot start enforcing on
+its own.
 
 VM testing caveats
 ------------------

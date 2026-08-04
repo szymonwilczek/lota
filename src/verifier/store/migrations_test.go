@@ -2,11 +2,12 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - Schema migration invariant gate
 //
-// Verifier fleet upgrades by rolling new instances in against shared Postgres
-// while old instances keep serving.
-// That only stays safe if every migration is additive:
-// an instance running the old binary must still read and write a schema a newer
-// peer has already migrated forward.
+// Schema history is append-only:
+// shipped migration is never edited, only new entry appended, so database already
+// in service reaches the current shape by applying what it is missing.
+// Appended migration must also be additive.
+// Live database is migrated by whichever instance starts first while the other
+// instances of the fleet keep operating it, and only an additive change is invisible to them.
 // These tests mechanically enforce that discipline so future destructive migration
 // (DROP/RENAME/type change) fails the build.
 
@@ -23,16 +24,7 @@ import (
 // Additive statements (CREATE TABLE, CREATE INDEX, ADD COLUMN) are intentionally not matched.
 var destructiveDDL = regexp.MustCompile(`(?i)\b(DROP\s+TABLE|DROP\s+COLUMN|RENAME\s+(TABLE|COLUMN|TO)|ALTER\s+COLUMN|MODIFY\s+COLUMN|SET\s+DATA\s+TYPE)\b`)
 
-// SQLite cannot re-key a primary key in place, only rebuild the table
-// (CREATE new, copy, DROP old, RENAME).
-// SQLite backend is single-node with stop-swap-start upgrade,
-// so no old reader observes the rebuild.
-// Each exemption is deliberate entry here; Postgres has none.
-var sqliteRebuildExempt = map[int]bool{
-	8: true, // hardware bans re-keyed to (tenant, hardware_id)
-}
-
-func assertAdditiveHistory(t *testing.T, label string, ms []migration, exempt map[int]bool) {
+func assertAdditiveHistory(t *testing.T, label string, ms []migration) {
 	t.Helper()
 
 	if len(ms) == 0 {
@@ -50,20 +42,21 @@ func assertAdditiveHistory(t *testing.T, label string, ms []migration, exempt ma
 		if m.description == "" {
 			t.Errorf("%s: migration %d has no description", label, m.version)
 		}
-		if destructiveDDL.MatchString(m.sql) && !exempt[m.version] {
+		if destructiveDDL.MatchString(m.sql) {
 			t.Errorf("%s: migration %d (%s) contains destructive DDL; migrations "+
-				"must be additive so a rolling upgrade keeps old readers working",
+				"must be additive so the instances already operating the database "+
+				"keep working through the change",
 				label, m.version, m.description)
 		}
 	}
 }
 
 func TestPgMigrationsAdditive(t *testing.T) {
-	assertAdditiveHistory(t, "postgres", pgMigrations, nil)
+	assertAdditiveHistory(t, "postgres", pgMigrations)
 }
 
 func TestSQLiteMigrationsAdditive(t *testing.T) {
-	assertAdditiveHistory(t, "sqlite", migrations, sqliteRebuildExempt)
+	assertAdditiveHistory(t, "sqlite", migrations)
 }
 
 // Compiled-in target must be the last (highest) version in the history,

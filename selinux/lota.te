@@ -67,6 +67,21 @@ logging_log_file(lota_log_t)
 type lota_tmp_t;
 files_tmp_file(lota_tmp_t)
 
+#
+# Port type for the attestation endpoints the agent connects out to.
+#
+# Policy below allows lota_agent_t to reach this type, so a port that nothing
+# labels is a port the agent cannot use:
+# the connect fails with EACCES and the operator sees a connection error against
+# server that is running.
+# The two documented defaults are labelled here; any other endpoint has to be
+# added by the operator:
+#
+#   semanage port -a -t lota_port_t -p tcp <port>
+#
+# Loadable module cannot carry port contexts -- portcon is base policy --
+# so the assignment happens at bring-up:
+# lota-install labels the endpoints it was given.
 type lota_port_t;
 corenet_port(lota_port_t)
 
@@ -96,7 +111,12 @@ dev_node(lota_tpm_device_t)
 # lota_agent_t policy
 #
 
-allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_rawio ipc_lock };
+# sys_ptrace is what authorises reading another process's /proc entries
+# -- maps, map_files -- which is how the runtime image measurement reaches
+# the code of title that asked to be protected.
+# It grants no debugger: attaching is refused separately by the agent's own
+# LSM hook, which exempts the agent for read access only.
+allow lota_agent_t self:capability { dac_override dac_read_search sys_admin sys_rawio ipc_lock sys_ptrace };
 allow lota_agent_t self:capability2 { bpf perfmon };
 allow lota_agent_t self:process { signal signull setcap setrlimit };
 allow lota_agent_t self:fifo_file rw_fifo_file_perms;
@@ -191,6 +211,31 @@ gen_require(`
 ')
 allow lota_agent_t system_map_t:file read_file_perms;
 
+# Runtime image measurement of protected process
+#
+# lota_protect_self() puts title in the protected set, and every token the agent
+# then issues folds in kernel-anchored measurement of that process's live code:
+# /proc/<pid>/maps is walked and each file-backed executable mapping is opened
+# through /proc/<pid>/map_files and measured with FS_IOC_MEASURE_VERITY (ioctlcmd 0x6686).
+#
+# What gets opened is whatever the title has mapped -- its own binary,
+# the SDK, libc, and anything else it loads -- so the type is not knowable from
+# this policy.
+# Without these rules the open is denied, the measurement cannot be taken,
+# and measurement that is missing must never be issued as trusted one,
+# so every GET_TOKEN on the host fails closed.
+#
+# Denial is dontaudit'ed in the base policy, so it leaves no trace in the audit
+# log either: the symptom is a token that is refused with no explanation.
+#
+# Read and measure only, on files already mapped by process the agent was asked
+# to protect.
+files_read_all_files(lota_agent_t)
+allow lota_agent_t file_type:file { getattr open read ioctl };
+
+# /proc/<pid>/map_files of a process the agent did not spawn
+domain_read_all_domains_state(lota_agent_t)
+
 # /boot/vmlinuz-*
 files_read_boot_files(lota_agent_t)
 files_read_boot_symlinks(lota_agent_t)
@@ -250,10 +295,14 @@ gen_require(`
 ')
 allow lota_agent_t system_dbusd_t:dbus acquire_svc;
 
-gen_require(`
-	type pidfs_t;
+# optional_policy() drops the block when the type is absent and keeps it
+# on a policy new enough to define pidfs_t
+optional_policy(`
+	gen_require(`
+		type pidfs_t;
+	')
+	allow lota_agent_t pidfs_t:filesystem getattr;
 ')
-allow lota_agent_t pidfs_t:filesystem getattr;
 
 #
 # Type=notify in systemd/lota-agent.service requires the agent to

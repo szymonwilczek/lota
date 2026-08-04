@@ -37,15 +37,14 @@ struct lota_report_header {
 #define LOTA_REPORT_FLAG_LOCKDOWN (1U << 5) /* Kernel lockdown active */
 #define LOTA_REPORT_FLAG_SECUREBOOT (1U << 6) /* Secure Boot enabled */
 #define LOTA_REPORT_FLAG_ENFORCE (1U << 7) /* LSM enforce mode active */
+/*
+ * The bit is not a generic "some boot commitment" marker:
+ * on the wire it names the v1 construction below.
+ * Future v2 must get new report flag and matching
+ * LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V2 capability bit.
+ */
 #define LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 \
 	(1U << 8) /* PCR14 bound by v1 boot-commitment derivation */
-/*
- * Source-compatible alias for pre-negotiation code. The bit is not a
- * generic "some boot commitment" marker: on the wire it names the v1
- * construction below. A future v2 must get a new report flag and a
- * matching LOTA_CHALLENGE_FLAG_BOOT_COMMITMENT_V2 capability bit.
- */
-#define LOTA_REPORT_FLAG_BOOT_COMMITMENT LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1
 
 /*
  * Challenge capability flags. The verifier sends these in

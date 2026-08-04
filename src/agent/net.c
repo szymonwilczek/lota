@@ -216,6 +216,7 @@ void net_context_cleanup(struct net_context *ctx)
 int net_connect(struct net_context *ctx)
 {
 	struct addrinfo hints, *result, *rp;
+	int last_errno = 0;
 	char port_str[16];
 	SSL *ssl;
 	int sock = -1;
@@ -241,8 +242,10 @@ int net_connect(struct net_context *ctx)
 
 	for (rp = result; rp != NULL; rp = rp->ai_next) {
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sock < 0)
+		if (sock < 0) {
+			last_errno = errno;
 			continue;
+		}
 
 		{
 			int normalized = normalize_socket_fd(sock);
@@ -263,6 +266,7 @@ int net_connect(struct net_context *ctx)
 		fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 
 		ret = connect(sock, rp->ai_addr, rp->ai_addrlen);
+		last_errno = errno;
 		if (ret == 0) {
 			/* immediate success */
 			fcntl(sock, F_SETFL, flags); /* restore blocking */
@@ -285,7 +289,9 @@ int net_connect(struct net_context *ctx)
 					if (getsockopt(sock, SOL_SOCKET,
 						       SO_ERROR, &err,
 						       &len) == 0 &&
-					    err == 0) {
+					    err != 0)
+						last_errno = err;
+					if (err == 0) {
 						/* connected successfully */
 						close(epfd);
 						fcntl(sock, F_SETFL,
@@ -306,7 +312,7 @@ int net_connect(struct net_context *ctx)
 	freeaddrinfo(result);
 
 	if (sock < 0) {
-		return -ECONNREFUSED;
+		return last_errno ? -last_errno : -ECONNREFUSED;
 	}
 
 	ctx->socket_fd = sock;

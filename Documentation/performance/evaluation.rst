@@ -194,12 +194,115 @@ Scaling note
 
 Per-attestation verification (``VerifyToken`` / RSASSA verify) has no shared
 state, so it scales linearly across cores: ~41 k/sec/core x 16 cores giving
-about **~660 k attestations/sec** on this host, crypto-bound. The sqlite store
-serialises writes, so registration (enrollment commit) does **not** scale the
-same way -- it is gated by the DB write lock, not the CPU.
+about **~660 k attestations/sec** on this host, crypto-bound. Writes are the
+tier that does not scale with cores, and which backend bounds them differs:
+SQLite's single-writer model serialises every write in one file -- a property
+of that backend, suited to single-node deployments -- while the Postgres
+backend (``--pg-dsn``) commits independent clients concurrently under
+per-client advisory locks and is bounded by the database host's WAL fsync
+rate (measured below). The verifier itself holds no process-wide lock on the
+attestation path; the store-concurrency contract that keeps it that way is
+in the contributor documentation.
 
-L2 / L3 (TBA)
-=============
+L2 fleet scale (synthetic, measured)
+====================================
+
+Measured with :doc:`lota-loadgen <load-testing>` on the L1 host (8c/16t
+Ryzen 7 5700X, NVMe, Postgres 16 in a local container, TLS loopback),
+10 000-agent rig, production verifier configuration (certificate chain,
+strict policy):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 44 16 16 24
+
+   * - Run
+     - Rate
+     - p99
+     - Notes
+   * - Storm, in-memory/file stores
+     - 3 854/s
+     - 62 ms
+     - crypto tier; not the bottleneck
+   * - Storm, Postgres, first attest
+     - 350/s
+     - 843 ms
+     - registration commit per agent
+   * - Storm, Postgres, re-attest
+     - 1 124/s
+     - 260 ms
+     - WAL-fsync bound
+   * - Steady 10k @ 60 s, Postgres
+     - 166.6/s
+     - 931 ms
+     - 3 min; 29 998/29 998 verified, 0 timeouts
+
+An 18-minute dual-instance soak (2 x 5 000 agents at 60 s, one shared
+Postgres) held the same rate through a ``kill -9`` of one instance
+(only its agents affected; recovered next interval; 20/20 of its
+session tokens validated on the survivor) and a ~2 s Postgres restart
+(fail-closed rejections inside the window only; all 10 000
+registrations intact). Operator-facing conclusions from these runs are
+in :doc:`the sizing guide <../operator/sizing>`.
+
+L2 write-tier scaling (measured)
+======================================
+
+Three optimisations attack the per-database WAL-fsync ceiling above. All
+were measured on the same L1 host.
+
+* **Attestation-log batching.** The audit write, one of the per-report
+  durable writes, is moved off the hot path and flushed in batches (one
+  commit per flush). In isolation against real Postgres the audit write
+  went from ~110-590 rows/s (one fsync per row, highly variable with host
+  fsync latency) to ~18 000-66 000 rows/s batched (one fsync per ~256).
+  Both ends move with the host's fsync latency, so the ratio between a
+  given pair of runs spans ~30-600x; the structural change is the one
+  that holds -- the audit trail costs one fsync per batch, not per row.
+* **Connection-pool / enrollment scaling.** Baseline-insert (enrollment)
+  throughput scales with the pool because Postgres group-commits
+  concurrent transactions: ~496/s at pool 8, ~4 655/s at pool 20,
+  ~15 145/s at pool 64 (~3.3x); pool 128 hit the container's default
+  ``max_connections`` of 100. Enrollment is a pool/``max_connections``
+  knob, not a fixed 350/s limit.
+* **Sharding distribution and aggregate scaling.** Across four shard
+  databases, 8 000 clients routed exactly 25.0 % per shard
+  (2 000 each, deterministic, every client on its hash's shard, all
+  persisted). Aggregate write throughput over the four shards ran only
+  **1.1-2.4x** the single-shard rate on this single-NVMe host, because
+  the shards share one fsync device.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Measurement
+     - Result
+     - Status
+   * - Audit write, per-row vs batched
+     - ~110-590/s -> ~18k-66k/s (one fsync per ~256 rows)
+     - measured
+   * - Enrollment vs pool (8 / 20 / 64)
+     - ~496 / 4 655 / 15 145 inserts/s
+     - measured
+   * - Shard routing distribution (4 shards)
+     - 25.0 % each, exact, deterministic
+     - measured
+   * - Shard aggregate write scaling (1 disk)
+     - 1.1-2.4x at N=4 (ideal 4.0x)
+     - measured, storage-bound
+   * - Shard aggregate on independent storage
+     - ~Nx
+     - **extrapolated** (needs multi-host)
+
+The linear-to-Nx shard scaling and the one-million-agent envelope
+(16 shards + ~56 stateless instances) are honest arithmetic over these
+measured building blocks; the aggregate on independent storage is not yet
+measured (single-disk rig). A multi-host run will replace the 1.1-2.4x
+figure. The 1M reasoning is in :doc:`the sizing guide <../operator/sizing>`.
+
+L2 swtpm / L3 kernel (TBA)
+==========================
 
 * **L2 macro (swtpm):** ``--attest`` round-trip and enrollment ceremony
   wall-clock with ``hyperfine``. Includes the real TPM quote, IPC, and TLS --

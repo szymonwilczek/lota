@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Szymon Wilczek
 // LOTA Verifier - scoped API key file
 //
-// Monitoring API historically knows two keys, both from environment
-// variables and both global: LOTA_ADMIN_API_KEY and LOTA_READER_API_KEY.
+// Monitoring API takes two keys from environment variables,
+// LOTA_ADMIN_API_KEY and LOTA_READER_API_KEY, both global-scope because
+// a variable carries a key and nothing else.
 //
 // Multi-tenant deployments need more:
 // one operator per tenant, each with their own key, role, and tenant set.
@@ -18,7 +19,10 @@
 // Only the SHA-256 of each key is stored, never the key itself.
 // The file is reloaded on SIGHUP; file that fails to parse or validate leaves
 // the previously loaded set in place.
-// Environment keys keep working and stay global-scope for backwards compatibility.
+// Environment keys are the development default and are deliberately global-scope:
+// they carry no tenant list, so principal authenticated by one is scoped to every tenant.
+// Deployment that needs per-tenant scoping configures the key file, which is
+// the only way to express it.
 
 package server
 

@@ -21,10 +21,12 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -45,6 +47,43 @@ func pgTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
+}
+
+func TestPostgresDBPoolCeiling(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+
+	// explicit ceiling is applied to the pool
+	db, err := OpenPostgresDBPool(dsn, 64)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool: %v", err)
+	}
+	defer db.Close()
+	if got := db.Stats().MaxOpenConnections; got != 64 {
+		t.Fatalf("MaxOpenConnections = %d, want 64", got)
+	}
+
+	// non-positive ceiling falls back to the default
+	dbDefault, err := OpenPostgresDBPool(dsn, 0)
+	if err != nil {
+		t.Fatalf("OpenPostgresDBPool(0): %v", err)
+	}
+	defer dbDefault.Close()
+	if got := dbDefault.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("default MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
+
+	// plain constructor uses the default too
+	dbPlain, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	defer dbPlain.Close()
+	if got := dbPlain.Stats().MaxOpenConnections; got != DefaultPGMaxOpenConns {
+		t.Fatalf("OpenPostgresDB MaxOpenConnections = %d, want %d", got, DefaultPGMaxOpenConns)
+	}
 }
 
 func TestPostgresMigrationsIdempotent(t *testing.T) {
@@ -254,5 +293,139 @@ func TestPostgresAttestationLog(t *testing.T) {
 	rs = al.QueryAttestations(1)
 	if len(rs) != 1 || rs[0].Tenant != "acme" {
 		t.Fatalf("QueryAttestations tenant = %+v, want acme", rs)
+	}
+}
+
+func TestPostgresAttestationLogRecordBatch(t *testing.T) {
+	db := pgTestDB(t)
+	al := NewPostgresAttestationLog(db)
+
+	if err := al.RecordBatch(nil); err != nil {
+		t.Fatalf("RecordBatch(nil): %v", err)
+	}
+
+	const n = 500
+	batch := make([]AttestationRecord, 0, n)
+	for i := range n {
+		batch = append(batch, AttestationRecord{
+			ClientID: fmt.Sprintf("batch-client-%03d", i),
+			Tenant:   "acme",
+			Result:   "VERIFY_OK",
+		})
+	}
+	if err := al.RecordBatch(batch); err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+
+	rs := al.QueryAttestations(n)
+	if len(rs) != n {
+		t.Fatalf("QueryAttestations returned %d records, want %d", len(rs), n)
+	}
+	for _, r := range rs {
+		if r.Timestamp.IsZero() {
+			t.Fatalf("record %s persisted with a zero timestamp", r.ClientID)
+		}
+		if r.Tenant != "acme" {
+			t.Fatalf("record %s tenant = %q, want acme", r.ClientID, r.Tenant)
+		}
+	}
+}
+
+// database's identity is minted once and then stable,
+// so restarts and extra instances all see the same value.
+func TestPostgresShardIdentityStable(t *testing.T) {
+	db := pgTestDB(t)
+	if _, err := db.Exec("DELETE FROM shard_identity"); err != nil {
+		t.Fatalf("clear shard_identity: %v", err)
+	}
+
+	ctx := context.Background()
+	first, err := ShardIdentity(ctx, db)
+	if err != nil {
+		t.Fatalf("ShardIdentity: %v", err)
+	}
+	if first == "" {
+		t.Fatal("empty shard identity")
+	}
+	again, err := ShardIdentity(ctx, db)
+	if err != nil {
+		t.Fatalf("ShardIdentity (second call): %v", err)
+	}
+	if again != first {
+		t.Errorf("identity changed across calls: %s then %s", first, again)
+	}
+}
+
+// control database pins the shard set on first use and refuses a later start
+// whose list differs -- reorder, different member, or changed shard count all
+// route clients to databases the peers disagree with.
+func TestPostgresAssertShardSet(t *testing.T) {
+	db := pgTestDB(t)
+	if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
+		t.Fatalf("clear shard_set: %v", err)
+	}
+	ctx := context.Background()
+
+	pinned := []string{"shard-a", "shard-b", "shard-c"}
+	if err := AssertShardSet(ctx, db, pinned); err != nil {
+		t.Fatalf("first pin: %v", err)
+	}
+	// the same list on every later start is the healthy case
+	if err := AssertShardSet(ctx, db, pinned); err != nil {
+		t.Fatalf("re-asserting the pinned list: %v", err)
+	}
+
+	divergent := map[string][]string{
+		"reordered":       {"shard-b", "shard-a", "shard-c"},
+		"shard added":     {"shard-a", "shard-b", "shard-c", "shard-d"},
+		"shard removed":   {"shard-a", "shard-b"},
+		"member replaced": {"shard-a", "shard-b", "shard-z"},
+	}
+	for name, ids := range divergent {
+		t.Run(name, func(t *testing.T) {
+			err := AssertShardSet(ctx, db, ids)
+			if err == nil {
+				t.Fatalf("%v accepted against the pinned set", ids)
+			}
+			if !errors.Is(err, ErrShardSetMismatch) {
+				t.Errorf("error = %v, want ErrShardSetMismatch", err)
+			}
+		})
+	}
+
+	// the same database listed twice would collapse routing onto it
+	if err := AssertShardSet(ctx, db, []string{"shard-a", "shard-a"}); err == nil {
+		t.Error("duplicate shard accepted")
+	}
+
+	// clearing the pin is the documented way to change the set on purpose
+	if _, err := db.Exec("DELETE FROM shard_set"); err != nil {
+		t.Fatalf("clear shard_set: %v", err)
+	}
+	if err := AssertShardSet(ctx, db, []string{"shard-a", "shard-b"}); err != nil {
+		t.Fatalf("re-pin after clearing: %v", err)
+	}
+}
+
+// ServerMaxConnections reads the budget every instance's pool draws from,
+// so the verifier can tell operator that raised pool is already over it
+func TestPostgresServerMaxConnections(t *testing.T) {
+	db := pgTestDB(t)
+
+	got, err := ServerMaxConnections(db)
+	if err != nil {
+		t.Fatalf("ServerMaxConnections: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("max_connections = %d, want a positive setting", got)
+	}
+
+	// cross-check against the server's own view
+	var want int
+	if err := db.QueryRow("SHOW max_connections").Scan(&want); err != nil {
+		t.Fatalf("SHOW max_connections: %v", err)
+	}
+	if got != want {
+		t.Errorf("ServerMaxConnections = %d, server reports %d", got, want)
 	}
 }

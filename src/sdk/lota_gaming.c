@@ -859,6 +859,14 @@ int lota_token_serialize(const struct lota_token *token, uint8_t *buf,
 	if (!token || !buf)
 		return LOTA_ERR_INVALID_ARG;
 
+	/* runtime_protect_version has to name version.
+	 * Caller that zeroes its struct and forgets the field would otherwise
+	 * get token every parser refuses, and would only find out at the far end
+	 */
+	if (token->runtime_protect_version < LOTA_RUNTIME_PROTECT_V1 ||
+	    token->runtime_protect_version > LOTA_RUNTIME_PROTECT_V2)
+		return LOTA_ERR_INVALID_ARG;
+
 	size_t total = lota_token_serialized_size(token);
 	if (total == 0)
 		return LOTA_ERR_INVALID_ARG;

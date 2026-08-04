@@ -12,6 +12,15 @@ Where the checks run
 * **Cross-architecture build**: the arm64 workflow starts on every pull
   request, but skips QEMU and the arm64 container when the commit range does
   not change source, build, BPF, policy, or deployment inputs.
+* **Packaging**: the ``Packages`` workflow proves the RPMs build and install
+  across the RPM/dracut family the nfpm configs and the 90lota module target,
+  not Fedora alone. It builds the RPMs on Fedora; on a RHEL-family (el9)
+  userspace it builds them off a clean archive, installs the agent, verifier
+  and attest-CA, and confirms the binaries link against el9 glibc and the
+  systemd units and dracut boot-path files are present. ``make
+  rhel-package-smoke`` runs the RHEL-family check under podman on any host. The
+  check ends at packaging: a container has no boot-measured trust chain, so
+  enrolment and attestation belong to the VM+swtpm job, not here.
 * **Every push to** ``lota-next``: the same workflows run on the branch tip, so
   the integration line is continuously built and fuzzed.
 * **Out of band**: Syzkaller fuzzes the BPF LSM / kernel surface against

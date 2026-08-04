@@ -69,6 +69,7 @@ INSTALLER_BIN := $(BUILD_DIR)/lota-install
 VERIFIER_BIN := $(BUILD_DIR)/lota-verifier
 ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
 FLEETCTL_BIN := $(BUILD_DIR)/lota-fleet
+LOADGEN_BIN := $(BUILD_DIR)/lota-loadgen
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
@@ -354,7 +355,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -369,6 +370,8 @@ verifier: $(VERIFIER_BIN)
 attest-ca: $(ATTESTCA_BIN)
 
 fleet-cli: $(FLEETCTL_BIN)
+
+loadgen: $(LOADGEN_BIN)
 
 sdk: $(SDK_LIB) $(SDK_STATIC)
 
@@ -463,6 +466,11 @@ $(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
 
+# Go synthetic-fleet load generator (lives in the verifier module)
+$(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/loadgen/**/*.go $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
+	$(QUIET_GO)
+	$(Q)cd $(SRC_DIR)/verifier && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) ./loadgen
+
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
 # -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
@@ -529,6 +537,14 @@ packages: all selinux-pp
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
+
+# RHEL-family (Rocky 9 / el9) package build + install smoke.
+# Spawns rockylinux:9 podman container, builds RPMs off clean archive of HEAD,
+# installs agent+verifier+attest-ca and checks the binaries run and the units ship.
+# No attestation: container has no boot-measured trust chain.
+.PHONY: rhel-package-smoke
+rhel-package-smoke:
+	$(Q)scripts/rhel-package-smoke.sh
 
 # Container images (OCI, built with ko -> distroless static, no Docker daemon)
 # KO_DOCKER_REPO is the destination registry prefix
@@ -669,6 +685,14 @@ check-version-tag:
 			fi; \
 		fi; \
 	fi
+
+# Package-manifest parity gate
+# nfpm configs and the RPM spec describe the same packages;
+# host gets whichever one built the package it installed,
+# so they must ship the same files.
+# See scripts/check-package-manifests.sh
+check-package-manifests:
+	@scripts/check-package-manifests.sh
 
 # Include-hygiene gate
 # Fails on any header pulled in but not used directly (transitive dependency).
@@ -821,18 +845,18 @@ install: check-version-tag all
 	done
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
-	install -m 755 scripts/lota-dev-bringup.sh $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
+	install -d $(DESTDIR)/usr/lib/sysusers.d
+	install -m 644 systemd/lota-sysusers.conf \
+		$(DESTDIR)/usr/lib/sysusers.d/lota-agent.conf
 	install -d $(DESTDIR)/usr/lib/systemd/system
 	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-attest.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
-	install -d $(DESTDIR)/usr/lib/systemd/system-preset
-	install -m 644 systemd/85-lota.preset $(DESTDIR)/usr/lib/systemd/system-preset/
 	install -d $(DESTDIR)/usr/share/lota/systemd
 	install -m 644 systemd/lota-agent.service.d/10-xdg-runtime.conf.example \
 		$(DESTDIR)/usr/share/lota/systemd/
@@ -889,6 +913,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
+	$(TEST_BIN_DIR)/test_protect_pids \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
 	$(TEST_BIN_DIR)/test_seal_blob \
@@ -1055,6 +1080,11 @@ $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c |
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_protect_pids: tests/test_protect_pids.c \
+		$(AGENT_DIR)/protect_pids.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_runtime_protect_digest: tests/test_runtime_protect_digest.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1152,6 +1182,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
 	@$(BUILD_DIR)/test_runtime_protect_digest
+	@$(BUILD_DIR)/test_protect_pids
 	@$(BUILD_DIR)/test_runtime_image_collect
 	@$(BUILD_DIR)/test_runtime_measure_pid
 	@$(BUILD_DIR)/test_seal_blob
@@ -1490,11 +1521,13 @@ help:
 	@echo "  verifier         Build Go verifier only"
 	@echo "  attest-ca        Build Go attestation CA only"
 	@echo "  fleet-cli        Build lota-fleet operator CLI only"
+	@echo "  loadgen          Build lota-loadgen synthetic fleet driver only"
 	@echo "  sdk              Build gaming SDK shared/static libraries"
 	@echo "  server-sdk       Build server SDK shared/static libraries"
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"

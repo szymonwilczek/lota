@@ -362,6 +362,14 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
 ``details`` is HTML-escaped and truncated to 2048 characters. **503**
 when no attestation log is configured.
 
+The decision log is written asynchronously in batches so a busy fleet does
+not pay one database commit per report. Records become durable within
+about one second; this endpoint forces a flush first, so it always returns
+the records it has accepted, but an ungraceful verifier crash can lose up
+to the last second of *audit* entries. No attestation verdict, session
+token or replay-protection state is affected -- those writes are
+synchronous.
+
 Session tokens
 ==============
 

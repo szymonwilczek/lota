@@ -13,6 +13,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -334,8 +335,11 @@ func (s *PostgresBanStore) CountBansE() (int, error) {
 }
 
 // PostgresAuditLog implements AuditLog using the audit_log table
+// No store-level lock:
+// every method is a single statement against the concurrency-safe *sql.DB,
+// and Log runs on operator actions and revocation events -- process-wide mutex
+// here only serializes callers for no correctness gain
 type PostgresAuditLog struct {
-	mu sync.Mutex
 	db *sql.DB
 }
 
@@ -346,9 +350,6 @@ func NewPostgresAuditLog(db *sql.DB) *PostgresAuditLog {
 }
 
 func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	_, err := l.db.Exec(
 		"INSERT INTO audit_log (timestamp, tenant, action, target_id, reason, actor, note) VALUES ($1, $2, $3, $4, $5, $6, $7)",
 		time.Now().UTC(), tenant, action, targetID, reason, actor, note,
@@ -357,9 +358,6 @@ func (l *PostgresAuditLog) Log(tenant, action, targetID, reason, actor, note str
 }
 
 func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	query := "SELECT id, timestamp, tenant, action, target_id, reason, actor, note FROM audit_log ORDER BY id DESC"
 	if limit > 0 {
 		query += " LIMIT $1"
@@ -389,8 +387,10 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 
 // PostgresAttestationLog implements AttestationLog using
 // the attestation_log table
+// No store-level lock:
+// Record is one INSERT on the attestation hot path (one call per verified report),
+// so process-wide mutex here caps fleet attestation throughput at one commit latency per report
 type PostgresAttestationLog struct {
-	mu sync.Mutex
 	db *sql.DB
 }
 
@@ -401,9 +401,6 @@ func NewPostgresAttestationLog(db *sql.DB) *PostgresAttestationLog {
 }
 
 func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	ts := entry.Timestamp
 	if ts.IsZero() {
 		ts = time.Now().UTC()
@@ -419,10 +416,38 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 	return err
 }
 
-func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error {
+	if len(entries) == 0 {
+		return nil
+	}
 
+	const cols = 9
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO attestation_log
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr) VALUES `)
+	args := make([]any, 0, len(entries)*cols)
+	now := time.Now().UTC()
+	for i := range entries {
+		ts := entries[i].Timestamp
+		if ts.IsZero() {
+			ts = now
+		}
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		base := i * cols
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9)
+		args = append(args, ts, entries[i].Tenant, entries[i].ClientID,
+			entries[i].HardwareID, entries[i].Result, entries[i].DurationMs,
+			entries[i].PCR14, entries[i].Details, entries[i].RemoteAddr)
+	}
+
+	_, err := l.db.Exec(sb.String(), args...)
+	return err
+}
+
+func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
 	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {

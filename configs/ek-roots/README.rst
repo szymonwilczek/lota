@@ -135,6 +135,13 @@ bundled intermediate verifies up to the bundled root) and as trust anchors in
 their own right -- pinning only the intermediate is a deliberate narrowing that
 trusts one manufacturer branch instead of everything under the root.
 
+Because a bundled intermediate is itself an anchor, its own revocation by the
+parent root is not evaluated during EK verification: the CA checks EK leaves
+against the manufacturer CRL feed, never the bundled anchors against one
+another. Treat a bundled intermediate with the same care as a root -- pin it
+from an out-of-band source, and drop its manifest line if the manufacturer
+revokes that intermediate, exactly as you would retire a compromised root.
+
 The AIA walk that finds the root passes through each intermediate on the way
 (``lota-ek-root-pin.sh`` follows the same chain); record a manifest line for
 every CA certificate on the path, not just the final self-signed one. A missing

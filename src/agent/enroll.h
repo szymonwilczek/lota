@@ -36,10 +36,9 @@ struct tpm_context;
  * --reenroll reuse the endpoint with no re-typed CA arguments, and lets the
  * daemon tell when a local AIK rotation has outdated the stored certificate.
  *
- * Version 2 appends the enrollment token so --reenroll and automatic
- * certificate renewal keep presenting it.
- * Loader still accepts version-1 record (everything up to enroll_token)
- * with an empty token.
+ * Version 2 appends the enrollment token so --reenroll and automatic certificate
+ * renewal keep presenting it.
+ * Loader requires the current record: short or older one is refused and the host re-enrolls.
  * Record is root-only 0600: the token is tenant-admission secret.
  */
 struct enroll_state {

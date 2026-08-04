@@ -83,8 +83,6 @@ int enroll_state_save_path(const char *path, const struct enroll_state *st)
 
 int enroll_state_load_path(const char *path, struct enroll_state *out)
 {
-	/* version-1 record ends where the token field begins */
-	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
 	struct enroll_state st;
 	ssize_t n;
 	int fd;
@@ -103,9 +101,7 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 		return -errno;
 	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
 		return -EINVAL;
-	if (!((size_t)n == sizeof(st) &&
-	      st.version == LOTA_ENROLL_STATE_VERSION) &&
-	    !((size_t)n == v1_size && st.version == 1))
+	if ((size_t)n != sizeof(st) || st.version != LOTA_ENROLL_STATE_VERSION)
 		return -EINVAL;
 
 	/* NUL-terminate the string fields defensively before use */
