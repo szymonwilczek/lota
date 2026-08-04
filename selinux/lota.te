@@ -67,6 +67,21 @@ logging_log_file(lota_log_t)
 type lota_tmp_t;
 files_tmp_file(lota_tmp_t)
 
+#
+# Port type for the attestation endpoints the agent connects out to.
+#
+# Policy below allows lota_agent_t to reach this type, so a port that nothing
+# labels is a port the agent cannot use:
+# the connect fails with EACCES and the operator sees a connection error against
+# server that is running.
+# The two documented defaults are labelled here; any other endpoint has to be
+# added by the operator:
+#
+#   semanage port -a -t lota_port_t -p tcp <port>
+#
+# Loadable module cannot carry port contexts -- portcon is base policy --
+# so the assignment happens at bring-up:
+# lota-install labels the endpoints it was given.
 type lota_port_t;
 corenet_port(lota_port_t)
 
