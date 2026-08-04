@@ -59,13 +59,12 @@ gate passes without any TOFU opt-out::
 
 .. note::
 
-   Do not combine the load rig with ``--db`` (single-file SQLite
-   backend): the SQLite AIK store does not implement certificate chain
-   verification, and the verifier refuses to start with the default
-   ``--require-cert``. Use the default file-backed certificate store
-   as above, or ``--pg-dsn`` for the shared Postgres backend -- the
-   Postgres rig is the configuration the scale and failover numbers
-   are recorded against.
+   ``--db`` (single-file SQLite backend) runs the rig, but one process
+   serializing writes to one file is not the write tier the numbers
+   describe. Use the default file-backed stores as above, or
+   ``--pg-dsn`` for the shared Postgres backend -- the Postgres rig is
+   the configuration the scale and failover numbers are recorded
+   against.
 
 Run modes
 =========
