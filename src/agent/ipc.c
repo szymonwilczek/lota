@@ -6,6 +6,7 @@
  */
 
 #include "ipc.h"
+#include "protect_pids.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -68,6 +69,7 @@ static int protect_pid_rate_count = 0;
 static uint64_t protect_pid_last_table_full_warn_sec = 0;
 
 static int u32_cmp(const void *a, const void *b);
+static void runtime_protect_reap_exited(void);
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count);
 
@@ -793,6 +795,14 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	memcpy(token->policy_digest, g_agent.policy_digest,
 	       sizeof(token->policy_digest));
 
+	/*
+	 * Protected process that has exited leaves PID nothing can measure,
+	 * and the measurement below fails closed -- for every title, not just
+	 * the one that protected itself.
+	 * Catch the set up with the kernel's before reading it
+	 */
+	runtime_protect_reap_exited();
+
 	ret = build_canonical_runtime_pid_list(&runtime_pids,
 					       &runtime_pid_count);
 	if (ret < 0) {
@@ -1060,6 +1070,99 @@ static int u32_cmp(const void *a, const void *b)
 	return 0;
 }
 
+/*
+ * Production liveness predicate: pid whose /proc/<pid>/stat cannot be read is
+ * process that has gone. That file is world-readable and is not gated by
+ * the dumpable flag, so this works against hardened peer.
+ */
+static bool protect_pid_is_alive(uint32_t pid, void *ctx)
+{
+	uint64_t ticks = 0;
+
+	(void)ctx;
+	return read_pid_start_time_ticks((pid_t)pid, &ticks) == 0;
+}
+
+/*
+ * Drop every protected PID whose process has exited.
+ *
+ * Kernel already did this to its own map through lota_task_free;
+ * this is the agent's copy catching up.
+ *
+ * Run before every read of the set rather than on timer, because the read is
+ * the only place stale entry does harm -- and it does it to every title at once,
+ * since PID that no longer resolves cannot be measured and the measurement fails
+ * closed.
+ *
+ * The mutation epoch moves whenever the set does, so relying party comparing epochs
+ * never sees the same one with different set.
+ */
+static void runtime_protect_reap_exited(void)
+{
+	uint32_t *kept = NULL;
+	int kept_count = 0;
+	int count;
+	int ret;
+
+	count = g_agent.policy_protect_pid_count;
+	if (count <= 0 || !g_agent.policy_protect_pids)
+		return;
+
+	kept = calloc((size_t)count, sizeof(uint32_t));
+	if (!kept)
+		return;
+
+	ret = protect_pids_reap(g_agent.policy_protect_pids, count,
+				protect_pid_is_alive, NULL, kept, &kept_count);
+	if (ret <= 0) {
+		OPENSSL_cleanse(kept, (size_t)count * sizeof(uint32_t));
+		free(kept);
+		return;
+	}
+
+	if (g_agent.policy_protect_epoch == UINT64_MAX) {
+		lota_err("Refusing to reap exited protected PIDs: epoch "
+			 "exhausted");
+		OPENSSL_cleanse(kept, (size_t)count * sizeof(uint32_t));
+		free(kept);
+		return;
+	}
+
+	/*
+	 * map entry is already gone -- the kernel dropped it on exit --
+	 * so this is best-effort tidy of a PID the map may have recycled
+	 * to nobody.
+	 * Failure here changes nothing the token says.
+	 */
+	for (int i = 0; i < count; i++) {
+		uint32_t pid = g_agent.policy_protect_pids[i];
+		bool still_kept = false;
+
+		for (int j = 0; j < kept_count; j++) {
+			if (kept[j] == pid) {
+				still_kept = true;
+				break;
+			}
+		}
+		if (still_kept)
+			continue;
+
+		lota_info("Protected PID %u has exited; dropping it from the "
+			  "runtime set",
+			  pid);
+		(void)bpf_loader_unprotect_pid(&g_agent.bpf_ctx, pid);
+	}
+
+	agent_globals_lock(&g_agent);
+	OPENSSL_cleanse(g_agent.policy_protect_pids,
+			(size_t)count * sizeof(uint32_t));
+	free(g_agent.policy_protect_pids);
+	g_agent.policy_protect_pids = kept;
+	g_agent.policy_protect_pid_count = kept_count;
+	g_agent.policy_protect_epoch += 1;
+	agent_globals_unlock(&g_agent);
+}
+
 static int build_canonical_runtime_pid_list(uint32_t **out_pids,
 					    uint32_t *out_count)
 {
@@ -1271,6 +1374,10 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 		return;
 	}
+
+	/* same catch-up, so idempotent no-op is judged against the processes
+	 * that are actually running */
+	runtime_protect_reap_exited();
 
 	had = pid_set_contains(g_agent.policy_protect_pids,
 			       g_agent.policy_protect_pid_count, pid);
