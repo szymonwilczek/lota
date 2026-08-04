@@ -56,7 +56,9 @@ Distributions
      - Experimental
      - The RPM/dracut family the agent targets beyond Fedora. The RPMs build
        and install on el9 and el10 userspaces, and on el10 the agent enrolls,
-       commits the boot state to PCR 14 and passes its TPM attestation. The
+       commits the boot state to PCR 14 and passes its TPM attestation. On el9
+       the agent's ``fsverity-utils`` dependency is served by EPEL rather than
+       the distribution, so that repository has to be enabled first. The
        BPF LSM does not arm on the el-family kernels, however -- see the
        Kernel section below -- so runtime enforcement stays a Fedora-class
        capability there.

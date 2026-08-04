@@ -63,6 +63,12 @@ Once the packages are served from a signed dnf repository::
 
    sudo dnf install lota-agent
 
+On RHEL-family hosts, enable EPEL before that command. The agent requires
+``fsverity-utils`` to measure the objects a title maps, and el9 serves that
+package from EPEL rather than from baseos, appstream or crb::
+
+   sudo dnf install epel-release
+
 The agent **fails closed** and is not started by the package: a fresh install
 only places files and refreshes systemd. Complete the host bring-up with::
 
