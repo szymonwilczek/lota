@@ -6,7 +6,8 @@
 // (the Go mirror of include/attestation.h)
 // and signs the quote so the report passes the production verification path:
 // binding nonce, PCR digest, PCR14 boot-commitment derivation (initramfs lock
-// + boot commitment over zero baseline, the legacy/BIOS event-log shape),
+// + boot commitment over zero baseline, the shape a UEFI host that boots
+// without shim reports),
 // and the AIK certificate chain.
 
 package synth
@@ -76,6 +77,37 @@ const (
 	iommuCmdline        = "intel_iommu=on"
 )
 
+// secureBootVariableEvent is the UEFI_VARIABLE_DATA payload measuring the EFI
+// global SecureBoot variable as enabled.
+// Verifier takes that measurement as proof the host booted via UEFI,
+// so synthetic report has to carry it like a real one does.
+func secureBootVariableEvent() []byte {
+	const name = "SecureBoot"
+
+	buf := make([]byte, 0, 32+2*len(name)+1)
+	buf = append(buf, efiGlobalVariableGUID[:]...)
+	buf = binary.LittleEndian.AppendUint64(buf, uint64(len(name)))
+	buf = binary.LittleEndian.AppendUint64(buf, 1)
+	// name is ASCII, so each byte widens into one UTF-16 code unit
+	for i := 0; i < len(name); i++ {
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(name[i]))
+	}
+	return append(buf, 0x01)
+}
+
+// PCR7 returns the value the fleet's event log replays into PCR 7:
+// single SecureBoot variable measurement extended over a zero register
+func (f *Fleet) PCR7() [types.HashSize]byte {
+	digest := sha256.Sum256(secureBootVariableEvent())
+
+	var pcr7 [types.HashSize]byte
+	h := sha256.New()
+	h.Write(pcr7[:])
+	h.Write(digest[:])
+	copy(pcr7[:], h.Sum(nil))
+	return pcr7
+}
+
 // PCR14 returns the fleet's boot-commitment PCR14:
 // initramfs lock and agent boot commitment chained over zero baseline
 // (nothing measures PCR14 before userspace in the synthetic event log)
@@ -97,6 +129,7 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	}
 
 	pcrs := f.PCRs
+	pcrs[7] = f.PCR7()
 	pcrs[14] = f.PCR14()
 
 	// binding nonce covers hardware_id, flags, kernel/agent hash
@@ -120,7 +153,7 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 		return nil, fmt.Errorf("sign quote: %w", err)
 	}
 
-	eventLog := minimalEventLog()
+	eventLog := uefiEventLog()
 
 	buf := make([]byte, types.FixedReportSize, types.MinReportSize+len(eventLog))
 	off := 0
@@ -260,9 +293,35 @@ func buildTPMSAttest(nonce, digest []byte) []byte {
 	return buf
 }
 
-// minimalEventLog is valid TCG log holding only the Spec ID header:
-// no PCR14 events, so the verifier reconstructs zero PCR14 baseline
-// (the legacy/BIOS shape) and no Secure Boot variables
+// efiGlobalVariableGUID is EFI_GLOBAL_VARIABLE, the GUID the firmware stamps
+// on the SecureBoot variable measurement.
+var efiGlobalVariableGUID = [16]byte{
+	0x61, 0xdf, 0xe4, 0x8b, 0xca, 0x93, 0xd2, 0x11,
+	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
+}
+
+// uefiEventLog is the synthetic firmware log:
+// the Spec ID header plus the PCR 7 EV_EFI_VARIABLE_DRIVER_CONFIG
+// measurement of SecureBoot.
+// It carries no PCR 14 event, so the verifier reconstructs zero PCR 14 baseline
+// -- the shape of a UEFI host that boots without shim.
+func uefiEventLog() []byte {
+	payload := secureBootVariableEvent()
+	digest := sha256.Sum256(payload)
+
+	entry := make([]byte, 0, 64+len(payload))
+	entry = binary.LittleEndian.AppendUint32(entry, 7)
+	entry = binary.LittleEndian.AppendUint32(entry, verify.EvEFIVariableDriverConfig)
+	entry = binary.LittleEndian.AppendUint32(entry, 1) // digest count
+	entry = binary.LittleEndian.AppendUint16(entry, verify.AlgSHA256)
+	entry = append(entry, digest[:]...)
+	entry = binary.LittleEndian.AppendUint32(entry, narrow32(len(payload)))
+	entry = append(entry, payload...)
+
+	return append(minimalEventLog(), entry...)
+}
+
+// minimalEventLog is valid TCG log holding only the Spec ID header
 func minimalEventLog() []byte {
 	specData := specIDEvent()
 

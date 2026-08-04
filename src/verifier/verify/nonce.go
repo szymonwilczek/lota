@@ -158,11 +158,10 @@ type NonceStore struct {
 }
 
 type nonceEntry struct {
-	nonce          [types.NonceSize]byte
-	createdAt      time.Time
-	bindingID      string // optional: bind nonce to specific bindingID (challengeID)
-	counter        uint64 // monotonic counter for ordering
-	challengeFlags uint32 // LOTA_CHALLENGE_FLAG_* capabilities offered with this nonce
+	nonce     [types.NonceSize]byte
+	createdAt time.Time
+	bindingID string // optional: bind nonce to specific bindingID (challengeID)
+	counter   uint64 // monotonic counter for ordering
 }
 
 // tracks per-client challenge state for rate limiting
@@ -287,13 +286,11 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		cs.pendingCount++
 		ns.bindingChallenges[bindingID] = cs
 
-		const challengeFlags = types.ChallengeFlagBootCommitmentV1
 		ns.pending[key] = nonceEntry{
-			nonce:          nonce,
-			createdAt:      time.Now(),
-			bindingID:      bindingID,
-			counter:        cs.attestCounter,
-			challengeFlags: challengeFlags,
+			nonce:     nonce,
+			createdAt: time.Now(),
+			bindingID: bindingID,
+			counter:   cs.attestCounter,
 		}
 		ns.mu.Unlock()
 
@@ -302,7 +299,7 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 			Version: types.ReportVersion,
 			Nonce:   nonce,
 			PCRMask: pcrMask,
-			Flags:   challengeFlags,
+			Flags:   types.ChallengeFlagBootCommitmentV1,
 		}, nil
 	}
 
@@ -360,11 +357,6 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	if subtle.ConstantTimeCompare(entry.nonce[:], report.TPM.Nonce[:]) != 1 {
 		ns.mu.Unlock()
 		return errors.New("nonce mismatch in report header")
-	}
-
-	if err := verifyChallengeCapabilities(report, entry.challengeFlags); err != nil {
-		ns.mu.Unlock()
-		return err
 	}
 
 	if err := ns.checkIdentityRateLimit(identityID); err != nil {
@@ -436,22 +428,6 @@ func (ns *NonceStore) consumeLocked(key, bindingID string) {
 		}
 		ns.bindingChallenges[bindingID] = cs
 	}
-}
-
-func verifyChallengeCapabilities(report *types.AttestationReport, challengeFlags uint32) error {
-	if report == nil {
-		return errors.New("nil report")
-	}
-
-	if report.Header.Flags&types.FlagBootCommitmentV1 != 0 &&
-		challengeFlags&types.ChallengeFlagBootCommitmentV1 == 0 {
-		return errors.New("report requested boot-commitment v1 not advertised by challenge")
-	}
-	if report.Header.Flags&types.FlagInitramfsLockV1 != 0 &&
-		challengeFlags&types.ChallengeFlagBootCommitmentV1 == 0 {
-		return errors.New("report requested initramfs-lock v1 without boot-commitment v1 challenge support")
-	}
-	return nil
 }
 
 // enforces per-binding pending challenge bound.

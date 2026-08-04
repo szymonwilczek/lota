@@ -43,9 +43,6 @@ the new hash *before* the fleet reboots:
    the verifier tier. Policy is configuration, not database state, so push it to
    every instance and reload them (restart the instances one at a time if they
    read policy at start).
-#. Leave ``--reject-legacy-baselines`` **off** during the rollout: it is what you
-   turn on *after* the fleet has fully moved, to stop accepting the old
-   pre-upgrade baseline.
 
 Pinning both hashes is what creates the grace window in which old and new agents
 both attest. How wide that window is depends on the deployment (see
@@ -74,12 +71,9 @@ On each host, once the new hash is pinned in the verifier tier:
 After the fleet has fully moved
 ===============================
 
-Once every host runs the new build:
-
-#. Remove the old hash from ``agent_hashes``, re-sign, and redistribute, so a
-   host that reappears on the old binary is no longer accepted.
-#. Optionally enable ``--reject-legacy-baselines`` to stop honouring the
-   pre-upgrade baseline rows.
+Once every host runs the new build, remove the old hash from ``agent_hashes``,
+re-sign, and redistribute, so a host that reappears on the old binary is no
+longer accepted.
 
 Grace window
 ============

@@ -454,13 +454,6 @@ func VerifyEventLogWithPolicy(report *types.AttestationReport, enforcePCR8 bool)
 	return facts, nil
 }
 
-// VerifyEventLog is the facts-free wrapper kept for callers that only
-// need the parse/replay/consistency verdict
-func VerifyEventLog(report *types.AttestationReport) error {
-	_, err := VerifyEventLogWithPolicy(report, false)
-	return err
-}
-
 func countNonZero(counts []int) int {
 	n := 0
 	for _, c := range counts {

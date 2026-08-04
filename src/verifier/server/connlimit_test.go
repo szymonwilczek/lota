@@ -78,6 +78,7 @@ func startCapTestServer(t *testing.T, cfg ServerConfig) string {
 	cfg.Logger = logging.Nop()
 
 	vcfg := verify.DefaultConfig()
+	vcfg.RequireBootEnrollment = false
 	vcfg.Metrics = metrics.New()
 	v := verify.NewVerifier(vcfg, store.NewMemoryStore())
 

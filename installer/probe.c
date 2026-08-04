@@ -334,8 +334,8 @@ int probe_lockdown_restrictive(void)
 
 /*
  * lota-pcr14-lock records the pre-extend PCR14 content here on the /run
- * tmpfs (0^32 on a legacy/BIOS host, the firmware/shim MOK measurement on
- * UEFI Secure Boot).
+ * tmpfs (the shim MOK measurement, or 0^32 on a UEFI host whose boot chain
+ * never measured PCR14).
  * Must match BASELINE_PATH in src/initramfs/lota-pcr14-lock.c.
  */
 #define PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
@@ -343,8 +343,9 @@ int probe_lockdown_restrictive(void)
 /*
  * read_pcr14_baseline_at - load the baseline the lock helper persisted this
  * boot.
- * Missing or short file means the legacy/BIOS path: zero baseline, which
- * reproduces the pre-fix behaviour and the agent's own fallback.
+ * Missing or short file yields a zero baseline, matching the agent's own fallback:
+ * that is the correct anchor where no shim measured PCR14, and elsewhere it
+ * simply fails to match the live register.
  */
 static void read_pcr14_baseline_at(const char *path,
 				   uint8_t out[PROBE_HASH_SIZE])

@@ -210,6 +210,25 @@ func SecureBootAnchored(facts *BootFacts) bool {
 		facts.SecureBoot.Found && facts.SecureBoot.Enabled
 }
 
+// UEFIAnchored reports whether the event log proves the host booted via UEFI:
+// the firmware measured the EFI global SecureBoot variable into PCR 7
+// (EV_EFI_VARIABLE_DRIVER_CONFIG) and that PCR 7 is quote-authenticated
+// by the replay.
+//
+// The variable's value is irrelevant here -- host with Secure Boot off still
+// measures it, and whether Secure Boot must be on is a policy question
+// (RequireSecureBoot).
+// What the event proves is that UEFI firmware ran: legacy BIOS/CSM has no EFI
+// variables to measure, so its log can never carry one.
+//
+// PCR 14 is not usable for this:
+// it holds the shim MOK state, so it is zero on UEFI host that boots without
+// shim (own PK/KEK/db, directly signed systemd-boot or UKI) exactly as it
+// is on BIOS.
+func UEFIAnchored(facts *BootFacts) bool {
+	return facts != nil && facts.SecureBootTrusted && facts.SecureBoot.Found
+}
+
 // reports whether the PCR's quoted value is independently authenticated
 // by the event log: the quote covers it and the replay reproduces it
 func pcrReplayAuthenticated(report *types.AttestationReport, replay *ReplayResult, pcr int) bool {

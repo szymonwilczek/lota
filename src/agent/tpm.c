@@ -1936,21 +1936,53 @@ static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
 }
 
 /*
+ * UEFI firmware path.
+ * Its presence is what distinguishes UEFI boot from legacy BIOS/CSM:
+ * efivarfs only exists when the kernel booted from UEFI firmware.
+ */
+#define UEFI_FIRMWARE_PATH "/sys/firmware/efi"
+
+/*
+ * Report whether this host booted via UEFI.
+ *
+ * LOTA's boot chain is UEFI-measured end to end:
+ * PCR 0/1/7 carry the firmware, platform configuration and Secure Boot policy,
+ * and the verifier refuses report whose event log proves no UEFI firmware ran.
+ * BIOS/CSM measures none of it. Agent checks locally so such host fails during
+ * bring-up with the cause named.
+ *
+ * The path override follows the LOTA_TCTI / LOTA_AIK_META_PATH rule:
+ * developer one-shot may redirect it, the persistent daemon may not
+ * (allow_env_tpm_overrides stays false there)
+ */
+static bool firmware_is_uefi(const struct tpm_context *ctx)
+{
+	const char *path = ctx->allow_env_tpm_overrides ?
+				   getenv("LOTA_UEFI_FIRMWARE_PATH") :
+				   NULL;
+
+	if (!path || !path[0])
+		path = UEFI_FIRMWARE_PATH;
+
+	return access(path, F_OK) == 0;
+}
+
+/*
  * read_pcr14_baseline - load the pre-LOTA PCR14 baseline written by the
  * initramfs lock helper.
  *
- * On UEFI Secure Boot shim measures the MOK state into PCR14 before the
- * initramfs runs, so PCR14 is non-zero when the lock helper extends it.
- * The helper records the value it observed (raw 32 bytes) at
- * LOTA_PCR14_BASELINE_PATH on the /run tmpfs, which persists across the
- * initramfs -> rootfs switch, so the agent anchors its derivations on the
- * same baseline. A legacy/BIOS host (or one without the lock module)
- * leaves no file; out is then zeroed, reproducing the 0^32 anchor.
+ * On shim-booted host shim measures the MOK state into PCR14 before the initramfs
+ * runs, so PCR14 is non-zero when the lock helper extends it.
+ * The helper records the value it observed (raw 32 bytes) at LOTA_PCR14_BASELINE_PATH
+ * on the /run tmpfs, which persists across the initramfs -> rootfs switch,
+ * so the agent anchors its derivations on the same baseline.
+ * UEFI host that boots without shim has nothing measuring PCR14, so the recorded
+ * baseline is legitimately 0^32; absent file leaves out zeroed and the derivations
+ * below then fail to match the live register, which fails closed.
  *
- * The baseline is not a trust input: a tampered file only makes the
- * agent's own self-check derivations miss the real PCR14 and fail closed.
- * The verifier independently reconstructs the baseline from the signed
- * event log.
+ * The baseline is not trust input: tampered file only makes the agent's own
+ * self-check derivations miss the real PCR14 and fail closed.
+ * The verifier independently reconstructs the baseline from the signed event log.
  *
  * Returns: 0 on success or when no baseline file exists (out zeroed).
  */
@@ -1993,26 +2025,6 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
 
 	memcpy(out, buf, LOTA_HASH_SIZE);
 	return 0;
-}
-
-/*
- * derive_expected_pcr14 - SHA-256(baseline || boot_commit).
- * Final PCR14 value an agent observes when it extends boot commitment
- * onto the pre-LOTA baseline directly (no initramfs lock ran).
- * baseline is 0^32 on a legacy/BIOS host and the firmware/shim MOK
- * measurement on UEFI Secure Boot (see read_pcr14_baseline).
- */
-static int derive_expected_pcr14(const uint8_t self_hash[],
-				 const uint8_t baseline[LOTA_HASH_SIZE],
-				 uint32_t reset_count, uint32_t restart_count,
-				 uint8_t out_pcr14[LOTA_HASH_SIZE])
-{
-	uint8_t commit[LOTA_HASH_SIZE];
-	int ret = tpm_boot_commitment_digest(self_hash, reset_count,
-					     restart_count, commit);
-	if (ret < 0)
-		return ret;
-	return sha256_two_block(baseline, commit, out_pcr14);
 }
 
 /*
@@ -2204,16 +2216,27 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	TSS2_RC rc;
 	uint8_t commit[LOTA_HASH_SIZE];
 	uint8_t current_pcr14[LOTA_HASH_SIZE];
-	uint8_t expected_pcr14[LOTA_HASH_SIZE];
 	uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
 	uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
-	uint8_t zero_pcr14[LOTA_HASH_SIZE] = { 0 };
 	uint32_t reset_count = 0;
 	uint32_t restart_count = 0;
 	int ret;
 
 	if (!ctx || !ctx->initialized || !self_hash)
 		return -EINVAL;
+
+	if (!firmware_is_uefi(ctx)) {
+		fprintf(stderr,
+			"SECURITY: this host did not boot via UEFI (%s absent). "
+			"LOTA requires UEFI measured boot: legacy BIOS/CSM "
+			"measures neither the firmware and Secure Boot state "
+			"the verifier pins nor the PCR14 baseline the boot "
+			"commitment chains onto, so such a host cannot attest. "
+			"Switch the firmware out of legacy/CSM mode and "
+			"reinstall\n",
+			UEFI_FIRMWARE_PATH);
+		return -ENOTSUP;
+	}
 
 	/*
 	 * boot_commitment_locked is recomputed on every call: a stale
@@ -2261,11 +2284,12 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 
 	/*
-	 * Baseline = the PCR14 content present before any LOTA extend: 0^32
-	 * on a legacy/BIOS host, or the firmware/shim MOK measurement on
-	 * UEFI Secure Boot, handed off by the initramfs lock helper.
-	 * Every candidate below anchors on it so the chain holds on Secure
-	 * Boot where PCR14 is never pristine
+	 * Baseline = the PCR14 content present before any LOTA extend:
+	 * shim MOK measurement on shim-booted host,
+	 * 0^32 on a UEFI host that boots without shim,
+	 * handed off by the initramfs lock helper.
+	 * Both candidates below anchor on it so the chain holds where PCR14
+	 * is not pristine
 	 */
 	uint8_t baseline[LOTA_HASH_SIZE];
 	ret = read_pcr14_baseline(baseline);
@@ -2273,22 +2297,16 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 
 	/*
-	 * Three candidate PCR14 values the agent can legitimately observe:
-	 *   expected_pcr14         = SHA-256(baseline || boot_commit)
-	 *     - unlocked host, agent extended boot commit on top of the
-	 *       baseline directly
+	 * Two PCR14 values the agent can legitimately observe:
 	 *   lock_pcr14_value       = SHA-256(baseline || lock_commit)
-	 *     - locked host where the initramfs helper ran but the agent
-	 *       has not extended its own commitment yet
+	 *     - the initramfs helper ran but the agent has not extended
+	 *       its own commitment yet
 	 *   expected_locked_pcr14  = SHA-256(lock_value || boot_commit)
-	 *     - locked host where both extends have occurred
-	 * Anything else is treated as tamper and routed through the
-	 * attribution logic below.
+	 *     - both extends have occurred
+	 * Register still holding the bare baseline means the lock never ran;
+	 * anything else is treated as tamper and routed through the attribution
+	 * logic below.
 	 */
-	ret = derive_expected_pcr14(self_hash, baseline, reset_count,
-				    restart_count, expected_pcr14);
-	if (ret < 0)
-		return ret;
 	ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
 				      lock_pcr14_value);
 	if (ret < 0)
@@ -2321,9 +2339,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			strerror(-ret));
 
 	/*
-	 * Locked-host branches handled before the legacy state machine
-	 * so a host that just deployed the dracut module gets the
-	 * lock-then-extend chain on its first run.
+	 * lock-then-extend chain is the only shape the verifier validates,
+	 * so both accepting branches sit here and everything else falls through
+	 * to attribution
 	 */
 	if (memcmp(current_pcr14, lock_pcr14_value, LOTA_HASH_SIZE) == 0) {
 		/*
@@ -2373,65 +2391,27 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return 0;
 	}
 
-	if (memcmp(current_pcr14, zero_pcr14, LOTA_HASH_SIZE) == 0) {
+	if (memcmp(current_pcr14, baseline, LOTA_HASH_SIZE) == 0) {
 		/*
-		 * Fresh boot: TPM reset, PCR14 still 0^32. If a prior snapshot
-		 * exists and its resetCount matches the current one, the TPM
-		 * apparently zeroed PCR14 without advancing resetCount - an
-		 * abnormal state worth flagging (operator action with
-		 * tpm2_pcr_reset on a debug PCR, kernel reload, ...).
+		 * PCR14 still holds the firmware baseline:
+		 * the initramfs lock helper never ran this boot.
+		 * Verifier has no derivation for commitment that is not chained
+		 * onto the lock value, so extending here would only produce
+		 * a register nothing can validate.
+		 * Fail closed and name the missing piece.
+		 *
+		 * The zero-baseline case lands here too:
+		 * UEFI host without shim measures nothing into PCR14,
+		 * so unlocked register reads 0^32 and the comparison above
+		 * still holds.
 		 */
-		if (have_prev && prev.reset_count == reset_count) {
-			fprintf(stderr,
-				"SECURITY: PCR14 cleared while resetCount=%u "
-				"unchanged "
-				"since last extend (last saved %lld); refusing "
-				"to attest "
-				"without operator review\n",
-				(unsigned)reset_count,
-				(long long)prev.saved_at);
-			return -EBADMSG;
-		}
-		ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
-		if (ret < 0)
-			return ret;
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-		};
-		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state save "
-				"failed (%s); "
-				"next run will lose tamper attribution\n",
-				strerror(-save_ret));
-		return 0;
-	}
-
-	if (memcmp(current_pcr14, expected_pcr14, LOTA_HASH_SIZE) == 0) {
-		/*
-		 * Warm restart: PCR14 already bound to (self_hash, resetCount,
-		 * restartCount). Refresh the snapshot so the saved_at stamp
-		 * stays current and a corrupted file gets healed.
-		 */
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-		};
-		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state refresh "
-				"failed (%s)\n",
-				strerror(-save_ret));
-		return 0;
+		fprintf(stderr,
+			"PCR14 holds the firmware baseline unchanged: the "
+			"initramfs lock helper did not run this boot. Install "
+			"the 90lota dracut module, rebuild the initramfs "
+			"(dracut -f --add lota) and cold reboot; the boot "
+			"commitment must chain onto the initramfs lock\n");
+		return -EBADMSG;
 	}
 
 	/*

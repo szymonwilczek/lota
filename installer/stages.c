@@ -69,9 +69,12 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	if (sb == -ENOENT) {
 		snprintf(note, cap,
 			 "This host booted via legacy BIOS/CSM, not UEFI. "
-			 "LOTA's verifier proves Secure Boot from the TPM "
-			 "event log, which needs a UEFI boot. Switch the "
-			 "firmware to UEFI mode.");
+			 "BIOS is unsupported: it measures neither the "
+			 "firmware and Secure Boot state the verifier pins "
+			 "nor an EFI variable the event log can carry, so "
+			 "the initramfs helper, the agent and the verifier "
+			 "each refuse such a host. Switch the firmware to "
+			 "UEFI mode and reinstall.");
 		return STAGE_BLOCKED;
 	}
 	if (sb == 0) {

@@ -69,7 +69,7 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
 		-nonce-db "$NONCE_DB" \
 		-policy "$POLICY" \
 		-generate-cert -allow-permissive-policy \
-		-allow-tofu-boot-baseline -allow-no-initramfs-lock
+		-allow-tofu-boot-baseline
 ) &
 VERIFIER_PID=$!
 sleep 1

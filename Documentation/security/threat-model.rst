@@ -194,6 +194,10 @@ Active threats
          refuses a ``require_secureboot`` policy with empty ``agent_hashes``
          (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
          is set.
+       | The per-device pin is established once, on the client's first
+         attestation, and never re-opened: a stored baseline whose
+         ``agent_hash`` is absent is refused rather than adopted from the
+         report presenting it.
        | Official hash comes from the reproducible signed release.
      - Without a pinned ``agent_hash``, a first-use modified agent would TOFU its
        own hash and attest while skipping enforcement. Operator must populate
@@ -318,6 +322,34 @@ PCRs, a compromised kernel cannot forge them after the fact. The practical trust
 anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
+
+Pinning these registers is not optional. A report whose ``pcr_mask`` omits
+PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
+configuration accepts one. This closes the downgrade an attacker would
+otherwise ask for: an agent that simply declined to quote the firmware and
+Secure Boot registers would bypass the pin while still presenting a
+well-formed, correctly signed report.
+
+All of it presumes a UEFI firmware, and the verifier proves that rather
+than assuming it: a report is refused unless its event log carries the
+firmware's own measurement of the EFI global ``SecureBoot`` variable into a
+quote-authenticated PCR 7. Legacy BIOS/CSM has no EFI variables to measure,
+so it cannot produce that evidence and cannot attest. The check is about the
+firmware interface, not the Secure Boot setting -- whether Secure Boot must
+be *enabled* stays a policy question (``require_secureboot``). PCR 14 is not
+usable as the UEFI signal: it holds the shim MOK state, so it is zero both on
+BIOS and on a UEFI host that boots without shim (own PK/KEK/db, a directly
+signed systemd-boot or UKI), and that host attests normally.
+
+The PCR 14 chain is mandatory on the same terms. A report must declare both
+the initramfs lock and the agent boot commitment; the verifier derives the
+expected PCR 14 as the lock value with the commitment chained on top and has
+no second derivation to fall back on. A host without the ``90lota`` dracut
+module therefore does not attest: without the initramfs lock, PCR 14 stays
+OS-writable between the kernel handoff and the agent's first extend, and any
+code running in that window could seed the value the baseline would pin. The
+agent refuses to build such a report locally, so the missing module is named
+on the host rather than surfacing as a remote rejection.
 
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the

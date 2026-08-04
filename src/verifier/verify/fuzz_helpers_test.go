@@ -130,8 +130,8 @@ func trimToMax(b []byte, max int) []byte {
 // so the seed gives the corpus a path through every gate
 func nominalSpec() *fuzzReportSpec {
 	s := &fuzzReportSpec{
-		flags:     types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce,
-		pcrMask:   0x00004003,
+		flags:     productionFlags,
+		pcrMask:   0x00004083,
 		aikGen:    1,
 		bindNonce: true,
 	}
@@ -140,9 +140,10 @@ func nominalSpec() *fuzzReportSpec {
 			s.pcrValues[i][j] = byte(i ^ j)
 		}
 	}
-	// PCR 14 stays zero
+	// PCR 14 carries the locked boot-commitment chain the verifier rederives,
+	// so the seed reaches the gates behind it
+	s.pcrValues[14] = fixturePCR14()
 	for j := range types.HashSize {
-		s.pcrValues[14][j] = 0
 		s.kernelHash[j] = byte(0xAA ^ j)
 		s.agentHash[j] = byte(0xBB ^ j)
 	}

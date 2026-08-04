@@ -790,11 +790,12 @@ int tpm_aik_get_prev_public(struct tpm_context *ctx, uint8_t *buf,
 /*
  * PCR14 baseline handoff.
  * initramfs lock helper records the PCR14 value it observed before its extend
- * (0^32 on legacy/BIOS, the firmware/shim MOK measurement on UEFI Secure Boot)
- * as raw 32 bytes here, on the /run tmpfs that persists across the
- * initramfs -> rootfs switch.
+ * (the shim MOK measurement, or 0^32 on a UEFI host whose boot chain never
+ * measured PCR14) as raw 32 bytes here, on the /run tmpfs that persists across
+ * the initramfs -> rootfs switch.
  * Agent reads it so its boot-commitment derivations anchor on the same baseline.
- * Absent file = zero baseline (legacy path).
+ * Absent file leaves the baseline zeroed, which then fails to match the live
+ * register unless nothing measured PCR14 -- the derivation fails closed either way.
  */
 #define LOTA_PCR14_BASELINE_PATH "/run/lota/pcr14_baseline"
 

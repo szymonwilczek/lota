@@ -45,6 +45,9 @@ const (
 	// SHA256(magic || agent_hash || resetCount_be || restartCount_be).
 	// The verifier derives the expected PCR14 from the pinned baseline
 	// agent hash plus the TPMS_ATTEST ClockInfo before comparing.
+	// Every agent sets it and the verifier requires it:
+	// the bit names the v1 construction specifically, so future v2
+	// derivation gets its own flag rather than reusing this one.
 	FlagBootCommitmentV1 uint32 = 1 << 8
 
 	// FlagInitramfsLockV1 is set when the agent observed that an
@@ -57,22 +60,18 @@ const (
 	// two-hop chain:
 	//     pcr14_lock  = SHA256(0^32 || initramfs_lock_commit)
 	//     pcr14_final = SHA256(pcr14_lock || boot_commitment)
-	// The verifier mirrors the derivation when this flag is set.
-	// Legacy v1 fleets without the dracut module continue emitting
-	// FlagBootCommitmentV1 alone; locked v1 hosts add this bit so a
-	// mixed deployment authenticates correctly within the negotiated
-	// v1 boot-commitment family.
+	// Verifier mirrors that two-hop derivation and has no other one:
+	// report without this bit alongside FlagBootCommitmentV1 carries
+	// a PCR14 the verifier cannot interpret and is rejected.
 	FlagInitramfsLockV1 uint32 = 1 << 9
 )
 
 // challenge capability flags (see: include/attestation.h)
 const (
-	// ChallengeFlagBootCommitmentV1 advertises that the verifier will
-	// accept reports carrying FlagBootCommitmentV1 for the issued
-	// nonce. The nonce store remembers this bit and rejects a report
-	// that claims a boot-commitment version not offered by its
-	// challenge, so future derivation versions cannot silently fall
-	// through a generic flag.
+	// ChallengeFlagBootCommitmentV1 names the PCR14 derivation the verifier
+	// validates. Every challenge carries it, because v1 is the only construction
+	// the verifier accepts.
+	// It stays on the wire so future v2 derivation has capability bit to differ from.
 	ChallengeFlagBootCommitmentV1 uint32 = 1 << 0
 )
 

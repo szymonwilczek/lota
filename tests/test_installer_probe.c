@@ -42,7 +42,8 @@ static int tests_passed;
 	} while (0)
 
 /* Known answer for SHA256(0^32 || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")),
- * the post-extend PCR14 the lock helper installs from a zero PCR.
+ * the post-extend PCR14 the lock helper installs from zero PCR --
+ * the baseline of UEFI host whose boot chain never measured PCR14.
  * Must stay in sync with src/initramfs/lota-pcr14-lock.c and the verifier's
  * DeriveInitramfsLockPCR14 */
 static const char lock_kat_hex[] =

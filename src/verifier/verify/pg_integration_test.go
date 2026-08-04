@@ -74,12 +74,13 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 		t.Fatal("GetBootBaseline")
 	}
 
-	// legacy backfill: PCR14-only row then agent_hash pin
+	// PCR14-only row carries no agent_hash pin,
+	// so the store refuses it instead of adopting the incoming hash
 	if r, _ := s.CheckAndUpdate("leg", fill(0x14)); r != TOFUFirstUse {
 		t.Fatal("PCR14 first use")
 	}
-	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFULegacyBackfill {
-		t.Fatalf("legacy backfill: got %v", r)
+	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFUMismatch {
+		t.Fatalf("unpinned row: got %v", r)
 	}
 }
 
@@ -269,10 +270,10 @@ func TestPostgresBaselineInspection(t *testing.T) {
 	}
 }
 
-// TestPostgresBootPCRsLegacyPath covers the standalone boot-PCR pin used by
-// the non-FlagBootCommitment flow: first use, match, drift, and the
-// backfill of a PCR14-only legacy row.
-func TestPostgresBootPCRsLegacyPath(t *testing.T) {
+// TestPostgresBootPCRsPinnedAfterPCR14Row covers the standalone boot-PCR pin:
+// fail-closed before the PCR14 row exists, first use, match, drift,
+// and a row whose boot columns are still unpinned.
+func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	s := pgBaselineStore(t)
 	boot := BootBaseline{PCR0: fill(0xA0), PCR1: fill(0xA1), PCR7: fill(0xA7)}
 
@@ -301,15 +302,15 @@ func TestPostgresBootPCRsLegacyPath(t *testing.T) {
 		t.Fatalf("drift must report the pinned baseline: %+v", stored)
 	}
 
-	// legacy PCR14-only row TOFU-establishes boot columns on next sight
-	if r, _ := s.CheckAndUpdate("boot-leg", fill(0x14)); r != TOFUFirstUse {
-		t.Fatal("legacy PCR14 first use")
+	// PCR14 row whose boot columns are unpinned establishes them on next sight
+	if r, _ := s.CheckAndUpdate("boot-unpinned", fill(0x14)); r != TOFUFirstUse {
+		t.Fatal("PCR14 first use boot-unpinned")
 	}
-	if s.GetBootBaseline("boot-leg") != nil {
-		t.Fatal("legacy row should have no boot baseline yet")
+	if s.GetBootBaseline("boot-unpinned") != nil {
+		t.Fatal("unpinned row should have no boot baseline yet")
 	}
-	if r, _ := s.CheckAndUpdateBootPCRs("boot-leg", boot); r != TOFUFirstUse {
-		t.Fatal("legacy boot backfill should be first use")
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-unpinned", boot); r != TOFUFirstUse {
+		t.Fatal("boot pin on an unpinned row should be first use")
 	}
 }
 

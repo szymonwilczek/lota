@@ -121,8 +121,9 @@ int probe_lockdown_restrictive(void);
 
 /* Derives the post-lock PCR14 value installed by the initramfs lock:
  * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
- * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (0^32 on a
- * legacy/BIOS host, the firmware/shim MOK measurement on UEFI Secure Boot). */
+ * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (the shim MOK
+ * measurement, or 0^32 on a UEFI host whose boot chain never measured
+ * PCR14). */
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE]);
 
 /* Path-parameterized variant behind the fixed-path wrapper above;

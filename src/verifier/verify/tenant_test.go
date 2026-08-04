@@ -90,10 +90,7 @@ func attestWithCertOUs(t *testing.T, clientID string, ous []string) (*types.Veri
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	testAIKCertOUs = ous
 	defer func() { testAIKCertOUs = nil }()
@@ -115,10 +112,7 @@ func attestVerifierWithCertOUs(t *testing.T, clientID string, ous []string) (*Ve
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	testAIKCertOUs = ous
 	defer func() { testAIKCertOUs = nil }()
@@ -260,8 +254,7 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 	t.Helper()
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.BanStore = bans
 	verifier := NewVerifier(cfg, newCertStore(t))
@@ -277,10 +270,7 @@ func attestWithBanStore(t *testing.T, clientID string, ous []string, bans store.
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	testAIKCertOUs = ous
 	defer func() { testAIKCertOUs = nil }()
@@ -356,8 +346,7 @@ func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
 
 	attestLog := store.NewMemoryAttestationLog()
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	cfg.AttestationLog = attestLog
 	verifier := NewVerifier(cfg, newCertStore(t))
@@ -373,10 +362,7 @@ func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	testAIKCertOUs = []string{"acme-corp"}
 	defer func() { testAIKCertOUs = nil }()
@@ -469,8 +455,7 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 	t.Helper()
 
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, newCertStore(t))
 
@@ -495,10 +480,7 @@ func attestWithTenantPolicy(t *testing.T, clientID string, ous []string) (*types
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	testAIKCertOUs = ous
 	defer func() { testAIKCertOUs = nil }()

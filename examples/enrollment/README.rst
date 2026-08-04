@@ -99,10 +99,11 @@ Notes for production
 --------------------
 
 - The demo verifier loads ``policies/testing.yaml`` and runs with
-  ``--allow-permissive-policy``, ``--allow-tofu-boot-baseline`` and
-  ``--allow-no-initramfs-lock`` so a fresh host passes without a pinned
-  production policy. A real deployment loads a signed policy that pins PCR
-  0/1/7 and ships the 90lota dracut module; see `Production Bringup
+  ``--allow-permissive-policy`` and ``--allow-tofu-boot-baseline`` so fresh
+  host passes without a pinned production policy. The 90lota dracut module is
+  required either way: the verifier has no derivation for a PCR 14 that the
+  initramfs lock did not pin. A real deployment also loads a signed policy
+  that pins PCR 0/1/7; see `Production Bringup
   <../../Documentation/operator/production-bringup/index.rst>`_
   and `policies/ <../../policies/README.rst>`_.
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
