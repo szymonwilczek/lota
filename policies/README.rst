@@ -293,10 +293,18 @@ When software is updated:
 1. PCR 7 stays stable across kernel updates (same signing key), so a signed
    kernel upgrade needs no policy change. Do not maintain per-kernel
    ``kernel_hashes`` - leave them empty (see "Kernel trust").
-2. Update ``agent_hashes`` when the LOTA agent binary is upgraded.
+2. Update ``agent_hashes`` when the LOTA agent binary is upgraded, and add the
+   incoming hash **before** the fleet updates. The list is what authorises a
+   client to move its pinned baseline: a client reporting a hash the list
+   names re-pins itself and keeps attesting, while a client reporting a hash
+   it does not name is refused. Keep the outgoing hash listed until the fleet
+   has moved, so hosts on either side of the rollout verify.
 3. PCR 0/1/7 typically only change with firmware or Secure Boot key updates;
    PCR 8 only when the kernel command line changes.
-4. Clear the TOFU baseline if the agent binary changes legitimately.
+4. Clear the TOFU baseline only when the agent hash changes to a build the
+   policy does not list - a listed build needs no operator action. A client
+   re-pins at most once per 24 hours, so a host that has just re-pinned and
+   then changes again within that window is refused until the window elapses.
 
 .. code:: bash
 

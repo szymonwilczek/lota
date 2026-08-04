@@ -195,9 +195,16 @@ Active threats
          (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
          is set.
        | The per-device pin is established once, on the client's first
-         attestation, and never re-opened: a stored baseline whose
-         ``agent_hash`` is absent is refused rather than adopted from the
-         report presenting it.
+         attestation: a stored baseline whose ``agent_hash`` is absent is
+         refused rather than adopted from the report presenting it.
+       | It re-opens for one reason only, a package update, and only toward a
+         build ``agent_hashes`` already names. The reported hash is not taken
+         on trust: PCR 14 is rederived from it and matched against the quoted
+         register first, so it is the binary that actually booted. The pin
+         then moves, the outgoing hash is archived, and one client may move
+         at most once per 24 hours.
+       | With an empty ``agent_hashes`` there is no authority to appeal to and
+         the pin never re-opens; the drift is refused and an operator decides.
        | Official hash comes from the reproducible signed release.
      - Without a pinned ``agent_hash``, a first-use modified agent would TOFU its
        own hash and attest while skipping enforcement. Operator must populate

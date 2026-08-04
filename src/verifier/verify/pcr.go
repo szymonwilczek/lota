@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -402,6 +403,19 @@ func (v *PCRVerifier) PolicyRequiresCmdlineForTenant(tenant string) bool {
 	return ok && policy != nil && policy.RequireCmdlinePolicy
 }
 
+// agentHashAllowed reports whether the reported agent hash is one the active
+// policy lists, ie build the publisher has blessed.
+// It is named predicate rather than inline loop because more than one gate has
+// to ask the same question, and two independent comparisons of one list are two
+// places for it to be read differently.
+//
+// The comparison is over lower-case hex, which is what the agent reports
+// and what a policy file carries; upper-case entry does not match and is policy
+// authoring error rather than hash to accept leniently.
+func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) bool {
+	return slices.Contains(allowedHashes, hex.EncodeToString(reported[:]))
+}
+
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
@@ -443,16 +457,9 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 	// verify agent binary hash if policy specifies allowed hashes
 	if len(policy.AgentHashes) > 0 {
-		agentHashHex := hex.EncodeToString(report.System.AgentHash[:])
-		found := false
-		for _, allowed := range policy.AgentHashes {
-			if agentHashHex == allowed {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("agent hash not in allowed list: %s", agentHashHex)
+		if !agentHashAllowed(report.System.AgentHash, policy.AgentHashes) {
+			return fmt.Errorf("agent hash not in allowed list: %s",
+				hex.EncodeToString(report.System.AgentHash[:]))
 		}
 	}
 

@@ -884,6 +884,31 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				"attest_count", outcome.AgentHashBaseline.AttestCount)
 		}
 	case TOFUMismatch:
+		// Package update:
+		// if the reported build is one the policy lists,
+		// move the pin instead of refusing this client for good.
+		// Returns true only on an actual re-pin.
+		if v.tryAgentHashRepin(clog, clientID, tenant, pcr14, report) {
+			// Transaction above aborted on the mismatch, so it left
+			// the boot side undecided (BootResult carries TOFUError
+			// precisely because no write happened) and wrote no attestation.
+			// Re-run it against the row the re-pin just replaced:
+			// agent hash now matches and the boot branch below gets
+			// real decision instead of store error from aborted transaction.
+			outcome = atomicStore.CheckAndUpdateAttestation(
+				clientID, pcr14, report.System.AgentHash, bootPtr)
+			if outcome.AgentHashResult != TOFUMatch {
+				// Something moved the row again between
+				// the re-pin and this read.
+				// Fail closed
+				logging.Security(clog, "agent_hash re-pin did not settle; refusing",
+					"agent_hash", hex.EncodeToString(report.System.AgentHash[:]))
+				v.metrics.Rejections.Inc("integrity_mismatch")
+				result.Result = types.VerifyIntegrityMismatch
+				return result, errors.New("FAIL_INTEGRITY_MISMATCH: agent_hash re-pin did not settle")
+			}
+			break
+		}
 		stored := report.System.AgentHash
 		if outcome.AgentHashBaseline != nil {
 			stored = outcome.AgentHashBaseline.AgentHash
@@ -1283,6 +1308,73 @@ func (v *Verifier) tryReanchor(clog *slog.Logger, clientID, tenant string,
 		v.metrics.Reanchors.Inc("escalate")
 		return false
 	}
+}
+
+// tryAgentHashRepin decides whether client whose reported agent hash no longer
+// matches its pinned baseline may move the pin to the reported one.
+// Returns true only on an actual re-pin.
+//
+// This is the package-update path.
+// The pin is TOFU, so it records whichever agent build the client happened
+// to run first; later package update makes the reported hash differ and,
+// without this, the client is refused for good.
+//
+// What makes moving the pin safe is proven before this runs.
+// MatchLockedBootCommitmentPCR14 derived the expected PCR 14 from the *reported*
+// hash and compared it against the quoted register, so the hash is not a claim:
+// it is the binary that extended PCR 14 during this boot, attested by the TPM.
+// The policy allow-list then decides whether that binary is one the relying
+// party trusts. With both, refusing the transition protects nothing and costs
+// every client its next update.
+//
+// Without allow-list there is nothing to appeal to, agentHashDecision escalates,
+// and the operator decides.
+func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
+	pcr14 [types.HashSize]byte, report *types.AttestationReport,
+) bool {
+	rs, ok := v.baselineStore.(AgentHashRepinStorer)
+	if !ok {
+		return false
+	}
+	policy, ok := v.pcrVerifier.policyForTenant(tenant)
+	if !ok || policy == nil {
+		return false
+	}
+
+	st := rs.GetAgentHashRepinState(clientID)
+	if !st.Present {
+		// No row to move.
+		// TOFU establishes a pin;
+		// this path only replaces one
+		return false
+	}
+
+	now := time.Now()
+	if agentHashDecision(report.System.AgentHash, policy.AgentHashes,
+		st.LastRepinAt, now) != AgentHashRepin {
+		return false
+	}
+
+	if err := rs.ArchiveAndRepinAgentHash(clientID, report.System.AgentHash,
+		pcr14, now); err != nil {
+		if errors.Is(err, ErrAgentHashRepinRateLimited) {
+			// concurrent attestation for this client re-pinned first
+			// and the in-transaction guard refused this one
+			// Fail closed
+			logging.Security(clog, "agent_hash re-pin escalated (rate limit raced)")
+			v.metrics.Reanchors.Inc("agent_hash_escalate")
+			return false
+		}
+		clog.Warn("agent_hash re-pin archive failed", "error", err)
+		return false
+	}
+
+	logging.Security(clog, "agent_hash re-pinned to a policy-listed build",
+		"new_agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
+		"repin_count", st.RepinCount+1,
+		"note", "package update; the outgoing hash is archived and PCR 14 moved with it")
+	v.metrics.Reanchors.Inc("agent_hash")
+	return true
 }
 
 // ListReanchorReview returns the clients that re-anchored on the
