@@ -355,7 +355,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -686,6 +686,14 @@ check-version-tag:
 		fi; \
 	fi
 
+# Package-manifest parity gate
+# nfpm configs and the RPM spec describe the same packages;
+# host gets whichever one built the package it installed,
+# so they must ship the same files.
+# See scripts/check-package-manifests.sh
+check-package-manifests:
+	@scripts/check-package-manifests.sh
+
 # Include-hygiene gate
 # Fails on any header pulled in but not used directly (transitive dependency).
 # Drives clang-include-cleaner over a bear-built compile database.
@@ -837,18 +845,18 @@ install: check-version-tag all
 	done
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
-	install -m 755 scripts/lota-dev-bringup.sh $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
+	install -d $(DESTDIR)/usr/lib/sysusers.d
+	install -m 644 systemd/lota-sysusers.conf \
+		$(DESTDIR)/usr/lib/sysusers.d/lota-agent.conf
 	install -d $(DESTDIR)/usr/lib/systemd/system
 	install -m 644 systemd/lota-agent.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-attest.service $(DESTDIR)/usr/lib/systemd/system/
 	install -m 644 systemd/lota-agent.socket $(DESTDIR)/usr/lib/systemd/system/
-	install -d $(DESTDIR)/usr/lib/systemd/system-preset
-	install -m 644 systemd/85-lota.preset $(DESTDIR)/usr/lib/systemd/system-preset/
 	install -d $(DESTDIR)/usr/share/lota/systemd
 	install -m 644 systemd/lota-agent.service.d/10-xdg-runtime.conf.example \
 		$(DESTDIR)/usr/share/lota/systemd/

@@ -176,27 +176,62 @@ static void test_attest_unit_isolated(void)
 	PASS();
 }
 
-/* preset must enable the attest loop so deployed host attests by default once enrolled */
-static void test_preset_enables_attest(void)
+/*
+ * Installing a package must enable nothing.
+ *
+ * Preset used to enable the daemon and the attestation loop on any host that installed
+ * the package -- but only where rpm applied it, since the nfpm post-install runs
+ * no `systemctl preset`, so the same package armed a machine or did not depending on
+ * who built it.
+ *
+ * File is gone, so this asserts its absence:
+ * Preset re-appearing in either manifest is the regression, and the test that used to
+ * demand one is what made it invisible when the ruling landed.
+ */
+static void test_no_preset_is_shipped(void)
 {
-	TEST("preset: enables lota-attest.service");
+	TEST("packaging: no systemd preset is shipped");
 
 	FILE *fp = open_shipped("systemd/85-lota.preset");
+
+	if (fp) {
+		fclose(fp);
+		FAIL("a systemd preset is shipped again; installing a package must enable nothing");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Installer is what arms a host, so it has to enable all three units.
+ * Host driven through bring-up that enforced but never reported is exactly
+ * what missing line here produced.
+ */
+static void test_installer_enables_the_units(void)
+{
+	TEST("installer: enables socket, daemon and attest loop");
+
+	FILE *fp = open_shipped("installer/stages.c");
 	if (!fp) {
-		FAIL("could not open 85-lota.preset");
+		FAIL("could not open installer/stages.c");
 		return;
 	}
 
 	char line[1024];
-	bool enables = false;
+	bool socket_unit = false, daemon_unit = false, attest_unit = false;
+
 	while (fgets(line, sizeof(line), fp)) {
-		if (strstr(line, "enable lota-attest.service"))
-			enables = true;
+		if (strstr(line, "\"lota-agent.socket\""))
+			socket_unit = true;
+		if (strstr(line, "\"lota-agent.service\""))
+			daemon_unit = true;
+		if (strstr(line, "\"lota-attest.service\""))
+			attest_unit = true;
 	}
 	fclose(fp);
 
-	if (!enables) {
-		FAIL("preset does not enable lota-attest.service");
+	if (!socket_unit || !daemon_unit || !attest_unit) {
+		FAIL("installer does not enable all three units");
 		return;
 	}
 	PASS();
@@ -209,7 +244,8 @@ int main(void)
 	test_packaged_unit_does_not_set_mode();
 	test_attest_unit_config_driven();
 	test_attest_unit_isolated();
-	test_preset_enables_attest();
+	test_no_preset_is_shipped();
+	test_installer_enables_the_units();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
