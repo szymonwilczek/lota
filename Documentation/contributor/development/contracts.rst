@@ -175,6 +175,31 @@ an unreadable setting is treated as unknown: behind a connection pooler the
 backend's ``max_connections`` is not the limit that applies, so failing
 closed on it would refuse a legitimate topology.
 
+GET_TOKEN rate limits
+=====================
+
+Every ``GET_TOKEN`` costs a fresh TPM quote, so the agent limits how fast
+they can be asked for. The limits are two, and they measure different things
+(``TOKEN_RATE_LIMIT_PER_SESSION`` and ``TOKEN_RATE_LIMIT`` in
+``src/agent/ipc.h``).
+
+The **session budget** is what one title may spend. A connection is a
+session, and a title holds one, so the budget is held on the connection and
+dies with it. It is sized so no realistic heartbeat reaches it.
+
+The **uid ceiling** is the bound on how much of the TPM one user may consume.
+It has to hold several sessions at once, because on a player's machine every
+title runs as the same uid: a ceiling sized for one title throttles the second
+game for what the first one spent.
+
+Both are needed. Without the session budget one title can spend the whole uid
+allowance; without the uid ceiling a caller opens connections until the TPM is
+saturated. Three ``_Static_assert``\ s in ``ipc.h`` keep the relationship
+honest: the session budget must exceed the reference heartbeat rate, the uid
+ceiling must cover at least two sessions, and the session budget must stay
+the tighter of the two. Changing either constant without the other fails the
+build rather than starving a title at runtime.
+
 IPC token payload budget
 ========================
 
