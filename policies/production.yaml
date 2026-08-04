@@ -38,6 +38,15 @@
 name: production
 description: "Production policy - customize PCR values for your environment"
 
+# Fleet this policy governs, which is what decides how firmware drift is handled.
+# `enterprise` (the default when unset) refuses drifted boot baseline until
+# operator clears the row, because on a fleet you own an unexplained PCR 0/1/7
+# change is a finding.
+# `consumer` lets the verifier re-anchor it on its own when the drift preserves
+# the Secure Boot root of trust, because on machines you do not own the same
+# change is a player installing a BIOS update.
+profile: enterprise
+
 # Expected PCR values (SHA-256 hex-encoded, 64 chars).
 #
 # Decision point - the raw pins and the event-log checks further down
