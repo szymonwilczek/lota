@@ -246,10 +246,28 @@ static int run_daemon(const struct run_daemon_params *params)
 		if (profile) {
 			ret = tpm_bind_profile(&g_agent.tpm_ctx, profile);
 			if (ret < 0) {
-				lota_err("Failed to bind the publisher "
-					 "profile: %s",
-					 strerror(-ret));
-				goto cleanup_tpm;
+				/*
+				 * Not fatal, for the same reason an unreadable
+				 * anchor above is not:
+				 * BPF policy, PCR 14 and the hash verifier are
+				 * host-owned and no publisher grants them.
+				 * Refusing to start would take enforcement down
+				 * over a publisher the host may not even have
+				 * enrolled with yet, which is the failure this
+				 * daemon exists to prevent
+				 */
+				lota_warn("Cannot bind the publisher profile "
+					  "under %s (%s): enforcing without a "
+					  "publisher, tokens are signed with "
+					  "the host AIK",
+					  profile->dir, strerror(-ret));
+				lota_warn("Enroll with the publisher to bind "
+					  "it: lota-agent --enroll --ca-cert "
+					  "%s",
+					  cfg && cfg->ca_cert[0] ?
+						  cfg->ca_cert :
+						  "<publisher CA anchor>");
+				profile = NULL;
 			}
 		}
 

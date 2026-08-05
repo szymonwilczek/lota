@@ -286,6 +286,17 @@ int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle)
 	if (!paths || paths->aik_handle[0] == '\0' || handle == 0)
 		return -EINVAL;
 
+	/*
+	 * Handle is the first thing written under publisher the host has only been
+	 * configured for:
+	 * the profile is bound at startup and the enrollment that would have
+	 * created the directory happens later, when title first asks.
+	 * Create the layout here rather than inherit it.
+	 */
+	ret = profile_dir_ensure(paths);
+	if (ret < 0)
+		return ret;
+
 	if (snprintf(tmp, sizeof(tmp), "%s.tmp", paths->aik_handle) >=
 	    (int)sizeof(tmp))
 		return -ENAMETOOLONG;
