@@ -190,6 +190,23 @@ host-local half of bring-up already done and this command finishes the boot
 path. Building from a release tree instead (``sudo make install``) does none of
 it, and every stage below is then this command's work.
 
+Titles that run under Proton or Wine
+====================================
+
+A Windows title reaches the agent through a Linux-side bridge
+(``liblota_wine_hook.so``), because a DLL inside the Wine prefix cannot open a
+host socket. Steam has to be told to preload it, which is one line pasted into
+that title's launch options -- ``lota-steam-setup`` prints the exact string,
+including the ``PRESSURE_VESSEL_FILESYSTEMS_RW`` entry the container manager
+needs to see the socket at all.
+
+It is the only step in this document that asks anyone to type something, and
+it stays until Steam supports a compatibility-tool layer that composes with
+the player's Proton choice rather than replacing it. A publisher shipping
+their own launcher avoids it entirely by setting the same variables on the
+process they spawn. The reasoning, and the three alternatives that were
+examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
+
 Pausing and removing
 ====================
 
