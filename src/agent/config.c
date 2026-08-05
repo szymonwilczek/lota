@@ -288,6 +288,18 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		return 0;
 	}
 	if (strcmp(key, "verifier") == 0) {
+		/*
+		 * Publisher verifies tokens in their own backend
+		 * and runs no verifier here.
+		 * Spelled out rather than inferred from absent key,
+		 * so a typo stays a refused config.
+		 */
+		if (strcmp(value, "none") == 0) {
+			p->token_only = true;
+			p->verifier[0] = '\0';
+			return 0;
+		}
+		p->token_only = false;
 		set_str(p->verifier, sizeof(p->verifier), value);
 		return 0;
 	}
@@ -445,12 +457,26 @@ static int validate_profiles(const struct lota_config *cfg,
 			missing = "ca";
 		else if (p->ca_cert[0] == '\0')
 			missing = "ca_cert";
-		else if (p->verifier[0] == '\0')
+		else if (p->verifier[0] == '\0' && !p->token_only)
 			missing = "verifier";
 
 		if (missing) {
 			fprintf(stderr, "%s: profile '%s' is missing %s\n",
 				filepath, p->name, missing);
+			errors++;
+		}
+
+		/*
+		 * Port for a verifier that was declared absent is a contradiction,
+		 * and ignoring the key an operator deliberately wrote is worse
+		 * than refusing it.
+		 */
+		if (p->token_only &&
+		    p->verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
+			fprintf(stderr,
+				"%s: profile '%s' says verifier = none and "
+				"still sets verifier_port\n",
+				filepath, p->name);
 			errors++;
 		}
 	}
@@ -1076,8 +1102,12 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 		fprintf(fp, "ca = %s\n", p->ca);
 		fprintf(fp, "ca_port = %d\n", p->ca_port);
 		fprintf(fp, "ca_cert = %s\n", p->ca_cert);
-		fprintf(fp, "verifier = %s\n", p->verifier);
-		fprintf(fp, "verifier_port = %d\n", p->verifier_port);
+		if (p->token_only) {
+			fprintf(fp, "verifier = none\n");
+		} else {
+			fprintf(fp, "verifier = %s\n", p->verifier);
+			fprintf(fp, "verifier_port = %d\n", p->verifier_port);
+		}
 		fprintf(fp, "reporting = %s\n",
 			p->session_gated ? "session" : "continuous");
 		if (p->attest_interval)

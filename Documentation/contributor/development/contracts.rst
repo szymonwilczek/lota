@@ -201,6 +201,21 @@ Three rules the agent holds to:
 version outright rather than negotiating: ``lota_ipc.h`` is internal, and the
 agent and the SDK that speaks to it ship together.
 
+Status flags are the same bits on both sides of that boundary:
+``LOTA_STATUS_*`` in ``include/lota_ipc.h`` and ``LOTA_FLAG_*`` in
+``include/lota_gaming.h`` are two names for one wire value, and the SDK copies
+the word through rather than translating it. A flag added to one header
+without the other silently means something different to the title than to the
+agent, so ``test_publisher_profile`` asserts the agreement.
+
+``LOTA_STATUS_TOKEN_ONLY`` is the flag that makes a cleared
+``LOTA_STATUS_ATTESTED`` readable. A publisher configured with
+``verifier = none`` is never reported to, so the host holds no verdict of
+theirs; without a second bit, a title could not tell that from a machine that
+failed verification, and the two call for opposite behaviour. It is set on a
+connection bound to such a publisher, and on the host-wide answer when no
+configured publisher runs a verifier at all.
+
 GET_TOKEN rate limits
 =====================
 

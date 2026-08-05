@@ -162,6 +162,16 @@ same ports as the top-level keys. A profile missing the CA, the anchor or the
 verifier is refused at load, and every anchor has to satisfy the same
 readability constraint as the top-level ``ca_cert`` above.
 
+``verifier = none`` is how a profile says that publisher runs no verifier and
+checks the tokens their titles fetch in their own backend. Nothing is reported
+to them and this host holds no verdict of theirs, so their titles read the
+token rather than the attested bit; the profile still enrolls, holds its own
+AIK and renews that key's certificate, which is what the publisher's backend
+chains a token to. It has to be said rather than left out -- an omitted
+``verifier`` stays a refused config, so a typo cannot turn a publisher who
+expects reports into one who silently receives none -- and ``verifier_port``
+must not accompany it.
+
 Adding a publisher does not have to be a text edit. ``lota-agent
 --add-publisher`` writes the section, which is how a game's installer registers
 the publisher it ships for::
@@ -226,7 +236,11 @@ plainly.
 A title that names nobody -- which is every enterprise integration, where the
 host has one publisher -- gets the first profile's token and the host-wide
 answer: attested only while **every** configured publisher is satisfied, with
-the window closing at the earliest of theirs.
+the window closing at the earliest of theirs. Publishers who run no verifier
+are left out of that answer, since a host holds no verdict for a publisher it
+never reports to. On a host where no publisher runs one, that answer carries
+``LOTA_FLAG_TOKEN_ONLY`` so a title reads "nothing is verified here, check the
+token you fetched" rather than "this machine failed".
 
 **A profile reports only while a title of its publisher is running.** That is
 what ``reporting`` selects, and ``session`` is a profile's default: a report is
@@ -243,6 +257,13 @@ they send nothing, and they are what lets a session's first quote still prove
 the whole boot-to-now window: the quote is a fresh signed read of state that
 already existed. On-demand *enforcement* would prove nothing, which is why only
 reporting follows the session.
+
+Neither is the enrollment ceremony. Every configured publisher is enrolled
+with, has its AIK rotated and its certificate renewed on the host's cadence,
+whether or not a title of theirs is running. Waiting for a session would leave
+a session-gated publisher unreachable: a title cannot select a publisher this
+machine never enrolled with, so the session that would trigger the enrollment
+could never be opened. What the gate withholds is the report, not the key.
 
 While no title of a publisher's is running, that publisher has no live verdict:
 the agent stops reporting to them and reports the host as not attested for

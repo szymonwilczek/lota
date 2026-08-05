@@ -27,6 +27,14 @@
 struct attest_target {
 	char server[256];
 	int port;
+
+	/*
+	 * How this target is named in log line, built once by attest_targets_build()
+	 * Every message about a target says which one it means, and deriving
+	 * that at each site made the identity of target formatting decision
+	 * repeated fifteen times.
+	 */
+	char label[288];
 	char ca_cert[PATH_MAX];
 	int interval;
 
@@ -34,6 +42,16 @@ struct attest_target {
 	 * empty when the target came from the single-verifier path */
 	char ca[256];
 	int ca_port;
+
+	/*
+	 * This publisher runs no verifier:
+	 * their backend checks the tokens a title fetches, so nothing is reported here.
+	 * The target still exists because everything else about it does
+	 * -- it enrolls, it holds an AIK, that key rotates and its certificate
+	 * is renewed, and dropping it from the list would let the certificate
+	 * the publisher's backend chains against lapse while the player is playing.
+	 */
+	bool token_only;
 
 	/*
 	 * Report only while a title of this publisher's is running.
@@ -83,6 +101,25 @@ struct attest_target {
 	 * the loop reacts on its next pass instead of sleeping through the change */
 	bool session_changed;
 };
+
+/*
+ * Whether this round sends report for @t.
+ *
+ * Two publishers are not reported to: one who verifies tokens in their own backend
+ * (nothing here holds verdict of theirs), and session-gated one with no title
+ * of theirs running (reporting follows the session).
+ * Neither is a reason to skip the round's enrollment, AIK rotation and certificate
+ * renewal -- those run for every configured publisher, which is what keeps
+ * session-gated one reachable at all.
+ *
+ * Pure so both gates are pinned without a TPM, a verifier or a live title.
+ */
+static inline bool attest_target_reports(const struct attest_target *t)
+{
+	if (!t || t->token_only)
+		return false;
+	return !t->session_gated || t->sessions > 0;
+}
 
 /*
  * Build the target list.

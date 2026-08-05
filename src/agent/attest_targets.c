@@ -41,6 +41,7 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 				 p->ca_cert);
 			snprintf(out[n].ca, sizeof(out[n].ca), "%s", p->ca);
 			out[n].ca_port = p->ca_port;
+			out[n].token_only = p->token_only;
 			out[n].session_gated = p->session_gated;
 			/* profile without its own cadence keeps the host's */
 			out[n].interval = p->attest_interval ?
@@ -64,6 +65,14 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 
 	for (size_t i = 0; i < n; i++) {
 		int ret;
+
+		if (out[i].token_only)
+			snprintf(out[i].label, sizeof(out[i].label),
+				 "token-only publisher enrolled at %s:%d",
+				 out[i].ca, out[i].ca_port);
+		else
+			snprintf(out[i].label, sizeof(out[i].label), "%s:%d",
+				 out[i].server, out[i].port);
 
 		if (out[i].ca_cert[0] == '\0')
 			continue; /* no anchor, so no publisher profile */

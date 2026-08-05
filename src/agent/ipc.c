@@ -878,6 +878,20 @@ static void client_attestation_view(const struct ipc_context *ctx,
 	if (!client->profile)
 		return;
 
+	/*
+	 * A publisher who runs no verifier is never reported to,
+	 * so this host holds no verdict of theirs and ATTESTED would be claim
+	 * about nothing.
+	 * Say which case it is instead: the title's own backend verifies
+	 * the token it fetches.
+	 */
+	if (client->profile->token_only) {
+		*flags |= LOTA_STATUS_TOKEN_ONLY;
+		*flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
+		*valid_until = 0;
+		return;
+	}
+
 	if (client->profile->attested) {
 		*flags |= LOTA_STATUS_ATTESTED;
 		*valid_until = client->profile->valid_until;
@@ -1399,6 +1413,17 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 		flags |= LOTA_STATUS_ATTESTED;
 	else
 		flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
+
+	/*
+	 * host whose every publisher runs light never reports at all,
+	 * so the host-wide answer says which case it is:
+	 * title that names nobody would otherwise read a bare NOT ATTESTED
+	 * and conclude the machine failed something
+	 */
+	if (ctx->profile_count > 0 && agg.reporting == 0)
+		flags |= LOTA_STATUS_TOKEN_ONLY;
+	else
+		flags &= ~(uint32_t)LOTA_STATUS_TOKEN_ONLY;
 
 	ipc_update_status(ctx, flags, agg.valid_until);
 }

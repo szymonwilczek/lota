@@ -16,6 +16,44 @@ Build with ``make examples`` from the repository root. The binary lands at
 ``build/examples/demo_anticheat`` and links against the gaming + anticheat +
 server SDKs that ``make all`` already produces under ``build/``.
 
+Which half of the evidence you run
+----------------------------------
+
+A publisher adopts either half, and the choice is a real fork with a direct
+privacy consequence for the player. Both work today; pick one before writing
+the integration, because it decides what your backend has to be able to do.
+
+**Light -- tokens only.** Your game backend receives the tokens titles fetch
+and verifies them itself: ``lota_server_verify_token()`` in
+``include/lota_server.h``, or ``VerifyToken`` in the Go server SDK. What that
+buys is the TPM's signature over the attestation flags and the PCR digest,
+bound to a nonce you issued, chained to the AIK certificate your attestation
+CA issued that machine. You run a CA and nothing else. **Nothing is reported
+from the player's machine to you** -- no attestation report, no TPM event log,
+no runtime manifest -- so the machine holds no verdict of yours, and
+``lota_is_attested()`` answers ``0`` with ``LOTA_FLAG_TOKEN_ONLY`` set. Read
+that flag: it distinguishes "nobody verifies here, check the token yourself"
+from "this machine failed verification", which look identical in the attested
+bit alone. The host is configured for you with ``verifier = none`` in that
+publisher's profile.
+
+**Deep -- a verifier and a policy.** The agent sends full attestation reports
+to a verifier you run, on your own cadence, and that verifier judges them
+against a policy: boot PCR pins, the agent-hash allow-list, the firmware
+floor, revocation, and how a kernel or firmware update is allowed to
+re-anchor. Strongest judgement, and the one that can refuse a machine for a
+reason no single token expresses. It costs you the verifier and its policy,
+and it costs the player the report: the PCR values, the event log and the
+runtime manifest reach you every interval a title of yours runs.
+``lota_is_attested()`` then answers with your verifier's verdict.
+
+Both paths use the same enrollment: a per-publisher AIK, minted on the
+player's machine and certified by your CA, which no other publisher can
+correlate against. Both are per publisher, so a player's machine can serve one
+of each without either arrangement changing for the other. Moving from light
+to deep later is a configuration change on the host and a verifier you stand
+up; nothing in the title has to change except which answer it reads.
+
 Configuring the session
 -----------------------
 

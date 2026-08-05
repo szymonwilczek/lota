@@ -107,9 +107,26 @@ struct lota_profile {
 	 */
 	char ca_cert[PATH_MAX];
 
-	/* Verifier the profile reports to */
+	/*
+	 * Verifier the profile reports to, empty when the publisher runs
+	 * none.
+	 *
+	 * Publisher can adopt either half of the evidence.
+	 * Running a verifier buys a judgement over the full attestation report
+	 * -- boot PCR pins, agent-hash allow-list, firmware floor, revocation.
+	 * Taking tokens only buys the TPM signature over the flags and the PCR
+	 * digest, checked in the publisher's own backend with the server SDK,
+	 * and costs the player less: no report, no event log and no runtime
+	 * manifest leaves the machine for that publisher.
+	 *
+	 * `verifier = none` is how the second one is said, and saying it is required:
+	 * omitted key is a mistake that would otherwise produce host that starts,
+	 * enrolls, mints tokens and reports to nobody, which fails only at whatever
+	 * was waiting for a report.
+	 */
 	char verifier[256];
 	int verifier_port;
+	bool token_only;
 
 	/* 0 = inherit the top-level attest_interval */
 	int attest_interval;

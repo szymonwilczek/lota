@@ -83,6 +83,24 @@ enum lota_error {
 #define LOTA_FLAG_SECURE_BOOT (1 << 4)
 
 /*
+ * The publisher this connection named verifies tokens itself.
+ *
+ * Publisher can run verifier, which judges the full attestation report and gives
+ * this machine a verdict, or run none and check in their own backend the token
+ * a title fetches.
+ * With the second, nothing is reported from this machine for them,
+ * so LOTA_FLAG_ATTESTED carries no verdict of theirs and stays clear
+ * -- which does not mean the machine failed anything.
+ *
+ * Title whose publisher runs light reads this bit instead of lota_is_attested():
+ * fetch token with lota_get_token(), send it to your backend, and let
+ * lota_server_verify_token() (or the Go SDK's VerifyToken) decide there.
+ * The token's TPM signature, its nonce binding and its PCR digest are the evidence
+ * in that arrangement.
+ */
+#define LOTA_FLAG_TOKEN_ONLY (1 << 7)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

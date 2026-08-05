@@ -105,6 +105,8 @@ static void test_single_verifier(void)
 	      "no anchor is not an error, it is a host without a publisher");
 	CHECK(!targets[0].session_gated,
 	      "the single verifier keeps the continuous stream it always had");
+	CHECK(strcmp(targets[0].label, "verifier.example:8443") == 0,
+	      "the target names itself the way its log lines will");
 
 	CHECK(attest_targets_build(&cfg, NULL, 8443, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count) == -EINVAL,
@@ -203,6 +205,44 @@ static void test_profiles_replace_the_single_verifier(void)
 	unlink(anchor);
 }
 
+/*
+ * Publisher who verifies tokens in their own backend runs no verifier here.
+ * The target still exists: it enrolls, it holds the AIK a token is signed with,
+ * and that key's certificate has to keep being renewed.
+ * What it never does is report.
+ */
+static void test_token_only_publisher(void)
+{
+	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	struct lota_config cfg;
+	size_t count = 0;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.profile_count = 1;
+	snprintf(cfg.profiles[0].name, sizeof(cfg.profiles[0].name), "%s",
+		 "publisher-light");
+	snprintf(cfg.profiles[0].ca, sizeof(cfg.profiles[0].ca), "%s",
+		 "ca.light.example");
+	cfg.profiles[0].ca_port = 8444;
+	snprintf(cfg.profiles[0].ca_cert, sizeof(cfg.profiles[0].ca_cert), "%s",
+		 "/tmp/lota-targets-absent.XXXXXX");
+	cfg.profiles[0].token_only = true;
+
+	CHECK(attest_targets_build(&cfg, "host-level.example", 1234, NULL, 300,
+				   targets, LOTA_CONFIG_MAX_PROFILES,
+				   &count) == 0 &&
+		      count == 1,
+	      "a publisher with no verifier is still a target");
+	CHECK(targets[0].token_only && targets[0].server[0] == '\0',
+	      "the target says it reports to nobody and names no verifier");
+	CHECK(strcmp(targets[0].ca, "ca.light.example") == 0 &&
+		      targets[0].ca_port == 8444,
+	      "the CA it enrolls against travels with it, since renewal does "
+	      "not stop");
+	CHECK(strstr(targets[0].label, "ca.light.example:8444") != NULL,
+	      "its log lines name the CA, there being no verifier to name");
+}
+
 static void test_more_profiles_than_room(void)
 {
 	struct attest_target targets[2];
@@ -244,14 +284,56 @@ static void test_effective_interval(void)
 	      "a configured cadence runs the loop without profiles too");
 }
 
+/*
+ * The two gates that decide whether a round reports.
+ * Neither may gate the round's enrollment: session-gated publisher that has
+ * never enrolled cannot be selected by a title (SET_PROFILE refuses one),
+ * so waiting for session before enrolling would leave that profile unreachable
+ * for good.
+ */
+static void test_target_reports(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	CHECK(attest_target_reports(&t),
+	      "a plain publisher is reported to every round");
+
+	memset(&t, 0, sizeof(t));
+	t.token_only = true;
+	CHECK(!attest_target_reports(&t),
+	      "a publisher who runs no verifier is never reported to");
+
+	memset(&t, 0, sizeof(t));
+	t.session_gated = true;
+	t.sessions = 0;
+	CHECK(!attest_target_reports(&t),
+	      "a session-gated publisher with no title running is not reported to");
+
+	t.sessions = 1;
+	CHECK(attest_target_reports(&t),
+	      "the same publisher is reported to while a title of theirs runs");
+
+	memset(&t, 0, sizeof(t));
+	t.token_only = true;
+	t.session_gated = true;
+	t.sessions = 3;
+	CHECK(!attest_target_reports(&t),
+	      "running no verifier outranks a live session");
+
+	CHECK(!attest_target_reports(NULL), "no target is reported to");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
 
 	test_single_verifier();
 	test_profiles_replace_the_single_verifier();
+	test_token_only_publisher();
 	test_more_profiles_than_room();
 	test_effective_interval();
+	test_target_reports();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

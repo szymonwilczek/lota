@@ -1145,6 +1145,43 @@ static void test_config_load_profile_incomplete(void)
 	}
 	PASS();
 
+	TEST("config_load accepts a publisher who runs no verifier");
+	/* light path:
+	 * their backend checks tokens, so nothing is reported and the profile
+	 * says so rather than omitting the key */
+	write_config("profile_tokenonly.conf", "[profile \"alpha\"]\n"
+					       "ca = ca.alpha.example\n"
+					       "ca_cert = /etc/lota/alpha.pem\n"
+					       "verifier = none\n");
+	config_path("profile_tokenonly.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		FAIL("a token-only publisher was refused");
+		return;
+	}
+	if (!cfg.profiles[0].token_only || cfg.profiles[0].verifier[0]) {
+		FAIL("verifier = none did not record a token-only publisher");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects verifier = none with a verifier port");
+	write_config("profile_tokenonly_port.conf",
+		     "[profile \"alpha\"]\n"
+		     "ca = ca.alpha.example\n"
+		     "ca_cert = /etc/lota/alpha.pem\n"
+		     "verifier = none\n"
+		     "verifier_port = 9443\n");
+	config_path("profile_tokenonly_port.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("a port for a verifier declared absent was accepted");
+		return;
+	}
+	PASS();
+
 	TEST("config_load rejects an empty profile section");
 	write_config("profile_empty.conf", "[profile \"alpha\"]\n");
 	config_path("profile_empty.conf", path, sizeof(path));
@@ -1386,6 +1423,19 @@ static void test_config_dump_roundtrip(void)
 	cfg1.profiles[0].verifier_port = 9443;
 	cfg1.profiles[0].attest_interval = 90;
 
+	/* second publisher who runs no verifier:
+	 * the dump has to say "verifier = none" and omit the port,
+	 * or it will not parse back */
+	cfg1.profile_count = 2;
+	snprintf(cfg1.profiles[1].name, sizeof(cfg1.profiles[1].name), "beta");
+	snprintf(cfg1.profiles[1].ca, sizeof(cfg1.profiles[1].ca),
+		 "ca.beta.example");
+	cfg1.profiles[1].ca_port = 8444;
+	snprintf(cfg1.profiles[1].ca_cert, sizeof(cfg1.profiles[1].ca_cert),
+		 "/etc/lota/beta.pem");
+	cfg1.profiles[1].token_only = true;
+	cfg1.profiles[1].verifier_port = LOTA_DEFAULT_VERIFIER_PORT;
+
 	/* dump to file */
 	snprintf(dump_path, sizeof(dump_path), "%s/dumped.conf", tmpdir);
 	{
@@ -1455,14 +1505,18 @@ static void test_config_dump_roundtrip(void)
 		FAIL("container_listener_uids mismatch");
 		return;
 	}
-	if (cfg2.profile_count != 1 ||
+	if (cfg2.profile_count != 2 ||
 	    strcmp(cfg2.profiles[0].name, "alpha") != 0 ||
 	    strcmp(cfg2.profiles[0].ca, "ca.alpha.example") != 0 ||
 	    cfg2.profiles[0].ca_port != 9444 ||
 	    strcmp(cfg2.profiles[0].ca_cert, "/etc/lota/alpha.pem") != 0 ||
 	    strcmp(cfg2.profiles[0].verifier, "v.alpha.example") != 0 ||
 	    cfg2.profiles[0].verifier_port != 9443 ||
-	    cfg2.profiles[0].attest_interval != 90) {
+	    cfg2.profiles[0].attest_interval != 90 ||
+	    cfg2.profiles[0].token_only ||
+	    strcmp(cfg2.profiles[1].name, "beta") != 0 ||
+	    !cfg2.profiles[1].token_only ||
+	    cfg2.profiles[1].verifier[0] != '\0') {
 		FAIL("profile mismatch");
 		return;
 	}
