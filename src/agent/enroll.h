@@ -12,6 +12,7 @@
 #define LOTA_AGENT_ENROLL_H
 
 #include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -171,6 +172,15 @@ int enroll_renew_cert(struct tpm_context *tpm,
  * Returns 0 on success, 1 on failure (one-shot CLI mode).
  */
 int do_allow_publisher(const char *profile_id);
+
+/*
+ * Write a publisher's [profile] section into lota.conf.
+ * Records no consent -- that stays a separate act by the person at the machine.
+ */
+int do_add_publisher(const char *config_path, const char *name,
+		     const char *ca_server, int ca_port, const char *ca_cert,
+		     const char *verifier, int verifier_port, int interval,
+		     bool session_gated);
 
 /*
  * Show every publisher this host stores anything for, and what it stores.

@@ -6,6 +6,7 @@
  */
 
 #include "config.h"
+#include "io_utils.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1110,4 +1111,229 @@ const char *config_resolve_policy_pubkey(const char *configured,
 	if (packaged_path && access(packaged_path, R_OK) == 0)
 		return packaged_path;
 	return NULL;
+}
+
+/*
+ * Whether @text already carries a `[profile "name"]` header, and how many profile
+ * sections it holds.
+ * Deliberately text scan rather than a parse:
+ * the file may hold keys this build does not know, and refusing to add publisher
+ * because of one would be the wrong answer.
+ */
+static int profile_section_scan(const char *text, const char *name,
+				int *out_count)
+{
+	const char *p = text;
+	int count = 0;
+	int found = 0;
+
+	while ((p = strstr(p, "[profile")) != NULL) {
+		const char *q = strchr(p, '"');
+		const char *r = q ? strchr(q + 1, '"') : NULL;
+
+		count++;
+		if (q && r && name) {
+			size_t len = (size_t)(r - q - 1);
+
+			if (len == strlen(name) &&
+			    strncmp(q + 1, name, len) == 0)
+				found = 1;
+		}
+		p += 8;
+	}
+
+	if (out_count)
+		*out_count = count;
+	return found;
+}
+
+/* The profile as the parser reads it back.
+ * Keys are written in the order the documentation lists them so a file
+ * an installer touched still reads like one a person wrote. */
+static int profile_section_render(const struct lota_profile *p, char *buf,
+				  size_t cap)
+{
+	int n;
+
+	n = snprintf(buf, cap,
+		     "\n[profile \"%s\"]\n"
+		     "ca = %s\n"
+		     "ca_port = %d\n"
+		     "ca_cert = %s\n"
+		     "verifier = %s\n"
+		     "verifier_port = %d\n"
+		     "reporting = %s\n",
+		     p->name, p->ca, p->ca_port, p->ca_cert,
+		     p->verifier[0] ? p->verifier : "none", p->verifier_port,
+		     p->session_gated ? "session" : "continuous");
+	if (n < 0 || (size_t)n >= cap)
+		return -EOVERFLOW;
+
+	if (p->attest_interval > 0) {
+		int m = snprintf(buf + n, cap - (size_t)n, "interval = %d\n",
+				 p->attest_interval);
+
+		if (m < 0 || (size_t)(n + m) >= cap)
+			return -EOVERFLOW;
+		n += m;
+	}
+
+	return n;
+}
+
+int config_profile_append_text(const char *existing,
+			       const struct lota_profile *p, char *out,
+			       size_t out_cap)
+{
+	char section[1024];
+	size_t existing_len;
+	int count = 0;
+	int rendered;
+
+	if (!existing || !p || !out || out_cap == 0)
+		return -EINVAL;
+
+	/* parser refuses a profile without these, so refuse to write one */
+	if (!p->name[0] || !p->ca[0] || !p->ca_cert[0])
+		return -EINVAL;
+
+	/*
+	 * A publisher is its trust anchor, not its label.
+	 * The same anchor already in the file is the installer running twice
+	 * -- or the same publisher configured under another name -- and either
+	 * way a second section would resolve to one profile directory and one
+	 * AIK, burning a slot and attesting twice to the same place.
+	 */
+	{
+		char probe[PATH_MAX + 64];
+		int n = snprintf(probe, sizeof(probe), "ca_cert = %s",
+				 p->ca_cert);
+
+		if (n > 0 && (size_t)n < sizeof(probe) &&
+		    strstr(existing, probe) != NULL) {
+			if (strlen(existing) >= out_cap)
+				return -EOVERFLOW;
+			memcpy(out, existing, strlen(existing) + 1);
+			return 0;
+		}
+	}
+
+	/* label already spoken for by a different anchor is two publishers claiming
+	 * one name, which only the operator can resolve */
+	if (profile_section_scan(existing, p->name, &count))
+		return -EEXIST;
+
+	if (count >= LOTA_CONFIG_MAX_PROFILES)
+		return -E2BIG;
+
+	rendered = profile_section_render(p, section, sizeof(section));
+	if (rendered < 0)
+		return rendered;
+
+	existing_len = strlen(existing);
+	if (existing_len + (size_t)rendered + 1 > out_cap)
+		return -EOVERFLOW;
+
+	memcpy(out, existing, existing_len);
+	memcpy(out + existing_len, section, (size_t)rendered + 1);
+	return 1;
+}
+
+int config_profile_append(const char *path, const struct lota_profile *p)
+{
+	char tmp_path[PATH_MAX];
+	char *existing = NULL;
+	char *updated = NULL;
+	size_t existing_len = 0;
+	size_t cap;
+	int ret;
+	int fd;
+
+	if (!path || !p)
+		return -EINVAL;
+
+	/* A file that is not there yet is an empty one:
+	 * the agent ships a config, but a host may have removed it and the verb
+	 * still has to work rather than telling the player to create one.
+	 * The reader reports a missing file as zero bytes, which is the same thing. */
+	existing = calloc(1, LOTA_CONFIG_MAX_FILE + 1);
+	if (!existing)
+		return -ENOMEM;
+
+	ret = lota_read_file_bounded(path, existing, LOTA_CONFIG_MAX_FILE,
+				     &existing_len);
+	if (ret < 0) {
+		free(existing);
+		return ret;
+	}
+	existing[existing_len] = '\0';
+
+	cap = existing_len + 2048;
+	updated = calloc(1, cap);
+	if (!updated) {
+		free(existing);
+		return -ENOMEM;
+	}
+
+	ret = config_profile_append_text(existing, p, updated, cap);
+	free(existing);
+	if (ret <= 0) {
+		free(updated);
+		return ret;
+	}
+
+	/*
+	 * Rename into place so crash mid-write leaves the old config rather than
+	 * half of one:
+	 * the agent reads this file on every start, and a truncated one is host
+	 * that will not come back.
+	 */
+	if (snprintf(tmp_path, sizeof(tmp_path), "%s.new", path) >=
+	    (int)sizeof(tmp_path)) {
+		free(updated);
+		return -ENAMETOOLONG;
+	}
+
+	int tmp_flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+	tmp_flags |= O_NOFOLLOW;
+#endif
+
+	fd = open(tmp_path, tmp_flags, 0644);
+	if (fd < 0) {
+		ret = -errno;
+		free(updated);
+		return ret;
+	}
+
+	{
+		size_t len = strlen(updated);
+		ssize_t written = write(fd, updated, len);
+
+		if (written < 0 || (size_t)written != len) {
+			ret = written < 0 ? -errno : -EIO;
+			close(fd);
+			unlink(tmp_path);
+			free(updated);
+			return ret;
+		}
+	}
+
+	if (fsync(fd) < 0) {
+		ret = -errno;
+		close(fd);
+		unlink(tmp_path);
+		free(updated);
+		return ret;
+	}
+	close(fd);
+	free(updated);
+
+	if (rename(tmp_path, path) < 0) {
+		ret = -errno;
+		unlink(tmp_path);
+		return ret;
+	}
+
+	return 1;
 }

@@ -47,6 +47,11 @@
 #define LOTA_ENFORCEMENT_PUBKEY_PATH "/usr/lib/lota/enforcement.pub"
 #define LOTA_POLICY_PUBKEY_OVERRIDE "/etc/lota/policy.pub"
 
+/* Largest lota.conf the agent will read back when appending a profile.
+ * Far above any real file.
+ * The bound exists so caller cannot be made to allocate on file's say-so */
+#define LOTA_CONFIG_MAX_FILE 262144
+
 /* Maximum line length in config file */
 #define LOTA_CONFIG_MAX_LINE 1024
 
@@ -249,6 +254,39 @@ int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
  * can be fed back into config_load().
  */
 void config_dump(const struct lota_config *cfg, FILE *fp);
+
+/*
+ * config_profile_append_text - add a publisher profile to a config's text
+ * @existing: current file contents (may be empty, never NULL)
+ * @p:        the publisher to add
+ * @out:      receives the new contents
+ * @out_cap:  size of @out
+ *
+ * Game's installer registers its publisher this way rather than asking the player
+ * to edit a file. Existing text is copied through untouched: installer that rewrote
+ * the file would drop whatever the operator put there, and the profile section
+ * is appended at the end, which is always valid because every key after a section
+ * header belongs to that section.
+ *
+ * Returns 1 when the profile was appended, 0 when the same publisher is already
+ * present under the same name (an installer that runs twice), or negative errno:
+ * -EEXIST when the name is taken by a different publisher,
+ * E2BIG at LOTA_CONFIG_MAX_PROFILES,
+ * -EOVERFLOW when @out cannot hold the result,
+ * -EINVAL on a profile the parser would refuse.
+ */
+int config_profile_append_text(const char *existing,
+			       const struct lota_profile *p, char *out,
+			       size_t out_cap);
+
+/*
+ * config_profile_append - the same, applied to a file at @path
+ *
+ * Writes through a temporary file in the same directory and renames it into place,
+ * so crash mid-write leaves the old config rather than half of one.
+ * Same return values.
+ */
+int config_profile_append(const char *path, const struct lota_profile *p);
 
 /*
  * config_resolve_policy_pubkey - Which key verifies the enforcement object.

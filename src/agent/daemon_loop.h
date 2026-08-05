@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "attest_targets.h"
 #include "bpf_loader.h"
 #include "config.h"
 #include "dbus.h"
@@ -31,6 +32,17 @@ struct agent_loop_ctx {
 	int *protect_pid_count;
 	char (*trust_libs)[PATH_MAX];
 	int *trust_lib_count;
+
+	/*
+	 * Publisher target list the IPC layer answers titles from,
+	 * owned by the caller.
+	 * Reload rebuilds it in place: lota.conf gains publishers while the daemon
+	 * runs (game's installer writes one), and title cannot name publisher
+	 * the daemon has not read.
+	 */
+	struct attest_target *targets;
+	size_t *target_count;
+	size_t target_max;
 
 	struct ipc_context *ipc_ctx;
 	struct dbus_context *dbus_ctx;

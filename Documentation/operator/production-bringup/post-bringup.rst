@@ -162,6 +162,35 @@ same ports as the top-level keys. A profile missing the CA, the anchor or the
 verifier is refused at load, and every anchor has to satisfy the same
 readability constraint as the top-level ``ca_cert`` above.
 
+Adding a publisher does not have to be a text edit. ``lota-agent
+--add-publisher`` writes the section, which is how a game's installer registers
+the publisher it ships for::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem \
+        --server verifier.studio.example --port 8443 \
+        --publisher-name studio
+
+The rest of the file is copied through untouched and the section is appended,
+so whatever the operator put there survives. A publisher is its trust anchor
+rather than its label: adding the same anchor again is a no-op whichever name
+it carries, and a label already spoken for by a different anchor is refused
+with a note to pass another ``--publisher-name``.
+
+**It records no consent.** Nothing enrols with the publisher until somebody at
+the machine runs the ``--allow-publisher`` command it prints. That separation
+is deliberate: an installer must not be able to agree, on the player's behalf,
+to a publisher holding an attestation key on their hardware.
+
+**A running agent has to be told.** The daemon answers titles from the
+publisher list it read when it started, so one added since is unknown to it and
+a title naming it is refused with ``LOTA_ERR_UNKNOWN_PROFILE``. ``systemctl
+reload lota-agent`` (SIGHUP) re-reads ``lota.conf`` and hands the new list to
+the socket, with no effect on enforcement, PCR 14 or any existing enrollment --
+the command ``--add-publisher`` prints alongside the consent line. A rebuild
+that fails leaves the previous list in place rather than answering no title at
+all.
+
 Every key below a section header belongs to that section, so the top-level keys
 go above the first profile and nothing top-level may follow one.
 ``lota-agent --dump-config`` prints profiles last for the same reason, which is

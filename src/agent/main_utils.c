@@ -119,6 +119,24 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
 	       LOTA_DEFAULT_CA_PORT);
+	printf("  --add-publisher HOST\n");
+	printf("                    Write a publisher into the "
+	       "configuration so a\n");
+	printf("                    title of theirs can name it. HOST is "
+	       "their\n");
+	printf("                    attestation CA; --ca-cert gives their "
+	       "trust\n");
+	printf("                    anchor, --server/--port their verifier, "
+	       "and\n");
+	printf("                    --publisher-name the label. Records no "
+	       "consent:\n");
+	printf("                    somebody at this machine still has to "
+	       "run\n");
+	printf("                    --allow-publisher\n");
+	printf("  --publisher-name NAME\n");
+	printf("                    Label for --add-publisher (default: a "
+	       "prefix of\n");
+	printf("                    the publisher identity)\n");
 	printf("  --allow-publisher HEX\n");
 	printf("                    Record that this machine may answer to "
 	       "one\n");
