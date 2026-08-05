@@ -741,7 +741,15 @@ check-includes:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl
+# Every Go module in the tree.
+# SDK and the examples are the code an integrator copies,
+# so they are linted at least as strictly as the rest.
+LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
+	$(SERVER_SDK_MODULE) examples/demo_server
+# Server SDK module is at src/sdk/server today and moves to sdk/server when
+# the public Go module lands where its import path points, so the list asks
+# the tree where it is rather than stating a path that goes stale.
+SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
 
 lint: lint-c lint-go
 

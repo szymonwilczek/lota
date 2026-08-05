@@ -80,6 +80,11 @@ const (
 	defaultGameID   = "trust-pong"
 	defaultLicense  = "lota-demo-CS2-clone"
 	shutdownTimeout = 3 * time.Second
+
+	// A day is already far past anything a heartbeat freshness window should be;
+	// the cap exists so the value cannot reach the duration arithmetic large
+	// enough to wrap.
+	maxHeartbeatAgeSecCap = 86400
 )
 
 func main() {
@@ -165,6 +170,17 @@ func main() {
 		os.Exit(2)
 	}
 
+	// --max-age big enough to overflow the duration would wrap into negative
+	// one, and negative freshness window accepts every heartbeat ever minted.
+	// Bound it here, where the operator can still be told,
+	// rather than at the comparison.
+	if *maxAgeSec > maxHeartbeatAgeSecCap {
+		fmt.Fprintf(os.Stderr,
+			"demo_server: --max-age %d exceeds the %d second cap\n",
+			*maxAgeSec, maxHeartbeatAgeSecCap)
+		os.Exit(2)
+	}
+	// #nosec G115 -- bounded by maxHeartbeatAgeSecCap above
 	srv, err := newServer(aik, games, time.Duration(*maxAgeSec)*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "demo_server: %v\n", err)

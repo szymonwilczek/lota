@@ -80,6 +80,27 @@ A heartbeat whose live measurement does not match the manifest is answered
 is omitted, the runtime measurement falls back to ``--anticheat-binary`` alone,
 which only matches a statically linked producer.
 
+Minting tokens in your own tests
+--------------------------------
+
+A relying party's test suite has to build tokens the way an agent would, and
+the fields a token binds under its quote are computed, not guessed. The server
+SDK exports each of those folds, so nothing downstream re-derives one by hand:
+
+* ``server.ComputeRuntimeProtectDigest(pids)`` for a v1 token built with
+  ``SerializeToken``,
+* ``server.ComputeRuntimeProtectDigestV2(pids, imageDigests)`` for a v2 token
+  built with ``SerializeTokenV2``,
+* ``server.ComputeTokenQuoteNonce(...)`` for the value the quote's extra data
+  has to carry.
+
+Each is domain-separated and has to agree byte for byte with the agent's C
+implementation; both sides carry the same known-answer vectors
+(``TestRuntimeProtectDigest_KAT`` here, ``test_runtime_protect_digest`` there).
+A second copy of one of these folds in a relying party's own tree is the drift
+those domain strings exist to prevent, which is why they are exported rather
+than reimplemented.
+
 Transport security
 ~~~~~~~~~~~~~~~~~~
 

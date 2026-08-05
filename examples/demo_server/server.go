@@ -190,7 +190,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(body)
+	if err := enc.Encode(body); err != nil {
+		// status line is already written, so there is nothing left
+		// to tell the client; say it where the operator can see it.
+		logf("write response: %v", err)
+	}
 }
 
 func logf(format string, args ...any) {

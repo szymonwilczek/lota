@@ -95,7 +95,7 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	validUntil := uint64(time.Now().Add(5 * time.Minute).Unix())
 	pcrMask := uint32(0x4001)
 	policyDigest := [32]byte{0xA1, 0xB2, 0xC3}
-	runtimeDigest := runtimeProtectDigest(nil)
+	runtimeDigest := verifysdk.ComputeRuntimeProtectDigest(nil)
 
 	pcrDigest := make([]byte, 32)
 	for i := range pcrDigest {
@@ -136,21 +136,6 @@ func newSignedHeartbeat(t *testing.T, key *rsa.PrivateKey,
 	hdr.totalSize = uint16(len(pkt))
 	hdr.tokenSize = uint16(len(token))
 	return pkt
-}
-
-func runtimeProtectDigest(pids []uint32) [32]byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
-	var le [4]byte
-	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
-	_, _ = h.Write(le[:])
-	for _, pid := range pids {
-		binary.LittleEndian.PutUint32(le[:], pid)
-		_, _ = h.Write(le[:])
-	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
 }
 
 func buildFakeTPMSAttest(extraData []byte, pcrMask uint32, pcrDigest []byte) []byte {

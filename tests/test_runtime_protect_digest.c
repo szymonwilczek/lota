@@ -158,6 +158,30 @@ int main(void)
 			FAIL("v1 and v2 collide");
 	}
 
+	TEST("v1 matches the cross-language known-answer vector");
+	{
+		/*
+		 * Locks the C and Go v1 folds to the same bytes, for pids {1,2}.
+		 * Every v1 token binds this value under its quote, and the Go
+		 * side now exports the fold (server.ComputeRuntimeProtectDigest),
+		 * so relying party's test suite consumes it instead of re-deriving it.
+		 * Mirror in the Go verifier's TestRuntimeProtectDigest_KAT.
+		 */
+		static const uint8_t kat[32] = {
+			0x35, 0xe7, 0x7d, 0x3b, 0x26, 0xca, 0xe8, 0x9d,
+			0xf4, 0x66, 0x73, 0xa3, 0xcc, 0xec, 0x9b, 0x85,
+			0xcc, 0x70, 0x7a, 0xb6, 0x94, 0x1a, 0x83, 0xbf,
+			0x29, 0x98, 0x85, 0x44, 0x12, 0x45, 0xbe, 0x02
+		};
+		uint32_t kp[2] = { 1, 2 };
+
+		if (lota_compute_runtime_protect_digest(kp, 2, b) == 0 &&
+		    memcmp(b, kat, 32) == 0)
+			PASS();
+		else
+			FAIL("KAT mismatch");
+	}
+
 	TEST("v2 matches the cross-language known-answer vector");
 	{
 		/*
