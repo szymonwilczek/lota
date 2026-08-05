@@ -84,9 +84,66 @@ enum probe_fstype probe_path_fstype(const char *path);
  * 0 when it has none or only a bare digest, errno on read failure. */
 int probe_file_ima_signed(const char *path);
 
+/* 1 when the machine booted through UEFI, 0 when it did not.
+ *
+ * Separate from probe_secureboot(): missing SecureBoot variable is either legacy
+ * BIOS boot or UEFI firmware without Secure Boot support, and the two get
+ * different instructions.
+ * _at form takes the firmware directory so the decision is testable without reboot */
+int probe_firmware_is_uefi(void);
+int probe_firmware_is_uefi_at(const char *dir);
+
 /* 1 = Secure Boot enabled, 0 = disabled/setup mode,
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
 int probe_secureboot(void);
+
+/* 1 = firmware holds no platform key (setup mode), so enabling Secure Boot also
+ * needs the factory keys restored,
+ * 0 = user mode,
+ * -errno on read failure (-ENOENT on firmware that exposes no SetupMode variable) */
+int probe_secureboot_setup_mode(void);
+
+/* 1 = firmware accepts the OsIndications request to boot straight into its setup
+ * UI, which is what makes 'systemctl reboot --firmware-setup' work,
+ * 0 = unsupported,
+ * -errno on read failure */
+int probe_firmware_setup_supported(void);
+
+/* Path-parameterized variants behind the fixed-path wrappers above.
+ * Both read efivarfs file: 4-byte attribute header, then the payload */
+int probe_efivar_flag_at(const char *path);
+int probe_efivar_bit0_at(const char *path);
+
+/* Pure:
+ * Writes the Secure-Boot remediation a player can act on without a manual:
+ * what the setting is called, how to reach firmware setup on this machine,
+ * and what enabling it does not break.
+ *
+ * It deliberately carries no per-vendor menu path or setup key.
+ * Those differ between firmware revisions of one model, nothing here can verify
+ * them, and confidently wrong instruction costs more than general one.
+ *
+ * machine is the DMI description echoed back (may be NULL);
+ * is_virtual says this is a guest (systemd-detect-virt, decided by the caller);
+ * setup_mode and firmware_setup_supported take the probe results above,
+ * where negative value reads as "could not tell" */
+void probe_secureboot_remediation(const char *machine, int is_virtual,
+				  int setup_mode, int firmware_setup_supported,
+				  char *out, size_t cap);
+
+/* Gathers the live inputs this file owns (DMI, SetupMode, OsIndicationsSupported)
+ * and builds the remediation above.
+ * Whether the host is a guest comes from the caller, since answering it means
+ * running systemd-detect-virt and no probe here spawns a process */
+void probe_secureboot_guidance(int is_virtual, char *out, size_t cap);
+
+/* Describes this machine the way DMI does ("Dell Inc. Latitude 7420"),
+ * for echoing back to whoever is at the keyboard.
+ * Writes empty string when DMI says nothing usable;
+ * placeholder strings a board ships unfilled ("System Product Name") count
+ * as nothing */
+void probe_machine_description(char *out, size_t cap);
+void probe_machine_description_at(const char *dmi_dir, char *out, size_t cap);
 
 /* 1 when the platform exposes an ESRT System Firmware entry (fw_type == 1),
  * 0 otherwise.

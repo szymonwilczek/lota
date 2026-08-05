@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../installer/install.h"
 #include "../installer/probe.h"
 
 static int tests_run;
@@ -365,6 +366,274 @@ static void test_verity_remediation_per_fs(void)
 	PASS();
 }
 
+static void test_machine_description(void)
+{
+	char dir[256];
+	char cmd[320];
+	char desc[192];
+
+	snprintf(dir, sizeof(dir), "/tmp/lota-inst-dmi.%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	TEST("a DMI tree with nothing usable describes no machine");
+	probe_machine_description_at(dir, desc, sizeof(desc));
+	if (desc[0] != '\0') {
+		FAIL("empty DMI tree produced a description");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("vendor and product are joined as DMI spells them");
+	write_text_file(dir, "sys_vendor", "Example Corp\n");
+	write_text_file(dir, "product_name", "Example Board X1\n");
+	probe_machine_description_at(dir, desc, sizeof(desc));
+	if (strcmp(desc, "Example Corp Example Board X1") != 0) {
+		FAIL("description is not the two DMI fields");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("an unfilled DMI field is left out, not read back");
+	/* boards ship these placeholders unfilled;
+	 * naming one describes no machine anybody owns */
+	write_text_file(dir, "product_name", "To Be Filled By O.E.M.\n");
+	probe_machine_description_at(dir, desc, sizeof(desc));
+	if (strcmp(desc, "Example Corp") != 0) {
+		FAIL("placeholder used as a machine name");
+		goto cleanup;
+	}
+	write_text_file(dir, "sys_vendor", "System manufacturer\n");
+	probe_machine_description_at(dir, desc, sizeof(desc));
+	if (desc[0] != '\0') {
+		FAIL("two placeholders still produced a description");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
+/* efivarfs payloads: 4 attribute bytes, then the value */
+static void write_efivar(const char *dir, const char *name, const uint8_t *val,
+			 size_t len)
+{
+	static const uint8_t attrs[4] = { 0x07, 0, 0, 0 };
+	char path[512];
+	int fd;
+
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return;
+	if (write(fd, attrs, sizeof(attrs)) != (ssize_t)sizeof(attrs) ||
+	    write(fd, val, len) != (ssize_t)len)
+		fprintf(stderr, "warning: efivar fixture write failed\n");
+	close(fd);
+}
+
+static void test_efivar_payload(void)
+{
+	char dir[256];
+	char path[320];
+	char cmd[320];
+	uint8_t one = 1;
+	uint8_t zero = 0;
+	uint8_t mask[8] = { 0x03, 0, 0, 0, 0, 0, 0, 0 };
+	uint8_t nofwui[8] = { 0x02, 0, 0, 0, 0, 0, 0, 0 };
+
+	snprintf(dir, sizeof(dir), "/tmp/lota-inst-efivar.%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	/*
+	 * missing SecureBoot variable has two causes and they need different
+	 * instructions: legacy BIOS boot, where "switch the firmware to UEFI mode"
+	 * is the fix, and UEFI firmware built without Secure Boot support,
+	 * where the machine is *already* in UEFI mode and that instruction
+	 * is dead end.
+	 * Telling the second case to do the first is the kind of confidently
+	 * wrong step this project refuses to ship.
+	 */
+	TEST("UEFI is detected from the firmware directory, not from SecureBoot");
+	if (probe_firmware_is_uefi_at(dir) != 1) {
+		FAIL("an existing firmware directory not read as UEFI");
+		goto cleanup;
+	}
+	{
+		char absent[380];
+
+		snprintf(absent, sizeof(absent), "%s/no-such-firmware", dir);
+		if (probe_firmware_is_uefi_at(absent) != 0) {
+			FAIL("a missing firmware directory not read as legacy BIOS");
+			goto cleanup;
+		}
+	}
+	PASS();
+
+	TEST("efivar flag reads past the attribute header");
+	write_efivar(dir, "on", &one, sizeof(one));
+	write_efivar(dir, "off", &zero, sizeof(zero));
+	snprintf(path, sizeof(path), "%s/on", dir);
+	if (probe_efivar_flag_at(path) != 1) {
+		FAIL("set flag not read as 1");
+		goto cleanup;
+	}
+	snprintf(path, sizeof(path), "%s/off", dir);
+	if (probe_efivar_flag_at(path) != 0) {
+		FAIL("clear flag not read as 0");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("a header-only or missing variable is not read as a value");
+	write_efivar(dir, "empty", &one, 0);
+	snprintf(path, sizeof(path), "%s/empty", dir);
+	if (probe_efivar_flag_at(path) != -EBADMSG) {
+		FAIL("truncated variable accepted");
+		goto cleanup;
+	}
+	snprintf(path, sizeof(path), "%s/absent", dir);
+	if (probe_efivar_flag_at(path) != -ENOENT) {
+		FAIL("missing variable not reported as -ENOENT");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("OsIndicationsSupported is masked to the boot-to-setup bit");
+	write_efivar(dir, "mask", mask, sizeof(mask));
+	write_efivar(dir, "nofwui", nofwui, sizeof(nofwui));
+	snprintf(path, sizeof(path), "%s/mask", dir);
+	if (probe_efivar_bit0_at(path) != 1) {
+		FAIL("bit 0 set but not reported");
+		goto cleanup;
+	}
+	snprintf(path, sizeof(path), "%s/nofwui", dir);
+	if (probe_efivar_bit0_at(path) != 0) {
+		FAIL("other bits read as boot-to-setup support");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
+static void test_secureboot_remediation(void)
+{
+	char msg[STAGE_NOTE_CAP];
+	char small[64];
+
+	TEST("firmware that takes the request gets the command, not a key");
+	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 1,
+				     msg, sizeof(msg));
+	if (!strstr(msg, "systemctl reboot --firmware-setup")) {
+		FAIL("boot-to-setup command missing");
+		return;
+	}
+	if (strstr(msg, "vendor logo")) {
+		FAIL("a keystroke was offered where the command works");
+		return;
+	}
+	PASS();
+
+	TEST("the machine DMI names is echoed back");
+	if (!strstr(msg, "Example Corp Example Board X1")) {
+		FAIL("machine description dropped");
+		return;
+	}
+	probe_secureboot_remediation(NULL, 0, 0, 1, msg, sizeof(msg));
+	if (!strstr(msg, "Secure Boot")) {
+		FAIL("no description left no instructions either");
+		return;
+	}
+	PASS();
+
+	TEST("firmware without boot-to-setup defers to its startup screen");
+	/* key differs between firmware revisions of one model,
+	 * so the firmware's own screen is the only source worth naming */
+	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 0,
+				     msg, sizeof(msg));
+	if (strstr(msg, "systemctl reboot --firmware-setup")) {
+		FAIL("command offered on firmware that refuses it");
+		return;
+	}
+	if (!strstr(msg, "startup screen")) {
+		FAIL("no route into setup offered as the fallback");
+		return;
+	}
+	PASS();
+
+	TEST("every case names the setting and where it sits");
+	if (!strstr(msg, "Secure Boot") || !strstr(msg, "Security or Boot")) {
+		FAIL("the setting was not named");
+		return;
+	}
+	PASS();
+
+	TEST("setup mode adds the factory-keys step");
+	probe_secureboot_remediation("Example Corp", 0, 1, 1, msg, sizeof(msg));
+	if (!strstr(msg, "factory keys")) {
+		FAIL("setup mode did not mention restoring the keys");
+		return;
+	}
+	probe_secureboot_remediation("Example Corp", 0, 0, 1, msg, sizeof(msg));
+	if (strstr(msg, "factory keys")) {
+		FAIL("user mode told to restore keys it already has");
+		return;
+	}
+	PASS();
+
+	TEST("a guest is sent to the VM definition, not into a menu");
+	probe_secureboot_remediation("QEMU Standard PC", 1, 0, 1, msg,
+				     sizeof(msg));
+	if (!strstr(msg, "OVMF") ||
+	    strstr(msg, "systemctl reboot --firmware-setup") ||
+	    strstr(msg, "Security or Boot")) {
+		FAIL("guest told to open a menu it does not have");
+		return;
+	}
+	PASS();
+
+	TEST("an unreadable probe reads as 'could not tell', not as yes");
+	/* -errno from either efivar must not claim setup mode or promise
+	 * boot-to-setup request the firmware never advertised */
+	probe_secureboot_remediation("Example Corp", 0, -ENOENT, -ENOENT, msg,
+				     sizeof(msg));
+	if (strstr(msg, "factory keys") ||
+	    strstr(msg, "systemctl reboot --firmware-setup")) {
+		FAIL("a failed probe was read as a positive answer");
+		return;
+	}
+	PASS();
+
+	TEST("the worst-case message fits a stage note whole");
+	probe_secureboot_remediation("Example Corp Example Board X1", 0, 1, 0,
+				     msg, sizeof(msg));
+	if (strlen(msg) >= sizeof(msg) - 1) {
+		FAIL("message fills STAGE_NOTE_CAP and is cut short");
+		return;
+	}
+	PASS();
+
+	TEST("a short buffer truncates without overrunning");
+	memset(small, 'X', sizeof(small));
+	probe_secureboot_remediation("Example Corp", 0, 1, 0, small,
+				     sizeof(small) - 8);
+	if (strlen(small) >= sizeof(small) - 8) {
+		FAIL("truncated message is not NUL-terminated in place");
+		return;
+	}
+	if (small[sizeof(small) - 1] != 'X') {
+		FAIL("wrote past the buffer it was given");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -379,6 +648,9 @@ int main(void)
 	test_fstype_magic_mapping();
 	test_fs_verity_capability();
 	test_verity_remediation_per_fs();
+	test_machine_description();
+	test_efivar_payload();
+	test_secureboot_remediation();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -45,6 +45,27 @@ static int tool_exists(const char *name)
 	return 0;
 }
 
+/*
+ * 1 when this host is a guest.
+ *
+ * systemd-detect-virt answers it from the CPUID hypervisor bit, DMI,
+ * the container environment and several more signals, and exits 0 only when it
+ * found one -- which is why the output is ignored here.
+ * Vendor table over DMI strings would be this project maintaining a worse
+ * copy of that.
+ *
+ * Missing tool, or spawn failure, reads as bare metal:
+ * those instructions are the ones a guest can most safely be given by mistake,
+ * since they send the reader to firmware menu instead of to the wrong machine.
+ */
+static int host_is_virtual(void)
+{
+	const char *const argv[] = { "systemd-detect-virt", "-q", NULL };
+	char out[64];
+
+	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
 /* stage 1: preflight */
 
 static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
@@ -67,7 +88,7 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	}
 
 	sb = probe_secureboot();
-	if (sb == -ENOENT) {
+	if (sb == -ENOENT && !probe_firmware_is_uefi()) {
 		snprintf(note, cap,
 			 "This host booted via legacy BIOS/CSM, not UEFI. "
 			 "BIOS is unsupported: it measures neither the "
@@ -78,13 +99,41 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 			 "UEFI mode and reinstall.");
 		return STAGE_BLOCKED;
 	}
+	if (sb == -ENOENT) {
+		/* UEFI, but the firmware carries no SecureBoot variable at all:
+		 * the feature is absent from this build rather than turned off.
+		 * Telling this machine to switch to UEFI mode would send player
+		 * after something already true, so name what is actually missing
+		 * and where it comes from. */
+		if (host_is_virtual())
+			snprintf(note, cap,
+				 "This guest booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from the firmware build "
+				 "rather than switched off. Give the VM a "
+				 "Secure Boot capable firmware -- on libvirt "
+				 "that is an OVMF secboot build with enrolled "
+				 "keys -- and boot it again. The verifier pins "
+				 "the Secure Boot state, so a guest without it "
+				 "cannot attest.");
+		else
+			snprintf(note, cap,
+				 "This host booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from this firmware build "
+				 "rather than switched off. A firmware update "
+				 "from the board vendor is what adds it; there "
+				 "is no setting to change on the running "
+				 "build. The verifier pins the Secure Boot "
+				 "state, so a host without it cannot attest.");
+		return STAGE_BLOCKED;
+	}
 	if (sb == 0) {
-		snprintf(note, cap,
-			 "Secure Boot is disabled. The verifier rejects "
-			 "hosts that boot with Secure Boot off (it is the "
-			 "machine-independent kernel-trust anchor). Enable "
-			 "it in firmware setup and re-run. Custom MOK-signed "
-			 "kernels keep working with Secure Boot on.");
+		/* most common reason an install stops, and the one thing here
+		 * LOTA cannot do on the player's behalf:
+		 * name the setting, this machine's way into firmware setup,
+		 * and the menu it lives under */
+		probe_secureboot_guidance(host_is_virtual(), note, cap);
 		return STAGE_BLOCKED;
 	}
 	if (sb < 0) {

@@ -99,7 +99,18 @@ What the stages do
 #. **Preflight** -- TPM 2.0 device present, UEFI Secure Boot enabled, required
    tooling installed. Secure Boot off is a hard stop: the verifier proves it
    from the TPM event log and rejects hosts without it (MOK-signed custom
-   kernels keep working).
+   kernels keep working). It is also the one requirement nobody but the person
+   at the keyboard can satisfy, so the blocked stage prints a route instead of
+   a rule: the machine as DMI names it, ``systemctl reboot --firmware-setup``
+   where the firmware advertises that it honours the request, the extra
+   "restore the factory keys" step when the firmware is in setup mode, and
+   that enabling Secure Boot leaves distribution kernels bootable. A guest is
+   sent to its VM definition instead, since a virtual machine has no firmware
+   menu of its own -- ``systemd-detect-virt`` decides that, so the installer
+   keeps no list of hypervisors. Everything in that message is read off the
+   machine; the installer names no per-vendor menu path or setup key, because
+   those differ between firmware revisions of a single model and a confidently
+   wrong instruction costs more than a general one.
 #. **Package artifacts** -- agent binary, BPF object, systemd units, udev rule
    and dracut module are installed. The installer does not build or download
    anything. Missing artifacts mean the LOTA package has not been installed yet.
