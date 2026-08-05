@@ -26,7 +26,6 @@
 #include <stdint.h>
 
 #include "../../include/lota.h"
-#include "../../include/lota_ipc.h"
 #include "agent.h"
 #include "attest.h"
 #include "bpf_loader.h"
@@ -47,6 +46,7 @@
 #include "selftest.h"
 #include "shutdown.h"
 #include "startup_policy.h"
+#include "status_flags.h"
 #include "tpm.h"
 
 /* Global state */
@@ -72,10 +72,44 @@ struct run_daemon_params {
 	struct lota_config *cfg;
 };
 
+/*
+ * What republish_rotation_state() needs to answer:
+ * "which AIK, measured against whose enrollment"
+ * Outlives the daemon's frame: the IPC context that holds the pointer
+ * is global, so the object it points at cannot be one the frame owns.
+ */
+struct rotation_hook_ctx {
+	uint32_t aik_ttl;
+	const struct profile_paths *profile;
+};
+
+static struct rotation_hook_ctx g_rotation_hook;
+
+/*
+ * Re-read the AIK rotation record and publish it.
+ *
+ * Called when the attestation loop syncs.
+ * Loop rotates the key and writes the record;
+ * this process serves D-Bus, so it has to pick the change up from the file rather
+ * than from its own copy, which was loaded at startup.
+ */
+static void republish_rotation_state(void *user)
+{
+	const struct rotation_hook_ctx *hook = user;
+
+	if (!hook)
+		return;
+
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
+		return;
+
+	publish_rotation_state(hook->aik_ttl, hook->profile);
+}
+
 static int run_daemon(const struct run_daemon_params *params)
 {
 	int ret, epoll_fd, sfd;
-	uint32_t status_flags = 0;
+	struct agent_boot_state boot_state = { 0 };
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
 	bool strict_mmap;
@@ -89,8 +123,13 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct lota_config *cfg;
 	sigset_t mask;
 	struct epoll_event ev;
-	struct profile_paths profile_storage;
 	const struct profile_paths *profile = NULL;
+	/*
+	 * IPC context is global and keeps this list for as long as it serves
+	 * titles, so the list cannot be one the frame owns
+	 */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count = 0;
 
 	if (!params)
 		return -EINVAL;
@@ -110,17 +149,42 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	lota_info("LOTA agent starting");
 
-	if (cfg && cfg->ca_cert[0]) {
-		int prof_ret = profile_paths_from_anchor(cfg->ca_cert,
-							 &profile_storage);
+	{
+		int t_ret = attest_targets_build(
+			cfg, (cfg && cfg->server[0]) ? cfg->server : NULL,
+			cfg ? cfg->port : 0, cfg ? cfg->ca_cert : NULL,
+			cfg ? cfg->attest_interval : 0, targets,
+			sizeof(targets) / sizeof(targets[0]), &target_count);
 
-		if (prof_ret == 0)
-			profile = &profile_storage;
-		else
-			lota_warn("Cannot read the CA trust anchor %s (%s): "
-				  "running without a publisher profile",
-				  cfg->ca_cert, strerror(-prof_ret));
+		if (t_ret < 0) {
+			/*
+			 * No publisher is configured at all, which is a fresh
+			 * consumer install before any title has run.
+			 * Not a reason to stop: enforcement is host-owned
+			 * and no publisher grants it.
+			 */
+			target_count = 0;
+			lota_info("No publisher configured; enforcing for the "
+				  "host and answering titles for nobody");
+		}
 	}
+
+	for (size_t i = 0; i < target_count; i++) {
+		if (targets[i].profile_error)
+			lota_warn("Cannot read the CA trust anchor %s (%s): "
+				  "answering for %s:%d without a publisher "
+				  "profile",
+				  targets[i].ca_cert,
+				  strerror(-targets[i].profile_error),
+				  targets[i].server, targets[i].port);
+	}
+
+	/*
+	 * Connection that names no publisher gets the first one's AIK,
+	 * which is the same choice the attestation loop makes between rounds.
+	 */
+	if (target_count > 0 && targets[0].has_profile)
+		profile = &targets[0].paths;
 
 	/*
 	 * Daemon-mode hardening: refuse to start under a tracer and install
@@ -198,6 +262,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 
 	ipc_set_mode(&g_agent.ipc_ctx, (uint8_t)g_agent.mode);
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
@@ -223,8 +288,19 @@ static int run_daemon(const struct run_daemon_params *params)
 	if (ret != 0) {
 		lota_warn("IOMMU verification failed");
 	} else {
-		status_flags |= LOTA_STATUS_IOMMU_OK;
+		boot_state.iommu_ok = true;
 	}
+
+	/*
+	 * Secure Boot, read straight off efivarfs.
+	 *
+	 * Title asks this process because this process is the one that booted
+	 * with the machine.
+	 */
+	boot_state.secure_boot = bpf_loader_secure_boot_enabled() == 0;
+	lota_info("Secure Boot: %s", boot_state.secure_boot ?
+					     "enabled" :
+					     "disabled or unreadable");
 
 	lota_info("Initializing TPM");
 	ret = tpm_init(&g_agent.tpm_ctx);
@@ -233,7 +309,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		goto cleanup_tpm;
 	} else {
 		lota_info("TPM initialized");
-		status_flags |= LOTA_STATUS_TPM_OK;
+		boot_state.tpm_ok = true;
 
 		/*
 		 * The AIK a token is quoted with has to be the one whose
@@ -316,6 +392,19 @@ static int run_daemon(const struct run_daemon_params *params)
 			publish_rotation_state(
 				params->cfg ? params->cfg->aik_ttl : 0,
 				profile);
+
+			/*
+			 * attestation loop is the process that rotates the AIK,
+			 * and it writes the record to disk
+			 * sync from it says a round has just finished,
+			 * which is exactly when that record is worth re-reading
+			 */
+			g_rotation_hook.aik_ttl =
+				params->cfg ? params->cfg->aik_ttl : 0;
+			g_rotation_hook.profile = profile;
+			ipc_set_attest_sync_hook(&g_agent.ipc_ctx,
+						 republish_rotation_state,
+						 &g_rotation_hook);
 		}
 
 		lota_info("Performing self-measurement");
@@ -344,7 +433,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	}
 	lota_info("BPF program loaded (attach deferred until startup policy "
 		  "applied)");
-	status_flags |= LOTA_STATUS_BPF_LOADED;
+	boot_state.bpf_loaded = true;
 
 	struct agent_startup_policy startup_policy = {
 		.mode = g_agent.mode,
@@ -399,7 +488,8 @@ static int run_daemon(const struct run_daemon_params *params)
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, bpf_fd, &ev);
 	}
 
-	ipc_update_status(&g_agent.ipc_ctx, status_flags, 0);
+	boot_state.tpm_lockout = tpm_is_locked_out(&g_agent.tpm_ctx);
+	ipc_update_status(&g_agent.ipc_ctx, agent_status_flags(&boot_state), 0);
 
 	sdnotify_ready();
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));

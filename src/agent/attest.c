@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <stdbool.h>
@@ -29,9 +30,10 @@
 #include "agent.h"
 #include "aik_cert.h"
 #include "attest.h"
+#include "attest_aggregate.h"
+#include "attest_peer.h"
 #include "attest_targets.h"
 #include "bpf_loader.h"
-#include "dbus.h"
 #include "enroll.h"
 #include "esrt.h"
 #include "hardening.h"
@@ -993,6 +995,16 @@ void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 			    (uint64_t)tpm->grace_deadline, reenroll_required);
 }
 
+/*
+ * The loop's attestation tallies.
+ *
+ * They used to live on the IPC context this process served;
+ * it serves none now, so they live here and travel to the socket owner with each sync.
+ * File scope for the same reason g_agent is: one loop per process, and every writer
+ * below is on its single thread.
+ */
+static struct attest_peer_counters g_attest_counters;
+
 static uint64_t monotonic_ms(void)
 {
 	struct timespec ts;
@@ -1138,8 +1150,7 @@ static bool enroll_target_if_needed(struct attest_target *t)
 }
 
 /* Rotate the bound AIK when its TTL has elapsed */
-static void rotate_bound_aik_if_due(const struct attest_target *t,
-				    uint32_t aik_ttl)
+static void rotate_bound_aik_if_due(uint32_t aik_ttl)
 {
 	int ret;
 
@@ -1158,16 +1169,10 @@ static void rotate_bound_aik_if_due(const struct attest_target *t,
 	else
 		lota_info("AIK rotated -> generation %lu",
 			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
-
-	/*
-	 * Republish so the rotation, its grace window, and re-enrollment surface
-	 * over D-Bus immediately
-	 */
-	publish_rotation_state(aik_ttl, t->has_profile ? &t->paths : NULL);
 }
 
 /* Renew this target's CA-issued AIK certificate before it lapses */
-static void renew_target_cert_if_due(struct attest_target *t, uint32_t aik_ttl)
+static void renew_target_cert_if_due(struct attest_target *t)
 {
 	int64_t remaining = 0, total = 0;
 	uint64_t mono_ms = monotonic_ms();
@@ -1189,7 +1194,6 @@ static void renew_target_cert_if_due(struct attest_target *t, uint32_t aik_ttl)
 		t->renew_backoff = 0;
 		lota_info("AIK certificate renewed for %s:%d", t->server,
 			  t->port);
-		publish_rotation_state(aik_ttl, &t->paths);
 		return;
 	}
 
@@ -1262,8 +1266,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 
 	ret = bind_target(t);
 	if (ret == 0) {
-		rotate_bound_aik_if_due(t, aik_ttl);
-		renew_target_cert_if_due(t, aik_ttl);
+		rotate_bound_aik_if_due(aik_ttl);
+		renew_target_cert_if_due(t);
 
 		lota_dbg("Attestation round starting for %s:%d", t->server,
 			 t->port);
@@ -1281,7 +1285,8 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		t->attested = true;
 		t->valid_until = (uint64_t)(now + t->interval +
 					    ATTEST_TOKEN_VALIDITY_SLACK_SEC);
-		ipc_record_attestation(&g_agent.ipc_ctx, true);
+		g_attest_counters.attest_count++;
+		g_attest_counters.last_attest_time = (uint64_t)now;
 		return t->interval;
 	}
 
@@ -1307,7 +1312,7 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		t->attested = false;
 		t->valid_until = 0;
 	}
-	ipc_record_attestation(&g_agent.ipc_ctx, false);
+	g_attest_counters.fail_count++;
 
 	{
 		/* jitter so a fleet does not retry in lockstep */
@@ -1335,48 +1340,24 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 static void publish_aggregate_status(const struct attest_target *targets,
 				     size_t count, uint32_t *status_flags)
 {
-	uint64_t valid_until = 0;
-	size_t considered = 0;
-	bool all = true;
+	struct attest_aggregate agg;
 
-	for (size_t i = 0; i < count; i++) {
-		/*
-		 * Publisher nobody is playing for is not reporting, so it has
-		 * no verdict to contribute.
-		 * Counting its silence as failure would leave a consumer host
-		 * permanently unattested; counting it as success would assert
-		 * something nothing is checking
-		 */
-		if (targets[i].session_gated && targets[i].sessions == 0)
-			continue;
+	attest_aggregate_compute(targets, count, &agg);
 
-		considered++;
-		if (!targets[i].attested) {
-			all = false;
-			break;
-		}
-		if (valid_until == 0 || targets[i].valid_until < valid_until)
-			valid_until = targets[i].valid_until;
-	}
-
-	/* nobody is reporting, so there is no live verdict to report either */
-	if (considered == 0)
-		all = false;
-
-	if (all)
+	if (agg.attested)
 		*status_flags |= LOTA_STATUS_ATTESTED;
 	else
 		*status_flags &= ~LOTA_STATUS_ATTESTED;
 
 	ipc_update_status(&g_agent.ipc_ctx,
 			  reconcile_tpm_lockout(*status_flags),
-			  all ? valid_until : 0);
+			  agg.valid_until);
 
-	if (all)
+	if (agg.attested)
 		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
-				considered, considered == 1 ? "" : "s",
-				(unsigned long)valid_until);
-	else if (considered == 0)
+				agg.considered, agg.considered == 1 ? "" : "s",
+				(unsigned long)agg.valid_until);
+	else if (agg.considered == 0)
 		sdnotify_status("Idle: no title running, nothing reported");
 	else
 		sdnotify_status("Attestation incomplete");
@@ -1392,6 +1373,7 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 			 uint32_t aik_ttl)
 {
 	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	struct attest_peer peer;
 	size_t target_count = 0;
 	uint32_t status_flags = 0;
 	uint64_t wd_usec = 0;
@@ -1399,6 +1381,8 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	int ret;
 
 	lota_info("Continuous attestation starting");
+
+	attest_peer_init(&peer);
 
 	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
 				   targets,
@@ -1458,21 +1442,20 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 
-	lota_info("Starting IPC server");
-	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
-	if (ret < 0) {
-		lota_warn("IPC init failed: %s", strerror(-ret));
-		lota_warn("Gaming clients will not be able to query status");
-	} else {
-		setup_container_listener(&g_agent.ipc_ctx, NULL);
-		setup_dbus(&g_agent.ipc_ctx);
-	}
-
+	/*
+	 * No IPC server here.
+	 * Enforcement daemon owns LOTA_IPC_SOCKET_PATH:
+	 * it is the always-on unit, it is what the packaged socket unit activates,
+	 * and it holds the BPF context, the enforcement policy digest
+	 * and the boot state a title asks about.
+	 * Binding it here would take it away from the process that has those,
+	 * which is how a host with the LSM attached came to tell a title
+	 * BPF_LOADED = 0.
+	 * This loop is a client of that socket instead.
+	 */
 	ret = net_init();
 	if (ret < 0) {
 		lota_err("Failed to initialize network: %s", strerror(-ret));
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	}
 
@@ -1481,8 +1464,6 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	if (ret < 0) {
 		lota_err("Failed to initialize TPM: %s", tpm_strerror(ret));
 		net_cleanup();
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
@@ -1494,8 +1475,6 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 				 strerror(-ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			net_cleanup();
-			dbus_cleanup(g_agent.dbus_ctx);
-			ipc_cleanup(&g_agent.ipc_ctx);
 			return 1;
 		}
 	}
@@ -1506,8 +1485,6 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	}
 
@@ -1535,29 +1512,14 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 		lota_err("Self-measurement failed: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	}
-
-	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
-		    LOTA_TOKEN_QUOTE_PCR_MASK);
-
-	/*
-	 * Hand the publishers to the IPC layer so title can name the one
-	 * it plays for.
-	 * The list outlives every connection: it is on this stack frame,
-	 * and ipc_cleanup() runs before this function returns.
-	 */
-	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
 
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
-		dbus_cleanup(g_agent.dbus_ctx);
-		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	} else {
 		int64_t age = tpm_aik_age(&g_agent.tpm_ctx);
@@ -1566,10 +1528,13 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 			  (long)age);
 	}
 
-	ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
-			  0);
-	publish_rotation_state(
-		aik_ttl, targets[0].has_profile ? &targets[0].paths : NULL);
+	/*
+	 * First sync before the first round:
+	 * it hands the socket owner empty verdict for every publisher and reads
+	 * back which of them a title is already playing for, so loop that starts
+	 * after a title did does not spend an interval reporting to nobody.
+	 */
+	attest_peer_sync(&peer, targets, target_count, &g_attest_counters);
 
 	/*
 	 * Auto-renew the CA-issued AIK certificate:
@@ -1622,6 +1587,15 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 		}
 
 		publish_aggregate_status(targets, target_count, &status_flags);
+
+		/*
+		 * Hand the round's verdicts to the socket owner and take back
+		 * the sessions and enrollment requests it has seen.
+		 * Done after the rounds so a title reads this round's answer,
+		 * not the previous one's.
+		 */
+		attest_peer_sync(&peer, targets, target_count,
+				 &g_attest_counters);
 
 		/*
 		 * Leave the TPM on the first publisher between rounds:
@@ -1681,7 +1655,37 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 					timeout_ms = wd_timeout_ms;
 			}
 
-			ipc_process(&g_agent.ipc_ctx, timeout_ms);
+			/*
+			 * Sleep on the socket owner's connection so a session
+			 * opening wakes this loop rather than waiting out the
+			 * interval.
+			 * With no connection there is nothing to wake on,
+			 * so the sleep is a plain one and the next sync retries
+			 * the link.
+			 */
+			{
+				int peer_fd = attest_peer_fd(&peer);
+
+				if (peer_fd >= 0) {
+					struct pollfd pfd = {
+						.fd = peer_fd,
+						.events = POLLIN,
+					};
+
+					if (poll(&pfd, 1, timeout_ms) > 0 &&
+					    attest_peer_drain(&peer))
+						break;
+				} else {
+					struct timespec req = {
+						.tv_sec = timeout_ms / 1000,
+						.tv_nsec = (long)(timeout_ms %
+								  1000) *
+							   1000000L,
+					};
+
+					nanosleep(&req, NULL);
+				}
+			}
 			if (wd_enabled)
 				sdnotify_watchdog_ping();
 		}
@@ -1689,9 +1693,8 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 
 	lota_info("Shutting down continuous attestation");
 	sdnotify_stopping();
+	attest_peer_close(&peer);
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
-	dbus_cleanup(g_agent.dbus_ctx);
-	ipc_cleanup(&g_agent.ipc_ctx);
 	return 0;
 }

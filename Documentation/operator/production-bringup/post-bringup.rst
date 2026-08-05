@@ -107,6 +107,32 @@ The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
 independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
 TLS socket misses the deadline and systemd restarts it.
 
+Which unit a title talks to
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``lota-agent.service`` owns ``/run/lota/lota.sock``, and it is the only unit
+that does. It is the always-on one, it is what ``lota-agent.socket`` activates,
+and it holds everything about the machine a title asks after: the BPF LSM
+state, the enforcement policy digest a token carries, the Secure Boot and IOMMU
+findings, and the publisher list a title selects from.
+
+What it does not hold is a verifier's verdict, so the attestation loop connects
+to that same socket as a local peer and trades state with it once per round --
+verdicts out, sessions and enrollment requests in. That exchange is refused
+unless the peer is the same agent binary running as the same user, and it is
+never something an integrator sends: the SDK has no such call.
+
+Two consequences worth knowing:
+
+* **Stopping ``lota-attest.service`` does not stop a title from getting an
+  answer.** The socket stays up and enforcement keeps running; what goes stale
+  is the verdict, which is exactly what a verifier is watching for. Session-gated
+  publishers stop being reported to, which is the safe direction.
+* **Stopping ``lota-agent.service`` takes the socket down with it.** A title
+  gets a connection failure rather than a wrong answer, and the attest loop
+  keeps attesting and retries the link every 30 s. Session gating and runtime
+  enrollment are off for that window, and the loop says so in the journal.
+
 The verifier, port, CA certificate and cadence come from
 ``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
 no attestation flags are hardcoded in the unit. A zero ``attest_interval``
