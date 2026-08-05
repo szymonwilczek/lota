@@ -634,6 +634,61 @@ static void test_secureboot_remediation(void)
 	PASS();
 }
 
+static void test_auto_bringup_opt_in(void)
+{
+	char dir[256];
+	char marker[320];
+	char cmd[320];
+
+	snprintf(dir, sizeof(dir), "/tmp/lota-inst-optin.%d", (int)getpid());
+	mkdir(dir, 0755);
+	snprintf(marker, sizeof(marker), "%s/auto-bringup", dir);
+	unsetenv("LOTA_AUTO_BRINGUP");
+
+	TEST("no marker and no variable is not consent");
+	if (probe_auto_bringup_at(marker) != 0) {
+		FAIL("bring-up opted in with nothing saying so");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("the marker file opts this host in");
+	write_text_file(dir, "auto-bringup", "");
+	if (probe_auto_bringup_at(marker) != 1) {
+		FAIL("marker file ignored");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("only an exact 1 in the environment counts as consent");
+	unlink(marker);
+	setenv("LOTA_AUTO_BRINGUP", "1", 1);
+	if (probe_auto_bringup_at(marker) != 1) {
+		FAIL("LOTA_AUTO_BRINGUP=1 ignored");
+		goto cleanup;
+	}
+
+	/* package hook inherits whatever environment the transaction had,
+	 * so anything but the exact value is not an answer */
+	setenv("LOTA_AUTO_BRINGUP", "0", 1);
+	if (probe_auto_bringup_at(marker) != 0) {
+		FAIL("LOTA_AUTO_BRINGUP=0 read as consent");
+		goto cleanup;
+	}
+	setenv("LOTA_AUTO_BRINGUP", "true", 1);
+	if (probe_auto_bringup_at(marker) != 0) {
+		FAIL("a non-1 value read as consent");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	unsetenv("LOTA_AUTO_BRINGUP");
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -651,6 +706,7 @@ int main(void)
 	test_machine_description();
 	test_efivar_payload();
 	test_secureboot_remediation();
+	test_auto_bringup_opt_in();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

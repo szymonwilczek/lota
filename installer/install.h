@@ -44,6 +44,9 @@
 #define PATH_POLICY_PUB_OVERRIDE "/etc/lota/policy.pub"
 #define PATH_ENFORCEMENT_PUB "/usr/lib/lota/enforcement.pub"
 #define PATH_LOTA_STATE_DIR "/var/lib/lota"
+
+/* Presence opts this host into unattended boot-path bring-up */
+#define PATH_AUTO_BRINGUP "/etc/lota/auto-bringup"
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 
 struct install_opts {
@@ -59,7 +62,17 @@ struct install_opts {
 	int status_only; /* Probe + report, change nothing */
 	int pause; /* Graceful agent shutdown, then stop */
 	int resume; /* Explain that resume means a reboot */
+	/*
+	 * Driven by package post-install hook rather than by person:
+	 * never prompts, never touches the boot path unless the host opted in,
+	 * and stops at the reboot checkpoint.
+	 */
+	int unattended;
 };
+
+/* Has this host opted into unattended boot-path changes?
+ * Reads /etc/lota/auto-bringup and $LOTA_AUTO_BRINGUP. */
+int install_auto_bringup_opted_in(void);
 
 struct install_ctx {
 	struct install_opts opts;
@@ -95,6 +108,15 @@ struct stage {
 	 * REBOOT verdict stops the run (exit 10) instead of deferring to
 	 * a later checkpoint */
 	int barrier;
+	/*
+	 * Rewrites how this machine boots:
+	 * the initramfs, or the kernel command line.
+	 * Unattended run leaves these alone unless the host asked for them,
+	 * because package install that changes the boot path of machine nobody
+	 * was sitting at is how player ends up with system that does not come
+	 * back the way it went down.
+	 */
+	int boot_path;
 };
 
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */

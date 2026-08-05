@@ -6,9 +6,11 @@
 #
 # Build from the repo root with LOTA_VERSION set; see the `packages` make target.
 #
-# BPF object is shipped UNSIGNED on purpose:
-# each adopter signs it with their own key during bring-up
-# (lota-install / make sign-bpf)
+# BPF object ships SIGNED, with its signature and the public key it verifies against:
+# enforcement is host-owned, and an object no host can verify is the "accepted here,
+# fails far away" shape this project keeps removing.
+# Fleet that signs with its own key replaces both files and keeps them across upgrades
+# (/etc/lota/policy.pub is a config file)
 name: lota-agent
 arch: amd64
 platform: linux
@@ -23,8 +25,10 @@ license: MIT AND GPL-2.0-only
 description: |
   LOTA host attestation agent
   Measured-boot TPM attestation client with a BPF LSM runtime-integrity
-  enforcer. Fails closed until host bring-up (lota-install) signs the BPF
-  object, installs the 90lota initramfs module and arms the PCR14 commitment.
+  enforcer. The post-install hook runs the host-local half of bring-up; the
+  90lota initramfs module and the kernel integrity floor wait for
+  `lota-install`, since they change how the machine boots. Fails closed until
+  both halves are done.
 
 changelog: ./build/changelog.gen.yaml
 

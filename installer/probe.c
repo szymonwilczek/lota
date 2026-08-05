@@ -829,6 +829,17 @@ int probe_conf_buf_has_key(const char *buf, const char *key)
 	return 0;
 }
 
+int probe_auto_bringup_at(const char *path)
+{
+	const char *env = getenv("LOTA_AUTO_BRINGUP");
+
+	if (env && env[0] == '1' && env[1] == '\0')
+		return 1;
+	if (!path)
+		return 0;
+	return access(path, F_OK) == 0;
+}
+
 int probe_conf_has_key(const char *conf_path, const char *key)
 {
 	char buf[16384] = { 0 };
