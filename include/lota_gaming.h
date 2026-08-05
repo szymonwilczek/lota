@@ -63,6 +63,14 @@ enum lota_error {
 	LOTA_ERR_NO_MEMORY = -9,
 	LOTA_ERR_RATE_LIMITED = -10,
 	LOTA_ERR_ACCESS_DENIED = -11,
+	/* the agent holds no enrollment for the requested publisher */
+	LOTA_ERR_UNKNOWN_PROFILE = -12,
+	/*
+	 * Nobody on this machine has agreed to answer to that publisher yet.
+	 * The player decides, not the title: show what the publisher would
+	 * learn and let them accept, then connect again.
+	 */
+	LOTA_ERR_CONSENT_REQUIRED = -13,
 };
 
 /*
@@ -150,11 +158,55 @@ struct lota_token {
 
 /*
  * Connection options
+ *
+ * struct_size is set by the caller to sizeof(struct lota_connect_opts)
+ * and is how this structure grows without second entry point:
+ * the library reads only the members the caller's build knew about, and caller
+ * built against a newer header than the library it links keeps working because
+ * the library ignores what it does not understand.
+ * Same contract as statx(2) and sched_setattr(2).
+ *
+ *     struct lota_connect_opts opts = { .struct_size = sizeof(opts) };
+ *
+ * Zero struct_size is refused rather than guessed at: it means the caller zeroed
+ * the structure and never set the field, and guessing size would read members
+ * the caller never wrote.
  */
 struct lota_connect_opts {
+	size_t struct_size; /* sizeof(struct lota_connect_opts) */
 	const char *socket_path; /* Custom socket path (NULL = default) */
 	int timeout_ms; /* Connection timeout in ms (0 = default 5000) */
+
+	/*
+	 * Which publisher this connection attests for:
+	 * the lowercase hex SHA-256 of that publisher's attestation-CA trust
+	 * anchor SubjectPublicKeyInfo (64 characters).
+	 * Publisher knows this about their own CA and ships it in the title.
+	 *
+	 * Player's machine holds one enrollment per publisher, so naming one
+	 * selects the AIK that signs this connection's tokens and makes
+	 * lota_is_attested() report that publisher's verdict instead of every
+	 * publisher on the host agreeing.
+	 *
+	 * NULL on a single-publisher host, which is every enterprise fleet:
+	 * the agent then answers with its first profile and the host-wide verdict.
+	 * Naming a publisher the machine has no enrollment for fails
+	 * the connection rather than falling back to another publisher's evidence.
+	 */
+	const char *publisher_profile;
 };
+
+/* hex SHA-256, without a terminator */
+#define LOTA_PUBLISHER_PROFILE_LEN 64
+
+/*
+ * Size of the structure as of the 1.0 surface.
+ * Caller passing less than this is refused;
+ * Caller passing more has members this library does not read.
+ */
+#define LOTA_CONNECT_OPTS_SIZE_MIN                               \
+	(offsetof(struct lota_connect_opts, publisher_profile) + \
+	 sizeof(const char *))
 
 /*
  * lota_connect - Connect to the LOTA agent
@@ -173,6 +225,22 @@ struct lota_client *lota_connect(void);
  * and timeout.
  */
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts);
+
+/*
+ * lota_connect_last_error - Why the last connect on this thread failed
+ *
+ * lota_connect() and lota_connect_opts() return NULL for several reasons
+ * and title has to tell them apart: LOTA_ERR_CONNECTION_FAILED is "no agent here",
+ * LOTA_ERR_UNKNOWN_PROFILE is
+ * "this machine has no enrollment with the publisher you named",
+ * and LOTA_ERR_CONSENT_REQUIRED is "nobody here has agreed to answer to them yet",
+ * which is a screen to show rather than error to report.
+ *
+ * Set by every connect attempt on the calling thread, including successful ones
+ * (LOTA_OK).
+ * Reading it after anything else is meaningless.
+ */
+int lota_connect_last_error(void);
 
 /*
  * lota_disconnect - Disconnect from the LOTA agent

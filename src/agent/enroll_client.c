@@ -21,6 +21,8 @@
 #include "agent.h"
 #include "enroll.h"
 #include "net.h"
+#include "profile.h"
+#include "publishers.h"
 #include "tpm.h"
 #include "lota_enroll.h"
 
@@ -300,7 +302,8 @@ out:
  * outdated the certificate. A persistence failure does not fail the
  * enrollment: the certificate is already stored.
  */
-static void persist_enroll_state(const char *server, int port,
+static void persist_enroll_state(const struct profile_paths *paths,
+				 const char *server, int port,
 				 const char *ca_cert, int skip_verify,
 				 const uint8_t *pin, const char *token)
 {
@@ -322,11 +325,11 @@ static void persist_enroll_state(const char *server, int port,
 	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0)
 		st.aik_generation = g_agent.tpm_ctx.aik_meta.generation;
 
-	if (enroll_state_save(&st) < 0)
+	if (enroll_state_save_path(paths->enroll_state, &st) < 0)
 		fprintf(stderr,
 			"Warning: could not record enrollment state at %s; "
 			"--reenroll will need the CA endpoint again\n",
-			LOTA_ENROLL_STATE_PATH);
+			paths->enroll_state);
 	OPENSSL_cleanse(&st, sizeof(st));
 }
 
@@ -334,12 +337,22 @@ static void persist_enroll_state(const char *server, int port,
  * Bring up the TPM, provision the AIK, run one enrollment against the CA,
  * store the certificate, and record the endpoint. Returns 0 on success,
  * negative errno on failure.
+ *
+ * Everything the enrollment writes lands in the profile the CA trust anchor
+ * names, so second publisher does not overwrite the first one's identity.
  */
-static int run_enrollment(const char *server, int port, const char *ca_cert,
-			  int skip_verify, const uint8_t *pin,
-			  const char *token)
+static int run_enrollment(const struct profile_paths *paths, const char *server,
+			  int port, const char *ca_cert, int skip_verify,
+			  const uint8_t *pin, const char *token)
 {
 	int ret;
+
+	ret = profile_dir_ensure(paths);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to create %s: %s\n", paths->dir,
+			strerror(-ret));
+		return ret;
+	}
 
 	ret = net_init();
 	if (ret < 0) {
@@ -357,6 +370,19 @@ static int run_enrollment(const char *server, int port, const char *ca_cert,
 		return ret;
 	}
 
+	ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
+	if (ret < 0) {
+		fprintf(stderr,
+			ret == -ENOSPC ?
+				"No TPM persistent handle left for another "
+				"publisher: %s\n" :
+				"Failed to bind the publisher profile: %s\n",
+			strerror(-ret));
+		tpm_cleanup(&g_agent.tpm_ctx);
+		net_cleanup();
+		return ret;
+	}
+
 	printf("Checking AIK...\n");
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -368,13 +394,42 @@ static int run_enrollment(const char *server, int port, const char *ca_cert,
 	}
 
 	ret = enroll_to_ca(&g_agent.tpm_ctx, server, port, ca_cert, skip_verify,
-			   pin, token, LOTA_AIK_CERT_PATH);
+			   pin, token, paths->aik_cert);
 	if (ret == 0)
-		persist_enroll_state(server, port, ca_cert, skip_verify, pin,
-				     token);
+		persist_enroll_state(paths, server, port, ca_cert, skip_verify,
+				     pin, token);
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
+	return ret;
+}
+
+/*
+ * Resolve the profile a CA trust anchor names.
+ *
+ * The anchor is mandatory for every enrollment path:
+ * it is the only input that tells two publishers apart, and the host keeps
+ * separate AIK per publisher so they cannot correlate the same machine across
+ * titles.
+ * Without it there is nothing to key the enrollment by.
+ */
+static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
+{
+	int ret;
+
+	if (!ca_cert) {
+		fprintf(stderr,
+			"ERROR: --ca-cert PATH is required.\n"
+			"The CA trust anchor names the publisher this host "
+			"enrolls with; its enrollment is stored under that "
+			"name.\n");
+		return -EINVAL;
+	}
+
+	ret = profile_paths_from_anchor(ca_cert, paths);
+	if (ret < 0)
+		fprintf(stderr, "Failed to read the CA trust anchor %s: %s\n",
+			ca_cert, strerror(-ret));
 	return ret;
 }
 
@@ -382,9 +437,28 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin, const char *token_file)
 {
 	char token[LOTA_ENROLL_MAX_TOKEN + 1];
+	struct profile_paths paths;
 	int ret;
 
 	printf("=== Attestation CA Enrollment ===\n\n");
+
+	if (resolve_profile(ca_cert, &paths) < 0) {
+		printf("\n=== Enrollment Failed ===\n");
+		return 1;
+	}
+	printf("Publisher profile: %s\n", paths.id);
+
+	/*
+	 * Running --enroll is the consent:
+	 * somebody with root named this CA and asked for the key.
+	 * Recording it here keeps one rule for the agent to enforce,
+	 * rather than one for operators and one for players
+	 */
+	if (profile_consent_record(&paths, getuid()) < 0)
+		fprintf(stderr,
+			"Warning: could not record consent for %s; the loop "
+			"may refuse to re-enroll later\n",
+			paths.id);
 
 	token[0] = '\0';
 	if (token_file) {
@@ -405,7 +479,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	 * return as "not a diagnostic, fall through to the daemon", so a
 	 * failed enrollment must not leak a negative errno upward.
 	 */
-	ret = run_enrollment(server, port, ca_cert, skip_verify, pin,
+	ret = run_enrollment(&paths, server, port, ca_cert, skip_verify, pin,
 			     token[0] ? token : NULL);
 	OPENSSL_cleanse(token, sizeof(token));
 
@@ -413,18 +487,23 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	return ret == 0 ? 0 : 1;
 }
 
-int do_reenroll(void)
+int do_reenroll(const char *ca_cert)
 {
+	struct profile_paths paths;
 	struct enroll_state st;
 	int ret;
 
-	ret = enroll_state_load(&st);
+	if (resolve_profile(ca_cert, &paths) < 0)
+		return 1;
+
+	ret = enroll_state_load_path(paths.enroll_state, &st);
 	if (ret == -ENOENT) {
 		fprintf(stderr,
-			"No saved enrollment endpoint at %s.\n"
-			"Run --enroll once with --ca-server first; --reenroll "
-			"then reuses that endpoint.\n",
-			LOTA_ENROLL_STATE_PATH);
+			"No saved enrollment for this CA at %s.\n"
+			"Run --enroll once with --ca-server and the same "
+			"--ca-cert first; --reenroll then reuses that "
+			"endpoint.\n",
+			paths.enroll_state);
 		return 1;
 	}
 	if (ret < 0) {
@@ -433,10 +512,15 @@ int do_reenroll(void)
 		return 1;
 	}
 
-	printf("=== Re-enrolling with %s:%d ===\n\n", st.ca_server, st.ca_port);
+	printf("=== Re-enrolling with %s:%d (profile %s) ===\n\n", st.ca_server,
+	       st.ca_port, paths.id);
 
-	ret = run_enrollment(st.ca_server, st.ca_port,
-			     st.ca_cert[0] ? st.ca_cert : NULL,
+	/*
+	 * endpoint comes from the record, the anchor from the caller:
+	 * the anchor is what selected this record in the first place,
+	 * so stale path in the record cannot send the re-enrollment somewhere else
+	 */
+	ret = run_enrollment(&paths, st.ca_server, st.ca_port, ca_cert,
 			     st.no_verify_tls,
 			     st.has_pin ? st.pin_sha256 : NULL,
 			     st.enroll_token[0] ? st.enroll_token : NULL);
@@ -447,15 +531,211 @@ int do_reenroll(void)
 	return ret == 0 ? 0 : 1;
 }
 
-int enroll_renew_cert(struct tpm_context *tpm)
+/*
+ * Build the profile paths for a publisher named by its identity.
+ * --allow-publisher runs before anything has enrolled, so there is no anchor
+ *  on disk to derive the identity from:
+ *  the title (or the publisher's own instructions) supplies the hex directly.
+ */
+static int paths_from_id(const char *profile_id, struct profile_paths *out)
+{
+	return profile_paths_from_id(LOTA_PROFILE_BASE_DIR, profile_id, out);
+}
+
+int do_allow_publisher(const char *profile_id)
+{
+	struct profile_paths paths;
+	time_t agreed = 0;
+	int ret;
+
+	ret = paths_from_id(profile_id, &paths);
+	if (ret < 0) {
+		fprintf(stderr,
+			"ERROR: '%s' is not a publisher identity.\n"
+			"It is the lowercase hex SHA-256 (64 characters) of "
+			"the publisher's CA trust anchor "
+			"SubjectPublicKeyInfo.\n",
+			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	if (profile_consent_time(&paths, &agreed) == 0) {
+		printf("Publisher %s was already agreed to.\n", paths.id);
+		return 0;
+	}
+
+	ret = profile_consent_record(&paths, getuid());
+	if (ret < 0) {
+		fprintf(stderr, "Failed to record consent for %s: %s\n",
+			paths.id, strerror(-ret));
+		return 1;
+	}
+
+	printf("Publisher %s may now enroll with this machine.\n", paths.id);
+	printf("They will hold one attestation key here, unlinkable to the "
+	       "one any other publisher holds.\n");
+	return 0;
+}
+
+static void print_publisher(const struct publisher_entry *e)
+{
+	printf("%s\n", e->id);
+
+	if (e->consented) {
+		char when[32];
+		struct tm tm;
+
+		gmtime_r(&e->consented_at, &tm);
+		strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%SZ", &tm);
+		printf("  agreed to      %s\n", when);
+	} else {
+		printf("  agreed to      no (nothing enrolls until it is)\n");
+	}
+
+	if (e->enrolled)
+		printf("  enrolled with  %s:%d\n", e->ca_server, e->ca_port);
+	else
+		printf("  enrolled with  not yet\n");
+
+	if (e->has_aik_handle)
+		printf("  attestation key at TPM handle 0x%08X\n",
+		       e->aik_handle);
+	else
+		printf("  attestation key none\n");
+
+	if (e->has_cert)
+		printf("  certificate    %lld s of validity left\n",
+		       (long long)e->cert_remaining_sec);
+	else
+		printf("  certificate    none stored\n");
+}
+
+int do_list_publishers(void)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	int ret;
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
+
+	if (count == 0) {
+		printf("This machine answers to no publisher.\n");
+		return 0;
+	}
+
+	printf("Publishers this machine answers to:\n\n");
+	for (size_t i = 0; i < count; i++) {
+		print_publisher(&entries[i]);
+		printf("\n");
+	}
+	printf("Each holds its own attestation key, so none of them can tell "
+	       "from the evidence\nthat this is the same machine another one "
+	       "sees. What every report contains is\nthe same for all of "
+	       "them and is listed in the operator documentation.\n");
+	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
+	return 0;
+}
+
+int do_forget_publisher(const char *profile_id)
+{
+	struct profile_paths paths;
+	uint32_t handle = 0;
+	bool had_key = false;
+	int ret;
+
+	ret = paths_from_id(profile_id, &paths);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: '%s' is not a publisher identity.\n",
+			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	if (profile_aik_handle_load(&paths, &handle) == 0) {
+		ret = tpm_init(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr,
+				"Failed to initialize TPM: %s\n"
+				"The key stays where it is; nothing was "
+				"deleted.\n",
+				tpm_strerror(ret));
+			return 1;
+		}
+		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
+		tpm_cleanup(&g_agent.tpm_ctx);
+		if (ret == 0) {
+			had_key = true;
+		} else if (ret != -ENOENT) {
+			fprintf(stderr,
+				"Failed to destroy the attestation key at "
+				"0x%08X: %s\n"
+				"Nothing was deleted: an orphaned key is "
+				"worse than a listed one.\n",
+				handle, tpm_strerror(ret));
+			return 1;
+		}
+	}
+
+	ret = publishers_forget(&paths);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to remove %s: %s\n", paths.dir,
+			strerror(-ret));
+		return 1;
+	}
+
+	printf("Publisher %s forgotten.\n", paths.id);
+	if (had_key)
+		printf("Its attestation key is destroyed; that identity "
+		       "cannot be handed back.\n");
+	printf("A title of theirs can ask again, and will need consent and a "
+	       "new key.\n");
+	return 0;
+}
+
+int enroll_profile_now(struct tpm_context *tpm,
+		       const struct profile_paths *paths, const char *ca_server,
+		       int ca_port, const char *ca_cert)
+{
+	int ret;
+
+	if (!tpm || !paths || !ca_server || !ca_cert)
+		return -EINVAL;
+
+	ret = profile_dir_ensure(paths);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * No enrollment token:
+	 * publisher admitting players cannot hand each of them a secret in advance,
+	 * so the CA admits on the EK's chain to a pinned root instead.
+	 * Operator fleet that does use tokens enrolls with --enroll before
+	 * the loop ever reaches this path.
+	 */
+	ret = enroll_to_ca(tpm, ca_server, ca_port, ca_cert, 0, NULL, NULL,
+			   paths->aik_cert);
+	if (ret < 0)
+		return ret;
+
+	persist_enroll_state(paths, ca_server, ca_port, ca_cert, 0, NULL, NULL);
+	return 0;
+}
+
+int enroll_renew_cert(struct tpm_context *tpm,
+		      const struct profile_paths *paths)
 {
 	struct enroll_state st;
 	int ret;
 
-	if (!tpm)
+	if (!tpm || !paths)
 		return -EINVAL;
 
-	ret = enroll_state_load(&st);
+	ret = enroll_state_load_path(paths->enroll_state, &st);
 	if (ret < 0)
 		return ret; /* -ENOENT: never enrolled, caller disables renew */
 
@@ -463,10 +743,10 @@ int enroll_renew_cert(struct tpm_context *tpm)
 			   st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
 			   st.has_pin ? st.pin_sha256 : NULL,
 			   st.enroll_token[0] ? st.enroll_token : NULL,
-			   LOTA_AIK_CERT_PATH);
+			   paths->aik_cert);
 	if (ret == 0)
 		persist_enroll_state(
-			st.ca_server, st.ca_port,
+			paths, st.ca_server, st.ca_port,
 			st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
 			st.has_pin ? st.pin_sha256 : NULL,
 			st.enroll_token[0] ? st.enroll_token : NULL);

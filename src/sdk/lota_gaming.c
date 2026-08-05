@@ -273,6 +273,10 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_RATE_LIMITED;
 	case LOTA_IPC_ERR_ACCESS_DENIED:
 		return LOTA_ERR_ACCESS_DENIED;
+	case LOTA_IPC_ERR_UNKNOWN_PROFILE:
+		return LOTA_ERR_UNKNOWN_PROFILE;
+	case LOTA_IPC_ERR_CONSENT_REQUIRED:
+		return LOTA_ERR_CONSENT_REQUIRED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -441,12 +445,93 @@ static int build_discovery_paths(char paths[][PATH_MAX], int max)
 	return n;
 }
 
+/*
+ * Bind the connection to one publisher, named by the hex SHA-256 of its CA trust
+ * anchor's SubjectPublicKeyInfo.
+ * Returns 0, or negative errno when the name is malformed
+ * or the agent has no profile for it.
+ */
+static int select_publisher(struct lota_client *client, const char *hex)
+{
+	struct lota_ipc_set_profile payload;
+	struct lota_ipc_request req;
+	struct lota_ipc_response resp;
+	size_t payload_len = 0;
+	size_t i;
+	int ret;
+
+	if (strlen(hex) != LOTA_PUBLISHER_PROFILE_LEN)
+		return -EINVAL;
+
+	for (i = 0; i < sizeof(payload.profile_id); i++) {
+		unsigned int byte;
+
+		if (sscanf(hex + i * 2, "%2x", &byte) != 1)
+			return -EINVAL;
+		payload.profile_id[i] = (uint8_t)byte;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.magic = LOTA_IPC_MAGIC;
+	req.version = LOTA_IPC_VERSION;
+	req.cmd = LOTA_IPC_CMD_SET_PROFILE;
+	req.payload_len = (uint32_t)sizeof(payload);
+
+	ret = send_request(client, &req, &payload, sizeof(payload));
+	if (ret < 0)
+		return ret;
+
+	ret = recv_response(client, &resp, NULL, 0, &payload_len);
+	if (ret < 0)
+		return ret;
+	if (resp.result == LOTA_IPC_ERR_CONSENT_REQUIRED)
+		return -EACCES;
+	/*
+	 * Only the agent's "no such publisher" reads as one.
+	 * Anything else -- malformed request, agent that refused the command
+	 * outright -- is fault on this side of the socket, and reporting it as
+	 * unknown publisher sends integrator to check the identity they sent,
+	 * which is not where the problem is.
+	 */
+	if (resp.result == LOTA_IPC_ERR_UNKNOWN_PROFILE)
+		return -ENOENT;
+	if (resp.result != LOTA_IPC_OK)
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * Why the last connect on this thread failed.
+ * Thread-local so two titles in one process (or title and its launcher) cannot
+ * read each other's answer.
+ */
+static _Thread_local int g_connect_error = LOTA_OK;
+
+int lota_connect_last_error(void)
+{
+	return g_connect_error;
+}
+
 struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 {
 	struct lota_client *client;
 	char discovery[MAX_DISCOVERY_PATHS][PATH_MAX];
 	int timeout_ms;
 	int fd = -1;
+
+	/*
+	 * Caller that passes options has to say how big they are.
+	 * Refusing zero here costs integrator one assignment and buys every
+	 * later member of this structure way in;
+	 * guessing would read memory the caller never wrote
+	 */
+	g_connect_error = LOTA_OK;
+
+	if (opts && opts->struct_size < LOTA_CONNECT_OPTS_SIZE_MIN) {
+		g_connect_error = LOTA_ERR_INVALID_ARG;
+		return NULL;
+	}
 
 	timeout_ms = (opts && opts->timeout_ms > 0) ? opts->timeout_ms :
 						      DEFAULT_TIMEOUT_MS;
@@ -474,17 +559,39 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		}
 	}
 
-	if (fd < 0)
+	if (fd < 0) {
+		g_connect_error = LOTA_ERR_CONNECTION_FAILED;
 		return NULL;
+	}
 
 	client = calloc(1, sizeof(*client));
 	if (!client) {
+		g_connect_error = LOTA_ERR_NO_MEMORY;
 		close(fd);
 		return NULL;
 	}
 
 	client->fd = fd;
 	client->timeout_ms = timeout_ms;
+
+	if (opts && opts->publisher_profile) {
+		int sel = select_publisher(client, opts->publisher_profile);
+
+		/* Caller asked to attest for a specific publisher and the agent
+		 * cannot answer for that one.
+		 * Failing the connection is the point:
+		 * falling back would hand the title another publisher's evidence
+		 * under its own name
+		 */
+		if (sel < 0) {
+			g_connect_error =
+				sel == -EACCES ? LOTA_ERR_CONSENT_REQUIRED :
+				sel == -EINVAL ? LOTA_ERR_INVALID_ARG :
+						 LOTA_ERR_UNKNOWN_PROFILE;
+			lota_disconnect(client);
+			return NULL;
+		}
+	}
 
 	return client;
 }
@@ -595,8 +702,11 @@ int lota_get_status(struct lota_client *client, struct lota_status *status)
 	if (!status)
 		return LOTA_ERR_INVALID_ARG;
 
+	memset(status, 0, sizeof(*status));
+
 	/* build request */
 	memset(&req, 0, sizeof(req));
+	memset(&ipc_status, 0, sizeof(ipc_status));
 	req.magic = LOTA_IPC_MAGIC;
 	req.version = LOTA_IPC_VERSION;
 	req.cmd = LOTA_IPC_CMD_GET_STATUS;
@@ -1144,6 +1254,10 @@ const char *lota_strerror(int error)
 		return "Request rate limited";
 	case LOTA_ERR_ACCESS_DENIED:
 		return "Access denied";
+	case LOTA_ERR_UNKNOWN_PROFILE:
+		return "This machine holds no enrollment for that publisher";
+	case LOTA_ERR_CONSENT_REQUIRED:
+		return "Nobody on this machine has agreed to answer to that publisher";
 	default:
 		return "Unknown error";
 	}

@@ -1,10 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Post-install for lota-agent: refresh systemd, restore fs-verity.
-# Bring-up (90lota initramfs, PCR14 arming) is
-# deliberately left to lota-install, and BPF object signing to the operator,
-# so a package install or upgrade never rewrites the boot path or signs
-# trust material on its own.
+# Bring-up (90lota initramfs, PCR14 arming) is deliberately left to lota-install,
+# so package install or upgrade never rewrites the boot path.
+# The enforcement object arrives signed by whoever built this package, with matching
+# public key, because enforcement is host-owned: one kernel, one LSM, and no publisher
+# pushes kernel policy onto a player's machine.
 set -e
 
 # Create the 'lota' socket group from the shipped sysusers.d fragment.
@@ -34,12 +35,14 @@ fi
 cat <<EOF
 lota-agent installed. Agent fails closed until host bring-up completes.
 
-BPF enforcement object ships UNSIGNED, and a package upgrade replaces it,
-so sign it with your operator key (lota-install verifies the signature, it
-never signs on this host):
+The BPF enforcement object ships signed, next to its signature and the public
+key it verifies against (/usr/lib/lota/enforcement.pub). All three are
+replaced together by an upgrade, so enforcement still arms after one.
 
-  sudo lota-agent --sign-policy /usr/lib/lota/lota_lsm.bpf.o \\
-      --signing-key /etc/lota/policy.key
+A fleet that signs enforcement with its own key re-signs the object and puts
+its key at /etc/lota/policy.pub, which no package owns and no upgrade
+touches; the agent prefers it whenever it is there. lota-install verifies the
+signature and never signs on this host.
 
 Then run \`lota-install\` (or the documented operator bring-up) to install the
 90lota dracut module, arm the PCR14 boot commitment and enable fs-verity. The

@@ -42,6 +42,7 @@
 #include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"
+#include "profile.h"
 #include "sdnotify.h"
 #include "selftest.h"
 #include "shutdown.h"
@@ -88,6 +89,8 @@ static int run_daemon(const struct run_daemon_params *params)
 	struct lota_config *cfg;
 	sigset_t mask;
 	struct epoll_event ev;
+	struct profile_paths profile_storage;
+	const struct profile_paths *profile = NULL;
 
 	if (!params)
 		return -EINVAL;
@@ -106,6 +109,18 @@ static int run_daemon(const struct run_daemon_params *params)
 	cfg = params->cfg;
 
 	lota_info("LOTA agent starting");
+
+	if (cfg && cfg->ca_cert[0]) {
+		int prof_ret = profile_paths_from_anchor(cfg->ca_cert,
+							 &profile_storage);
+
+		if (prof_ret == 0)
+			profile = &profile_storage;
+		else
+			lota_warn("Cannot read the CA trust anchor %s (%s): "
+				  "running without a publisher profile",
+				  cfg->ca_cert, strerror(-prof_ret));
+	}
 
 	/*
 	 * Daemon-mode hardening: refuse to start under a tracer and install
@@ -221,6 +236,24 @@ static int run_daemon(const struct run_daemon_params *params)
 		status_flags |= LOTA_STATUS_TPM_OK;
 
 		/*
+		 * The AIK a token is quoted with has to be the one whose
+		 * certificate the relying party holds, so the daemon uses the same
+		 * publisher profile the enrollment did: the one the configured CA
+		 * trust anchor names.
+		 * With no anchor configured the host has no publisher and keeps
+		 * its own AIK.
+		 */
+		if (profile) {
+			ret = tpm_bind_profile(&g_agent.tpm_ctx, profile);
+			if (ret < 0) {
+				lota_err("Failed to bind the publisher "
+					 "profile: %s",
+					 strerror(-ret));
+				goto cleanup_tpm;
+			}
+		}
+
+		/*
 		 * load metadata BEFORE provisioning the AIK so a fresh
 		 * install (no /var/lib/lota/aik_meta and no persistent
 		 * AIK handle yet) takes the ENOENT branch that initialises
@@ -260,10 +293,11 @@ static int run_daemon(const struct run_daemon_params *params)
 
 			/*
 			 * surface the rotation state over D-Bus from
-			 * the loaded metadata
+			 * the loaded metadata, read against the same profile
 			 */
 			publish_rotation_state(
-				params->cfg ? params->cfg->aik_ttl : 0);
+				params->cfg ? params->cfg->aik_ttl : 0,
+				profile);
 		}
 
 		lota_info("Performing self-measurement");
@@ -535,10 +569,15 @@ int main(int argc, char *argv[])
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		fprintf(stderr, "ERROR: BPF object signature verification "
-				"requires --policy-pubkey\n"
-				"Set policy_pubkey in config or pass "
-				"--policy-pubkey PATH.\n");
+		fprintf(stderr,
+			"ERROR: no key to verify the enforcement object "
+			"against.\n"
+			"The agent package ships one at " LOTA_ENFORCEMENT_PUBKEY_PATH
+			";\n"
+			"a fleet that signs enforcement itself puts its key at " LOTA_POLICY_PUBKEY_OVERRIDE
+			"\n"
+			"or names one with policy_pubkey / "
+			"--policy-pubkey PATH.\n");
 		pidfile_remove(opts.pid_file_path, pid_fd);
 		return 1;
 	}

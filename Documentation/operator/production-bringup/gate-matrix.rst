@@ -43,8 +43,11 @@ current tree.
        ``ima_appraise=enforce``.
    * - BPF object Ed25519 signature
      - ``src/agent/bpf_loader.c::verify_bpf_object_signature()``
-     - Sign ``lota_lsm.bpf.o`` against the operator key, install the ``.sig``
-       next to the ``.o``, point ``policy_pubkey`` at the PEM.
+     - Ships signed: the agent package carries ``lota_lsm.bpf.o``, its
+       ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, all
+       replaced together on upgrade. A fleet that signs enforcement itself
+       re-signs the object and puts its key at ``/etc/lota/policy.pub``, which
+       the agent prefers over the packaged one.
    * - AIK persistent handle + metadata in sync
      - ``src/agent/tpm.c::tpm_aik_load_metadata()``
      - Evict any stale persistent handle (``tpm2_evictcontrol``) before first

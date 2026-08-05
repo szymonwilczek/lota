@@ -16,6 +16,74 @@ Build with ``make examples`` from the repository root. The binary lands at
 ``build/examples/demo_anticheat`` and links against the gaming + anticheat +
 server SDKs that ``make all`` already produces under ``build/``.
 
+Configuring the session
+-----------------------
+
+``struct lota_ac_config`` starts with ``struct_size``, which the caller sets to
+its own ``sizeof``. That is what lets the structure gain members after 1.0
+without a second entry point: the library reads only the members the caller's
+size covers, so a game built against a newer header than the library it links
+keeps working. A configuration that leaves the field zero is refused rather
+than guessed at -- reading members the caller never wrote is what the field
+exists to prevent -- so an integrator copying this reference should copy the
+first line with it:
+
+.. code-block:: c
+
+   struct lota_ac_config cfg = {
+           .struct_size = sizeof(cfg),
+           .provider = LOTA_AC_PROVIDER_EAC,
+           .game_id = "trust-pong",
+           .direct = 1,
+   };
+
+``struct lota_connect_opts`` carries the same first member for the same
+reason, on the rare path where a game opens the agent connection itself
+instead of letting ``lota_ac_init()`` do it.
+
+On a player's machine, which may hold enrollments with several publishers, set
+``publisher_profile`` to the lowercase hex SHA-256 of your own attestation CA's
+trust anchor SubjectPublicKeyInfo:
+
+.. code-block:: sh
+
+   openssl x509 -in ca-tls.crt -pubkey -noout \
+       | openssl pkey -pubin -outform der \
+       | sha256sum
+
+The session's tokens are then signed by the AIK that machine enrolled with
+*your* CA, and its attested state is your verifier's verdict rather than every
+publisher on the host agreeing. Leave it NULL on a single-publisher host. A
+machine that holds no enrollment for the named publisher fails the connection
+rather than answering with another publisher's evidence.
+
+Nothing enrolls with a publisher until somebody on that machine agrees to it,
+so a first run there fails the connection with ``LOTA_ERR_CONSENT_REQUIRED``
+(read it with ``lota_connect_last_error()``; ``lota_ac_init()`` returns NULL
+and the same call answers why). That is a screen to show, not an error to
+report: say what your verifier would receive, and call ``lota-agent
+--allow-publisher <your hex>`` when the player accepts. Distinguish it from
+``LOTA_ERR_CONNECTION_FAILED``, which means no agent is installed at all::
+
+   struct lota_client *c = lota_connect_opts(&opts);
+
+   if (!c) {
+           switch (lota_connect_last_error()) {
+           case LOTA_ERR_CONSENT_REQUIRED:  /* ask the player */
+           case LOTA_ERR_UNKNOWN_PROFILE:   /* consented, not enrolled yet */
+           case LOTA_ERR_CONNECTION_FAILED: /* no agent on this machine */
+           case LOTA_ERR_INVALID_ARG:       /* this title's request was bad */
+           default:
+                   break;
+           }
+   }
+
+``LOTA_ERR_INVALID_ARG`` is the one that is not about the player: the identity
+was malformed, the options were not sized, or the agent refused the request
+itself. It never means the publisher is unknown to that machine, so a title
+that hits it should report a fault rather than send the player to a consent
+screen.
+
 Flags
 -----
 

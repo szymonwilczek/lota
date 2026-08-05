@@ -29,6 +29,7 @@
 #include "agent.h"
 #include "aik_cert.h"
 #include "attest.h"
+#include "attest_targets.h"
 #include "bpf_loader.h"
 #include "dbus.h"
 #include "enroll.h"
@@ -261,8 +262,14 @@ int export_policy(int mode)
 	return 0;
 }
 
+/*
+ * @aik_cert_path: the enrolling profile's certificate, or NULL when no CA
+ *                 trust anchor is configured and the host therefore has no
+ *                 profile to read one from.
+ */
 static int build_attestation_report(const struct verifier_challenge *challenge,
-				    struct lota_attestation_report *report)
+				    struct lota_attestation_report *report,
+				    const char *aik_cert_path)
 {
 	struct tpm_quote_response quote_resp;
 	struct iommu_status iommu_status;
@@ -539,14 +546,19 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	report->tpm.ek_cert_size = 0;
 
 	/*
-	 * include the CA-issued AIK certificate from the last --enroll. The
-	 * verifier chains it to the attestation CA root to authenticate the
-	 * AIK; an unenrolled host carries no certificate and is rejected
-	 * under the production require-cert default
+	 * Include the CA-issued AIK certificate from the last --enroll against
+	 * this profile.
+	 * Verifier chains it to the attestation CA root to authenticate the AIK;
+	 * unenrolled host carries no certificate and is rejected under
+	 * the production require-cert default
 	 */
-	{
+	if (!aik_cert_path) {
+		report->tpm.aik_cert_size = 0;
+		lota_dbg("No CA trust anchor configured, so no profile to read "
+			 "an AIK certificate from");
+	} else {
 		size_t aik_cert_size = 0;
-		int aret = lota_read_file_bounded(LOTA_AIK_CERT_PATH,
+		int aret = lota_read_file_bounded(aik_cert_path,
 						  report->tpm.aik_certificate,
 						  LOTA_MAX_AIK_CERT_SIZE,
 						  &aik_cert_size);
@@ -603,7 +615,8 @@ cleanup:
  * Returns: 0 on success, negative errno on failure
  */
 static int attest_once(const char *server, int port, const char *ca_cert,
-		       int skip_verify, const uint8_t *pin_sha256, int verbose)
+		       int skip_verify, const uint8_t *pin_sha256,
+		       const struct profile_paths *paths, int verbose)
 {
 	struct net_context net_ctx;
 	int net_ctx_inited = 0;
@@ -660,7 +673,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		print_hex("  Nonce", challenge.nonce, LOTA_NONCE_SIZE);
 	}
 
-	ret = build_attestation_report(&challenge, &report);
+	ret = build_attestation_report(&challenge, &report,
+				       paths ? paths->aik_cert : NULL);
 	if (ret < 0) {
 		if (verbose)
 			fprintf(stderr, "Failed to build report: %s\n",
@@ -764,12 +778,51 @@ cleanup:
 	return ret;
 }
 
-int do_attest(const char *server, int port, const char *ca_cert,
-	      int skip_verify, const uint8_t *pin_sha256)
+/*
+ * Resolve the publisher profile the CA trust anchor names, into storage
+ * the caller owns for the lifetime of the attestation.
+ *
+ * Host attesting without an anchor has no profile, so it has no enrolled
+ * certificate to present and verifier refuses it under the production
+ * require-cert default.
+ *
+ * Say that here, where the anchor is missing, rather than leaving operator
+ * to read it off a rejection.
+ */
+static const struct profile_paths *
+resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 {
 	int ret;
 
+	if (!ca_cert) {
+		lota_warn("No CA trust anchor configured: attesting without a "
+			  "publisher profile, so no CA-issued AIK certificate "
+			  "is presented");
+		return NULL;
+	}
+
+	ret = profile_paths_from_anchor(ca_cert, storage);
+	if (ret < 0) {
+		lota_warn("Cannot read the CA trust anchor %s (%s): attesting "
+			  "without a publisher profile",
+			  ca_cert, strerror(-ret));
+		return NULL;
+	}
+
+	lota_dbg("Publisher profile %s", storage->id);
+	return storage;
+}
+
+int do_attest(const char *server, int port, const char *ca_cert,
+	      int skip_verify, const uint8_t *pin_sha256)
+{
+	struct profile_paths storage;
+	const struct profile_paths *paths;
+	int ret;
+
 	printf("=== Remote Attestation ===\n\n");
+
+	paths = resolve_attest_profile(ca_cert, &storage);
 
 	/*
 	 * Long-running attestation path: install tracer refusal and the
@@ -797,6 +850,18 @@ int do_attest(const char *server, int port, const char *ca_cert,
 			tpm_strerror(ret));
 		net_cleanup();
 		return 1;
+	}
+
+	if (paths) {
+		ret = tpm_bind_profile(&g_agent.tpm_ctx, paths);
+		if (ret < 0) {
+			fprintf(stderr,
+				"Failed to bind the publisher profile: %s\n",
+				strerror(-ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			net_cleanup();
+			return 1;
+		}
 	}
 
 	printf("Checking AIK...\n");
@@ -836,7 +901,8 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 
-	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, 1);
+	ret = attest_once(server, port, ca_cert, skip_verify, pin_sha256, paths,
+			  1);
 
 	printf("\n=== Attestation %s ===\n",
 	       ret == 0 ? "Successful" : "Failed");
@@ -892,8 +958,12 @@ static uint32_t reconcile_tpm_lockout(uint32_t flags)
  * whether the issued certificate has been outdated by a local rotation
  * (the enrolled generation no longer matching the live one), which an
  * operator clears with a guided lota-agent --reenroll.
+ *
+ * paths names the profile whose enrollment is compared against the live AIK;
+ * NULL when no CA trust anchor is configured, in which case there is no enrollment
+ * to compare and the flag stays clear.
  */
-void publish_rotation_state(uint32_t aik_ttl)
+void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 {
 	struct tpm_context *tpm = &g_agent.tpm_ctx;
 	struct enroll_state st;
@@ -913,7 +983,7 @@ void publish_rotation_state(uint32_t aik_ttl)
 	 * rotation has outdated the stored certificate.
 	 * With no record there is no way to tell, so do not raise the flag
 	 */
-	if (enroll_state_load(&st) == 0)
+	if (paths && enroll_state_load_path(paths->enroll_state, &st) == 0)
 		reenroll_required = st.aik_generation !=
 				    tpm->aik_meta.generation;
 
@@ -923,30 +993,455 @@ void publish_rotation_state(uint32_t aik_ttl)
 			    (uint64_t)tpm->grace_deadline, reenroll_required);
 }
 
+static uint64_t monotonic_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
 /*
- * Continuous attestation loop.
- * Re-attests every interval_sec seconds with exponential backoff on failure.
+ * Point the TPM at a target's publisher and reload nothing else:
+ * the metadata and the userAuth are dropped by the bind and read back on demand
+ * for the key that is now selected.
  */
-int do_continuous_attest(const char *server, int port, const char *ca_cert,
-			 int skip_verify, const uint8_t *pin_sha256,
-			 int interval_sec, uint32_t aik_ttl)
+static int bind_target(struct attest_target *t)
 {
 	int ret;
-	int consecutive_failures = 0;
-	int backoff_sec = 0;
-	time_t last_success = 0;
-	time_t now;
-	uint32_t status_flags = 0;
+
+	if (!t->has_profile)
+		return 0;
+
+	ret = tpm_bind_profile(&g_agent.tpm_ctx, &t->paths);
+	if (ret < 0) {
+		lota_err("Cannot bind the publisher profile for %s:%d: %s",
+			 t->server, t->port, strerror(-ret));
+		return ret;
+	}
+
+	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		lota_err("AIK unavailable for %s:%d: %s", t->server, t->port,
+			 tpm_strerror(ret));
+		return ret;
+	}
+
+	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+	if (ret < 0) {
+		lota_err("Cannot load AIK metadata for %s:%d: %s", t->server,
+			 t->port, tpm_strerror(ret));
+		return ret;
+	}
+	return 0;
+}
+
+/*
+ * Has this publisher ever enrolled?
+ *
+ * Record is written by the enrollment ceremony, whether that ran as -enroll
+ * at install time or on demand here, so its absence is what "never enrolled" means.
+ */
+static bool target_is_enrolled(const struct attest_target *t)
+{
+	struct enroll_state st;
+	bool ok;
+
+	if (!t->has_profile)
+		return false;
+
+	ok = enroll_state_load_path(t->paths.enroll_state, &st) == 0;
+	OPENSSL_cleanse(&st, sizeof(st));
+	return ok;
+}
+
+/*
+ * Enroll a publisher this host has never enrolled with.
+ *
+ * This is the install step player cannot perform:
+ * at install time there is no publisher yet, and the CA belongs to whoever they
+ * buy a title from.
+ * Profile carries the CA endpoint and its anchor, so the first time the loop
+ * reaches an unenrolled publisher -- or a title asks for one -- the ceremony runs
+ * here instead.
+ *
+ * Failure backs off: CA that is down must not be hammered once per round,
+ * and the host keeps working for every other publisher meanwhile.
+ */
+static bool enroll_target_if_needed(struct attest_target *t)
+{
+	uint64_t now_ms = monotonic_ms();
+	int ret;
+
+	if (!t->has_profile || target_is_enrolled(t))
+		return true;
+
+	t->enroll_pending = false;
+
+	{
+		time_t agreed = 0;
+		int cret = profile_consent_time(&t->paths, &agreed);
+
+		if (cret == -ENOENT) {
+			lota_warn("%s:%d has no enrollment and nobody has "
+				  "agreed to answer to publisher %s; run "
+				  "--allow-publisher %s to record that",
+				  t->server, t->port, t->paths.id, t->paths.id);
+			return false;
+		}
+		if (cret < 0) {
+			lota_warn("Consent record for publisher %s is "
+				  "unreadable (%s); refusing to enroll",
+				  t->paths.id, strerror(-cret));
+			return false;
+		}
+	}
+
+	if (t->ca[0] == '\0') {
+		lota_warn("%s:%d has no enrollment and its profile names no "
+			  "attestation CA; run --enroll for it",
+			  t->server, t->port);
+		return false;
+	}
+	if (now_ms < t->next_enroll_ms)
+		return false;
+
+	lota_info("Enrolling with %s:%d for publisher %s (first time this "
+		  "host has attested for them)",
+		  t->ca, t->ca_port, t->paths.id);
+
+	ret = bind_target(t);
+	if (ret == 0)
+		ret = enroll_profile_now(&g_agent.tpm_ctx, &t->paths, t->ca,
+					 t->ca_port, t->ca_cert);
+	if (ret == 0) {
+		t->enroll_backoff = 0;
+		lota_info("Enrolled with %s:%d", t->ca, t->ca_port);
+		return true;
+	}
+
+	{
+		int shift = t->enroll_backoff;
+		int delay;
+
+		if (shift > 5)
+			shift = 5;
+		t->enroll_backoff++;
+		delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+		if (delay > MAX_BACKOFF_SECONDS)
+			delay = MAX_BACKOFF_SECONDS;
+		t->next_enroll_ms = now_ms + (uint64_t)delay * 1000;
+		lota_warn("Enrollment with %s:%d failed (%s); retry in %ds",
+			  t->ca, t->ca_port, strerror(-ret), delay);
+	}
+	return false;
+}
+
+/* Rotate the bound AIK when its TTL has elapsed */
+static void rotate_bound_aik_if_due(const struct attest_target *t,
+				    uint32_t aik_ttl)
+{
+	int ret;
+
+	if (!g_agent.tpm_ctx.aik_meta_loaded)
+		return;
+	if (tpm_aik_needs_rotation(&g_agent.tpm_ctx, aik_ttl) != 1)
+		return;
+
+	lota_info("AIK rotation due (gen %lu, age %ld s)",
+		  (unsigned long)g_agent.tpm_ctx.aik_meta.generation,
+		  (long)tpm_aik_age(&g_agent.tpm_ctx));
+
+	ret = tpm_rotate_aik(&g_agent.tpm_ctx);
+	if (ret < 0)
+		lota_err("AIK rotation failed: %s", tpm_strerror(ret));
+	else
+		lota_info("AIK rotated -> generation %lu",
+			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
+
+	/*
+	 * Republish so the rotation, its grace window, and re-enrollment surface
+	 * over D-Bus immediately
+	 */
+	publish_rotation_state(aik_ttl, t->has_profile ? &t->paths : NULL);
+}
+
+/* Renew this target's CA-issued AIK certificate before it lapses */
+static void renew_target_cert_if_due(struct attest_target *t, uint32_t aik_ttl)
+{
+	int64_t remaining = 0, total = 0;
+	uint64_t mono_ms = monotonic_ms();
+	int ret;
+
+	if (!t->auto_renew || mono_ms < t->next_renew_ms)
+		return;
+	if (aik_cert_lifetime_path(t->paths.aik_cert, &remaining, &total) != 0)
+		return;
+	if (!aik_cert_renew_due(remaining, total))
+		return;
+
+	lota_info("AIK certificate renewal due for %s:%d (%lld s left of "
+		  "%lld s)",
+		  t->server, t->port, (long long)remaining, (long long)total);
+
+	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths);
+	if (ret == 0) {
+		t->renew_backoff = 0;
+		lota_info("AIK certificate renewed for %s:%d", t->server,
+			  t->port);
+		publish_rotation_state(aik_ttl, &t->paths);
+		return;
+	}
+
+	{
+		int shift = t->renew_backoff;
+		int delay;
+
+		if (shift > 5)
+			shift = 5;
+		t->renew_backoff++;
+		delay = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+		if (delay > MAX_BACKOFF_SECONDS)
+			delay = MAX_BACKOFF_SECONDS;
+		t->next_renew_ms = mono_ms + (uint64_t)delay * 1000;
+		lota_warn("AIK certificate renewal failed for %s:%d (%s); "
+			  "retry in %ds, cert expires in %lld s",
+			  t->server, t->port, strerror(-ret), delay,
+			  (long long)remaining);
+		sdnotify_status("AIK cert renewal failing for %s, expires in "
+				"%lld s",
+				t->server, (long long)remaining);
+	}
+}
+
+/*
+ * Is this publisher owed a report right now?
+ *
+ * Session-gated target reports only while a title of that publisher's is running.
+ * When the last one exits, reporting stops and the verdict is dropped:
+ * claiming machine is attested for publisher nobody is reporting to would be
+ * asserting something no longer being checked.
+ */
+static bool target_reporting_now(struct attest_target *t)
+{
+	if (!t->session_gated || t->sessions > 0)
+		return true;
+
+	if (t->attested) {
+		lota_info("No session left for %s:%d; reporting stops until a "
+			  "title of theirs runs again",
+			  t->server, t->port);
+		t->attested = false;
+		t->valid_until = 0;
+	}
+	return false;
+}
+
+/*
+ * One round against one target: how long to wait before the next one.
+ * Failure backs this target off; the other publishers keep their cadence.
+ */
+static int attest_target_round(struct attest_target *t, int skip_verify,
+			       const uint8_t *pin_sha256, uint32_t aik_ttl)
+{
+	time_t now = time(NULL);
+	int ret;
+
+	if (!target_reporting_now(t))
+		return t->interval;
+
+	if (!enroll_target_if_needed(t)) {
+		/* Nothing to report with:
+		 * no certificate, so every verifier refuses.
+		 * Wait for the enrollment backoff instead of sending evidence
+		 * nobody can chain. */
+		t->attested = false;
+		t->valid_until = 0;
+		return t->interval;
+	}
+
+	ret = bind_target(t);
+	if (ret == 0) {
+		rotate_bound_aik_if_due(t, aik_ttl);
+		renew_target_cert_if_due(t, aik_ttl);
+
+		lota_dbg("Attestation round starting for %s:%d", t->server,
+			 t->port);
+		ret = attest_once(t->server, t->port,
+				  t->ca_cert[0] ? t->ca_cert : NULL,
+				  skip_verify, pin_sha256,
+				  t->has_profile ? &t->paths : NULL, 0);
+	}
+
+	if (ret == 0) {
+		lota_info("Attestation successful (%s:%d)", t->server, t->port);
+		t->consecutive_failures = 0;
+		t->backoff_sec = 0;
+		t->last_success = now;
+		t->attested = true;
+		t->valid_until = (uint64_t)(now + t->interval +
+					    ATTEST_TOKEN_VALIDITY_SLACK_SEC);
+		ipc_record_attestation(&g_agent.ipc_ctx, true);
+		return t->interval;
+	}
+
+	t->consecutive_failures++;
+	{
+		int shift = t->consecutive_failures - 1;
+
+		if (shift > 5)
+			shift = 5; /* 10 * 2^5 = 320 > MAX_BACKOFF_SECONDS */
+		t->backoff_sec = ATTEST_BACKOFF_BASE_SEC * (1 << shift);
+	}
+	if (t->backoff_sec > MAX_BACKOFF_SECONDS)
+		t->backoff_sec = MAX_BACKOFF_SECONDS;
+
+	lota_err("Attestation FAILED for %s:%d (attempt %d, backoff %ds)",
+		 t->server, t->port, t->consecutive_failures, t->backoff_sec);
+	if (t->last_success > 0)
+		lota_warn("Last success for %s:%d: %ld seconds ago", t->server,
+			  t->port, (long)(now - t->last_success));
+
+	/* one round may be a blip; three in a row is a host nobody trusts */
+	if (t->consecutive_failures >= 3) {
+		t->attested = false;
+		t->valid_until = 0;
+	}
+	ipc_record_attestation(&g_agent.ipc_ctx, false);
+
+	{
+		/* jitter so a fleet does not retry in lockstep */
+		int jitter_max = t->backoff_sec / 2;
+		int sleep_time;
+		int jitter;
+
+		if (jitter_max < 1)
+			jitter_max = 1;
+		jitter = (int)(rand_u32_best_effort() %
+			       (uint32_t)(jitter_max + 1));
+		sleep_time = t->backoff_sec + jitter;
+		if (sleep_time > MAX_BACKOFF_SECONDS)
+			sleep_time = MAX_BACKOFF_SECONDS;
+		return sleep_time;
+	}
+}
+
+/*
+ * Host's single answer to "is this machine attested".
+ *
+ * Every configured publisher has to be satisfied, and the window closes at
+ * the earliest of theirs.
+ */
+static void publish_aggregate_status(const struct attest_target *targets,
+				     size_t count, uint32_t *status_flags)
+{
 	uint64_t valid_until = 0;
+	size_t considered = 0;
+	bool all = true;
+
+	for (size_t i = 0; i < count; i++) {
+		/*
+		 * Publisher nobody is playing for is not reporting, so it has
+		 * no verdict to contribute.
+		 * Counting its silence as failure would leave a consumer host
+		 * permanently unattested; counting it as success would assert
+		 * something nothing is checking
+		 */
+		if (targets[i].session_gated && targets[i].sessions == 0)
+			continue;
+
+		considered++;
+		if (!targets[i].attested) {
+			all = false;
+			break;
+		}
+		if (valid_until == 0 || targets[i].valid_until < valid_until)
+			valid_until = targets[i].valid_until;
+	}
+
+	/* nobody is reporting, so there is no live verdict to report either */
+	if (considered == 0)
+		all = false;
+
+	if (all)
+		*status_flags |= LOTA_STATUS_ATTESTED;
+	else
+		*status_flags &= ~LOTA_STATUS_ATTESTED;
+
+	ipc_update_status(&g_agent.ipc_ctx,
+			  reconcile_tpm_lockout(*status_flags),
+			  all ? valid_until : 0);
+
+	if (all)
+		sdnotify_status("Attested (%zu publisher%s), valid until %lu",
+				considered, considered == 1 ? "" : "s",
+				(unsigned long)valid_until);
+	else if (considered == 0)
+		sdnotify_status("Idle: no title running, nothing reported");
+	else
+		sdnotify_status("Attestation incomplete");
+}
+
+/*
+ * Continuous attestation loop.
+ * Re-attests every target on its own interval, with exponential backoff on failure.
+ */
+int do_continuous_attest(const struct lota_config *cfg, const char *server,
+			 int port, const char *ca_cert, int skip_verify,
+			 const uint8_t *pin_sha256, int interval_sec,
+			 uint32_t aik_ttl)
+{
+	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count = 0;
+	uint32_t status_flags = 0;
 	uint64_t wd_usec = 0;
 	bool wd_enabled;
-	bool auto_renew = false;
-	int renew_backoff = 0;
-	uint64_t next_renew_ms = 0;
+	int ret;
 
 	lota_info("Continuous attestation starting");
-	lota_info("Server: %s:%d, interval: %d seconds", server, port,
-		  interval_sec);
+
+	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
+				   targets,
+				   sizeof(targets) / sizeof(targets[0]),
+				   &target_count);
+	if (ret < 0) {
+		lota_err("Cannot build the attestation target list: %s",
+			 strerror(-ret));
+		return 1;
+	}
+
+	for (size_t i = 0; i < target_count; i++) {
+		lota_info("Target %zu: %s:%d every %d seconds%s", i + 1,
+			  targets[i].server, targets[i].port,
+			  targets[i].interval,
+			  targets[i].session_gated ?
+				  ", while a title of theirs runs" :
+				  "");
+		if (targets[i].profile_error)
+			lota_warn("Cannot read the CA trust anchor %s (%s): "
+				  "attesting to %s:%d without a publisher "
+				  "profile, so no CA-issued AIK certificate is "
+				  "presented",
+				  targets[i].ca_cert,
+				  strerror(-targets[i].profile_error),
+				  targets[i].server, targets[i].port);
+		else if (!targets[i].has_profile)
+			lota_warn("No CA trust anchor for %s:%d: attesting "
+				  "without a publisher profile, so no "
+				  "CA-issued AIK certificate is presented",
+				  targets[i].server, targets[i].port);
+	}
+
+	/*
+	 * Title that names its publisher gets that publisher's AIK
+	 * and that publisher's verdict.
+	 * One that names none gets the first profile's token and the host-wide
+	 * verdict, which is every publisher agreeing.
+	 */
+	if (target_count > 1)
+		lota_info("A title that does not select a publisher is "
+			  "answered for %s:%d and with the host-wide verdict",
+			  targets[0].server, targets[0].port);
 
 	/*
 	 * Long-running attestation loop: install tracer refusal and the
@@ -992,6 +1487,19 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	}
 	status_flags |= LOTA_STATUS_TPM_OK;
 
+	if (targets[0].has_profile) {
+		ret = tpm_bind_profile(&g_agent.tpm_ctx, &targets[0].paths);
+		if (ret < 0) {
+			lota_err("Failed to bind the publisher profile: %s",
+				 strerror(-ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			net_cleanup();
+			dbus_cleanup(g_agent.dbus_ctx);
+			ipc_cleanup(&g_agent.ipc_ctx);
+			return 1;
+		}
+	}
+
 	lota_info("Checking AIK");
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -1035,6 +1543,14 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 	ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 		    LOTA_TOKEN_QUOTE_PCR_MASK);
 
+	/*
+	 * Hand the publishers to the IPC layer so title can name the one
+	 * it plays for.
+	 * The list outlives every connection: it is on this stack frame,
+	 * and ipc_cleanup() runs before this function returns.
+	 */
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, target_count);
+
 	ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to load AIK metadata: %s", tpm_strerror(ret));
@@ -1052,225 +1568,115 @@ int do_continuous_attest(const char *server, int port, const char *ca_cert,
 
 	ipc_update_status(&g_agent.ipc_ctx, reconcile_tpm_lockout(status_flags),
 			  0);
-	publish_rotation_state(aik_ttl);
+	publish_rotation_state(
+		aik_ttl, targets[0].has_profile ? &targets[0].paths : NULL);
 
 	/*
 	 * Auto-renew the CA-issued AIK certificate:
 	 * it is short-lived (24h by default) and would otherwise lapse a day
 	 * after install.
-	 * Enabled whenever a CA endpoint was recorded at enroll time.
-	 * Manual -reenroll stays the fallback when no endpoint is on disk.
+	 * Enabled per publisher, whenever that profile recorded CA endpoint
+	 * at enroll time.
+	 * Manual --reenroll stays the fallback when no endpoint is on disk.
 	 */
-	{
+	for (size_t i = 0; i < target_count; i++) {
 		struct enroll_state est;
 
-		auto_renew = enroll_state_load(&est) == 0;
-		if (auto_renew)
-			lota_info("AIK certificate auto-renewal enabled");
+		targets[i].auto_renew =
+			targets[i].has_profile &&
+			enroll_state_load_path(targets[i].paths.enroll_state,
+					       &est) == 0;
+		if (targets[i].auto_renew)
+			lota_info("AIK certificate auto-renewal enabled for "
+				  "%s:%d",
+				  targets[i].server, targets[i].port);
 		else
-			lota_info(
-				"AIK certificate auto-renewal off: no recorded "
-				"CA endpoint (run --enroll to record one)");
+			lota_info("AIK certificate auto-renewal off for %s:%d: "
+				  "no recorded CA endpoint (run --enroll to "
+				  "record one)",
+				  targets[i].server, targets[i].port);
 	}
 
 	sdnotify_ready();
-	sdnotify_status("Attesting to %s:%d", server, port);
 	lota_info("Starting attestation loop");
 
 	while (g_agent.running) {
-		now = time(NULL);
-
-		/* check if AIK rotation is due */
-		if (g_agent.tpm_ctx.aik_meta_loaded) {
-			int needs = tpm_aik_needs_rotation(&g_agent.tpm_ctx,
-							   aik_ttl);
-			if (needs == 1) {
-				lota_info(
-					"AIK rotation due (gen %lu, age %ld s)",
-					(unsigned long)g_agent.tpm_ctx.aik_meta
-						.generation,
-					(long)tpm_aik_age(&g_agent.tpm_ctx));
-				ret = tpm_rotate_aik(&g_agent.tpm_ctx);
-				if (ret < 0) {
-					lota_err("AIK rotation failed: %s",
-						 tpm_strerror(ret));
-				} else {
-					lota_info(
-						"AIK rotated -> generation %lu",
-						(unsigned long)g_agent.tpm_ctx
-							.aik_meta.generation);
-				}
-				/*
-				 * Republish so the rotation, its grace window,
-				 * and the now-required re-enrollment surface
-				 * over D-Bus immediately
-				 */
-				publish_rotation_state(aik_ttl);
-			}
-		}
+		uint64_t now_ms = monotonic_ms();
+		uint64_t wake_ms = 0;
 
 		/*
-		 * Renew the CA-issued AIK certificate before it expires.
-		 * Cert lives far less than the AIK key (24h vs 30d), so renewal
-		 * is driven by cert expiry, not by key rotation.
-		 * Re-enroll once the cert enters its final third.
-		 * Back off when the CA is unreachable so a momentary outage
-		 * does not hammer it.
-		 * Renewal that keeps failing past notAfter surfaces through the
-		 * attestation-failure path below:
+		 * Every target that has come due, then the earliest deadline left.
+		 * Rounds are serialized on purpose: they share one TPM and one
+		 * binding, and a quote is short.
 		 */
-		if (auto_renew) {
-			int64_t remaining = 0, total = 0;
-			struct timespec mono;
-			uint64_t mono_ms;
+		for (size_t i = 0; i < target_count && g_agent.running; i++) {
+			int wait_sec;
 
-			clock_gettime(CLOCK_MONOTONIC, &mono);
-			mono_ms = (uint64_t)mono.tv_sec * 1000 +
-				  (uint64_t)mono.tv_nsec / 1000000;
+			if (now_ms < targets[i].next_due_ms)
+				continue;
 
-			if (mono_ms >= next_renew_ms &&
-			    aik_cert_lifetime(&remaining, &total) == 0 &&
-			    aik_cert_renew_due(remaining, total)) {
-				lota_info("AIK certificate renewal due "
-					  "(%lld s left of %lld s)",
-					  (long long)remaining,
-					  (long long)total);
-				ret = enroll_renew_cert(&g_agent.tpm_ctx);
-				if (ret == 0) {
-					renew_backoff = 0;
-					lota_info("AIK certificate renewed");
-					publish_rotation_state(aik_ttl);
-				} else {
-					int shift = renew_backoff;
-					int delay;
-
-					if (shift > 5)
-						shift = 5;
-					renew_backoff++;
-					delay = MIN_ATTEST_INTERVAL *
-						(1 << shift);
-					if (delay > MAX_BACKOFF_SECONDS)
-						delay = MAX_BACKOFF_SECONDS;
-					next_renew_ms = mono_ms +
-							(uint64_t)delay * 1000;
-					lota_warn("AIK certificate renewal "
-						  "failed (%s); "
-						  "retry in %ds, cert expires "
-						  "in %lld s",
-						  strerror(-ret), delay,
-						  (long long)remaining);
-					sdnotify_status(
-						"AIK cert renewal failing, "
-						"expires in %lld s",
-						(long long)remaining);
-				}
-			}
+			wait_sec = attest_target_round(&targets[i], skip_verify,
+						       pin_sha256, aik_ttl);
+			targets[i].next_due_ms =
+				monotonic_ms() + (uint64_t)wait_sec * 1000;
 		}
 
-		lota_dbg("Attestation round starting");
-		ret = attest_once(server, port, ca_cert, skip_verify,
-				  pin_sha256, 0);
+		publish_aggregate_status(targets, target_count, &status_flags);
 
-		if (ret == 0) {
-			lota_info("Attestation successful");
-			consecutive_failures = 0;
-			backoff_sec = 0;
-			last_success = now;
-
-			/* update ipc: attestation successful */
-			status_flags |= LOTA_STATUS_ATTESTED;
-			valid_until = (uint64_t)(now + interval_sec +
-						 60); /* buffer */
-			ipc_update_status(&g_agent.ipc_ctx,
-					  reconcile_tpm_lockout(status_flags),
-					  valid_until);
-			ipc_record_attestation(&g_agent.ipc_ctx, true);
-			sdnotify_status("Attested, valid until %lu",
-					(unsigned long)valid_until);
-		} else {
-			consecutive_failures++;
-			/* exponential backoff */
-			{
-				int shift = consecutive_failures - 1;
-				if (shift > 5)
-					shift = 5; /* 10 * 2^5 = 320 >
-						      MAX_BACKOFF_SECONDS */
-				backoff_sec =
-					MIN_ATTEST_INTERVAL * (1 << shift);
-			}
-			if (backoff_sec > MAX_BACKOFF_SECONDS)
-				backoff_sec = MAX_BACKOFF_SECONDS;
-
-			lota_err("Attestation FAILED (attempt %d, backoff %ds)",
-				 consecutive_failures, backoff_sec);
-
-			if (last_success > 0) {
-				lota_warn("Last success: %ld seconds ago",
-					  (long)(now - last_success));
-			}
-
-			/* update ipc: clear attested flag after multiple
-			 * failures */
-			if (consecutive_failures >= 3) {
-				status_flags &= ~LOTA_STATUS_ATTESTED;
-				ipc_update_status(
-					&g_agent.ipc_ctx,
-					reconcile_tpm_lockout(status_flags), 0);
-			} else {
-				/*
-				 * Even when the attested bit is still asserted,
-				 * a failure round may be the first time the TPM
-				 * signaled DA lockout; surface that bit
-				 * promptly so SDK clients can refuse to issue
-				 * new tokens.
-				 */
-				uint32_t refreshed =
-					reconcile_tpm_lockout(status_flags);
-				if (refreshed != status_flags) {
-					status_flags = refreshed;
-					ipc_update_status(&g_agent.ipc_ctx,
-							  status_flags,
-							  valid_until);
-				}
-			}
-			ipc_record_attestation(&g_agent.ipc_ctx, false);
-			sdnotify_status("Attestation failed (%d consecutive)",
-					consecutive_failures);
+		/*
+		 * Leave the TPM on the first publisher between rounds:
+		 * it is the AIK a GET_TOKEN is answered with, and token must not
+		 * depend on which target happened to attest last
+		 */
+		if (target_count > 1 && targets[0].has_profile) {
+			ret = bind_target(&targets[0]);
+			if (ret < 0)
+				lota_warn("Tokens will keep the previous "
+					  "publisher's AIK until the next "
+					  "round");
 		}
 
-		int sleep_time = (ret == 0) ? interval_sec : backoff_sec;
-		if (ret != 0 && backoff_sec > 0) {
-			/* jitter to avoid synchronized retries */
-			int jitter_max = backoff_sec / 2;
-			if (jitter_max < 1)
-				jitter_max = 1;
-			int jitter = (int)(rand_u32_best_effort() %
-					   (uint32_t)(jitter_max + 1));
-			sleep_time = backoff_sec + jitter;
-			if (sleep_time > MAX_BACKOFF_SECONDS)
-				sleep_time = MAX_BACKOFF_SECONDS;
+		for (size_t i = 0; i < target_count; i++) {
+			if (wake_ms == 0 || targets[i].next_due_ms < wake_ms)
+				wake_ms = targets[i].next_due_ms;
 		}
-		lota_dbg("Next attestation in %d seconds", sleep_time);
-
-		struct timespec now_ts;
-		clock_gettime(CLOCK_MONOTONIC, &now_ts);
-		uint64_t target_ms = (uint64_t)now_ts.tv_sec * 1000 +
-				     (uint64_t)now_ts.tv_nsec / 1000000 +
-				     (uint64_t)sleep_time * 1000;
+		lota_dbg("Next attestation round in %llu ms",
+			 (unsigned long long)(wake_ms > monotonic_ms() ?
+						      wake_ms - monotonic_ms() :
+						      0));
 
 		while (g_agent.running) {
-			clock_gettime(CLOCK_MONOTONIC, &now_ts);
-			uint64_t current_ms =
-				(uint64_t)now_ts.tv_sec * 1000 +
-				(uint64_t)now_ts.tv_nsec / 1000000;
+			uint64_t current_ms = monotonic_ms();
+			bool asked = false;
+			int timeout_ms;
 
-			if (current_ms >= target_ms)
+			if (current_ms >= wake_ms)
 				break;
 
-			int timeout_ms = (int)(target_ms - current_ms);
+			/*
+			 * title selected a publisher this host has never
+			 * enrolled with, or session opened or closed.
+			 * Both are moments this loop exists to serve,
+			 * so stop sleeping through them:
+			 * title that just launched wants its first report now,
+			 * not one interval from now
+			 */
+			for (size_t i = 0; i < target_count; i++) {
+				if (targets[i].enroll_pending ||
+				    targets[i].session_changed) {
+					targets[i].session_changed = false;
+					targets[i].next_due_ms = current_ms;
+					asked = true;
+				}
+			}
+			if (asked)
+				break;
+
+			timeout_ms = (int)(wake_ms - current_ms);
 
 			if (wd_enabled && wd_usec > 0) {
 				int wd_timeout_ms = (int)(wd_usec / 2000);
+
 				if (timeout_ms > wd_timeout_ms)
 					timeout_ms = wd_timeout_ms;
 			}

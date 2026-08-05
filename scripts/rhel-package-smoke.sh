@@ -64,8 +64,14 @@ build_rpms() {
 	cd /build
 	PATH="$(go env GOPATH)/bin:$PATH"
 	export PATH
+	echo "== signing the enforcement object with an ephemeral key =="
+	make all
+	./build/lota-agent --gen-signing-key /build/smoke-enforcement
+	make sign-bpf SIGNING_KEY=/build/smoke-enforcement.key
 	echo "== make packages =="
-	make packages
+	make packages \
+		SIGNING_KEY=/build/smoke-enforcement.key \
+		SIGNING_PUBKEY=/build/smoke-enforcement.pub
 }
 
 # fail if shipped file's digest differs from the package or file is missing;

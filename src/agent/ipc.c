@@ -5,7 +5,9 @@
  * Unix socket server for local attestation queries.
  */
 
+#include "enroll.h"
 #include "ipc.h"
+#include "ipc_payload.h"
 #include "protect_pids.h"
 
 #include <errno.h>
@@ -204,6 +206,14 @@ struct ipc_client {
 	 */
 	int token_count;
 	uint64_t token_window_start_sec;
+
+	/*
+	 * The publisher this connection speaks for, set by SET_PROFILE.
+	 * Borrowed from ctx->profiles, which the attestation loop owns for
+	 * longer than any connection lives.
+	 * Not const: binding and unbinding maintain that publisher's session count.
+	 */
+	struct attest_target *profile;
 
 	struct ipc_client *next;
 };
@@ -572,6 +582,18 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 
 	client_map_remove(ctx, client->fd);
 
+	/*
+	 * session ends when its connection does -- which is the right lifetime
+	 * whether the title exited cleanly or was killed, and is why session-gated
+	 * reporting needs nothing from the title to stop
+	 */
+	if (client->profile) {
+		if (client->profile->sessions > 0)
+			client->profile->sessions--;
+		client->profile->session_changed = true;
+		client->profile = NULL;
+	}
+
 	while (*pp) {
 		if (*pp == client) {
 			*pp = client->next;
@@ -733,21 +755,53 @@ static void handle_ping(struct ipc_context *ctx, struct ipc_client *client)
 	client->send_offset = 0;
 }
 
+/*
+ * The attestation answer this connection gets.
+ *
+ * Host-wide unless the connection named a publisher, in which case only that
+ * publisher's verdict decides: title must not read NOT ATTESTED because verifier
+ * it never talks to is down.
+ * Everything else in the status -- TPM health, lockout, mode -- is property
+ * of the machine and stays as it is.
+ */
+static void client_attestation_view(const struct ipc_context *ctx,
+				    const struct ipc_client *client,
+				    uint32_t *flags, uint64_t *valid_until)
+{
+	*flags = ctx->status_flags;
+	*valid_until = ctx->valid_until;
+
+	if (!client->profile)
+		return;
+
+	if (client->profile->attested) {
+		*flags |= LOTA_STATUS_ATTESTED;
+		*valid_until = client->profile->valid_until;
+	} else {
+		*flags &= ~(uint32_t)LOTA_STATUS_ATTESTED;
+		*valid_until = 0;
+	}
+}
+
 static void handle_get_status(struct ipc_context *ctx,
 			      struct ipc_client *client)
 {
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_status *status;
+	uint64_t valid_until;
+	uint32_t flags;
 
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
 	resp->result = LOTA_IPC_OK;
 	resp->payload_len = sizeof(*status);
 
+	client_attestation_view(ctx, client, &flags, &valid_until);
+
 	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
-	status->flags = ctx->status_flags;
+	status->flags = flags;
 	status->last_attest_time = ctx->last_attest_time;
-	status->valid_until = ctx->valid_until;
+	status->valid_until = valid_until;
 	status->attest_count = ctx->attest_count;
 	status->fail_count = ctx->fail_count;
 	status->mode = ctx->mode;
@@ -785,13 +839,18 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	uint8_t (*image_digests)[32] = NULL;
 	size_t image_list_size = 0;
 	size_t total_size;
+	uint64_t view_valid_until;
+	uint32_t view_flags;
 	int ret;
 	bool fail = false;
+	bool rebound = false;
 	uint32_t fail_code = LOTA_IPC_ERR_INTERNAL;
 
 	memset(&quote, 0, sizeof(quote));
 
-	if (!(ctx->status_flags & LOTA_STATUS_ATTESTED)) {
+	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
+
+	if (!(view_flags & LOTA_STATUS_ATTESTED)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
 		goto out;
@@ -839,9 +898,34 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	token = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 
-	token->valid_until = ctx->valid_until;
-	token->flags = ctx->status_flags;
+	/* token states this publisher's verdict and window,
+	 * not the host's aggregate,
+	 * so a relying party reads its own answer */
+	token->valid_until = view_valid_until;
+	token->flags = view_flags;
 	token->pcr_mask = ctx->quote_pcr_mask;
+
+	/*
+	 * Quote with the publisher's own AIK.
+	 * Attestation loop leaves the TPM bound to the first profile between
+	 * rounds, so connection that named different one rebinds here and puts
+	 * it back afterwards -- token has to verify against the certificate
+	 * that publisher's verifier holds, and the loop's next round expects
+	 * the binding it left
+	 */
+	if (client->profile && ctx->tpm) {
+		ret = tpm_bind_profile(ctx->tpm, &client->profile->paths);
+		if (ret < 0) {
+			lota_err(
+				"cannot bind publisher profile for GET_TOKEN: %s",
+				strerror(-ret));
+			fail = true;
+			fail_code = LOTA_IPC_ERR_INTERNAL;
+			goto out;
+		}
+		rebound = ctx->profiles && ctx->profile_count > 0 &&
+			  client->profile != &ctx->profiles[0];
+	}
 
 	if (!g_agent.policy_digest_set) {
 		lota_err("Refusing GET_TOKEN: policy_digest is not set");
@@ -1042,6 +1126,15 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	client->send_offset = 0;
 
 out:
+	/* leave the TPM where the attestation loop expects to find it */
+	if (rebound) {
+		int rb = tpm_bind_profile(ctx->tpm, &ctx->profiles[0].paths);
+
+		if (rb < 0)
+			lota_warn("cannot restore the default publisher "
+				  "binding: %s",
+				  strerror(-rb));
+	}
 	ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
 	ipc_secure_bzero(runtime_protect_digest,
 			 sizeof(runtime_protect_digest));
@@ -1057,6 +1150,107 @@ out:
 	ipc_secure_bzero(&quote, sizeof(quote));
 	if (fail)
 		build_error_response(client, fail_code);
+}
+
+/*
+ * Handle SET_PROFILE command
+ *
+ * Binds this connection to one publisher, named by the SHA-256 of that publisher's
+ * CA trust anchor SubjectPublicKeyInfo.
+ * From here on the connection's token is signed by that publisher's AIK
+ * and its status is that publisher's verdict.
+ *
+ * An id the host has no profile for is refused rather than ignored:
+ * title that asked for publisher B and silently got publisher A's answers would
+ * be told its machine is trusted on evidence B never sees.
+ */
+static void handle_set_profile(struct ipc_context *ctx,
+			       struct ipc_client *client,
+			       const uint8_t *payload, uint32_t payload_len)
+{
+	struct lota_ipc_response *resp = (void *)client->send_buf;
+	struct lota_ipc_set_profile req;
+	char want[LOTA_PROFILE_ID_LEN];
+
+	if (payload_len < sizeof(req)) {
+		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+		return;
+	}
+	memcpy(&req, payload, sizeof(req));
+
+	if (!ctx->profiles || ctx->profile_count == 0) {
+		build_error_response(client, LOTA_IPC_ERR_UNKNOWN_PROFILE);
+		return;
+	}
+
+	for (size_t i = 0; i < sizeof(req.profile_id); i++)
+		snprintf(want + i * 2, 3, "%02x", req.profile_id[i]);
+
+	for (size_t i = 0; i < ctx->profile_count; i++) {
+		time_t agreed = 0;
+
+		if (!ctx->profiles[i].has_profile)
+			continue;
+		if (strcmp(ctx->profiles[i].paths.id, want) != 0)
+			continue;
+
+		/*
+		 * Answering to publisher hands them stable handle on this machine,
+		 * so somebody here has to have agreed to it.
+		 * The title is told which case it is, because "nobody agreed yet"
+		 * is a screen to show, not a failure to report
+		 */
+		if (profile_consent_time(&ctx->profiles[i].paths, &agreed) ==
+		    -ENOENT) {
+			lota_warn("connection pid=%d asked for publisher %s, "
+				  "which nobody on this machine has agreed to",
+				  client->peer_pid, want);
+			build_error_response(client,
+					     LOTA_IPC_ERR_CONSENT_REQUIRED);
+			return;
+		}
+
+		client->profile = &ctx->profiles[i];
+		ctx->profiles[i].sessions++;
+		ctx->profiles[i].session_changed = true;
+		lota_dbg(
+			"connection pid=%d bound to publisher %s (%d session%s)",
+			client->peer_pid, want, ctx->profiles[i].sessions,
+			ctx->profiles[i].sessions == 1 ? "" : "s");
+
+		/*
+		 * Title asking for a publisher this host has never enrolled with
+		 * is the trigger the runtime enrollment exists for.
+		 * Ask the attestation loop to run it -- the ceremony is TLS round
+		 * trip and TPM credential activation, which is not something
+		 * to do inside an IPC reply -- and answer now.
+		 * The connection reads not-attested until it completes,
+		 * which is the truth.
+		 */
+		{
+			struct enroll_state st;
+
+			if (enroll_state_load_path(
+				    ctx->profiles[i].paths.enroll_state, &st) ==
+			    -ENOENT)
+				ctx->profiles[i].enroll_pending = true;
+			else
+				ipc_secure_bzero(&st, sizeof(st));
+		}
+
+		resp->magic = LOTA_IPC_MAGIC;
+		resp->version = LOTA_IPC_VERSION;
+		resp->result = LOTA_IPC_OK;
+		resp->payload_len = 0;
+		client->send_len = LOTA_IPC_RESPONSE_SIZE;
+		client->send_offset = 0;
+		return;
+	}
+
+	lota_warn("connection pid=%d asked for publisher %s, which this host "
+		  "has no profile for",
+		  client->peer_pid, want);
+	build_error_response(client, LOTA_IPC_ERR_UNKNOWN_PROFILE);
 }
 
 /*
@@ -1592,42 +1786,6 @@ static void handle_shutdown(struct ipc_context *ctx, struct ipc_client *client,
 		    client->peer_uid, client->peer_pid);
 }
 
-static int validate_request_payload_len(uint32_t cmd, uint32_t payload_len)
-{
-	switch (cmd) {
-	case LOTA_IPC_CMD_PING:
-	case LOTA_IPC_CMD_GET_STATUS:
-	case LOTA_IPC_CMD_SHUTDOWN:
-		return payload_len == 0;
-
-	case LOTA_IPC_CMD_GET_TOKEN:
-		return payload_len == 0 ||
-		       payload_len == sizeof(struct lota_ipc_token_request);
-
-	case LOTA_IPC_CMD_SUBSCRIBE:
-		return payload_len == sizeof(struct lota_ipc_subscribe_request);
-
-	case LOTA_IPC_CMD_PROTECT_PID:
-	case LOTA_IPC_CMD_UNPROTECT_PID:
-		return payload_len == sizeof(struct lota_ipc_pid_request);
-
-	default:
-		/*
-		 * Unknown command. The dispatcher returns
-		 * LOTA_IPC_ERR_UNKNOWN_CMD regardless of payload contents, but
-		 * a non-zero payload still consumed up to LOTA_IPC_MAX_PAYLOAD
-		 * bytes of recv_buf on the way in. A malicious local client
-		 * could pump 64 KiB of payload per unknown command and force
-		 * the agent to copy and discard it indefinitely. Require zero
-		 * payload here so the bad request is rejected as soon as the
-		 * IPC header is parsed; the client gets the same
-		 * LOTA_IPC_ERR_BAD_REQUEST it would get for any other malformed
-		 * length, and the agent never reads the body off the socket.
-		 */
-		return payload_len == 0;
-	}
-}
-
 static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 {
 	struct lota_ipc_request req;
@@ -1647,7 +1805,7 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 		return;
 	}
 
-	if (!validate_request_payload_len(req.cmd, payload_len)) {
+	if (!ipc_payload_len_valid(req.cmd, payload_len)) {
 		lota_warn("invalid payload length for cmd=0x%X from pid=%d "
 			  "uid=%d (len=%u)",
 			  req.cmd, client->peer_pid, client->peer_uid,
@@ -1667,6 +1825,10 @@ static void process_request(struct ipc_context *ctx, struct ipc_client *client)
 
 	case LOTA_IPC_CMD_GET_TOKEN:
 		handle_get_token(ctx, client, payload, payload_len);
+		break;
+
+	case LOTA_IPC_CMD_SET_PROFILE:
+		handle_set_profile(ctx, client, payload, payload_len);
 		break;
 
 	case LOTA_IPC_CMD_SUBSCRIBE:
@@ -2240,6 +2402,27 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 {
 	ctx->tpm = tpm;
 	ctx->quote_pcr_mask = pcr_mask;
+}
+
+void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
+		      size_t count)
+{
+	if (!ctx)
+		return;
+
+	ctx->profiles = count ? profiles : NULL;
+	ctx->profile_count = profiles ? count : 0;
+
+	/*
+	 * connection outlives reload of this list only in theory today
+	 * (the loop sets it once), but client holding a pointer into a list that
+	 * has gone away would be use-after-free, so drop the bindings rather than
+	 * trusting the caller never re-registers
+	 */
+	for (struct ipc_client *c = ctx->client_list; c; c = c->next)
+		c->profile = NULL;
+	for (size_t i = 0; i < ctx->profile_count; i++)
+		ctx->profiles[i].sessions = 0;
 }
 
 /*

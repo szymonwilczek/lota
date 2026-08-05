@@ -15,15 +15,12 @@
 #include <stdint.h>
 
 /*
- * Validity of the stored AIK certificate, via OpenSSL.
+ * Validity of the AIK certificate stored in a publisher profile, via OpenSSL.
  * On success both *remaining_sec (until notAfter; <= 0 once expired) and
  * *total_sec (the notBefore..notAfter span) are set.
  * Returns 0, -ENOENT if no certificate is present, or another negative errno
  * if it cannot be read or parsed.
  */
-int aik_cert_lifetime(int64_t *remaining_sec, int64_t *total_sec);
-
-/* Path-parameterized variant behind the fixed-path wrapper above (tests). */
 int aik_cert_lifetime_path(const char *path, int64_t *remaining_sec,
 			   int64_t *total_sec);
 

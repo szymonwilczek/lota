@@ -14,7 +14,6 @@
 
 #include "../../include/lota.h"
 #include "../../include/lota_ipc.h"
-#include "cli.h"
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
@@ -114,12 +113,30 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");
 	printf("  --reenroll        Re-enroll using the endpoint saved by the\n");
-	printf("                    last --enroll (no CA arguments needed), "
-	       "then exit\n");
+	printf("                    last --enroll against the same --ca-cert,\n");
+	printf("                    then exit\n");
 	printf("  --ca-server HOST  Attestation CA address (required by "
 	       "--enroll)\n");
 	printf("  --ca-port PORT    Attestation CA port (default: %d)\n",
-	       LOTA_CLI_DEFAULT_CA_PORT);
+	       LOTA_DEFAULT_CA_PORT);
+	printf("  --allow-publisher HEX\n");
+	printf("                    Record that this machine may answer to "
+	       "one\n");
+	printf("                    publisher, named by the SHA-256 of their "
+	       "CA\n");
+	printf("                    trust anchor's public key. Nothing "
+	       "enrolls\n");
+	printf("                    with a publisher before this\n");
+	printf("  --list-publishers Show every publisher this machine "
+	       "answers to,\n");
+	printf("                    what it stores for each and when it was "
+	       "agreed to\n");
+	printf("  --forget-publisher HEX\n");
+	printf("                    Destroy that publisher's attestation key "
+	       "and\n");
+	printf("                    everything stored for them. They can ask "
+	       "again\n");
+	printf("                    and would need consent and a new key\n");
 	printf("  --enroll-token-file PATH\n");
 	printf("                    File holding a per-tenant enrollment "
 	       "token to\n");
@@ -130,16 +147,22 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    certificate renewal)\n");
 	printf("  --attest-interval SECS\n");
 	printf("                    Continuous attestation interval in seconds\n");
-	printf("                    (default: 0=one-shot, min: %d for "
-	       "continuous)\n",
-	       MIN_ATTEST_INTERVAL);
+	printf("                    (default: 0=one-shot, else %d-%d; above "
+	       "%d\n",
+	       MIN_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
+	printf("                    the minted tokens outlive every relying "
+	       "party's\n");
+	printf("                    freshness window)\n");
 	printf("  --server HOST     Verifier server address (default: "
 	       "localhost)\n");
 	printf("  --port PORT       Verifier server port (default: %d)\n",
 	       default_verifier_port);
-	printf("  --ca-cert PATH    CA certificate for verifier TLS "
-	       "verification\n");
-	printf("                    (default: use system CA store)\n");
+	printf("  --ca-cert PATH    CA trust anchor, PEM or DER. Verifies the\n");
+	printf("                    TLS peer (default: system CA store) and\n");
+	printf("                    names the publisher profile the AIK\n");
+	printf("                    certificate and enrollment record live\n");
+	printf("                    in, so --enroll and --reenroll require "
+	       "it\n");
 	printf("  --no-verify-tls   Disable TLS certificate verification "
 	       "(INSECURE)\n");
 	printf("                    Only for development/testing!\n");

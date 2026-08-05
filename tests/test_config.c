@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 
+#include "../src/agent/attest.h"
 #include "../src/agent/config.h"
 
 static int tests_run;
@@ -279,7 +280,7 @@ static void test_config_load_basic_values(void)
 				   "mode = enforce\n"
 				   "strict_mmap = true\n"
 				   "block_ptrace = yes\n"
-				   "attest_interval = 600\n"
+				   "attest_interval = 300\n"
 				   "aik_ttl = 7200\n"
 				   "aik_handle = 0x81010003\n"
 				   "seal_aik_auth = true\n"
@@ -315,8 +316,8 @@ static void test_config_load_basic_values(void)
 		FAIL("block_ptrace != true");
 		return;
 	}
-	if (cfg.attest_interval != 600) {
-		FAIL("attest_interval != 600");
+	if (cfg.attest_interval != 300) {
+		FAIL("attest_interval != 300");
 		return;
 	}
 	if (cfg.aik_ttl != 7200) {
@@ -914,6 +915,381 @@ static void test_config_load_port_bounds(void)
 	PASS();
 }
 
+/*
+ * Interval above the ceiling mints tokens whose valid_until sits past every
+ * relying party's freshness window, so the agent runs and every token it produces
+ * is refused.
+ * The mistake has to be caught where it is made.
+ */
+static void test_config_load_attest_interval_bounds(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[64];
+	int ret;
+
+	TEST("config_load accepts attest_interval at the ceiling");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MAX_ATTEST_INTERVAL);
+	write_config("interval_max.conf", content);
+	config_path("interval_max.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.attest_interval != MAX_ATTEST_INTERVAL) {
+		FAIL("interval not applied");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects attest_interval above the ceiling");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MAX_ATTEST_INTERVAL + 1);
+	write_config("interval_high.conf", content);
+	config_path("interval_high.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.attest_interval != 0) {
+		FAIL("out-of-range interval was applied");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects attest_interval below the floor");
+	snprintf(content, sizeof(content), "attest_interval = %d\n",
+		 MIN_ATTEST_INTERVAL - 1);
+	write_config("interval_low.conf", content);
+	config_path("interval_low.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load accepts attest_interval = 0 (one-shot)");
+	write_config("interval_zero.conf", "attest_interval = 0\n");
+	config_path("interval_zero.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profiles(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load parses a publisher profile list");
+	write_config("profiles.conf", "server = top.example\n"
+				      "\n"
+				      "[profile \"alpha\"]\n"
+				      "ca = ca.alpha.example\n"
+				      "ca_cert = /etc/lota/alpha.pem\n"
+				      "verifier = verifier.alpha.example\n"
+				      "interval = 60\n"
+				      "\n"
+				      "[profile \"beta\"]\n"
+				      "ca = ca.beta.example\n"
+				      "ca_port = 9444\n"
+				      "ca-cert = /etc/lota/beta.pem\n"
+				      "verifier = verifier.beta.example\n"
+				      "verifier_port = 9443\n");
+	config_path("profiles.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.profile_count != 2) {
+		FAIL("profile_count != 2");
+		return;
+	}
+	/* keys above the first section still reach the top level */
+	if (strcmp(cfg.server, "top.example") != 0) {
+		FAIL("top-level key not applied");
+		return;
+	}
+	if (strcmp(cfg.profiles[0].name, "alpha") != 0 ||
+	    strcmp(cfg.profiles[0].ca, "ca.alpha.example") != 0 ||
+	    strcmp(cfg.profiles[0].ca_cert, "/etc/lota/alpha.pem") != 0 ||
+	    strcmp(cfg.profiles[0].verifier, "verifier.alpha.example") != 0 ||
+	    cfg.profiles[0].attest_interval != 60) {
+		FAIL("profile 'alpha' mismatch");
+		return;
+	}
+	/* unset ports fall back to the defaults, not to zero */
+	if (cfg.profiles[0].ca_port != LOTA_DEFAULT_CA_PORT ||
+	    cfg.profiles[0].verifier_port != LOTA_DEFAULT_VERIFIER_PORT) {
+		FAIL("profile 'alpha' default ports");
+		return;
+	}
+	if (strcmp(cfg.profiles[1].name, "beta") != 0 ||
+	    cfg.profiles[1].ca_port != 9444 ||
+	    cfg.profiles[1].verifier_port != 9443 ||
+	    strcmp(cfg.profiles[1].ca_cert, "/etc/lota/beta.pem") != 0) {
+		FAIL("profile 'beta' mismatch");
+		return;
+	}
+	/* unset interval means "inherit", not "one-shot" */
+	if (cfg.profiles[1].attest_interval != 0) {
+		FAIL("profile 'beta' interval");
+		return;
+	}
+	/* profile reports while a title of its publisher runs, by default */
+	if (!cfg.profiles[0].session_gated || !cfg.profiles[1].session_gated) {
+		FAIL("a profile should default to session-gated reporting");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Fleet whose publishers are all its own wants the continuous stream that session
+ * gating exists to stop, so the profile can say so -- and nothing else may.
+ */
+static void test_config_profile_reporting(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load reads a profile's reporting mode");
+	write_config("reporting.conf", "[profile \"fleet\"]\n"
+				       "ca = ca.example\n"
+				       "ca_cert = /etc/lota/ca.pem\n"
+				       "verifier = verifier.example\n"
+				       "reporting = continuous\n");
+	config_path("reporting.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		FAIL("continuous reporting rejected");
+		return;
+	}
+	if (cfg.profiles[0].session_gated) {
+		FAIL("reporting = continuous not applied");
+		return;
+	}
+
+	write_config("reporting-bad.conf", "[profile \"fleet\"]\n"
+					   "ca = ca.example\n"
+					   "ca_cert = /etc/lota/ca.pem\n"
+					   "verifier = verifier.example\n"
+					   "reporting = sometimes\n");
+	config_path("reporting-bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("an unknown reporting mode was accepted");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_incomplete(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+
+	TEST("config_load rejects a profile with no trust anchor");
+	write_config("profile_noanchor.conf", "[profile \"alpha\"]\n"
+					      "ca = ca.alpha.example\n"
+					      "verifier = v.alpha.example\n");
+	config_path("profile_noanchor.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a profile with no verifier");
+	write_config("profile_noverifier.conf",
+		     "[profile \"alpha\"]\n"
+		     "ca = ca.alpha.example\n"
+		     "ca_cert = /etc/lota/alpha.pem\n");
+	config_path("profile_noverifier.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects an empty profile section");
+	write_config("profile_empty.conf", "[profile \"alpha\"]\n");
+	config_path("profile_empty.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_malformed(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	int ret;
+	size_t i;
+	static const char *const bad[] = {
+		"[profile alpha]\n",	      "[profile \"alpha]\n",
+		"[profile \"alpha\"] junk\n", "[publisher \"alpha\"]\n",
+		"[profile \"\"]\n",
+	};
+
+	for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		char name[64];
+
+		TEST("config_load rejects a malformed profile header");
+		snprintf(name, sizeof(name), "profile_bad_%zu.conf", i);
+		write_config(name, bad[i]);
+		config_path(name, path, sizeof(path));
+		config_init(&cfg);
+		ret = config_load(&cfg, path);
+		if (ret != -EINVAL) {
+			char msg[64];
+			snprintf(msg, sizeof(msg), "expected -EINVAL, got %d",
+				 ret);
+			FAIL(msg);
+			return;
+		}
+		if (cfg.profile_count != 0) {
+			FAIL("malformed header opened a profile");
+			return;
+		}
+		PASS();
+	}
+
+	TEST("config_load rejects a duplicate profile name");
+	write_config("profile_dup.conf", "[profile \"alpha\"]\n"
+					 "ca = ca.alpha.example\n"
+					 "ca_cert = /etc/lota/alpha.pem\n"
+					 "verifier = v.alpha.example\n"
+					 "[profile \"alpha\"]\n"
+					 "ca = ca.other.example\n"
+					 "ca_cert = /etc/lota/other.pem\n"
+					 "verifier = v.other.example\n");
+	config_path("profile_dup.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	if (cfg.profile_count != 1) {
+		FAIL("duplicate name opened a second profile");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a top-level key inside a profile");
+	write_config("profile_toplevel.conf", "[profile \"alpha\"]\n"
+					      "ca = ca.alpha.example\n"
+					      "ca_cert = /etc/lota/alpha.pem\n"
+					      "verifier = v.alpha.example\n"
+					      "mode = enforce\n");
+	config_path("profile_toplevel.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+
+	TEST("config_load rejects a per-profile interval above the ceiling");
+	{
+		char content[256];
+		snprintf(content, sizeof(content),
+			 "[profile \"alpha\"]\n"
+			 "ca = ca.alpha.example\n"
+			 "ca_cert = /etc/lota/alpha.pem\n"
+			 "verifier = v.alpha.example\n"
+			 "interval = %d\n",
+			 MAX_ATTEST_INTERVAL + 1);
+		write_config("profile_interval.conf", content);
+	}
+	config_path("profile_interval.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		FAIL("expected -EINVAL");
+		return;
+	}
+	PASS();
+}
+
+static void test_config_load_profile_overflow(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[4096];
+	size_t off = 0;
+	int ret;
+
+	TEST("config_load rejects more profiles than there are slots");
+	for (int i = 0; i <= LOTA_CONFIG_MAX_PROFILES; i++) {
+		int n = snprintf(content + off, sizeof(content) - off,
+				 "[profile \"p%d\"]\n"
+				 "ca = ca%d.example\n"
+				 "ca_cert = /etc/lota/p%d.pem\n"
+				 "verifier = v%d.example\n",
+				 i, i, i, i);
+		if (n < 0 || (size_t)n >= sizeof(content) - off) {
+			FAIL("fixture too large");
+			return;
+		}
+		off += (size_t)n;
+	}
+	write_config("profile_overflow.conf", content);
+	config_path("profile_overflow.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != -EINVAL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected -EINVAL, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.profile_count != LOTA_CONFIG_MAX_PROFILES) {
+		FAIL("profile_count past the cap");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_load_rejects_group_writable(void)
 {
 	struct lota_config cfg;
@@ -998,6 +1374,17 @@ static void test_config_dump_roundtrip(void)
 	cfg1.container_listener_uid_count = 2;
 	cfg1.container_listener_uids[0] = 1000;
 	cfg1.container_listener_uids[1] = 1001;
+	cfg1.profile_count = 1;
+	snprintf(cfg1.profiles[0].name, sizeof(cfg1.profiles[0].name), "alpha");
+	snprintf(cfg1.profiles[0].ca, sizeof(cfg1.profiles[0].ca),
+		 "ca.alpha.example");
+	cfg1.profiles[0].ca_port = 9444;
+	snprintf(cfg1.profiles[0].ca_cert, sizeof(cfg1.profiles[0].ca_cert),
+		 "/etc/lota/alpha.pem");
+	snprintf(cfg1.profiles[0].verifier, sizeof(cfg1.profiles[0].verifier),
+		 "v.alpha.example");
+	cfg1.profiles[0].verifier_port = 9443;
+	cfg1.profiles[0].attest_interval = 90;
 
 	/* dump to file */
 	snprintf(dump_path, sizeof(dump_path), "%s/dumped.conf", tmpdir);
@@ -1068,6 +1455,17 @@ static void test_config_dump_roundtrip(void)
 		FAIL("container_listener_uids mismatch");
 		return;
 	}
+	if (cfg2.profile_count != 1 ||
+	    strcmp(cfg2.profiles[0].name, "alpha") != 0 ||
+	    strcmp(cfg2.profiles[0].ca, "ca.alpha.example") != 0 ||
+	    cfg2.profiles[0].ca_port != 9444 ||
+	    strcmp(cfg2.profiles[0].ca_cert, "/etc/lota/alpha.pem") != 0 ||
+	    strcmp(cfg2.profiles[0].verifier, "v.alpha.example") != 0 ||
+	    cfg2.profiles[0].verifier_port != 9443 ||
+	    cfg2.profiles[0].attest_interval != 90) {
+		FAIL("profile mismatch");
+		return;
+	}
 	PASS();
 }
 
@@ -1098,7 +1496,7 @@ static void test_config_load_all_known_keys(void)
 				 "mode = maintenance\n"
 				 "strict_mmap = true\n"
 				 "block_ptrace = true\n"
-				 "attest_interval = 999\n"
+				 "attest_interval = 240\n"
 				 "aik_ttl = 86400\n"
 				 "aik_handle = 0x81010005\n"
 				 "daemon = true\n"
@@ -1153,7 +1551,7 @@ static void test_config_load_all_known_keys(void)
 		FAIL("block_ptrace");
 		return;
 	}
-	if (cfg.attest_interval != 999) {
+	if (cfg.attest_interval != 240) {
 		FAIL("attest_interval");
 		return;
 	}
@@ -1228,6 +1626,75 @@ static void test_config_load_override_order(void)
 		FAIL("port should be 2222");
 		return;
 	}
+	PASS();
+}
+
+/*
+ * Which key verifies the enforcement object.
+ *
+ * The order is what keeps fleet that signs enforcement itself from being
+ * overwritten by an upgrade, and host that made no such choice from being left
+ * with key the object no longer matches.
+ * Both are silent failures if the order is wrong, so it is pinned here rather
+ * than left to the two callers to agree on.
+ */
+static void test_config_resolve_policy_pubkey(void)
+{
+	char override_path[PATH_MAX];
+	char packaged_path[PATH_MAX];
+	const char *got;
+
+	TEST("config_resolve_policy_pubkey follows configured, override, packaged");
+
+	config_path("override.pub", override_path, sizeof(override_path));
+	config_path("packaged.pub", packaged_path, sizeof(packaged_path));
+	write_config("packaged.pub", "packaged\n");
+
+	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	if (!got || strcmp(got, packaged_path) != 0) {
+		FAIL("with no operator key the packaged one is used");
+		return;
+	}
+
+	write_config("override.pub", "operator\n");
+	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	if (!got || strcmp(got, override_path) != 0) {
+		FAIL("an operator key present on disk wins over the packaged one");
+		return;
+	}
+
+	got = config_resolve_policy_pubkey(override_path, override_path,
+					   packaged_path);
+	if (!got || strcmp(got, override_path) != 0) {
+		FAIL("policy_pubkey names the key outright");
+		return;
+	}
+
+	/*
+	 * Named key that is no longer on disk is a leftover, not a choice:
+	 * older installer wrote this line, and the file it named is one upgrade
+	 * can take away.
+	 * Falling back keeps enforcement armed on host whose package brought
+	 * key of its own.
+	 */
+	got = config_resolve_policy_pubkey("/nonexistent/named.pub",
+					   "/nonexistent/override.pub",
+					   packaged_path);
+	if (!got || strcmp(got, packaged_path) != 0) {
+		FAIL("a named key that no longer exists falls back to the "
+		     "packaged one");
+		return;
+	}
+
+	got = config_resolve_policy_pubkey(NULL, "/nonexistent/override.pub",
+					   "/nonexistent/packaged.pub");
+	if (got != NULL) {
+		FAIL("no readable key resolves to nothing, not to a guess");
+		return;
+	}
+
+	unlink(override_path);
+	unlink(packaged_path);
 	PASS();
 }
 
@@ -1333,12 +1800,19 @@ int main(void)
 		test_config_load_empty_key,
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
+		test_config_load_attest_interval_bounds,
+		test_config_load_profiles,
+		test_config_profile_reporting,
+		test_config_load_profile_incomplete,
+		test_config_load_profile_malformed,
+		test_config_load_profile_overflow,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,
 		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
+		test_config_resolve_policy_pubkey,
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
 	};

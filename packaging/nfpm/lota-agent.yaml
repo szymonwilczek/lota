@@ -56,6 +56,14 @@ contents:
     dst: /usr/lib/lota/lota_lsm.bpf.o
     file_info:
       mode: 0644
+  - src: ./build/lota_lsm.bpf.o.sig
+    dst: /usr/lib/lota/lota_lsm.bpf.o.sig
+    file_info:
+      mode: 0644
+  - src: ./build/lota-enforcement.pub
+    dst: /usr/lib/lota/enforcement.pub
+    file_info:
+      mode: 0644
   - src: ./selinux/lota.pp
     dst: /usr/share/lota/selinux/lota.pp
     file_info:
@@ -110,6 +118,10 @@ contents:
     file_info:
       mode: 0755
   - dst: /var/lib/lota/aiks
+    type: dir
+    file_info:
+      mode: 0700
+  - dst: /var/lib/lota/profiles
     type: dir
     file_info:
       mode: 0700

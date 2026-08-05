@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include "attest.h"
 #include "lota.h"
 #include "parse_utils.h"
 #include "path_validate.h"
@@ -191,7 +192,7 @@ void config_init(struct lota_config *cfg)
 	memset(cfg, 0, sizeof(*cfg));
 
 	set_str(cfg->server, sizeof(cfg->server), "localhost");
-	cfg->port = 8443;
+	cfg->port = LOTA_DEFAULT_VERIFIER_PORT;
 
 	cfg->allow_verity_count = 0;
 	set_str(cfg->bpf_path, sizeof(cfg->bpf_path),
@@ -226,8 +227,234 @@ void config_init(struct lota_config *cfg)
 		"/run/lota/lota-agent.pid");
 
 	cfg->protect_pid_count = 0;
+	cfg->profile_count = 0;
 
 	set_str(cfg->log_level, sizeof(cfg->log_level), "info");
+}
+
+/*
+ * Shared by the top-level attest_interval and the per-profile interval:
+ * 0 has a meaning at each level, anything else has to sit between the bounds
+ * the attestation loop can actually mint verifiable tokens within.
+ */
+static int check_attest_interval(long v, const char *key, const char *filepath,
+				 int lineno)
+{
+	if (v == 0 || (v >= MIN_ATTEST_INTERVAL && v <= MAX_ATTEST_INTERVAL))
+		return 0;
+
+	fprintf(stderr,
+		"%s:%d: %s %ld out of range (0 or %d-%d; above %d the minted "
+		"tokens outlive every relying party's freshness window)\n",
+		filepath, lineno, key, v, MIN_ATTEST_INTERVAL,
+		MAX_ATTEST_INTERVAL, MAX_ATTEST_INTERVAL);
+	return -1;
+}
+
+/*
+ * Apply a single key = value pair to the profile a [profile "name"] header
+ * opened.
+ *
+ * Returns 0 applied, 1 unknown key, -1 invalid value.
+ * Top-level key used inside profile section lands here as unknown, which is
+ * the fail-closed answer: the operator meant one of the two and the file
+ * cannot say which.
+ */
+static int apply_profile_key(struct lota_profile *p, const char *key,
+			     const char *value, const char *filepath,
+			     int lineno)
+{
+	if (strcmp(key, "ca") == 0) {
+		set_str(p->ca, sizeof(p->ca), value);
+		return 0;
+	}
+	if (strcmp(key, "ca_port") == 0 || strcmp(key, "ca-port") == 0) {
+		long v;
+		if (safe_parse_long(value, &v) != 0 || v <= 0 || v > 65535) {
+			fprintf(stderr,
+				"%s:%d: invalid ca_port '%s' (expected 1-65535)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		p->ca_port = (int)v;
+		return 0;
+	}
+	if (strcmp(key, "ca_cert") == 0 || strcmp(key, "ca-cert") == 0) {
+		if (validate_path_value("ca_cert", value, filepath, lineno) !=
+		    0)
+			return -1;
+		set_str(p->ca_cert, sizeof(p->ca_cert), value);
+		return 0;
+	}
+	if (strcmp(key, "verifier") == 0) {
+		set_str(p->verifier, sizeof(p->verifier), value);
+		return 0;
+	}
+	if (strcmp(key, "verifier_port") == 0 ||
+	    strcmp(key, "verifier-port") == 0) {
+		long v;
+		if (safe_parse_long(value, &v) != 0 || v <= 0 || v > 65535) {
+			fprintf(stderr,
+				"%s:%d: invalid verifier_port '%s' (expected "
+				"1-65535)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		p->verifier_port = (int)v;
+		return 0;
+	}
+	if (strcmp(key, "reporting") == 0) {
+		if (strcmp(value, "session") == 0) {
+			p->session_gated = true;
+			return 0;
+		}
+		if (strcmp(value, "continuous") == 0) {
+			p->session_gated = false;
+			return 0;
+		}
+		fprintf(stderr,
+			"%s:%d: invalid reporting '%s' (expected session or "
+			"continuous)\n",
+			filepath, lineno, value);
+		return -1;
+	}
+	if (strcmp(key, "interval") == 0) {
+		long v;
+		if (safe_parse_long(value, &v) != 0 || v < 0 || v > INT_MAX) {
+			fprintf(stderr, "%s:%d: invalid interval '%s'\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		if (check_attest_interval(v, "interval", filepath, lineno) != 0)
+			return -1;
+		p->attest_interval = (int)v;
+		return 0;
+	}
+
+	return 1;
+}
+
+/*
+ * Parse a [profile "name"] header and open the profile it names.
+ *
+ * @line is the trimmed line, known to start with '['.
+ * Returns 0 with *out set, or -1 with a reason on stderr.
+ */
+static int open_profile_section(struct lota_config *cfg, char *line,
+				const char *filepath, int lineno,
+				struct lota_profile **out)
+{
+	static const char kw[] = "profile";
+	char *p = line + 1;
+	char *name;
+	char *end;
+	struct lota_profile *prof;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+
+	if (strncmp(p, kw, sizeof(kw) - 1) != 0) {
+		fprintf(stderr, "%s:%d: unknown section header '%s'\n",
+			filepath, lineno, line);
+		return -1;
+	}
+	p += sizeof(kw) - 1;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+
+	if (*p != '"') {
+		fprintf(stderr,
+			"%s:%d: malformed profile header (expected [profile "
+			"\"name\"])\n",
+			filepath, lineno);
+		return -1;
+	}
+	name = ++p;
+
+	end = strchr(name, '"');
+	if (!end) {
+		fprintf(stderr, "%s:%d: unterminated profile name\n", filepath,
+			lineno);
+		return -1;
+	}
+	*end++ = '\0';
+
+	while (*end == ' ' || *end == '\t')
+		end++;
+	if (strcmp(end, "]") != 0) {
+		fprintf(stderr,
+			"%s:%d: trailing content after profile header\n",
+			filepath, lineno);
+		return -1;
+	}
+
+	if (name[0] == '\0' || strlen(name) >= LOTA_CONFIG_MAX_PROFILE_NAME) {
+		fprintf(stderr, "%s:%d: profile name must be 1-%d characters\n",
+			filepath, lineno, LOTA_CONFIG_MAX_PROFILE_NAME - 1);
+		return -1;
+	}
+	if (lota_str_has_control(name)) {
+		fprintf(stderr,
+			"%s:%d: profile name contains control characters\n",
+			filepath, lineno);
+		return -1;
+	}
+
+	for (int i = 0; i < cfg->profile_count; i++) {
+		if (strcmp(cfg->profiles[i].name, name) == 0) {
+			fprintf(stderr, "%s:%d: duplicate profile '%s'\n",
+				filepath, lineno, name);
+			return -1;
+		}
+	}
+
+	if (cfg->profile_count >= LOTA_CONFIG_MAX_PROFILES) {
+		fprintf(stderr, "%s:%d: too many profiles (max %d)\n", filepath,
+			lineno, LOTA_CONFIG_MAX_PROFILES);
+		return -1;
+	}
+
+	prof = &cfg->profiles[cfg->profile_count++];
+	memset(prof, 0, sizeof(*prof));
+	set_str(prof->name, sizeof(prof->name), name);
+	prof->ca_port = LOTA_DEFAULT_CA_PORT;
+	prof->verifier_port = LOTA_DEFAULT_VERIFIER_PORT;
+	prof->session_gated = true;
+
+	*out = prof;
+	return 0;
+}
+
+/*
+ * Profile that names no CA, no anchor or no verifier cannot enroll or report,
+ * and the identity everything else will be keyed by is derived from the anchor.
+ * Incomplete is refused rather than half-configured.
+ */
+static int validate_profiles(const struct lota_config *cfg,
+			     const char *filepath)
+{
+	int errors = 0;
+
+	for (int i = 0; i < cfg->profile_count; i++) {
+		const struct lota_profile *p = &cfg->profiles[i];
+		const char *missing = NULL;
+
+		if (p->ca[0] == '\0')
+			missing = "ca";
+		else if (p->ca_cert[0] == '\0')
+			missing = "ca_cert";
+		else if (p->verifier[0] == '\0')
+			missing = "verifier";
+
+		if (missing) {
+			fprintf(stderr, "%s: profile '%s' is missing %s\n",
+				filepath, p->name, missing);
+			errors++;
+		}
+	}
+
+	return errors;
 }
 
 /*
@@ -429,6 +656,9 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
+		if (check_attest_interval(v, "attest_interval", filepath,
+					  lineno) != 0)
+			return -1;
 		cfg->attest_interval = (int)v;
 		return 0;
 	}
@@ -585,6 +815,8 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 			      const char *filepath)
 {
 	char line[LOTA_CONFIG_MAX_LINE];
+	struct lota_profile *profile = NULL;
+	bool in_section = false;
 	int lineno = 0;
 	int errors = 0;
 
@@ -617,6 +849,21 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 		if (*trimmed == '\0' || *trimmed == '#')
 			continue;
 
+		if (*trimmed == '[') {
+			/*
+			 * rejected header leaves the section open with no profile
+			 * behind it, so the keys that follow are skipped rather
+			 * than landing in the previous profile or at the top level
+			 */
+			in_section = true;
+			if (open_profile_section(cfg, trimmed, filepath, lineno,
+						 &profile) != 0) {
+				profile = NULL;
+				errors++;
+			}
+			continue;
+		}
+
 		eq = strchr(trimmed, '=');
 		if (!eq) {
 			fprintf(stderr,
@@ -636,15 +883,29 @@ static int config_load_stream(struct lota_config *cfg, FILE *f,
 			continue;
 		}
 
-		int ret = apply_key(cfg, key, value, filepath, lineno);
+		if (in_section && !profile)
+			continue;
+
+		int ret = profile ?
+				  apply_profile_key(profile, key, value,
+						    filepath, lineno) :
+				  apply_key(cfg, key, value, filepath, lineno);
 		if (ret == 1) {
-			fprintf(stderr, "%s:%d: unknown key '%s'\n", filepath,
-				lineno, key);
+			if (profile)
+				fprintf(stderr,
+					"%s:%d: unknown key '%s' in profile "
+					"'%s'\n",
+					filepath, lineno, key, profile->name);
+			else
+				fprintf(stderr, "%s:%d: unknown key '%s'\n",
+					filepath, lineno, key);
 			errors++;
 		} else if (ret < 0) {
 			errors++;
 		}
 	}
+
+	errors += validate_profiles(cfg, filepath);
 
 	if (ferror(f))
 		return -EIO;
@@ -800,4 +1061,53 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 			fprintf(fp, "container_listener_uid = %u\n",
 				cfg->container_listener_uids[i]);
 	}
+
+	/*
+	 * profiles come last, and nothing top-level may follow them:
+	 * every key after section header belongs to that section, so dump that
+	 * emitted them earlier would not parse back as what it printed
+	 */
+	for (int i = 0; i < cfg->profile_count; i++) {
+		const struct lota_profile *p = &cfg->profiles[i];
+
+		fprintf(fp, "\n# Publisher profile\n");
+		fprintf(fp, "[profile \"%s\"]\n", p->name);
+		fprintf(fp, "ca = %s\n", p->ca);
+		fprintf(fp, "ca_port = %d\n", p->ca_port);
+		fprintf(fp, "ca_cert = %s\n", p->ca_cert);
+		fprintf(fp, "verifier = %s\n", p->verifier);
+		fprintf(fp, "verifier_port = %d\n", p->verifier_port);
+		fprintf(fp, "reporting = %s\n",
+			p->session_gated ? "session" : "continuous");
+		if (p->attest_interval)
+			fprintf(fp, "interval = %d\n", p->attest_interval);
+	}
+}
+
+const char *config_resolve_policy_pubkey(const char *configured,
+					 const char *override_path,
+					 const char *packaged_path)
+{
+	/*
+	 * Named key wins -- but only while it is there.
+	 * Path that has stopped resolving is not an operator's choice any more,
+	 * it is leftover: the installer used to write this key into lota.conf,
+	 * and the file it named is one an upgrade can take away.
+	 * Treating that as "verify against nothing" would stop enforcement on
+	 * host whose package brought a perfectly good key with it.
+	 */
+	if (configured && configured[0] && access(configured, R_OK) == 0)
+		return configured;
+
+	/*
+	 * Operator's own key wins over the packaged one whenever it is there.
+	 * No package owns that path, so fleet that signs enforcement itself
+	 * keeps its answer across every upgrade, and host that never made that
+	 * choice follows the object the package installed.
+	 */
+	if (override_path && access(override_path, R_OK) == 0)
+		return override_path;
+	if (packaged_path && access(packaged_path, R_OK) == 0)
+		return packaged_path;
+	return NULL;
 }

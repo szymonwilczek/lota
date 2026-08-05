@@ -126,11 +126,16 @@ What the stages do
    hardware reset, so this cannot be skipped.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
-#. **Enrollment** -- the TPM proves itself to the operator's attestation CA
-   (credential activation) and receives a short-lived AIK certificate. The
-   running agent renews that certificate on its own against the recorded
-   endpoint as it nears expiry, so no terminal is needed after install;
-   ``lota-agent --reenroll`` stays as a manual fallback.
+#. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
+   (credential activation) and receives a short-lived AIK certificate, one per
+   publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
+   with it during the install, which is what an operator provisioning a fleet
+   wants. Naming none is the normal player case and is not a blocked stage:
+   the publisher is whoever they buy a title from, so the agent enrolls with
+   each publisher the first time a title asks for one. Either way the running
+   agent renews the certificate on its own against the endpoint recorded in
+   the profile, and ``lota-agent --reenroll --ca-cert ...`` stays as a manual
+   fallback.
 
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
 and -- when ``--verifier`` is given -- a full attestation round-trip) and a
@@ -139,12 +144,19 @@ plain-language summary of exactly what telemetry leaves the machine.
 What the operator must ship
 ===========================
 
-A player install needs four operator-provided inputs, all fail-closed:
+A player install needs these inputs, all fail-closed:
 
-* **BPF signing public key** (default ``/etc/lota/policy.pub``, override with
-  ``--policy-pubkey``) and the matching ``.sig`` next to
-  ``/usr/lib/lota/lota_lsm.bpf.o``;
-* **attestation CA endpoint** (``--ca-server``, ``--ca-port``, ``--ca-cert``);
+* nothing for **enforcement**: the agent package ships the BPF object, its
+  ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, because
+  enforcement is host-owned and signed by whoever built the package. All three
+  are replaced together by an upgrade. A fleet that signs it with its own key
+  re-signs the object and puts its key at ``/etc/lota/policy.pub``, which no
+  package owns and the agent prefers whenever it is there;
+* optionally an **attestation CA endpoint** (``--ca-server``, ``--ca-port``)
+  and its **trust anchor** (``--ca-cert``), to enroll during the install. Both
+  or neither: an anchor without an endpoint has nothing to enroll against. A
+  player install normally passes neither and lets the agent enroll with each
+  publisher when a title first asks;
 * optionally the **verifier endpoint** (``--verifier``) for the final
   round-trip check;
 * compiled **SELinux module** (``lota.pp``, default

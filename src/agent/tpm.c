@@ -36,6 +36,7 @@
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "../../include/lota_tpm_nv.h"
+#include "profile.h"
 #include "quote.h"
 #include "tpm.h"
 #include "attestation.h"
@@ -722,6 +723,7 @@ int tpm_init(struct tpm_context *ctx)
 	aik_meta_path = ctx->allow_env_tpm_overrides ?
 				getenv("LOTA_AIK_META_PATH") :
 				NULL;
+	ctx->aik_meta_path_from_env = false;
 	if (aik_meta_path && aik_meta_path[0]) {
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
@@ -747,6 +749,7 @@ int tpm_init(struct tpm_context *ctx)
 			     "%s",
 			     aik_meta_path) >= (int)sizeof(ctx->aik_meta_path))
 			return -ENAMETOOLONG;
+		ctx->aik_meta_path_from_env = true;
 	}
 
 	tcti_conf = ctx->allow_env_tpm_overrides ? getenv("LOTA_TCTI") : NULL;
@@ -1009,6 +1012,127 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
  * Check if AIK exists at persistent handle.
  * Returns: 1 if exists, 0 if not, negative errno on error
  */
+static int persistent_handle_in_use(struct tpm_context *ctx, uint32_t handle)
+{
+	TPMS_CAPABILITY_DATA *capability_data = NULL;
+	TPMI_YES_NO more_data = TPM2_NO;
+	int found = 0;
+	TSS2_RC rc;
+	int ret;
+
+	{
+		struct esys_get_capability_args args = {
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_HANDLES,
+			.property = handle,
+			.property_count = 1,
+			.more_data_out = &more_data,
+			.capability_data_out = &capability_data,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk,
+					    &args, &rc, 1,
+					    (void **)&capability_data);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!capability_data ||
+	    capability_data->capability != TPM2_CAP_HANDLES) {
+		Esys_Free(capability_data);
+		return -EIO;
+	}
+
+	for (uint32_t i = 0; i < capability_data->data.handles.count; i++) {
+		if (capability_data->data.handles.handle[i] == handle) {
+			found = 1;
+			break;
+		}
+	}
+	Esys_Free(capability_data);
+	return found;
+}
+
+/*
+ * Forget the AIK material cached for whichever profile was bound before.
+ * The rotation record and the userAuth belong to one key; carrying either across
+ * rebind would quote one publisher's key with another's auth.
+ */
+static void tpm_forget_bound_aik(struct tpm_context *ctx)
+{
+	memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+	ctx->aik_meta_loaded = false;
+	secure_bzero(ctx->aik_auth, sizeof(ctx->aik_auth));
+	ctx->aik_auth_loaded = false;
+}
+
+int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
+{
+	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
+	char previous_meta_path[sizeof(ctx->aik_meta_path)];
+	uint32_t previous_handle;
+	size_t candidate_count = 0;
+	uint32_t handle = 0;
+	int ret;
+
+	if (!ctx || !ctx->initialized || !paths || !paths->aik_meta[0])
+		return -EINVAL;
+
+	previous_handle = ctx->aik_handle;
+	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
+		 ctx->aik_meta_path);
+
+	if (!ctx->aik_meta_path_from_env) {
+		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
+			     "%s", paths->aik_meta) >=
+		    (int)sizeof(ctx->aik_meta_path))
+			return -ENAMETOOLONG;
+		if (strcmp(previous_meta_path, ctx->aik_meta_path) != 0)
+			tpm_forget_bound_aik(ctx);
+	}
+
+	ret = profile_aik_handle_load(paths, &handle);
+	if (ret == 0) {
+		if (handle != previous_handle)
+			tpm_forget_bound_aik(ctx);
+		ctx->aik_handle = handle;
+		return 0;
+	}
+	if (ret != -ENOENT)
+		return ret;
+
+	/*
+	 * First provisioning for this publisher.
+	 * Take the lowest handle the range offers that no other profile recorded,
+	 * skipping any the TPM already holds an object at:
+	 * unrecorded object is somebody else's (or a wiped profile's)
+	 * and evicting it is not this agent's call
+	 */
+	ret = profile_aik_handle_candidates(
+		LOTA_PROFILE_BASE_DIR, TPM_AIK_PROFILE_HANDLE_BASE,
+		TPM_AIK_PROFILE_HANDLE_COUNT, candidates,
+		sizeof(candidates) / sizeof(candidates[0]), &candidate_count);
+	if (ret < 0)
+		return ret;
+
+	for (size_t i = 0; i < candidate_count; i++) {
+		ret = persistent_handle_in_use(ctx, candidates[i]);
+		if (ret < 0)
+			return ret;
+		if (ret == 1)
+			continue;
+
+		ret = profile_aik_handle_save(paths, candidates[i]);
+		if (ret < 0)
+			return ret;
+		if (candidates[i] != previous_handle)
+			tpm_forget_bound_aik(ctx);
+		ctx->aik_handle = candidates[i];
+		return 0;
+	}
+
+	return -ENOSPC;
+}
+
 static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 {
 	TSS2_RC rc;
@@ -4890,6 +5014,41 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 					 ESYS_TR_NONE, ESYS_TR_NONE,
 					 TPM_SEAL_PRIMARY_HANDLE, &persistent));
 	Esys_FlushContext(ctx->esys_ctx, primary);
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	return 0;
+}
+
+int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
+{
+	ESYS_TR existing = ESYS_TR_NONE;
+	ESYS_TR persistent = ESYS_TR_NONE;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
+		return -EINVAL;
+
+	ret = persistent_handle_in_use(ctx, handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx, handle,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, &existing));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					 existing, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE, handle,
+					 &persistent));
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 

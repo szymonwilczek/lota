@@ -175,6 +175,32 @@ an unreadable setting is treated as unknown: behind a connection pooler the
 backend's ``max_connections`` is not the limit that applies, so failing
 closed on it would refuse a legitimate topology.
 
+Publisher selection over IPC
+----------------------------
+
+``LOTA_IPC_CMD_SET_PROFILE`` binds a connection to one publisher, named by the
+SHA-256 of that publisher's CA trust anchor SubjectPublicKeyInfo -- the same
+identity ``/var/lib/lota/profiles/`` is keyed by. It is connection state, not a
+per-request argument, because a title plays for one publisher: after it,
+``GET_TOKEN`` quotes with that publisher's AIK and ``GET_STATUS`` answers with
+that publisher's verdict and validity window.
+
+Three rules the agent holds to:
+
+* An identity the host has no profile for is **refused**
+  (``LOTA_IPC_ERR_UNKNOWN_PROFILE``), never quietly answered for another
+  publisher.
+* The attestation loop leaves the TPM bound to the first profile between
+  rounds, so a connection bound elsewhere rebinds for its quote and restores
+  the binding afterwards. They share one TPM and the loop expects the binding
+  it left.
+* A connection that never sends it keeps the host-wide answers: attested only
+  while every configured publisher is satisfied.
+
+``LOTA_IPC_VERSION`` is 2 for this command. The agent refuses any other
+version outright rather than negotiating: ``lota_ipc.h`` is internal, and the
+agent and the SDK that speaks to it ship together.
+
 GET_TOKEN rate limits
 =====================
 

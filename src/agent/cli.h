@@ -23,8 +23,6 @@
 #include "net.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
-#define LOTA_CLI_DEFAULT_VERIFIER_PORT 8443
-#define LOTA_CLI_DEFAULT_CA_PORT 8444
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 struct cli_options {
@@ -80,6 +78,12 @@ struct cli_options {
 	const char *ca_server;
 	int ca_port;
 	const char *enroll_token_file; /* --enroll-token-file: tenant token */
+	/* --allow-publisher: record consent to answer to one publisher,
+	 * named by the hex SHA-256 of its CA anchor's SPKI */
+	const char *allow_publisher;
+	int list_publishers_flag; /* --list-publishers */
+	/* --forget-publisher: destroy one publisher's key and stored state */
+	const char *forget_publisher;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;

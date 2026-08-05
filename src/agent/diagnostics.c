@@ -152,8 +152,19 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	if (opts->list_publishers_flag)
+		return diagnostic_exit_code(do_list_publishers());
+
+	if (opts->forget_publisher)
+		return diagnostic_exit_code(
+			do_forget_publisher(opts->forget_publisher));
+
+	if (opts->allow_publisher)
+		return diagnostic_exit_code(
+			do_allow_publisher(opts->allow_publisher));
+
 	if (opts->reenroll_flag)
-		return diagnostic_exit_code(do_reenroll());
+		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
 
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {
@@ -178,6 +189,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	}
 
 	if (opts->attest_flag) {
+		int interval;
+
 		if (opts->no_verify_tls &&
 		    !opts->insecure_allow_no_verify_tls) {
 			fprintf(stderr, "ERROR: --no-verify-tls is INSECURE "
@@ -188,15 +201,58 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			return 1;
 		}
 		if (opts->no_verify_tls && opts->ca_cert_path) {
-			fprintf(stderr, "Warning: --ca-cert ignored when "
-					"--no-verify-tls is set\n");
+			fprintf(stderr,
+				"Warning: --ca-cert is not verified against "
+				"when --no-verify-tls is set; it still names "
+				"the publisher profile the AIK certificate is "
+				"read from\n");
 		}
-		if (opts->attest_interval > 0)
+		/*
+		 * profile list is the target list, so the single-verifier flags
+		 * no longer have one target to apply to.
+		 * Refusing beats ignoring them: operator who passed --server means it
+		 */
+		if (cfg && cfg->profile_count > 0) {
+			if (opts->server_overridden) {
+				fprintf(stderr,
+					"ERROR: --server names one verifier, "
+					"but %d publisher profile(s) are "
+					"configured.\nRemove the flag, or the "
+					"profiles, so there is one answer to "
+					"where this host reports.\n",
+					cfg->profile_count);
+				return 1;
+			}
+			if (opts->has_pin) {
+				fprintf(stderr,
+					"ERROR: --pin-sha256 pins one "
+					"verifier's certificate, but %d "
+					"publisher profile(s) are "
+					"configured.\nEach profile is anchored "
+					"by its own ca_cert instead.\n",
+					cfg->profile_count);
+				return 1;
+			}
+		}
+
+		/*
+		 * Profile list is the target list, so host that names publishers
+		 * attests to them continuously.
+		 * Unset cadence says the host never chose one, not that it wants
+		 * the single-verifier one-shot below:
+		 * that path has no target list and would attest to the top-level
+		 * verifier -- unset on consumer install -- while every configured
+		 * publisher waited.
+		 */
+		interval = attest_effective_interval(
+			opts->attest_interval, cfg ? cfg->profile_count : 0);
+
+		if (interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
-				opts->server_addr, opts->server_port,
+				cfg, opts->server_addr, opts->server_port,
 				opts->ca_cert_path, opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
-				opts->attest_interval, opts->aik_ttl));
+				interval, opts->aik_ttl));
 		return diagnostic_exit_code(
 			do_attest(opts->server_addr, opts->server_port,
 				  opts->ca_cert_path, opts->no_verify_tls,

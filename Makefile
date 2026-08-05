@@ -217,7 +217,10 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/enroll_state.c \
+              $(AGENT_DIR)/publishers.c \
+              $(AGENT_DIR)/profile.c \
               $(AGENT_DIR)/aik_cert.c \
+              $(AGENT_DIR)/attest_targets.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -270,10 +273,16 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # (PCR14 lock-constant derivation + AIK certificate expiry)
 # Every privileged action shells out to the same tooling the documentation names
 # (dracut, grubby, systemctl, ...)
+#
+# profile.c comes from the agent on purpose:
+# the installer has to name the same publisher profile directory the agent enrolls
+# into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
-	installer/ui.c installer/run.c installer/probe.c
+	installer/ui.c installer/run.c installer/probe.c \
+	$(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
-		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
+		installer/run.h installer/tui.h installer/ui.h \
+		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
@@ -521,7 +530,29 @@ $(SELINUX_PP):
 .PHONY: selinux-pp
 selinux-pp: $(SELINUX_PP)
 
+# Enforcement object ships signed, and the key it is verified against ships with it.
+# Enforcement is host-owned singleton -- one kernel, one LSM, so no publisher pushes
+# kernel policy -- which makes signing it the job of whoever builds the package:
+# the distribution, or this project for its own releases.
+# Package built without that step installs an object the agent refuses to load,
+# so the machine stops enforcing for reason nobody chose; refuse to build it instead.
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 packages: all selinux-pp
+	$(Q)test -r $(BPF_OBJ).sig || { \
+		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
+		echo "  The enforcement object must be signed by whoever builds" >&2; \
+		echo "  the package: make sign-bpf SIGNING_KEY=<release key>" >&2; \
+		exit 1; \
+	}
+	$(Q)test -r $(SIGNING_PUBKEY) || { \
+		echo "packages: $(SIGNING_PUBKEY) is missing." >&2; \
+		echo "  The public half of the signing key ships with the object" >&2; \
+		echo "  so the host can verify it; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	$(Q)mkdir -p $(PKG_DIR)
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
@@ -820,6 +851,7 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
+	install -d $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
@@ -834,6 +866,12 @@ install: check-version-tag all
 	@# the agent will refuse to load until sign-bpf runs.
 	@if [ -f $(BPF_OBJ).sig ]; then \
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
+	fi
+	@# Same for the public half of the key it was signed with:
+	@# it is the other end of that signature, so it ships beside it or not at all
+	@if [ -f $(PKG_ENFORCEMENT_PUB) ]; then \
+		install -m 644 $(PKG_ENFORCEMENT_PUB) \
+			$(DESTDIR)/usr/lib/lota/enforcement.pub; \
 	fi
 	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
 	for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
@@ -895,6 +933,9 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
+	$(TEST_BIN_DIR)/test_profile_id \
+	$(TEST_BIN_DIR)/test_attest_targets \
+	$(TEST_BIN_DIR)/test_publisher_profile \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
@@ -908,6 +949,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_server_sdk \
 	$(TEST_BIN_DIR)/demo_sdk \
 	$(TEST_BIN_DIR)/test_ipc_client \
+	$(TEST_BIN_DIR)/test_ipc_payload_len \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
 	$(TEST_BIN_DIR)/test_anticheat \
 	$(TEST_BIN_DIR)/test_runtime_measure \
@@ -992,6 +1034,10 @@ $(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
+$(TEST_BIN_DIR)/test_publisher_profile: tests/test_publisher_profile.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
 $(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1000,15 +1046,15 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
@@ -1019,6 +1065,16 @@ $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c
 $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c \
+		$(AGENT_DIR)/publishers.c $(AGENT_DIR)/enroll_state.c \
+		$(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1105,13 +1161,18 @@ $(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+
+$(TEST_BIN_DIR)/test_ipc_payload_len: tests/test_ipc_payload_len.c \
+		$(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1166,6 +1227,9 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
+	@$(BUILD_DIR)/test_profile_id
+	@$(BUILD_DIR)/test_attest_targets
+	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_path_sanitize
@@ -1256,7 +1320,8 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_event_budget \
-	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
+	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
+	test_profile_id test_attest_targets test_publisher_profile
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
