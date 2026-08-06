@@ -31,7 +31,8 @@ Checks:
   - CI-equivalent DCO and hotpath documentation rules,
   - conventional commit subjects with scope parentheses,
   - good GPG or SSH signature on every commit,
-  - standalone Problem: and Solution: commit body sections,
+  - standalone Problem: and Solution: commit body sections, except on the
+    version-bump commit whose body is the release notes,
   - one blank line before the Signed-off-by trailer,
   - commit body lines wrapped to 75 columns, with a two-column tolerance,
   - body detail proportional to changed files and lines,
@@ -215,6 +216,26 @@ commit_change_size() {
 		'
 }
 
+# Release tag sits on a commit that changes VERSION and nothing else,
+# and release.yml publishes that commit's description as the release notes.
+# Recognised by shape and by content together. The subject must name a version
+# and the diff must touch VERSION alone, so a commit carrying code cannot claim
+# the exemption by renaming its subject.
+is_version_bump() {
+	local commit=$1
+	local subject
+	local files
+
+	subject=$(commit_subject "$commit")
+	[[ $subject =~ ^build:[[:space:]][0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+		return 1
+
+	files=$(git diff-tree --no-commit-id --name-only -r "$commit")
+	[[ $files == "VERSION" ]] || return 1
+
+	return 0
+}
+
 check_commit_body_contract() {
 	local rc=0
 	local commit
@@ -223,6 +244,9 @@ check_commit_body_contract() {
 	msg_file=$(mktemp)
 
 	for commit in "$@"; do
+		if is_version_bump "$commit"; then
+			continue
+		fi
 		write_commit_message "$commit" "$msg_file"
 		if grep -q '^Problem:[[:space:]].' "$msg_file"; then
 			printf '  Problem: must be standalone: %s %s\n' \
