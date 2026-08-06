@@ -231,6 +231,26 @@ struct lota_config {
 void config_init(struct lota_config *cfg);
 
 /*
+ * config_new - Allocate a config and apply the defaults.
+ *
+ * struct lota_config is over a megabyte, most of it the fs-verity allow-list
+ * and the trusted-library list, so a local one costs more stack than a thread
+ * is typically given in total.
+ * Callers allocate instead; config_init() stays for the caller that already
+ * owns the storage.
+ *
+ * Returns a config with defaults applied, or NULL if the allocation failed.
+ * Release it with config_free().
+ */
+struct lota_config *config_new(void);
+
+/*
+ * config_free - Release a config from config_new().
+ * NULL is a no-op.
+ */
+void config_free(struct lota_config *cfg);
+
+/*
  * config_load - Parse a config file into the struct.
  *
  * @cfg:  Pointer to an already-initialized config struct.
