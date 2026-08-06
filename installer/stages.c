@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
@@ -383,15 +384,27 @@ static int st_verity_apply(struct install_ctx *ctx)
 
 /* stage 5: initramfs PCR14 lock module */
 
+/* lsinitrd lists every file in the image, so the capture buffer is 64 KB */
+#define INITRD_LIST_CAP 65536
+
 static int initrd_has_lock_module(void)
 {
-	char out[65536];
 	const char *const argv[] = { "lsinitrd", NULL };
-	int rc = run_capture(argv, out, sizeof(out));
+	char *out = malloc(INITRD_LIST_CAP);
+	int rc;
 
-	if (rc != 0)
+	if (!out)
+		return -ENOMEM;
+
+	rc = run_capture(argv, out, INITRD_LIST_CAP);
+	if (rc != 0) {
+		free(out);
 		return -EIO;
-	return strstr(out, "lota-pcr14-lock") != NULL;
+	}
+
+	rc = strstr(out, "lota-pcr14-lock") != NULL;
+	free(out);
+	return rc;
 }
 
 static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
