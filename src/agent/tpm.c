@@ -1082,13 +1082,12 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		 ctx->aik_meta_path);
 
 	if (!ctx->aik_meta_path_from_env) {
-		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
-			     "%s", paths->aik_meta) >=
-		    (int)sizeof(ctx->aik_meta_path)) {
-			/* truncated path is already in the context */
+		if (strlen(paths->aik_meta) >= sizeof(ctx->aik_meta_path)) {
 			ret = -ENAMETOOLONG;
 			goto restore;
 		}
+		snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path), "%s",
+			 paths->aik_meta);
 		if (strcmp(previous_meta_path, ctx->aik_meta_path) != 0)
 			tpm_forget_bound_aik(ctx);
 	}
