@@ -40,8 +40,10 @@ Checks:
   - full project build,
   - include hygiene when C changes (skipped if clang-include-cleaner or
     bear is missing),
-  - sparse and smatch semantic analysis when C changes (advisory; each
-    skipped if its tool is missing),
+  - sparse semantic analysis when C changes (blocking; skipped if sparse
+    is missing),
+  - smatch flow analysis when C changes (advisory; skipped if smatch is
+    missing),
   - Coccinelle semantic-patch rules when C changes (blocking; skipped if
     spatch is missing),
   - BPF mirror drift guard when src/bpf/lota_lsm.bpf.c or fuzz/bpf_oracle
@@ -647,13 +649,14 @@ patch_touches_c() {
 	return 1
 }
 
-# sparse and smatch are advisory:
-# They report a summary but never fail the patch (the findings are backlog to
-# ratchet down, not a release blocker).
+# sparse is blocking:
+# the make target reports only findings in tracked files, so anything it
+# prints is this tree's problem and fails the patch.
+# smatch stays advisory (see below).
 # Both run the make target so the flag set stays in one place, only when the
 # patch touches C and the tool is installed.
 check_sparse() {
-	local out summary
+	local out
 
 	if ! patch_touches_c "$@"; then
 		pass "sparse"
@@ -664,9 +667,11 @@ check_sparse() {
 		return
 	fi
 
-	out=$(make sparse 2>&1) || true
-	summary=$(printf '%s\n' "$out" | grep -E '^sparse: [0-9]+ file' | tail -1)
-	note "${summary:-sparse: ran} (advisory)"
+	if ! out=$(make sparse 2>&1); then
+		printf '%s\n' "$out" >&2
+		fail "sparse" "semantic findings above; fix them or the gate stays red."
+		return
+	fi
 	pass "sparse"
 }
 

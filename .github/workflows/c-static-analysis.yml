@@ -52,7 +52,7 @@ jobs:
             PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
           sudo ldconfig
 
-      - name: Run sparse (advisory)
+      - name: Run sparse
         run: make sparse
 
   coccinelle:
