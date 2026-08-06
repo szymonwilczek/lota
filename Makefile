@@ -1064,6 +1064,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_config \
+	$(TEST_BIN_DIR)/test_config_alloc \
 	$(TEST_BIN_DIR)/test_config_add_profile \
 	$(TEST_BIN_DIR)/test_subscribe \
 	$(TEST_BIN_DIR)/test_policy_sign \
@@ -1177,6 +1178,10 @@ $(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AG
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_config_alloc: tests/test_config_alloc.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^
 
 $(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1409,6 +1414,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_signal_shutdown
 	@$(BUILD_DIR)/test_daemon_loop
 	@$(BUILD_DIR)/test_config
+	@$(BUILD_DIR)/test_config_alloc
 	@$(BUILD_DIR)/test_config_add_profile
 	@$(BUILD_DIR)/test_subscribe
 	@$(BUILD_DIR)/test_policy_sign
@@ -1522,7 +1528,8 @@ VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 VALGRIND_UNIT_BINS := \
 	test_hash_verify test_dbus test_systemd test_packaging \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
-	test_daemon_loop test_config test_subscribe test_policy_sign \
+	test_daemon_loop test_config test_config_alloc test_subscribe \
+	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_event_budget \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
