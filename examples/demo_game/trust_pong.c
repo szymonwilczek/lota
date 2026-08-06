@@ -70,7 +70,7 @@ struct response_buf {
 
 static atomic_int g_poll_verdict = UI_VERDICT_CHECKING;
 static char g_poll_reason[160];
-static pthread_mutex_t g_poll_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_poll_lock;
 static atomic_bool g_poll_stop = false;
 
 static int append_buf(struct response_buf *b, const char *data, size_t n)
@@ -141,7 +141,7 @@ static char *extract_string(const char *body, const char *key)
  */
 static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 {
-	struct response_buf body = { 0 };
+	struct response_buf body = {};
 	struct curl_slist *headers =
 		curl_slist_append(NULL, "Content-Type: application/json");
 	char url[256];
@@ -269,7 +269,7 @@ static void *poll_thread(void *arg)
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
 	while (!atomic_load(&g_poll_stop)) {
-		struct response_buf body = { 0 };
+		struct response_buf body = {};
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_writer);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
 		CURLcode rc = curl_easy_perform(curl);
@@ -393,6 +393,13 @@ int main(int argc, char **argv)
 		return 0;
 	if (rc != 0)
 		return 64;
+
+	rc = pthread_mutex_init(&g_poll_lock, NULL);
+	if (rc != 0) {
+		fprintf(stderr, "trust_pong: pthread_mutex_init: %s\n",
+			strerror(rc));
+		return 1;
+	}
 
 	signal(SIGPIPE, SIG_IGN);
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {

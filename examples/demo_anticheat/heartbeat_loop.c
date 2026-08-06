@@ -449,7 +449,7 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 			opt->tamper_marker, written - 1);
 	}
 
-	struct response_buf resp = { 0 };
+	struct response_buf resp = {};
 	long http_status = 0;
 	double latency_ms = 0.0;
 	rc = post_heartbeat(curl, opt->server_url, buf, written, &resp,
