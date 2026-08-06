@@ -153,7 +153,7 @@ static int initial_handshake(const struct cli_opts *opts, CURL *curl)
 	snprintf(post_body, sizeof(post_body), "{\"game_id\":\"%s\"}",
 		 opts->game_id);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_writer);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &curl_writer);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1500L);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -270,7 +270,7 @@ static void *poll_thread(void *arg)
 
 	while (!atomic_load(&g_poll_stop)) {
 		struct response_buf body = {};
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_writer);
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &curl_writer);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
 		CURLcode rc = curl_easy_perform(curl);
 		if (rc != CURLE_OK) {

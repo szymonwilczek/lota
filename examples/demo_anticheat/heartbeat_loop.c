@@ -374,7 +374,7 @@ static int post_heartbeat(CURL *curl, const char *url, const uint8_t *body,
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_writer);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &response_writer);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);

@@ -183,7 +183,7 @@ static CURL *new_handle(const struct options *opts, const char *url,
 		return NULL;
 
 	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, collect);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &collect);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, opts->timeout_sec);
 	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
