@@ -67,7 +67,7 @@ hardening, machine, and sanitizer flags in ``CFLAGS`` confuse the parsers:
   build it from ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or
   pass ``SMATCH=/path/to/smatch``), otherwise the target skips.
 * ``make check-stack-frames`` fails on a function in a shipped binary whose
-  stack frame exceeds 256 KB (``STACK_FRAME_LIMIT`` overrides it). The agent
+  stack frame exceeds 32 KB (``STACK_FRAME_LIMIT`` overrides it). The agent
   is a long-running daemon and the installer runs on whatever stack its caller
   has, so an object large enough to matter -- configuration, an allow-list, a
   rollback snapshot -- belongs on the heap, where a failed allocation is a
@@ -76,8 +76,11 @@ hardening, machine, and sanitizer flags in ``CFLAGS`` confuse the parsers:
   full stack. The compiler flags are pinned inside the script rather than
   taken from ``CFLAGS``, because hardening, machine and sanitizer flags move
   frame sizes and the gate is about the shape of the source, not of one build.
-  The ceiling is a ratchet: lower it as the largest frames come in, never
-  raise it to admit a new one.
+  The ceiling is a ratchet: lower it as the largest frames come in, never raise
+  it to admit a new one. It currently sits just above the tree's high-water
+  mark, and every frame near that mark is one ``struct profile_paths`` (24592
+  bytes, six ``PATH_MAX`` strings by value) plus small locals -- so the next
+  step down is a decision about that struct rather, not a change to this number.
 * ``make coccicheck`` runs the Coccinelle semantic-patch rules under
   ``scripts/coccinelle`` (configured by ``.cocciconfig``). It is **blocking**:
   the rules are tuned to be clean on a healthy tree, so any match is a finding.

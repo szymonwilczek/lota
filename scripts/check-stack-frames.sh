@@ -22,12 +22,13 @@
 
 set -euo pipefail
 
-# Quarter of a megabyte.
-# Chosen as a ceiling over the largest frame the tree legitimately needs,
-# not as a target: the attestation loop's per-target array in src/agent/attest.c
-# is the current high-water mark at ~242 KB.
-# Ratchet this down as that comes in; never raise it to admit a new frame.
-LIMIT=${STACK_FRAME_LIMIT:-262144}
+# 32 KB
+# Tree's high-water mark is ~29.4 KB and every frame near it is one struct
+# profile_paths (24592 bytes: six PATH_MAX strings) + small locals,
+# so the next step down is not a ceiling change -- it is a decision about
+# that struct, which would have to stop holding 6 absolute paths by value.
+# Ratchet down when that happens; never raise it to admit a new frame.
+LIMIT=${STACK_FRAME_LIMIT:-32768}
 
 CC=${CC:-gcc}
 SRC_GLOBS=('src/*.c' 'src/**/*.c' 'installer/*.c')
