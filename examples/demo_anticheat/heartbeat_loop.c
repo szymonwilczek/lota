@@ -200,7 +200,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "client-cert", required_argument, NULL, 'E' },
 		{ "client-key", required_argument, NULL, 'K' },
 		{ "help", no_argument, NULL, 'h' },
-		{ 0, 0, 0, 0 },
+		{ NULL, 0, NULL, 0 },
 	};
 
 	int c;
