@@ -596,6 +596,20 @@ check_includes() {
 	fi
 }
 
+# License boundary:
+# MIT files must not depend on GPL-2.0-only ones,
+# and every source file must name its license
+check_license_boundary() {
+	local output
+	if output="$(scripts/check-license-boundary.sh 2>&1)"; then
+		pass "license-boundary"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "license-boundary" \
+			"an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
+	fi
+}
+
 # true when the patch touches any C source or header
 patch_touches_c() {
 	local path
@@ -781,6 +795,7 @@ main() {
 	check_gofmt "${changed_files[@]}"
 	check_build
 	check_includes "${changed_files[@]}"
+	check_license_boundary
 	check_sparse "${changed_files[@]}"
 	check_smatch "${changed_files[@]}"
 	check_coccinelle "${changed_files[@]}"

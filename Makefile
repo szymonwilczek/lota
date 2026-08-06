@@ -365,7 +365,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
 
 bpf: $(BPF_OBJ)
 
@@ -732,6 +732,13 @@ check-package-manifests:
 # See scripts/check-includes.sh; auto-fix with scripts/fix-includes.sh
 check-includes:
 	@scripts/check-includes.sh
+
+# License-boundary gate
+# Fails when MIT file depends on GPL-2.0-only one,
+# or when source file declares no license at all.
+# See Documentation/contributor/development/license-boundary.rst
+check-license-boundary:
+	@scripts/check-license-boundary.sh
 
 # Combined lint:
 # clang-format style check on the C sources and headers plus golangci-lint
