@@ -36,6 +36,7 @@
 
 #define DIGEST_LEN 32
 
+static void fail(const char *msg) __attribute__((noreturn));
 static void fail(const char *msg)
 {
 	fprintf(stderr, "FAIL: %s\n", msg);
