@@ -62,10 +62,24 @@ hardening, machine, and sanitizer flags in ``CFLAGS`` confuse the parsers:
   or macro and reported as if the source wrote the specialised result, the
   flexible-array union that sizes a variable-length ioctl argument, and two
   whole-struct ``memset`` calls above Sparse's 100 KB copy limit.
-* ``make smatch`` runs the Smatch flow analyzer, advisory, with
-  ``SMATCH_STRICT=1`` for the strict mode. Smatch has no distribution package;
-  build it from ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or
-  pass ``SMATCH=/path/to/smatch``), otherwise the target skips.
+* ``make smatch`` runs the Smatch flow analyzer. It is **blocking when it
+  runs**: any finding fails the target. Smatch has no distribution package, so
+  the target skips when the binary is absent -- build it from
+  ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or pass
+  ``SMATCH=/path/to/smatch``). Skipping locally does not make it optional: the
+  ``smatch`` job in the ``C static analysis`` workflow builds a pinned revision
+  from source, caches it, and runs the same target on every pull request, so a
+  finding cannot reach ``lota-next`` because a contributor lacked the tool.
+  Build the revision that job pins if you want local results to match CI.
+
+  It takes the same corrected flag set as Sparse -- Smatch is built from Sparse
+  and parses with the same front end, so a translation unit one cannot assemble
+  is one neither can analyse. Two shapes of output count. Smatch's own findings
+  read ``file.c:LINE func() warn:``, with no column and ``warn`` rather than
+  ``warning``, which is why the Sparse filter does not match them; front-end
+  errors read ``file.c:LINE:COL: error:`` and mean the translation unit was
+  never assembled, so the file went unanalysed. A gate that ignored the second
+  kind would report success over sources it never read.
 * ``make check-stack-frames`` fails on a function in a shipped binary whose
   stack frame exceeds 32 KB (``STACK_FRAME_LIMIT`` overrides it). The agent
   is a long-running daemon and the installer runs on whatever stack its caller
@@ -87,12 +101,11 @@ hardening, machine, and sanitizer flags in ``CFLAGS`` confuse the parsers:
 
 Install the front ends with ``dnf install sparse coccinelle`` on Fedora or
 ``apt-get install sparse coccinelle`` on Debian and Ubuntu, and build Smatch
-from source. ``scripts/check-patch`` runs all four when the patch touches C
-and skips each one whose tool is absent, so the gate stays usable without them.
-Smatch stays advisory because it has no distribution package, so most
-contributors and the ``check-patch`` run skip it; ``SMATCH_STRICT=1`` is the
-ratchet for anyone who has built it. The same four checks run in CI under the
-``C static analysis`` workflow.
+from source. ``scripts/check-patch`` runs all four when the patch touches C and
+skips each one whose tool is absent, so the gate stays usable without them --
+but CI has every tool, so skipping locally postpones a failure rather than
+avoiding one. The same four checks run in CI under the ``C static analysis``
+workflow.
 
 Use ``scripts/format-patch [<base> [<head>]]`` only to normalize local commit
 messages before pushing. It rewrites commits in ``base..head`` to remove

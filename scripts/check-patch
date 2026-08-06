@@ -42,8 +42,8 @@ Checks:
     bear is missing),
   - sparse semantic analysis when C changes (blocking; skipped if sparse
     is missing),
-  - smatch flow analysis when C changes (advisory; skipped if smatch is
-    missing),
+  - smatch flow analysis when C changes (blocking when present; skipped if
+    smatch is missing, which CI never is),
   - Coccinelle semantic-patch rules when C changes (blocking; skipped if
     spatch is missing),
   - stack-frame ceiling over the shipped C sources when C changes
@@ -674,9 +674,8 @@ patch_touches_c() {
 # sparse is blocking:
 # the make target reports only findings in tracked files, so anything it
 # prints is this tree's problem and fails the patch.
-# smatch stays advisory (see below).
-# Both run the make target so the flag set stays in one place, only when the
-# patch touches C and the tool is installed.
+# Both checkers run the make target so the flag set stays in one place, only
+# when the patch touches C and the tool is installed.
 check_sparse() {
 	local out
 
@@ -697,8 +696,11 @@ check_sparse() {
 	pass "sparse"
 }
 
+# smatch is blocking when it is present:
+# it has no distribution package, so a contributor without it skips, but CI
+# builds a pinned revision and always runs it. When it runs, it decides.
 check_smatch() {
-	local out summary
+	local out
 
 	if ! patch_touches_c "$@"; then
 		pass "smatch"
@@ -706,13 +708,15 @@ check_smatch() {
 	fi
 	if ! command -v smatch >/dev/null 2>&1; then
 		skip "smatch" \
-			"build smatch from https://repo.or.cz/smatch.git and add it to PATH."
+			"build smatch from https://repo.or.cz/smatch.git and add it to PATH; CI runs it regardless."
 		return
 	fi
 
-	out=$(make smatch 2>&1) || true
-	summary=$(printf '%s\n' "$out" | grep -E '^smatch: [0-9]+ file' | tail -1)
-	note "${summary:-smatch: ran} (advisory)"
+	if ! out=$(make smatch 2>&1); then
+		printf '%s\n' "$out" >&2
+		fail "smatch" "flow-analysis findings above; fix them or the gate stays red."
+		return
+	fi
 	pass "smatch"
 }
 
