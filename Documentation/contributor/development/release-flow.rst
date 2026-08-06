@@ -13,6 +13,9 @@ Tagging releases is a maintainer action. Contributors do not push tags.
 For context, this is how a candidate is cut on ``lota-next``:
 
 * The tag sits on a single commit that changes only ``VERSION``.
+* **That commit's description becomes the release notes.** ``release.yml``
+  publishes the release page as the build line, then the body of the tagged
+  commit, then the verification line.
 * ``release.yml`` builds reproducibly, signs ``SHA256SUMS`` with cosign
   keyless, and -- because the tag is ``0.x`` or carries a ``-`` suffix -- marks
   the GitHub release as a **pre-release**.
