@@ -243,7 +243,7 @@ jobs:
             libbpf-devel elfutils-libelf-devel zlib-devel \
             tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
             dbus-devel golang selinux-policy-devel \
-            rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh
+            rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh openssl
 
       - name: Checkout
         uses: actions/checkout@v4
