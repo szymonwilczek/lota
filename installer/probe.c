@@ -937,3 +937,52 @@ int probe_esrt_system_firmware_present(void)
 	return probe_esrt_system_firmware_present_at(
 		"/sys/firmware/efi/esrt/entries");
 }
+
+enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
+					   char *note, size_t cap)
+{
+	if (!s) {
+		snprintf(note, cap,
+			 "The agent's unit state could not be read.");
+		return STAGE_ERROR;
+	}
+
+	if (!s->agent_active) {
+		snprintf(note, cap, "lota-agent.service is NOT RUNNING.");
+		return STAGE_PENDING;
+	}
+
+	/*
+	 * Running is not installed.
+	 * A unit that is not enabled does not come back after a reboot,
+	 * and a host that stops enforcing at its next boot must not be
+	 * reported as satisfied.
+	 */
+	if (!s->agent_enabled || !s->socket_enabled || !s->attest_enabled) {
+		char units[160];
+		size_t used = 0;
+
+		units[0] = '\0';
+		if (!s->agent_enabled)
+			used += (size_t)snprintf(units + used,
+						 sizeof(units) - used,
+						 "lota-agent.service");
+		if (!s->socket_enabled)
+			used += (size_t)snprintf(units + used,
+						 sizeof(units) - used,
+						 "%slota-agent.socket",
+						 used ? ", " : "");
+		if (!s->attest_enabled)
+			snprintf(units + used, sizeof(units) - used,
+				 "%slota-attest.service", used ? ", " : "");
+
+		snprintf(note, cap,
+			 "lota-agent.service is running, but these units are "
+			 "not enabled and will not start after a reboot: %s.",
+			 units);
+		return STAGE_PENDING;
+	}
+
+	snprintf(note, cap, "lota-agent.service is ACTIVE and enabled.");
+	return STAGE_DONE;
+}
