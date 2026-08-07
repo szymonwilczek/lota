@@ -87,6 +87,31 @@ static inline int attest_effective_interval(int configured, int profile_count)
 	return 0;
 }
 
+/*
+ * Stages an attestation round can fail at.
+ *
+ * The round reports its failure by stage, because the continuous loop runs
+ * with nobody reading its progress output: the stage name plus an errno is
+ * the whole of what an operator gets.
+ */
+enum attest_stage {
+	ATTEST_STAGE_TLS_SETUP,
+	ATTEST_STAGE_CONNECT,
+	ATTEST_STAGE_CHALLENGE,
+	ATTEST_STAGE_BUILD_REPORT,
+	ATTEST_STAGE_SERIALIZE,
+	ATTEST_STAGE_SEND,
+	ATTEST_STAGE_RESULT,
+	ATTEST_STAGE_VERDICT,
+	ATTEST_STAGE_COUNT,
+};
+
+/*
+ * Name of a stage, for a log line.
+ * Never NULL, including for a value the table does not cover.
+ */
+const char *attest_stage_str(enum attest_stage stage);
+
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);

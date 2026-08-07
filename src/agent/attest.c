@@ -621,6 +621,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	uint8_t *wire_buf = NULL;
 	size_t wire_buf_size = 0;
 	ssize_t wire_size = 0;
+	enum attest_stage stage = ATTEST_STAGE_COUNT;
 	int ret;
 
 	memset(&net_ctx, 0, sizeof(net_ctx));
@@ -634,18 +635,14 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	ret = net_context_init(&net_ctx, server, port, ca_cert, skip_verify,
 			       pin_sha256);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to initialize connection: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_TLS_SETUP;
 		goto cleanup;
 	}
 	net_ctx_inited = 1;
 
 	ret = net_connect(&net_ctx);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to connect to verifier: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_CONNECT;
 		goto cleanup;
 	}
 
@@ -654,9 +651,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	ret = net_recv_challenge(&net_ctx, &challenge);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to receive challenge: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_CHALLENGE;
 		goto cleanup;
 	}
 
@@ -669,9 +664,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 	ret = build_attestation_report(&challenge, &report,
 				       paths ? paths->aik_cert : NULL);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to build report: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_BUILD_REPORT;
 		goto cleanup;
 	}
 
@@ -707,9 +700,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
-			fprintf(stderr,
-				"Failed to allocate serialization buffer\n");
 			ret = -ENOMEM;
+			stage = ATTEST_STAGE_SERIALIZE;
 			goto cleanup;
 		}
 
@@ -718,9 +710,8 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 					     (uint32_t)event_log_size, &esrt,
 					     wire_buf, total);
 		if (wire_size < 0) {
-			fprintf(stderr, "Failed to serialize report: %s\n",
-				strerror((int)-wire_size));
 			ret = (int)wire_size;
+			stage = ATTEST_STAGE_SERIALIZE;
 			goto cleanup;
 		}
 	}
@@ -731,17 +722,13 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 
 	ret = net_send_report(&net_ctx, wire_buf, (size_t)wire_size);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to send report: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_SEND;
 		goto cleanup;
 	}
 
 	ret = net_recv_result(&net_ctx, &result);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr, "Failed to receive result: %s\n",
-				strerror(-ret));
+		stage = ATTEST_STAGE_RESULT;
 		goto cleanup;
 	}
 
@@ -753,9 +740,24 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		}
 	}
 
-	ret = (result.result == VERIFY_OK) ? 0 : 1;
+	if (result.result != VERIFY_OK) {
+		lota_err("Attestation round failed at %s: %s",
+			 attest_stage_str(ATTEST_STAGE_VERDICT),
+			 net_result_str(result.result));
+		ret = 1;
+		goto cleanup;
+	}
+	ret = 0;
 
 cleanup:
+	/*
+	 * Report where the round failed whatever the caller's narration setting:
+	 * the continuous loop runs with nobody reading its progress output,
+	 * so this is the only account of the failure it will ever get.
+	 */
+	if (ret < 0 && stage != ATTEST_STAGE_COUNT)
+		lota_err("Attestation round failed at %s: %s",
+			 attest_stage_str(stage), strerror(-ret));
 	OPENSSL_cleanse(&challenge, sizeof(challenge));
 	OPENSSL_cleanse(&result, sizeof(result));
 	OPENSSL_cleanse(&report, sizeof(report));
