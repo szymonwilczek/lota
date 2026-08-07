@@ -747,6 +747,23 @@ static int agent_service_active(void)
 	return run_capture(argv, out, sizeof(out)) == 0;
 }
 
+static int unit_enabled(const char *unit)
+{
+	char out[256];
+	const char *const argv[] = { "systemctl", "is-enabled", unit, NULL };
+
+	return run_capture(argv, out, sizeof(out)) == 0;
+}
+
+/* what the stage decides on: running now, and running again after a reboot */
+static void read_service_state(struct probe_service_state *s)
+{
+	s->agent_active = agent_service_active();
+	s->agent_enabled = unit_enabled("lota-agent.service");
+	s->socket_enabled = unit_enabled("lota-agent.socket");
+	s->attest_enabled = unit_enabled("lota-attest.service");
+}
+
 static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 					 size_t cap)
 {
@@ -795,14 +812,12 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
+	struct probe_service_state state;
+
 	(void)ctx;
 
-	if (agent_service_active()) {
-		snprintf(note, cap, "lota-agent.service is ACTIVE.");
-		return STAGE_DONE;
-	}
-	snprintf(note, cap, "lota-agent.service is NOT RUNNING.");
-	return STAGE_PENDING;
+	read_service_state(&state);
+	return probe_agent_service_stage(&state, note, cap);
 }
 
 static int st_agent_apply(struct install_ctx *ctx)

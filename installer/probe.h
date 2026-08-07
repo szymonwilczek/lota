@@ -16,7 +16,34 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "install.h"
+
 #define PROBE_HASH_SIZE 32
+
+/*
+ * What the installer learned about the agent's units.
+ *
+ * Running and enabled are separate questions and a host can answer them
+ * differently: one that was started by hand, or through socket activation,
+ * enforces now and not after the next reboot.
+ */
+struct probe_service_state {
+	int agent_active;
+	int agent_enabled;
+	int socket_enabled;
+	int attest_enabled;
+};
+
+/*
+ * Verdict for the agent-service stage, and the sentence explaining it.
+ *
+ * Pure: the caller does the asking, this decides.
+ * Satisfied only when the agent runs and every unit comes back on its own,
+ * so a host that would lose enforcement at the next boot is reported as work
+ * to do rather than as an installed machine.
+ */
+enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
+					   char *note, size_t cap);
 
 /* fs-verity state of one file */
 enum probe_verity {
