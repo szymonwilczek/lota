@@ -38,6 +38,18 @@
 #define LOTA_ENROLL_MAX_DEVICE_ID 128u
 #define LOTA_ENROLL_MAX_TOKEN 128u
 
+/*
+ * Manufacturer intermediates a device presents with its EK leaf.
+ *
+ * TPM whose EK certificate sits several levels below its manufacturer root
+ * stores the intermediates the CA cannot obtain anywhere else in its own NV,
+ * so the device is the only party that can supply them.
+ * Both caps are frame budget: eight certificates and 8 KB of them still leave
+ * the leaf, the AIK template and the token inside LOTA_ENROLL_MAX_FRAME.
+ */
+#define LOTA_ENROLL_MAX_EK_CHAIN_CERTS 8u
+#define LOTA_ENROLL_MAX_EK_CHAIN_BYTES 8192u
+
 /* Bound on a single decoded frame body. */
 #define LOTA_ENROLL_MAX_FRAME (16u * 1024u)
 

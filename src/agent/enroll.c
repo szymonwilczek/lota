@@ -133,6 +133,68 @@ static int wr_preamble(struct wr *w, uint16_t version)
 	return wr_u16(w, version);
 }
 
+/*
+ * Total length of the DER certificate starting at buf, or 0 when those bytes
+ * do not begin one that fits. Only the definite-length constructed SEQUENCE
+ * an X.509 certificate is encoded as is accepted; an indefinite length,
+ * a length wider than four bytes and a body running past the blob all end
+ * the walk.
+ */
+static size_t der_cert_len(const uint8_t *buf, size_t len)
+{
+	size_t hdr, body;
+
+	if (len < 2 || buf[0] != 0x30)
+		return 0;
+
+	if (buf[1] < 0x80) {
+		hdr = 2;
+		body = buf[1];
+	} else {
+		size_t width = buf[1] & 0x7Fu;
+
+		if (width == 0 || width > 4 || len < 2 + width)
+			return 0;
+		hdr = 2 + width;
+		body = 0;
+		for (size_t i = 0; i < width; i++)
+			body = (body << 8) | buf[2 + i];
+	}
+
+	if (body == 0 || body > len - hdr)
+		return 0;
+	return hdr + body;
+}
+
+int enroll_split_cert_chain(const uint8_t *blob, size_t len,
+			    struct enroll_cert_ref *out, size_t out_max,
+			    size_t *out_count)
+{
+	size_t off = 0;
+	size_t count = 0;
+
+	if (!blob || !out || !out_count)
+		return -EINVAL;
+	*out_count = 0;
+
+	while (off < len && count < out_max) {
+		size_t cert_len = der_cert_len(blob + off, len - off);
+
+		if (cert_len == 0 || cert_len > LOTA_ENROLL_MAX_EK_CERT)
+			break;
+		/* keep the walk inside the frame budget the encoder enforces */
+		if (cert_len > LOTA_ENROLL_MAX_EK_CHAIN_BYTES - off)
+			break;
+		out[count].der = blob + off;
+		out[count].len = cert_len;
+		off += cert_len;
+		count++;
+	}
+
+	*out_count = count;
+	return 0;
+}
+
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
