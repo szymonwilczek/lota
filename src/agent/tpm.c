@@ -1009,10 +1009,17 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
 }
 
 /*
- * Check if AIK exists at persistent handle.
- * Returns: 1 if exists, 0 if not, negative errno on error
+ * Check whether the TPM holds an object at a handle -- a persistent key
+ * or an NV index, both of which TPM2_CAP_HANDLES enumerates from the queried
+ * handle onward.
+ *
+ * Asking first is what keeps an optional read quiet: a handle that is simply
+ * not provisioned answers here rather than through a failed Esys call,
+ * whose TSS2 error the library prints straight at whoever ran the command.
+ *
+ * Returns: 1 if it exists, 0 if not, negative errno on error
  */
-static int persistent_handle_in_use(struct tpm_context *ctx, uint32_t handle)
+static int tpm_handle_in_use(struct tpm_context *ctx, uint32_t handle)
 {
 	TPMS_CAPABILITY_DATA *capability_data = NULL;
 	TPMI_YES_NO more_data = TPM2_NO;
@@ -1117,7 +1124,7 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		goto restore;
 
 	for (size_t i = 0; i < candidate_count; i++) {
-		ret = persistent_handle_in_use(ctx, candidates[i]);
+		ret = tpm_handle_in_use(ctx, candidates[i]);
 		if (ret < 0)
 			goto restore;
 		if (ret == 1)
@@ -4310,6 +4317,22 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
 			  size_t buf_size, size_t *out_size)
 {
+	int present;
+
+	if (!ctx || !ctx->initialized || !buf || !out_size)
+		return -EINVAL;
+
+	/*
+	 * Most TPMs store no chain, so the miss is the common case:
+	 * ask whether the index exists instead of reading it and letting
+	 * the failure surface as a TSS2 error line at the operator
+	 */
+	present = tpm_handle_in_use(ctx, TPM_EK_CERT_CHAIN_HANDLE);
+	if (present < 0)
+		return present;
+	if (!present)
+		return -ENOENT;
+
 	return tpm_nv_read_index(ctx, TPM_EK_CERT_CHAIN_HANDLE, buf, buf_size,
 				 out_size);
 }
@@ -5066,7 +5089,7 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
 	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
 		return -EINVAL;
 
-	ret = persistent_handle_in_use(ctx, handle);
+	ret = tpm_handle_in_use(ctx, handle);
 	if (ret < 0)
 		return ret;
 	if (ret == 0)
