@@ -95,6 +95,19 @@ const char *tpm_strerror(int err);
 #define TPM_EK_CERT_HANDLE 0x01c00002
 
 /*
+ * EK certificate chain handle.
+ *
+ * A manufacturer whose EK certificate sits several levels below its root
+ * stores the intervening intermediates here, as one blob with the certificates
+ * laid end to end.
+ * On such a platform -- Intel PTT among them -- these certificates are published
+ * nowhere else, so the device is the only party that can hand them to a CA.
+ * Index is optional: a TPM whose leaf is issued directly by a published root
+ * does not populate it.
+ */
+#define TPM_EK_CERT_CHAIN_HANDLE 0x01c00100
+
+/*
  * Default AIK persistent handle for a host with no publisher profile.
  * Configurable via lota.conf
  *
@@ -721,6 +734,23 @@ int tpm_activate_credential(struct tpm_context *ctx, const uint8_t *cred_blob,
  */
 int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 		    size_t *out_size);
+
+/*
+ * tpm_get_ek_cert_chain - Read the EK certificate chain from NVRAM
+ * @ctx: Initialized TPM context
+ * @buf: Output buffer for the concatenated DER certificates
+ * @buf_size: Size of output buffer
+ * @out_size: Actual size of the blob read
+ *
+ * Reads NV index 0x01c00100, where a manufacturer stores the intermediates
+ * between its EK certificates and a published root. The blob holds the
+ * certificates end to end with no framing of its own.
+ *
+ * Returns: 0 on success, -ENOENT when the platform stores no chain,
+ * negative errno on failure
+ */
+int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
+			  size_t buf_size, size_t *out_size);
 
 /*
  * tpm_get_hardware_id - Compute unique hardware identifier

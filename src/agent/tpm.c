@@ -4198,8 +4198,13 @@ static int tpm_get_prop(struct tpm_context *ctx, TPM2_PT prop,
 	return 0;
 }
 
-int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
-		    size_t *out_size)
+/*
+ * Read one NV index whole.
+ * Shared by the EK certificate and the certificate chain stored beside it:
+ * same read, different index.
+ */
+static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
+			     uint8_t *buf, size_t buf_size, size_t *out_size)
 {
 	TSS2_RC rc;
 	ESYS_TR nv_handle = ESYS_TR_NONE;
@@ -4220,9 +4225,9 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 
 	/* ESYS handle for NV index */
 	TPM_CALL_RETRY(ctx, rc,
-		       Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_CERT_HANDLE,
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx, index, ESYS_TR_NONE,
 					     ESYS_TR_NONE, ESYS_TR_NONE,
-					     ESYS_TR_NONE, &nv_handle));
+					     &nv_handle));
 	if (rc != TSS2_RC_SUCCESS) {
 		if (tpm_rc_layer_is_tpm(rc) &&
 		    tpm_rc_decode(rc) == TPM2_RC_HANDLE)
@@ -4293,6 +4298,20 @@ int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
 
 	*out_size = data_size;
 	return 0;
+}
+
+int tpm_get_ek_cert(struct tpm_context *ctx, uint8_t *buf, size_t buf_size,
+		    size_t *out_size)
+{
+	return tpm_nv_read_index(ctx, TPM_EK_CERT_HANDLE, buf, buf_size,
+				 out_size);
+}
+
+int tpm_get_ek_cert_chain(struct tpm_context *ctx, uint8_t *buf,
+			  size_t buf_size, size_t *out_size)
+{
+	return tpm_nv_read_index(ctx, TPM_EK_CERT_CHAIN_HANDLE, buf, buf_size,
+				 out_size);
 }
 
 /* ------------------------------------------------------------------ *
