@@ -76,9 +76,10 @@ static int rd_preamble(struct rd *r)
 	if (ret < 0)
 		return ret;
 	/* CA mirrors the request's version;
-	 * replies carry no version-specific fields, so both are acceptable here */
+	 * replies carry no version-specific fields, so all are acceptable here */
 	if (version != LOTA_ENROLL_VERSION &&
-	    version != LOTA_ENROLL_VERSION_TOKEN)
+	    version != LOTA_ENROLL_VERSION_TOKEN &&
+	    version != LOTA_ENROLL_VERSION_EK_CHAIN)
 		return -EPROTONOSUPPORT;
 	return 0;
 }
@@ -120,7 +121,9 @@ static int wr_bytes16(struct wr *w, const uint8_t *data, size_t len)
 		return ret;
 	if (w->pos + len > w->max)
 		return -ENOSPC;
-	memcpy(w->buf + w->pos, data, len);
+	/* empty field is a length and nothing else; data may be NULL */
+	if (len > 0)
+		memcpy(w->buf + w->pos, data, len);
 	w->pos += len;
 	return 0;
 }
@@ -198,28 +201,54 @@ int enroll_split_cert_chain(const uint8_t *blob, size_t len,
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
-			    const uint8_t *token, size_t token_len)
+			    const uint8_t *token, size_t token_len,
+			    const struct enroll_cert_ref *ek_chain,
+			    size_t ek_chain_len)
 {
 	struct wr w = { .buf = out, .max = out_max, .pos = 0 };
+	size_t chain_bytes = 0;
+	uint16_t version;
 	int ret;
 
 	if (!out || !ek_cert || !aik_public)
 		return -EINVAL;
 	if (!token && token_len > 0)
 		return -EINVAL;
+	if (!ek_chain && ek_chain_len > 0)
+		return -EINVAL;
 	if (ek_cert_len > LOTA_ENROLL_MAX_EK_CERT ||
 	    aik_public_len > LOTA_ENROLL_MAX_AIK_PUBLIC ||
-	    token_len > LOTA_ENROLL_MAX_TOKEN)
+	    token_len > LOTA_ENROLL_MAX_TOKEN ||
+	    ek_chain_len > LOTA_ENROLL_MAX_EK_CHAIN_CERTS)
+		return -EMSGSIZE;
+
+	for (size_t i = 0; i < ek_chain_len; i++) {
+		if (!ek_chain[i].der)
+			return -EINVAL;
+		if (ek_chain[i].len == 0 ||
+		    ek_chain[i].len > LOTA_ENROLL_MAX_EK_CERT)
+			return -EMSGSIZE;
+		chain_bytes += ek_chain[i].len;
+	}
+	if (chain_bytes > LOTA_ENROLL_MAX_EK_CHAIN_BYTES)
 		return -EMSGSIZE;
 
 	/*
-	 * token is what the two frame versions differ by:
-	 * untenanted request carries none and is version 1,
-	 * tenant request carries one and is version 2.
-	 * Both are current modes.
+	 * what the request carries selects the version:
+	 * untenanted request carries neither and is version 1,
+	 * tenant request carries a token and is version 2,
+	 * device presenting its manufacturer intermediates is version 3.
+	 * All three are current modes, so a host with no chain still speaks
+	 * to a CA that predates the field.
 	 */
-	ret = wr_preamble(&w, token_len > 0 ? LOTA_ENROLL_VERSION_TOKEN :
-					      LOTA_ENROLL_VERSION);
+	if (ek_chain_len > 0)
+		version = LOTA_ENROLL_VERSION_EK_CHAIN;
+	else if (token_len > 0)
+		version = LOTA_ENROLL_VERSION_TOKEN;
+	else
+		version = LOTA_ENROLL_VERSION;
+
+	ret = wr_preamble(&w, version);
 	if (ret < 0)
 		return ret;
 	ret = wr_bytes16(&w, ek_cert, ek_cert_len);
@@ -228,10 +257,21 @@ ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 	ret = wr_bytes16(&w, aik_public, aik_public_len);
 	if (ret < 0)
 		return ret;
-	if (token_len > 0) {
+	/* version 3 carries the token field whether or not it holds one */
+	if (token_len > 0 || version == LOTA_ENROLL_VERSION_EK_CHAIN) {
 		ret = wr_bytes16(&w, token, token_len);
 		if (ret < 0)
 			return ret;
+	}
+	if (version == LOTA_ENROLL_VERSION_EK_CHAIN) {
+		ret = wr_u16(&w, (uint16_t)ek_chain_len);
+		if (ret < 0)
+			return ret;
+		for (size_t i = 0; i < ek_chain_len; i++) {
+			ret = wr_bytes16(&w, ek_chain[i].der, ek_chain[i].len);
+			if (ret < 0)
+				return ret;
+		}
 	}
 	return (ssize_t)w.pos;
 }

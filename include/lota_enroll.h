@@ -18,13 +18,17 @@
 /*
  * Version 1 frames carry no enrollment token;
  * Version 2 appends one to BeginRequest.
+ * Version 3 appends the manufacturer intermediates the device holds,
+ * and carries the token field even when it is empty.
  * Version states what the frame carries, not how old the peer is:
  * untenanted enrollment sends version 1, tenant enrollment sends
- * version 2, and the CA answers in the version it received.
- * Both are current modes.
+ * version 2, a device presenting an EK chain sends version 3,
+ * and the CA answers in the version it received.
+ * All three are current modes.
  */
 #define LOTA_ENROLL_VERSION 1u
 #define LOTA_ENROLL_VERSION_TOKEN 2u
+#define LOTA_ENROLL_VERSION_EK_CHAIN 3u
 
 /* Field bounds, identical to the Go wire caps. */
 /* see (src/attestcta/wire/wire.go) */

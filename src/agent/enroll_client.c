@@ -188,7 +188,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	blen = enroll_encode_begin(body, LOTA_ENROLL_MAX_FRAME, ek_cert, ek_len,
 				   aik_pub, aik_len, (const uint8_t *)token,
-				   token ? strlen(token) : 0);
+				   token ? strlen(token) : 0, NULL, 0);
 	if (blen < 0) {
 		ret = (int)blen;
 		fprintf(stderr, "Failed to encode the enrollment request: %s\n",

@@ -92,14 +92,20 @@ negotiated**, not strict. The rule the project follows:
   new agent actually uses a new field does it require a CA new enough to
   understand it.
 
-The first use of this mechanism is the enrollment token that carries a device's
-tenant to the CA: a token-bearing request is sent under the higher version, a
-token-less request under the base version. An operator who has not deployed
-tokens sees no version change on the enrollment path at all.
+Two fields use this mechanism today. The enrollment token carries a device's
+tenant to the CA: a token-bearing request is sent under version 2, a token-less
+request under version 1. The EK certificate chain carries the manufacturer
+intermediates a firmware TPM stores on the chip: a device that has them sends
+version 3, which also carries the token field whether or not it holds a token.
+An operator who has deployed neither sees no version change on the enrollment
+path at all.
 
 Consequence: the CA and the agent fleet can be brought up in either order.
 Deploy the CA first if you intend to start using a new enrollment field, so the
-field has somewhere to land; otherwise the order does not matter.
+field has somewhere to land; otherwise the order does not matter. A host whose
+TPM stores an EK chain is the one case where the order matters in practice --
+it sends version 3 because it has no other way to be verified, so its CA has to
+understand version 3.
 
 Persistent schema (verifier - database)
 =======================================

@@ -115,11 +115,20 @@ int enroll_split_cert_chain(const uint8_t *blob, size_t len,
  * NULL or empty means none.
  * Token-less begin is version-1 frame an old CA accepts;
  * Token upgrades the frame to version 2.
+ *
+ * ek_chain carries the manufacturer intermediates between the leaf and a root
+ * the CA pins, for a platform that stores them on the chip; it upgrades the frame
+ * to version 3 and is what lets a leaf several levels below its root be verified
+ * at all.
+ * NULL or empty leaves the frame at the version the token selects,
+ * so a host with nothing to present speaks to a CA that predates the field.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
-			    const uint8_t *token, size_t token_len);
+			    const uint8_t *token, size_t token_len,
+			    const struct enroll_cert_ref *ek_chain,
+			    size_t ek_chain_len);
 
 /*
  * Read an enrollment token from a file into out (NUL-terminated).
