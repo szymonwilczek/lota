@@ -51,6 +51,18 @@ struct lota_rt_map_entry {
 int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 
 /*
+ * Identity of an opened mapping, as stat() reports it.
+ *
+ * Kept apart from the numbers in /proc/<pid>/maps:
+ * this one is comparable with a stat() of /proc/<pid>/exe,
+ * and that one is not.
+ */
+struct lota_rt_open_identity {
+	dev_t dev;
+	ino_t ino;
+};
+
+/*
  * Does the opened mapping still describe the one that was enumerated?
  *
  * enumerated and observed are both read from /proc/<pid>/maps -- the second
@@ -178,7 +190,8 @@ int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
 int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
 				 struct lota_verity_digest_key *out,
-				 uint32_t *reported_len);
+				 uint32_t *reported_len,
+				 struct lota_rt_open_identity *opened);
 
 /*
  * Compute the kernel-anchored runtime image digest of a live process.
