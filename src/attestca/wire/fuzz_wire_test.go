@@ -24,6 +24,13 @@ func FuzzDecodeBegin(f *testing.F) {
 		Token:     []byte("enroll-token"),
 	})
 	f.Add(validToken)
+	validChain, _ := EncodeBegin(&BeginRequest{
+		EKCertDER:  []byte("ek-cert"),
+		AIKPublic:  []byte("aik-pub"),
+		Token:      []byte("enroll-token"),
+		EKChainDER: [][]byte{[]byte("intermediate-a"), []byte("intermediate-b")},
+	})
+	f.Add(validChain)
 	f.Add([]byte{})
 	f.Add([]byte{0x00})       // length prefix cut short
 	f.Add([]byte{0xFF, 0xFF}) // length larger than the buffer
