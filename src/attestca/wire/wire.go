@@ -30,17 +30,21 @@ const (
 	// big-endian here for a stable on-wire byte order)
 	Magic uint32 = 0x4C434145
 
-	// Version1 frames carry no enrollment token;
+	// Version1 frames carry no enrollment token.
 	// Version2 appends one to BeginRequest.
-	// Both are current modes: untenanted enrollment is Version1,
-	// tenant enrollment presents its token and is Version2.
-	// Agent picks by whether it holds a token;
+	// Version3 appends the manufacturer intermediates the device holds and
+	// carries the token field even when it is empty.
+	// All three are current modes: untenanted enrollment is Version1,
+	// tenant enrollment presents its token and is Version2,
+	// and a device presenting an EK certificate chain is Version3.
+	// Agent picks by what it holds;
 	// CA mirrors the version of the request in its replies.
 	Version1 uint16 = 1
 	Version2 uint16 = 2
+	Version3 uint16 = 3
 
 	// Version is the newest protocol version this package speaks.
-	Version = Version2
+	Version = Version3
 
 	MaxEKCertSize      = 2048
 	MaxAIKPublicSize   = 1024
@@ -51,6 +55,13 @@ const (
 	MaxAIKCertSize     = 4096
 	MaxDeviceIDSize    = 128
 	MaxEnrollTokenSize = 128
+
+	// MaxEKChainCerts and MaxEKChainBytes bound the manufacturer
+	// intermediates a device presents with its EK leaf.
+	// Both are frame budget: eight certificates and 8 KB of them still leave
+	// the leaf, the AIK template and the token inside MaxFrameSize.
+	MaxEKChainCerts = 8
+	MaxEKChainBytes = 8192
 
 	// MaxFrameSize bounds a single decoded message body.
 	MaxFrameSize = 16 * 1024
@@ -81,10 +92,16 @@ type BeginRequest struct {
 	EKCertDER []byte
 	AIKPublic []byte // marshaled TPMT_PUBLIC
 
-	// Token is the optional enrollment token, carried by Version2 frames only.
-	// EncodeBegin derives the frame version from its presence;
+	// Token is the optional enrollment token, carried by Version2 frames
+	// and later. EncodeBegin derives the frame version from its presence;
 	// DecodeBegin leaves it nil on a Version1 frame.
 	Token []byte
+
+	// EKChainDER holds the manufacturer intermediates the device read out
+	// of its own TPM, leaf-ward first, carried by Version3 frames only.
+	// They are untrusted path material: they may complete a route to a
+	// pinned root, never widen the set of roots.
+	EKChainDER [][]byte
 
 	// Version is set by DecodeBegin to the version of the received frame
 	// so the server can mirror it in the replies.
@@ -143,6 +160,8 @@ func frameVersion(v uint16) (uint16, error) {
 		return Version1, nil
 	case Version2:
 		return Version2, nil
+	case Version3:
+		return Version3, nil
 	default:
 		return 0, ErrBadVersion
 	}
@@ -187,23 +206,44 @@ func (e *encoder) result() ([]byte, error) {
 }
 
 // EncodeBegin serializes a BeginRequest.
-// Frame version follows the token, because the token is what the two versions
-// differ by: untenanted request has none and is Version1, a tenant request carries
-// one and is Version2.
+// Frame version follows what the request carries, because that is what the
+// versions differ by: an untenanted request has neither field and is Version1,
+// a tenant request carries a token and is Version2, and a device presenting
+// its manufacturer intermediates is Version3.
 func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize ||
-		len(r.Token) > MaxEnrollTokenSize {
+		len(r.Token) > MaxEnrollTokenSize || len(r.EKChainDER) > MaxEKChainCerts {
+		return nil, ErrTooLarge
+	}
+	chainBytes := 0
+	for _, c := range r.EKChainDER {
+		if len(c) > MaxEKCertSize {
+			return nil, ErrTooLarge
+		}
+		chainBytes += len(c)
+	}
+	if chainBytes > MaxEKChainBytes {
 		return nil, ErrTooLarge
 	}
 	version := Version1
-	if len(r.Token) > 0 {
+	switch {
+	case len(r.EKChainDER) > 0:
+		version = Version3
+	case len(r.Token) > 0:
 		version = Version2
 	}
 	e := newEncoder(version)
 	e.bytes16(r.EKCertDER)
 	e.bytes16(r.AIKPublic)
-	if version == Version2 {
+	// Version3 carries the token field whether or not it holds one
+	if version >= Version2 {
 		e.bytes16(r.Token)
+	}
+	if version >= Version3 {
+		e.u16(uint16(len(r.EKChainDER)))
+		for _, c := range r.EKChainDER {
+			e.bytes16(c)
+		}
 	}
 	return e.result()
 }
@@ -272,7 +312,7 @@ func newDecoder(b []byte) (*decoder, error) {
 		return nil, ErrBadMagic
 	}
 	v := binary.BigEndian.Uint16(b[4:6])
-	if v != Version1 && v != Version2 {
+	if v != Version1 && v != Version2 && v != Version3 {
 		return nil, ErrBadVersion
 	}
 	return &decoder{buf: b, off: 6, version: v}, nil
@@ -325,7 +365,41 @@ func DecodeBegin(b []byte) (*BeginRequest, error) {
 			return nil, err
 		}
 	}
+	if d.version >= Version3 {
+		req.EKChainDER, err = d.chain()
+		if err != nil {
+			return nil, err
+		}
+	}
 	return req, nil
+}
+
+// chain reads the count-prefixed list of manufacturer intermediates.
+// The peer is unauthenticated at this point and stays so: the count is
+// checked before a single element is allocated, and the elements are bounded
+// individually and in total.
+func (d *decoder) chain() ([][]byte, error) {
+	n, err := d.u16()
+	if err != nil {
+		return nil, err
+	}
+	if int(n) > MaxEKChainCerts {
+		return nil, ErrTooLarge
+	}
+	total := 0
+	out := make([][]byte, 0, n)
+	for i := 0; i < int(n); i++ {
+		cert, err := d.bytes16(MaxEKCertSize)
+		if err != nil {
+			return nil, err
+		}
+		total += len(cert)
+		if total > MaxEKChainBytes {
+			return nil, ErrTooLarge
+		}
+		out = append(out, cert)
+	}
+	return out, nil
 }
 
 // DecodeChallenge parses a ChallengeReply.
