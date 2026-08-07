@@ -187,6 +187,115 @@ static void test_decode_rejects_malformed(void)
 	      "decode rejects an oversized field length");
 }
 
+/*
+ * TPM stores its manufacturer intermediates as one NV blob with the certificates
+ * laid end to end and no framing of its own, so the only way to find the elements
+ * is to walk the ASN.1 SEQUENCE headers.
+ * Intel PTT keeps three of them there, and they are the certificates without which
+ * no such host can build a path to its manufacturer root.
+ */
+static void test_split_cert_chain(void)
+{
+	/* three SEQUENCEs: short form, long form, short form */
+	const uint8_t blob[] = { 0x30, 0x02, 0xAA, 0xBB, /* 4 bytes */
+				 0x30, 0x82, 0x00, 0x03,
+				 0x01, 0x02, 0x03, /* 7 bytes */
+				 0x30, 0x01, 0xFF }; /* 3 bytes */
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 0;
+
+	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0,
+	      "split accepts a concatenated certificate blob");
+	CHECK(count == 3, "split finds every certificate in the blob");
+	CHECK(count == 3 && certs[0].der == blob && certs[0].len == 4,
+	      "split sizes a short-form certificate");
+	CHECK(count == 3 && certs[1].der == blob + 4 && certs[1].len == 7,
+	      "split sizes a long-form certificate");
+	CHECK(count == 3 && certs[2].der == blob + 11 && certs[2].len == 3,
+	      "split sizes the last certificate");
+}
+
+/*
+ * NV contents are vendor data the host does not control, so the walk is lenient
+ * in both directions: whatever stops looking like a certificate ends the list,
+ * and a blob that yields nothing leaves the enrollment to proceed on the leaf
+ * alone.
+ */
+static void test_split_cert_chain_tolerates_junk(void)
+{
+	const uint8_t padded[] = { 0x30, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x00 };
+	const uint8_t junk[] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	const uint8_t truncated[] = { 0x30, 0x08, 0xAA, 0xBB };
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 99;
+
+	CHECK(enroll_split_cert_chain(padded, sizeof(padded), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 1,
+	      "trailing NV padding ends the list");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(junk, sizeof(junk), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "a blob holding no certificate yields none");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(truncated, sizeof(truncated), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "a certificate running past the blob is dropped");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(NULL, 0, certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == -EINVAL,
+	      "split rejects a NULL blob");
+}
+
+/*
+ * Both caps are frame budget: the begin request has to fit LOTA_ENROLL_MAX_FRAME
+ * beside the leaf, the AIK template and the token, so the walk stops at
+ * the caller's array and at the byte budget rather than handing the encoder
+ * a chain it would refuse.
+ */
+static void test_split_cert_chain_bounds(void)
+{
+	const uint8_t blob[] = { 0x30, 0x01, 0xAA, 0x30, 0x01,
+				 0xBB, 0x30, 0x01, 0xCC };
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 0;
+
+	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs, 2, &count) ==
+			      0 &&
+		      count == 2,
+	      "split stops at the caller's array");
+
+	/*
+	 * one certificate one byte past the per-certificate cap:
+	 * it is not a certificate this wire can carry, so the walk ends there
+	 */
+	static uint8_t oversized[LOTA_ENROLL_MAX_EK_CERT + 8];
+	size_t body = LOTA_ENROLL_MAX_EK_CERT;
+
+	memset(oversized, 0, sizeof(oversized));
+	oversized[0] = 0x30;
+	oversized[1] = 0x82;
+	oversized[2] = (uint8_t)((body >> 8) & 0xFFu);
+	oversized[3] = (uint8_t)(body & 0xFFu);
+	count = 99;
+	CHECK(enroll_split_cert_chain(oversized, sizeof(oversized), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "split drops a certificate past the per-certificate cap");
+}
+
 static const char *write_token_file(const char *content, size_t len)
 {
 	static char path[256];
@@ -256,6 +365,9 @@ int main(void)
 	test_decode_challenge();
 	test_decode_result();
 	test_decode_rejects_malformed();
+	test_split_cert_chain();
+	test_split_cert_chain_tolerates_junk();
+	test_split_cert_chain_bounds();
 	test_token_from_file();
 
 	if (g_failures) {
