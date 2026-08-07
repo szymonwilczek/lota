@@ -14,7 +14,6 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <unistd.h>
 
 #include "runtime_image_measure.h"
@@ -255,7 +254,8 @@ out:
 int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
 				 struct lota_verity_digest_key *out,
-				 uint32_t *reported_len)
+				 uint32_t *reported_len,
+				 struct lota_rt_open_identity *opened)
 {
 	char map_files_dir[64];
 	char map_files_leaf[40];
@@ -267,6 +267,10 @@ int lota_rt_measure_entry_verity(pid_t pid,
 
 	if (reported_len)
 		*reported_len = 0;
+	if (opened) {
+		opened->dev = 0;
+		opened->ino = 0;
+	}
 
 	if (!entry || !out)
 		return -EINVAL;
@@ -327,6 +331,17 @@ int lota_rt_measure_entry_verity(pid_t pid,
 			    entry, &observed, (unsigned long long)st.st_ino)) {
 			ret = -ESTALE;
 			goto out;
+		}
+
+		/*
+		 * Report the handle's own identity so the caller can tell
+		 * which mapping is the executable without comparing a stat()
+		 * device against a maps one -- the comparison this block
+		 * exists to avoid.
+		 */
+		if (opened) {
+			opened->dev = st.st_dev;
+			opened->ino = st.st_ino;
 		}
 	}
 
@@ -497,7 +512,7 @@ int lota_runtime_coverage_pid(pid_t pid,
 	for (size_t i = 0; i < n; i++) {
 		struct lota_verity_digest_key key;
 
-		ret = lota_rt_measure_entry_verity(pid, &entries[i], &key,
+		ret = lota_rt_measure_entry_verity(pid, &entries[i], &key, NULL,
 						   NULL);
 		if (ret == 0) {
 			cov->measured++;
@@ -561,15 +576,24 @@ int lota_runtime_measure_pid(pid_t pid,
 		struct lota_runtime_image_module *slot =
 			&mods[local_cov.measured];
 		uint32_t reported = 0;
-		int is_exe = major(exe_dev) == entries[i].dev_major &&
-			     minor(exe_dev) == entries[i].dev_minor &&
-			     (unsigned long long)exe_ino == entries[i].ino;
+		struct lota_rt_open_identity opened = { 0 };
+		int is_exe;
 
 		snprintf(slot->soname, sizeof(slot->soname), "%s",
 			 entries[i].soname);
 
-		ret = lota_rt_measure_entry_verity(pid, &entries[i],
-						   &slot->verity, &reported);
+		ret = lota_rt_measure_entry_verity(
+			pid, &entries[i], &slot->verity, &reported, &opened);
+
+		/*
+		 * Both sides come from stat(): the mapping's opened handle
+		 * and /proc/<pid>/exe.
+		 * Comparing a maps device against a stat one would never match
+		 * on a filesystem that reports a device per subvolume,
+		 * and the executable would then never be recognised as measured.
+		 */
+		is_exe = opened.ino != 0 && opened.dev == exe_dev &&
+			 opened.ino == exe_ino;
 		if (ret != 0) {
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),

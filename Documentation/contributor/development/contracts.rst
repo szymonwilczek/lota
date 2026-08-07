@@ -77,6 +77,16 @@ Both halves are load-bearing. Dropping the device comparison would accept the
 same inode number appearing on another filesystem; dropping the handle's inode
 would accept a measurement of whatever the range points at now.
 
+The same rule decides **which mapping is the process's own executable**, and
+that decision is not cosmetic: an executable that cannot be measured fails the
+measurement, while a library that cannot be measured is coverage the relying
+party judges. The measurement therefore reports the identity of the handle it
+opened (``struct lota_rt_open_identity``, a ``stat()`` device and inode) and
+the caller compares that against a ``stat()`` of ``/proc/<pid>/exe``. Comparing
+either against a number parsed out of ``maps`` recognises no executable at all
+on a per-subvolume-device filesystem, which downgrades the fatal case to a
+coverage note and makes the refusal name whichever object was recorded last.
+
 Baseline store migrations
 =========================
 
