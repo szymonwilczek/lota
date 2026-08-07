@@ -22,7 +22,7 @@ func FuzzVerifyEKCertificate(f *testing.F) {
 	f.Add([]byte{0x30, 0x00})
 
 	f.Fuzz(func(t *testing.T, der []byte) {
-		cert, err := is.VerifyEKCertificate(der, time.Now())
+		cert, err := is.VerifyEKCertificate(der, nil, time.Now())
 		if (err == nil) != (cert != nil) {
 			t.Fatalf("contract violated: err=%v cert=%v", err, cert)
 		}

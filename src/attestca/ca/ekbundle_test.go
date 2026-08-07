@@ -58,7 +58,7 @@ func TestLoadEKRootBundleAcceptsPinnedRoots(t *testing.T) {
 		t.Fatalf("NewIssuer with bundle: %v", err)
 	}
 	ekDER, _ := makeEKCert(t, roots["intel.pem"], nil)
-	if _, err := is.VerifyEKCertificate(ekDER, time.Now()); err != nil {
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("bundled root did not verify its EK: %v", err)
 	}
 }
