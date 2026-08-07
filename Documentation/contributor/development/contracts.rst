@@ -49,6 +49,34 @@ three:
   with the production parser and checks each field against the same patterns.
   The patterns are restated in both files on purpose.
 
+Runtime image measurement: which numbers identify a mapping
+===========================================================
+
+Measuring a protected process's executable images means enumerating its
+mappings from ``/proc/<pid>/maps``, opening each through
+``/proc/<pid>/map_files/<range>``, and confirming the handle still describes
+what was enumerated. That confirmation is the contract, and it is easy to get
+wrong in a way that only shows on some filesystems.
+
+**A device number from ``/proc/<pid>/maps`` and one from ``stat()`` are not the
+same quantity.** ``maps`` prints the filesystem's ``s_dev``; ``stat()`` returns
+whatever the filesystem chooses to report, and btrfs reports a separate
+anonymous device per subvolume. For one live mapping on a btrfs root the two
+differ, so code that compares one against the other rejects every mapping on
+that host -- silently, since the rejection looks like a mapping that moved.
+
+The identity is therefore built from numbers of one kind:
+
+* the device and inode of the enumerated range, and the device and inode of the
+  range re-read from ``/proc/<pid>/maps`` after the handle was opened, are
+  compared with each other -- same API, same meaning;
+* the opened handle's own inode is compared against the enumerated inode, which
+  is what ties the file being measured to the range that was enumerated.
+
+Both halves are load-bearing. Dropping the device comparison would accept the
+same inode number appearing on another filesystem; dropping the handle's inode
+would accept a measurement of whatever the range points at now.
+
 Baseline store migrations
 =========================
 

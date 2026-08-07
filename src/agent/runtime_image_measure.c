@@ -184,6 +184,74 @@ out:
 	return ret;
 }
 
+int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
+				const struct lota_rt_map_entry *observed,
+				unsigned long long opened_ino)
+{
+	if (!enumerated || !observed)
+		return 0;
+
+	/*
+	 * Both devices come from /proc/<pid>/maps, so they are the same quantity.
+	 * Taking one of them from stat() would compare a subvolume's anonymous
+	 * device against the filesystem's on any filesystem that distinguishes
+	 * them.
+	 */
+	if (observed->dev_major != enumerated->dev_major ||
+	    observed->dev_minor != enumerated->dev_minor)
+		return 0;
+	if (observed->ino != enumerated->ino)
+		return 0;
+
+	/* and the handle that was opened is that same inode */
+	if (opened_ino != enumerated->ino)
+		return 0;
+
+	return 1;
+}
+
+int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
+			     struct lota_rt_map_entry *out)
+{
+	char maps_path[64];
+	char *line = NULL;
+	size_t line_cap = 0;
+	FILE *f;
+	int ret = 0;
+
+	if (!out)
+		return -EINVAL;
+
+	memset(out, 0, sizeof(*out));
+
+	snprintf(maps_path, sizeof(maps_path), "/proc/%d/maps", (int)pid);
+	f = fopen(maps_path, "re");
+	if (!f)
+		return -errno;
+
+	while (getline(&line, &line_cap, f) != -1) {
+		struct lota_rt_map_entry e;
+		int rc = lota_rt_parse_maps_line(line, &e);
+
+		if (rc < 0) {
+			ret = rc;
+			goto out;
+		}
+		if (rc == 0)
+			continue;
+		if (e.start == start && e.end == end) {
+			*out = e;
+			ret = 1;
+			goto out;
+		}
+	}
+
+out:
+	free(line);
+	fclose(f);
+	return ret;
+}
+
 int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
 				 struct lota_verity_digest_key *out,
@@ -235,12 +303,31 @@ int lota_rt_measure_entry_verity(pid_t pid,
 		goto out;
 	}
 
-	/* mapping must still resolve to the inode seen during enumeration */
-	if (!S_ISREG(st.st_mode) || major(st.st_dev) != entry->dev_major ||
-	    minor(st.st_dev) != entry->dev_minor ||
-	    (unsigned long long)st.st_ino != entry->ino) {
+	/*
+	 * The mapping must still resolve to what was enumerated.
+	 * The range is re-read from the same /proc/<pid>/maps the enumeration
+	 * used, so the two device numbers are comparable; the opened handle's
+	 * inode is what ties the file about to be measured to that range.
+	 */
+	if (!S_ISREG(st.st_mode)) {
 		ret = -ESTALE;
 		goto out;
+	}
+	{
+		struct lota_rt_map_entry observed;
+		int found = lota_rt_lookup_map_entry(pid, entry->start,
+						     entry->end, &observed);
+
+		if (found < 0) {
+			ret = found;
+			goto out;
+		}
+		if (found == 0 ||
+		    !lota_rt_mapping_identity_ok(
+			    entry, &observed, (unsigned long long)st.st_ino)) {
+			ret = -ESTALE;
+			goto out;
+		}
 	}
 
 	{

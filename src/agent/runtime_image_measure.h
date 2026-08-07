@@ -51,6 +51,38 @@ struct lota_rt_map_entry {
 int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 
 /*
+ * Does the opened mapping still describe the one that was enumerated?
+ *
+ * enumerated and observed are both read from /proc/<pid>/maps -- the second
+ * after the handle was opened -- so their device numbers are the same quantity
+ * and can be compared.
+ *
+ * opened_ino is the inode of the handle itself, which is what ties the file
+ * that will be measured to the range that was enumerated.
+ *
+ * A device from stat() is deliberately not one of the inputs: a filesystem
+ * that reports one device per subvolume, as btrfs does, answers stat()
+ * and maps differently for the same live mapping, and comparing the two refuses
+ * every mapping on such a host.
+ *
+ * Returns 1 when the mapping is unchanged, 0 otherwise -- including for a NULL
+ * argument, so the caller fails closed.
+ */
+int lota_rt_mapping_identity_ok(const struct lota_rt_map_entry *enumerated,
+				const struct lota_rt_map_entry *observed,
+				unsigned long long opened_ino);
+
+/*
+ * Read the current /proc/<pid>/maps entry covering exactly [start, end).
+ *
+ * Returns 1 and fills *out when the range is still a file-backed executable
+ * mapping, 0 when no such range exists any more, or a negative errno.
+ * *out is zeroed on anything but a hit.
+ */
+int lota_rt_lookup_map_entry(pid_t pid, unsigned long start, unsigned long end,
+			     struct lota_rt_map_entry *out);
+
+/*
  * Collect the deduplicated set of file-backed executable mappings of a live
  * process (one entry per backing inode) into entries[].
  *
