@@ -352,6 +352,139 @@ static int build_full_token_sha256(EVP_PKEY *key, uint64_t valid_until,
 				nonce, tokbuf, tokbuf_size, tok_written);
 }
 
+/*
+ * Same, but with one protected process and its image digest,
+ * so the relying-party side has a v2 runtime measurement to recompute.
+ */
+static int build_full_token_v2(EVP_PKEY *key, uint64_t valid_until,
+			       uint32_t flags, const uint8_t nonce[32],
+			       uint8_t *tokbuf, size_t tokbuf_size,
+			       size_t *tok_written)
+{
+	uint8_t exp_nonce[32];
+	uint8_t runtime_digest[32];
+	uint8_t policy_digest[32] = { 0x11, 0x22, 0x33 };
+	uint8_t pcr_digest[32];
+	uint32_t pcr_mask = 0x4001;
+	uint32_t pids[1] = { 4242 };
+	uint8_t image_digests[1][32];
+	struct lota_token token;
+	size_t attest_len = 0;
+	size_t sig_len = 0;
+	uint8_t *attest;
+	uint8_t *sig;
+	int ret;
+
+	memset(image_digests[0], 0x5A, sizeof(image_digests[0]));
+	memset(pcr_digest, 0xDD, sizeof(pcr_digest));
+
+	if (lota_compute_runtime_protect_digest_v2(
+		    pids, (const uint8_t (*)[32])image_digests, 1,
+		    runtime_digest) != 0)
+		return LOTA_ERR_INVALID_ARG;
+	if (compute_expected_nonce(valid_until, flags, pcr_mask, nonce,
+				   policy_digest, runtime_digest, 0,
+				   exp_nonce) != 0)
+		return LOTA_ERR_INVALID_ARG;
+
+	attest = build_fake_tpms_attest(exp_nonce, 32, pcr_mask, pcr_digest,
+					sizeof(pcr_digest), &attest_len);
+	if (!attest)
+		return LOTA_ERR_INVALID_ARG;
+	sig = rsa_sign(key, EVP_sha256(), attest, attest_len, &sig_len);
+	if (!sig) {
+		free(attest);
+		return LOTA_ERR_INVALID_ARG;
+	}
+
+	memset(&token, 0, sizeof(token));
+	token.runtime_protect_version = LOTA_RUNTIME_PROTECT_V2;
+	token.valid_until = valid_until;
+	token.flags = flags;
+	memcpy(token.nonce, nonce, 32);
+	token.sig_alg = 0x0014; /* RSASSA */
+	token.hash_alg = 0x000B; /* SHA-256 */
+	token.pcr_mask = pcr_mask;
+	memcpy(token.policy_digest, policy_digest, sizeof(token.policy_digest));
+	memcpy(token.runtime_protect_digest, runtime_digest,
+	       sizeof(token.runtime_protect_digest));
+	token.runtime_protect_epoch = 0;
+	token.protect_pid_count = 1;
+	token.protected_pids = pids;
+	token.protected_image_digests = image_digests;
+	token.attest_data = attest;
+	token.attest_size = attest_len;
+	token.signature = sig;
+	token.signature_len = sig_len;
+
+	ret = lota_token_serialize(&token, tokbuf, tokbuf_size, tok_written);
+
+	free(attest);
+	free(sig);
+	return ret;
+}
+
+/*
+ * A tampered image digest is the one signal a relying party has that the
+ * runtime image measurement did not reconcile, so it may not arrive wearing
+ * the name of a nonce failure.
+ */
+static void test_verify_tampered_image_digest_is_named(EVP_PKEY *key,
+						       const uint8_t *aik_der,
+						       size_t aik_len)
+{
+	TEST("lota_server_verify_token - tampered image digest is not a nonce failure");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	struct lota_server_claims claims;
+	size_t image_off;
+	const char *msg_image;
+	const char *msg_nonce;
+	int ret;
+
+	if (build_full_token_v2(key, now + LOTA_SERVER_MAX_TOKEN_AGE_SEC, 0x07,
+				nonce, tokbuf, sizeof(tokbuf),
+				&tok_written) != LOTA_OK) {
+		FAIL("build_full_token_v2 failed");
+		return;
+	}
+
+	if (lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				     nonce, &claims) != LOTA_SERVER_OK) {
+		FAIL("the untampered v2 token did not verify");
+		return;
+	}
+
+	/* header, then the four-byte pid list, then the image digest */
+	image_off = LOTA_TOKEN_HEADER_SIZE + sizeof(uint32_t);
+	tokbuf[image_off] ^= 0x01;
+
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret == LOTA_SERVER_OK) {
+		FAIL("a tampered image digest was accepted");
+		return;
+	}
+	if (ret == LOTA_SERVER_ERR_NONCE_FAIL) {
+		FAIL("reported as a nonce failure, which is a different fault");
+		return;
+	}
+
+	msg_image = lota_server_strerror(ret);
+	msg_nonce = lota_server_strerror(LOTA_SERVER_ERR_NONCE_FAIL);
+	if (!msg_image || strlen(msg_image) == 0 ||
+	    strcmp(msg_image, msg_nonce) == 0 ||
+	    strcmp(msg_image, "Unknown error") == 0) {
+		FAIL("the runtime-image refusal has no message of its own");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_serialize_basic(void)
 {
 	TEST("lota_token_serialize - basic roundtrip");
@@ -1346,6 +1479,7 @@ int main(void)
 	test_verify_bad_signature(key, aik_der, aik_len);
 	test_verify_tampered_flags(key, aik_der, aik_len);
 	test_verify_tampered_pcr_mask(key, aik_der, aik_len);
+	test_verify_tampered_image_digest_is_named(key, aik_der, aik_len);
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
 	test_verify_expired(key, aik_der, aik_len);
 	test_verify_beyond_freshness_window(key, aik_der, aik_len);
