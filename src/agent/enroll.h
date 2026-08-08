@@ -195,7 +195,26 @@ int do_reenroll(const char *ca_cert);
  * auto-renewal.
  */
 int enroll_renew_cert(struct tpm_context *tpm,
-		      const struct profile_paths *paths);
+		      const struct profile_paths *paths,
+		      const char *configured_ca_cert);
+
+/*
+ * Which CA trust anchor a renewal presents.
+ *
+ * configured is the anchor this profile is configured with and recorded is
+ * the one stored when it enrolled.  Both name the same publisher, since the
+ * profile is derived from the anchor, so the choice is about which path is
+ * still openable: the daemon's sandbox gives it its own /tmp and /var/tmp,
+ * and an enrollment driven from a staging directory records a path that is
+ * not there for it.
+ *
+ * Returns 0 and points *out at the anchor to use, or -ENOENT when neither is
+ * set, or -EINVAL for a NULL out.
+ *
+ * *out points into one of the arguments and lives as long as it does.
+ */
+int enroll_renew_anchor(const char *configured, const char *recorded,
+			const char **out);
 
 /*
  * Record that somebody on this machine agreed to answer to a publisher,
