@@ -287,6 +287,13 @@ either fails: something has to have been measured, and the producer's **own
 executable** has to be one of the objects measured -- that binary is the one
 a publisher ships and can make measurable.
 
+On the backend side, ``lota_server_verify_token()`` recomputes the runtime
+measurement from the token's own protected-PID list and image digests and
+compares it against the value inside the TPM signature. A mismatch is
+``LOTA_SERVER_ERR_RUNTIME_IMAGE`` -- its own code, distinct from the two nonce
+checks, because it is the signal that a protected process's code did not
+reconcile and it is the one an anti-cheat backend alerts on.
+
 Making your own objects measurable
 ----------------------------------
 
