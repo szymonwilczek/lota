@@ -111,3 +111,31 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	*out = st;
 	return 0;
 }
+
+int enroll_renew_anchor(const char *configured, const char *recorded,
+			const char **out)
+{
+	if (!out)
+		return -EINVAL;
+
+	*out = NULL;
+
+	/*
+	 * Configured anchor is the one the profile was derived from,
+	 * so it names the same publisher as the recorded path and is
+	 * the one the daemon is guaranteed to be able to open:
+	 * the recorded path may be a staging directory an installer used,
+	 * or anything under a /tmp the unit's sandbox replaces
+	 */
+	if (configured && configured[0]) {
+		*out = configured;
+		return 0;
+	}
+
+	if (recorded && recorded[0]) {
+		*out = recorded;
+		return 0;
+	}
+
+	return -ENOENT;
+}

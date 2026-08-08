@@ -915,9 +915,11 @@ int enroll_profile_now(struct tpm_context *tpm,
 }
 
 int enroll_renew_cert(struct tpm_context *tpm,
-		      const struct profile_paths *paths)
+		      const struct profile_paths *paths,
+		      const char *configured_ca_cert)
 {
 	struct enroll_state st;
+	const char *anchor = NULL;
 	int ret;
 
 	if (!tpm || !paths)
@@ -927,16 +929,24 @@ int enroll_renew_cert(struct tpm_context *tpm,
 	if (ret < 0)
 		return ret; /* -ENOENT: never enrolled, caller disables renew */
 
-	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port,
-			   st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
-			   st.has_pin ? st.pin_sha256 : NULL,
+	/*
+	 * endpoint comes from the record, which is the promise --reenroll makes
+	 * the anchor does not: see enroll_renew_anchor()
+	 */
+	ret = enroll_renew_anchor(configured_ca_cert, st.ca_cert, &anchor);
+	if (ret < 0) {
+		OPENSSL_cleanse(&st, sizeof(st));
+		return ret;
+	}
+
+	ret = enroll_to_ca(tpm, st.ca_server, st.ca_port, anchor,
+			   st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL,
 			   st.enroll_token[0] ? st.enroll_token : NULL,
 			   paths->aik_cert);
 	if (ret == 0)
 		persist_enroll_state(
-			paths, st.ca_server, st.ca_port,
-			st.ca_cert[0] ? st.ca_cert : NULL, st.no_verify_tls,
-			st.has_pin ? st.pin_sha256 : NULL,
+			paths, st.ca_server, st.ca_port, anchor,
+			st.no_verify_tls, st.has_pin ? st.pin_sha256 : NULL,
 			st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));
 	return ret;
