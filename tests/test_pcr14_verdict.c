@@ -135,7 +135,7 @@ static void test_warm_restart_is_committed(void)
 	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
 		FAIL("failed to derive the register value");
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_ALREADY_COMMITTED)
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a warm restart must read as already committed");
 	PASS();
 }
@@ -159,8 +159,12 @@ static void test_resume_is_not_a_foreign_extend(void)
 		FAIL("the scenario is void: restartCount did not move the "
 		     "derived value");
 
-	if (tpm_classify_pcr14(&s.obs) == TPM_PCR14_MUTATED_IN_SESSION)
-		FAIL("a resume was reported as another writer extending PCR14");
+	uint32_t drift = 0;
+
+	if (tpm_classify_pcr14(&s.obs, &drift) != TPM_PCR14_RESUMED)
+		FAIL("a resume was not recognised as a TPM restart");
+	if (drift != 1)
+		FAIL("expected a drift of one restart, got %u", drift);
 	PASS();
 }
 
@@ -182,7 +186,7 @@ static void test_foreign_extend_is_still_refused(void)
 	/* somebody extended PCR14; the snapshot still holds our value */
 	fill(s.current, 0x77);
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("a foreign extend must read as a mutation");
 	PASS();
 }
@@ -204,8 +208,12 @@ static void test_resume_does_not_license_a_new_binary(void)
 	/* different binary is running now */
 	fill(s.self_hash, 0xB0);
 
-	if (tpm_classify_pcr14(&s.obs) == TPM_PCR14_ALREADY_COMMITTED)
+	enum tpm_pcr14_state got = tpm_classify_pcr14(&s.obs, NULL);
+
+	if (got == TPM_PCR14_ALREADY_COMMITTED || got == TPM_PCR14_RESUMED)
 		FAIL("a resume must not accept a different agent binary");
+	if (got != TPM_PCR14_BINARY_CHANGED)
+		FAIL("a changed binary must be named as such");
 	PASS();
 }
 
@@ -234,14 +242,40 @@ static void test_reset_count_advance_is_not_a_resume(void)
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 	s.prev.reset_count = RESET_COUNT - 1;
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_TAMPERED_BEFORE_START)
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_TAMPERED_BEFORE_START)
 		FAIL("an advanced resetCount must read as pre-start tamper");
+	PASS();
+}
+
+/*
+ * The resume verdict is derived from the agent's own hash and the TPM's
+ * counters, never read from the clock-state file. A local root who can
+ * rewrite that file and who has extended PCR14 must not be able to
+ * dress the result up as a suspend/resume.
+ */
+static void test_forged_snapshot_cannot_fake_a_resume(void)
+{
+	struct scenario s;
+
+	TEST("a forged clock-state snapshot cannot fake a resume");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+		FAIL("failed to derive the register value");
+
+	/* Somebody extended PCR14 with a value of their choosing ... */
+	fill(s.current, 0x5c);
+	/* ... and wrote a snapshot that claims it is what we committed. */
+	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
+
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_MUTATED_IN_SESSION)
+		FAIL("a forged snapshot was allowed to explain the register");
 	PASS();
 }
 
 int main(void)
 {
 	test_warm_restart_is_committed();
+	test_forged_snapshot_cannot_fake_a_resume();
 	test_resume_is_not_a_foreign_extend();
 	test_foreign_extend_is_still_refused();
 	test_resume_does_not_license_a_new_binary();
