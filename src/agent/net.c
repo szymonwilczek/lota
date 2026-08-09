@@ -35,6 +35,11 @@
 /* TLS socket I/O timeout */
 #define NET_IO_TIMEOUT_SEC 30
 
+/* Where the kernel reports whether SELinux is enforcing.
+ * Read directly, so the agent needs no libselinux at link time
+ * -- the same reason the TPM device label is read through getxattr(2) */
+#define NET_SELINUX_ENFORCE_PATH "/sys/fs/selinux/enforce"
+
 /*
  * Wire-format size assertions.
  * Protocol sends these structures as flat byte arrays; any compiler
@@ -312,6 +317,18 @@ int net_connect(struct net_context *ctx)
 	freeaddrinfo(result);
 
 	if (sock < 0) {
+		char hint[512];
+		const char *cause = net_connect_refusal_hint(
+			last_errno, ctx->server_port, NULL, hint, sizeof(hint));
+
+		/*
+		 * Caller renders the errno, which for a refusal by the policy
+		 * is "Permission denied" against a server that is running.
+		 * Say the rest here, where the port is known.
+		 */
+		if (cause)
+			lota_err("Cannot reach %s:%d. %s", ctx->server_addr,
+				 ctx->server_port, cause);
 		return last_errno ? -last_errno : -ECONNREFUSED;
 	}
 
@@ -778,13 +795,45 @@ const char *net_connect_refusal_hint(int err, int port,
 				     const char *enforce_path, char *buf,
 				     size_t cap)
 {
-	(void)err;
-	(void)port;
-	(void)enforce_path;
-	(void)buf;
-	(void)cap;
+	char state[8];
+	ssize_t got;
+	int fd, n;
 
-	return NULL;
+	if (err != EACCES || !buf || cap == 0)
+		return NULL;
+	if (port <= 0 || port > 65535)
+		return NULL;
+
+	/*
+	 * Read the state.
+	 * Where SELinux is absent or permissive the denial did not happen,
+	 * so this EACCES came from somewhere else and the port label is
+	 * the wrong thing to name.
+	 */
+	fd = open(enforce_path ? enforce_path : NET_SELINUX_ENFORCE_PATH,
+		  O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return NULL;
+	got = read(fd, state, sizeof(state) - 1);
+	close(fd);
+	if (got <= 0)
+		return NULL;
+	state[got] = '\0';
+	if (state[0] != '1')
+		return NULL;
+
+	n = snprintf(buf, cap,
+		     "SELinux is enforcing and TCP port %d carries no LOTA "
+		     "label, which is what refuses this connect; the policy "
+		     "dontaudits it, so no AVC is logged anywhere. Label the "
+		     "port and the next round goes through:\n"
+		     "  sudo semanage port -a -t lota_port_t -p tcp %d",
+		     port, port);
+	/* half a command is worse than none -- an operator would run it */
+	if (n < 0 || (size_t)n >= cap)
+		return NULL;
+
+	return buf;
 }
 
 const char *net_result_str(uint32_t result)

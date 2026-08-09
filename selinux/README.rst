@@ -386,6 +386,28 @@ Port 8443 is an exception that hides the rule: the base policy already labels
 it ``http_port_t``, which ``lota_agent_t`` may also reach, so a deployment on
 the default port works without any of this.
 
+The denial is ``dontaudit``\ ed, so ``ausearch`` shows nothing and there is no
+AVC to search for. The agent says it instead: a connect refused with ``EACCES``
+on an enforcing host is reported with the port and the command that labels it,
+next to the plain errno::
+
+   Cannot reach 192.000.0.000:8573. SELinux is enforcing and TCP port 8573
+   carries no LOTA label, which is what refuses this connect; the policy
+   dontaudits it, so no AVC is logged anywhere. Label the port and the next
+   round goes through:
+     sudo semanage port -a -t lota_port_t -p tcp 8573
+
+The state is read from ``/sys/fs/selinux/enforce``, so a permissive or SELinux-less
+host is not told to label a port for an ``EACCES`` that came from somewhere else.
+
+**Ports are labelled one at a time, and a range is deliberately not offered.**
+Each publisher runs its own CA and verifier, so a fleet of them spans arbitrary
+ports and a range wide enough to cover them would be wide enough to cover
+whatever else listens in it -- the fence exists to say which endpoints this
+domain may reach, and a range that answers "most of them" is not that fence.
+The cost is one ``semanage port`` per endpoint, which ``lota-install`` performs
+for the ones it is given and the message above names for the ones added later.
+
 Interface Reference
 -------------------
 
