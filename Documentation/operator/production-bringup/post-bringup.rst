@@ -128,6 +128,16 @@ need either path: ``systemctl reload lota-agent`` picks up a newly added
 publisher without stopping anything. Settings the agent reads once at startup,
 such as ``container_listener_uid``, take effect at the next boot instead.
 
+The socket that setting asks for is a separate matter from the setting itself.
+``/run/user/<uid>`` belongs to a login, so the agent creates
+``/run/user/<uid>/lota/lota.sock`` when the registered user logs in and
+releases it when the last session closes; no restart is involved, and none
+should be attempted, since stopping the agent spends the boot's PCR 14
+commitment. The socket is handed to the ``lota`` group at mode 0660, so an
+account outside that group cannot open it even though it is there.
+``lota-steam-setup --verify``, run from the user's own session, reports both
+halves: whether the socket exists and whether that account can open it.
+
 Continuous attestation
 ----------------------
 
