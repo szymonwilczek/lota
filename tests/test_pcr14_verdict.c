@@ -248,10 +248,10 @@ static void test_reset_count_advance_is_not_a_resume(void)
 }
 
 /*
- * The resume verdict is derived from the agent's own hash and the TPM's
- * counters, never read from the clock-state file. A local root who can
- * rewrite that file and who has extended PCR14 must not be able to
- * dress the result up as a suspend/resume.
+ * Resume verdict is derived from the agent's own hash and the TPM's counters,
+ * never read from the clock-state file. A local root who can rewrite that file
+ * and who has extended PCR14 must not be able to dress the result up as
+ * suspend/resume.
  */
 static void test_forged_snapshot_cannot_fake_a_resume(void)
 {
@@ -262,9 +262,9 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
 		FAIL("failed to derive the register value");
 
-	/* Somebody extended PCR14 with a value of their choosing ... */
+	/* somebody extended PCR14 with a value of their choosing ... */
 	fill(s.current, 0x5c);
-	/* ... and wrote a snapshot that claims it is what we committed. */
+	/* ... and wrote a snapshot that claims it is what we committed */
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 
 	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_MUTATED_IN_SESSION)
