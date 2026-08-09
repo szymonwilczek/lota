@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #include <sys/types.h>
 
@@ -52,9 +53,25 @@ int lota_read_full(int fd, void *buf, size_t len)
 
 int lota_copy_xattr(const char *from, const char *to, const char *name)
 {
-	(void)from;
-	(void)to;
-	(void)name;
+	/* SELinux context is well under this;
+	 * a value that does not fit is not one this carries */
+	char value[512];
+	ssize_t got;
+
+	if (!from || !to || !name)
+		return -EINVAL;
+
+	got = getxattr(from, name, value, sizeof(value));
+	if (got < 0) {
+		/* nothing to carry is the common case and not a failure:
+		 * a first write has no file to take the attribute from */
+		if (errno == ENODATA || errno == ENOTSUP)
+			return 0;
+		return -errno;
+	}
+
+	if (setxattr(to, name, value, (size_t)got, 0) < 0)
+		return -errno;
 
 	return 0;
 }

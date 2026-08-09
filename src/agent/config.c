@@ -1397,6 +1397,30 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	close(fd);
 	free(updated);
 
+	/*
+	 * Temporary file took its SELinux type from this directory,
+	 * not from the file it is about to replace.
+	 * Where the two differ -- a packaged lota.conf under an unlabelled
+	 * /etc/lota -- the rename would hand the agent a config it may not
+	 * read, and the policy dontaudits that denial, so the host would
+	 * simply not come up.
+	 *
+	 * A destination that refuses the attribute is not a reason to throw
+	 * away a correct config: the writer says so and the operator can
+	 * restorecon.
+	 */
+	{
+		int lret = lota_copy_xattr(path, tmp_path, "security.selinux");
+
+		if (lret < 0 && lret != -ENOENT)
+			fprintf(stderr,
+				"Warning: could not carry the SELinux label of "
+				"%s onto its replacement: %s\n"
+				"Run 'restorecon %s' if this host is "
+				"enforcing.\n",
+				path, strerror(-lret), path);
+	}
+
 	if (rename(tmp_path, path) < 0) {
 		ret = -errno;
 		unlink(tmp_path);
