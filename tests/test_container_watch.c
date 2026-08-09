@@ -69,7 +69,8 @@ static int record_bind(uint32_t uid, void *user)
 	if (log->bind_result != 0)
 		return log->bind_result;
 
-	if (log->bound_count < (int)(sizeof(log->bound) / sizeof(log->bound[0])))
+	if (log->bound_count <
+	    (int)(sizeof(log->bound) / sizeof(log->bound[0])))
 		log->bound[log->bound_count++] = uid;
 
 	return 0;

@@ -3196,6 +3196,33 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	return 0;
 }
 
+int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path)
+{
+	if (!ctx || !socket_path || !socket_path[0])
+		return -EINVAL;
+
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd < 0 ||
+		    strcmp(ctx->extra[i].path, socket_path) != 0)
+			continue;
+
+		if (ctx->epoll_fd >= 0)
+			epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL,
+				  ctx->extra[i].fd, NULL);
+		close(ctx->extra[i].fd);
+		ctx->extra[i].fd = -1;
+		unlink(ctx->extra[i].path);
+		ctx->extra[i].path[0] = '\0';
+		if (ctx->extra_count > 0)
+			ctx->extra_count--;
+
+		lota_info("IPC extra listener %s removed", socket_path);
+		return 0;
+	}
+
+	return -ENOENT;
+}
+
 int ipc_is_listener(struct ipc_context *ctx, int fd)
 {
 	if (fd == ctx->listen_fd)
