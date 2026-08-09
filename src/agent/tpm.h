@@ -281,12 +281,6 @@ enum tpm_pcr14_state {
 	TPM_PCR14_AWAITING_EXTEND = 0,
 	/* Both extends already happened in this boot: nothing to do */
 	TPM_PCR14_ALREADY_COMMITTED,
-	/*
-	 * TPM was restarted (deep suspend/resume) since the extend:
-	 * restartCount moved on, resetCount did not, and PCR14 still holds
-	 * the commitment this agent wrote. Accepted like a warm restart.
-	 */
-	TPM_PCR14_RESUMED,
 	/* Register still holds the bare baseline: the lock never ran */
 	TPM_PCR14_LOCK_MISSING,
 	/*
@@ -609,28 +603,27 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 		   const uint8_t *digest);
 
 /*
- * tpm_boot_commitment_digest - Compute the boot-bound PCR14 commit
- * @self_hash:     SHA-256 of the running agent binary (LOTA_HASH_SIZE bytes)
- * @reset_count:   TPM clockInfo.resetCount  (big-endian wire layout)
- * @restart_count: TPM clockInfo.restartCount (big-endian wire layout)
- * @out_digest:    LOTA_HASH_SIZE bytes
+ * tpm_boot_commitment_digest - Compute the boot commitment for PCR14
+ * @self_hash:  SHA-256 of the running agent binary (LOTA_HASH_SIZE bytes)
+ * @out_digest: LOTA_HASH_SIZE bytes
  *
- * Domain-separated digest used by tpm_extend_boot_commitment(). The
- * verifier mirrors the same construction to derive the expected PCR14
- * value from the pinned baseline agent hash plus the ClockInfo
- * recovered from the TPMS_ATTEST quote.
+ * Domain-separated digest used by tpm_extend_boot_commitment().
+ * It names the agent binary and nothing else, so every relying party derives
+ * the same value: the TPM obfuscates clockInfo per signing key,
+ * and a commitment that folded those counters in could only ever be rederived
+ * by the one key whose quote the agent happened to read at startup.
+ *
+ * What the register still binds, and where it comes from,
+ * is in Documentation/security/threat-model.rst.
  *
  * Returns: 0 on success, negative errno on failure
  */
-int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
-			       uint32_t restart_count, uint8_t out_digest[]);
+int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[]);
 
 /*
  * tpm_initramfs_lock_digest - reproduce the digest the initramfs lock
  *                             helper (src/initramfs/lota-pcr14-lock.c)
  *                             extends PCR14 with before the agent runs
- * @reset_count, @restart_count: accepted for API symmetry; intentionally
- *                               ignored by the lock digest
  * @out_digest: LOTA_HASH_SIZE bytes, receives the SHA-256 digest
  *
  * The helper extends with
@@ -643,28 +636,24 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
  *
  * Returns: 0 on success, negative errno on failure.
  */
-int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
-			      uint8_t out_digest[]);
+int tpm_initramfs_lock_digest(uint8_t out_digest[]);
 
 /*
  * tpm_derive_locked_pcr14 - PCR14 after the lock-then-extend chain
- * @self_hash:     SHA-256 of the agent binary that commits
- * @baseline:      pre-LOTA PCR14 content the initramfs lock extended on
- * @reset_count:   TPM clockInfo.resetCount bound into the commitment
- * @restart_count: TPM clockInfo.restartCount bound into the commitment
- * @out:           LOTA_HASH_SIZE bytes
+ * @self_hash: SHA-256 of the agent binary that commits
+ * @baseline:  pre-LOTA PCR14 content the initramfs lock extended on
+ * @out:       LOTA_HASH_SIZE bytes
  *
  * SHA-256(SHA-256(baseline || lock_commit) || boot_commit).
- *
- * Pure: no TPM and no file access, so a caller can derive what the
- * register would hold for counters other than the ones it just read.
+ * Pure: no TPM and no file access.  The value depends on the platform baseline
+ * and the agent binary, so it is the same for every relying party and stable
+ * across a suspend, which is why neither side scans candidates any more.
  * The verifier mirrors it in verifier/verify/baseline.go.
  *
  * Returns: 0 on success, negative errno on failure.
  */
 int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 			    const uint8_t baseline[LOTA_HASH_SIZE],
-			    uint32_t reset_count, uint32_t restart_count,
 			    uint8_t out[LOTA_HASH_SIZE]);
 
 /*
@@ -679,42 +668,37 @@ struct tpm_pcr14_observation {
 	const uint8_t *lock_value; /* baseline + initramfs lock extend */
 	const uint8_t *expected_locked; /* lock value + boot commitment */
 	const uint8_t *self_hash; /* hash of the running binary */
-	uint32_t reset_count; /* quote counters for this run */
+	/*
+	 * TPM's counters for this run.
+	 * Classifier compares reset_count against the snapshot to tell a restart
+	 * within this boot from a register that was already committed when
+	 * the agent started after a cold boot.
+	 */
+	uint32_t reset_count;
 	uint32_t restart_count;
 	const struct lota_clock_state *prev;
 };
 
 /*
- * How many TPM restarts the classifier will look back over when deciding whether
- * PCR14 still holds its own commitment.
- * Mirrors the verifier's --max-restart-count-skew default so both sides accept
- * the same suspend/resume history; every candidate is derived,
- * so the cost of the ceiling is a bounded number of hashes and nothing else.
- */
-#define TPM_PCR14_MAX_RESTART_SKEW 64U
-
-/*
  * tpm_classify_pcr14 - decide what the observed PCR14 value means
- * @obs:           fully populated observation
- * @restart_drift: optional, receives how many TPM restarts back the
- *                 commitment was extended when the verdict is
- *                 TPM_PCR14_RESUMED, and 0 otherwise
+ * @obs: fully populated observation
  *
  * Pure function: no TPM access, no file access, no logging.
  * The caller renders the operator message and performs the extend.
  *
- * The resume verdict is derived, never read:
- * Candidates come from the agent's own hash, the platform baseline
- * and the TPM's signed counters, so no on-disk state can promote a register
- * another writer extended into an accepted one.
- * resetCount is not iterated, so a post-cold-boot replay stays refused.
+ * The accepted values are derived, so no on-disk state can promote a register
+ * another writer extended into an accepted one.  A suspend leaves the register
+ * untouched and the derivation does not move with the counters, so a resume
+ * is simply a committed register; a commitment already present when the agent
+ * starts after a cold boot is refused, because on an honest cold boot
+ * the register holds the initramfs lock value at that point.
  *
  * Returns: the verdict, or TPM_PCR14_UNATTRIBUTABLE for a malformed
  * observation, which is the conservative reading of "cannot explain
  * this register".
  */
-enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
-					uint32_t *restart_drift);
+enum tpm_pcr14_state
+tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
 
 /*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the

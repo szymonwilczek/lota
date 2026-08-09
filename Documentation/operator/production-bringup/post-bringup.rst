@@ -69,10 +69,11 @@ The most common failures, with the gate that produced them:
 
 Counters printed by these messages come from ``TPM2_ReadClock`` and are the
 values ``tpm2_readclock`` reports, so they can be checked against the machine.
-The counters bound into the boot commitment itself are read from an
-AIK-signed quote instead, and a TPM deliberately offsets ``clock``,
-``resetCount`` and ``restartCount`` in a signed attestation by a per-key
-amount, so those will not match ``tpm2_readclock`` and are not meant to.
+Counters carried by a quote will not match them, and are not meant to: a TPM
+offsets ``clock``, ``resetCount`` and ``restartCount`` in a signed attestation
+by a per-key amount. Nothing binds either reading into PCR 14 -- the boot
+commitment names the agent binary alone -- so the counters are diagnostic
+here, not evidence.
 
 Threat model implications of the dev path
 =========================================

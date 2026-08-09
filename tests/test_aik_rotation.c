@@ -1086,7 +1086,7 @@ static void test_initramfs_lock_digest_matches_reference(void)
 	memset(got, 0, sizeof(got));
 	memset(want, 0, sizeof(want));
 
-	if (tpm_initramfs_lock_digest(0x01020304U, 0xA0B0C0D0U, got) != 0) {
+	if (tpm_initramfs_lock_digest(got) != 0) {
 		FAIL("digest helper failed");
 		return;
 	}
@@ -1095,16 +1095,7 @@ static void test_initramfs_lock_digest_matches_reference(void)
 		FAIL("digest mismatch");
 		return;
 	}
-	uint8_t drifted[LOTA_HASH_SIZE];
-	if (tpm_initramfs_lock_digest(0xFFFFFFFFU, 0x00000001U, drifted) != 0) {
-		FAIL("drifted digest helper failed");
-		return;
-	}
-	if (memcmp(got, drifted, LOTA_HASH_SIZE) != 0) {
-		FAIL("initramfs lock digest must ignore TPM clock counters");
-		return;
-	}
-	if (tpm_initramfs_lock_digest(1, 2, NULL) != -EINVAL) {
+	if (tpm_initramfs_lock_digest(NULL) != -EINVAL) {
 		FAIL("NULL output must be rejected");
 		return;
 	}

@@ -1878,12 +1878,13 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
 /*
  * Domain-separation tag for the PCR14 boot commitment.
  *
- * The string is intentionally version-tagged so a future revision can
- * change the derivation without colliding with deployed baselines: the
- * verifier advertises the matching challenge capability and the agent
- * reports the corresponding LOTA_REPORT_FLAG_BOOT_COMMITMENT_V1 bit.
+ * The string is version-tagged so a change of derivation cannot collide
+ * with a deployed baseline: v2 commits to the agent hash alone, where v1
+ * also folded in the TPM's resetCount and restartCount.
+ * Host that still runs a v1 agent therefore extends a value no v2 verifier
+ * derives, and is refused.
  */
-#define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v1"
+#define TPM_BOOT_COMMITMENT_TAG "LOTA-PCR14-BOOT-COMMITMENT-v2"
 
 /*
  * Domain-separation tag for the PCR14 initramfs lock. Mirrors
@@ -1899,22 +1900,10 @@ int tpm_pcr_extend(struct tpm_context *ctx, uint32_t pcr_index,
  * the unit-test build (tpm.c is also linked from test_aik_rotation). */
 #define TPM_BOOT_COMMITMENT_PCR 14
 
-int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
-			       uint32_t restart_count, uint8_t out_digest[])
+int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[])
 {
 	if (!self_hash || !out_digest)
 		return -EINVAL;
-
-	uint8_t reset_be[4];
-	uint8_t restart_be[4];
-	reset_be[0] = (uint8_t)((reset_count >> 24) & 0xff);
-	reset_be[1] = (uint8_t)((reset_count >> 16) & 0xff);
-	reset_be[2] = (uint8_t)((reset_count >> 8) & 0xff);
-	reset_be[3] = (uint8_t)(reset_count & 0xff);
-	restart_be[0] = (uint8_t)((restart_count >> 24) & 0xff);
-	restart_be[1] = (uint8_t)((restart_count >> 16) & 0xff);
-	restart_be[2] = (uint8_t)((restart_count >> 8) & 0xff);
-	restart_be[3] = (uint8_t)(restart_count & 0xff);
 
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
@@ -1924,8 +1913,6 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
 		 EVP_DigestUpdate(md, TPM_BOOT_COMMITMENT_TAG,
 				  sizeof(TPM_BOOT_COMMITMENT_TAG) - 1) == 1 &&
 		 EVP_DigestUpdate(md, self_hash, LOTA_HASH_SIZE) == 1 &&
-		 EVP_DigestUpdate(md, reset_be, sizeof(reset_be)) == 1 &&
-		 EVP_DigestUpdate(md, restart_be, sizeof(restart_be)) == 1 &&
 		 EVP_DigestFinal_ex(md, out_digest, NULL) == 1;
 	EVP_MD_CTX_free(md);
 
@@ -1934,14 +1921,10 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint32_t reset_count,
 	return 0;
 }
 
-int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
-			      uint8_t out_digest[])
+int tpm_initramfs_lock_digest(uint8_t out_digest[])
 {
 	if (!out_digest)
 		return -EINVAL;
-
-	(void)reset_count;
-	(void)restart_count;
 
 	EVP_MD_CTX *md = EVP_MD_CTX_new();
 	if (!md)
@@ -2181,12 +2164,10 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
  * baseline is the pre-LOTA PCR14 content the lock helper extended on top of.
  */
 static int derive_lock_pcr14_value(const uint8_t baseline[LOTA_HASH_SIZE],
-				   uint32_t reset_count, uint32_t restart_count,
 				   uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_commit[LOTA_HASH_SIZE];
-	int ret = tpm_initramfs_lock_digest(reset_count, restart_count,
-					    lock_commit);
+	int ret = tpm_initramfs_lock_digest(lock_commit);
 	if (ret < 0)
 		return ret;
 	return sha256_two_block(baseline, lock_commit, out);
@@ -2201,17 +2182,14 @@ static int derive_lock_pcr14_value(const uint8_t baseline[LOTA_HASH_SIZE],
  */
 int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 			    const uint8_t baseline[LOTA_HASH_SIZE],
-			    uint32_t reset_count, uint32_t restart_count,
 			    uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_value[LOTA_HASH_SIZE];
 	uint8_t boot_commit[LOTA_HASH_SIZE];
-	int ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
-					  lock_value);
+	int ret = derive_lock_pcr14_value(baseline, lock_value);
 	if (ret < 0)
 		return ret;
-	ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
-					 boot_commit);
+	ret = tpm_boot_commitment_digest(self_hash, boot_commit);
 	if (ret < 0)
 		return ret;
 	return sha256_two_block(lock_value, boot_commit, out);
@@ -2431,12 +2409,8 @@ static void save_commitment_snapshot(struct tpm_context *ctx,
 			strerror(-ret));
 }
 
-enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
-					uint32_t *restart_drift)
+enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 {
-	if (restart_drift)
-		*restart_drift = 0;
-
 	if (!obs || !obs->current || !obs->baseline || !obs->lock_value ||
 	    !obs->expected_locked || !obs->self_hash)
 		return TPM_PCR14_UNATTRIBUTABLE;
@@ -2449,42 +2423,24 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
 	if (memcmp(obs->current, obs->lock_value, LOTA_HASH_SIZE) == 0)
 		return TPM_PCR14_AWAITING_EXTEND;
 
-	if (memcmp(obs->current, obs->expected_locked, LOTA_HASH_SIZE) == 0)
+	if (memcmp(obs->current, obs->expected_locked, LOTA_HASH_SIZE) == 0) {
+		/*
+		 * The register carries this binary's commitment, which is
+		 * the normal reading for a restart within one boot and for
+		 * a resume -- the TPM restores every PCR across a deep suspend
+		 * and the derivation does not move with the counters,
+		 * so there is nothing to scan for.
+		 *
+		 * It is not the normal reading after a cold boot.
+		 * The hardware reset clears PCR14, the initramfs helper leaves
+		 * the lock value, and the agent is the next thing to extend;
+		 * a commitment already present means something ran before it.
+		 * The snapshot is the only witness of when this agent last saw
+		 * the register, so a missing one leaves the accepting branch.
+		 */
+		if (obs->prev && obs->prev->reset_count < obs->reset_count)
+			return TPM_PCR14_TAMPERED_BEFORE_START;
 		return TPM_PCR14_ALREADY_COMMITTED;
-
-	/*
-	 * A TPM that saves and restores its state across a deep suspend increments
-	 * restartCount, leaves resetCount alone and leaves every PCR as it was.
-	 * The register therefore still holds the commitment this agent extended,
-	 * derived with the restartCount that was in effect then.
-	 * Recover it by deriving what the register would hold for the preceding
-	 * restartCount values.
-	 *
-	 * The scan reads nothing from disk: the candidates come from the agent's
-	 * own binary hash, the platform baseline and the TPM's signed counters,
-	 * so a forged clock-state snapshot cannot make a register somebody else
-	 * extended look like a resume.
-	 * PCR14 is not resettable from userspace, so no writer can restore
-	 * a value it displaced, and resetCount is never iterated, which keeps
-	 * a post-cold-boot replay refused.
-	 *
-	 * Verifier performs the mirror of this scan in verifier/verify/baseline.go
-	 */
-	for (uint32_t drift = 1;
-	     drift <= TPM_PCR14_MAX_RESTART_SKEW && drift <= obs->restart_count;
-	     drift++) {
-		uint8_t candidate[LOTA_HASH_SIZE];
-
-		if (tpm_derive_locked_pcr14(
-			    obs->self_hash, obs->baseline, obs->reset_count,
-			    obs->restart_count - drift, candidate) < 0)
-			break;
-
-		if (memcmp(obs->current, candidate, LOTA_HASH_SIZE) == 0) {
-			if (restart_drift)
-				*restart_drift = drift;
-			return TPM_PCR14_RESUMED;
-		}
 	}
 
 	/*
@@ -2591,8 +2547,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 	}
 
-	ret = tpm_boot_commitment_digest(self_hash, reset_count, restart_count,
-					 commit);
+	ret = tpm_boot_commitment_digest(self_hash, commit);
 	if (ret < 0)
 		return ret;
 
@@ -2620,12 +2575,11 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * anything else is treated as tamper and routed through the attribution
 	 * logic below.
 	 */
-	ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
-				      lock_pcr14_value);
+	ret = derive_lock_pcr14_value(baseline, lock_pcr14_value);
 	if (ret < 0)
 		return ret;
-	ret = tpm_derive_locked_pcr14(self_hash, baseline, reset_count,
-				      restart_count, expected_locked_pcr14);
+	ret = tpm_derive_locked_pcr14(self_hash, baseline,
+				      expected_locked_pcr14);
 	if (ret < 0)
 		return ret;
 
@@ -2661,9 +2615,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		.prev = have_prev ? &prev : NULL,
 	};
 
-	uint32_t restart_drift = 0;
-
-	ctx->boot_commitment_state = tpm_classify_pcr14(&obs, &restart_drift);
+	ctx->boot_commitment_state = tpm_classify_pcr14(&obs);
 
 	switch (ctx->boot_commitment_state) {
 	case TPM_PCR14_AWAITING_EXTEND:
@@ -2683,25 +2635,6 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	case TPM_PCR14_ALREADY_COMMITTED:
 		/* Warm restart on a locked host - both extends already done. */
 		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
-					 reset_count, restart_count);
-		ctx->boot_commitment_locked = true;
-		return 0;
-
-	case TPM_PCR14_RESUMED:
-		/*
-		 * TPM was restarted under us and put PCR14 back exactly as it was.
-		 * There is nothing to re-extend - the register never moved - so
-		 * record the counters this run observed and carry on.
-		 * The quote the verifier receives carries the same moved
-		 * restartCount and its own scan absorbs the drift.
-		 */
-		fprintf(stderr,
-			"PCR14 boot-commitment: the TPM was restarted %u "
-			"suspend/resume cycle(s) after the commitment was "
-			"extended; PCR14 is unchanged and the commitment still "
-			"stands\n",
-			(unsigned)restart_drift);
-		save_commitment_snapshot(ctx, current_pcr14, self_hash,
 					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
 		return 0;
