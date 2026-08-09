@@ -532,6 +532,25 @@ int tpm_bind_profile(struct tpm_context *ctx,
 		     const struct profile_paths *paths);
 
 /*
+ * tpm_aik_profile_unique - creation input that separates publishers' keys
+ * @profile_id: the profile's identity, the SHA-256 of its CA anchor's
+ *              SubjectPublicKeyInfo as lowercase hex, or NULL/"" for
+ *              a host with no publisher
+ * @out:        LOTA_HASH_SIZE bytes, receives the value
+ * @out_len:    receives how many of them are meaningful,
+ *              0 when the caller has no publisher to separate from
+ *
+ * A TPM primary key is derived from the hierarchy seed and the creation
+ * template, so two profiles that pass the same template get the same
+ * key however many handles they occupy. This is what makes the template
+ * differ per publisher.
+ *
+ * Returns: 0 on success, negative errno when the identity is malformed.
+ */
+int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
+			   uint16_t *out_len);
+
+/*
  * tpm_hash_fd - Calculate SHA-256 hash from an open regular file descriptor
  * @fd: Open regular file descriptor (read position should be at start)
  * @hash: Output buffer (LOTA_HASH_SIZE bytes)

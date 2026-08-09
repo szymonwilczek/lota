@@ -1072,6 +1072,21 @@ static void tpm_forget_bound_aik(struct tpm_context *ctx)
 	ctx->aik_auth_loaded = false;
 }
 
+int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
+			   uint16_t *out_len)
+{
+	if (!out || !out_len)
+		return -EINVAL;
+
+	memset(out, 0, LOTA_HASH_SIZE);
+	*out_len = 0;
+
+	if (!profile_id || !profile_id[0])
+		return 0;
+
+	return 0;
+}
+
 int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
