@@ -1228,7 +1228,7 @@ $(TEST_BIN_DIR)/test_packaging: tests/test_packaging.c | $(BUILD_DIR)
 
 $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/steam_runtime.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+	$(Q)$(CC) $(CFLAGS) -DLOTA_GROUP_NAME='"root"' -o $@ $^ -lsystemd
 
 $(TEST_BIN_DIR)/test_container_watch: tests/test_container_watch.c $(AGENT_DIR)/container_watch.c | $(BUILD_DIR)
 	$(QUIET_CC)
