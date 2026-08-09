@@ -46,6 +46,7 @@ struct container_watch {
 	int uid_count;
 	int fd; /* inotify on the root, -1 when unavailable */
 	int wd;
+	int mnt_fd; /* /proc/self/mountinfo, -1 when unavailable */
 	struct container_watch_ops ops;
 };
 
@@ -75,6 +76,19 @@ int container_watch_init(struct container_watch *w, const char *root,
  * not be watched.
  */
 int container_watch_fd(const struct container_watch *w);
+
+/*
+ * container_watch_mount_fd - descriptor that reports a mount change
+ *
+ * logind creates the runtime directory and then mounts a tmpfs over it.
+ * The mount is what makes the directory usable and it fires no inotify
+ * event, so the directory alone is not the signal to act on.
+ * Poll this descriptor for POLLPRI as well; the mount table changing
+ * is the second thing that can make a login bindable.
+ *
+ * Returns a descriptor, or -1 when the mount table cannot be watched.
+ */
+int container_watch_mount_fd(const struct container_watch *w);
 
 /*
  * container_watch_process - act on what happened under the root
