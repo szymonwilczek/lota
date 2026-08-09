@@ -70,6 +70,11 @@ The agent requires elevated privileges for hardware attestation:
 - **BPF Operations**: Load LSM programs for execution monitoring
 - **System State**: Read kernel, firmware, and security status
 - **Network**: Connect to verifier servers for attestation
+- **chown** (``lota_gaming`` only): hand the per-user container socket and
+  its directory to the ``lota`` group, which is what lets a title open
+  them. SELinux checks this as a capability of its own, so a host with
+  ``CAP_CHOWN`` in the unit's bounding set but without the rule still
+  fails the change with ``EPERM``
 
 Installation
 ------------
