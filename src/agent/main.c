@@ -306,12 +306,25 @@ static int run_daemon(const struct run_daemon_params *params)
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
-	/* logins happen after this point, and each one may carry a listener */
+	/*
+	 * Logins happen after this point, and each one may carry a listener.
+	 * Two things say a login became bindable:
+	 * the runtime directory appearing (inotify) and the tmpfs logind mounts
+	 * over it landing (a mount-table change, which fires no inotify event
+	 * and is reported as EPOLLPRI on /proc/self/mountinfo).
+	 */
 	int watch_fd = container_watch_fd(&g_agent.container_watch);
 	if (watch_fd >= 0) {
 		ev.events = EPOLLIN;
 		ev.data.fd = watch_fd;
 		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, watch_fd, &ev);
+	}
+
+	int mount_fd = container_watch_mount_fd(&g_agent.container_watch);
+	if (mount_fd >= 0) {
+		ev.events = EPOLLPRI | EPOLLERR;
+		ev.data.fd = mount_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, mount_fd, &ev);
 	}
 
 	/* IPC epoll fd to main loop */

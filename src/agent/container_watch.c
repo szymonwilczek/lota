@@ -4,6 +4,7 @@
 #include "container_watch.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/inotify.h>
@@ -80,6 +81,29 @@ static int watch_sync_uid(struct container_watch *w, int slot)
 	return 0;
 }
 
+/*
+ * Re-read /proc/self/mountinfo to the end.
+ *
+ * poll(2) reports POLLPRI on that file when the mount table changes,
+ * and only a read that reaches EOF re-arms it. The contents are of
+ * no interest -- the reconcile below asks the filesystem directly.
+ */
+static void watch_drain_mounts(struct container_watch *w)
+{
+	char buf[4096];
+	ssize_t got;
+
+	if (w->mnt_fd < 0)
+		return;
+
+	if (lseek(w->mnt_fd, 0, SEEK_SET) < 0)
+		return;
+
+	do {
+		got = read(w->mnt_fd, buf, sizeof(buf));
+	} while (got > 0 || (got < 0 && errno == EINTR));
+}
+
 static void watch_drain_events(struct container_watch *w)
 {
 	char buf[4096]
@@ -97,6 +121,10 @@ static void watch_drain_events(struct container_watch *w)
 static int watch_start(struct container_watch *w)
 {
 	int fd, wd;
+
+	w->mnt_fd = open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC);
+	if (w->mnt_fd >= 0)
+		watch_drain_mounts(w);
 
 	fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (fd < 0)
@@ -130,6 +158,7 @@ int container_watch_init(struct container_watch *w, const char *root,
 	memset(w, 0, sizeof(*w));
 	w->fd = -1;
 	w->wd = -1;
+	w->mnt_fd = -1;
 
 	n = snprintf(w->root, sizeof(w->root), "%s",
 		     root ? root : CONTAINER_WATCH_RUNTIME_ROOT);
@@ -164,6 +193,14 @@ int container_watch_fd(const struct container_watch *w)
 	return w->fd;
 }
 
+int container_watch_mount_fd(const struct container_watch *w)
+{
+	if (!w)
+		return -1;
+
+	return w->mnt_fd;
+}
+
 int container_watch_process(struct container_watch *w)
 {
 	int bound = 0;
@@ -172,6 +209,7 @@ int container_watch_process(struct container_watch *w)
 		return -EINVAL;
 
 	watch_drain_events(w);
+	watch_drain_mounts(w);
 
 	for (int i = 0; i < w->uid_count; i++)
 		bound += watch_sync_uid(w, i);
@@ -186,8 +224,11 @@ void container_watch_cleanup(struct container_watch *w)
 
 	if (w->fd >= 0)
 		close(w->fd);
+	if (w->mnt_fd >= 0)
+		close(w->mnt_fd);
 
 	memset(w, 0, sizeof(*w));
 	w->fd = -1;
 	w->wd = -1;
+	w->mnt_fd = -1;
 }
