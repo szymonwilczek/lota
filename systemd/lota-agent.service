@@ -71,8 +71,19 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/lota /run/lota
 ReadOnlyPaths=/etc/lota /usr/lib/lota
 
-# no access to /home, /root
-ProtectHome=yes
+#
+# No access to /home or /root.
+#
+# ProtectHome=yes would be the obvious way to say this, and it also empties
+# /run/user -- where the socket a Proton title connects to has to be created,
+# under the runtime directory logind makes at login.
+# The agent is then refused even the inotify watch that tells it the login
+# happened, with a bare EACCES. Naming the two directories directly keeps
+# the same protection and leaves /run/user where the agent can reach it;
+# a per-user runtime directory mounted after the daemon started propagates
+# into this namespace, which is what makes a login observable at all.
+#
+InaccessiblePaths=/home /root
 
 # private /tmp and /var/tmp
 PrivateTmp=yes
