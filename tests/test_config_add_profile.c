@@ -14,11 +14,43 @@
  */
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../src/agent/config.h"
 
 static int g_failures;
+
+/* the text the writer produced, read back the way the agent reads it at the next
+ * start: a section that does not load is a host that does not come up */
+static int loads_back(const char *text)
+{
+	char path[] = "/tmp/lota_add_profile_XXXXXX";
+	struct lota_config *cfg;
+	size_t len = strlen(text);
+	int fd = mkstemp(path);
+	int rc;
+
+	if (fd < 0)
+		return -errno;
+	if (write(fd, text, len) != (ssize_t)len) {
+		close(fd);
+		unlink(path);
+		return -EIO;
+	}
+	close(fd);
+
+	cfg = config_new();
+	if (!cfg) {
+		unlink(path);
+		return -ENOMEM;
+	}
+	rc = config_load(cfg, path);
+	config_free(cfg);
+	unlink(path);
+	return rc;
+}
 
 #define CHECK(cond, msg)                                    \
 	do {                                                \
@@ -108,6 +140,31 @@ int main(void)
 		rc = config_profile_append_text(once, &q, out, sizeof(out));
 		CHECK(rc == -EEXIST,
 		      "a different publisher under an existing name is refused");
+	}
+
+	{
+		/* the publisher who runs no verifier:
+		 * their backend checks the tokens their titles fetch, so nothing
+		 * is reported from this machine and the section has to say so.
+		 * the parser refuses a port for a verifier declared absent,
+		 * so a writer that emits one produces a file the host cannot load
+		 * -- the port carried by the profile is not the operator naming
+		 * a target, it is the default nobody chose */
+		struct lota_profile t;
+
+		t = mkprofile("studio-b", "ca.studio-b.example",
+			      "/etc/lota/studio-b.pem", "");
+		t.verifier_port = 9443;
+
+		rc = config_profile_append_text("mode = enforce\n", &t, out,
+						sizeof(out));
+		CHECK(rc == 1, "a publisher with no verifier is appended");
+		CHECK(strstr(out, "verifier = none") != NULL,
+		      "the section says the publisher runs no verifier");
+		CHECK(strstr(out, "verifier_port") == NULL,
+		      "no port is written for a verifier declared absent");
+		CHECK(loads_back(out) == 0,
+		      "the section the writer produced loads back");
 	}
 
 	{
