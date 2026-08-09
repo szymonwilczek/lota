@@ -52,6 +52,15 @@ userdom_manage_tmp_sockets(lota_agent_t)
 userdom_watch_tmp_dirs(lota_agent_t)
 
 #
+# The directory and the socket are handed to the lota group, which is what lets
+# a title open them at all -- they are bound 0750 and 0660 and created by root.
+# That is a chown, so SELinux wants the capability named as well as the unit's
+# bounding set carrying it; without this rule the change fails with EPERM
+# and the listener answers nobody.
+#
+allow lota_agent_t self:capability chown;
+
+#
 # Steam
 #
 optional_policy(`
