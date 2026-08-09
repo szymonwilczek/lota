@@ -8,6 +8,7 @@
 #include "attest_aggregate.h"
 #include "enroll.h"
 #include "ipc.h"
+#include "ipc_privilege.h"
 #include "ipc_payload.h"
 #include "protect_pids.h"
 #include "terminate_policy.h"
@@ -690,35 +691,37 @@ static void build_error_response(struct ipc_client *client, uint32_t result)
 }
 
 /*
- * Privileged IPC commands require all of the following:
- * - same UID as the agent process (SO_PEERCRED authenticated),
- * - stable PID identity (pid + start_time_ticks still matches),
- * - executable fs-verity digest present in current policy allowlist.
+ * Gather the inputs the privileged-IPC rule decides on;
+ * the rule itself is ipc_privilege_granted() in ipc_privilege.h
  */
 static int ipc_client_is_privileged(struct ipc_context *ctx,
 				    const struct ipc_client *client)
 {
 	uint64_t current_ticks = 0;
+	bool pid_identity_ok;
 
 	if (!ctx || !client)
 		return 0;
 
-	if (client->peer_uid != geteuid())
+	pid_identity_ok = client->peer_start_time_ticks != 0 &&
+			  read_pid_start_time_ticks(client->peer_pid,
+						    &current_ticks) >= 0 &&
+			  current_ticks == client->peer_start_time_ticks;
+
+	/*
+	 * Settle the cheap checks before measuring the peer's executable:
+	 * that reads /proc and hashes a file, and a caller the uid check
+	 * already refused must not be able to make the agent do it.
+	 */
+	if (!ipc_privilege_granted(client->peer_uid == geteuid(),
+				   pid_identity_ok, 0, true))
 		return 0;
 
-	if (client->peer_start_time_ticks == 0)
-		return 0;
-
-	if (read_pid_start_time_ticks(client->peer_pid, &current_ticks) < 0)
-		return 0;
-
-	if (current_ticks != client->peer_start_time_ticks)
-		return 0;
-
-	if (!ipc_client_has_trusted_executable(client))
-		return 0;
-
-	return 1;
+	return ipc_privilege_granted(
+		       true, true, g_agent.policy_verity_digest_count,
+		       ipc_client_has_trusted_executable(client) != 0) ?
+		       1 :
+		       0;
 }
 
 /*
