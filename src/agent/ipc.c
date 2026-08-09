@@ -1187,12 +1187,46 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
-				lota_err("runtime image measurement failed for "
-					 "pid=%u: %s",
-					 runtime_pids[i], reason);
-				fail = true;
-				fail_code = LOTA_IPC_ERR_INTERNAL;
-				goto out;
+
+				/*
+				 * Only the caller's own executable decides
+				 * the caller's token.
+				 * Any local program may protect itself,
+				 * so folding somebody else's unmeasurable
+				 * binary into this refusal stops every title
+				 * on the machine until that program exits.
+				 */
+				if (token_gate_failure_is_fatal(
+					    (pid_t)runtime_pids[i],
+					    client->peer_pid)) {
+					lota_err(
+						"runtime image measurement failed for "
+						"the requesting pid=%u: %s",
+						runtime_pids[i], reason);
+					fail = true;
+					fail_code =
+						LOTA_IPC_ERR_UNMEASURABLE_SELF;
+					goto out;
+				}
+
+				/*
+				 * Absent from the fold:
+				 * the digest stays a zero for that process,
+				 * the coverage flag carries the gap,
+				 * and a publisher who requires full coverage
+				 * refuses the token on that flag.
+				 */
+				memset(image_digests[i], 0,
+				       sizeof(image_digests[i]));
+				lota_warn(
+					"runtime image measurement failed for pid=%u, "
+					"which is not the caller (pid=%d): the token "
+					"reports partial coverage rather than "
+					"refusing every title on this host: %s",
+					runtime_pids[i], client->peer_pid,
+					reason);
+				image_fully_measured = false;
+				continue;
 			}
 			if (cov.unmeasurable > 0) {
 				lota_rt_failure_reason(&mfail, mfail.err,

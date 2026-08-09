@@ -68,6 +68,19 @@ enum lota_error {
 	 * learn and let them accept, then connect again.
 	 */
 	LOTA_ERR_CONSENT_REQUIRED = -13,
+	/*
+	 * This process's own executable carries no measurable identity,
+	 * so the agent cannot state what is running and will not issue
+	 * a token for it.
+	 * Enable fs-verity on the binary, or stop asking to be protected.
+	 *
+	 * It is about this process and no other.  A different protected
+	 * process being unmeasurable never produces this code:
+	 * the token is issued with LOTA_FLAG_IMAGE_FULLY_MEASURED clear
+	 * instead, and how much coverage a publisher requires is theirs
+	 * to decide.
+	 */
+	LOTA_ERR_UNMEASURABLE_SELF = -14,
 };
 
 /*

@@ -169,8 +169,13 @@ decides how much of a process's code the measurement can account for.
    * - A title's own binaries
      - Full, on any verity-capable filesystem. Whoever ships the title
        enables it, with ``lota-install --verity-manifest`` or the
-       equivalent in their own packaging. The agent refuses a token when a
-       protected process's own executable carries no digest.
+       equivalent in their own packaging. The agent refuses a token when
+       **the requesting process's own** executable carries no digest, and
+       says so with ``LOTA_ERR_UNMEASURABLE_SELF``. Another protected
+       process being unmeasurable never refuses this caller: any local
+       program may ask to be protected, so one program's packaging would
+       otherwise stop token issuance for every title on the machine. It is
+       reported through the coverage flag instead.
    * - Distribution libraries on a package-managed host
      - **None, today.** Fedora ships ``libc``, ``libcurl`` and the rest
        without fs-verity, so those objects are absent from the fold and the

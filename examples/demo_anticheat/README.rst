@@ -285,7 +285,16 @@ signature covers it, and the reason names the missing flag.
 Two properties are not a policy choice, and the agent refuses a token when
 either fails: something has to have been measured, and the producer's **own
 executable** has to be one of the objects measured -- that binary is the one
-a publisher ships and can make measurable.
+a publisher ships and can make measurable. The refusal names that case,
+``LOTA_ERR_UNMEASURABLE_SELF``.
+
+The refusal stops there. A *different* protected process that cannot be
+measured never refuses this caller: any program on the machine may ask to be
+protected, so folding somebody else's packaging into this answer would let one
+unmeasurable binary stop token issuance for every title on the host. Such a
+process is reported instead -- its digest is absent from the fold and the token
+carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear -- which leaves the decision
+with the publisher who has to make it.
 
 On the backend side, ``lota_server_verify_token()`` recomputes the runtime
 measurement from the token's own protected-PID list and image digests and

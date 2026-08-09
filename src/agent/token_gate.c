@@ -20,8 +20,13 @@ bool token_gate_needs_attested(uint32_t view_flags)
 
 bool token_gate_failure_is_fatal(pid_t failing_pid, pid_t requesting_pid)
 {
-	(void)failing_pid;
-	(void)requesting_pid;
-
-	return true;
+	/*
+	 * The caller's own executable is the part its publisher packages,
+	 * so an unmeasurable one is theirs to answer for.
+	 * Every other protected process belongs to somebody else and is reported
+	 * through the coverage flag instead: a token that cannot be issued
+	 * because a third program protected itself from a binary with no fs-verity
+	 * is a denial of service any local program can cause.
+	 */
+	return failing_pid == requesting_pid;
 }
