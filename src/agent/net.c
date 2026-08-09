@@ -791,6 +791,13 @@ const char *net_result_str(uint32_t result)
 		return "FAIL - Protocol version mismatch";
 	case VERIFY_INTEGRITY_MISMATCH:
 		return "FAIL - Integrity mismatch (agent binary changed!)";
+	case VERIFY_REVOKED:
+		return "FAIL - This host's attestation key was revoked by the "
+		       "publisher's administrator; re-enrollment is their "
+		       "decision, not this machine's";
+	case VERIFY_BANNED:
+		return "FAIL - This machine is banned by the publisher's "
+		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
 	default:

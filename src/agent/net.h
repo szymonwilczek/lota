@@ -56,7 +56,11 @@ struct verifier_result {
 	uint8_t session_token[32];
 };
 
-/* Result codes */
+/* Result codes.
+ * One enumeration with the verifier's (src/verifier/types/report.go):
+ * a code this list is missing reaches the host as an unknown error,
+ * which is the only account it has of why it stopped attesting.
+ * The pair is compared in the build -- see verify_codes_test.go */
 #define VERIFY_OK 0
 #define VERIFY_NONCE_FAIL 1
 #define VERIFY_SIG_FAIL 2
@@ -64,6 +68,8 @@ struct verifier_result {
 #define VERIFY_IOMMU_FAIL 4
 #define VERIFY_OLD_VERSION 5
 #define VERIFY_INTEGRITY_MISMATCH 6
+#define VERIFY_REVOKED 7
+#define VERIFY_BANNED 8
 #define VERIFY_INTERNAL_ERROR 9
 
 /*
