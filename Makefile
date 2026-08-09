@@ -1136,6 +1136,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_policy_export \
 	$(TEST_BIN_DIR)/test_aik_rotation \
 	$(TEST_BIN_DIR)/test_signed_clockinfo \
+	$(TEST_BIN_DIR)/test_pcr14_verdict \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
@@ -1286,6 +1287,10 @@ $(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
 $(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+
+$(TEST_BIN_DIR)/test_pcr14_verdict: tests/test_pcr14_verdict.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
@@ -1501,6 +1506,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_policy_export
 	@$(BUILD_DIR)/test_aik_rotation
 	@$(BUILD_DIR)/test_signed_clockinfo
+	@$(BUILD_DIR)/test_pcr14_verdict
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
