@@ -588,6 +588,27 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
 			      uint8_t out_digest[]);
 
 /*
+ * tpm_derive_locked_pcr14 - PCR14 after the lock-then-extend chain
+ * @self_hash:     SHA-256 of the agent binary that commits
+ * @baseline:      pre-LOTA PCR14 content the initramfs lock extended on
+ * @reset_count:   TPM clockInfo.resetCount bound into the commitment
+ * @restart_count: TPM clockInfo.restartCount bound into the commitment
+ * @out:           LOTA_HASH_SIZE bytes
+ *
+ * SHA-256(SHA-256(baseline || lock_commit) || boot_commit).
+ *
+ * Pure: no TPM and no file access, so a caller can derive what the
+ * register would hold for counters other than the ones it just read.
+ * The verifier mirrors it in verifier/verify/baseline.go.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int tpm_derive_locked_pcr14(const uint8_t self_hash[],
+			    const uint8_t baseline[LOTA_HASH_SIZE],
+			    uint32_t reset_count, uint32_t restart_count,
+			    uint8_t out[LOTA_HASH_SIZE]);
+
+/*
  * What the PCR14 register observed at agent startup means.
  *
  * The verdict is separated from the extend that acts on it so

@@ -2193,16 +2193,16 @@ static int derive_lock_pcr14_value(const uint8_t baseline[LOTA_HASH_SIZE],
 }
 
 /*
- * derive_expected_locked_pcr14 - final PCR14 after the lock-then-extend
+ * tpm_derive_locked_pcr14 - final PCR14 after the lock-then-extend
  * chain: SHA-256(lock_value || boot_commit).
- * Used by both the warm-restart match (when the agent re-runs in locked
- * boot session) and the post-extend state save.
+ * Used by the warm-restart match (when the agent re-runs in a locked
+ * boot session), the post-extend state save, and the restartCount scan
+ * that recognises a resume.
  */
-static int derive_expected_locked_pcr14(const uint8_t self_hash[],
-					const uint8_t baseline[LOTA_HASH_SIZE],
-					uint32_t reset_count,
-					uint32_t restart_count,
-					uint8_t out[LOTA_HASH_SIZE])
+int tpm_derive_locked_pcr14(const uint8_t self_hash[],
+			    const uint8_t baseline[LOTA_HASH_SIZE],
+			    uint32_t reset_count, uint32_t restart_count,
+			    uint8_t out[LOTA_HASH_SIZE])
 {
 	uint8_t lock_value[LOTA_HASH_SIZE];
 	uint8_t boot_commit[LOTA_HASH_SIZE];
@@ -2530,9 +2530,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 				      lock_pcr14_value);
 	if (ret < 0)
 		return ret;
-	ret = derive_expected_locked_pcr14(self_hash, baseline, reset_count,
-					   restart_count,
-					   expected_locked_pcr14);
+	ret = tpm_derive_locked_pcr14(self_hash, baseline, reset_count,
+				      restart_count, expected_locked_pcr14);
 	if (ret < 0)
 		return ret;
 
