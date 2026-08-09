@@ -429,6 +429,26 @@ static int run_daemon(const struct run_daemon_params *params)
 			goto cleanup_tpm;
 		}
 
+		/*
+		 * The record predates per-publisher key derivation,
+		 * so the key it names is the one every publisher enrolled here
+		 * holds.
+		 * The daemon does not replace it: doing so would invalidate
+		 * the certificate that names it and leave the host unable to
+		 * attest without saying why.
+		 */
+		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
+			lota_err("This publisher's attestation key was created "
+				 "before each publisher got a key of its own, "
+				 "so it is byte for byte the key every other "
+				 "publisher enrolled here holds. Run "
+				 "lota-agent --reenroll --ca-cert <their "
+				 "anchor> to replace it; the device pseudonym "
+				 "is derived from the key and moves with it.");
+			ret = -ENOTSUP;
+			goto cleanup_tpm;
+		}
+
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
 		if (ret < 0) {

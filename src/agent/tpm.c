@@ -1072,6 +1072,21 @@ static void tpm_forget_bound_aik(struct tpm_context *ctx)
 	ctx->aik_auth_loaded = false;
 }
 
+bool tpm_aik_key_is_shared(const struct tpm_context *ctx)
+{
+	if (!ctx || !ctx->aik_profile_id[0] || !ctx->aik_meta_loaded)
+		return false;
+
+	return ctx->aik_meta.key_derivation !=
+	       TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+}
+
+void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
+{
+	if (ctx)
+		ctx->aik_allow_shared_key_replace = allow;
+}
+
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len)
 {
@@ -1084,6 +1099,26 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 	if (!profile_id || !profile_id[0])
 		return 0;
 
+	if (strlen(profile_id) != LOTA_PROFILE_ID_LEN - 1)
+		return -EINVAL;
+
+	/*
+	 * The identity is already a SHA-256 -- of the publisher's CA anchor
+	 * SubjectPublicKeyInfo -- so its bytes go in as they are.
+	 * Decoding the hex keeps the value the same whichever side of
+	 * the project computes it.
+	 */
+	for (size_t i = 0; i < LOTA_HASH_SIZE; i++) {
+		unsigned int byte;
+
+		if (sscanf(profile_id + i * 2, "%2x", &byte) != 1) {
+			memset(out, 0, LOTA_HASH_SIZE);
+			return -EINVAL;
+		}
+		out[i] = (uint8_t)byte;
+	}
+
+	*out_len = LOTA_HASH_SIZE;
 	return 0;
 }
 
@@ -1102,6 +1137,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 	previous_handle = ctx->aik_handle;
 	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
 		 ctx->aik_meta_path);
+	snprintf(ctx->aik_profile_id, sizeof(ctx->aik_profile_id), "%s",
+		 paths->id);
 
 	if (!ctx->aik_meta_path_from_env) {
 		if (strlen(paths->aik_meta) >= sizeof(ctx->aik_meta_path)) {
@@ -1300,8 +1337,31 @@ static int create_aik_primary(struct tpm_context *ctx, ESYS_TR *out_handle,
 		    .data = {.size = 0},
 		},
 	};
+	uint8_t unique[LOTA_HASH_SIZE];
+	uint16_t unique_len = 0;
+	int unique_ret;
+
 	if (!aik_auth)
 		return -EINVAL;
+
+	/*
+	 * What makes one publisher's key theirs.
+	 *
+	 * TPM2_CreatePrimary derives the key from the hierarchy seed
+	 * and the template; userAuth is not part of that, so without this
+	 * the profiles differ only in which handle they occupy and every
+	 * publisher's certificate carries the same public key.
+	 * A host with no publisher contributes nothing and keeps the key it had.
+	 */
+	unique_ret = tpm_aik_profile_unique(ctx->aik_profile_id, unique,
+					    &unique_len);
+	if (unique_ret < 0)
+		return unique_ret;
+	if (unique_len > 0) {
+		in_public.publicArea.unique.rsa.size = unique_len;
+		memcpy(in_public.publicArea.unique.rsa.buffer, unique,
+		       unique_len);
+	}
 
 	memcpy(in_sensitive.sensitive.userAuth.buffer, aik_auth,
 	       TPM_AIK_AUTH_SIZE);
@@ -1438,6 +1498,9 @@ static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx)
 	}
 
 	ctx->aik_meta.provisioned_at = (int64_t)now;
+	ctx->aik_meta.key_derivation =
+		ctx->aik_profile_id[0] ? TPM_AIK_KEY_DERIVATION_PER_PUBLISHER :
+					 TPM_AIK_KEY_DERIVATION_SHARED;
 	ctx->aik_meta_loaded = true;
 
 	return tpm_aik_save_metadata(ctx);
@@ -1469,8 +1532,25 @@ int tpm_provision_aik(struct tpm_context *ctx)
 		/* existing key is accepted only when its non-empty auth is
 		 * present */
 		int load_rc = tpm_aik_load_auth(ctx);
-		if (load_rc == 0)
+		if (load_rc == 0) {
+			/*
+			 * A key created before publishers had keys of their own
+			 * is the same key every other publisher here holds.
+			 * Only the enrollment path may replace it, because
+			 * replacing it invalidates the certificate that names
+			 * it and that path fetches a new one.
+			 */
+			if (tpm_aik_key_is_shared(ctx)) {
+				if (!ctx->aik_allow_shared_key_replace)
+					return -ENOTSUP;
+
+				ret = tpm_aik_reprovision_with_auth(ctx, 1);
+				if (ret < 0)
+					return ret;
+				return tpm_aik_save_new_key_metadata(ctx);
+			}
 			return 0;
+		}
 
 		/*
 		 * Strict at-rest sealing: if the sealed auth failed only
@@ -4051,6 +4131,13 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 		return -errno;
 
 	struct aik_metadata wire;
+
+	/*
+	 * Zero first: every byte of this struct is written to disk,
+	 * so a field the assignments below do not cover would put
+	 * a stack byte in the record and read back as a derivation nobody chose.
+	 */
+	memset(&wire, 0, sizeof(wire));
 	wire.magic = htole32(ctx->aik_meta.magic);
 	wire.version = htole32(TPM_AIK_META_VERSION);
 	wire.generation = htole64(ctx->aik_meta.generation);
@@ -4058,7 +4145,7 @@ int tpm_aik_save_metadata(struct tpm_context *ctx)
 		(int64_t)htole64((uint64_t)ctx->aik_meta.provisioned_at);
 	wire.last_rotated_at =
 		(int64_t)htole64((uint64_t)ctx->aik_meta.last_rotated_at);
-	memset(wire._reserved, 0, sizeof(wire._reserved));
+	wire.key_derivation = ctx->aik_meta.key_derivation;
 
 	n = write(fd, &wire, sizeof(wire));
 	if (n != (ssize_t)sizeof(wire)) {

@@ -117,6 +117,51 @@ static void make_ctx(struct tpm_context *ctx)
 		 "%s/aik_meta.dat", tmp_dir);
 }
 
+/*
+ * The record says how the key it describes was derived, and that answer
+ * decides whether the daemon will attest with the key at all.
+ * A field the writer forgets is not a missing feature here: every byte
+ * of the struct reaches the disk, so an unassigned one reads back as
+ * a derivation nobody chose.
+ */
+static void test_metadata_key_derivation_round_trip(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+
+	TEST("the key-derivation marker survives save -> load");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 7;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+	if (tpm_aik_load_metadata(&ctx2) != 0) {
+		FAIL("load returned error");
+		return;
+	}
+	if (ctx2.aik_meta.key_derivation !=
+	    TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("the marker did not survive the round-trip");
+		return;
+	}
+
+	/* and a key with no publisher stays marked as such */
+	snprintf(ctx2.aik_profile_id, sizeof(ctx2.aik_profile_id), "%s", "");
+	if (tpm_aik_key_is_shared(&ctx2)) {
+		FAIL("a host with no publisher was called shared");
+		return;
+	}
+	PASS();
+}
+
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -1494,6 +1539,7 @@ int main(void)
 	setup_tmp_dir();
 
 	test_metadata_save_load();
+	test_metadata_key_derivation_round_trip();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();

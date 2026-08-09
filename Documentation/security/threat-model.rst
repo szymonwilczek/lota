@@ -75,6 +75,20 @@ as path material only. A supplied certificate can complete a route to a root
 the operator pinned; it can never become one, so a host that presents its own
 self-signed root is refused exactly as a host presenting nothing is.
 
+One key per publisher, and it is the template that makes it so. A TPM primary
+is derived from the hierarchy seed and the creation template, so two profiles
+that present the same template receive the same key however many persistent
+handles they occupy -- and the per-profile ``userAuth`` takes no part in that
+derivation. The agent therefore puts the publisher's own identity, the SHA-256
+of its CA anchor's SubjectPublicKeyInfo, into the template's ``unique`` field.
+Distinct per publisher, reproduced exactly when that publisher re-enrols, and
+absent on a host that answers to nobody, whose key is unchanged.
+
+A key created before that was shared with every other publisher on the host,
+and no upgrade can rewrite a TPM key in place. The AIK metadata record carries
+the distinction (version 2), and a version-1 record is refused with that sentence;
+re-enrolling the profile replaces the key and the device pseudonym moves with it.
+
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
 public key at all, so an AIK cannot become trusted by being seen first. The

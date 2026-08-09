@@ -424,7 +424,16 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	}
 
 	printf("Checking AIK...\n");
+
+	/* this is the command that comes back with a certificate */
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0 &&
+	    tpm_aik_key_is_shared(&g_agent.tpm_ctx))
+		printf("Replacing the attestation key this publisher shares "
+		       "with every other one enrolled here.\n");
+
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, true);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, false);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
