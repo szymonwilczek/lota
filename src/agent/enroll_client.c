@@ -622,7 +622,12 @@ int do_allow_publisher(const char *profile_id)
 
 	printf("Publisher %s may now enroll with this machine.\n", paths.id);
 	printf("They will hold one attestation key here, unlinkable to the "
-	       "one any other publisher holds.\n");
+	       "one any other\npublisher holds.\n");
+	printf("If they run a verifier, they also receive this host's boot "
+	       "evidence, which\nis the same evidence every other such "
+	       "publisher receives -- comparing it\ntells them they are "
+	       "looking at one machine. Take it back at any time with:\n");
+	printf("  lota-agent --forget-publisher %s\n", paths.id);
 	return 0;
 }
 
@@ -831,10 +836,17 @@ int do_list_publishers(void)
 		print_publisher(&entries[i]);
 		printf("\n");
 	}
-	printf("Each holds its own attestation key, so none of them can tell "
-	       "from the evidence\nthat this is the same machine another one "
-	       "sees. What every report contains is\nthe same for all of "
-	       "them and is listed in the operator documentation.\n");
+	printf("Each holds its own attestation key, so none of them can name "
+	       "this machine\nfrom the certificate it was issued, and nothing "
+	       "ties one publisher's\nidentity for this machine to another's."
+	       "\n\n");
+	printf("A publisher who runs a verifier receives more than that: the "
+	       "boot evidence,\nincluding the firmware measurements and the "
+	       "event log, which names this\nhost's disk. Two such publishers "
+	       "who compare what they each received can\ntell they are looking "
+	       "at one machine. A publisher whose titles only check\ntokens "
+	       "receives none of it. What a report contains is listed in the "
+	       "operator\ndocumentation.\n");
 	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
 	return 0;
 }
