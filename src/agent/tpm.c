@@ -2298,148 +2298,6 @@ int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 #define TPM_CLOCK_PROBE_TAG "LOTA-PCR14-CLOCK-PROBE-v1"
 
 /*
- * Extract clockInfo.resetCount/restartCount from a marshalled
- * TPMS_ATTEST blob (as produced by Esys_Quote). Factored out so the
- * unit tests can exercise the parsing path without a live TPM.
- */
-static int parse_signed_clockinfo(const uint8_t *attest_buf, size_t attest_len,
-				  uint32_t *reset_count_out,
-				  uint32_t *restart_count_out)
-{
-	TPMS_ATTEST attest;
-	size_t offset = 0;
-	TSS2_RC rc;
-
-	if (!attest_buf || attest_len == 0 || !reset_count_out ||
-	    !restart_count_out)
-		return -EINVAL;
-
-	memset(&attest, 0, sizeof(attest));
-	rc = Tss2_MU_TPMS_ATTEST_Unmarshal(attest_buf, attest_len, &offset,
-					   &attest);
-	if (rc != TSS2_RC_SUCCESS)
-		return tss2_rc_to_errno(rc);
-
-	*reset_count_out = attest.clockInfo.resetCount;
-	*restart_count_out = attest.clockInfo.restartCount;
-	return 0;
-}
-
-#ifdef LOTA_TPM_TESTING
-int tpm_test_parse_signed_clockinfo(const uint8_t *attest_buf,
-				    size_t attest_len,
-				    uint32_t *reset_count_out,
-				    uint32_t *restart_count_out)
-{
-	return parse_signed_clockinfo(attest_buf, attest_len, reset_count_out,
-				      restart_count_out);
-}
-#endif
-
-/*
- * Issue a TPM2_Quote with an empty PCR selection so the TPM signs a
- * TPMS_ATTEST whose clockInfo is captured under the AIK signing path.
- * The agent uses these counters for the boot-commitment derivation so
- * the value extended into PCR14 matches the clockInfo the later
- * attestation quote will carry.
- *
- * The two sources are expected to disagree. A TPM obfuscates clock,
- * resetCount and restartCount in an attestation structure by an amount
- * unique to the signing key whenever that key sits outside the endorsement
- * hierarchy, so a quote cannot be used to correlate a machine across keys;
- * the AIK is an owner-hierarchy primary, so its quotes always carry offset
- * counters.
- * Deriving the commitment from Esys_ReadClock instead would break the verifier,
- * which rederives from this very quote.
- *
- * Anything an operator is asked to confirm goes through print_platform_clock()
- * instead.
- *
- * Requires a provisioned AIK with auth loaded; callers that may run before
- * enrollment must handle -ENOKEY by falling back to the unauthenticated path
- * or by deferring the extend.
- */
-static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
-				     uint32_t *reset_count_out,
-				     uint32_t *restart_count_out)
-{
-	TSS2_RC rc;
-	int ret;
-	ESYS_TR key_handle = ESYS_TR_NONE;
-	TPM2B_DATA qualifying_data;
-	TPMT_SIG_SCHEME in_scheme;
-	TPML_PCR_SELECTION pcr_selection;
-	TPM2B_ATTEST *quoted = NULL;
-	TPMT_SIGNATURE *signature = NULL;
-
-	if (!ctx || !ctx->initialized || !reset_count_out || !restart_count_out)
-		return -EINVAL;
-
-	ret = aik_exists(ctx, &key_handle);
-	if (ret < 0)
-		return ret;
-	if (ret == 0)
-		return -ENOKEY;
-
-	if (!ctx->aik_auth_loaded) {
-		ret = tpm_aik_load_auth(ctx);
-		if (ret < 0)
-			return ret;
-	}
-
-	{
-		TPM2B_AUTH auth_value = { .size = TPM_AIK_AUTH_SIZE };
-		memcpy(auth_value.buffer, ctx->aik_auth, TPM_AIK_AUTH_SIZE);
-		TPM_CALL_RETRY(ctx, rc,
-			       Esys_TR_SetAuth(ctx->esys_ctx, key_handle,
-					       &auth_value));
-		secure_bzero(auth_value.buffer, sizeof(auth_value.buffer));
-		if (rc != TSS2_RC_SUCCESS)
-			return tss2_rc_to_errno(rc);
-	}
-
-	qualifying_data.size = (uint16_t)(sizeof(TPM_CLOCK_PROBE_TAG) - 1);
-	memset(qualifying_data.buffer, 0, sizeof(qualifying_data.buffer));
-	memcpy(qualifying_data.buffer, TPM_CLOCK_PROBE_TAG,
-	       qualifying_data.size);
-
-	in_scheme.scheme = TPM2_ALG_NULL;
-
-	memset(&pcr_selection, 0, sizeof(pcr_selection));
-	pcr_selection.count = 0;
-
-	{
-		struct esys_quote_args args = {
-			.esys_ctx = ctx->esys_ctx,
-			.sign_handle = key_handle,
-			.shandle1 = ESYS_TR_PASSWORD,
-			.qualifying_data = &qualifying_data,
-			.in_scheme = &in_scheme,
-			.pcr_selection = &pcr_selection,
-			.quoted_out = &quoted,
-			.signature_out = &signature,
-		};
-		int call_ret = tpm_call_with_backoff(ctx, esys_quote_thunk,
-						     &args, &rc, 2,
-						     (void **)&quoted,
-						     (void **)&signature);
-		secure_bzero(qualifying_data.buffer,
-			     sizeof(qualifying_data.buffer));
-		if (call_ret < 0)
-			return call_ret;
-	}
-
-	ret = parse_signed_clockinfo(quoted->attestationData, quoted->size,
-				     reset_count_out, restart_count_out);
-	secure_bzero(quoted->attestationData, sizeof(quoted->attestationData));
-	secure_bzero(signature, sizeof(*signature));
-	Esys_Free(quoted);
-	Esys_Free(signature);
-
-	return ret;
-}
-
-/*
  * Print the platform's own reset/restart counters, the pair an operator
  * can confirm with tpm2_readclock.
  *
@@ -2610,15 +2468,21 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 */
 	ctx->boot_commitment_locked = false;
 
-	ret = tpm_read_signed_clockinfo(ctx, &reset_count, &restart_count);
-	if (ret == -ENOKEY) {
-		/*
-		 * AIK not provisioned yet. Fall back to Esys_ReadClock so a
-		 * pre-enrollment boot can still pin PCR14. After enrollment
-		 * the next agent run will rebind PCR14 via the authenticated
-		 * path; this fallback must therefore not be used by an
-		 * attesting agent.
-		 */
+	/*
+	 * Counters for attribution, from the platform's own reading.
+	 *
+	 * They tell a restart within one boot from a hardware reset,
+	 * and nothing else: the commitment binds the agent hash alone.
+	 * Reading them through an AIK-signed quote would make them
+	 * key-specific -- TPM obfuscates clockInfo per signing key
+	 * -- so a snapshot written while one publisher's key was bound
+	 * reads as an attack to the next start under another's.
+	 *
+	 * TPM2_ReadClock is the reading every caller shares, and the one
+	 * tpm2_readclock prints, so an operator can check any number
+	 * the agent quotes.
+	 */
+	{
 		TPMS_TIME_INFO *time_info = NULL;
 		struct esys_read_clock_args args = {
 			.esys_ctx = ctx->esys_ctx,
@@ -2632,14 +2496,6 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		reset_count = time_info->clockInfo.resetCount;
 		restart_count = time_info->clockInfo.restartCount;
 		Esys_Free(time_info);
-		fprintf(stderr,
-			"PCR14 boot-commitment: AIK absent, falling back to "
-			"unauthenticated clockInfo (resetCount=%u "
-			"restartCount=%u); rerun after --enroll so the "
-			"signed-clock path takes over\n",
-			(unsigned)reset_count, (unsigned)restart_count);
-	} else if (ret < 0) {
-		return ret;
 	}
 
 	ret = tpm_boot_commitment_digest(self_hash, commit);
