@@ -197,10 +197,10 @@ in ``--help``; the agent refuses to start on anything else, since an interval
 past the ceiling mints tokens that sit outside every relying party's freshness
 window.
 
-``ca_cert`` must point at a path the hardened unit can read. The service runs
-with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
-an operator home directory (the ``--ca-cert ~/tls.crt`` used for a manual
-``--enroll``) is invisible to it. Copy the verifier CA certificate under
+``ca_cert`` must point at a path the hardened unit can read. Both units run
+with ``ProtectSystem=strict`` and with ``/home`` and ``/root`` inaccessible, so
+a certificate left in an operator home directory (the ``--ca-cert ~/tls.crt``
+used for a manual ``--enroll``) is invisible to them. Copy the verifier CA certificate under
 ``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
 there, for example::
 
