@@ -136,7 +136,13 @@ should be attempted, since stopping the agent spends the boot's PCR 14
 commitment. The socket is handed to the ``lota`` group at mode 0660, so an
 account outside that group cannot open it even though it is there.
 ``lota-steam-setup --verify``, run from the user's own session, reports both
-halves: whether the socket exists and whether that account can open it.
+halves: whether the socket exists and whether that account can open it. When
+it cannot, the tool prints the socket's ownership and points at the agent's
+own message (``journalctl -u lota-agent | grep chown``), because a socket the
+agent could not hand to the group looks identical from the outside to one it
+did. When the socket is absent it names the two things that produce one --
+a registered UID and a boot since it was registered -- and does not suggest
+restarting the agent.
 
 Continuous attestation
 ----------------------
