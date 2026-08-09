@@ -588,6 +588,67 @@ int tpm_initramfs_lock_digest(uint32_t reset_count, uint32_t restart_count,
 			      uint8_t out_digest[]);
 
 /*
+ * What the PCR14 register observed at agent startup means.
+ *
+ * The verdict is separated from the extend that acts on it so
+ * the attribution rules can be exercised without a TPM: every input is
+ * a value the caller already read, and the classifier performs no I/O.
+ */
+enum tpm_pcr14_state {
+	/* Initramfs lock ran, the agent has not committed yet: extend */
+	TPM_PCR14_AWAITING_EXTEND = 0,
+	/* Both extends already happened in this boot: nothing to do */
+	TPM_PCR14_ALREADY_COMMITTED,
+	/* Register still holds the bare baseline: the lock never ran */
+	TPM_PCR14_LOCK_MISSING,
+	/*
+	 * PCR14 carries this agent's own commitment but a different
+	 * binary is running now.
+	 * Non-resettable register, so the way out is to install and cold reboot.
+	 */
+	TPM_PCR14_BINARY_CHANGED,
+	/* resetCount advanced and PCR14 was dirty before the agent ran */
+	TPM_PCR14_TAMPERED_BEFORE_START,
+	/* Something extended PCR14 after this agent's last commitment */
+	TPM_PCR14_MUTATED_IN_SESSION,
+	/* Unexpected value and no snapshot to attribute it with */
+	TPM_PCR14_UNATTRIBUTABLE,
+	/* TPM reports an older resetCount than the snapshot recorded */
+	TPM_PCR14_STATE_ROLLBACK,
+};
+
+/*
+ * Everything tpm_classify_pcr14() needs, all of it already read by
+ * the caller.
+ * Pointers are LOTA_HASH_SIZE buffers;
+ * @prev is NULL when the host has no usable snapshot from an earlier run.
+ */
+struct tpm_pcr14_observation {
+	const uint8_t *current; /* PCR14 as the TPM reports it now */
+	const uint8_t *baseline; /* pre-LOTA platform value */
+	const uint8_t *lock_value; /* baseline + initramfs lock extend */
+	const uint8_t *expected_locked; /* lock value + boot commitment */
+	const uint8_t *self_hash; /* hash of the running binary */
+	uint32_t reset_count; /* quote counters for this run */
+	uint32_t restart_count;
+	const struct lota_clock_state *prev;
+};
+
+/*
+ * tpm_classify_pcr14 - decide what the observed PCR14 value means
+ * @obs: fully populated observation
+ *
+ * Pure function: no TPM access, no file access, no logging.
+ * The caller renders the operator message and performs the extend.
+ *
+ * Returns: the verdict, or TPM_PCR14_UNATTRIBUTABLE for a malformed
+ * observation, which is the conservative reading of "cannot explain
+ * this register".
+ */
+enum tpm_pcr14_state
+tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
+
+/*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
  *                              current TPM reset/restart counter
  * @ctx:       Initialized TPM context
