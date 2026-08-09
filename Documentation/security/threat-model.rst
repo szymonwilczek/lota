@@ -89,6 +89,21 @@ and no upgrade can rewrite a TPM key in place. The AIK metadata record carries
 the distinction (version 2), and a version-1 record is refused with that sentence;
 re-enrolling the profile replaces the key and the device pseudonym moves with it.
 
+What that separation does not cover is the evidence. Two publishers who each
+run a verifier receive the same firmware and Secure Boot measurements and the
+same event log, and the log names the disk this host boots from, so comparing
+what they each legitimately received tells them it is one machine. Identity is
+unlinkable; evidence is not, and the product says so where a player can act on
+it -- at the consent prompt, in ``--list-publishers`` and in the player
+documentation.
+
+The fork the design already had is the answer to it. A publisher whose titles
+only check tokens receives no report, no PCR values and no event log, so for
+them the separation is complete; a publisher who runs a verifier trades that
+away for a verifier's judgement. Nothing in the protocol can give two verifiers
+a per-publisher view of PCR 14 while both still verify it, so this is a
+disclosure to state plainly.
+
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
 public key at all, so an AIK cannot become trusted by being seen first. The
