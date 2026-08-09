@@ -1134,6 +1134,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_verify_result_str \
 	$(TEST_BIN_DIR)/test_connect_hint \
+	$(TEST_BIN_DIR)/test_xattr_carry \
 	$(TEST_BIN_DIR)/test_config \
 	$(TEST_BIN_DIR)/test_config_alloc \
 	$(TEST_BIN_DIR)/test_config_add_profile \
@@ -1351,6 +1352,10 @@ $(TEST_BIN_DIR)/test_aik_cert_renew: tests/test_aik_cert_renew.c $(AGENT_DIR)/ai
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_xattr_carry: tests/test_xattr_carry.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
 $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
@@ -1558,6 +1563,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_verify_result_str
 	@$(BUILD_DIR)/test_connect_hint
+	@$(BUILD_DIR)/test_xattr_carry
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
 	@$(BUILD_DIR)/test_runtime_measure_failure
@@ -1657,7 +1663,8 @@ VALGRIND_UNIT_BINS := \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
 	test_profile_id test_attest_targets test_attest_aggregate \
 	test_status_flags test_terminate_policy \
-	test_publisher_profile test_verify_result_str test_connect_hint
+	test_publisher_profile test_verify_result_str test_connect_hint \
+	test_xattr_carry
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
