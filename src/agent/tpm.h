@@ -166,6 +166,10 @@ const char *tpm_strerror(int err);
 #define TPM_AIK_META_MAGIC 0x4D4B4941 /* "AIKM" */
 #define TPM_AIK_META_VERSION 1
 
+/* How the key this record describes was derived */
+#define TPM_AIK_KEY_DERIVATION_SHARED 0
+#define TPM_AIK_KEY_DERIVATION_PER_PUBLISHER 2
+
 /* Default metadata path (install target creates /var/lib/lota/aiks/) */
 #define TPM_AIK_META_PATH "/var/lib/lota/aik_meta.dat"
 #define TPM_AIK_AUTH_PATH "/var/lib/lota/aik_auth.dat"
@@ -266,7 +270,8 @@ struct aik_metadata {
 	uint64_t generation; /* monotonic rotation counter */
 	int64_t provisioned_at; /* time_t: current AIK creation */
 	int64_t last_rotated_at; /* time_t: last rotation (0 if never) */
-	uint8_t _reserved[64];
+	uint8_t key_derivation; /* TPM_AIK_KEY_DERIVATION_* */
+	uint8_t _reserved[63];
 } __attribute__((packed));
 
 /*
@@ -324,7 +329,22 @@ struct tpm_context {
 	/* AIK rotation state */
 	struct aik_metadata aik_meta;
 	bool aik_meta_loaded;
+
+	/*
+	 * Identity of the publisher whose AIK this context is bound to,
+	 * empty on a host with no publisher.  It is a creation input,
+	 * so the key a publisher holds is theirs and no other publisher's.
+	 */
+	char aik_profile_id[LOTA_PROFILE_ID_LEN];
+
+	/*
+	 * Set by the enrollment path, which is the one command that can
+	 * replace a publisher's key and come back with a certificate for
+	 * the new one.
+	 */
+	bool aik_allow_shared_key_replace;
 	char aik_meta_path[256];
+
 	/* set when LOTA_AIK_META_PATH chose the path above,
 	 * so binding publisher profile leaves developer's explicit override alone */
 	bool aik_meta_path_from_env;
@@ -549,6 +569,33 @@ int tpm_bind_profile(struct tpm_context *ctx,
  */
 int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 			   uint16_t *out_len);
+
+/*
+ * tpm_aik_key_is_shared - does this profile hold a key every publisher has
+ * @ctx: context bound to a publisher profile, with metadata loaded
+ *
+ * True when the record describes a key created before the publisher's
+ * identity entered the creation template.  Such a key is byte for byte
+ * the key every other publisher on this host holds, so a relying party
+ * comparing certificates can link them.
+ * A TPM key cannot be rewritten in place: the way out is an enrollment,
+ * which creates the profile's own key.
+ *
+ * False on a host with no publisher, whose derivation did not change.
+ */
+bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
+
+/*
+ * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
+ * @ctx:   initialized context
+ * @allow: true on the enrollment path, false everywhere else
+ *
+ * Replacing the key invalidates the CA certificate that names it,
+ * so it belongs to the command that will fetch a new one.
+ * Every other caller refuses the shared key instead, and says which command
+ * to run.
+ */
+void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow);
 
 /*
  * tpm_hash_fd - Calculate SHA-256 hash from an open regular file descriptor
