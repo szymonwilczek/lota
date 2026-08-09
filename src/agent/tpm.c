@@ -2357,6 +2357,78 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 	return ret;
 }
 
+/*
+ * Persist what PCR14 now holds so the next run can attribute a change.
+ * A failed save costs attribution on the next start, never this boot,
+ * so it warns with the caller's wording and carries on.
+ */
+static void save_commitment_snapshot(struct tpm_context *ctx,
+				     const uint8_t pcr14[LOTA_HASH_SIZE],
+				     const uint8_t self_hash[LOTA_HASH_SIZE],
+				     uint32_t reset_count,
+				     uint32_t restart_count)
+{
+	struct lota_clock_state snap = {
+		.reset_count = reset_count,
+		.restart_count = restart_count,
+		.saved_at = (int64_t)time(NULL),
+		.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
+	};
+	int ret;
+
+	memcpy(snap.pcr14, pcr14, LOTA_HASH_SIZE);
+	memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
+
+	ret = tpm_clock_state_save(ctx, &snap);
+	if (ret < 0)
+		fprintf(stderr,
+			"PCR14 boot-commitment: clock-state save failed (%s); "
+			"the next run will lose tamper attribution\n",
+			strerror(-ret));
+}
+
+enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
+{
+	if (!obs || !obs->current || !obs->baseline || !obs->lock_value ||
+	    !obs->expected_locked || !obs->self_hash)
+		return TPM_PCR14_UNATTRIBUTABLE;
+
+	/*
+	 * lock-then-extend chain is the only shape the verifier validates,
+	 * so both accepting branches sit first and everything else falls
+	 * through to attribution.
+	 */
+	if (memcmp(obs->current, obs->lock_value, LOTA_HASH_SIZE) == 0)
+		return TPM_PCR14_AWAITING_EXTEND;
+
+	if (memcmp(obs->current, obs->expected_locked, LOTA_HASH_SIZE) == 0)
+		return TPM_PCR14_ALREADY_COMMITTED;
+
+	/*
+	 * The zero-baseline case lands here too:
+	 * UEFI host without shim measures nothing into PCR14,
+	 * so the unlocked register reads 0^32 and the comparison still holds
+	 */
+	if (memcmp(obs->current, obs->baseline, LOTA_HASH_SIZE) == 0)
+		return TPM_PCR14_LOCK_MISSING;
+
+	if (!obs->prev)
+		return TPM_PCR14_UNATTRIBUTABLE;
+
+	if (obs->prev->reset_count > obs->reset_count)
+		return TPM_PCR14_STATE_ROLLBACK;
+
+	if (obs->prev->reset_count < obs->reset_count)
+		return TPM_PCR14_TAMPERED_BEFORE_START;
+
+	/* same boot session from here down */
+	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0 &&
+	    memcmp(obs->prev->self_hash, obs->self_hash, LOTA_HASH_SIZE) != 0)
+		return TPM_PCR14_BINARY_CHANGED;
+
+	return TPM_PCR14_MUTATED_IN_SESSION;
+}
+
 int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			       const uint8_t self_hash[])
 {
@@ -2485,12 +2557,19 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			"continuing without attribution\n",
 			strerror(-ret));
 
-	/*
-	 * lock-then-extend chain is the only shape the verifier validates,
-	 * so both accepting branches sit here and everything else falls through
-	 * to attribution
-	 */
-	if (memcmp(current_pcr14, lock_pcr14_value, LOTA_HASH_SIZE) == 0) {
+	struct tpm_pcr14_observation obs = {
+		.current = current_pcr14,
+		.baseline = baseline,
+		.lock_value = lock_pcr14_value,
+		.expected_locked = expected_locked_pcr14,
+		.self_hash = self_hash,
+		.reset_count = reset_count,
+		.restart_count = restart_count,
+		.prev = have_prev ? &prev : NULL,
+	};
+
+	switch (tpm_classify_pcr14(&obs)) {
+	case TPM_PCR14_AWAITING_EXTEND:
 		/*
 		 * Initramfs lock ran; agent has not extended yet. Extend with
 		 * the boot commitment on top so PCR14 ends at the two-hop
@@ -2499,58 +2578,26 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
 		if (ret < 0)
 			return ret;
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-			.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
-		};
-		memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state save "
-				"failed (%s); "
-				"next run will lose tamper attribution\n",
-				strerror(-save_ret));
+		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
+					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
 		return 0;
-	}
 
-	if (memcmp(current_pcr14, expected_locked_pcr14, LOTA_HASH_SIZE) == 0) {
+	case TPM_PCR14_ALREADY_COMMITTED:
 		/* Warm restart on a locked host - both extends already done. */
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-			.flags = LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK,
-		};
-		memcpy(snap.pcr14, expected_locked_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state refresh "
-				"failed (%s)\n",
-				strerror(-save_ret));
+		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
+					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
 		return 0;
-	}
 
-	if (memcmp(current_pcr14, baseline, LOTA_HASH_SIZE) == 0) {
+	case TPM_PCR14_LOCK_MISSING:
 		/*
 		 * PCR14 still holds the firmware baseline:
-		 * the initramfs lock helper never ran this boot.
-		 * Verifier has no derivation for commitment that is not chained
-		 * onto the lock value, so extending here would only produce
-		 * a register nothing can validate.
+		 * initramfs lock helper never ran this boot.
+		 * verifier has no derivation for a commitment that is not chained
+		 * onto the lock value, so extending here would only produce a
+		 * register nothing can validate.
 		 * Fail closed and name the missing piece.
-		 *
-		 * The zero-baseline case lands here too:
-		 * UEFI host without shim measures nothing into PCR14,
-		 * so unlocked register reads 0^32 and the comparison above
-		 * still holds.
 		 */
 		fprintf(stderr,
 			"PCR14 holds the firmware baseline unchanged: the "
@@ -2559,15 +2606,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			"(dracut -f --add lota) and cold reboot; the boot "
 			"commitment must chain onto the initramfs lock\n");
 		return -EBADMSG;
-	}
 
-	/*
-	 * PCR14 holds an unexpected value. Without prior state every cause
-	 * collapses to a single -EBADMSG; with it we can attribute to one
-	 * of three concrete operator scenarios so the journal entry tells
-	 * the responder which runbook to follow.
-	 */
-	if (!have_prev) {
+	case TPM_PCR14_UNATTRIBUTABLE:
 		fprintf(stderr,
 			"SECURITY: PCR14 holds an unexpected value (resetCount=%u "
 			"restartCount=%u) and no prior clock-state snapshot exists "
@@ -2582,14 +2622,13 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			"quote\n",
 			(unsigned)reset_count, (unsigned)restart_count);
 		return -EBADMSG;
-	}
 
-	if (prev.reset_count < reset_count) {
+	case TPM_PCR14_TAMPERED_BEFORE_START:
 		/*
 		 * Cold boot happened since the last agent run (resetCount
 		 * advanced) and PCR14 is already non-zero before the agent
-		 * could extend it. PCR14 should have been 0^32 at this point;
-		 * something touched it between TPM_INIT and lota-agent startup.
+		 * could extend it.
+		 * Something touched it between TPM_INIT and lota-agent startup.
 		 */
 		fprintf(stderr,
 			"SECURITY: PCR14 tampered between cold boot and agent "
@@ -2604,45 +2643,30 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			(unsigned)prev.reset_count, (unsigned)reset_count,
 			(long long)prev.saved_at);
 		return -EBADMSG;
-	}
 
-	if (prev.reset_count == reset_count) {
+	case TPM_PCR14_BINARY_CHANGED:
 		/*
-		 * Same boot session. Two sub-cases:
-		 *
-		 *  (a) PCR14 still holds the value lota-agent itself wrote
-		 * during the previous run in this session, AND the agent binary
-		 *      hash has changed since then. Live agent upgrade without
-		 * a cold reboot: PCR14 cannot be rebound without resetCount
-		 *      advancing, and the operator must reboot to re-extend.
-		 *
-		 *  (b) PCR14 differs from both the recomputed expected value
-		 * AND the previously-saved snapshot value. Something mutated
-		 *      PCR14 during the current boot session after the last
-		 *      successful extend.
+		 * PCR14 still holds the value lota-agent itself wrote earlier
+		 * in this session, and the binary has changed since.
+		 * PCR14 cannot be rebound without resetCount advancing,
+		 * so the operator must reboot to re-extend.
 		 */
-		int pcr_matches_prev =
-			memcmp(current_pcr14, prev.pcr14, LOTA_HASH_SIZE) == 0;
-		int self_hash_changed =
-			memcmp(prev.self_hash, self_hash, LOTA_HASH_SIZE) != 0;
+		fprintf(stderr,
+			"SECURITY: PCR14 holds the boot commitment of "
+			"a prior "
+			"agent binary in this boot session "
+			"(resetCount=%u); the "
+			"agent binary has changed since that extend. "
+			"PCR14 is "
+			"non-resettable from userspace, so live "
+			"upgrades cannot "
+			"rebind it. Cold reboot to re-extend PCR14 "
+			"against the "
+			"current agent binary\n",
+			(unsigned)reset_count);
+		return -EBADMSG;
 
-		if (pcr_matches_prev && self_hash_changed) {
-			fprintf(stderr,
-				"SECURITY: PCR14 holds the boot commitment of "
-				"a prior "
-				"agent binary in this boot session "
-				"(resetCount=%u); the "
-				"agent binary has changed since that extend. "
-				"PCR14 is "
-				"non-resettable from userspace, so live "
-				"upgrades cannot "
-				"rebind it. Cold reboot to re-extend PCR14 "
-				"against the "
-				"current agent binary\n",
-				(unsigned)reset_count);
-			return -EBADMSG;
-		}
-
+	case TPM_PCR14_MUTATED_IN_SESSION:
 		fprintf(stderr,
 			"SECURITY: PCR14 mutated during the current boot session "
 			"(resetCount=%u; last successful extend at %lld). Another "
@@ -2655,20 +2679,22 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			"clean baseline\n",
 			(unsigned)reset_count, (long long)prev.saved_at);
 		return -EBADMSG;
+
+	case TPM_PCR14_STATE_ROLLBACK:
+		/*
+		 * TPM reports an OLDER reset count than what we previously
+		 * persisted. TPM device or the clock-state file is lying
+		 * about platform identity; treat as tamper.
+		 */
+		fprintf(stderr,
+			"SECURITY: TPM reports resetCount=%u while the local "
+			"snapshot recorded a higher value (%u). The TPM device or "
+			"the persistent state file has been rolled back; refusing "
+			"to attest\n",
+			(unsigned)reset_count, (unsigned)prev.reset_count);
+		return -EBADMSG;
 	}
 
-	/*
-	 * prev.reset_count > reset_count: the TPM reports an OLDER reset
-	 * count than what we previously persisted. The TPM device or the
-	 * clock-state file is lying about platform identity; treat as
-	 * tamper.
-	 */
-	fprintf(stderr,
-		"SECURITY: TPM reports resetCount=%u while the local "
-		"snapshot recorded a higher value (%u). The TPM device or "
-		"the persistent state file has been rolled back; refusing "
-		"to attest\n",
-		(unsigned)reset_count, (unsigned)prev.reset_count);
 	return -EBADMSG;
 }
 
