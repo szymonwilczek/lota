@@ -774,6 +774,19 @@ int net_parse_pin_sha256(const char *hex, uint8_t *out)
 	return 0;
 }
 
+const char *net_connect_refusal_hint(int err, int port,
+				     const char *enforce_path, char *buf,
+				     size_t cap)
+{
+	(void)err;
+	(void)port;
+	(void)enforce_path;
+	(void)buf;
+	(void)cap;
+
+	return NULL;
+}
+
 const char *net_result_str(uint32_t result)
 {
 	switch (result) {
