@@ -376,7 +376,9 @@ here: when it was agreed to, where it enrolled, which TPM handle holds its
 attestation key and how much validity that key's certificate has left.
 ``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
 in that order -- a key with no directory left to name it would be worse than
-either state alone, so nothing is deleted if the eviction fails.
+either state alone, so nothing is deleted if the eviction fails. An identity
+this machine never answered to is refused: a mistyped identity would otherwise
+confirm a removal that did not happen while the real publisher stayed enrolled.
 
 Forgetting is about the identity, not about refusing the publisher. A profile
 still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
