@@ -865,6 +865,22 @@ int do_forget_publisher(const char *profile_id)
 		return 1;
 	}
 
+	/*
+	 * A publisher this machine never answered to has nothing to take back,
+	 * and reporting one forgotten would tell somebody checking that they
+	 * had removed a publisher they had not.
+	 * The directory is the record of the relationship, so its absence is
+	 * the answer.
+	 */
+	if (access(paths.dir, F_OK) != 0) {
+		fprintf(stderr,
+			"This machine does not answer to publisher %s, so "
+			"there is nothing to take back.\nSee lota-agent "
+			"--list-publishers for the ones it does.\n",
+			paths.id);
+		return 1;
+	}
+
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
 		ret = tpm_init(&g_agent.tpm_ctx);
 		if (ret < 0) {
