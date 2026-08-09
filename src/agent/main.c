@@ -58,6 +58,16 @@ struct agent_globals g_agent = {
 
 static volatile sig_atomic_t g_reload = 0;
 
+/*
+ * Exit status for a state only an operator can clear: the host is configured
+ * in a way the agent refuses, and starting it again changes nothing.
+ * The packaged unit lists it in RestartPreventExitStatus, so systemd leaves
+ * the unit failed with the reason in the journal.
+ *
+ * 78 is sysexits.h EX_CONFIG, which is what this is.
+ */
+#define LOTA_EXIT_OPERATOR_ACTION 78
+
 struct run_daemon_params {
 	const char *bpf_path;
 	const char *bpf_pubkey_path;
@@ -789,6 +799,14 @@ int main(int argc, char *argv[])
 		.cfg = cfg,
 	};
 	rc = run_daemon(&run_params);
+	/*
+	 * -ENOTSUP is the daemon's "this host is configured in a way I refuse":
+	 * a legacy firmware interface, or a publisher key that predates
+	 * per-publisher derivation.
+	 * Both need someone to act; neither is fixed by trying again.
+	 */
+	if (rc == -ENOTSUP)
+		rc = LOTA_EXIT_OPERATOR_ACTION;
 
 out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);

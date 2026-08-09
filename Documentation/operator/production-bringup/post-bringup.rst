@@ -66,6 +66,20 @@ The most common failures, with the gate that produced them:
 * ``PCR14 no longer holds the value lota-agent extended in this boot session``.
   Something outside the agent extended PCR 14. Cold reboot, then audit what
   reached ``/dev/tpmrm0``.
+* ``This publisher's attestation key was created before each publisher got a
+  key of its own``. The host was enrolled by a build that gave every publisher
+  the same TPM key. A key cannot be rewritten in place, so the agent refuses
+  to attest with it and the fix is one command per publisher:
+  ``sudo lota-agent --reenroll --ca-cert <their anchor>``. The device
+  pseudonym is derived from the key and moves with it, so each publisher's
+  verifier sees a device it has not met and re-establishes its baseline.
+  Nothing has been spent: the refusal happens before the boot commitment, so
+  the host comes up in the same boot once the enrollment is done.
+
+The unit does not restart into either of the last two: the agent exits 78
+(``EX_CONFIG``) for a state only an operator can clear, and
+``RestartPreventExitStatus=78`` leaves the unit failed with the reason in the
+journal.
 
 Counters printed by these messages come from ``TPM2_ReadClock`` and are the
 values ``tpm2_readclock`` reports, so they can be checked against the machine.
