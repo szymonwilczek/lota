@@ -44,19 +44,24 @@ struct container_watch {
 	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	bool bound[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int uid_count;
+	int fd; /* inotify on the root, -1 when unavailable */
+	int wd;
 	struct container_watch_ops ops;
 };
 
 /*
- * container_watch_init - track @uids under @root and bind what is there
+ * container_watch_init - watch @root for logins and bind what is there
  * @root: parent of the per-user runtime directories, or NULL for
  *        CONTAINER_WATCH_RUNTIME_ROOT.
  * 	  Overridable so a test can point the tracking at a directory it owns.
  *
- * Binds every configured UID whose runtime directory already exists,
- * which on a normal boot is none of them.
+ * Starts watching before it scans, so a login racing the scan is
+ * reported, then binds every configured UID whose runtime directory already
+ * exists -- on a normal boot, none of them.
  *
- * Returns 0, or a negative errno when the arguments do not describe a usable set.
+ * Returns 0, or a negative errno when the arguments do not describe a usable
+ * set or the root cannot be watched. A watch that could not be started leaves
+ * whatever the scan bound in place, so the caller can warn and carry on.
  * A UID whose bind fails is not an error here: it stays unbound and is retried.
  */
 int container_watch_init(struct container_watch *w, const char *root,
@@ -66,16 +71,18 @@ int container_watch_init(struct container_watch *w, const char *root,
 /*
  * container_watch_fd - descriptor that reports a change under the root
  *
- * Returns a descriptor to poll, or -1 when nothing reports logins.
- * The agent has no such reporter today, so this is always -1.
+ * Returns a descriptor the event loop can wait on, or -1 when the root could
+ * not be watched.
  */
 int container_watch_fd(const struct container_watch *w);
 
 /*
  * container_watch_process - act on what happened under the root
  *
+ * Binds every configured UID that has gained a runtime directory and unbinds
+ * every one that has lost it. Call it whenever the descriptor above is readable.
+ *
  * Returns the number of UIDs bound by this call, or a negative errno.
- * Nothing observes the root today, so this call has nothing to act on.
  */
 int container_watch_process(struct container_watch *w);
 

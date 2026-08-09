@@ -11,6 +11,7 @@
 #include "attest_targets.h"
 #include "bpf_loader.h"
 #include "config.h"
+#include "container_watch.h"
 #include "dbus.h"
 #include "ipc.h"
 
@@ -47,6 +48,11 @@ struct agent_loop_ctx {
 	struct ipc_context *ipc_ctx;
 	struct dbus_context *dbus_ctx;
 	struct bpf_loader_ctx *bpf_ctx;
+	/*
+	 * Logins arrive while the daemon runs, and each one can carry
+	 * a container listener the configuration already asked for.
+	 */
+	struct container_watch *container_watch;
 	volatile sig_atomic_t *running;
 };
 

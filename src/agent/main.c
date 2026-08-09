@@ -306,6 +306,14 @@ static int run_daemon(const struct run_daemon_params *params)
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
+	/* logins happen after this point, and each one may carry a listener */
+	int watch_fd = container_watch_fd(&g_agent.container_watch);
+	if (watch_fd >= 0) {
+		ev.events = EPOLLIN;
+		ev.data.fd = watch_fd;
+		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, watch_fd, &ev);
+	}
+
 	/* IPC epoll fd to main loop */
 	int ipc_fd = ipc_get_fd(&g_agent.ipc_ctx);
 	if (ipc_fd >= 0) {
@@ -542,6 +550,7 @@ static int run_daemon(const struct run_daemon_params *params)
 		.ipc_ctx = &g_agent.ipc_ctx,
 		.dbus_ctx = g_agent.dbus_ctx,
 		.bpf_ctx = &g_agent.bpf_ctx,
+		.container_watch = &g_agent.container_watch,
 		.running = &g_agent.running,
 	};
 	ret = agent_run_event_loop(&loop_ctx);
@@ -613,6 +622,7 @@ cleanup_bpf:
 cleanup_tpm:
 	tpm_cleanup(&g_agent.tpm_ctx);
 	dbus_cleanup(g_agent.dbus_ctx);
+	container_watch_cleanup(&g_agent.container_watch);
 	ipc_cleanup(&g_agent.ipc_ctx);
 cleanup_epoll:
 	hash_verify_cleanup(&g_agent.hash_ctx);

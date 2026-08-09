@@ -6,7 +6,17 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
+/*
+ * Events that can start or end a login: logind creates the runtime
+ * directory when the user's first session opens and removes it when
+ * the last one closes.
+ */
+#define WATCH_EVENTS \
+	(IN_CREATE | IN_MOVED_TO | IN_DELETE | IN_MOVED_FROM | IN_ONLYDIR)
 
 static int watch_slot_of_uid(const struct container_watch *w, uint32_t uid)
 {
@@ -37,23 +47,79 @@ static bool runtime_dir_present(const struct container_watch *w, uint32_t uid)
 	return S_ISDIR(st.st_mode);
 }
 
-static void watch_bind_uid(struct container_watch *w, int slot)
+/*
+ * Reconcile one UID against what is on the filesystem.
+ *
+ * The events themselves are never read for their contents:
+ * a rescan answers the same question without having to trust that every event
+ * arrived, which the queue does not guarantee under IN_Q_OVERFLOW, and without
+ * a second code path for the directory that appeared while the watch was being
+ * installed.
+ *
+ * Returns 1 when this call bound the UID.
+ */
+static int watch_sync_uid(struct container_watch *w, int slot)
 {
-	if (w->bound[slot] || !w->ops.bind)
-		return;
+	bool present = runtime_dir_present(w, w->uids[slot]);
 
-	if (!runtime_dir_present(w, w->uids[slot]))
-		return;
-
-	if (w->ops.bind(w->uids[slot], w->ops.user) == 0)
+	if (present && !w->bound[slot]) {
+		if (!w->ops.bind)
+			return 0;
+		if (w->ops.bind(w->uids[slot], w->ops.user) < 0)
+			return 0;
 		w->bound[slot] = true;
+		return 1;
+	}
+
+	if (!present && w->bound[slot]) {
+		w->bound[slot] = false;
+		if (w->ops.unbind)
+			w->ops.unbind(w->uids[slot], w->ops.user);
+	}
+
+	return 0;
+}
+
+static void watch_drain_events(struct container_watch *w)
+{
+	char buf[4096]
+		__attribute__((aligned(__alignof__(struct inotify_event))));
+	ssize_t got;
+
+	if (w->fd < 0)
+		return;
+
+	do {
+		got = read(w->fd, buf, sizeof(buf));
+	} while (got > 0 || (got < 0 && errno == EINTR));
+}
+
+static int watch_start(struct container_watch *w)
+{
+	int fd, wd;
+
+	fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	wd = inotify_add_watch(fd, w->root, WATCH_EVENTS);
+	if (wd < 0) {
+		int ret = -errno;
+
+		close(fd);
+		return ret;
+	}
+
+	w->fd = fd;
+	w->wd = wd;
+	return 0;
 }
 
 int container_watch_init(struct container_watch *w, const char *root,
 			 const uint32_t *uids, int uid_count,
 			 const struct container_watch_ops *ops)
 {
-	int n;
+	int n, ret;
 
 	if (!w || !uids || !ops)
 		return -EINVAL;
@@ -62,6 +128,8 @@ int container_watch_init(struct container_watch *w, const char *root,
 		return -EINVAL;
 
 	memset(w, 0, sizeof(*w));
+	w->fd = -1;
+	w->wd = -1;
 
 	n = snprintf(w->root, sizeof(w->root), "%s",
 		     root ? root : CONTAINER_WATCH_RUNTIME_ROOT);
@@ -75,25 +143,40 @@ int container_watch_init(struct container_watch *w, const char *root,
 		w->uids[w->uid_count++] = uids[i];
 	}
 
-	for (int i = 0; i < w->uid_count; i++)
-		watch_bind_uid(w, i);
+	/*
+	 * Watch first, scan second.
+	 * A login that lands between the two is seen twice, which costs nothing;
+	 * the other order loses it.
+	 */
+	ret = watch_start(w);
 
-	return 0;
+	for (int i = 0; i < w->uid_count; i++)
+		(void)watch_sync_uid(w, i);
+
+	return ret;
 }
 
 int container_watch_fd(const struct container_watch *w)
 {
-	(void)w;
+	if (!w)
+		return -1;
 
-	return -1;
+	return w->fd;
 }
 
 int container_watch_process(struct container_watch *w)
 {
+	int bound = 0;
+
 	if (!w)
 		return -EINVAL;
 
-	return 0;
+	watch_drain_events(w);
+
+	for (int i = 0; i < w->uid_count; i++)
+		bound += watch_sync_uid(w, i);
+
+	return bound;
 }
 
 void container_watch_cleanup(struct container_watch *w)
@@ -101,5 +184,10 @@ void container_watch_cleanup(struct container_watch *w)
 	if (!w)
 		return;
 
+	if (w->fd >= 0)
+		close(w->fd);
+
 	memset(w, 0, sizeof(*w));
+	w->fd = -1;
+	w->wd = -1;
 }
