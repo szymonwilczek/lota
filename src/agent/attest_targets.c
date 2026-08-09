@@ -15,6 +15,24 @@
 
 #include "attest_targets.h"
 
+int attest_targets_reload(const char *config_path, struct lota_config *cfg,
+			  const char *server, int port, const char *ca_cert,
+			  int interval_sec, struct attest_target *targets,
+			  size_t max, size_t *count)
+{
+	(void)config_path;
+	(void)cfg;
+	(void)server;
+	(void)port;
+	(void)ca_cert;
+	(void)interval_sec;
+	(void)targets;
+	(void)max;
+	(void)count;
+
+	return -ENOSYS;
+}
+
 int attest_targets_build(const struct lota_config *cfg, const char *server,
 			 int port, const char *ca_cert, int interval_sec,
 			 struct attest_target *out, size_t max, size_t *count)
