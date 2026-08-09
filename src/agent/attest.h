@@ -45,12 +45,28 @@
 #define DEFAULT_ATTEST_INTERVAL 300
 
 /*
+ * How long a token issued to a publisher who runs no verifier is good for.
+ *
+ * There is no round to take the window from: nothing is reported to that
+ * publisher, so the agent mints the bound itself.  It matches the default
+ * cadence, which keeps a token-only publisher's freshness the same as
+ * everybody else's and leaves the slack below the window every relying
+ * party accepts.
+ */
+#define TOKEN_ONLY_VALIDITY_SEC DEFAULT_ATTEST_INTERVAL
+
+/*
  * Ceiling on the continuous-attestation interval.
  * Above it the loop mints tokens no relying party accepts, which is running agent
  * whose every token is refused.
  */
 #define MAX_ATTEST_INTERVAL \
 	(RELYING_PARTY_TOKEN_WINDOW_SEC - ATTEST_TOKEN_VALIDITY_SLACK_SEC)
+
+/* A token nobody reports on still has to land inside that window */
+_Static_assert(TOKEN_ONLY_VALIDITY_SEC + ATTEST_TOKEN_VALIDITY_SLACK_SEC <=
+		       RELYING_PARTY_TOKEN_WINDOW_SEC,
+	       "a token-only token must stay verifiable by every relying party");
 
 /* Interval the operator can set has to exist between the two bounds */
 _Static_assert(MIN_ATTEST_INTERVAL < MAX_ATTEST_INTERVAL,

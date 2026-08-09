@@ -116,9 +116,11 @@ enum lota_ipc_result {
 
 #define LOTA_STATUS_TOKEN_ONLY \
 	(1                     \
-	 << 8) /* the publisher this connection named runs no verifier here,  \
-		  so ATTESTED carries no verdict of theirs and the token is   \
-		  the evidence */
+	 << 8) /* the publisher this connection named runs no verifier here, \
+		  so ATTESTED carries no verdict of theirs and the token is  \
+		  the evidence. Such a token is issued without an attested   \
+		  verdict, which cannot exist for them, and carries a        \
+		  freshness window the agent bounds itself */
 
 #define LOTA_STATUS_IMAGE_FULLY_MEASURED \
 	(1                               \
