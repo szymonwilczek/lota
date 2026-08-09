@@ -119,6 +119,13 @@ After installing the agent binary and BPF object:
    sudo restorecon -Rv /etc/lota
    sudo restorecon -Rv /var/lib/lota
 
+``restorecon -R /etc/lota`` labels the directory as well as the files in it,
+which matters for anything written there afterwards: a new file takes the type
+its parent directory implies. ``lota-agent --add-publisher`` replaces
+``lota.conf`` by rename and carries the replaced file's label onto the
+replacement, so a correctly labelled config stays correct even under a
+directory that is not; it prints a warning naming ``restorecon`` if it cannot.
+
 Cross-distribution portability
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
