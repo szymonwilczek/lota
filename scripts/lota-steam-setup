@@ -60,12 +60,15 @@ Options:
                               runtime dir on boot. Requires root.
                               Single-operator hosts only; for
                               multiple operators use --register-uid.
-  --register-uid              Append container_listener_uid = \$SUDO_UID
-                              to ${LOTA_CONF} and restart lota-agent so
-                              every configured operator UID gets its
-                              own /run/user/<uid>/lota/lota.sock
-                              listener. Supersedes the drop-in on
-                              multi-user hosts. Requires root.
+  --register-uid              Write container_listener_uid = \$SUDO_UID
+                              into ${LOTA_CONF} so every configured
+                              UID gets its own
+                              /run/user/<uid>/lota/lota.sock listener
+                              when that user logs in. The agent reads
+                              the setting at startup, so it takes
+                              effect at the next boot. Supersedes the
+                              drop-in on multi-user hosts. Requires
+                              root.
   --help                      Show this help message
 
 Environment:
@@ -170,13 +173,29 @@ check_container_socket() {
     local container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
 
     if [[ -S "$container_socket" ]]; then
-        ok "Container socket: $container_socket"
-        return 0
+        # a socket this user cannot open is not a working one,
+        # and it looks identical to a working one from the outside
+        if [[ -r "$container_socket" && -w "$container_socket" ]]; then
+            ok "Container socket: $container_socket"
+            return 0
+        fi
+
+        warn "Container socket exists but this user cannot open it: $container_socket"
+        echo "  It should be owned by group '$LOTA_GROUP' and mode 0660:"
+        ls -l "$container_socket" 2>/dev/null | sed 's/^/    /'
+        echo "  Check that this user is in the '$LOTA_GROUP' group, then"
+        echo "  report the agent's own message: journalctl -u lota-agent | grep chown"
+        return 1
     fi
 
     warn "Container socket not found: $container_socket"
-    echo "  The LOTA agent needs to be (re)started to create this socket."
-    echo "  It will automatically create an extra listener at this path."
+    echo "  The agent creates it when the configured user logs in, so it"
+    echo "  exists only for a UID the agent was told about:"
+    echo "    sudo lota-steam-setup --register-uid   # writes container_listener_uid"
+    echo "  That setting is read at agent startup, so a host that has not"
+    echo "  rebooted since it was written has no listener yet. Do not restart"
+    echo "  the agent to get one: stopping it spends this boot's PCR 14"
+    echo "  commitment and the host cannot attest again until it reboots."
     return 1
 }
 
@@ -378,8 +397,9 @@ if $register_uid; then
     echo "then paste the printed Steam launch options into the game's"
     echo "Properties -> General -> Launch options field."
     echo ""
-    echo "The listener is created when the agent starts, so it does not"
-    echo "appear before that reboot."
+    echo "The setting is read when the agent starts, so it does not take"
+    echo "effect before that reboot; the socket itself is created when the"
+    echo "registered user logs in, and again after every logout."
     exit 0
 fi
 
