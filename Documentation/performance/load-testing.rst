@@ -16,7 +16,9 @@ verifier: each attestation walks the production verification path --
 AIK certificate chain to a rig CA, RSA quote signature over a
 ``TPMS_ATTEST`` blob, the report binding nonce, PCR digest, event-log
 parsing, and the PCR14 boot-commitment derivation (initramfs lock +
-boot commitment). The synthetic event log carries the firmware's
+boot commitment, over the fleet's agent hash -- the derivation takes no
+clock counters, so the synthetic quote's ClockInfo is free to be a
+constant). The synthetic event log carries the firmware's
 ``SecureBoot`` variable measurement on PCR 7, which is what proves a
 UEFI boot, and no PCR 14 event, so the chain anchors on a zero
 baseline -- the shape of a UEFI host that boots without shim. The
