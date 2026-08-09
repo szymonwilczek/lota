@@ -101,6 +101,24 @@ check "the command names the verifier it wrote" \
       says "$out" 'verifier.reporting.example'
 check "the config the command wrote loads" loads "$conf"
 
+# A config that exists and holds nothing: an installer that created the file
+# before configuring it, or an operator who cleared it.
+# There is nothing to preserve, so the section is appended to it like any other.
+empty_pem=$(anchor empty)
+conf="$WORK_DIR/empty.conf"
+: >"$conf"
+
+rc=0
+out=$("$AGENT_BIN" --add-publisher ca.empty.example --ca-port 8564 \
+	           --ca-cert "$empty_pem" --publisher-name empty \
+	           --server verifier.empty.example \
+	           --config "$conf" 2>&1) || rc=$?
+check "a publisher is added to a config file that is empty" test "$rc" -eq 0
+check "the section is written into the empty file" \
+      has_line "$conf" 'verifier = verifier.empty.example'
+check "the config the command wrote loads" loads "$conf"
+[[ $rc -eq 0 ]] || echo "  reported: $out"
+
 if [[ $failures -ne 0 ]]; then
     echo "FAILURES: $failures"
     exit 1
