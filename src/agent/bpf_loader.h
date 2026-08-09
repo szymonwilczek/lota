@@ -312,6 +312,21 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path);
 
 /*
+ * bpf_loader_probe_trusted_lib - Ask whether a path could be trusted
+ * @path: Full path to the shared library
+ *
+ * Applies exactly the resolution bpf_loader_trust_lib() applies
+ * -- same open, same regular-file requirement, same device/inode rejection --
+ * and stops before touching a map, so it needs no loaded context.
+ * A caller that must know whether a startup policy will be accepted asks
+ * here first; anything this refuses, trust_lib refuses for the same
+ * reason.
+ *
+ * Returns: 0 if the path resolves, negative errno otherwise
+ */
+int bpf_loader_probe_trusted_lib(const char *path);
+
+/*
  * bpf_loader_untrust_lib - Remove a library path from the trusted whitelist
  * @ctx: Loaded context
  * @path: Full path to the shared library

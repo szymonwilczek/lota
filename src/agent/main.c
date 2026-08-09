@@ -202,6 +202,46 @@ static int run_daemon(const struct run_daemon_params *params)
 		}
 	}
 
+	/*
+	 * Enforcement policy is built and checked here, before anything
+	 * this process does can cost something.
+	 *
+	 * The boot commitment can be spent once per boot: the register is not
+	 * resettable from userspace, so an instance that extends it and then
+	 * dies leaves every later instance unable to commit until the host
+	 * reboots.
+	 * A policy naming a path this process cannot see is an ordinary
+	 * configuration mistake and has to cost a failed start, not the boot.
+	 *
+	 * Everything that can refuse on the policy's own contents therefore
+	 * refuses before the extend, and agent_apply_startup_policy() below
+	 * still performs the same checks against the live maps.
+	 */
+	struct agent_startup_policy startup_policy = {
+		.mode = g_agent.mode,
+		.strict_mmap = strict_mmap,
+		.strict_exec = strict_exec,
+		.block_ptrace = block_ptrace,
+		.strict_modules = strict_modules,
+		.block_anon_exec = block_anon_exec,
+		.protect_pids = *cli_runtime_protect_pids(),
+		.protect_pid_count = *cli_runtime_protect_pid_count(),
+		.trust_libs = cli_runtime_trust_libs(),
+		.trust_lib_count = *cli_runtime_trust_lib_count(),
+		.allow_verity = cli_runtime_allow_verity(),
+		.allow_verity_count = *cli_runtime_allow_verity_count(),
+		.allow_mutable_rootfs = params->allow_mutable_rootfs,
+	};
+
+	ret = agent_validate_startup_policy(&startup_policy);
+	if (ret < 0) {
+		lota_err("Startup policy refused before the boot commitment "
+			 "was spent; the host keeps the agent it is running "
+			 "and PCR 14 is untouched. Correct the policy and "
+			 "start again.");
+		return ret;
+	}
+
 	/* detect watchdog interval */
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 	if (wd_enabled)
@@ -434,22 +474,6 @@ static int run_daemon(const struct run_daemon_params *params)
 	lota_info("BPF program loaded (attach deferred until startup policy "
 		  "applied)");
 	boot_state.bpf_loaded = true;
-
-	struct agent_startup_policy startup_policy = {
-		.mode = g_agent.mode,
-		.strict_mmap = strict_mmap,
-		.strict_exec = strict_exec,
-		.block_ptrace = block_ptrace,
-		.strict_modules = strict_modules,
-		.block_anon_exec = block_anon_exec,
-		.protect_pids = *cli_runtime_protect_pids(),
-		.protect_pid_count = *cli_runtime_protect_pid_count(),
-		.trust_libs = cli_runtime_trust_libs(),
-		.trust_lib_count = *cli_runtime_trust_lib_count(),
-		.allow_verity = cli_runtime_allow_verity(),
-		.allow_verity_count = *cli_runtime_allow_verity_count(),
-		.allow_mutable_rootfs = params->allow_mutable_rootfs,
-	};
 
 	/*
 	 * Write the full enforcement policy (mode + strict_* + block_* +
