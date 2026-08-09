@@ -50,6 +50,15 @@ int lota_read_full(int fd, void *buf, size_t len)
 	return 0;
 }
 
+int lota_copy_xattr(const char *from, const char *to, const char *name)
+{
+	(void)from;
+	(void)to;
+	(void)name;
+
+	return 0;
+}
+
 int lota_read_file_bounded(const char *path, void *buf, size_t max,
 			   size_t *out_len)
 {
