@@ -2498,6 +2498,17 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
 	if (!obs->prev)
 		return TPM_PCR14_UNATTRIBUTABLE;
 
+	/*
+	 * Agent poisons PCR14 on its way out of an operator-requested shutdown
+	 * and records that it did.
+	 * Recognising its own act keeps the refusal honest:
+	 * the register really is spent and a reboot is really required,
+	 * but nobody attacked this host.
+	 */
+	if ((obs->prev->flags & LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON) &&
+	    memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0)
+		return TPM_PCR14_SPENT_BY_SHUTDOWN;
+
 	if (obs->prev->reset_count > obs->reset_count)
 		return TPM_PCR14_STATE_ROLLBACK;
 
@@ -2694,6 +2705,15 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
 		return 0;
+
+	case TPM_PCR14_SPENT_BY_SHUTDOWN:
+		fprintf(stderr,
+			"PCR14 was spent by a shutdown requested on this host "
+			"(lota-agent --shutdown, or lota-install --pause). The "
+			"boot commitment cannot be re-extended once it is "
+			"poisoned, which is what makes a pause visible to every "
+			"relying party. Reboot to attest again\n");
+		return -EBADMSG;
 
 	case TPM_PCR14_LOCK_MISSING:
 		/*
