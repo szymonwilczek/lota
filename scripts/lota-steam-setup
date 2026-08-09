@@ -287,7 +287,7 @@ fi
 # config knob accepts up to LOTA_CONFIG_MAX_CONTAINER_LISTENERS
 # entries, while the drop-in can only pin one XDG_RUNTIME_DIR.
 register_container_listener_uid() {
-    local uid line
+    local uid line backup
 
     if [[ $EUID -ne 0 ]]; then
         fail "--register-uid must run as root (try: sudo $(basename "$0") --register-uid)"
@@ -320,27 +320,66 @@ register_container_listener_uid() {
     line="container_listener_uid = ${uid}"
     if grep -Eq "^[[:space:]]*container_listener_uid[[:space:]]*=[[:space:]]*${uid}[[:space:]]*$" "$LOTA_CONF"; then
         ok "uid=${uid} already registered in ${LOTA_CONF}"
-    else
-        info "Appending '${line}' to ${LOTA_CONF}"
-        printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
-            "$line" >>"$LOTA_CONF"
-        ok "uid=${uid} registered in ${LOTA_CONF}"
+        return 0
     fi
 
-    if systemctl is-active --quiet lota-agent.service; then
-        info "Restarting lota-agent.service to pick up the new UID"
-        systemctl restart lota-agent.service
+    # The listener is built once, when the agent starts, so this change
+    # reaches a running host at its next boot.
+    # Say so before touching the file: the alternative is stopping the agent,
+    # and that spends the boot's PCR 14 commitment, which stops the host
+    # attesting until it reboots anyway.
+    info "This takes effect at the next boot. The running agent keeps"
+    info "serving titles unchanged until then, and nothing here stops it."
+
+    backup="${LOTA_CONF}.lota-steam-setup.bak"
+    cp -p -- "$LOTA_CONF" "$backup"
+
+    # container_listener_uid is a global key, and the grammar is sectioned:
+    # everything after the first [profile "..."] header belongs to that profile.
+    # Appending would land it inside the last profile and the whole file would
+    # stop parsing at the next boot, on a host that looks healthy until then.
+    info "Writing '${line}' to ${LOTA_CONF}"
+    if grep -Eq '^[[:space:]]*\[profile' "$LOTA_CONF"; then
+        awk -v line="$line" '
+            !done && /^[[:space:]]*\[profile/ {
+                print "# Added by lota-steam-setup --register-uid"
+                print line
+                print ""
+                done = 1
+            }
+            { print }
+        ' "$backup" >"$LOTA_CONF"
+    else
+        printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
+            "$line" >>"$LOTA_CONF"
     fi
+
+    # Read back what was written.
+    # A writer that leaves an unloadable config must not report success:
+    # the running agent has already read its copy, so the damage would stay
+    # invisible until the host failed to bring the agent up at the next boot.
+    if ! lota-agent --dump-config --config "$LOTA_CONF" >/dev/null 2>&1; then
+        cp -p -- "$backup" "$LOTA_CONF"
+        fail "the resulting ${LOTA_CONF} does not parse; restored the original"
+        fail "nothing was changed. Report this with the config layout"
+        return 1
+    fi
+
+    rm -f -- "$backup"
+    ok "uid=${uid} registered in ${LOTA_CONF}; reboot to create the listener"
 }
 
 if $register_uid; then
     register_container_listener_uid || exit 1
     echo ""
-    echo "From the operator account run:"
+    echo "Reboot, then from the operator account run:"
     echo "  lota-steam-setup --verify"
     echo "to confirm /run/user/${SUDO_UID}/lota/lota.sock is live,"
     echo "then paste the printed Steam launch options into the game's"
     echo "Properties -> General -> Launch options field."
+    echo ""
+    echo "The listener is created when the agent starts, so it does not"
+    echo "appear before that reboot."
     exit 0
 fi
 

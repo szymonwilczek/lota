@@ -200,6 +200,14 @@ that title's launch options -- ``lota-steam-setup`` prints the exact string,
 including the ``PRESSURE_VESSEL_FILESYSTEMS_RW`` entry the container manager
 needs to see the socket at all.
 
+A title running inside a Proton container reaches the agent through a
+per-user socket, and ``lota-steam-setup --register-uid`` records the account
+that needs one. The agent builds its listeners when it starts, so that
+setting takes effect at the **next boot**: the command says so before it
+edits anything, and the socket does not appear until then. Nothing stops the
+running agent to force it -- stopping the agent spends this boot's
+attestation and would cost a reboot regardless.
+
 It is the only step in this document that asks anyone to type something, and
 it stays until Steam supports a compatibility-tool layer that composes with
 the player's Proton choice rather than replacing it. A publisher shipping
