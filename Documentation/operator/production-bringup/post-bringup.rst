@@ -46,6 +46,9 @@ The most common failures, with the gate that produced them:
   --pause``, or a ``systemctl stop`` that ran the unit's ``ExecStop``. PCR 14
   cannot be re-extended once poisoned, which is what makes a pause visible to
   every relying party. Reboot to attest again.
+  ``lota-steam-setup --register-uid`` deliberately does **not** stop the agent
+  for this reason: its setting takes effect at the next boot, and the command
+  says so before it edits the configuration.
 * ``Startup policy refused before the boot commitment was spent``. A path or
   PID named by the enforcement policy could not be resolved -- most often a
   ``--trust-lib`` or ``--allow-verity`` path the unit's sandbox hides, since
