@@ -119,6 +119,55 @@ func TestDeriveLockedBootCommitmentPCR14_RestartCountInvalidatesValue(t *testing
 	}
 }
 
+// The commitment names the agent binary and nothing else.
+// Binding it to the quote's ClockInfo made the register key-specific:
+// a TPM obfuscates resetCount and restartCount per signing key, so every
+// publisher's AIK sees different counters for the same machine and only one of
+// them could ever rederive the single value PCR 14 holds.
+func TestDeriveLockedBootCommitmentPCR14_ClockCountersDoNotBindTheValue(t *testing.T) {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = 0x5A
+	}
+
+	base := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 7, 0)
+
+	if got := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 7, 4); got != base {
+		t.Fatal("restartCount still changes the committed value")
+	}
+	if got := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 8, 0); got != base {
+		t.Fatal("resetCount still changes the committed value")
+	}
+
+	var other [types.HashSize]byte
+	for i := range other {
+		other[i] = 0x5B
+	}
+	if DeriveLockedBootCommitmentPCR14(zeroBaseline, other, 7, 0) == base {
+		t.Fatal("the agent hash must still change the committed value")
+	}
+}
+
+// A host that suspended between the extend and the quote needs no skew window
+// to be recognised, because the counters no longer take part
+func TestMatchLockedBootCommitmentPCR14_ResumeNeedsNoSkewWindow(t *testing.T) {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = 0x33
+	}
+
+	target := DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 12, 0)
+
+	expected, drift, matched := MatchLockedBootCommitmentPCR14(
+		zeroBaseline, agentHash, 12, 9, target, 0)
+	if !matched {
+		t.Fatalf("a resumed host was refused: expected %x target %x", expected, target)
+	}
+	if drift != 0 {
+		t.Fatalf("no drift can be reported when the counters do not bind: got %d", drift)
+	}
+}
+
 func TestAgentHashStore_MemoryFirstUseAndMatch(t *testing.T) {
 	bs := NewBaselineStore()
 

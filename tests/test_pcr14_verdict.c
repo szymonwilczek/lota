@@ -272,9 +272,90 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 	PASS();
 }
 
+/*
+ * The commitment names the agent binary, and nothing else.
+ * Binding it to the TPM's clock counters made the register different for every
+ * publisher's AIK -- each key sees its own obfuscated counters -- so one PCR 14
+ * could only ever be verified by one of them.
+ */
+static void test_commitment_does_not_bind_the_clock_counters(void)
+{
+	uint8_t self_hash[LOTA_HASH_SIZE];
+	uint8_t a[LOTA_HASH_SIZE];
+	uint8_t b[LOTA_HASH_SIZE];
+	uint8_t c[LOTA_HASH_SIZE];
+
+	TEST("the commitment does not bind the TPM clock counters");
+
+	fill(self_hash, 0xA0);
+
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, RESET_COUNT,
+				    RESTART_AT_EXTEND, a) < 0)
+		FAIL("failed to derive the register value");
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, RESET_COUNT,
+				    RESTART_AT_EXTEND + 7, b) < 0)
+		FAIL("failed to derive the register value");
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, RESET_COUNT + 1,
+				    RESTART_AT_EXTEND, c) < 0)
+		FAIL("failed to derive the register value");
+
+	if (memcmp(a, b, LOTA_HASH_SIZE) != 0)
+		FAIL("restartCount still changes the committed value");
+	if (memcmp(a, c, LOTA_HASH_SIZE) != 0)
+		FAIL("resetCount still changes the committed value");
+	PASS();
+}
+
+/*
+ * With the counters gone a resume needs no candidate scan:
+ * the register still holds exactly what this agent extended,
+ * so it reads as committed.
+ */
+static void test_resume_reads_as_committed(void)
+{
+	struct scenario s;
+
+	TEST("a resume reads as committed without a candidate scan");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+		FAIL("failed to derive the register value");
+
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_ALREADY_COMMITTED)
+		FAIL("a resume must read as already committed");
+	PASS();
+}
+
+/*
+ * What the counters used to catch implicitly, kept explicitly:
+ * a cold boot has happened since the snapshot was written, so a register
+ * that already carries this binary's commitment was extended by somebody
+ * who ran before the agent did.
+ * On an honest cold boot the register holds the initramfs lock value at
+ * this point and nothing else.
+ */
+static void test_commitment_present_after_a_cold_boot_is_refused(void)
+{
+	struct scenario s;
+
+	TEST("a commitment already present after a cold boot is refused");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+
+	/* snapshot was written before the most recent hardware reset */
+	s.prev.reset_count = RESET_COUNT - 1;
+
+	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_TAMPERED_BEFORE_START)
+		FAIL("a commitment extended before the agent ran was accepted");
+	PASS();
+}
+
 int main(void)
 {
 	test_warm_restart_is_committed();
+	test_commitment_does_not_bind_the_clock_counters();
+	test_resume_reads_as_committed();
+	test_commitment_present_after_a_cold_boot_is_refused();
 	test_forged_snapshot_cannot_fake_a_resume();
 	test_resume_is_not_a_foreign_extend();
 	test_foreign_extend_is_still_refused();
