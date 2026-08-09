@@ -2387,8 +2387,12 @@ static void save_commitment_snapshot(struct tpm_context *ctx,
 			strerror(-ret));
 }
 
-enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
+enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
+					uint32_t *restart_drift)
 {
+	if (restart_drift)
+		*restart_drift = 0;
+
 	if (!obs || !obs->current || !obs->baseline || !obs->lock_value ||
 	    !obs->expected_locked || !obs->self_hash)
 		return TPM_PCR14_UNATTRIBUTABLE;
@@ -2403,6 +2407,42 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 
 	if (memcmp(obs->current, obs->expected_locked, LOTA_HASH_SIZE) == 0)
 		return TPM_PCR14_ALREADY_COMMITTED;
+
+	/*
+	 * A TPM that saves and restores its state across a deep suspend increments
+	 * restartCount, leaves resetCount alone and leaves every PCR as it was.
+	 * The register therefore still holds the commitment this agent extended,
+	 * derived with the restartCount that was in effect then rather than
+	 * the one the quote now carries.
+	 * Recover it by deriving what the register would hold for the preceding
+	 * restartCount values.
+	 *
+	 * The scan reads nothing from disk: the candidates come from the agent's
+	 * own binary hash, the platform baseline and the TPM's signed counters,
+	 * so a forged clock-state snapshot cannot make a register somebody else
+	 * extended look like a resume.
+	 * PCR14 is not resettable from userspace, so no writer can restore
+	 * a value it displaced, and resetCount is never iterated, which keeps
+	 * a post-cold-boot replay refused.
+	 *
+	 * Verifier performs the mirror of this scan in verifier/verify/baseline.go
+	 */
+	for (uint32_t drift = 1;
+	     drift <= TPM_PCR14_MAX_RESTART_SKEW && drift <= obs->restart_count;
+	     drift++) {
+		uint8_t candidate[LOTA_HASH_SIZE];
+
+		if (tpm_derive_locked_pcr14(
+			    obs->self_hash, obs->baseline, obs->reset_count,
+			    obs->restart_count - drift, candidate) < 0)
+			break;
+
+		if (memcmp(obs->current, candidate, LOTA_HASH_SIZE) == 0) {
+			if (restart_drift)
+				*restart_drift = drift;
+			return TPM_PCR14_RESUMED;
+		}
+	}
 
 	/*
 	 * The zero-baseline case lands here too:
@@ -2567,7 +2607,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		.prev = have_prev ? &prev : NULL,
 	};
 
-	switch (tpm_classify_pcr14(&obs)) {
+	uint32_t restart_drift = 0;
+
+	switch (tpm_classify_pcr14(&obs, &restart_drift)) {
 	case TPM_PCR14_AWAITING_EXTEND:
 		/*
 		 * Initramfs lock ran; agent has not extended yet. Extend with
@@ -2585,6 +2627,25 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	case TPM_PCR14_ALREADY_COMMITTED:
 		/* Warm restart on a locked host - both extends already done. */
 		save_commitment_snapshot(ctx, expected_locked_pcr14, self_hash,
+					 reset_count, restart_count);
+		ctx->boot_commitment_locked = true;
+		return 0;
+
+	case TPM_PCR14_RESUMED:
+		/*
+		 * TPM was restarted under us and put PCR14 back exactly as it was.
+		 * There is nothing to re-extend - the register never moved - so
+		 * record the counters this run observed and carry on.
+		 * The quote the verifier receives carries the same moved
+		 * restartCount and its own scan absorbs the drift.
+		 */
+		fprintf(stderr,
+			"PCR14 boot-commitment: the TPM was restarted %u "
+			"suspend/resume cycle(s) after the commitment was "
+			"extended; PCR14 is unchanged and the commitment still "
+			"stands\n",
+			(unsigned)restart_drift);
+		save_commitment_snapshot(ctx, current_pcr14, self_hash,
 					 reset_count, restart_count);
 		ctx->boot_commitment_locked = true;
 		return 0;

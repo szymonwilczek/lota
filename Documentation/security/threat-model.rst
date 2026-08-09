@@ -411,6 +411,19 @@ code running in that window could seed the value the baseline would pin. The
 agent refuses to build such a report locally, so the missing module is named
 on the host rather than surfacing as a remote rejection.
 
+The commitment binds the TPM's ``resetCount`` and ``restartCount``, which
+makes a suspend part of this boundary. A suspend deep enough to restart the
+TPM (S3) restores every PCR unchanged and increments ``restartCount``, so the
+register no longer matches the value derived from the counters the next quote
+carries. Both sides resolve that by deriving what the register would hold for
+the preceding restart counts and accepting a match, bounded by the verifier's
+``--max-restart-count-skew``. The candidates are derived from the agent's own
+hash, the platform baseline and the TPM's signed counters, so nothing on disk
+takes part: a local root who rewrites the agent's clock-state file cannot make
+a register they extended read as a resume. ``resetCount`` is never iterated on
+either side, so a cold boot still demands a fresh commitment, and a PCR 14
+another writer extended is refused after a suspend.
+
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the
 kernel from a CPU-rooted late launch into PCR 17-22, removing the firmware and

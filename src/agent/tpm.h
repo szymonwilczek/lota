@@ -620,6 +620,12 @@ enum tpm_pcr14_state {
 	TPM_PCR14_AWAITING_EXTEND = 0,
 	/* Both extends already happened in this boot: nothing to do */
 	TPM_PCR14_ALREADY_COMMITTED,
+	/*
+	 * TPM was restarted (deep suspend/resume) since the extend:
+	 * restartCount moved on, resetCount did not, and PCR14 still holds
+	 * the commitment this agent wrote. Accepted like a warm restart.
+	 */
+	TPM_PCR14_RESUMED,
 	/* Register still holds the bare baseline: the lock never ran */
 	TPM_PCR14_LOCK_MISSING,
 	/*
@@ -656,18 +662,36 @@ struct tpm_pcr14_observation {
 };
 
 /*
+ * How many TPM restarts the classifier will look back over when
+ * deciding whether PCR14 still holds its own commitment.
+ * Mirrors the verifier's --max-restart-count-skew default so both sides
+ * accept the same suspend/resume history; every candidate is derived,
+ * so the cost of the ceiling is a bounded number of hashes and nothing else.
+ */
+#define TPM_PCR14_MAX_RESTART_SKEW 64U
+
+/*
  * tpm_classify_pcr14 - decide what the observed PCR14 value means
- * @obs: fully populated observation
+ * @obs:           fully populated observation
+ * @restart_drift: optional, receives how many TPM restarts back the
+ *                 commitment was extended when the verdict is
+ *                 TPM_PCR14_RESUMED, and 0 otherwise
  *
  * Pure function: no TPM access, no file access, no logging.
  * The caller renders the operator message and performs the extend.
+ *
+ * The resume verdict is derived, never read: candidates come from
+ * the agent's own hash, the platform baseline and the TPM's signed
+ * counters, so no on-disk state can promote a register another writer
+ * extended into an accepted one. resetCount is not iterated,
+ * so a post-cold-boot replay stays refused.
  *
  * Returns: the verdict, or TPM_PCR14_UNATTRIBUTABLE for a malformed
  * observation, which is the conservative reading of "cannot explain
  * this register".
  */
-enum tpm_pcr14_state
-tpm_classify_pcr14(const struct tpm_pcr14_observation *obs);
+enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
+					uint32_t *restart_drift);
 
 /*
  * tpm_extend_boot_commitment - Bind PCR14 to the agent binary and the
