@@ -260,6 +260,42 @@ struct aik_metadata {
 } __attribute__((packed));
 
 /*
+ * What the PCR14 register observed at agent startup means.
+ *
+ * The verdict is separated from the extend that acts on it so
+ * the attribution rules can be exercised without a TPM: every input is
+ * a value the caller already read, and the classifier performs no I/O.
+ */
+enum tpm_pcr14_state {
+	/* Initramfs lock ran, the agent has not committed yet: extend */
+	TPM_PCR14_AWAITING_EXTEND = 0,
+	/* Both extends already happened in this boot: nothing to do */
+	TPM_PCR14_ALREADY_COMMITTED,
+	/*
+	 * TPM was restarted (deep suspend/resume) since the extend:
+	 * restartCount moved on, resetCount did not, and PCR14 still holds
+	 * the commitment this agent wrote. Accepted like a warm restart.
+	 */
+	TPM_PCR14_RESUMED,
+	/* Register still holds the bare baseline: the lock never ran */
+	TPM_PCR14_LOCK_MISSING,
+	/*
+	 * PCR14 carries this agent's own commitment but a different
+	 * binary is running now.
+	 * Non-resettable register, so the way out is to install and cold reboot.
+	 */
+	TPM_PCR14_BINARY_CHANGED,
+	/* resetCount advanced and PCR14 was dirty before the agent ran */
+	TPM_PCR14_TAMPERED_BEFORE_START,
+	/* Something extended PCR14 after this agent's last commitment */
+	TPM_PCR14_MUTATED_IN_SESSION,
+	/* Unexpected value and no snapshot to attribute it with */
+	TPM_PCR14_UNATTRIBUTABLE,
+	/* TPM reports an older resetCount than the snapshot recorded */
+	TPM_PCR14_STATE_ROLLBACK,
+};
+
+/*
  * TPM context - holds ESYS context and session state.
  * Opaque to callers, accessed via tpm_* functions.
  */
@@ -340,6 +376,13 @@ struct tpm_context {
 	 * single agent lifecycle.
 	 */
 	bool boot_commitment_locked;
+
+	/*
+	 * Verdict from the last tpm_extend_boot_commitment() call,
+	 * so a caller that only sees -EBADMSG can still tell the operator
+	 * which of the refusals it was. Meaningless before the first call.
+	 */
+	enum tpm_pcr14_state boot_commitment_state;
 
 	/*
 	 * AIK userAuth at-rest hardening (default off). When seal_aik_auth is
@@ -609,42 +652,6 @@ int tpm_derive_locked_pcr14(const uint8_t self_hash[],
 			    uint8_t out[LOTA_HASH_SIZE]);
 
 /*
- * What the PCR14 register observed at agent startup means.
- *
- * The verdict is separated from the extend that acts on it so
- * the attribution rules can be exercised without a TPM: every input is
- * a value the caller already read, and the classifier performs no I/O.
- */
-enum tpm_pcr14_state {
-	/* Initramfs lock ran, the agent has not committed yet: extend */
-	TPM_PCR14_AWAITING_EXTEND = 0,
-	/* Both extends already happened in this boot: nothing to do */
-	TPM_PCR14_ALREADY_COMMITTED,
-	/*
-	 * TPM was restarted (deep suspend/resume) since the extend:
-	 * restartCount moved on, resetCount did not, and PCR14 still holds
-	 * the commitment this agent wrote. Accepted like a warm restart.
-	 */
-	TPM_PCR14_RESUMED,
-	/* Register still holds the bare baseline: the lock never ran */
-	TPM_PCR14_LOCK_MISSING,
-	/*
-	 * PCR14 carries this agent's own commitment but a different
-	 * binary is running now.
-	 * Non-resettable register, so the way out is to install and cold reboot.
-	 */
-	TPM_PCR14_BINARY_CHANGED,
-	/* resetCount advanced and PCR14 was dirty before the agent ran */
-	TPM_PCR14_TAMPERED_BEFORE_START,
-	/* Something extended PCR14 after this agent's last commitment */
-	TPM_PCR14_MUTATED_IN_SESSION,
-	/* Unexpected value and no snapshot to attribute it with */
-	TPM_PCR14_UNATTRIBUTABLE,
-	/* TPM reports an older resetCount than the snapshot recorded */
-	TPM_PCR14_STATE_ROLLBACK,
-};
-
-/*
  * Everything tpm_classify_pcr14() needs, all of it already read by
  * the caller.
  * Pointers are LOTA_HASH_SIZE buffers;
@@ -662,10 +669,10 @@ struct tpm_pcr14_observation {
 };
 
 /*
- * How many TPM restarts the classifier will look back over when
- * deciding whether PCR14 still holds its own commitment.
- * Mirrors the verifier's --max-restart-count-skew default so both sides
- * accept the same suspend/resume history; every candidate is derived,
+ * How many TPM restarts the classifier will look back over when deciding whether
+ * PCR14 still holds its own commitment.
+ * Mirrors the verifier's --max-restart-count-skew default so both sides accept
+ * the same suspend/resume history; every candidate is derived,
  * so the cost of the ceiling is a bounded number of hashes and nothing else.
  */
 #define TPM_PCR14_MAX_RESTART_SKEW 64U
@@ -680,11 +687,11 @@ struct tpm_pcr14_observation {
  * Pure function: no TPM access, no file access, no logging.
  * The caller renders the operator message and performs the extend.
  *
- * The resume verdict is derived, never read: candidates come from
- * the agent's own hash, the platform baseline and the TPM's signed
- * counters, so no on-disk state can promote a register another writer
- * extended into an accepted one. resetCount is not iterated,
- * so a post-cold-boot replay stays refused.
+ * The resume verdict is derived, never read:
+ * Candidates come from the agent's own hash, the platform baseline
+ * and the TPM's signed counters, so no on-disk state can promote a register
+ * another writer extended into an accepted one.
+ * resetCount is not iterated, so a post-cold-boot replay stays refused.
  *
  * Returns: the verdict, or TPM_PCR14_UNATTRIBUTABLE for a malformed
  * observation, which is the conservative reading of "cannot explain

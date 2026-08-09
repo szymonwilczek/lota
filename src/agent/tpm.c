@@ -2268,14 +2268,23 @@ int tpm_test_parse_signed_clockinfo(const uint8_t *attest_buf,
  * TPMS_ATTEST whose clockInfo is captured under the AIK signing path.
  * The agent uses these counters for the boot-commitment derivation so
  * the value extended into PCR14 matches the clockInfo the later
- * attestation quote will carry. Esys_ReadClock returns counters from a
- * separate, unauthenticated firmware path; on TPM 2.0 simulators
- * (swtpm) those values may diverge from TPM2_Quote.clockInfo even
- * within a single boot, which made verifier-side derivation fail.
+ * attestation quote will carry.
  *
- * Requires a provisioned AIK with auth loaded; callers that may run
- * before enrollment must handle -ENOKEY by falling back to the
- * unauthenticated path or by deferring the extend.
+ * The two sources are expected to disagree. A TPM obfuscates clock,
+ * resetCount and restartCount in an attestation structure by an amount
+ * unique to the signing key whenever that key sits outside the endorsement
+ * hierarchy, so a quote cannot be used to correlate a machine across keys;
+ * the AIK is an owner-hierarchy primary, so its quotes always carry offset
+ * counters.
+ * Deriving the commitment from Esys_ReadClock instead would break the verifier,
+ * which rederives from this very quote.
+ *
+ * Anything an operator is asked to confirm goes through print_platform_clock()
+ * instead.
+ *
+ * Requires a provisioned AIK with auth loaded; callers that may run before
+ * enrollment must handle -ENOKEY by falling back to the unauthenticated path
+ * or by deferring the extend.
  */
 static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 				     uint32_t *reset_count_out,
@@ -2358,6 +2367,41 @@ static int tpm_read_signed_clockinfo(struct tpm_context *ctx,
 }
 
 /*
+ * Print the platform's own reset/restart counters, the pair an operator
+ * can confirm with tpm2_readclock.
+ *
+ * The counters bound into the boot commitment come from an AIK-signed quote,
+ * and a TPM obfuscates clockInfo in an attestation structure by an amount
+ * unique to the signing key whenever that key sits outside the endorsement
+ * hierarchy - which the AIK does.
+ * Both readings are correct, but only this one matches what the operator can
+ * read back, so it is the one a security message quotes.
+ */
+static void print_platform_clock(struct tpm_context *ctx, const char *prefix)
+{
+	TPMS_TIME_INFO *time_info = NULL;
+	struct esys_read_clock_args args = {
+		.esys_ctx = ctx->esys_ctx,
+		.time_info_out = &time_info,
+	};
+	TSS2_RC rc;
+	int ret;
+
+	ret = tpm_call_with_backoff(ctx, esys_read_clock_thunk, &args, &rc, 1,
+				    (void **)&time_info);
+	if (ret < 0 || !time_info) {
+		fprintf(stderr, "%s: unavailable (%s)\n", prefix,
+			strerror(ret < 0 ? -ret : EIO));
+		return;
+	}
+
+	fprintf(stderr, "%s: resetCount=%u restartCount=%u\n", prefix,
+		(unsigned)time_info->clockInfo.resetCount,
+		(unsigned)time_info->clockInfo.restartCount);
+	Esys_Free(time_info);
+}
+
+/*
  * Persist what PCR14 now holds so the next run can attribute a change.
  * A failed save costs attribution on the next start, never this boot,
  * so it warns with the caller's wording and carries on.
@@ -2412,8 +2456,7 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs,
 	 * A TPM that saves and restores its state across a deep suspend increments
 	 * restartCount, leaves resetCount alone and leaves every PCR as it was.
 	 * The register therefore still holds the commitment this agent extended,
-	 * derived with the restartCount that was in effect then rather than
-	 * the one the quote now carries.
+	 * derived with the restartCount that was in effect then.
 	 * Recover it by deriving what the register would hold for the preceding
 	 * restartCount values.
 	 *
@@ -2609,7 +2652,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 
 	uint32_t restart_drift = 0;
 
-	switch (tpm_classify_pcr14(&obs, &restart_drift)) {
+	ctx->boot_commitment_state = tpm_classify_pcr14(&obs, &restart_drift);
+
+	switch (ctx->boot_commitment_state) {
 	case TPM_PCR14_AWAITING_EXTEND:
 		/*
 		 * Initramfs lock ran; agent has not extended yet. Extend with
@@ -2669,8 +2714,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 
 	case TPM_PCR14_UNATTRIBUTABLE:
 		fprintf(stderr,
-			"SECURITY: PCR14 holds an unexpected value (resetCount=%u "
-			"restartCount=%u) and no prior clock-state snapshot exists "
+			"SECURITY: PCR14 holds an unexpected value and no prior "
+			"clock-state snapshot exists "
 			"to attribute the cause. Possible explanations: "
 			"(1) initramfs / boot loader extended PCR14 with a "
 			"non-LOTA commitment; "
@@ -2679,8 +2724,8 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			"(3) the clock-state file was deleted between runs. "
 			"Cold reboot the host and consult systemd journal for "
 			"tpm2_pcr_extend invocations before lota-agent's first "
-			"quote\n",
-			(unsigned)reset_count, (unsigned)restart_count);
+			"quote\n");
+		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
 		return -EBADMSG;
 
 	case TPM_PCR14_TAMPERED_BEFORE_START:
@@ -2711,33 +2756,33 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 * PCR14 cannot be rebound without resetCount advancing,
 		 * so the operator must reboot to re-extend.
 		 */
-		fprintf(stderr,
-			"SECURITY: PCR14 holds the boot commitment of "
-			"a prior "
-			"agent binary in this boot session "
-			"(resetCount=%u); the "
-			"agent binary has changed since that extend. "
-			"PCR14 is "
-			"non-resettable from userspace, so live "
-			"upgrades cannot "
-			"rebind it. Cold reboot to re-extend PCR14 "
-			"against the "
-			"current agent binary\n",
-			(unsigned)reset_count);
+		fprintf(stderr, "SECURITY: PCR14 holds the boot commitment of "
+				"a prior "
+				"agent binary in this boot session; the "
+				"agent binary has changed since that extend. "
+				"PCR14 is "
+				"non-resettable from userspace, so live "
+				"upgrades cannot "
+				"rebind it. Cold reboot to re-extend PCR14 "
+				"against the "
+				"current agent binary\n");
+		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
 		return -EBADMSG;
 
 	case TPM_PCR14_MUTATED_IN_SESSION:
 		fprintf(stderr,
-			"SECURITY: PCR14 mutated during the current boot session "
-			"(resetCount=%u; last successful extend at %lld). Another "
-			"writer extended PCR14 after lota-agent's last "
+			"SECURITY: PCR14 no longer holds the value lota-agent "
+			"extended in this boot session, and holds no value this "
+			"boot could produce (last successful extend at %lld). "
+			"Another writer extended PCR14 after lota-agent's last "
 			"self_measure() and outside its control. Possible causes: "
 			"(1) local root invoked tpm2_pcr_extend on /dev/tpmrm0; "
 			"(2) another integrity subsystem (IMA, integrity-init, "
 			"...) extended PCR14 from the OS. Audit auditd and the "
 			"process table for the writer; cold reboot to restore a "
 			"clean baseline\n",
-			(unsigned)reset_count, (long long)prev.saved_at);
+			(long long)prev.saved_at);
+		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
 		return -EBADMSG;
 
 	case TPM_PCR14_STATE_ROLLBACK:

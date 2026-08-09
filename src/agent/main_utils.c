@@ -506,10 +506,36 @@ int self_measure(struct tpm_context *ctx)
 	 */
 	ret = tpm_extend_boot_commitment(ctx, self_hash);
 	if (ret < 0) {
+		/*
+		 * -EBADMSG covers every refusal the commitment can produce,
+		 * so name which one it was.
+		 * A refusal an operator caused by running a build the register
+		 * does not commit to reads identically to a TPM fault otherwise.
+		 */
 		if (ret == -EBADMSG) {
-			lota_err(
-				"PCR14 boot-commitment refused; see the preceding "
-				"SECURITY log for the exact recovery path.");
+			switch (ctx->boot_commitment_state) {
+			case TPM_PCR14_BINARY_CHANGED:
+				lota_err(
+					"This is not the lota-agent build PCR 14 "
+					"committed to when the host booted, so it "
+					"cannot attest in this boot. Install this "
+					"build and reboot; the register is not "
+					"rewritable while the host is up.");
+				break;
+			case TPM_PCR14_LOCK_MISSING:
+				lota_err(
+					"PCR 14 never received the initramfs lock "
+					"this boot, so there is nothing for the "
+					"boot commitment to chain onto. See the "
+					"preceding log for the dracut step.");
+				break;
+			default:
+				lota_err(
+					"PCR14 boot-commitment refused; see the "
+					"preceding SECURITY log for the exact "
+					"recovery path.");
+				break;
+			}
 		}
 		return ret;
 	}
