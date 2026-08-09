@@ -113,8 +113,7 @@ func (f *Fleet) PCR7() [types.HashSize]byte {
 // (nothing measures PCR14 before userspace in the synthetic event log)
 func (f *Fleet) PCR14() [types.HashSize]byte {
 	var zeroBaseline [types.HashSize]byte
-	return verify.DeriveLockedBootCommitmentPCR14(
-		zeroBaseline, f.AgentHash, quoteResetCount, quoteRestartCount)
+	return verify.DeriveLockedBootCommitmentPCR14(zeroBaseline, f.AgentHash)
 }
 
 // BuildReport assembles and signs full attestation report for agent answering challengeNonce

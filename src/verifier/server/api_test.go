@@ -363,7 +363,7 @@ func serverFixturePCR14() [32]byte {
 	for i := range agentHash {
 		agentHash[i] = byte(0xBB ^ i)
 	}
-	return verify.DeriveLockedBootCommitmentPCR14([32]byte{}, agentHash, 0, 0)
+	return verify.DeriveLockedBootCommitmentPCR14([32]byte{}, agentHash)
 }
 
 // builds a complete attestation report with valid TPM quote signature

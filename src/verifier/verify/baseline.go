@@ -10,7 +10,6 @@ package verify
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -22,8 +21,12 @@ import (
 
 // bootCommitmentTag is the domain-separation prefix used by the agent
 // when extending PCR14 with the boot commitment. It MUST match the
-// LOTA-PCR14-BOOT-COMMITMENT-v1 string in src/agent/tpm.c.
-const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v1"
+// LOTA-PCR14-BOOT-COMMITMENT-v2 string in src/agent/tpm.c.
+//
+// v2 commits to the agent hash alone.
+// An agent still extending v1 produces a register this code does not derive,
+// and is refused.
+const bootCommitmentTag = "LOTA-PCR14-BOOT-COMMITMENT-v2"
 
 // initramfsLockTag is the domain-separation prefix used by the
 // initramfs lock helper (src/initramfs/lota-pcr14-lock.c) when it
@@ -44,16 +47,7 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 // PCR14 before userspace.
 //
 // Verifier reconstructs baseline from the TPM event log.
-//
-// resetCount and restartCount are accepted for API symmetry with the
-// agent helper, but intentionally ignored. The initramfs lock runs long
-// before the quote, so binding it to restartCount would make a correct
-// boot fail when the counter moves between initramfs and attestation.
-// Freshness is bound by the later agent boot commitment, which still
-// includes the TPMS_ATTEST ClockInfo counters.
-func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte, resetCount, restartCount uint32) [types.HashSize]byte {
-	_, _ = resetCount, restartCount
-
+func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte) [types.HashSize]byte {
 	commit := sha256.New()
 	commit.Write([]byte(initramfsLockTag))
 	commitDigest := commit.Sum(nil)
@@ -72,25 +66,24 @@ func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte, resetCount, restart
 // been applied in sequence. The chain is:
 //
 //	lock_value  = DeriveInitramfsLockPCR14()
-//	boot_commit = SHA256(bootCommitmentTag || agentHash || R || S)
+//	boot_commit = SHA256(bootCommitmentTag || agentHash)
 //	pcr14_final = SHA256(lock_value || boot_commit)
+//
+// The value depends on the platform baseline and the agent binary,
+// and on nothing the signing key can change, so every publisher's verifier
+// derives the same register for the same host.  It is also stable across
+// a suspend and across reboots of the same build, which is why neither
+// side scans candidates.
 //
 // This is the only PCR14 derivation the verifier validates;
 // report that does not carry both FlagInitramfsLockV1 and FlagBootCommitment
 // is rejected before the chain is rederived.
-func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
-	resetCount, restartCount uint32,
-) [types.HashSize]byte {
-	lockValue := DeriveInitramfsLockPCR14(baseline, resetCount, restartCount)
-
-	var counters [8]byte
-	binary.BigEndian.PutUint32(counters[0:4], resetCount)
-	binary.BigEndian.PutUint32(counters[4:8], restartCount)
+func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte) [types.HashSize]byte {
+	lockValue := DeriveInitramfsLockPCR14(baseline)
 
 	commit := sha256.New()
 	commit.Write([]byte(bootCommitmentTag))
 	commit.Write(agentHash[:])
-	commit.Write(counters[:])
 	commitDigest := commit.Sum(nil)
 
 	pcr := sha256.New()
@@ -133,67 +126,25 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 	return replay.PCRValues[pcr14Index]
 }
 
-// MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash
-// bound at boot and the (resetCount, restartCount) reported in the quote's
-// ClockInfo, then scans restartCount backward looking for value whose derivation
-// matches the PCR14 carried in the quote.
+// MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash the report
+// carries and compares it against the register the quote signed.
 //
-// The scan exists because the agent extends PCR14 once at startup using
-// the restartCount in effect at that moment, while the quote carries
-// the restartCount in effect when it is signed. TPM2_Startup(STATE)
-// increments restartCount across every suspend/resume cycle within a
-// single boot session, so on laptops the two values diverge between
-// attestations. resetCount is left fixed because the TPM only
-// increments it at TPM_INIT (cold boot), which would also have killed
-// the agent process and triggered a fresh extend on the next start.
+// There is nothing to scan.  The derivation binds the platform baseline
+// and the agent binary, so the value a host presents is the same before
+// and after a suspend, and the same for every publisher that verifies it.
 //
-// matched is true when some restartCount in [quoteRestartCount-maxRestartSkew,
-// quoteRestartCount] reproduces the PCR14 carried in target.
+// The signature parameters are kept as named returns so callers keep reading
+// one shape: restartDrift is always zero and exists so a caller that logs it
+// does not have to special-case this derivation.
 //
-// expected is set to the matched derivation (drift accepted) or to the exact
-// quote derivation (when no candidate matched) so the caller can log
-// the failure with a deterministic expected_pcr14 column.
-//
-// restartDrift carries the positive distance between the quote value
-// and the matched value (0 when the exact-match branch succeeded).
-//
-// The scan does not weaken the integrity binding: an attacker who does
-// not know the pinned agent_hash cannot produce a matching PCR14 for
-// any restartCount value, and resetCount is not iterated so a post-cold-boot
-// state cannot be replayed.
+// The integrity binding is the agent hash: a party who does not know the hash
+// the register commits to cannot produce a matching PCR 14, and the register
+// cannot be reset from userspace within a boot.
 func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
-	resetCount, quoteRestartCount uint32,
 	target [types.HashSize]byte,
-	maxRestartSkew uint32,
 ) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-	derive := func(ah [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
-		return DeriveLockedBootCommitmentPCR14(baseline, ah, reset, restart)
-	}
-	return matchPCR14(derive, agentHash, resetCount,
-		quoteRestartCount, target, maxRestartSkew)
-}
-
-// matchPCR14 keeps the restartCount-skew scan separate from the derivation it
-// scans over, so future derivation can reuse the same exhaustion logic without
-// copy/paste.
-func matchPCR14(
-	derive func(agentHash [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte,
-	agentHash [types.HashSize]byte,
-	resetCount, quoteRestartCount uint32,
-	target [types.HashSize]byte,
-	maxRestartSkew uint32,
-) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-	expected = derive(agentHash, resetCount, quoteRestartCount)
-	if expected == target {
-		return expected, 0, true
-	}
-	for d := uint32(1); d <= maxRestartSkew && d <= quoteRestartCount; d++ {
-		cand := derive(agentHash, resetCount, quoteRestartCount-d)
-		if cand == target {
-			return cand, d, true
-		}
-	}
-	return expected, 0, false
+	expected = DeriveLockedBootCommitmentPCR14(baseline, agentHash)
+	return expected, 0, expected == target
 }
 
 // ErrBaselineNotFound is returned by baseline-mutating helpers when the

@@ -411,18 +411,42 @@ code running in that window could seed the value the baseline would pin. The
 agent refuses to build such a report locally, so the missing module is named
 on the host rather than surfacing as a remote rejection.
 
-The commitment binds the TPM's ``resetCount`` and ``restartCount``, which
-makes a suspend part of this boundary. A suspend deep enough to restart the
-TPM (S3) restores every PCR unchanged and increments ``restartCount``, so the
-register no longer matches the value derived from the counters the next quote
-carries. Both sides resolve that by deriving what the register would hold for
-the preceding restart counts and accepting a match, bounded by the verifier's
-``--max-restart-count-skew``. The candidates are derived from the agent's own
-hash, the platform baseline and the TPM's signed counters, so nothing on disk
-takes part: a local root who rewrites the agent's clock-state file cannot make
-a register they extended read as a resume. ``resetCount`` is never iterated on
-either side, so a cold boot still demands a fresh commitment, and a PCR 14
-another writer extended is refused after a suspend.
+What the commitment binds, and what it does not
+-----------------------------------------------
+
+The commitment is ``SHA-256(tag || agent_hash)``, chained onto the initramfs
+lock value. It names the agent binary that took the boot and the platform
+baseline that binary chained onto, and nothing else.
+
+* **Within a boot**, PCR 14 cannot be reset from userspace. The agent extends
+  the commitment once; a second agent, a different build, or any other writer
+  moves the register away from the value the reported hash derives, and the
+  verifier refuses. The agent refuses locally on the same comparison, and an
+  operator-requested shutdown poisons the register deliberately so a pause is
+  visible rather than silent.
+* **Across a boot**, the register is cleared by the hardware reset and rebuilt
+  in a fixed order: the firmware measures its own state, the initramfs lock
+  helper extends before any userspace, and the agent extends next. A
+  commitment already present when the agent starts after a cold boot means
+  something ran before it, which the agent refuses by name.
+* **Freshness** is the verifier's nonce over a quote signed in that session,
+  not the register's contents. A recorded PCR 14 value proves nothing on its
+  own, because there is no way to present it without a fresh signature over
+  it, and the value is expected to repeat: the same host running the same
+  agent build has the same commitment every boot, which is what makes a
+  per-client baseline comparable at all.
+* **What is out of scope** is a local root that runs *before* the agent in the
+  same boot. Such an attacker can extend the commitment themselves and, having
+  reached the boot state the AIK auth is sealed to, quote it -- and that was
+  equally true when the counters were in the digest, since they could be
+  predicted. The layers that address that attacker are Secure Boot, the IMA
+  appraisal floor, fs-verity on the agent binary and the ordering that puts
+  the agent ahead of every login-capable target; PCR 14 records which binary
+  committed, it does not prove that a process is still alive.
+
+A TPM that restarts across S3 restores every PCR unchanged, and the derivation
+does not move with the counters, so the register matches on both sides with
+no candidate scan and no skew window to configure.
 
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the
