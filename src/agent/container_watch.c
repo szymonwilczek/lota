@@ -81,6 +81,21 @@ int container_watch_init(struct container_watch *w, const char *root,
 	return 0;
 }
 
+int container_watch_fd(const struct container_watch *w)
+{
+	(void)w;
+
+	return -1;
+}
+
+int container_watch_process(struct container_watch *w)
+{
+	if (!w)
+		return -EINVAL;
+
+	return 0;
+}
+
 void container_watch_cleanup(struct container_watch *w)
 {
 	if (!w)

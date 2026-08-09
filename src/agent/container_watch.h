@@ -63,6 +63,22 @@ int container_watch_init(struct container_watch *w, const char *root,
 			 const uint32_t *uids, int uid_count,
 			 const struct container_watch_ops *ops);
 
+/*
+ * container_watch_fd - descriptor that reports a change under the root
+ *
+ * Returns a descriptor to poll, or -1 when nothing reports logins.
+ * The agent has no such reporter today, so this is always -1.
+ */
+int container_watch_fd(const struct container_watch *w);
+
+/*
+ * container_watch_process - act on what happened under the root
+ *
+ * Returns the number of UIDs bound by this call, or a negative errno.
+ * Nothing observes the root today, so this call has nothing to act on.
+ */
+int container_watch_process(struct container_watch *w);
+
 void container_watch_cleanup(struct container_watch *w);
 
 #endif /* LOTA_CONTAINER_WATCH_H */
