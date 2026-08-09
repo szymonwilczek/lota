@@ -17,6 +17,7 @@
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
+#include "container_watch.h"
 #include "daemon.h"
 #include "dbus.h"
 #include "journal.h"
@@ -369,8 +370,9 @@ void setup_dbus(struct ipc_context *ctx)
 _Static_assert(LOTA_CONFIG_MAX_CONTAINER_LISTENERS <= IPC_MAX_EXTRA_LISTENERS,
 	       "container listener cap exceeds ipc extra-listener slots");
 
-static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
+static int add_listener_for_uid(uint32_t uid, void *user)
 {
+	struct ipc_context *ctx = user;
 	char dir[PATH_MAX];
 	char path[PATH_MAX];
 	int n, ret;
@@ -414,9 +416,20 @@ void setup_container_listener(struct ipc_context *ctx,
 	int ret;
 
 	if (cfg && cfg->container_listener_uid_count > 0) {
-		for (int i = 0; i < cfg->container_listener_uid_count; i++)
-			(void)add_listener_for_uid(
-				ctx, cfg->container_listener_uids[i]);
+		struct container_watch_ops ops = {
+			.bind = add_listener_for_uid,
+			.user = ctx,
+		};
+		struct container_watch watch;
+
+		ret = container_watch_init(&watch, NULL,
+					   cfg->container_listener_uids,
+					   cfg->container_listener_uid_count,
+					   &ops);
+		if (ret < 0)
+			lota_warn("container listeners unavailable: %s",
+				  strerror(-ret));
+		container_watch_cleanup(&watch);
 
 		ret = steam_runtime_detect(&rt_info);
 		if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))

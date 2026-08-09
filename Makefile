@@ -215,6 +215,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/policy_sign.c \
               $(AGENT_DIR)/config.c \
               $(AGENT_DIR)/steam_runtime.c \
+              $(AGENT_DIR)/container_watch.c \
               $(AGENT_DIR)/dbus.c \
               $(AGENT_DIR)/sdnotify.c \
               $(AGENT_DIR)/journal.c \
