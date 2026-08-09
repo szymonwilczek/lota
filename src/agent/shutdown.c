@@ -8,6 +8,7 @@
 #include <sys/random.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "../../include/lota.h"
 #include "agent.h"
@@ -18,6 +19,7 @@ int poison_runtime_pcr(struct tpm_context *ctx)
 	uint8_t poison_digest[LOTA_HASH_SIZE];
 	size_t off = 0;
 	int use_fallback = 0;
+	int ret;
 
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
@@ -41,7 +43,35 @@ int poison_runtime_pcr(struct tpm_context *ctx)
 	if (use_fallback)
 		memset(poison_digest, 0xDE, sizeof(poison_digest));
 
-	return tpm_pcr_extend(ctx, LOTA_PCR_SELF, poison_digest);
+	ret = tpm_pcr_extend(ctx, LOTA_PCR_SELF, poison_digest);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * Record that this host spent its own commitment, so the next start
+	 * reports a paused agent.
+	 * Best effort: losing the note costs the wording of a refusal that
+	 * happens either way.
+	 */
+	{
+		struct lota_clock_state snap = { 0 };
+
+		/*
+		 * Keep the counters the successful extend recorded;
+		 * only the register value and the reason change
+		 */
+		if (tpm_clock_state_load(ctx, &snap) < 0)
+			memset(&snap, 0, sizeof(snap));
+
+		if (tpm_read_pcr(ctx, LOTA_PCR_SELF, TPM_HASH_ALG,
+				 snap.pcr14) == 0) {
+			snap.saved_at = (int64_t)time(NULL);
+			snap.flags |= LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON;
+			(void)tpm_clock_state_save(ctx, &snap);
+		}
+	}
+
+	return 0;
 }
 
 int agent_poison_runtime_pcr_before_bpf_unload(struct tpm_context *tpm,

@@ -41,6 +41,11 @@ The most common failures, with the gate that produced them:
   ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
   the dracut module is installed and the initramfs was rebuilt (see
   :doc:`manual-reference`, section 5), then cold reboot.
+* ``The agent is paused on this host``. Its boot commitment was spent by a
+  shutdown requested here -- ``lota-agent --shutdown``, ``lota-install
+  --pause``, or a ``systemctl stop`` that ran the unit's ``ExecStop``. PCR 14
+  cannot be re-extended once poisoned, which is what makes a pause visible to
+  every relying party. Reboot to attest again.
 * ``Startup policy refused before the boot commitment was spent``. A path or
   PID named by the enforcement policy could not be resolved -- most often a
   ``--trust-lib`` or ``--allow-verity`` path the unit's sandbox hides, since
