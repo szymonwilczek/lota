@@ -1448,7 +1448,8 @@ $(TEST_BIN_DIR)/test_flag_names: tests/test_flag_names.c $(SDK_LIB) | $(BUILD_DI
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_ipc_privilege: tests/test_ipc_privilege.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ipc_privilege: tests/test_ipc_privilege.c \
+		$(AGENT_DIR)/ipc_privilege.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 

@@ -27,12 +27,23 @@ static inline bool ipc_privilege_granted(bool uid_is_agent,
 					 int verity_allowlist_count,
 					 bool exe_on_allowlist)
 {
-	(void)verity_allowlist_count;
-
 	if (!uid_is_agent || !pid_identity_ok)
 		return false;
 
-	return exe_on_allowlist;
+	/*
+	 * An allowlist narrows this rule where an operator has configured one
+	 * and is silent where they have not. Requiring membership of an empty
+	 * list would deny the unit's own ExecStop, and with SIGKILL refused by
+	 * the LSM hook nothing could stop the agent.
+	 *
+	 * The uid check alone admits only root, which this rule never kept
+	 * from stopping the agent; what it keeps out is the lota group,
+	 * which can reach the socket but may not drive a privileged command.
+	 */
+	if (verity_allowlist_count > 0)
+		return exe_on_allowlist;
+
+	return true;
 }
 
 #endif /* LOTA_IPC_PRIVILEGE_H */
