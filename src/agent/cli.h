@@ -157,6 +157,23 @@ char (*cli_runtime_allow_verity(void))[PATH_MAX];
 int *cli_runtime_allow_verity_count(void);
 
 /*
+ * Which enforcement switches the command line turned on.
+ *
+ * All five are enabling flags, and a reload re-applies the switches from
+ * the configuration file -- whose defaults leave strict_exec and strict_modules off.
+ * Without a record of what was asked for, a reload withdraws an enforcement
+ * setting the operator passed to this daemon, and the agent cannot be restarted
+ * to re-read its own command line.
+ */
+#define LOTA_CLI_SWITCH_STRICT_MMAP (1U << 0)
+#define LOTA_CLI_SWITCH_STRICT_EXEC (1U << 1)
+#define LOTA_CLI_SWITCH_BLOCK_PTRACE (1U << 2)
+#define LOTA_CLI_SWITCH_STRICT_MODULES (1U << 3)
+#define LOTA_CLI_SWITCH_BLOCK_ANON_EXEC (1U << 4)
+
+uint32_t cli_startup_switch_mask(void);
+
+/*
  * What the command line itself asked for, kept apart from the runtime lists
  * above.
  *

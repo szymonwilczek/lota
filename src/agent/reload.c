@@ -318,6 +318,55 @@ static void apply_runtime_flags_transactional(
 }
 
 /*
+ * Keep the enforcement switches the command line turned on.
+ *
+ * All five flags only enable, and the reload below applies whatever the file says
+ * -- whose defaults leave strict_exec and strict_modules off.
+ * So a switch an operator passed as an argument would be withdrawn by a reload
+ * that merely inherited a default, and the daemon cannot be restarted to read
+ * its own command line again.
+ *
+ * A switch the command line did not pass is untouched here, so the file still
+ * decides everything nobody asked for by hand.
+ */
+static void keep_command_line_switches(struct lota_config *new_cfg)
+{
+	static const struct {
+		uint32_t bit;
+		const char *name;
+		size_t offset;
+	} switches[] = {
+		{ LOTA_CLI_SWITCH_STRICT_MMAP, "strict_mmap",
+		  offsetof(struct lota_config, strict_mmap) },
+		{ LOTA_CLI_SWITCH_STRICT_EXEC, "strict_exec",
+		  offsetof(struct lota_config, strict_exec) },
+		{ LOTA_CLI_SWITCH_BLOCK_PTRACE, "block_ptrace",
+		  offsetof(struct lota_config, block_ptrace) },
+		{ LOTA_CLI_SWITCH_STRICT_MODULES, "strict_modules",
+		  offsetof(struct lota_config, strict_modules) },
+		{ LOTA_CLI_SWITCH_BLOCK_ANON_EXEC, "block_anon_exec",
+		  offsetof(struct lota_config, block_anon_exec) },
+	};
+	uint32_t mask = cli_startup_switch_mask();
+
+	for (size_t i = 0; i < sizeof(switches) / sizeof(switches[0]); i++) {
+		bool *field;
+
+		if (!(mask & switches[i].bit))
+			continue;
+
+		field = (bool *)((char *)new_cfg + switches[i].offset);
+		if (*field)
+			continue;
+
+		lota_info(
+			"Reload keeps %s on: the command line asked for it, and the configuration does not",
+			switches[i].name);
+		*field = true;
+	}
+}
+
+/*
  * Fold what the command line asked for back into the set the file describes.
  *
  * --trust-lib and --protect-pid are arguments to the running daemon, not entries
@@ -703,6 +752,8 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			lota_err("Failed to apply new mode");
 		}
 	}
+
+	keep_command_line_switches(new_cfg);
 
 	apply_runtime_flags_transactional(new_cfg, strict_mmap, strict_exec,
 					  block_ptrace, strict_modules,
