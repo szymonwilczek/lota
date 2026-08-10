@@ -105,7 +105,6 @@ int main(void)
 	char anchor_a[128], anchor_b[128], conf[128];
 	char text[2048];
 	struct attest_target *targets;
-	struct lota_config *cfg;
 	size_t count = 0;
 	int rc;
 
@@ -123,11 +122,8 @@ int main(void)
 	}
 
 	targets = calloc(LOTA_CONFIG_MAX_PROFILES, sizeof(*targets));
-	cfg = config_new();
-	if (!targets || !cfg) {
+	if (!targets) {
 		fprintf(stderr, "FAIL: allocation\n");
-		config_free(cfg);
-		free(targets);
 		return 1;
 	}
 
@@ -140,12 +136,11 @@ int main(void)
 		 anchor_a);
 	if (write_file(conf, text) < 0) {
 		fprintf(stderr, "FAIL: could not write the config\n");
-		config_free(cfg);
 		free(targets);
 		return 1;
 	}
 
-	rc = attest_targets_reload(conf, cfg, NULL, 0, NULL, 300, targets,
+	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
 	CHECK(rc == 0 && count == 1, "the configured publisher is a target");
 
@@ -171,12 +166,11 @@ int main(void)
 		 anchor_a, anchor_b);
 	if (write_file(conf, text) < 0) {
 		fprintf(stderr, "FAIL: could not rewrite the config\n");
-		config_free(cfg);
 		free(targets);
 		return 1;
 	}
 
-	rc = attest_targets_reload(conf, cfg, NULL, 0, NULL, 300, targets,
+	rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
 				   LOTA_CONFIG_MAX_PROFILES, &count);
 	CHECK(rc == 0 && count == 2,
 	      "a publisher added while the loop runs becomes a target");
@@ -198,23 +192,21 @@ int main(void)
 	if (write_file(conf, "[profile \"broken\"]\n") == 0) {
 		size_t before = count;
 
-		rc = attest_targets_reload(conf, cfg, NULL, 0, NULL, 300,
-					   targets, LOTA_CONFIG_MAX_PROFILES,
-					   &count);
+		rc = attest_targets_reload(conf, NULL, 0, NULL, 300, targets,
+					   LOTA_CONFIG_MAX_PROFILES, &count);
 		CHECK(rc < 0, "a config that does not load is refused");
 		CHECK(count == before &&
 			      strcmp(targets[1].server, "v.beta.example") == 0,
 		      "and the list the loop is using is left alone");
 	}
 
-	CHECK(attest_targets_reload(NULL, cfg, NULL, 0, NULL, 300, targets,
+	CHECK(attest_targets_reload(NULL, NULL, 0, NULL, 300, targets,
 				    LOTA_CONFIG_MAX_PROFILES, &count) < 0,
 	      "a reload without a config path is refused");
 
 	unlink(anchor_a);
 	unlink(anchor_b);
 	unlink(conf);
-	config_free(cfg);
 	free(targets);
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");

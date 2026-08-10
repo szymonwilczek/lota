@@ -1328,7 +1328,7 @@ $(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
@@ -1340,7 +1340,7 @@ $(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 

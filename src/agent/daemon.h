@@ -12,6 +12,7 @@
 #define LOTA_DAEMON_H
 
 #include <signal.h>
+#include <stdbool.h>
 #include <sys/types.h>
 
 /* Default PID file path */
@@ -60,6 +61,22 @@ int pidfile_create(const char *path);
  * @fd:   file descriptor returned by pidfile_create (-1 to skip close)
  */
 void pidfile_remove(const char *path, int fd);
+
+/*
+ * Whether a SIGHUP has been taken since the last time this was asked,
+ * and clearing it in the same call.
+ *
+ * The enforcement daemon reads its own flag off a signalfd inside its event
+ * loop. The attestation loop has no event loop to hang one on and only needs
+ * to know, between rounds, whether the publisher list has to be re-read
+ * -- so it asks the handler that daemon_install_signals() already put in place.
+ */
+bool daemon_reload_taken(void);
+
+/* Whether a SIGHUP is waiting, without taking it.
+ * Lets a loop stop sleeping for a reload it will act on at the top of its
+ * next pass. */
+bool daemon_reload_pending(void);
 
 /*
  * Install signal handlers for daemon operation.
