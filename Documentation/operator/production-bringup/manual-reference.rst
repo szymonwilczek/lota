@@ -184,11 +184,24 @@ touching the TPM: the initramfs helper exits non-zero (which aborts the boot
 transition, its unit is ordered before ``initrd-root-fs.target``) and the agent
 returns ``ENOTSUP`` from its self-measurement, each naming the absent
 ``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
-:doc:`../platform-support`. If PCR14 still holds the bare baseline when the
-agent runs, the initramfs lock did not run: install the ``90lota`` dracut
-module, ``dracut -f --add lota``, and cold reboot. The agent refuses to extend
-a commitment onto an unlocked register, because the verifier validates only the
-lock-then-commit chain.
+:doc:`../platform-support`. When the lock did not run this boot the agent says
+so and names the fix: install the ``90lota`` dracut module, rebuild the
+initramfs (``dracut -f --add lota`` for the booted kernel, or
+``dracut -f --regenerate-all`` for every installed one) and cold reboot. It
+recognises that case by the absence of the handoff file above, not by the
+register's value -- on a shim host PCR14 holds the MOK measurement whether or
+not the lock ran, so the value alone cannot tell a machine that needs its
+initramfs rebuilt from one that was tampered with. The agent refuses to extend
+a commitment onto an unlocked register either way, because the verifier
+validates only the lock-then-commit chain.
+
+The lock belongs in **every** installed kernel's initramfs, not only the
+running one. The kernel command-line floor is armed on every boot entry, so a
+kernel that can be selected from the boot menu without the lock boots a host
+with no commitment; ``lota-install`` regenerates them all and reports the stage
+unsatisfied while any installed kernel is missing the helper. A kernel
+installed later picks the helper up from the packaged dracut module without
+further action.
 
 A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
 baseline and therefore the final PCR14, so an enrolled host reports an
