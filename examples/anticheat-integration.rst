@@ -137,6 +137,35 @@ an integration:
        already knows because ``--add-publisher`` prints it.
    * - Verdict handling
      - The demo prints. Yours is your anti-cheat policy.
+   * - Heartbeat interval
+     - The demo beats every 5 seconds, which is a measured choice rather
+       than a round number: see below.
+
+What a heartbeat costs
+======================
+
+Every heartbeat mints a token, and every token is a fresh ``TPM2_Quote`` --
+a blocking operation on a device the whole machine shares. On the validation
+host, an Intel PTT firmware TPM, ``lota_get_token()`` measured **48 ms
+median** end to end through the SDK against the running daemon. Treat that as
+the order of magnitude for a consumer laptop; an earlier measurement on the
+same host recorded roughly three times more, and no hardware is promised to
+be fast. :doc:`../Documentation/operator/platform-support` carries the
+numbers and the method.
+
+Three rules follow, and they are the reason the reference beats at 5 seconds:
+
+* **Never call it from a frame loop, a render thread or anything with a
+  deadline.** Tens of milliseconds is several frames. Beat from your own
+  thread or your existing network tick.
+* **Hold the token you have.** A token is valid for a window; fetching a new
+  one per request wastes the device and buys nothing, since the nonce is what
+  binds a token to a challenge.
+* **Beat no faster than you need.** The agent enforces 20 token requests per
+  session per minute and 60 per uid per minute; at 5 seconds a title uses 12
+  of its 20, which leaves room for a second title of yours on the same
+  machine. ``LOTA_AC_ERR_RATE_LIMITED`` means the producer is beating faster
+  than the agent issues, and the fix is the interval, not a retry loop.
 
 Telling your bug from the player's state
 ========================================
