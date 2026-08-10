@@ -395,6 +395,14 @@ them. A title that names no publisher reads the host-wide answer, which is now
 every *currently reporting* publisher agreeing -- and not attested when nothing
 is reporting at all, since nothing is being checked.
 
+**A title that names no publisher also opens no session**, so it does not start
+anybody reporting either. On a host where every profile is session-gated, which
+is the consumer default, such a title reads not-attested for as long as it is
+the only one running. That is deliberate -- a session is a title saying which
+publisher it plays for, and reporting follows it -- and it makes naming the
+publisher part of integrating, not an optimisation. The anti-cheat producer
+reference takes ``--publisher``; see :ghsrc:`examples/anticheat-integration.rst`.
+
 **Nothing enrolls with a publisher until somebody here agrees to it.** An
 attestation key is a stable handle that publisher can recognise this machine
 by, so the decision to hand one out is recorded before the key exists, in the

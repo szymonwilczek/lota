@@ -126,6 +126,15 @@ an integration:
      - The demo trusts one key from a file. Yours comes from enrolment
        records -- see ``examples/enrollment/README.rst`` -- so the
        backend knows which TPM belongs to which account.
+   * - Publisher selection
+     - ``--publisher <hex>`` in the demo; ``publisher_profile`` in
+       ``struct lota_ac_config`` for you, and not optional. Naming the
+       publisher is what opens a session for them, and a session-gated
+       host -- the consumer default -- reports only while one is open.
+       A producer that names nobody is never attested for anybody and
+       every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
+       your CA anchor's SubjectPublicKeyInfo, which your installer
+       already knows because ``--add-publisher`` prints it.
    * - Verdict handling
      - The demo prints. Yours is your anti-cheat policy.
 

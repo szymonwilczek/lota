@@ -1413,7 +1413,10 @@ static void announce_targets(const struct attest_target *targets, size_t count)
 	 */
 	if (count > 1)
 		lota_info("A title that does not select a publisher is "
-			  "answered for %s:%d and with the host-wide verdict",
+			  "answered for %s:%d and with the host-wide verdict, "
+			  "but opens no session for them -- on a session-gated "
+			  "publisher it reads not-attested until a title that "
+			  "names one is running",
 			  targets[0].server, targets[0].port);
 }
 
