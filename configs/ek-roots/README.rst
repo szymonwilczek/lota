@@ -63,31 +63,54 @@ Finding the root for a platform
 -------------------------------
 
 Take an EK certificate from a host you mean to attest and walk its issuer chain
-to the self-signed root:
+to the self-signed root. **Read the certificates the chip carries first**: on a
+firmware TPM the EK certificate has no Authority Information Access extension at
+all, so there is no URL to follow from the leaf, and the certificates above it
+live in NV at ``0x01c00100`` -- concatenated DER, no separators, published
+nowhere else. AIA appears only from the certificates above those, so the walk
+starts at the top of what the chip gave you, not at the EK.
 
 .. code:: sh
 
    # discrete TPM / Intel PTT: the EK cert lives in TPM NV
-   sudo tpm2_nvreadpublic                    # find the 0x01c0xxxx EK cert index
-   sudo tpm2_nvread 0x01c00002 -o ek.der     # RSA EK (0x01c0000a = ECC)
+   sudo tpm2_nvreadpublic                      # find the 0x01c0xxxx EK cert index
+   sudo tpm2_nvread 0x01c00002 -o ek.der       # RSA EK (0x01c0000a = ECC)
+   sudo tpm2_nvread 0x01c00100 -o nvchain.bin  # the certificates above it, if any
    openssl x509 -in ek.der -inform DER -noout -issuer -ext authorityInfoAccess
-   # follow each "CA Issuers" URL up until issuer == subject (the root),
-   # then: openssl x509 -in root.der -inform DER -outform DER | sha256sum  # the pin
+   # a discrete TPM usually answers with a "CA Issuers" URL here;
+   # Intel PTT answers "No extensions in certificate", which is what nvchain.bin is for.
+   # From the highest certificate you now hold, follow each "CA Issuers" URL up
+   # until issuer == subject (the root), then:
+   openssl x509 -in root.der -inform DER -outform DER | sha256sum  # the pin
+
+Guessing filenames at a vendor's distribution point is not a substitute; Intel's
+returns ``AccessDenied`` for anything not linked from a certificate.
 
 On a Windows host the chain comes from PowerShell (admin):
 ``Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256`` exposes
 ``ManufacturerCertificates`` and ``AdditionalCertificates``; export each
 (``[IO.File]::WriteAllBytes(...,$c.RawData)``) and walk the same way.
 
-``scripts/lota-ek-root-pin.sh`` automates the walk: hand it the EK certificate
-and it follows the AIA chain to the self-signed root, then prints the root PEM
-and a ready sources line carrying the root's SHA-256:
+``scripts/lota-ek-root-pin.sh`` does all of it. Hand it the EK certificate and,
+where the chip carries one, the NV blob: it splits the blob, climbs through the
+certificates the device has, follows the AIA chain from the highest of them to
+the self-signed root, and prints the root PEM plus a ready sources line carrying
+the root's SHA-256.
 
 .. code:: sh
 
    sudo tpm2_nvread 0x01c00002 -o ek.der
-   scripts/lota-ek-root-pin.sh ek.der
+   scripts/lota-ek-root-pin.sh ek.der                        # discrete TPM
    # de0e...99b  acme-tpm-root-ca.pem  https://...  Acme TPM Root CA
+
+   sudo tpm2_nvread 0x01c00100 -o nvchain.bin                # firmware TPM
+   scripts/lota-ek-root-pin.sh --nv-chain nvchain.bin ek.der
+   # on-chip chain: 3 certificate(s) from nvchain.bin
+   # self-signed root: ...,OU=OnDie CA Root Cert Signing,CN=www.intel.com
+   # beb40bb7...fc24  c-us-st-ca-...-cn-www-intel-com.pem  https://tsci.intel.com/...
+
+Without the blob on a firmware TPM the tool stops where the operator would, and
+says which NV index to read.
 
 The pin it prints is over what the network returned -- it does **not** vouch
 for it. The pin you record is the SHA-256 over the root's DER **after** you
