@@ -763,6 +763,108 @@ static void test_manifest_line(void)
 	}
 }
 
+/*
+ * Every installed kernel has to be covered, not just the running one.
+ *
+ * Stage 6 arms the cmdline with `grubby --update-kernel=ALL` while stage 5 ran
+ * a bare `dracut -f`, which rebuilds one image.
+ * On a Fedora host keeping three kernels that left two of them without the PCR 14
+ * lock, and selecting either from the GRUB menu -- which is the reason more
+ * than one is kept -- produces a boot with no commitment on a machine
+ * the operator was told is installed.
+ *
+ * The enumeration is what the coverage is stated against: a kernel counts when
+ * /lib/modules holds it and /boot holds its initramfs.
+ */
+static void test_installed_kernels(void)
+{
+	char root[64];
+	char cmd[512];
+	char path[128];
+	struct probe_kernel_image images[PROBE_MAX_KERNELS];
+	size_t count = 0;
+	int rc;
+
+	snprintf(root, sizeof(root), "/tmp/lota-inst-kernels.%d",
+		 (int)getpid());
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: fixture reset failed\n");
+
+	snprintf(cmd, sizeof(cmd),
+		 "mkdir -p '%s/lib/modules/7.0.13-200.fc44.x86_64' "
+		 "'%s/lib/modules/7.0.12-201.fc44.x86_64' "
+		 "'%s/lib/modules/7.0.9-205.fc44.x86_64' '%s/boot'",
+		 root, root, root, root);
+	if (system(cmd) != 0) {
+		fprintf(stderr, "warning: fixture setup failed\n");
+		return;
+	}
+
+	/* two kernels have an image; the third is a modules tree with none,
+	 * which is what a half-removed kernel leaves behind */
+	snprintf(path, sizeof(path), "%s/boot", root);
+	write_text_file(path, "initramfs-7.0.13-200.fc44.x86_64.img", "image");
+	write_text_file(path, "initramfs-7.0.12-201.fc44.x86_64.img", "image");
+	/* a rescue image belongs to no /lib/modules entry of its own */
+	write_text_file(path, "initramfs-0-rescue-abc.img", "image");
+
+	TEST("every installed kernel with an initramfs is enumerated");
+	{
+		char modules[96];
+		char boot[96];
+
+		snprintf(modules, sizeof(modules), "%s/lib/modules", root);
+		snprintf(boot, sizeof(boot), "%s/boot", root);
+		rc = probe_installed_kernels_at(modules, boot, images,
+						PROBE_MAX_KERNELS, &count);
+	}
+	if (rc != 0 || count != 2) {
+		FAIL("expected the two kernels that have an image");
+		goto cleanup;
+	}
+	PASS();
+
+	TEST("each entry names the image the lock has to be in");
+	{
+		int seen13 = 0;
+		int seen12 = 0;
+
+		for (size_t i = 0; i < count; i++) {
+			if (strcmp(images[i].release,
+				   "7.0.13-200.fc44.x86_64") == 0 &&
+			    strstr(images[i].image,
+				   "initramfs-7.0.13-200.fc44.x86_64.img"))
+				seen13 = 1;
+			if (strcmp(images[i].release,
+				   "7.0.12-201.fc44.x86_64") == 0 &&
+			    strstr(images[i].image,
+				   "initramfs-7.0.12-201.fc44.x86_64.img"))
+				seen12 = 1;
+		}
+		if (!seen13 || !seen12) {
+			FAIL("an entry does not name its own image");
+			goto cleanup;
+		}
+	}
+	PASS();
+
+	TEST("a host with no modules tree enumerates nothing, not an error");
+	rc = probe_installed_kernels_at("/nonexistent/modules",
+					"/nonexistent/boot", images,
+					PROBE_MAX_KERNELS, &count);
+	if (rc != 0 || count != 0) {
+		FAIL("absence should read as no kernels");
+		goto cleanup;
+	}
+	PASS();
+
+cleanup:
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+	if (system(cmd) != 0)
+		fprintf(stderr, "warning: cleanup failed\n");
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -782,6 +884,7 @@ int main(void)
 	test_secureboot_remediation();
 	test_auto_bringup_opt_in();
 	test_manifest_line();
+	test_installed_kernels();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

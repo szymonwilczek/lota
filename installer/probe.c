@@ -986,3 +986,62 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 	snprintf(note, cap, "lota-agent.service is ACTIVE and enabled.");
 	return STAGE_DONE;
 }
+
+/*
+ * Kernels installed on this host.
+ *
+ * /lib/modules is the register of what is installed -- the package manager
+ * creates a tree per kernel and removes it with the kernel -- and /boot holds
+ * the image each one boots with.
+ * A tree with no image cannot be locked (a half-removed kernel), and an image
+ * with no tree is the rescue entry, which dracut does not regenerate,
+ * so neither is a kernel this stage can act on.
+ */
+int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
+			       struct probe_kernel_image *out, size_t max,
+			       size_t *count)
+{
+	DIR *d;
+	struct dirent *de;
+	size_t n = 0;
+
+	if (!modules_dir || !boot_dir || !out || !count)
+		return -EINVAL;
+
+	*count = 0;
+
+	d = opendir(modules_dir);
+	if (!d)
+		return 0; /* no modules tree: nothing installed to lock */
+
+	while (n < max && (de = readdir(d)) != NULL) {
+		char image[PROBE_KERNEL_IMAGE_MAX];
+
+		if (de->d_name[0] == '.')
+			continue;
+		if (strlen(de->d_name) >= PROBE_KERNEL_RELEASE_MAX)
+			continue;
+
+		if (snprintf(image, sizeof(image), "%s/initramfs-%s.img",
+			     boot_dir, de->d_name) >= (int)sizeof(image))
+			continue;
+		if (access(image, F_OK) != 0)
+			continue;
+
+		snprintf(out[n].release, sizeof(out[n].release), "%s",
+			 de->d_name);
+		snprintf(out[n].image, sizeof(out[n].image), "%s", image);
+		n++;
+	}
+
+	closedir(d);
+	*count = n;
+	return 0;
+}
+
+int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
+			    size_t *count)
+{
+	return probe_installed_kernels_at("/lib/modules", "/boot", out, max,
+					  count);
+}
