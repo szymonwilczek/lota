@@ -641,6 +641,30 @@ static void test_publisher_inventory(void)
 	CHECK(!entries[0].enrolled && !entries[0].has_cert,
 	      "agreed to but not enrolled is a state, not an omission");
 
+	/*
+	 * One key is one TPM persistent slot, and running out of them is what
+	 * reported "Input/output error" to a player whose machine was merely
+	 * full. The count is what the ceiling is stated against, so a publisher
+	 * that holds no key must not be counted as using a slot.
+	 */
+	CHECK(publishers_keys_held(entries, count) == 1,
+	      "a publisher holding a key counts against the TPM's slots");
+
+	CHECK(profile_paths_from_id(base, id_b, &paths) == 0 &&
+		      profile_consent_record(&paths, 0) == 0,
+	      "publisher B agreed to, with no key yet");
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 2 && publishers_keys_held(entries, count) == 1,
+	      "a publisher with no key holds no slot");
+	CHECK(publishers_forget(&paths) == 0, "publisher B forgotten");
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 1,
+	      "the inventory is back to one publisher");
+	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
+	      "paths derive from publisher A again");
+
 	CHECK(publishers_forget(&paths) == 0, "a publisher can be forgotten");
 	CHECK(stat(paths.dir, &st) != 0,
 	      "forgetting leaves no directory behind");

@@ -374,6 +374,69 @@ static void persist_enroll_state(const struct profile_paths *paths,
 }
 
 /*
+ * Say that the TPM is full, in the terms the player can act in.
+ *
+ * The machine is not broken and the limit is not LOTA's to raise:
+ * every publisher's attestation key takes one persistent slot, a firmware TPM
+ * has few of them, and other software may hold some.
+ * Counting them is what turns "your TPM has no room" into a number and a way out,
+ * so the numbers come from the TPM and the profile inventory.
+ * Neither is essential to the message, so a TPM that will not answer for its
+ * capacity still produces the sentence and the two verbs.
+ */
+static void report_no_room_for_a_key(struct tpm_context *tpm)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	uint32_t used = 0;
+	uint32_t total = 0;
+	size_t count = 0;
+	size_t held = 0;
+
+	fprintf(stderr, "This TPM has no room for another attestation key.\n");
+
+	if (tpm_persistent_slots(tpm, &used, &total) == 0) {
+		if (used >= total)
+			fprintf(stderr,
+				"It holds %u persistent objects, which is "
+				"every one it has room for.\n",
+				used);
+		else
+			fprintf(stderr,
+				"It holds %u persistent object%s and has room "
+				"for about %u.\n",
+				used, used == 1 ? "" : "s", total);
+	}
+
+	if (publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			    sizeof(entries) / sizeof(entries[0]), &count) == 0)
+		held = publishers_keys_held(entries, count);
+
+	if (held == 1)
+		fprintf(stderr,
+			"One of them is an attestation key this machine put "
+			"there. Taking that publisher back frees its slot:\n"
+			"  lota-agent --list-publishers\n"
+			"  lota-agent --forget-publisher <id>\n");
+	else if (held > 1)
+		fprintf(stderr,
+			"%zu of them are attestation keys this machine put "
+			"there, one for each publisher it answers to. Taking "
+			"one back frees its slot:\n"
+			"  lota-agent --list-publishers\n"
+			"  lota-agent --forget-publisher <id>\n",
+			held);
+	else
+		fprintf(stderr,
+			"None of them is this machine's: every slot belongs to "
+			"other software, and freeing one is that software's to "
+			"do.\n"
+			"  lota-agent --list-publishers\n");
+
+	fprintf(stderr,
+		"This publisher holds no key here, so nothing was enrolled.\n");
+}
+
+/*
  * Bring up the TPM, provision the AIK, run one enrollment against the CA,
  * store the certificate, and record the endpoint. Returns 0 on success,
  * negative errno on failure.
@@ -434,9 +497,12 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, true);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, false);
-	if (ret < 0) {
+	if (ret == -ENOSPC)
+		report_no_room_for_a_key(&g_agent.tpm_ctx);
+	else if (ret < 0)
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
+	if (ret < 0) {
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;
@@ -834,6 +900,47 @@ static void print_publisher(const struct publisher_entry *e)
 		printf("  certificate    none stored\n");
 }
 
+/*
+ * What this machine has room for, said before it runs out.
+ *
+ * The 17th title a player buys is the one that finds the ceiling.
+ * The TPM is asked: LOTA's own maximum is a constant, but the binding number
+ * is how many persistent objects this chip holds, which is smaller on firmware
+ * TPMs and shared with whatever else persists keys here.
+ *
+ * A TPM that is not there, or does not answer for its capacity, costs the line
+ * and nothing else -- reading the inventory is deliberately not a TPM operation.
+ */
+static void print_key_capacity(const struct publisher_entry *entries,
+			       size_t count)
+{
+	size_t held = publishers_keys_held(entries, count);
+	uint32_t used = 0;
+	uint32_t total = 0;
+	bool have_slots = false;
+
+	if (tpm_init(&g_agent.tpm_ctx) == 0) {
+		have_slots = tpm_persistent_slots(&g_agent.tpm_ctx, &used,
+						  &total) == 0;
+		tpm_cleanup(&g_agent.tpm_ctx);
+	}
+
+	printf("Attestation keys: %zu held, one per publisher enrolled with.\n",
+	       held);
+	if (have_slots)
+		printf("This TPM holds %u persistent object%s of about %u, and "
+		       "each key needs one;\nthis build answers to at most %d "
+		       "publishers.\n",
+		       used, used == 1 ? "" : "s", total,
+		       LOTA_PROFILE_MAX_AIK_HANDLES);
+	else
+		printf("This build answers to at most %d publishers; the TPM's "
+		       "own capacity for keys\nis the lower limit on machines "
+		       "with little non-volatile memory.\n",
+		       LOTA_PROFILE_MAX_AIK_HANDLES);
+	printf("\n");
+}
+
 int do_list_publishers(void)
 {
 	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
@@ -858,6 +965,9 @@ int do_list_publishers(void)
 		print_publisher(&entries[i]);
 		printf("\n");
 	}
+
+	print_key_capacity(entries, count);
+
 	printf("Each holds its own attestation key, so none of them can name "
 	       "this machine\nfrom the certificate it was issued, and nothing "
 	       "ties one publisher's\nidentity for this machine to another's."

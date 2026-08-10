@@ -1193,6 +1193,27 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
 int tpm_seal_evict_primary(struct tpm_context *ctx);
 
 /*
+ * tpm_persistent_slots - How many persistent objects this TPM holds and can hold
+ * @ctx: Initialized TPM context
+ * @used: receives the objects resident now, LOTA's and everyone else's
+ * @total: receives that plus what the TPM says it has room for
+ *
+ * Each publisher's attestation key occupies one of these, so the count is
+ * the real ceiling on publishers this machine can answer to -- lower than
+ * LOTA_PROFILE_MAX_AIK_HANDLES on a firmware TPM with little NV memory,
+ * and lowered further by any other software that persists objects here.
+ *
+ * The available figure is the TPM's own estimate (TPM2_PT_HR_PERSISTENT_AVAIL),
+ * so it is reported as such and never used to refuse anything: the authority on
+ * whether one more key fits is the TPM refusing to make it.
+ *
+ * Returns 0, -ENOTSUP when the TPM does not answer for these properties,
+ * or negative errno.
+ */
+int tpm_persistent_slots(struct tpm_context *ctx, uint32_t *used,
+			 uint32_t *total);
+
+/*
  * tpm_evict_profile_aik - Destroy the AIK a publisher's profile holds
  * @ctx: Initialized TPM context
  * @handle: The persistent handle recorded in that profile
