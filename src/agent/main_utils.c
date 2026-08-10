@@ -236,7 +236,15 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    (requires --mode enforce)\n");
 	printf("  --block-anon-exec Block anonymous executable mappings\n");
 	printf("                    (requires --mode enforce)\n");
-	printf("  --protect-pid PID Add PID to protected set (ptrace blocked)\n");
+	printf("  --protect-pid PID Seed this daemon's protected set with PID "
+	       "(ptrace\n");
+	printf("                    blocked). A startup option, not a request "
+	       "to a\n");
+	printf("                    daemon that is already running: on a host "
+	       "with\n");
+	printf("                    one up it does nothing. A process protects "
+	       "itself\n");
+	printf("                    through the SDK, with lota_protect_self()\n");
 	printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
 	printf("  --allow-verity PATH\n");
 	printf("                    Allow a fs-verity protected file by digest\n");

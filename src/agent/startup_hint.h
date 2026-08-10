@@ -34,11 +34,22 @@ static inline void startup_busy_message(bool asked_protect_pid, char *out,
 	if (!out || cap == 0)
 		return;
 
-	/* Says what the daemon says today,which is the same thing to every
-	 * caller however they were refused */
-	(void)asked_protect_pid;
+	if (!asked_protect_pid) {
+		snprintf(out, cap,
+			 "Another instance is already running (PID file "
+			 "locked).");
+		return;
+	}
+
 	snprintf(out, cap,
-		 "Another instance is already running (PID file locked).");
+		 "Another instance is already running (PID file locked), so "
+		 "--protect-pid did nothing.\n"
+		 "It is a startup option of the daemon, not a request to the "
+		 "one that is running: it seeds the protected set of the "
+		 "instance it starts.\n"
+		 "A process that is already running protects itself through "
+		 "the SDK, with lota_protect_self(); ending one that did is "
+		 "lota-agent --terminate-protected PID.");
 }
 
 #endif /* LOTA_AGENT_STARTUP_HINT_H */

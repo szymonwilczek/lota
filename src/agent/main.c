@@ -45,6 +45,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "shutdown.h"
+#include "startup_hint.h"
 #include "startup_policy.h"
 #include "status_flags.h"
 #include "tpm.h"
@@ -760,8 +761,11 @@ int main(int argc, char *argv[])
 
 	pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
-		fprintf(stderr,
-			"Another instance is already running (PID file locked)\n");
+		char busy[512];
+
+		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
+				     sizeof(busy));
+		fprintf(stderr, "%s\n", busy);
 		rc = 1;
 		goto out;
 	}
