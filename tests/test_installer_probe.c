@@ -865,6 +865,71 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/*
+ * A first install is not leftover state from an install that never happened.
+ *
+ * PCR 14 is non-zero on every Secure Boot host before LOTA exists:
+ * shim measures the MOK variables into it. The stage classified any non-zero
+ * value it could not derive as residue from an earlier agent run, so the first
+ * thing a new operator or player was told on the default consumer host was
+ * to go looking for state to clean up, of which there is none.
+ *
+ * The absence of the lock helper's baseline handoff is the available signal:
+ * no lock ran this boot, so nothing in PCR 14 is LOTA's, whatever it holds.
+ */
+static void test_barrier_stage_verdicts(void)
+{
+	char note[256];
+
+	TEST("a platform-extended PCR14 before any lock is not stale state");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("a first install still needs a reboot");
+		return;
+	}
+	if (strstr(note, "earlier agent run") || strstr(note, "stale")) {
+		FAIL("the note blames LOTA state that does not exist");
+		return;
+	}
+	PASS();
+
+	TEST("a genuinely stale commitment keeps its wording");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("stale state still needs a reboot");
+		return;
+	}
+	if (!strstr(note, "earlier agent run")) {
+		FAIL("the stale case lost its explanation");
+		return;
+	}
+	PASS();
+
+	TEST("a running agent's own commitment is satisfied");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("this boot's commitment is the satisfied state");
+		return;
+	}
+	PASS();
+
+	TEST("the lock value alone is satisfied");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("a locked register is what this stage waits for");
+		return;
+	}
+	PASS();
+
+	TEST("a pristine register still says the lock has not run");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, note,
+				      sizeof(note)) != STAGE_REBOOT) {
+		FAIL("no lock this boot needs a reboot");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -885,6 +950,7 @@ int main(void)
 	test_auto_bringup_opt_in();
 	test_manifest_line();
 	test_installed_kernels();
+	test_barrier_stage_verdicts();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

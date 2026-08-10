@@ -1045,3 +1045,50 @@ int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
 	return probe_installed_kernels_at("/lib/modules", "/boot", out, max,
 					  count);
 }
+
+int probe_pcr14_lock_ran_at(const char *baseline_path)
+{
+	if (!baseline_path)
+		return 0;
+	return access(baseline_path, F_OK) == 0;
+}
+
+int probe_pcr14_lock_ran(void)
+{
+	return probe_pcr14_lock_ran_at(PCR14_BASELINE_PATH);
+}
+
+/*
+ * Verdict for the reboot barrier.
+ *
+ * A PCR 14 value the installer cannot derive, with no running agent to own it,
+ * is residue from an earlier agent run. lock_ran is not consulted.
+ */
+enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
+					   int agent_active, char *note,
+					   size_t cap)
+{
+	(void)lock_ran;
+
+	switch (pcr_state) {
+	case PROBE_PCR14_LOCK_ONLY:
+		snprintf(note, cap,
+			 "PCR14 carries the initramfs lock from this boot.");
+		return STAGE_DONE;
+	case PROBE_PCR14_OTHER:
+		if (agent_active) {
+			snprintf(note, cap,
+				 "PCR14 carries this boot's agent commitment.");
+			return STAGE_DONE;
+		}
+		snprintf(note, cap,
+			 "PCR14 holds a stale value from an earlier agent run. "
+			 "PCR14 only resets on a hardware reset.");
+		return STAGE_REBOOT;
+	default:
+		snprintf(note, cap,
+			 "The initramfs PCR14 lock has not run during this "
+			 "boot.");
+		return STAGE_REBOOT;
+	}
+}

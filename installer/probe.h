@@ -303,4 +303,29 @@ int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
 int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
 			    size_t *count);
 
+/* 1 when the initramfs lock helper ran this boot, 0 when it did not.
+ *
+ * The helper writes the pre-extend PCR 14 to the /run handoff as its first act,
+ * so the file's presence is the evidence.
+ * Without it, a PCR 14 the installer cannot derive is the platform's -- shim
+ * measures the MOK variables into it on every Secure Boot host -- and not
+ * residue from a LOTA install. */
+int probe_pcr14_lock_ran(void);
+int probe_pcr14_lock_ran_at(const char *baseline_path);
+
+/*
+ * Verdict for the reboot barrier, and the sentence explaining it.
+ *
+ * Pure: the caller reads PCR 14, the handoff and the service state; this decides.
+ * @pcr_state is an enum probe_pcr14, @lock_ran and @agent_active are 1/0.
+ *
+ * A first install on a Secure Boot host and a host carrying a commitment from
+ * an earlier agent run look identical in the register and need the same reboot;
+ * they are told apart by whether the lock ran, and only ever differ in what the
+ * operator is told.
+ */
+enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
+					   int agent_active, char *note,
+					   size_t cap);
+
 #endif /* LOTA_INSTALL_PROBE_H */
