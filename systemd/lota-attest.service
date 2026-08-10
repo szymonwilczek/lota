@@ -57,6 +57,14 @@ Type=simple
 # (zero interval attests once and exits)
 #
 ExecStart=/usr/bin/lota-agent --attest
+#
+# SIGHUP rebuilds the target list from /etc/lota/lota.conf between rounds,
+# so a publisher registered by a game's installer is reported to without
+# a restart.
+# A restart would do it too and costs more than it looks: this loop
+# self-measures at startup, which is the one thing that touches PCR 14.
+#
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 # host that is reachable but not yet fully enrolled should back off
 RestartSec=30s
