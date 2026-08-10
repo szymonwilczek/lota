@@ -842,34 +842,14 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	}
 
 	pcr = probe_pcr14_state();
-	switch (pcr) {
-	case PROBE_PCR14_LOCK_ONLY:
-		snprintf(note, cap,
-			 "PCR14 carries the initramfs lock from "
-			 "this boot.");
-		return STAGE_DONE;
-	case PROBE_PCR14_OTHER:
-		if (agent_service_active()) {
-			snprintf(note, cap,
-				 "PCR14 carries this boot's agent "
-				 "commitment.");
-			return STAGE_DONE;
-		}
-		snprintf(note, cap,
-			 "PCR14 holds a stale value from an "
-			 "earlier agent run. PCR14 only resets on "
-			 "a hardware reset.");
-		return STAGE_REBOOT;
-	case PROBE_PCR14_ZERO:
-		snprintf(note, cap,
-			 "The initramfs PCR14 lock has not run "
-			 "during this boot.");
-		return STAGE_REBOOT;
-	default:
+	if (pcr < 0) {
 		snprintf(note, cap, "Cannot read PCR14 from sysfs (%s).",
 			 strerror(-pcr));
 		return STAGE_ERROR;
 	}
+
+	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
+					 agent_service_active(), note, cap);
 }
 
 /* stage 9: agent service */

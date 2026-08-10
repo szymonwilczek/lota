@@ -1061,15 +1061,17 @@ int probe_pcr14_lock_ran(void)
 /*
  * Verdict for the reboot barrier.
  *
- * A PCR 14 value the installer cannot derive, with no running agent to own it,
- * is residue from an earlier agent run. lock_ran is not consulted.
+ * A register the installer cannot derive means one of two things, and they need
+ * the same reboot but not the same sentence: either an agent ran earlier this
+ * boot and left its commitment, or the platform extended PCR 14 before LOTA
+ * was ever installed -- which every Secure Boot host does, because shim measures
+ * the MOK variables there.
+ * Whether the lock ran this boot is what tells them apart.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, char *note,
 					   size_t cap)
 {
-	(void)lock_ran;
-
 	switch (pcr_state) {
 	case PROBE_PCR14_LOCK_ONLY:
 		snprintf(note, cap,
@@ -1080,6 +1082,16 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 			snprintf(note, cap,
 				 "PCR14 carries this boot's agent commitment.");
 			return STAGE_DONE;
+		}
+		if (!lock_ran) {
+			snprintf(note, cap,
+				 "PCR14 was extended by the platform before "
+				 "LOTA ran (on a Secure Boot host, shim's MOK "
+				 "measurement) and the initramfs lock has not "
+				 "run this boot. A reboot puts the lock in "
+				 "place; nothing here is left over from an "
+				 "earlier install.");
+			return STAGE_REBOOT;
 		}
 		snprintf(note, cap,
 			 "PCR14 holds a stale value from an earlier agent run. "

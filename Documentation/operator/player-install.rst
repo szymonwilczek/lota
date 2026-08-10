@@ -146,7 +146,10 @@ What the stages do
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
    live and PCR 14 carries this boot's initramfs lock. PCR 14 only resets on a
-   hardware reset, so this cannot be skipped.
+   hardware reset, so this cannot be skipped. On a Secure Boot machine PCR 14 is
+   already non-zero before any of this -- shim measures the MOK variables into
+   it -- and the checkpoint says so rather than reporting state from an earlier
+   install.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
 #. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
