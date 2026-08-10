@@ -116,6 +116,7 @@ static int build_committed_boot(struct scenario *s, uint32_t observed_restart)
 	s->obs.reset_count = RESET_COUNT;
 	s->obs.restart_count = observed_restart;
 	s->obs.prev = &s->prev;
+	s->obs.lock_ran = 1;
 	return 0;
 }
 
