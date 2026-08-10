@@ -37,3 +37,9 @@ LOTA_ANTICHEAT_1.0 {
 	local:
 		*;
 };
+
+LOTA_ANTICHEAT_1.1 {
+	global:
+		lota_ac_last_error;
+		lota_ac_strerror;
+} LOTA_ANTICHEAT_1.0;

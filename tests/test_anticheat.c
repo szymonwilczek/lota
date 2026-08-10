@@ -1418,6 +1418,210 @@ static void test_direct_mode_no_agent(void)
 	PASS();
 }
 
+/*
+ * Why a session refused to start.
+ *
+ * lota_ac_init() returns NULL for reasons an integrator has to tell apart
+ * -- a configuration they got wrong is their bug, an agent that is not there
+ * or a publisher nobody has consented to is a state the player acts on
+ * -- and it returned the same NULL for all of them.
+ * Bringing a client up against the installed SDK on the hardware host took
+ * four blind attempts for exactly this reason.
+ */
+static void test_last_error_init_causes(void)
+{
+	struct lota_ac_config cfg;
+
+	TEST("last_error: a NULL configuration is an invalid argument");
+	lota_ac_init(NULL);
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: an unset struct_size names the struct size");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "test-game";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_CONFIG_SIZE) {
+		FAIL("expected LOTA_AC_ERR_CONFIG_SIZE");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a missing game_id names the game_id");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_GAME_ID) {
+		FAIL("expected LOTA_AC_ERR_GAME_ID");
+		return;
+	}
+	PASS();
+
+	/* the cause that cost the four attempts: a zeroed provider */
+	TEST("last_error: a provider nobody set names the provider");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.game_id = "test-game";
+	lota_ac_init(&cfg);
+	if (lota_ac_last_error() != LOTA_AC_ERR_PROVIDER) {
+		FAIL("expected LOTA_AC_ERR_PROVIDER");
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a session that started says nothing failed");
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.struct_size = sizeof(cfg);
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "test-game";
+	cfg.token_dir = test_dir;
+	{
+		struct lota_ac_session *s = lota_ac_init(&cfg);
+
+		if (!s) {
+			FAIL("init refused a valid file-mode configuration");
+			return;
+		}
+		if (lota_ac_last_error() != LOTA_AC_ERR_OK) {
+			FAIL("expected LOTA_AC_ERR_OK");
+			lota_ac_shutdown(s);
+			return;
+		}
+		lota_ac_shutdown(s);
+	}
+	PASS();
+}
+
+/*
+ * "The host is not ready" has to be distinguishable from "you called this wrong":
+ * one is a screen the player acts on, the other is the integrator's bug.
+ */
+static void test_last_error_no_agent(void)
+{
+	TEST("last_error: no agent on the socket is named as such");
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
+/*
+ * A beat that cannot be produced says which half failed.
+ * The heartbeat path has ten distinct -EIO returns, and the one word
+ * "Input/output error" is what the anti-cheat reference reported
+ * on the hardware host for all of them.
+ */
+static void test_last_error_heartbeat_causes(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-direct",
+		.direct = 1,
+		.socket_path = "/tmp/lota_nonexistent_socket_for_test",
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	size_t written = 0;
+
+	TEST("last_error: a beat without a session is an invalid argument");
+	lota_ac_heartbeat(NULL, buf, sizeof(buf), &written);
+	if (lota_ac_last_error() != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a beat with no agent behind it names the agent");
+	if (!s) {
+		FAIL("init returned NULL");
+		return;
+	}
+	lota_ac_heartbeat(s, buf, sizeof(buf), &written);
+	if (lota_ac_last_error() != LOTA_AC_ERR_NO_AGENT) {
+		FAIL("expected LOTA_AC_ERR_NO_AGENT");
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* a code an integrator logs is worth a sentence; a number is not one */
+static void test_last_error_strings(void)
+{
+	static const int codes[] = {
+		LOTA_AC_ERR_OK,
+		LOTA_AC_ERR_INVALID_ARG,
+		LOTA_AC_ERR_CONFIG_SIZE,
+		LOTA_AC_ERR_GAME_ID,
+		LOTA_AC_ERR_PROVIDER,
+		LOTA_AC_ERR_NO_MEMORY,
+		LOTA_AC_ERR_INTERNAL,
+		LOTA_AC_ERR_NO_AGENT,
+		LOTA_AC_ERR_CONSENT_REQUIRED,
+		LOTA_AC_ERR_UNKNOWN_PROFILE,
+		LOTA_AC_ERR_ACCESS_DENIED,
+		LOTA_AC_ERR_TOKEN_DIR,
+		LOTA_AC_ERR_NOT_ATTESTED,
+		LOTA_AC_ERR_RATE_LIMITED,
+		LOTA_AC_ERR_STATUS,
+		LOTA_AC_ERR_TOKEN,
+		LOTA_AC_ERR_MEASURE,
+		LOTA_AC_ERR_SERIALIZE,
+	};
+	const char *unknown = lota_ac_strerror(-9999);
+	size_t i, j;
+
+	TEST("strerror: every code has a sentence of its own");
+	for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+		const char *si = lota_ac_strerror(codes[i]);
+
+		if (!si || !si[0] || strcmp(si, unknown) == 0) {
+			FAIL("a code renders as the fallback");
+			return;
+		}
+		for (j = i + 1; j < sizeof(codes) / sizeof(codes[0]); j++) {
+			if (strcmp(si, lota_ac_strerror(codes[j])) == 0) {
+				FAIL("two codes share a sentence");
+				return;
+			}
+		}
+	}
+	PASS();
+
+	TEST("strerror: a code from a newer library still prints");
+	if (!unknown || !unknown[0]) {
+		FAIL("no fallback string");
+		return;
+	}
+	PASS();
+}
+
 static void test_default_heartbeat_interval(void)
 {
 	TEST("config: default heartbeat interval = 30s");
@@ -1744,6 +1948,12 @@ int main(void)
 
 	printf("\nDirect Mode:\n");
 	test_direct_mode_no_agent();
+
+	printf("\nWhy a call failed:\n");
+	test_last_error_init_causes();
+	test_last_error_no_agent();
+	test_last_error_heartbeat_causes();
+	test_last_error_strings();
 
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
