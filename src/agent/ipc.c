@@ -791,6 +791,27 @@ static int ipc_client_is_agent_self(const struct ipc_client *client)
 	return client->peer_pid == getpid();
 }
 
+/*
+ * Ask the event loop to write what this client now has queued.
+ *
+ * Nothing leaves the daemon without EPOLLOUT, and a client's interest is EPOLLIN
+ * alone between frames. A response is armed by the pass that built it;
+ * a notification is built outside that pass -- by another connection opening
+ * a session. The attestation loop, which sleeps on exactly that frame,
+ * read the silence as an interval with nothing to do.
+ */
+static void client_arm_send(struct ipc_context *ctx, struct ipc_client *client)
+{
+	struct epoll_event ev;
+
+	if (!ctx || !client || ctx->epoll_fd < 0 || client->send_len == 0)
+		return;
+
+	ev.events = EPOLLIN | EPOLLOUT;
+	ev.data.fd = client->fd;
+	epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+}
+
 static void build_notification(struct ipc_context *ctx,
 			       struct ipc_client *client, uint32_t events)
 {
@@ -814,6 +835,8 @@ static void build_notification(struct ipc_context *ctx,
 
 	client->send_len = LOTA_IPC_RESPONSE_SIZE + sizeof(*notify);
 	client->send_offset = 0;
+
+	client_arm_send(ctx, client);
 }
 
 static void push_notify(struct ipc_context *ctx, struct ipc_client *client,
@@ -2590,12 +2613,7 @@ have_request:
 	process_request(ctx, client);
 
 	/* arm EPOLLOUT so the event loop will drive the send */
-	if (client->send_len > 0) {
-		struct epoll_event ev;
-		ev.events = EPOLLIN | EPOLLOUT;
-		ev.data.fd = client->fd;
-		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
-	}
+	client_arm_send(ctx, client);
 
 	/* preserve any leftover bytes from the next pipelined request */
 	{
@@ -2654,6 +2672,22 @@ static int handle_client_write(struct ipc_context *ctx,
 			client->pending_events = 0;
 			build_notification(ctx, client, pending);
 		}
+
+		/*
+		 * A request that arrived while the previous frame was going out.
+		 *
+		 * handle_client_read() defers it, and this is the only place
+		 * that can take it up again: the bytes are already in the receive
+		 * buffer, so no further EPOLLIN is coming to announce them.
+		 * Left there, the peer waits for an answer to a request this
+		 * process has already read -- which is what made the attestation
+		 * loop time out and drop a connection the daemon still
+		 * considered live.
+		 */
+		if (client->send_len == 0 &&
+		    client->recv_len >= LOTA_IPC_REQUEST_SIZE &&
+		    handle_client_read(ctx, client) < 0)
+			return -1;
 
 		/* disarm EPOLLOUT if nothing left to send */
 		if (client->send_len == 0) {
