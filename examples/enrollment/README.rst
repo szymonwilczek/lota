@@ -121,6 +121,14 @@ Notes for production
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should
   trust it gets ``--aik-ca-cert ca.crt``.
+- ``--ca-cert`` on the agent is that same ``ca.crt``, never the listener
+  certificate. One file serves two roles -- the TLS trust anchor and the
+  publisher's identity, which is the SHA-256 of its SubjectPublicKeyInfo -- so
+  ``gen-ca.sh`` issues the listener from the CA and an operator names the CA.
+  Binding the identity to the listener instead would move every enrolled host
+  onto a new profile, a new AIK and a fresh consent prompt on each TLS
+  rotation, with nothing reporting it; the listener is meant to rotate, and
+  because it chains to the anchor, rotating it moves nobody.
 - AIK certificates are short-lived (``--aik-cert-ttl``, default 24h); a host
   refreshes before expiry. The first enrollment records the CA endpoint in the
   publisher profile, so a refresh is a single ``lota-agent --reenroll
