@@ -154,6 +154,7 @@ int sdnotify_status(const char *fmt, ...)
  */
 static char cli_libs[1][PATH_MAX];
 static uint32_t cli_pids[1];
+static uint32_t cli_switch_mask;
 
 const char (*cli_startup_trust_libs(void))
 	[PATH_MAX] { return (const char (*)[PATH_MAX])cli_libs; }
@@ -171,6 +172,11 @@ const uint32_t *cli_startup_protect_pids(void)
 int cli_startup_protect_pid_count(void)
 {
 	return cli_pids[0] ? 1 : 0;
+}
+
+uint32_t cli_startup_switch_mask(void)
+{
+	return cli_switch_mask;
 }
 
 static int tests_run;
@@ -237,6 +243,7 @@ static void seed_runtime(char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
 
 	snprintf(cli_libs[0], PATH_MAX, "%s", flag_lib);
 	cli_pids[0] = flag_pid;
+	cli_switch_mask = 0;
 
 	stub_trusted_count = 0;
 	snprintf(stub_trusted[stub_trusted_count++], PATH_MAX, "%s", flag_lib);
@@ -411,6 +418,108 @@ static void test_config_removal_still_takes_effect(void)
 	unlink(path);
 }
 
+/*
+ * An enforcement switch the command line turned on is not withdrawn by a reload.
+ *
+ * strict_exec and strict_modules default to false in the configuration,
+ * so a daemon started with the flag and a file that never mentions the key runs
+ * with the switch on and would come back from a reload with it off -- a global
+ * enforcement setting, changed by a command that says it reloaded
+ * the configuration, on a daemon that cannot be restarted to re-read its own
+ * arguments.
+ */
+static void test_command_line_switch_survives_reload(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_ENFORCE;
+	bool strict_mmap = true, strict_exec = true, block_ptrace = true;
+	bool strict_modules = false, block_anon_exec = true;
+
+	TEST("a switch the command line turned on survives a reload");
+
+	if (write_config(path, sizeof(path), NULL) < 0) {
+		FAIL("cannot write a config under /tmp");
+		return;
+	}
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	cli_switch_mask = LOTA_CLI_SWITCH_STRICT_EXEC;
+
+	agent_reload_config(path, cfg, &mode, &strict_mmap, &strict_exec,
+			    &block_ptrace, &strict_modules, &block_anon_exec,
+			    &protect_pids, &protect_pid_count, trust_libs,
+			    &trust_lib_count);
+
+	if (!strict_exec)
+		FAIL("the reload turned strict exec off");
+	else
+		PASS();
+
+	config_free(cfg);
+	free(protect_pids);
+	unlink(path);
+}
+
+/*
+ * And a switch the command line never set still follows the file.
+ *
+ * Otherwise the fix would freeze the file out and a reload would stop being
+ * a way to change anything.
+ */
+static void test_switch_not_asked_for_follows_the_file(void)
+{
+	char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX] = { { 0 } };
+	uint32_t *protect_pids = NULL;
+	int trust_lib_count = 0, protect_pid_count = 0;
+	struct lota_config *cfg;
+	char path[PATH_MAX];
+	int mode = LOTA_MODE_ENFORCE;
+	bool strict_mmap = true, strict_exec = true, block_ptrace = true;
+	bool strict_modules = false, block_anon_exec = true;
+
+	TEST("a switch nobody asked for still follows the config file");
+
+	if (write_config(path, sizeof(path), "strict_exec = false\n") < 0) {
+		FAIL("cannot write a config under /tmp");
+		return;
+	}
+
+	cfg = config_new();
+	if (!cfg) {
+		FAIL("out of memory");
+		return;
+	}
+	snprintf(cfg->mode, sizeof(cfg->mode), "enforce");
+	seed_runtime(trust_libs, &trust_lib_count, &protect_pids,
+		     &protect_pid_count);
+	cli_switch_mask = 0;
+
+	agent_reload_config(path, cfg, &mode, &strict_mmap, &strict_exec,
+			    &block_ptrace, &strict_modules, &block_anon_exec,
+			    &protect_pids, &protect_pid_count, trust_libs,
+			    &trust_lib_count);
+
+	if (strict_exec)
+		FAIL("the file no longer decides a switch nobody passed");
+	else
+		PASS();
+
+	config_free(cfg);
+	free(protect_pids);
+	unlink(path);
+}
+
 int main(void)
 {
 	printf("=== reload keeps command-line enforcement state ===\n\n");
@@ -418,6 +527,8 @@ int main(void)
 	test_command_line_trust_lib_survives_reload();
 	test_command_line_protect_pid_survives_reload();
 	test_config_removal_still_takes_effect();
+	test_command_line_switch_survives_reload();
+	test_switch_not_asked_for_follows_the_file();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
