@@ -363,7 +363,7 @@ func TestAPI_ListBans_RejectsOffsetPagination(t *testing.T) {
 		t.Fatalf("Expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "offset pagination is not supported") {
-		t.Fatalf("Expected offset deprecation error, got body=%q", rec.Body.String())
+		t.Fatalf("Expected offset refusal, got body=%q", rec.Body.String())
 	}
 }
 

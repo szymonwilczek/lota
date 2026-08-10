@@ -204,9 +204,10 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    Acknowledge that --mode weakens cfg.mode\n"
 	       "                    'enforce' to monitor/maintenance.\n");
 	printf("  --insecure-allow-mutable-rootfs\n");
-	printf("                    Skip the fs-verity self-binary check at\n"
-	       "                    startup. Use only on legacy hosts whose\n"
-	       "                    rootfs cannot yet ship fs-verity; the\n"
+	printf("                    Skip the agent-binary immutability check\n"
+	       "                    at startup. Use only where the rootfs can\n"
+	       "                    offer neither fs-verity nor a signed\n"
+	       "                    security.ima xattr; the\n"
 	       "                    dirty-shutdown (panic/power-loss/SIGKILL)\n"
 	       "                    coverage gap stays open on that host.\n");
 	printf("  --strict-mmap     Block mmap(PROT_EXEC) of untrusted "

@@ -184,19 +184,20 @@ func TestEnrollAssignsTenantFromManifest(t *testing.T) {
 	}
 }
 
-// TestDefaultTenantKeepsLegacyPseudonym pins the default-tenant device ID
-// to the pre-tenant EK-only derivation, so a device enrolled before tenant
-// assignment re-enrolls under the same pseudonym and keeps its verifier
-// state (baselines, standing revocations) across a CA upgrade.
-func TestDefaultTenantKeepsLegacyPseudonym(t *testing.T) {
+// TestDefaultTenantDeviceIDIsEKOnly pins the default tenant's derivation:
+// with no tenant name to mix in, the MAC input is the EK modulus alone.
+// Named tenant prepends its name and a NUL, so the two derivations differ
+// by construction -- which is what keeps one TPM enrolling into two tenants
+// from colliding on a single device ID.
+func TestDefaultTenantDeviceIDIsEKOnly(t *testing.T) {
 	svc, root := newTestService(t)
 	ek := tpmtest.NewEKCert(t, root)
 
 	_, id := enrollWith(t, svc, ek, nil)
-	legacy := hex.EncodeToString(hmacSHA256(
+	ekOnly := hex.EncodeToString(hmacSHA256(
 		[]byte("pseudonym-key-0123456789abcdef"), ek.Priv.PublicKey.N.Bytes()))
-	if id != legacy {
-		t.Fatalf("default-tenant device ID %q != legacy EK-only derivation %q", id, legacy)
+	if id != ekOnly {
+		t.Fatalf("default-tenant device ID %q != EK-only derivation %q", id, ekOnly)
 	}
 }
 

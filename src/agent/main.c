@@ -576,7 +576,8 @@ cleanup_bpf:
 	 *     the operator's deployment contract; the agent already
 	 *     requires kernel IMA appraisal at startup.
 	 * The --insecure-allow-mutable-rootfs escape hatch keeps the gap
-	 * open on legacy hosts and logs a warn-level deviation; the
+	 * open where the rootfs can prove neither, and logs a warn-level
+	 * deviation; the
 	 * verifier still binds PCR14 to the live agent self-hash, but
 	 * the dirty-shutdown -> tampered-rootfs branch is no longer
 	 * authenticated end to end on that host.
