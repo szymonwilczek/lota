@@ -106,6 +106,11 @@ var (
 	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
 	ErrNoSignature  = errors.New("lota: token contains no signature")
 	ErrNoAttestData = errors.New("lota: token contains no attestation data")
+	// ErrRuntimeImage is reserved:
+	// the runtime image recomputation still answers with the nonce error,
+	// which is what a backend alerting on tampered game images has to be
+	// able to tell apart.
+	ErrRuntimeImage = errors.New("lota: runtime image measurement does not match the quote")
 )
 
 // represents the verified claims extracted from a LOTA attestation token
