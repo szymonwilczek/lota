@@ -1193,6 +1193,20 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already);
 int tpm_seal_evict_primary(struct tpm_context *ctx);
 
 /*
+ * tpm_handle_holds_object - Does this TPM have an object at @handle
+ * @ctx: Initialized TPM context
+ * @handle: A persistent handle
+ *
+ * The TPM is the authority on what lives at a handle; a profile's recorded
+ * handle is only a claim about it. Callers that are about to act on the
+ * difference ask here first.
+ *
+ * Returns 1 when the handle holds an object, 0 when it is free, negative errno
+ * when the TPM could not be asked.
+ */
+int tpm_handle_holds_object(struct tpm_context *ctx, uint32_t handle);
+
+/*
  * tpm_persistent_slots - How many persistent objects this TPM holds and can hold
  * @ctx: Initialized TPM context
  * @used: receives the objects resident now, LOTA's and everyone else's

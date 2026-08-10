@@ -374,6 +374,29 @@ static void persist_enroll_state(const struct profile_paths *paths,
 }
 
 /*
+ * Forget the handle a profile reserved for a key that never reached the TPM.
+ *
+ * Binding a profile records the key's handle before the key is created,
+ * and both --list-publishers and the count of keys held against the TPM's
+ * capacity read that record. The record is dropped only when the TPM holds
+ * nothing at the handle: a failure after the key is in place (a certificate
+ * that would not issue, say) keeps it.
+ */
+static void release_unfilled_handle(struct tpm_context *tpm,
+				    const struct profile_paths *paths)
+{
+	uint32_t handle = 0;
+
+	if (profile_aik_handle_load(paths, &handle) != 0)
+		return;
+
+	if (tpm_handle_holds_object(tpm, handle) != 0)
+		return;
+
+	profile_aik_handle_forget(paths);
+}
+
+/*
  * Say that the TPM is full, in the terms the player can act in.
  *
  * The machine is not broken and the limit is not LOTA's to raise:
@@ -497,12 +520,13 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, true);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, false);
-	if (ret == -ENOSPC)
-		report_no_room_for_a_key(&g_agent.tpm_ctx);
-	else if (ret < 0)
-		fprintf(stderr, "Failed to provision AIK: %s\n",
-			tpm_strerror(ret));
 	if (ret < 0) {
+		release_unfilled_handle(&g_agent.tpm_ctx, paths);
+		if (ret == -ENOSPC)
+			report_no_room_for_a_key(&g_agent.tpm_ctx);
+		else
+			fprintf(stderr, "Failed to provision AIK: %s\n",
+				tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;

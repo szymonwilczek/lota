@@ -1122,6 +1122,14 @@ static int tpm_read_property(struct tpm_context *ctx, TPM2_PT property,
 	return 0;
 }
 
+int tpm_handle_holds_object(struct tpm_context *ctx, uint32_t handle)
+{
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
+		return -EINVAL;
+
+	return tpm_handle_in_use(ctx, handle);
+}
+
 int tpm_persistent_slots(struct tpm_context *ctx, uint32_t *used,
 			 uint32_t *total)
 {
