@@ -956,24 +956,133 @@ static int is_trusted(uint32_t flags, uint32_t required)
 	return flags != 0;
 }
 
+const char *lota_ac_strerror(int err)
+{
+	switch (err) {
+	case LOTA_AC_ERR_OK:
+		return "no error";
+	case LOTA_AC_ERR_INVALID_ARG:
+		return "invalid argument";
+	case LOTA_AC_ERR_MALFORMED:
+		return "malformed heartbeat";
+	case LOTA_AC_ERR_VERSION:
+		return "heartbeat version not supported";
+	case LOTA_AC_ERR_SIG_FAIL:
+		return "heartbeat signature verification failed";
+	case LOTA_AC_ERR_NONCE_FAIL:
+		return "heartbeat nonce does not match";
+	case LOTA_AC_ERR_EXPIRED:
+		return "heartbeat is outside its freshness window";
+	case LOTA_AC_ERR_CRYPTO:
+		return "cryptographic operation failed";
+	case LOTA_AC_ERR_CONFIG_SIZE:
+		return "config struct_size is unset or too small";
+	case LOTA_AC_ERR_GAME_ID:
+		return "game_id is missing, empty or too long";
+	case LOTA_AC_ERR_PROVIDER:
+		return "provider is neither EAC nor BattlEye";
+	case LOTA_AC_ERR_NO_MEMORY:
+		return "out of memory";
+	case LOTA_AC_ERR_INTERNAL:
+		return "internal error building the session";
+	case LOTA_AC_ERR_NO_AGENT:
+		return "no LOTA agent is answering on this machine";
+	case LOTA_AC_ERR_CONSENT_REQUIRED:
+		return "nobody at this machine has agreed to this publisher";
+	case LOTA_AC_ERR_UNKNOWN_PROFILE:
+		return "this machine is not enrolled with that publisher";
+	case LOTA_AC_ERR_ACCESS_DENIED:
+		return "the agent refused this caller";
+	case LOTA_AC_ERR_TOKEN_DIR:
+		return "no hook output directory for file mode";
+	case LOTA_AC_ERR_NOT_ATTESTED:
+		return "this machine holds no attestation verdict yet";
+	case LOTA_AC_ERR_RATE_LIMITED:
+		return "beating faster than the agent issues tokens";
+	case LOTA_AC_ERR_STATUS:
+		return "the agent would not report its state";
+	case LOTA_AC_ERR_TOKEN:
+		return "the agent would not issue a token";
+	case LOTA_AC_ERR_MEASURE:
+		return "this process could not be measured";
+	case LOTA_AC_ERR_SERIALIZE:
+		return "the token could not be serialised";
+	}
+
+	return "unknown error";
+}
+
+/*
+ * Why the last call on this thread failed.
+ * Thread-local for the reason the gaming SDK's is:
+ * a title and its launcher in one process must not read each other's answer.
+ */
+static _Thread_local int g_ac_error = LOTA_AC_ERR_OK;
+
+int lota_ac_last_error(void)
+{
+	return g_ac_error;
+}
+
+/* Set and return, so every refusal is one line and none can forget */
+static int ac_fail(int err)
+{
+	g_ac_error = err;
+	return err;
+}
+
+/*
+ * The connect refusal in this SDK's vocabulary.
+ *
+ * The gaming SDK already tells "no agent" from "nobody has consented" from
+ * "this host is not enrolled with them", and those are exactly the 3 an integrator
+ * has to act on differently, so they are carried across.
+ */
+static int ac_error_from_connect(int connect_err)
+{
+	switch (connect_err) {
+	case LOTA_ERR_CONSENT_REQUIRED:
+		return LOTA_AC_ERR_CONSENT_REQUIRED;
+	case LOTA_ERR_UNKNOWN_PROFILE:
+		return LOTA_AC_ERR_UNKNOWN_PROFILE;
+	case LOTA_ERR_ACCESS_DENIED:
+		return LOTA_AC_ERR_ACCESS_DENIED;
+	case LOTA_ERR_RATE_LIMITED:
+		return LOTA_AC_ERR_RATE_LIMITED;
+	default:
+		return LOTA_AC_ERR_NO_AGENT;
+	}
+}
+
 struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 {
-	if (!cfg)
+	g_ac_error = LOTA_AC_ERR_OK;
+
+	if (!cfg) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
 		return NULL;
+	}
 	/* caller has to say how big its configuration is; see the header */
-	if (cfg->struct_size < LOTA_AC_CONFIG_SIZE_MIN)
+	if (cfg->struct_size < LOTA_AC_CONFIG_SIZE_MIN) {
+		ac_fail(LOTA_AC_ERR_CONFIG_SIZE);
 		return NULL;
-	if (!cfg->game_id || cfg->game_id[0] == '\0')
+	}
+	if (!cfg->game_id || cfg->game_id[0] == '\0' ||
+	    strlen(cfg->game_id) >= LOTA_AC_MAX_GAME_ID) {
+		ac_fail(LOTA_AC_ERR_GAME_ID);
 		return NULL;
-	if (strlen(cfg->game_id) >= LOTA_AC_MAX_GAME_ID)
-		return NULL;
+	}
 	if (cfg->provider != LOTA_AC_PROVIDER_EAC &&
-	    cfg->provider != LOTA_AC_PROVIDER_BATTLEYE)
+	    cfg->provider != LOTA_AC_PROVIDER_BATTLEYE) {
+		ac_fail(LOTA_AC_ERR_PROVIDER);
 		return NULL;
+	}
 
 	struct lota_ac_session *s = calloc(1, sizeof(*s));
-	if (!s)
+	if (!s) {
+		ac_fail(LOTA_AC_ERR_NO_MEMORY);
 		return NULL;
+	}
 
 	s->provider = cfg->provider;
 	s->state = LOTA_AC_STATE_IDLE;
@@ -986,10 +1095,12 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 
 	if (generate_session_id(s->session_id) < 0) {
 		free(s);
+		ac_fail(LOTA_AC_ERR_INTERNAL);
 		return NULL;
 	}
 	if (compute_game_id_hash(s->game_id, s->game_id_hash) < 0) {
 		free(s);
+		ac_fail(LOTA_AC_ERR_INTERNAL);
 		return NULL;
 	}
 
@@ -1007,14 +1118,26 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 		} else {
 			s->client = lota_connect();
 		}
-		if (!s->client)
+
+		/*
+		 * A session whose agent is not there is handed back:
+		 * the title has something to show the player and can beat again
+		 * once the host is ready. The reason is reported either way,
+		 * so "not ready yet" is never mistaken for a configuration
+		 * this library rejected.
+		 */
+		if (!s->client) {
 			s->state = LOTA_AC_STATE_ERROR;
-		else
+			ac_fail(ac_error_from_connect(
+				lota_connect_last_error()));
+		} else {
 			s->state = LOTA_AC_STATE_RUNNING;
+		}
 	} else {
 		if (resolve_token_dir(cfg, s->token_dir, sizeof(s->token_dir)) <
 		    0) {
 			s->state = LOTA_AC_STATE_ERROR;
+			ac_fail(LOTA_AC_ERR_TOKEN_DIR);
 		} else {
 			snprintf(s->status_path, sizeof(s->status_path),
 				 "%s/lota-status", s->token_dir);
@@ -1144,16 +1267,22 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	uint8_t heartbeat_nonce[LOTA_NONCE_SIZE];
 	uint8_t runtime_measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
 
-	if (!session || !buf || !written)
+	g_ac_error = LOTA_AC_ERR_OK;
+
+	if (!session || !buf || !written) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
 		return -EINVAL;
+	}
 
 	/*
 	 * Replay-safe heartbeat requires nonce-bound token acquisition.
 	 * File mode uses pre-generated snapshot tokens and cannot safely bind
 	 * current sequence/timestamp challenge into TPM-signed nonce.
 	 */
-	if (!session->direct)
+	if (!session->direct) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
 		return -EOPNOTSUPP;
+	}
 
 	/*
 	 * Refresh integrity flags for the nonce binding with GET_STATUS only. A
@@ -1163,13 +1292,18 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	 * agent's per-UID GET_TOKEN rate limit (ipc.c), halving the sustainable
 	 * heartbeat rate.
 	 */
-	if (!session->client)
+	if (!session->client) {
+		ac_fail(LOTA_AC_ERR_NO_AGENT);
 		return -ENOTCONN;
+	}
 
 	struct lota_status status;
 	int ret = lota_get_status(session->client, &status);
 	if (ret != LOTA_OK) {
 		session->state = LOTA_AC_STATE_ERROR;
+		ac_fail(ret == LOTA_ERR_CONNECTION_FAILED ?
+				LOTA_AC_ERR_NO_AGENT :
+				LOTA_AC_ERR_STATUS);
 		return -EIO;
 	}
 	session->lota_flags = status.flags;
@@ -1184,16 +1318,20 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	 * session-start on-disk hash
 	 */
 	ret = lota_ac_compute_runtime_measure(runtime_measure);
-	if (ret < 0)
+	if (ret < 0) {
+		ac_fail(LOTA_AC_ERR_MEASURE);
 		return ret;
+	}
 
 	ret = compute_heartbeat_nonce(heartbeat_nonce, session->session_id,
 				      (uint8_t)session->provider, sequence,
 				      session->lota_flags, timestamp,
 				      session->game_id_hash, runtime_measure,
 				      LOTA_AC_DOMAIN_VERSION_CURRENT);
-	if (ret < 0)
+	if (ret < 0) {
+		ac_fail(LOTA_AC_ERR_INTERNAL);
 		return ret;
+	}
 
 	{
 		struct lota_token token;
@@ -1202,14 +1340,27 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 		memset(&token, 0, sizeof(token));
 		ret = lota_get_token(session->client, heartbeat_nonce, &token);
 		if (ret != LOTA_OK) {
-			if (ret == LOTA_ERR_NOT_ATTESTED)
+			if (ret == LOTA_ERR_NOT_ATTESTED) {
+				ac_fail(LOTA_AC_ERR_NOT_ATTESTED);
 				return -ENODATA;
+			}
+
+			/*
+			 * The rate limit is the one an integrator can fix
+			 * by beating slower, so it must not read as a broken agent.
+			 */
+			ac_fail(ret == LOTA_ERR_RATE_LIMITED ?
+					LOTA_AC_ERR_RATE_LIMITED :
+				ret == LOTA_ERR_CONNECTION_FAILED ?
+					LOTA_AC_ERR_NO_AGENT :
+					LOTA_AC_ERR_TOKEN);
 			return -EIO;
 		}
 
 		if (CRYPTO_memcmp(token.nonce, heartbeat_nonce,
 				  LOTA_NONCE_SIZE) != 0) {
 			lota_token_free(&token);
+			ac_fail(LOTA_AC_ERR_NONCE_FAIL);
 			return -EPROTO;
 		}
 
@@ -1222,18 +1373,24 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 		ret = lota_token_serialize(&token, session->token_buf,
 					   LOTA_AC_MAX_TOKEN, &tok_written);
 		lota_token_free(&token);
-		if (ret != LOTA_OK)
+		if (ret != LOTA_OK) {
+			ac_fail(LOTA_AC_ERR_SERIALIZE);
 			return -EIO;
+		}
 
 		session->token_len = tok_written;
 	}
 
-	if (session->token_len == 0)
+	if (session->token_len == 0) {
+		ac_fail(LOTA_AC_ERR_NOT_ATTESTED);
 		return -ENODATA;
+	}
 
 	size_t total = LOTA_AC_HEADER_SIZE + session->token_len;
-	if (buflen < total)
+	if (buflen < total) {
+		ac_fail(LOTA_AC_ERR_INVALID_ARG);
 		return -ENOSPC;
+	}
 
 	lota__write_le32(buf + 0, (uint32_t)LOTA_AC_MAGIC);
 	buf[4] = (uint8_t)LOTA_AC_VERSION;
@@ -1364,19 +1521,6 @@ int lota_ac_verify_heartbeat(
 				      LOTA_AC_STATE_UNTRUSTED;
 
 	return 0;
-}
-
-/* Answers what the library can answer today, which is nothing */
-int lota_ac_last_error(void)
-{
-	return LOTA_AC_ERR_OK;
-}
-
-const char *lota_ac_strerror(int err)
-{
-	(void)err;
-
-	return "unknown error";
 }
 
 const char *lota_ac_state_str(enum lota_ac_state state)

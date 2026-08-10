@@ -419,8 +419,8 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 	size_t written = 0;
 	int rc = lota_ac_heartbeat(session, buf, sizeof(buf), &written);
 	if (rc != 0) {
-		fprintf(stderr, "demo_anticheat: lota_ac_heartbeat: %s\n",
-			strerror(-rc));
+		fprintf(stderr, "demo_anticheat: lota_ac_heartbeat: %s (%s)\n",
+			lota_ac_strerror(lota_ac_last_error()), strerror(-rc));
 		*out_verdict = DEMO_EXIT_TRANSPORT;
 		return rc;
 	}
@@ -561,11 +561,8 @@ int main(int argc, char **argv)
 
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {
-		fprintf(stderr,
-			"demo_anticheat: lota_ac_init failed (agent socket "
-			"unreachable at %s)\n",
-			opt.socket_path ? opt.socket_path :
-					  "/run/lota/lota.sock");
+		fprintf(stderr, "demo_anticheat: lota_ac_init failed: %s\n",
+			lota_ac_strerror(lota_ac_last_error()));
 		if (protect_client)
 			lota_disconnect(protect_client);
 		curl_global_cleanup();
