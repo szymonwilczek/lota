@@ -1366,6 +1366,19 @@ int lota_ac_verify_heartbeat(
 	return 0;
 }
 
+/* Answers what the library can answer today, which is nothing */
+int lota_ac_last_error(void)
+{
+	return LOTA_AC_ERR_OK;
+}
+
+const char *lota_ac_strerror(int err)
+{
+	(void)err;
+
+	return "unknown error";
+}
+
 const char *lota_ac_state_str(enum lota_ac_state state)
 {
 	switch (state) {

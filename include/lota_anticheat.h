@@ -73,7 +73,19 @@ enum lota_ac_state {
 	LOTA_AC_STATE_ERROR = 4, /* cannot reach agent / internal fault */
 };
 
-/* error codes */
+/*
+ * Error codes.
+ *
+ * -1..-7 are the verification vocabulary: why a heartbeat packet a server
+ * received was refused.
+ *
+ * -8 and below say why a call on the producing side could not be made,
+ * and are read through lota_ac_last_error().
+ * The split that matters to an integrator runs through the middle of them:
+ * a configuration this library refused is their bug, while an agent that
+ * is not there, a publisher nobody has agreed to, or a host that is not
+ * attested is a state the player acts on.
+ */
 enum {
 	LOTA_AC_ERR_OK = 0,
 	LOTA_AC_ERR_INVALID_ARG = -1,
@@ -83,6 +95,33 @@ enum {
 	LOTA_AC_ERR_NONCE_FAIL = -5,
 	LOTA_AC_ERR_EXPIRED = -6,
 	LOTA_AC_ERR_CRYPTO = -7,
+
+	/* the caller's own configuration */
+	LOTA_AC_ERR_CONFIG_SIZE = -8, /* struct_size unset or too small */
+	LOTA_AC_ERR_GAME_ID = -9, /* game_id missing, empty or too long */
+	LOTA_AC_ERR_PROVIDER = -10, /* provider is neither EAC nor BattlEye */
+
+	/* this library */
+	LOTA_AC_ERR_NO_MEMORY = -11,
+	LOTA_AC_ERR_INTERNAL = -12, /* session id or game-id hash failed */
+
+	/* the host, which is what a player acts on */
+	LOTA_AC_ERR_NO_AGENT = -13, /* no agent answering the socket */
+	LOTA_AC_ERR_CONSENT_REQUIRED = -14, /* nobody has agreed to this
+					     * publisher on this machine */
+	LOTA_AC_ERR_UNKNOWN_PROFILE = -15, /* the host is not enrolled with the
+					    * publisher that was named */
+	LOTA_AC_ERR_ACCESS_DENIED = -16,
+	LOTA_AC_ERR_TOKEN_DIR = -17, /* file mode: no hook output directory */
+	LOTA_AC_ERR_NOT_ATTESTED = -18, /* the host holds no verdict yet */
+	LOTA_AC_ERR_RATE_LIMITED = -19, /* beating faster than the agent
+					 * issues tokens */
+
+	/* the beat itself */
+	LOTA_AC_ERR_STATUS = -20, /* the agent would not report its state */
+	LOTA_AC_ERR_TOKEN = -21, /* the agent would not issue a token */
+	LOTA_AC_ERR_MEASURE = -22, /* this process could not be measured */
+	LOTA_AC_ERR_SERIALIZE = -23, /* the token would not serialise */
 };
 
 struct lota_ac_config {
@@ -224,9 +263,35 @@ struct lota_ac_session;
  * In direct mode, opens a connection to the LOTA agent.
  * In file mode, locates the Wine hook output directory.
  *
- * Returns NULL on error.
+ * Returns NULL on error; lota_ac_last_error() says which one.
+ * A session whose agent could not be reached is returned, in LOTA_AC_STATE_ERROR,
+ * so a title can show the player something and try again -- the accessor names
+ * that case too.
  */
 struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg);
+
+/*
+ * lota_ac_last_error - Why the last call on this thread failed
+ *
+ * Every entry point that can refuse sets it, including on success
+ * (LOTA_AC_ERR_OK), so reading it after anything else is meaningless.
+ * Thread-local, because a title and its launcher in one process must
+ * not read each other's answer.
+ *
+ * It exists because the alternative is what this SDK used to do:
+ * return NULL or -EIO for a dozen unrelated causes and leave an integrator
+ * to guess. The one distinction to build on is whether the code names
+ * the caller's own configuration or the state of the host.
+ */
+int lota_ac_last_error(void);
+
+/*
+ * lota_ac_strerror - The error code as a sentence
+ *
+ * Stable, English, no trailing punctuation, never NULL:
+ * a code from a newer library than the caller was built against still renders.
+ */
+const char *lota_ac_strerror(int err);
 
 /*
  * Destroy session and release resources.
