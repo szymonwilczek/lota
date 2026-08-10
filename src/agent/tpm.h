@@ -743,6 +743,21 @@ struct tpm_pcr14_observation {
 	uint32_t reset_count;
 	uint32_t restart_count;
 	const struct lota_clock_state *prev;
+	/*
+	 * Whether the initramfs lock helper ran this boot, which the caller
+	 * answers by the presence of the baseline handoff the helper writes.
+	 *
+	 * Without it a boot with no lock is only recognisable where the register
+	 * still equals the baseline -- true on a host that measures nothing into
+	 * PCR 14, false on every shim host, where PCR 14 carries the MOK
+	 * measurement and the absent handoff reads as 0^32.
+	 * The benign case then arrives as suspected tamper.
+	 *
+	 * Not trust input: it can only route a refusal to a better sentence.
+	 * Both readings refuse, and the accepting branches are decided by
+	 * derivations against the live register before this is consulted.
+	 */
+	int lock_ran;
 };
 
 /*
