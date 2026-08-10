@@ -694,11 +694,20 @@ int tpm_boot_commitment_digest(const uint8_t self_hash[], uint8_t out_digest[]);
  *
  * The helper extends with
  *     SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")
- * and PCR14 ends up at SHA256(0^32 || that_digest). The agent calls
- * this function so it can recognise when PCR14 already carries the
- * lock value and chain its own boot commitment on top deterministically.
- * The verifier mirrors the derivation via
- * verifier/verify/baseline.go::DeriveInitramfsLockPCR14.
+ * and PCR14 ends up at SHA256(baseline || that_digest), where the baseline is
+ * whatever the platform had already measured there. The agent uses this to
+ * recognise the lock value and chain its boot commitment on top.
+ *
+ * The digest binds nothing about the boot: for one baseline, every boot leaves
+ * the same PCR14 here regardless of TPM reset count. Freshness comes from
+ * the boot commitment chained on top (tpm_boot_commitment_digest()) and from
+ * the ClockInfo in the quote. The constant lets a verifier derive the expected
+ * register from the event-log baseline alone.
+ *
+ * Three implementations must stay in step, none of them taking a counter:
+ * this one, the installer's probe_pcr14_lock_value_at() (installer/probe.c)
+ * and the verifier's DeriveInitramfsLockPCR14()
+ * (src/verifier/verify/baseline.go).
  *
  * Returns: 0 on success, negative errno on failure.
  */

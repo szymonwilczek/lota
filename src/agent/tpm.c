@@ -2362,6 +2362,11 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
  * Exact PCR14 value PCR14 carries when the initramfs lock helper ran but
  * the agent has not extended its own commitment yet.
  * baseline is the pre-LOTA PCR14 content the lock helper extended on top of.
+ *
+ * Constant across boots for one baseline, by design: nothing about this boot
+ * enters it, which is what lets a verifier derive it from the event log alone.
+ * The freshness lives one hop further up, in the commitment the agent chains
+ * on top and in the ClockInfo the quote carries.
  */
 static int derive_lock_pcr14_value(const uint8_t baseline[LOTA_HASH_SIZE],
 				   uint8_t out[LOTA_HASH_SIZE])
