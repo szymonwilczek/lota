@@ -32,6 +32,9 @@
 #   # Windows host: PowerShell (admin)
 #   #   $ek = Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256
 #   #   $ek.ManufacturerCertificates + $ek.AdditionalCertificates
+#   # a firmware TPM's EK certificate carries no AIA at all;
+#   # read the certificates above it from NV first (tpm2_nvread 0x01c00100)
+#   # and start the walk from the highest of those. See README.rst.
 #   # follow each "CA Issuers" URL up until issuer == subject (the root),
 #   # then: sha256sum root.der  -> the pin (after out-of-band confirmation).
 #
