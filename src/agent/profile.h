@@ -97,6 +97,24 @@ int profile_paths_from_anchor_base(const char *base_dir,
 				   struct profile_paths *out);
 
 /*
+ * Is this trust anchor a CA certificate, or a listener leaf?
+ *
+ * One --ca-cert serves two roles: the TLS trust anchor the CA server is verified
+ * against, and the publisher's identity. A CA anchor serves both and outlives
+ * the deployment. A TLS listener certificate serves the first and is rotated on
+ * a schedule -- and a rotation with a new key moves the identity, so every host
+ * of that publisher becomes a new device with a new AIK in a new persistent slot.
+ *
+ * Not a refusal: a self-signed leaf is a legitimate pin for a deployment that
+ * wants one, and this cannot tell that apart from a listener certificate
+ * somebody named by mistake. Callers say what the choice costs and continue.
+ *
+ * Returns 1 for a CA certificate, 0 for one that is not, negative errno when
+ * the file cannot be read or parsed.
+ */
+int profile_anchor_is_ca(const char *ca_cert_path);
+
+/*
  * Lay out a profile from its identity rather than from an anchor,
  * for the paths that meet a publisher by name: title handing over the hex,
  * and the inventory reading directories that are already there.

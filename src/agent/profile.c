@@ -28,6 +28,7 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include "profile.h"
 
@@ -113,6 +114,30 @@ static int anchor_spki_sha256(const char *path, uint8_t out[32])
 	OPENSSL_free(der);
 	X509_free(cert);
 	return ret;
+}
+
+int profile_anchor_is_ca(const char *ca_cert_path)
+{
+	X509 *cert;
+	int is_ca;
+
+	if (!ca_cert_path)
+		return -EINVAL;
+
+	if (access(ca_cert_path, R_OK) != 0)
+		return -errno;
+
+	cert = anchor_read(ca_cert_path);
+	if (!cert)
+		return -EINVAL;
+
+	/* Answers nothing yet:
+	 * the callers that would act on the difference still name whatever
+	 * file they were given. */
+	(void)cert;
+	is_ca = 0;
+	X509_free(cert);
+	return is_ca;
 }
 
 int profile_id_from_anchor(const char *ca_cert_path, char *out, size_t out_len)
