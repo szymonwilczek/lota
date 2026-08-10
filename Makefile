@@ -1144,6 +1144,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_aik_rotation \
 	$(TEST_BIN_DIR)/test_pcr14_verdict \
 	$(TEST_BIN_DIR)/test_ipc_privilege \
+	$(TEST_BIN_DIR)/test_startup_hint \
 	$(TEST_BIN_DIR)/test_ipc_notify \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
@@ -1481,6 +1482,11 @@ $(TEST_BIN_DIR)/test_ipc_privilege: tests/test_ipc_privilege.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_startup_hint: tests/test_startup_hint.c \
+		$(AGENT_DIR)/startup_hint.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_ipc_notify: tests/test_ipc_notify.c $(AGENT_DIR)/ipc.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/profile.c \
 		$(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
@@ -1549,6 +1555,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_aik_rotation
 	@$(BUILD_DIR)/test_pcr14_verdict
 	@$(BUILD_DIR)/test_ipc_privilege
+	@$(BUILD_DIR)/test_startup_hint
 	@$(BUILD_DIR)/test_ipc_notify
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
