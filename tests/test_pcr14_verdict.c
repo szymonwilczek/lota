@@ -49,6 +49,9 @@ static const char *g_current_test;
 		return;                                                       \
 	} while (0)
 
+/* What the caller anchors on when the lock left no baseline behind */
+static const uint8_t k_zero_baseline[LOTA_HASH_SIZE] = { 0 };
+
 /* A baseline shaped like what shim's MOK measurement leaves behind */
 static const uint8_t k_baseline[LOTA_HASH_SIZE] = {
 	0x17, 0xcd, 0xef, 0xd9, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -114,6 +117,79 @@ static int build_committed_boot(struct scenario *s, uint32_t observed_restart)
 	s->obs.restart_count = observed_restart;
 	s->obs.prev = &s->prev;
 	return 0;
+}
+
+/*
+ * A shim host whose initramfs never ran the lock.
+ *
+ * The classifier has a branch for exactly this -- the register still holds
+ * the platform value -- and it is reached by comparing against the baseline
+ * the lock helper wrote.
+ * When the lock did not run there is no baseline file, the caller passes 0^32,
+ * and on a shim host PCR 14 holds shim's MOK measurement, so the comparison
+ * cannot match.
+ * The benign "you booted a kernel whose initramfs was never rebuilt" case then
+ * arrives as suspected tampering, with a runbook that sends the responder to
+ * audit boot scripts.
+ *
+ * The absence of the baseline handoff is the signal: no lock ran this boot,
+ * so whatever PCR 14 holds, it is not a LOTA commitment.
+ */
+static void test_lock_missing_on_a_shim_host(void)
+{
+	struct scenario s;
+	uint8_t shim_value[LOTA_HASH_SIZE];
+
+	TEST("no lock this boot reads as a missing lock, not as tampering");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+
+	/* shim measured the MOK state; the lock helper never ran,
+	 * so it left no baseline and the caller anchors on zeroes */
+	fill(shim_value, 0x5C);
+	memcpy(s.current, shim_value, LOTA_HASH_SIZE);
+	s.obs.baseline = k_zero_baseline;
+	s.obs.lock_ran = 0;
+	s.obs.prev = NULL;
+
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_LOCK_MISSING)
+		FAIL("a boot with no lock must not read as tamper");
+	PASS();
+
+	/*
+	 * The guard: with the lock having run, a register matching neither
+	 * derivation is still what it always was.
+	 * Otherwise "stop calling a missing lock tamper" could be satisfied
+	 * by never calling anything tamper.
+	 */
+	TEST("with the lock run, an unexplained register is still refused");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+	fill(s.current, 0x77);
+	s.obs.lock_ran = 1;
+
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+		FAIL("a foreign extend must still read as a mutation");
+	PASS();
+
+	/*
+	 * And a host that booted without shim keeps working: PCR 14 is 0^32,
+	 * the lock did not run, and that has always been a missing lock.
+	 */
+	TEST("a non-shim host with no lock still reads as a missing lock");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+	memset(s.current, 0, LOTA_HASH_SIZE);
+	s.obs.baseline = k_zero_baseline;
+	s.obs.lock_ran = 0;
+	s.obs.prev = NULL;
+
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_LOCK_MISSING)
+		FAIL("a pristine register with no lock is a missing lock");
+	PASS();
 }
 
 /*
@@ -325,6 +401,7 @@ static void test_commitment_present_after_a_cold_boot_is_refused(void)
 
 int main(void)
 {
+	test_lock_missing_on_a_shim_host();
 	test_warm_restart_is_committed();
 	test_commitment_does_not_bind_the_clock_counters();
 	test_resume_reads_as_committed();
