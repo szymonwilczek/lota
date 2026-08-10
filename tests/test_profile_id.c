@@ -665,6 +665,33 @@ static void test_publisher_inventory(void)
 	CHECK(profile_paths_from_id(base, id_a, &paths) == 0,
 	      "paths derive from publisher A again");
 
+	/*
+	 * A handle is recorded before its key exists, so it can be given back
+	 * without the key ever having been made. Giving back a handle that is
+	 * already gone succeeds, and the profile stays listed with its consent
+	 * but holds no key.
+	 */
+	{
+		uint32_t handle = 0;
+
+		CHECK(profile_aik_handle_forget(&paths) == 0 &&
+			      profile_aik_handle_load(&paths, &handle) ==
+				      -ENOENT,
+		      "a reserved handle can be given back");
+		CHECK(profile_aik_handle_forget(&paths) == 0,
+		      "giving back a handle twice is not a failure");
+		CHECK(publishers_list(base, entries,
+				      LOTA_PROFILE_MAX_AIK_HANDLES,
+				      &count) == 0 &&
+			      count == 1 &&
+			      publishers_keys_held(entries, count) == 0,
+		      "a profile that gave its handle back holds no key");
+		CHECK(entries[0].consented,
+		      "and is still listed, with the consent it was given");
+		CHECK(profile_aik_handle_save(&paths, 0x81010010) == 0,
+		      "publisher A holds a key again");
+	}
+
 	CHECK(publishers_forget(&paths) == 0, "a publisher can be forgotten");
 	CHECK(stat(paths.dir, &st) != 0,
 	      "forgetting leaves no directory behind");

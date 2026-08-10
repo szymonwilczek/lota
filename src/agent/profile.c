@@ -333,6 +333,17 @@ int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle)
 	return 0;
 }
 
+int profile_aik_handle_forget(const struct profile_paths *paths)
+{
+	if (!paths || paths->aik_handle[0] == '\0')
+		return -EINVAL;
+
+	if (unlink(paths->aik_handle) != 0 && errno != ENOENT)
+		return -errno;
+
+	return 0;
+}
+
 int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  uint32_t count, uint32_t *out, size_t out_max,
 				  size_t *out_count)
