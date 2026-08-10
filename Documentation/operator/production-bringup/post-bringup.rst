@@ -421,7 +421,10 @@ screen calls ``--allow-publisher`` when they accept.
 **What this machine holds for whom is inspectable, and revocable.**
 ``lota-agent --list-publishers`` shows every publisher with anything stored
 here: when it was agreed to, where it enrolled, which TPM handle holds its
-attestation key and how much validity that key's certificate has left.
+attestation key and how much validity that key's certificate has left. It ends
+with what the machine has room for -- the keys held, the TPM's own persistent
+capacity and this build's maximum -- so the ceiling is readable before it is
+met; :doc:`../platform-support` covers what sets it.
 ``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
 in that order -- a key with no directory left to name it would be worse than
 either state alone, so nothing is deleted if the eviction fails. An identity
