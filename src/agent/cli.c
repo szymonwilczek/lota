@@ -30,6 +30,10 @@ static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
+static char (*g_cli_trust_libs)[PATH_MAX];
+static int g_cli_trust_lib_count;
+static uint32_t *g_cli_protect_pids;
+static int g_cli_protect_pid_count;
 static char g_allow_verity[LOTA_CONFIG_MAX_VERITY][PATH_MAX];
 static int g_allow_verity_count;
 
@@ -48,6 +52,24 @@ char (*cli_runtime_trust_libs(void)) [PATH_MAX] { return g_trust_libs; }
 int *cli_runtime_trust_lib_count(void)
 {
 	return &g_trust_lib_count;
+}
+
+const char (*cli_startup_trust_libs(void))
+	[PATH_MAX] { return (const char (*)[PATH_MAX])g_cli_trust_libs; }
+
+int cli_startup_trust_lib_count(void)
+{
+	return g_cli_trust_lib_count;
+}
+
+const uint32_t *cli_startup_protect_pids(void)
+{
+	return g_cli_protect_pids;
+}
+
+int cli_startup_protect_pid_count(void)
+{
+	return g_cli_protect_pid_count;
 }
 
 char (*cli_runtime_allow_verity(void)) [PATH_MAX] { return g_allow_verity; }
@@ -507,6 +529,17 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			}
 			g_protect_pids = new_pids;
 			g_protect_pids[g_protect_pid_count++] = v;
+
+			uint32_t *cli_pids = realloc(g_cli_protect_pids,
+						     (g_cli_protect_pid_count +
+						      1) * sizeof(uint32_t));
+			if (!cli_pids) {
+				fprintf(stderr, "Memory allocation failed for "
+						"protected PID\n");
+				return 1;
+			}
+			g_cli_protect_pids = cli_pids;
+			g_cli_protect_pids[g_cli_protect_pid_count++] = v;
 		} break;
 		case 'L':
 			if (g_trust_lib_count < LOTA_CONFIG_MAX_LIBS) {
@@ -519,6 +552,26 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 					return 1;
 				}
 				g_trust_lib_count++;
+
+				char (*cli_libs)[PATH_MAX] = realloc(
+					g_cli_trust_libs,
+					(size_t)(g_cli_trust_lib_count + 1) *
+						PATH_MAX);
+				if (!cli_libs) {
+					fprintf(stderr,
+						"Memory allocation failed for "
+						"trusted library\n");
+					return 1;
+				}
+				g_cli_trust_libs = cli_libs;
+				if (copy_string_checked(
+					    "trust-lib",
+					    g_cli_trust_libs
+						    [g_cli_trust_lib_count],
+					    PATH_MAX, optarg) < 0) {
+					return 1;
+				}
+				g_cli_trust_lib_count++;
 			} else {
 				fprintf(stderr,
 					"Too many --trust-lib entries (max %d)\n",

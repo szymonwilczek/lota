@@ -17,7 +17,6 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
-#include <fcntl.h>
 #include <limits.h>
 #include <errno.h>
 #include <stdio.h>
@@ -27,6 +26,7 @@
 
 #include "../src/agent/agent.h"
 #include "../src/agent/bpf_loader.h"
+#include "../src/agent/cli.h"
 #include "../src/agent/config.h"
 #include "../src/agent/main_utils.h"
 #include "../src/agent/reload.h"
@@ -148,6 +148,31 @@ int sdnotify_status(const char *fmt, ...)
 	return 0;
 }
 
+/*
+ * What the command line asked for, as cli.c reports it to a reload.
+ * Filled by seed_runtime() so each test states its own starting point.
+ */
+static char cli_libs[1][PATH_MAX];
+static uint32_t cli_pids[1];
+
+const char (*cli_startup_trust_libs(void))
+	[PATH_MAX] { return (const char (*)[PATH_MAX])cli_libs; }
+
+int cli_startup_trust_lib_count(void)
+{
+	return cli_libs[0][0] ? 1 : 0;
+}
+
+const uint32_t *cli_startup_protect_pids(void)
+{
+	return cli_pids;
+}
+
+int cli_startup_protect_pid_count(void)
+{
+	return cli_pids[0] ? 1 : 0;
+}
+
 static int tests_run;
 static int tests_passed;
 
@@ -209,6 +234,9 @@ static void seed_runtime(char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
 	*protect_pids = calloc(1, sizeof(**protect_pids));
 	(*protect_pids)[0] = flag_pid;
 	*protect_pid_count = 1;
+
+	snprintf(cli_libs[0], PATH_MAX, "%s", flag_lib);
+	cli_pids[0] = flag_pid;
 
 	stub_trusted_count = 0;
 	snprintf(stub_trusted[stub_trusted_count++], PATH_MAX, "%s", flag_lib);

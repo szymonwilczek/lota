@@ -15,6 +15,7 @@
 
 #include "agent.h"
 #include "bpf_loader.h"
+#include "cli.h"
 #include "journal.h"
 #include "main_utils.h"
 #include "policy_sign.h"
@@ -314,6 +315,87 @@ static void apply_runtime_flags_transactional(
 	if (*block_anon_exec != old_block_anon_exec)
 		lota_info("Block anonymous exec: %s",
 			  *block_anon_exec ? "ON" : "OFF");
+}
+
+/*
+ * Fold what the command line asked for back into the set the file describes.
+ *
+ * --trust-lib and --protect-pid are arguments to the running daemon, not entries
+ * in the file it re-reads, so a reload built from the file alone revokes them:
+ * the trusted-library map empties and lota_sb_mount has no inode left to refuse,
+ * which is the substitution it exists to stop. There is no way back short of
+ * a cold boot, because the agent burns its boot commitment when it stops.
+ *
+ * Merging here rather than inside the two reload paths keeps their rollback
+ * intact and makes the counts they report the real totals.
+ *
+ * The file still owns what the file says: an entry it drops is dropped,
+ * unless the command line asked for that one too.
+ */
+static void merge_command_line_state(struct lota_config *new_cfg)
+{
+	const char (*cli_libs)[PATH_MAX] = cli_startup_trust_libs();
+	const uint32_t *cli_pids = cli_startup_protect_pids();
+	int cli_lib_count = cli_startup_trust_lib_count();
+	int cli_pid_count = cli_startup_protect_pid_count();
+	int kept_libs = 0;
+	int kept_pids = 0;
+
+	for (int i = 0; i < cli_lib_count; i++) {
+		bool present = false;
+
+		for (int k = 0; k < new_cfg->trust_lib_count; k++) {
+			if (strcmp(new_cfg->trust_libs[k], cli_libs[i]) == 0) {
+				present = true;
+				break;
+			}
+		}
+		if (present)
+			continue;
+
+		if (new_cfg->trust_lib_count >= LOTA_CONFIG_MAX_LIBS) {
+			lota_warn("No room to keep trusted library %s asked "
+				  "for on the command line (max %d)",
+				  cli_libs[i], LOTA_CONFIG_MAX_LIBS);
+			break;
+		}
+
+		copy_path(new_cfg->trust_libs[new_cfg->trust_lib_count],
+			  cli_libs[i]);
+		new_cfg->trust_lib_count++;
+		kept_libs++;
+	}
+
+	for (int i = 0; i < cli_pid_count; i++) {
+		bool present = false;
+
+		for (int k = 0; k < new_cfg->protect_pid_count; k++) {
+			if (new_cfg->protect_pids[k] == cli_pids[i]) {
+				present = true;
+				break;
+			}
+		}
+		if (present)
+			continue;
+
+		if (new_cfg->protect_pid_count >= LOTA_MAX_PROTECTED_PIDS) {
+			lota_warn("No room to keep protected PID %u asked for "
+				  "on the command line (max %d)",
+				  cli_pids[i], LOTA_MAX_PROTECTED_PIDS);
+			break;
+		}
+
+		new_cfg->protect_pids[new_cfg->protect_pid_count] = cli_pids[i];
+		new_cfg->protect_pid_count++;
+		kept_pids++;
+	}
+
+	if (kept_libs || kept_pids) {
+		lota_info(
+			"Reload kept what the command line asked for: %d trusted library entr%s, %d protected PID%s",
+			kept_libs, kept_libs == 1 ? "y" : "ies", kept_pids,
+			kept_pids == 1 ? "" : "s");
+	}
 }
 
 static void reload_protected_pids(const struct lota_config *new_cfg,
@@ -638,6 +720,8 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 		journal_set_level(lvl);
 		lota_info("Log level changed to %s", new_cfg->log_level);
 	}
+
+	merge_command_line_state(new_cfg);
 
 	reload_protected_pids(new_cfg, protect_pids, protect_pid_count);
 	lota_info("Protected PIDs reloaded (%d entries)", *protect_pid_count);
