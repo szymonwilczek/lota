@@ -131,11 +131,12 @@ int profile_anchor_is_ca(const char *ca_cert_path)
 	if (!cert)
 		return -EINVAL;
 
-	/* Answers nothing yet:
-	 * the callers that would act on the difference still name whatever
-	 * file they were given. */
-	(void)cert;
-	is_ca = 0;
+	/*
+	 * X509_check_ca() answers 0 for a plain end-entity certificate
+	 * and non-zero for anything the library will let sign
+	 * -- basicConstraints CA:TRUE, and the older shapes it still honours.
+	 */
+	is_ca = X509_check_ca(cert) > 0 ? 1 : 0;
 	X509_free(cert);
 	return is_ca;
 }

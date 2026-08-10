@@ -145,6 +145,12 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
+warn when the file named is not a CA certificate, naming what a re-key of it
+would cost; an anchor produces no such line. It is a warning rather than a
+refusal, because a self-signed leaf is a legitimate pin for a deployment that
+wants one and nothing in the file says which was meant.
+
 Naming the listener certificate here instead is the mistake with the quietest
 consequences. It is the one certificate in a deployment that is rotated on a
 schedule, and a rotation that generates a new key changes the SPKI: every host
