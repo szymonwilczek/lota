@@ -232,6 +232,16 @@ static int tss2_rc_to_errno(TSS2_RC rc)
 	case TPM2_RC_VALUE:
 	case TPM2_RC_SIZE:
 		return -EINVAL;
+	case TPM2_RC_NV_SPACE:
+		/*
+		 * The TPM's non-volatile memory is full, which is what making
+		 * one more key persistent runs into.
+		 * It is a full machine, not a broken one, and -EIO
+		 * -- "Input/output error" -- read to a player like failing
+		 * hardware.
+		 * Callers that can free a slot say so on this code.
+		 */
+		return -ENOSPC;
 	case TPM2_RC_POLICY_FAIL:
 	case TPM2_RC_PCR_CHANGED:
 		/*
@@ -1057,6 +1067,67 @@ static int tpm_handle_in_use(struct tpm_context *ctx, uint32_t handle)
 	}
 	Esys_Free(capability_data);
 	return found;
+}
+
+static int tpm_read_property(struct tpm_context *ctx, TPM2_PT property,
+			     uint32_t *out)
+{
+	TPMS_CAPABILITY_DATA *capability_data = NULL;
+	TPMI_YES_NO more_data = TPM2_NO;
+	TSS2_RC rc;
+	int ret;
+
+	{
+		struct esys_get_capability_args args = {
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_TPM_PROPERTIES,
+			.property = property,
+			.property_count = 1,
+			.more_data_out = &more_data,
+			.capability_data_out = &capability_data,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk,
+					    &args, &rc, 1,
+					    (void **)&capability_data);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!capability_data ||
+	    capability_data->capability != TPM2_CAP_TPM_PROPERTIES ||
+	    capability_data->data.tpmProperties.count < 1 ||
+	    capability_data->data.tpmProperties.tpmProperty[0].property !=
+		    property) {
+		Esys_Free(capability_data);
+		return -ENOTSUP;
+	}
+
+	*out = capability_data->data.tpmProperties.tpmProperty[0].value;
+	Esys_Free(capability_data);
+	return 0;
+}
+
+int tpm_persistent_slots(struct tpm_context *ctx, uint32_t *used,
+			 uint32_t *total)
+{
+	uint32_t in_use = 0;
+	uint32_t available = 0;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !used || !total)
+		return -EINVAL;
+
+	ret = tpm_read_property(ctx, TPM2_PT_HR_PERSISTENT, &in_use);
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_read_property(ctx, TPM2_PT_HR_PERSISTENT_AVAIL, &available);
+	if (ret < 0)
+		return ret;
+
+	*used = in_use;
+	*total = in_use + available;
+	return 0;
 }
 
 /*

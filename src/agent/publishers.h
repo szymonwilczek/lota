@@ -58,6 +58,16 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 		    size_t max, size_t *count);
 
 /*
+ * How many of the listed publishers hold an attestation key.
+ *
+ * One key is one TPM persistent slot, and slots are the resource that runs out
+ * first on a firmware TPM -- so this is the count that says how much of the
+ * machine's capacity its own publishers are using, as against a profile that is
+ * consented to and holds nothing yet.
+ */
+size_t publishers_keys_held(const struct publisher_entry *list, size_t count);
+
+/*
  * Delete everything stored for one publisher.
  *
  * TPM key is not this function's business -- the caller evicts it first,
