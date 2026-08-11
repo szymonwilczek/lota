@@ -682,6 +682,21 @@ check_license_boundary() {
 	fi
 }
 
+# Doc-quoted diagnostics:
+# A message quoted in the documentation must be one the tree can print.
+# Runs unconditionally: a patch that only reworded a message breaks
+# a quote in a file it never touched.
+check_doc_diagnostics() {
+	local output
+	if output="$(scripts/check-doc-diagnostics.sh 2>&1)"; then
+		pass "doc-diagnostics"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "doc-diagnostics" \
+			"the documentation quotes a message the program cannot print; quote it verbatim or exempt the literal."
+	fi
+}
+
 # true when the patch touches any C source or header
 patch_touches_c() {
 	local path
@@ -875,6 +890,7 @@ main() {
 	check_build
 	check_includes "${changed_files[@]}"
 	check_license_boundary
+	check_doc_diagnostics
 	check_stack_frames "${changed_files[@]}"
 	check_abi
 	check_sparse "${changed_files[@]}"
