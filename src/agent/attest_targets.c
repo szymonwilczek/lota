@@ -17,6 +17,17 @@
 #include "attest_targets.h"
 
 /*
+ * Stated here, answered in the commit that follows: the test that pins the
+ * contract fails against this.
+ */
+bool attest_target_should_announce_wait(struct attest_target *t)
+{
+	(void)t;
+
+	return false;
+}
+
+/*
  * Same publisher as before the reload.
  *
  * The identity is the trust anchor's key, so a publisher that moved its CA

@@ -324,6 +324,54 @@ static void test_target_reports(void)
 	CHECK(!attest_target_reports(NULL), "no target is reported to");
 }
 
+/*
+ * A publisher that gates on a session and has never had one is the case that
+ * reads as a hang.
+ *
+ * "--attest" says it performs an attestation and exits. With publisher
+ * profiles configured it runs the loop instead -- deliberately, because
+ * a one-shot against the single top-level verifier would leave every
+ * configured publisher unattested -- and on the shipped consumer default,
+ * which is session-gated, the loop then reports to nobody until a title
+ * starts.
+ * The target already announces the end of a session. The start of waiting
+ * for the first one is what it never said, and the two are told apart by
+ * whether this target has ever been attested to.
+ */
+static void test_wait_for_a_first_session_is_announced(void)
+{
+	struct attest_target t;
+
+	memset(&t, 0, sizeof(t));
+	t.session_gated = true;
+	t.sessions = 0;
+
+	CHECK(attest_target_should_announce_wait(&t),
+	      "a session-gated target with no session yet says so");
+	CHECK(!attest_target_should_announce_wait(&t),
+	      "and says it once, not every round");
+
+	memset(&t, 0, sizeof(t));
+	t.session_gated = true;
+	t.sessions = 1;
+	CHECK(!attest_target_should_announce_wait(&t),
+	      "a target with a live session is not waiting for one");
+
+	memset(&t, 0, sizeof(t));
+	t.sessions = 0;
+	CHECK(!attest_target_should_announce_wait(&t),
+	      "a publisher that does not gate on sessions is not waiting");
+
+	memset(&t, 0, sizeof(t));
+	t.session_gated = true;
+	t.token_only = true;
+	CHECK(!attest_target_should_announce_wait(&t),
+	      "a publisher who runs no verifier is not waiting to report");
+
+	CHECK(!attest_target_should_announce_wait(NULL),
+	      "no target is waiting");
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -334,6 +382,7 @@ int main(void)
 	test_more_profiles_than_room();
 	test_effective_interval();
 	test_target_reports();
+	test_wait_for_a_first_session_is_announced();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
