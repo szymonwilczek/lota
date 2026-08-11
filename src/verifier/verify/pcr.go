@@ -741,6 +741,12 @@ func (p *PCRPolicy) GetRequiredMask() uint32 {
 		mask |= 1 << 8
 	}
 
+	// PCR 9: bootloader per-file measurements, source of the recorded kernel
+	// image digest.
+	// Unconditional -- the digest is recorded whether or not a policy pins
+	// a kernel, and is trusted only when the quote covers PCR
+	mask |= 1 << 9
+
 	return mask
 }
 

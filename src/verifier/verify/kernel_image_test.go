@@ -142,3 +142,21 @@ func TestRecordedKernelHash_UntrustedImageDoesNotDisplaceTheRegister(t *testing.
 		t.Errorf("used an unauthenticated kernel image measurement: %x", got)
 	}
 }
+
+// The kernel image digest is recorded for every attestation and counts only
+// when the quote covers PCR 9, so PCR 9 is always in the required mask.
+func TestRequiredMask_CoversTheKernelMeasurementRegister(t *testing.T) {
+	p := &PCRPolicy{Name: "no pins at all"}
+
+	mask := p.GetRequiredMask()
+	if mask&(1<<9) == 0 {
+		t.Errorf("a policy that pins nothing does not ask for PCR 9: mask=0x%x", mask)
+	}
+
+	// the registers the boot baseline is built from stay in the mask
+	for _, pcr := range []uint{0, 1, 7, 14} {
+		if mask&(1<<pcr) == 0 {
+			t.Errorf("PCR %d fell out of the required mask", pcr)
+		}
+	}
+}
