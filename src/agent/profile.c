@@ -431,6 +431,25 @@ emit:
 	return 0;
 }
 
+bool profile_aik_cert_stored(const struct profile_paths *paths)
+{
+	struct stat st;
+
+	if (!paths || !paths->aik_cert[0])
+		return false;
+
+	/*
+	 * Empty file is not a certificate.
+	 * A write interrupted between create and content leaves one,
+	 * and treating that as an enrollment would name a key nothing was
+	 * ever issued against.
+	 */
+	if (stat(paths->aik_cert, &st) != 0)
+		return false;
+
+	return S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
 int profile_consent_record(const struct profile_paths *paths, uid_t by)
 {
 	char line[160];

@@ -23,6 +23,7 @@
 #define LOTA_AGENT_PROFILE_H
 
 #include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -173,11 +174,20 @@ int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  size_t *out_count);
 
 /*
+ * profile_aik_cert_stored - does this publisher have an enrollment
+ * certificate on disk?
+ *
+ * The certificate is what names the key to a verifier, so its presence is
+ * what makes a replaced key a problem worth reporting.
+ * Reads nothing: the file either is there or is not.
+ */
+bool profile_aik_cert_stored(const struct profile_paths *paths);
+
+/*
  * Consent to answer to a publisher.
  *
  * Minting AIK for publisher gives them stable handle on this machine,
- * so the host records that somebody agreed to it before the key exists rather
- * than after.
+ * so the host records that somebody agreed to it before the key exists.
  * Record is plain text, root-only like the directory holding it, and states when
  * it was made and by whom -- audit note, not secret: anyone who could forge it
  * could delete the profile instead.

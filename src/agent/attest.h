@@ -136,6 +136,26 @@ const char *attest_stage_str(enum attest_stage stage);
  */
 const char *attest_failure_reason(int ret);
 
+/*
+ * attest_warn_cert_orphaned - say it when provisioning is about to replace
+ * a key this publisher's stored certificate names
+ *
+ * @paths: the profile just bound, or NULL when the caller has none
+ * @label: how this publisher is named in log lines
+ *
+ * Called immediately before provisioning, because provisioning is what makes
+ * the answer stop being true. Every path that binds a profile and provisions
+ * goes through this: the daemon's own, the continuous loop's per-target
+ * binding, and the one-shot round. A cleared TPM strands all of them at once,
+ * and one that stayed quiet would be a publisher whose refusals had no cause
+ * on the host.
+ *
+ * Only logs. The verifier refuses those rounds on its own, and one
+ * publisher's enrollment never takes the host's enforcement down.
+ */
+void attest_warn_cert_orphaned(const struct profile_paths *paths,
+			       const char *label);
+
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);
