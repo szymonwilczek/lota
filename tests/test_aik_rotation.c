@@ -162,6 +162,86 @@ static void test_metadata_key_derivation_round_trip(void)
 	PASS();
 }
 
+/*
+ * A publisher enrolling for the first time has no record, and reading one
+ * that is not there must not invent an answer about a key that does not exist.
+ * The shared derivation belongs to keys created before publishers had keys of
+ * their own; a zeroed struct is not evidence of one, and the enrollment path
+ * prints "replacing the key this publisher shares" when it believes it.
+ */
+static void test_absent_metadata_claims_nothing(void)
+{
+	char path[512];
+	struct tpm_context ctx;
+	struct stat st;
+
+	TEST("a key that does not exist yet is not called shared");
+	make_ctx(&ctx);
+	snprintf(path, sizeof(path), "%s", ctx.aik_meta_path);
+	unlink(path);
+	snprintf(
+		ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+
+	if (tpm_aik_load_metadata(&ctx) != 0) {
+		FAIL("load of an absent record returned error");
+		return;
+	}
+
+	if (tpm_aik_key_is_shared(&ctx)) {
+		FAIL("a publisher with no key was called shared");
+		return;
+	}
+
+	if (stat(path, &st) == 0) {
+		FAIL("reading an absent record wrote one");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * The other half: a host upgraded from a build where every publisher used
+ * one key still has that record, and it still has to mean what it says,
+ * or the enrollment path stops replacing a key it must replace.
+ */
+static void test_recorded_shared_key_still_reads_shared(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+
+	TEST("a recorded shared key still reads as shared");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 1;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+
+	snprintf(
+		ctx2.aik_profile_id, sizeof(ctx2.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+	if (tpm_aik_load_metadata(&ctx2) != 0) {
+		FAIL("load returned error");
+		return;
+	}
+
+	if (!tpm_aik_key_is_shared(&ctx2)) {
+		FAIL("a recorded shared key stopped reading as shared");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -1562,6 +1642,8 @@ int main(void)
 
 	test_metadata_save_load();
 	test_metadata_key_derivation_round_trip();
+	test_absent_metadata_claims_nothing();
+	test_recorded_shared_key_still_reads_shared();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
