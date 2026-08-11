@@ -196,6 +196,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/daemon_loop_telemetry.c \
 			  $(AGENT_DIR)/main_utils.c \
 			  $(AGENT_DIR)/io_utils.c \
+			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
@@ -1374,9 +1375,9 @@ $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DI
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
-$(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $<
+	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c
 
 $(TEST_BIN_DIR)/test_path_sanitize: tests/test_path_sanitize.c $(AGENT_DIR)/path_validate.h | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1533,13 +1534,13 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
 # Interpose libbpf's open calls and the signature verify so the loader's
 # verify-then-load path is testable without a key or a live kernel
-$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer \

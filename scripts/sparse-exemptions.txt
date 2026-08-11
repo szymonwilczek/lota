@@ -67,3 +67,4 @@ installer/tui.c|memset with byte count|Clears the whole struct tui, 152 KB of st
 # the kernel has stx_mnt_id. The compiler reads the kernel header.
 
 tests/test_sb_dev.c|no member 'stx_mnt_id' in struct statx|The test's oracle reads the mount id statx(2) fills in for STATX_MNT_ID; the kernel's struct statx declares it.
+src/agent/sb_dev.c|no member 'stx_mnt_id' in struct statx|sb_dev_from_fd() looks the file's mount up in mountinfo by the id statx(2) fills in for STATX_MNT_ID; the kernel's struct statx declares it.

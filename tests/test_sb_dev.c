@@ -18,14 +18,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <unistd.h>
 
 #include "../include/lota_devt.h"
+#include "../src/agent/sb_dev.h"
 
 static int g_failures;
 
@@ -110,13 +110,16 @@ static int oracle_sb_dev_for_path(const char *path, unsigned long long *out_dev)
  */
 static int loader_key_dev(const char *path, unsigned long long *out_dev)
 {
-	struct stat st = { 0 };
+	int fd;
+	int ret;
 
-	if (stat(path, &st) != 0)
+	fd = open(path, O_RDONLY | O_CLOEXEC | O_PATH);
+	if (fd < 0)
 		return -errno;
 
-	*out_dev = lota_devt_from_st(st.st_dev);
-	return 0;
+	ret = sb_dev_from_fd(fd, out_dev);
+	close(fd);
+	return ret;
 }
 
 static void test_file_key_matches_superblock(const char *path)
@@ -171,6 +174,22 @@ static void test_dir_key_matches_superblock(const char *path)
 	CHECK(actual == expected, msg);
 }
 
+/* Mount a path resolves to, or 0 when it cannot be read */
+static unsigned long long path_mnt_id(const char *path)
+{
+	unsigned long long id = 0;
+	int fd;
+	int ret;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC | O_PATH);
+	if (fd < 0)
+		return 0;
+
+	ret = oracle_mnt_id(fd, &id);
+	close(fd);
+	return ret == 0 ? id : 0;
+}
+
 static int read_record(FILE *f, char *buf, size_t size)
 {
 	size_t len = 0;
@@ -220,6 +239,14 @@ static void test_every_mounted_filesystem(void)
 		if (strchr(mount_point, '\\'))
 			continue;
 
+		/*
+		 * A mount point can be mounted over -- /proc/sys/fs/binfmt_misc
+		 * is autofs with binfmt_misc on top -- and then the path leads
+		 * to the mount above, whose device this line does not name.
+		 */
+		if (path_mnt_id(mount_point) != id)
+			continue;
+
 		if (loader_key_dev(mount_point, &actual) < 0)
 			continue;
 
@@ -241,6 +268,105 @@ static void test_every_mounted_filesystem(void)
 	      "no mounted filesystem keys on a device the BPF side cannot read");
 }
 
+static const char *g_fixture =
+	/* a btrfs filesystem mounted twice: two mount ids, one superblock */
+	"43 1 0:35 /root / rw,relatime shared:1 - btrfs /dev/sdb3 rw,compress=zstd:1,subvol=/root\n"
+	"61 43 0:35 /home /home rw,relatime shared:31 - btrfs /dev/sdb3 rw,compress=zstd:1,subvol=/home\n"
+	"27 25 259:4 / /boot rw,relatime shared:22 - ext4 /dev/nvme0n1p4 rw\n"
+	"not a mountinfo line at all\n";
+
+static void write_fixture(int fd, const char *path, const char *body)
+{
+	FILE *f = fdopen(fd, "w");
+
+	if (!f) {
+		fprintf(stderr, "FAIL: cannot write fixture %s\n", path);
+		close(fd);
+		g_failures++;
+		return;
+	}
+	fputs(body, f);
+	fclose(f);
+}
+
+/*
+ * Two subvolumes of one filesystem answer with the same superblock device
+ * -- the case stat(2) gets wrong -- and a mount that is not listed is refused.
+ */
+static void test_mountinfo_parse(void)
+{
+	char path[] = "/tmp/lota-test-mountinfo-XXXXXX";
+	unsigned long long dev = 0;
+	int fd = mkstemp(path);
+
+	if (fd < 0) {
+		fprintf(stderr, "FAIL: cannot create a fixture file\n");
+		g_failures++;
+		return;
+	}
+	write_fixture(fd, path, g_fixture);
+
+	CHECK(sb_dev_from_mountinfo(path, 43, &dev) == 0 &&
+		      dev == LOTA_DEVT_MKDEV(0, 35),
+	      "a subvolume mount resolves to its superblock device");
+
+	dev = 0;
+	CHECK(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
+		      dev == LOTA_DEVT_MKDEV(0, 35),
+	      "a second subvolume of the same filesystem resolves to the same device");
+
+	dev = 0;
+	CHECK(sb_dev_from_mountinfo(path, 27, &dev) == 0 &&
+		      dev == LOTA_DEVT_MKDEV(259, 4),
+	      "a real block device keeps its major and minor");
+
+	dev = 0xdeadbeefULL;
+	CHECK(sb_dev_from_mountinfo(path, 999, &dev) == -ENODEV &&
+		      dev == 0xdeadbeefULL,
+	      "an unlisted mount is refused and writes nothing");
+
+	CHECK(sb_dev_from_mountinfo("/proc/self/no-such-mountinfo", 43, &dev) <
+		      0,
+	      "a mountinfo that cannot be read is refused");
+
+	unlink(path);
+}
+
+/*
+ * A line longer than the reader's buffer must not have its tail taken for
+ * a record of its own: a mount point can be as long as a path,
+ * and the fields after it are longer still.
+ */
+static void test_long_line_is_not_split(void)
+{
+	char path[] = "/tmp/lota-test-mountinfo-XXXXXX";
+	char body[16384];
+	char pad[9000];
+	unsigned long long dev = 0;
+	int fd = mkstemp(path);
+
+	if (fd < 0) {
+		fprintf(stderr, "FAIL: cannot create a fixture file\n");
+		g_failures++;
+		return;
+	}
+
+	memset(pad, 'a', sizeof(pad) - 1);
+	pad[sizeof(pad) - 1] = '\0';
+
+	snprintf(body, sizeof(body),
+		 "43 1 0:35 / /%s rw,relatime - btrfs /dev/sdb3 rw\n"
+		 "61 43 0:36 / /home rw,relatime - btrfs /dev/sdb3 rw\n",
+		 pad);
+	write_fixture(fd, path, body);
+
+	CHECK(sb_dev_from_mountinfo(path, 61, &dev) == 0 &&
+		      dev == LOTA_DEVT_MKDEV(0, 36),
+	      "the record after an over-long line is read as one record");
+
+	unlink(path);
+}
+
 int main(void)
 {
 	char self[PATH_MAX];
@@ -248,6 +374,9 @@ int main(void)
 	ssize_t len;
 
 	printf("=== trusted-library map key device tests ===\n");
+
+	test_mountinfo_parse();
+	test_long_line_is_not_split();
 
 	len = readlink("/proc/self/exe", self, sizeof(self) - 1);
 	if (len <= 0) {
