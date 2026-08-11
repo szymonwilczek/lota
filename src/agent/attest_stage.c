@@ -10,9 +10,8 @@
  * stack behind it.
  */
 
-#include <string.h>
-
 #include "attest.h"
+#include "tpm.h"
 
 static const char *const stage_names[ATTEST_STAGE_COUNT] = {
 	[ATTEST_STAGE_TLS_SETUP] = "TLS setup",
@@ -32,13 +31,8 @@ const char *attest_stage_str(enum attest_stage stage)
 	return stage_names[stage] ? stage_names[stage] : "an unnamed stage";
 }
 
-/*
- * Renders the return value the way the round's call site in attest.c
- * does: strerror() on its magnitude.
- */
+/* tpm_strerror() lives in tpm_errno.c, which links without a TPM */
 const char *attest_failure_reason(int ret)
 {
-	int code = ret < 0 ? -ret : ret;
-
-	return strerror(code);
+	return tpm_strerror(ret);
 }
