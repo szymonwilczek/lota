@@ -3002,10 +3002,14 @@ cleanup:
  */
 #define TPM_EK_RSA_HANDLE 0x81010001
 
+static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
+		       bool *out_transient);
+
 int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id)
 {
 	TSS2_RC rc;
 	ESYS_TR ek_handle = ESYS_TR_NONE;
+	bool ek_transient = false;
 	TPM2B_PUBLIC *ek_public = NULL;
 	TPM2B_NAME *ek_name = NULL;
 	TPM2B_NAME *ek_qualified_name = NULL;
@@ -3019,18 +3023,17 @@ int tpm_get_hardware_id(struct tpm_context *ctx, uint8_t *hardware_id)
 	memset(hardware_id, 0, LOTA_HARDWARE_ID_SIZE);
 
 	/*
-	 * Try to read EK from standard persistent handle.
-	 * Most TPMs have EK provisioned at 0x81010001.
-	 */
-	TPM_CALL_RETRY(ctx, rc,
-		       Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE,
-					     ESYS_TR_NONE, ESYS_TR_NONE,
-					     ESYS_TR_NONE, &ek_handle));
-	if (rc != TSS2_RC_SUCCESS) {
+	* The hardware ID follows the EK, which outlives TPM2_Clear: a clear
+	* evicts the persistent handle but keeps the endorsement seed,
+	* so tpm_load_ek() recreates the same key.
+	* The AIK fallback below is only for a TPM that yields no EK at all.
+	*/
+	if (tpm_load_ek(ctx, &ek_handle, &ek_transient) < 0) {
 		/*
-		 * EK not at standard handle - this is common.
-		 * Fall back to using AIK fingerprint as hardware ID.
-		 * Less ideal but still unique per TPM installation.
+		 * No EK at all: no persistent handle and the endorsement
+		 * hierarchy would not yield one.
+		 * Fall back to the AIK fingerprint, which is still unique
+		 * per installation.
 		 */
 		uint8_t aik_buf[LOTA_MAX_AIK_PUB_SIZE];
 		size_t aik_size;
@@ -3125,6 +3128,8 @@ cleanup:
 		Esys_Free(ek_name);
 	if (ek_qualified_name)
 		Esys_Free(ek_qualified_name);
+	if (ek_transient && ek_handle != ESYS_TR_NONE)
+		Esys_FlushContext(ctx->esys_ctx, ek_handle);
 
 	return ret;
 }
