@@ -196,8 +196,8 @@ func (m *Metrics) Export() string {
 		m.Rejections.Values(),
 		[]string{
 			"nonce_fail", "sig_fail", "pcr_fail",
-			"integrity_mismatch", "revoked", "banned",
-			"baseline_error",
+			"identity_fail", "integrity_mismatch", "revoked",
+			"banned", "baseline_error",
 		})
 
 	// labeled re-anchor outcomes

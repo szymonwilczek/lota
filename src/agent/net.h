@@ -71,6 +71,7 @@ struct verifier_result {
 #define VERIFY_REVOKED 7
 #define VERIFY_BANNED 8
 #define VERIFY_INTERNAL_ERROR 9
+#define VERIFY_IDENTITY_FAIL 10
 
 /*
  * The likely cause of a connect(2) that was refused, as a sentence the operator

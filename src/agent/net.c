@@ -861,6 +861,12 @@ const char *net_result_str(uint32_t result)
 		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
+	case VERIFY_IDENTITY_FAIL:
+		return "FAIL - The certificate this host presented does not "
+		       "certify the key it signed with, so the publisher "
+		       "cannot tell which machine this is. A TPM clear leaves "
+		       "exactly this. Run lota-agent --reenroll --ca-cert "
+		       "<their anchor>";
 	default:
 		return "FAIL - Unknown error";
 	}

@@ -35,7 +35,7 @@ static int g_failures;
 /* Every code the verifier can send, by the number it sends it as.
  * Written as literals rather than through the macros so a code the agent
  * has not learned yet is a failing test rather than a build error. */
-#define FIRST_UNKNOWN_CODE 10
+#define FIRST_UNKNOWN_CODE 11
 
 static const char *g_default;
 

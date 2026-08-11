@@ -416,6 +416,18 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
+// certificateVerdict maps an AIK certificate failure to the verdict the agent
+// is told. A certificate naming a key other than the one that signed the quote
+// is VerifyIdentityFail, which re-enrolling fixes (a TPM clear leaves this).
+// Expiry, chain and configuration failures stay VerifySigFail:
+// their fix lies with the operator or the CA.
+func certificateVerdict(err error) uint32 {
+	if errors.Is(err, store.ErrCertificateKeyMatch) {
+		return types.VerifyIdentityFail
+	}
+	return types.VerifySigFail
+}
+
 // performs full verification of attestation report
 // returns verification result ready to send back to client
 //
@@ -536,8 +548,9 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	aikLeaf, err := certVerifier.VerifyAIKCertificate(reportAIK, aikCert)
 	if err != nil {
 		logging.Security(clog, "AIK certificate verification failed", "error", err)
-		v.metrics.Rejections.Inc("sig_fail")
-		result.Result = types.VerifySigFail
+		verdict := certificateVerdict(err)
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, fmt.Errorf("AIK certificate verification failed: %w", err)
 	}
 

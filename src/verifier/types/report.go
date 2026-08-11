@@ -94,6 +94,11 @@ const (
 	VerifyRevoked           uint32 = 7 // AIK revoked by administrator
 	VerifyBanned            uint32 = 8 // hardware ID banned
 	VerifyInternalError     uint32 = 9 // verifier internal error / unset failure path
+
+	// VerifyIdentityFail: the quote's signature verified, but the AIK
+	// certificate names another key. Kept apart from VerifySigFail
+	// because only this one is fixed by re-enrolling.
+	VerifyIdentityFail uint32 = 10
 )
 
 // returns a deterministic string for a result code
@@ -119,6 +124,8 @@ func VerifyResultString(code uint32) string {
 		return "banned"
 	case VerifyInternalError:
 		return "internal_error"
+	case VerifyIdentityFail:
+		return "identity_fail"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}
