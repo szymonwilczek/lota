@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# Literals scripts/check-doc-diagnostics.sh would read as a quoted diagnostic
+# and that are not one.
+# Each line is a whitespace-normalised literal, matched whole.
+# Keep the reason with the entry: an exemption without one is how a real
+# paraphrase gets waved through later.
+
+# A capacity formula in the sizing guide, not a message.
+N instances x pool
+
+# The three verdicts a watcher prints one at a time, written as a set.
+TRUSTED / UNTRUSTED / OFFLINE
+
+# A Go structured log line. The verifier passes the message and the attribute
+# separately and the handler renders them together, so no format string in the
+# tree carries the rendered text.
+Postgres store initialized schema_version=1
