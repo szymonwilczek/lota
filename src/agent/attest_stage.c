@@ -10,6 +10,8 @@
  * stack behind it.
  */
 
+#include <string.h>
+
 #include "attest.h"
 
 static const char *const stage_names[ATTEST_STAGE_COUNT] = {
@@ -28,4 +30,15 @@ const char *attest_stage_str(enum attest_stage stage)
 	if (stage < 0 || stage >= ATTEST_STAGE_COUNT)
 		return "an unnamed stage";
 	return stage_names[stage] ? stage_names[stage] : "an unnamed stage";
+}
+
+/*
+ * Renders the return value the way the round's call site in attest.c
+ * does: strerror() on its magnitude.
+ */
+const char *attest_failure_reason(int ret)
+{
+	int code = ret < 0 ? -ret : ret;
+
+	return strerror(code);
 }

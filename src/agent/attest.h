@@ -128,6 +128,14 @@ enum attest_stage {
  */
 const char *attest_stage_str(enum attest_stage stage);
 
+/*
+ * Why a round failed, for the line the loop logs.
+ *
+ * Takes a return value from the round, negative errno or LOTA-private
+ * TPM code, and yields a printable reason. Never NULL.
+ */
+const char *attest_failure_reason(int ret);
+
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin_sha256);
