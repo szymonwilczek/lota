@@ -98,3 +98,47 @@ func TestExtractKernelImageDigest_ConflictingImagesRefused(t *testing.T) {
 		t.Error("accepted a log measuring two different kernel images")
 	}
 }
+
+// The recorded value and the kernel_hashes gate read one source,
+// or a policy copied from the log refuses the host it came from.
+func TestRecordedKernelHash_PrefersTheMeasuredImage(t *testing.T) {
+	var report types.AttestationReport
+	for i := range report.System.KernelHash {
+		report.System.KernelHash[i] = 0xEE // the PCR 9 aggregate
+	}
+
+	facts := &BootFacts{
+		KernelImage: KernelImage{
+			Found:  true,
+			Path:   "(hd0,gpt4)/vmlinuz-7.1.8-200.fc44.x86_64",
+			Digest: bytes.Repeat([]byte{0x5b}, types.HashSize),
+		},
+		KernelImageTrusted: true,
+	}
+
+	got := RecordedKernelHash(&report, facts)
+	if !bytes.Equal(got[:], facts.KernelImage.Digest) {
+		t.Errorf("recorded the register instead of the measured image: %x", got)
+	}
+}
+
+// An image digest the quote does not cover leaves the reported value alone.
+func TestRecordedKernelHash_UntrustedImageDoesNotDisplaceTheRegister(t *testing.T) {
+	var report types.AttestationReport
+	for i := range report.System.KernelHash {
+		report.System.KernelHash[i] = 0xEE
+	}
+
+	facts := &BootFacts{
+		KernelImage: KernelImage{
+			Found:  true,
+			Digest: bytes.Repeat([]byte{0x5b}, types.HashSize),
+		},
+		KernelImageTrusted: false, // PCR 9 not quoted, or replay disagreed
+	}
+
+	got := RecordedKernelHash(&report, facts)
+	if !bytes.Equal(got[:], report.System.KernelHash[:]) {
+		t.Errorf("used an unauthenticated kernel image measurement: %x", got)
+	}
+}

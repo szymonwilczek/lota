@@ -689,7 +689,13 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
-	kernelHashHex = hex.EncodeToString(report.System.KernelHash[:])
+	recordedKernelHash := RecordedKernelHash(report, bootFacts)
+	kernelHashHex = hex.EncodeToString(recordedKernelHash[:])
+	if bootFacts != nil && bootFacts.KernelImageTrusted &&
+		bootFacts.KernelImage.Found {
+		clog.Debug("kernel hash taken from the measured kernel image",
+			"path", bootFacts.KernelImage.Path)
+	}
 
 	// PCR14 carries exactly one construction:
 	// the initramfs lock value the 90lota dracut helper extends before
@@ -983,15 +989,15 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// Advisory: the hash is of a file the agent read, so nothing gates on it.
 	// It is carried in the digest the TPM signs, so the stored value is attested.
 	if kr, ok := v.baselineStore.(KernelHashRecorder); ok {
-		prev, had, err := kr.RecordKernelHash(clientID, report.System.KernelHash)
+		prev, had, err := kr.RecordKernelHash(clientID, recordedKernelHash)
 		switch {
 		case err != nil:
 			clog.Warn("failed to record the reported kernel hash", "error", err)
-		case had && prev != report.System.KernelHash:
+		case had && prev != recordedKernelHash:
 			clog.Info("kernel_hash changed",
 				"previous_kernel_hash", hex.EncodeToString(prev[:]),
 				"reported_kernel_hash", kernelHashHex,
-				"note", "advisory: the boot measurement this device reports is not the one it reported before. What it covers depends on how the host boots -- a unified kernel image on a systemd-stub host, the kernel and the initramfs on a GRUB one, so an initramfs rebuild moves it too")
+				"note", "advisory: this device booted a different kernel image than the one it booted before. The digest is the bootloader's own measurement of the image, taken from the quote-authenticated event log, so a rebooted host reports the same value until the kernel it loads changes. Hosts that measure no kernel image under a name the verifier recognises fall back to the register the agent reports, which covers everything the bootloader read and moves on an ordinary reboot")
 		}
 	}
 

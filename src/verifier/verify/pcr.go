@@ -530,7 +530,8 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 	// check kernel hash
 	if len(policy.KernelHashes) > 0 {
-		kernelHashHex := hex.EncodeToString(report.System.KernelHash[:])
+		recorded := RecordedKernelHash(report, facts)
+		kernelHashHex := hex.EncodeToString(recorded[:])
 		found := false
 		for _, allowed := range policy.KernelHashes {
 			if kernelHashHex == allowed {
