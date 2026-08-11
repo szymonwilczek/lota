@@ -121,6 +121,41 @@ Firmware and boot
        verifier rejects the report. Switch the firmware out of legacy/CSM mode
        and reinstall.
 
+Which registers a policy can pin
+--------------------------------
+
+A policy that pins a PCR is asking that register to hold still. Not all of them
+do, and which ones move is a property of the boot path.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Register
+     - Stability
+   * - PCR 0, 1, 7
+     - Stable across kernel upgrades and across a machine-owner key change.
+       These are what a boot-state pin is built from.
+   * - PCR 14
+     - The LOTA commitment, derived over the platform baseline. On a shim host
+       the baseline carries the MOK state, so enrolling a machine-owner key
+       moves it while PCR 7 does not -- an enrolled host then reports an
+       integrity mismatch until an operator re-anchors it. That is the review
+       gate a boot-chain change is meant to pass through, not a fault.
+   * - PCR 4, 8, 9, 10
+     - Move with a kernel upgrade, and on a GRUB host **also move with boot
+       history**. ``grubenv`` is measured into PCR 9 and GRUB rewrites it every
+       boot; GRUB's menu logic branches on ``boot_success``, so PCR 8 records a
+       different command sequence after an interrupted boot. Two boots of one
+       kernel, with the kernel and initramfs digests byte-identical, differ in
+       both. A pin on either re-pins after every unclean shutdown.
+
+A consumer fleet pins none of these and is unaffected by a kernel upgrade: the
+upgrade touches neither the boot baseline nor the PCR 14 commitment, so the
+host keeps attesting with nothing to re-anchor. An enterprise fleet that pins
+PCR 4, 8, 9 or 10 refuses the host after the upgrade, correctly by its own
+rules, and the operator updates the pins.
+
 TPM
 ===
 
