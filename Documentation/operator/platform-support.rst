@@ -124,12 +124,40 @@ Firmware and boot
 TPM
 ===
 
-The agent requires a **TPM 2.0**. Production hosts use a hardware TPM --
-a discrete TPM (dTPM) or a firmware TPM (fTPM / Intel PTT). The documented
-development environment is a KVM guest with a swTPM backend over TIS; its two
-divergences from hardware (persistent state across guest reboots, and a quote
-clock quirk) and the operator workarounds are covered under
-:doc:`production-bringup/post-bringup`.
+The agent requires a **TPM 2.0**.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 22 56
+
+   * - Device
+     - Tier
+     - What it means for a deployment
+   * - Firmware TPM (fTPM / Intel PTT)
+     - Supported
+     - The reference hardware device: the full path -- enrollment against a
+       manufacturer EK certificate, boot commitment, quoting under load,
+       suspend and resume, dictionary-attack lockout and recovery -- runs on
+       one. Its limits are the ones a deployment meets first: a small
+       persistent-object pool shared with whatever else on the machine
+       persists keys, small command and NV buffers, and quote latency
+       measured in tens of milliseconds.
+   * - Discrete TPM (dTPM)
+     - Supported
+     - The same interfaces over a separate chip. Nothing in the agent
+       distinguishes the two; a dTPM is typically more generous with
+       persistent objects and is **not** automatically faster at quoting.
+   * - swTPM (KVM guest, TIS)
+     - Development only
+     - The documented development environment. It is fast, permissive,
+       always freshly initialised and never locked out, so it cannot stand
+       in for a hardware device when the question is capacity, latency or
+       lockout behaviour. Its divergences and the operator workarounds are
+       under :doc:`production-bringup/post-bringup`.
+
+The measurements and limits below were taken on an Intel PTT (CSME Tiger Lake)
+firmware TPM. Read them as the order of magnitude for that class of device and
+measure the hardware a deployment ships on.
 
 How many publishers a TPM has room for
 --------------------------------------
