@@ -1162,6 +1162,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
+	$(TEST_BIN_DIR)/test_sb_dev \
 	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
 	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
@@ -1370,6 +1371,10 @@ $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_uti
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
@@ -1587,6 +1592,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
+	@$(BUILD_DIR)/test_sb_dev
 	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
 	@$(BUILD_DIR)/test_tpm_nv_chunk
@@ -1708,7 +1714,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_event_budget \
+	test_installer_probe test_devt test_sb_dev test_event_budget \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
