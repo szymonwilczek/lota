@@ -1066,3 +1066,38 @@ func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
 		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
 	return err
 }
+
+// RecordKernelHash implements KernelHashRecorder against Postgres.
+// See the SQLite implementation for why the value is kept and why it gates nothing.
+func (s *PostgresBaselineStore) RecordKernelHash(clientID string,
+	kernelHash [types.HashSize]byte,
+) (prev [types.HashSize]byte, had bool, err error) {
+	var stored []byte
+	if err := s.db.QueryRow(
+		`SELECT kernel_hash FROM baselines WHERE client_id = $1`,
+		clientID,
+	).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return prev, false, nil
+		}
+		return prev, false, err
+	}
+
+	if len(stored) == types.HashSize {
+		copy(prev[:], stored)
+		had = true
+	}
+
+	if had && prev == kernelHash {
+		return prev, had, nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE baselines SET kernel_hash = $1 WHERE client_id = $2`,
+		kernelHash[:], clientID,
+	); err != nil {
+		return prev, had, err
+	}
+
+	return prev, had, nil
+}

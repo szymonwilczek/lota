@@ -418,10 +418,11 @@ func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
 
 	_, err := l.db.Exec(
 		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
+		entry.KernelHash,
 	)
 	return err
 }
@@ -441,8 +442,8 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 
 	stmt, err := tx.Prepare(
 		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return rollbackOnErr(tx, err)
 	}
@@ -457,7 +458,7 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 		if _, err := stmt.Exec(
 			ts, entries[i].Tenant, entries[i].ClientID, entries[i].HardwareID,
 			entries[i].Result, entries[i].DurationMs, entries[i].PCR14,
-			entries[i].Details, entries[i].RemoteAddr,
+			entries[i].Details, entries[i].RemoteAddr, entries[i].KernelHash,
 		); err != nil {
 			return rollbackOnErr(tx, err)
 		}
@@ -469,7 +470,7 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT ?"
@@ -491,7 +492,8 @@ func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord 
 	for rows.Next() {
 		var e AttestationRecord
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
-			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
+			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
+			&e.KernelHash); err == nil {
 			entries = append(entries, e)
 		}
 	}

@@ -438,6 +438,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	clientID := challengeID
 	clog := logging.WithClient(v.log, clientID)
 	var pcr14Hex string
+	var kernelHashHex string
 	var hwID string
 	// tenant stays empty until the AIK certificate authenticates it.
 	// attestation record without a tenant is one that never proved
@@ -470,6 +471,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				Result:     resultStr,
 				DurationMs: float64(duration.Milliseconds()),
 				PCR14:      pcr14Hex,
+				KernelHash: kernelHashHex,
 			}); err != nil {
 				clog.Warn("failed to record attestation decision", "error", err)
 			}
@@ -687,6 +689,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	// check agent self-measurement against baseline
 	pcr14 := report.TPM.PCRValues[14]
 	pcr14Hex = FormatPCR14(pcr14)
+	kernelHashHex = hex.EncodeToString(report.System.KernelHash[:])
 
 	// PCR14 carries exactly one construction:
 	// the initramfs lock value the 90lota dracut helper extends before
@@ -974,6 +977,23 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	clog.Info("verification successful")
+
+	// Record which kernel image this device reported, and log once when it
+	// changes.
+	// Advisory: the hash is of a file the agent read, so nothing gates on it.
+	// It is carried in the digest the TPM signs, so the stored value is attested.
+	if kr, ok := v.baselineStore.(KernelHashRecorder); ok {
+		prev, had, err := kr.RecordKernelHash(clientID, report.System.KernelHash)
+		switch {
+		case err != nil:
+			clog.Warn("failed to record the reported kernel hash", "error", err)
+		case had && prev != report.System.KernelHash:
+			clog.Info("kernel_hash changed",
+				"previous_kernel_hash", hex.EncodeToString(prev[:]),
+				"reported_kernel_hash", kernelHashHex,
+				"note", "advisory: the kernel image the agent measured is not the one it reported before")
+		}
+	}
 
 	// stamp the CA-assigned tenant on the baseline row so the operator
 	// surface can scope this client.

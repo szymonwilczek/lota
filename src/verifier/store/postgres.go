@@ -63,7 +63,8 @@ var pgMigrations = []migration{
 				lfa_review_pending       BOOLEAN NOT NULL DEFAULT FALSE,
 				tenant                   TEXT NOT NULL DEFAULT 'default',
 				agent_hash_repin_count   BIGINT NOT NULL DEFAULT 0,
-				last_agent_hash_repin_at TIMESTAMPTZ
+				last_agent_hash_repin_at TIMESTAMPTZ,
+				kernel_hash              BYTEA
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
@@ -121,7 +122,8 @@ var pgMigrations = []migration{
 				pcr14       TEXT NOT NULL DEFAULT '',
 				details     TEXT NOT NULL DEFAULT '',
 				remote_addr TEXT NOT NULL DEFAULT '',
-				tenant      TEXT NOT NULL DEFAULT 'default'
+				tenant      TEXT NOT NULL DEFAULT 'default',
+				kernel_hash TEXT NOT NULL DEFAULT ''
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);

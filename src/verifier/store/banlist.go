@@ -409,6 +409,12 @@ type AttestationRecord struct {
 	PCR14      string  // hex-encoded PCR14 value, empty if not available
 	Details    string  // human-readable detail or error message
 	RemoteAddr string  // client IP address
+
+	// hex-encoded kernel image hash the agent reported, empty if unknown.
+	// Advisory: it gates nothing, and it is what an operator reads to answer
+	// whether a device's kernel changed.
+	// It is covered by the quote, so a recorded value is attested.
+	KernelHash string
 }
 
 // implements AttestationLog using an in-memory slice

@@ -408,10 +408,11 @@ func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 
 	_, err := l.db.Exec(
 		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
 		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
+		entry.KernelHash,
 	)
 	return err
 }
@@ -421,10 +422,10 @@ func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error 
 		return nil
 	}
 
-	const cols = 9
+	const cols = 10
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr) VALUES `)
+		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash) VALUES `)
 	args := make([]any, 0, len(entries)*cols)
 	now := time.Now().UTC()
 	for i := range entries {
@@ -436,11 +437,13 @@ func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error 
 			sb.WriteByte(',')
 		}
 		base := i * cols
-		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9)
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
+			base+9, base+10)
 		args = append(args, ts, entries[i].Tenant, entries[i].ClientID,
 			entries[i].HardwareID, entries[i].Result, entries[i].DurationMs,
-			entries[i].PCR14, entries[i].Details, entries[i].RemoteAddr)
+			entries[i].PCR14, entries[i].Details, entries[i].RemoteAddr,
+			entries[i].KernelHash)
 	}
 
 	_, err := l.db.Exec(sb.String(), args...)
@@ -448,7 +451,7 @@ func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error 
 }
 
 func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT $1"
@@ -470,7 +473,8 @@ func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecor
 	for rows.Next() {
 		var e AttestationRecord
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
-			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr); err == nil {
+			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
+			&e.KernelHash); err == nil {
 			entries = append(entries, e)
 		}
 	}

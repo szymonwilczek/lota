@@ -1378,6 +1378,7 @@ type attestationResponse struct {
 	Result     string  `json:"result"`
 	DurationMs float64 `json:"duration_ms"`
 	PCR14      string  `json:"pcr14,omitempty"`
+	KernelHash string  `json:"kernel_hash,omitempty"`
 	Details    string  `json:"details,omitempty"`
 	RemoteAddr string  `json:"remote_addr,omitempty"`
 }
@@ -1416,6 +1417,7 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 			Result:     e.Result,
 			DurationMs: e.DurationMs,
 			PCR14:      e.PCR14,
+			KernelHash: e.KernelHash,
 			Details:    sanitizeAttestationDetail(e.Details),
 			RemoteAddr: e.RemoteAddr,
 		})
