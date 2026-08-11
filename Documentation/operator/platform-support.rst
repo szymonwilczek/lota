@@ -230,6 +230,79 @@ Two consequences hold under either figure:
 A discrete TPM is not automatically faster. Nothing here is a floor: measure
 the hardware a deployment actually ships on.
 
+Dictionary-attack lockout
+-------------------------
+
+A TPM counts failed authorization attempts and stops answering when the count
+reaches its threshold. The three properties that decide what that costs a fleet
+are per-device and are read from the chip, not assumed:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 18 48
+
+   * - Property
+     - Example
+     - What it governs
+   * - ``TPM2_PT_MAX_AUTH_FAIL``
+     - 32
+     - How many failures reach lockout. The example device enters lockout on
+       exactly the 32nd.
+   * - ``TPM2_PT_LOCKOUT_INTERVAL``
+     - 7200 s
+     - How fast the counter drains on its own: one attempt forgiven per
+       interval, so a host walks out of lockout in its own time.
+   * - ``TPM2_PT_LOCKOUT_RECOVERY``
+     - 86400 s
+     - How long the **lockout hierarchy** stays barred after a failed
+       ``lockoutAuth``. It is not the wait for an object lockout, which is
+       what the interval above governs.
+
+Read them with ``tpm2_getcap properties-variable`` and
+``tpm2_getcap properties-fixed``. The agent reports the state it sees rather
+than an errno: a round that fails on a locked-out device says
+``TPM dictionary-attack lockout engaged``.
+
+**Whether recovery is a command or a wait is decided by who holds
+``lockoutAuth``, and that is a property of the deployment, not of LOTA.** With
+the value in hand, recovery is ``tpm2_dictionarylockout --clear-lockout`` and
+the next attestation round succeeds. Without it, the fleet either waits out the
+drain or clears the TPM and re-enrolls. Check ``lockoutAuthSet`` before
+assuming: a machine that has run another operating system may have had the
+value set by it, and an OS that derives the authorization instead of storing it
+leaves nothing to recover. Provision hosts so the fleet owns ``lockoutAuth``,
+or plan for the wait.
+
+A failed authorization against the **platform** hierarchy does not move the
+counter, so probing platform-owned state costs nothing in lockout terms.
+
+What clearing a TPM costs
+-------------------------
+
+Clearing is the last resort behind an unrecoverable ``lockoutAuth``, and it is
+survivable but not free. It destroys **every persistent object**: each
+publisher's attestation key and any persisted EK. It leaves **NV storage
+alone**, so the manufacturer EK certificates stay on the chip, and it does not
+touch the PCRs.
+
+For LOTA that means every publisher enrollment on the host is gone and each has
+to be re-established with ``lota-agent --reenroll --ca-cert <their anchor>``.
+The agent mints fresh keys on its next round, so a verifier holding the old
+certificate sees a host whose key no longer matches what it was issued and
+refuses it by name until the re-enrollment lands.
+
+Where the authorization to clear comes from is firmware-dependent. Both
+hierarchy-authorized routes need a value the fleet may not hold, and the
+platform's own physical-presence interface is the way through when they do not:
+read ``/sys/class/tpm/tpm0/ppi/`` for the version, the transition action and
+whether the firmware marks the clear operation as requiring a user at the
+keyboard. Where it does not, writing the operation to ``request`` and rebooting
+performs it, and ``response`` reports the result afterwards. **Write 0 to
+``request`` before writing an operation**: firmware has been observed returning
+junk from that file when nothing is pending, so a stale-looking value is not
+evidence of a queued request, and an unexecuted one can sit there across many
+reboots.
+
 Suspend and resume
 ------------------
 
