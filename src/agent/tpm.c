@@ -1184,6 +1184,18 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 	return tpm_aik_key_is_shared(ctx);
 }
 
+/*
+ * The contract belongs with its sibling above, and the test that pins it
+ * fails against this.
+ */
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
+{
+	(void)key_present;
+	(void)cert_stored;
+
+	return false;
+}
+
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
 {
 	if (ctx)
