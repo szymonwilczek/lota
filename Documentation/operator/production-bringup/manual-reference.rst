@@ -212,8 +212,8 @@ key is a security-relevant boot-chain change. The agent therefore provisions its
 the unauthenticated clock and must be rebound on the next start. A re-install
 that changes either the initramfs helper or the agent binary without rebuilding
 initramfs and cold-rebooting reports a PCR14 derivation mismatch or
-``PCR14 holds a boot commitment from a different agent binary``. Wipe the
-witness file and the persistent AIK, then reboot:
+``This is not the lota-agent build PCR 14 committed to when the host booted``.
+Wipe the witness file and the persistent AIK, then reboot:
 
 .. code-block:: sh
 

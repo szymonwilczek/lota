@@ -15,7 +15,8 @@ The most common failures, with the gate that produced them:
   ``[confidentiality]``), ``cat /sys/module/module/parameters/sig_enforce``
   (must be ``Y``), and ``grep -oE 'ima_appraise=\w+' /proc/cmdline`` (must
   report ``enforce`` or ``fix``).
-* ``Agent binary is not protected against offline tampering``. On
+* ``Agent binary (/proc/self/exe) is not protected against offline
+  tampering``. On
   ext4/btrfs/f2fs re-run ``fsverity enable`` on ``/usr/bin/lota-agent``; the
   verity merkle root is bound to the inode, so re-installs invalidate the bit
   and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
@@ -472,9 +473,9 @@ VM testing caveats
 ------------------
 
 The supported development environment is a KVM guest with a swTPM backend
-attached over TIS. Two behaviours diverge from bare metal and the agent's
-startup gates treat them as integrity violations unless the operator works
-around them.
+attached over TIS. Two behaviours diverge from bare metal, and the second is
+one the agent's startup gates treat as an integrity violation unless the
+operator works around it.
 
 * **swTPM persists state across guest reboots.** The TPM resource manager runs
   as a host process backed by an NV state file. A ``sudo reboot`` inside the
@@ -483,10 +484,19 @@ around them.
   host keeps the same ``resetCount`` unless the libvirt XML carries
   ``<backend ... persistent_state='no'/>`` or swTPM is started with
   ``--flags startup-clear``. The guest's PCR14 resets to all-zero on each
-  Startup(CLEAR) but ``resetCount`` does not advance; the agent's witness records
-  the old ``(resetCount, last_extend)`` tuple and the next start reports
-  ``PCR14 cleared while resetCount=N unchanged since last extend``. Before each
-  test run on a guest without that XML setting, wipe the witness and evict the
+  Startup(CLEAR) but ``resetCount`` does not advance.
+
+  A guest that boots with the ``90lota`` dracut module comes up normally
+  anyway: the helper locks the cleared register, the agent finds the lock
+  value and extends its commitment onto it exactly as on hardware. What the
+  frozen counter costs is coverage, not availability -- the attributions that
+  key off the counter moving (a cold boot the agent did not see, a rolled-back
+  TPM state file) cannot be exercised on such a guest, so those paths are
+  hardware or ``persistent_state='no'`` territory.
+
+  The state that does survive is the TPM's: a guest reused across agent builds
+  carries the earlier run's persistent AIK and the witness that names it. To
+  start a test run from a clean slate, wipe the witness and evict the
   persistent AIK:
 
   .. code-block:: sh

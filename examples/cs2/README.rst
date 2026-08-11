@@ -425,9 +425,9 @@ attempt and match against this table:
 |                                              | does not include the LOTA socket directory.                     |
 +----------------------------------------------+-----------------------------------------------------------------+
 | ``connected to agent`` followed by           | Agent reachable but refusing token issuance. Under              |
-| ``get_token: Agent returned error``          | ``--test-ipc`` this is expected (``policy_digest is not set``   |
-|                                              | plus                                                            |
-|                                              | ``TPM context is required - refuse to issue unsigned tokens``). |
+| ``get_token: Agent returned error``          | ``--test-ipc`` this is expected: the policy digest is unset and |
+|                                              | there is no TPM context, and the agent will not sign a token    |
+|                                              | it cannot back.                                                 |
 |                                              | Switch to ``--test-signed`` to provision a real TPM Quote; the  |
 |                                              | in-tree fixture policy digest is applied automatically on the   |
 |                                              | test paths.                                                     |
