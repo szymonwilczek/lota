@@ -717,7 +717,6 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->config_fd = -1;
 	ctx->task_auth_fd = -1;
 	ctx->trusted_libs_fd = -1;
-	ctx->trusted_lib_mnt_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 
@@ -1038,21 +1037,6 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
-	/* Get trusted parent mountpoint map fd */
-	ctx->trusted_lib_mnt_fd =
-		bpf_object__find_map_fd_by_name(ctx->obj, "trusted_lib_mnt");
-	if (ctx->trusted_lib_mnt_fd < 0) {
-		ctx->trusted_lib_mnt_fd = -1; /* optional map */
-	} else {
-		err = harden_fd_cloexec(ctx->trusted_lib_mnt_fd,
-					"trusted_lib_mnt map");
-		if (err < 0) {
-			lota_err("Failed to harden trusted_lib_mnt map fd: %s",
-				 strerror(-err));
-			goto err_close;
-		}
-	}
-
 	/* Get protected PIDs map fd */
 	ctx->protected_pids_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "protected_pids");
@@ -1308,7 +1292,6 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->task_auth_fd = -1;
 	ctx->integrity_fd = -1;
 	ctx->trusted_libs_fd = -1;
-	ctx->trusted_lib_mnt_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 }
@@ -1667,111 +1650,6 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st,
 	return 0;
 }
 
-static int stat_dir_nofollow(const char *path, struct stat *st,
-			     unsigned long long *sb_dev)
-{
-	int fd = -1;
-	int ret = 0;
-
-	if (!path || !st)
-		return -EINVAL;
-
-	if (path[0] != '/')
-		return -EINVAL;
-
-	{
-		struct open_how how = {
-			.flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
-			.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-		};
-
-		fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how,
-				  sizeof(how));
-		if (fd < 0 && errno != ENOSYS && errno != EINVAL)
-			return -errno;
-	}
-
-	if (fd < 0) {
-		int dirfd = -1;
-		const char *p = path;
-
-		dirfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-		if (dirfd < 0)
-			return -errno;
-
-		while (*p == '/')
-			p++;
-
-		if (*p == '\0') {
-			fd = dirfd;
-			dirfd = -1;
-		}
-
-		while (fd < 0 && *p != '\0') {
-			char name[NAME_MAX + 1];
-			const char *slash = strchr(p, '/');
-			size_t n = slash ? (size_t)(slash - p) : strlen(p);
-			int nextfd;
-
-			if (n == 0) {
-				p++;
-				continue;
-			}
-			if (n > NAME_MAX) {
-				close(dirfd);
-				return -ENAMETOOLONG;
-			}
-
-			memcpy(name, p, n);
-			name[n] = '\0';
-
-			nextfd = openat(dirfd, name,
-					O_PATH | O_DIRECTORY | O_NOFOLLOW |
-						O_CLOEXEC);
-			close(dirfd);
-			if (nextfd < 0)
-				return -errno;
-			dirfd = nextfd;
-
-			if (!slash) {
-				fd = dirfd;
-				dirfd = -1;
-				break;
-			}
-
-			p = slash + 1;
-			while (*p == '/')
-				p++;
-		}
-
-		if (dirfd >= 0)
-			close(dirfd);
-
-		if (fd < 0)
-			return -EINVAL;
-	}
-
-	if (fstat(fd, st) != 0) {
-		ret = -errno;
-		close(fd);
-		return ret;
-	}
-
-	if (sb_dev) {
-		ret = sb_dev_from_fd(fd, sb_dev);
-		if (ret < 0) {
-			close(fd);
-			return ret;
-		}
-	}
-
-	close(fd);
-	if (!S_ISDIR(st->st_mode))
-		return -EINVAL;
-
-	return 0;
-}
-
 /*
  * BPF side looks these keys up with inode->i_sb->s_dev, so the loader has to
  * write that device and not the one stat(2) reports: on btrfs a subvolume has
@@ -1800,202 +1678,6 @@ static int trusted_lib_key_for_file(const char *path,
 	key->ino = (uint64_t)st.st_ino;
 	if (key->dev == 0 || key->ino == 0)
 		return -EINVAL;
-
-	return 0;
-}
-
-static int trusted_lib_key_for_dir(const char *path,
-				   struct trusted_lib_key *key)
-{
-	unsigned long long sb_dev = 0;
-	struct stat st = { 0 };
-	int ret;
-
-	ret = stat_dir_nofollow(path, &st, &sb_dev);
-	if (ret < 0) {
-		if (ret == -ENOTSUP || ret == -ENODEV)
-			lota_err(
-				"Cannot read the superblock device of %s: %s; "
-				"the kernel would never match a trusted-mountpoint key for it",
-				path, strerror(-ret));
-		return ret;
-	}
-
-	key->dev = sb_dev;
-	key->ino = (uint64_t)st.st_ino;
-	if (key->dev == 0 || key->ino == 0)
-		return -EINVAL;
-
-	return 0;
-}
-
-static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
-					 const char *dir_path, int add)
-{
-	struct trusted_lib_key key = { 0 };
-	uint32_t refcnt = 0;
-	int ret;
-
-	if (!ctx || !dir_path)
-		return -EINVAL;
-
-	if (ctx->trusted_lib_mnt_fd < 0)
-		return 0;
-
-	ret = trusted_lib_key_for_dir(dir_path, &key);
-	if (ret < 0)
-		return ret;
-
-	if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
-		if (errno != ENOENT)
-			return -errno;
-		refcnt = 0;
-	}
-
-	if (add) {
-		if (refcnt == UINT32_MAX)
-			return -EOVERFLOW;
-		refcnt++;
-		if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
-					BPF_ANY) < 0)
-			return -errno;
-		return 0;
-	}
-
-	if (refcnt == 0)
-		return 0;
-
-	if (refcnt == 1) {
-		if (bpf_map_delete_elem(ctx->trusted_lib_mnt_fd, &key) < 0 &&
-		    errno != ENOENT)
-			return -errno;
-		return 0;
-	}
-
-	refcnt--;
-	if (bpf_map_update_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt,
-				BPF_ANY) < 0)
-		return -errno;
-
-	return 0;
-}
-
-static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
-					     const char *lib_path, int add)
-{
-	char dir_path[PATH_MAX];
-	char prefix[PATH_MAX];
-	size_t len;
-	size_t prefix_len = 0;
-	char *slash;
-	char *p;
-	uint32_t applied = 0;
-
-	if (!ctx || !lib_path)
-		return -EINVAL;
-
-	if (ctx->trusted_lib_mnt_fd < 0)
-		return 0;
-
-	len = strnlen(lib_path, sizeof(dir_path));
-	if (len == 0 || len >= sizeof(dir_path))
-		return -EINVAL;
-
-	memcpy(dir_path, lib_path, len + 1);
-
-	while (len > 1 && dir_path[len - 1] == '/') {
-		dir_path[len - 1] = '\0';
-		len--;
-	}
-
-	slash = strrchr(dir_path, '/');
-	if (!slash)
-		return -EINVAL;
-	if (slash == dir_path)
-		return 0; /* parent is /, skip global mountpoint lock */
-	*slash = '\0';
-
-	p = dir_path + 1; /* skip leading slash */
-	while (*p != '\0') {
-		const char *next = strchr(p, '/');
-		size_t comp_len = next ? (size_t)(next - p) : strlen(p);
-
-		if (comp_len == 0) {
-			p++;
-			continue;
-		}
-
-		if (prefix_len == 0) {
-			if (1 + comp_len >= sizeof(prefix))
-				return -ENAMETOOLONG;
-			prefix[0] = '/';
-			memcpy(prefix + 1, p, comp_len);
-			prefix_len = 1 + comp_len;
-		} else {
-			if (prefix_len + 1 + comp_len >= sizeof(prefix))
-				return -ENAMETOOLONG;
-			prefix[prefix_len] = '/';
-			memcpy(prefix + prefix_len + 1, p, comp_len);
-			prefix_len += 1 + comp_len;
-		}
-
-		prefix[prefix_len] = '\0';
-
-		int ret = update_trusted_mountpoint_ref(ctx, prefix, add);
-		if (ret < 0) {
-			if (add && applied > 0) {
-				size_t rollback_prefix_len = 0;
-				char rollback_prefix[PATH_MAX];
-				char *rp = dir_path + 1;
-				uint32_t remaining = applied;
-
-				while (remaining > 0 && *rp != '\0') {
-					const char *rnext = strchr(rp, '/');
-					size_t rlen =
-						rnext ? (size_t)(rnext - rp) :
-							strlen(rp);
-
-					if (rlen == 0) {
-						rp++;
-						continue;
-					}
-
-					if (rollback_prefix_len == 0) {
-						rollback_prefix[0] = '/';
-						memcpy(rollback_prefix + 1, rp,
-						       rlen);
-						rollback_prefix_len = 1 + rlen;
-					} else {
-						rollback_prefix
-							[rollback_prefix_len] =
-								'/';
-						memcpy(rollback_prefix +
-							       rollback_prefix_len +
-							       1,
-						       rp, rlen);
-						rollback_prefix_len += 1 + rlen;
-					}
-
-					rollback_prefix[rollback_prefix_len] =
-						'\0';
-					(void)update_trusted_mountpoint_ref(
-						ctx, rollback_prefix, 0);
-					remaining--;
-
-					if (!rnext)
-						break;
-					rp = (char *)rnext + 1;
-				}
-			}
-			return ret;
-		}
-
-		applied++;
-
-		if (!next)
-			break;
-		p = (char *)next + 1;
-	}
 
 	return 0;
 }
@@ -2030,12 +1712,6 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	    0)
 		return -errno;
 
-	ret = update_trusted_parent_mountpoints(ctx, path, 1);
-	if (ret < 0) {
-		(void)bpf_map_delete_elem(ctx->trusted_libs_fd, &key);
-		return ret;
-	}
-
 	return 0;
 }
 
@@ -2057,10 +1733,6 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 &&
 	    errno != ENOENT)
 		return -errno;
-
-	ret = update_trusted_parent_mountpoints(ctx, path, 0);
-	if (ret < 0)
-		return ret;
 
 	return 0;
 }

@@ -187,7 +187,6 @@ struct lota_exec_event {
  * Each trusted library can contribute multiple parent directories, so this
  * limit is intentionally larger than LOTA_MAX_TRUSTED_LIBS.
  */
-#define LOTA_MAX_TRUSTED_LIB_MOUNTPOINTS 4096
 
 /*
  * Kernel integrity configuration.

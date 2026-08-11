@@ -12,8 +12,8 @@
  *   - Kernel module loading (kernel_module_request, kernel_read_file,
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
- *   - Bind-mount overwrite on trusted library paths/parents, on both mount
- *     APIs (security_sb_mount, security_move_mount)
+ *   - Bind-mount overwrite on trusted library paths, on both mount APIs
+ *     (security_sb_mount, security_move_mount)
  *   - In-place write/truncate on trusted library inodes (security_file_open)
  *   - Direct kernel memory device access (/dev/mem, /dev/kmem, /dev/port)
  *   - Debugger attachment (security_ptrace_access_check)
@@ -267,19 +267,6 @@ struct {
 	__type(key, struct trusted_lib_key);
 	__type(value, u32);
 } trusted_libs SEC(".maps");
-
-/*
- * Trusted mountpoint directories protecting trusted libraries.
- *
- * Keys are inode identities (device + inode) for parent directories of
- * trusted libraries. Value is a refcount managed by user-space loader.
- */
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, LOTA_MAX_TRUSTED_LIB_MOUNTPOINTS);
-	__type(key, struct trusted_lib_key);
-	__type(value, u32);
-} trusted_lib_mnt SEC(".maps");
 
 /*
  * fs-verity digest allowlist.
@@ -590,9 +577,6 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 		return 1;
 	if (__builtin_memcmp(name, "trusted_libs", sizeof("trusted_libs")) == 0)
 		return 1;
-	if (__builtin_memcmp(name, "trusted_lib_mnt",
-			     sizeof("trusted_lib_mnt")) == 0)
-		return 1;
 	if (__builtin_memcmp(name, "trusted_inodes",
 			     sizeof("trusted_inodes")) == 0)
 		return 1;
@@ -731,28 +715,6 @@ static __always_inline int is_trusted_inode(struct inode *inode)
 	return (allowed && *allowed) ? 1 : 0;
 }
 
-static __always_inline int is_trusted_mountpoint_inode(struct inode *inode)
-{
-	struct super_block *sb;
-	struct trusted_lib_key key = {};
-	u32 *refcnt;
-
-	if (!inode)
-		return 0;
-
-	sb = BPF_CORE_READ(inode, i_sb);
-	if (!sb)
-		return 0;
-
-	key.dev = (u64)BPF_CORE_READ(sb, s_dev);
-	key.ino = (u64)BPF_CORE_READ(inode, i_ino);
-	if (key.dev == 0 || key.ino == 0)
-		return 0;
-
-	refcnt = bpf_map_lookup_elem(&trusted_lib_mnt, &key);
-	return (refcnt && *refcnt) ? 1 : 0;
-}
-
 static __always_inline int is_write_open_flags(int flags)
 {
 	int acc_mode = flags & LOTA_O_ACCMODE;
@@ -872,7 +834,7 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (!inode)
 		return 0;
 
-	if (!is_trusted_inode(inode) && !is_trusted_mountpoint_inode(inode))
+	if (!is_trusted_inode(inode))
 		return 0;
 
 	return -EPERM;
@@ -917,7 +879,7 @@ int BPF_PROG(lota_move_mount, const struct path *from_path,
 	if (!inode)
 		return 0;
 
-	if (!is_trusted_inode(inode) && !is_trusted_mountpoint_inode(inode))
+	if (!is_trusted_inode(inode))
 		return 0;
 
 	return -EPERM;
