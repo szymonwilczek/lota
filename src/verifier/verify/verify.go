@@ -991,7 +991,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 			clog.Info("kernel_hash changed",
 				"previous_kernel_hash", hex.EncodeToString(prev[:]),
 				"reported_kernel_hash", kernelHashHex,
-				"note", "advisory: the kernel image the agent measured is not the one it reported before")
+				"note", "advisory: the boot measurement this device reports is not the one it reported before. What it covers depends on how the host boots -- a unified kernel image on a systemd-stub host, the kernel and the initramfs on a GRUB one, so an initramfs rebuild moves it too")
 		}
 	}
 

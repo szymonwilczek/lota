@@ -28,6 +28,11 @@ typedef int (*kernel_pcr_reader)(void *ctx, int pcr,
  * A register that cannot be read, or that reads as all zeros because nothing
  * extended it, is not a source.
  *
+ * What the value covers depends on the boot path, and it is wider than
+ * the kernel image on every path but the first: on a GRUB host PCR 9 carries
+ * the initramfs too, so rebuilding that moves the measurement without
+ * the kernel changing.
+ *
  * Returns 0 with @out_hash filled and @selected_pcr naming the register,
  * or -ENOENT when no candidate carries a measurement -- which is the answer
  * a caller must not report as a kernel hash of zeros.
