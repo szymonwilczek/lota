@@ -4047,17 +4047,27 @@ int tpm_aik_load_metadata(struct tpm_context *ctx)
 			}
 		}
 
-		/* no AIK exists yet -> first run after install: initialize
-		 * defaults */
+		/*
+		 * No AIK exists yet -- first run after install,
+		 * or a publisher enrolling for the first time.
+		 * These defaults stay in memory and are not written: a record
+		 * on disk describes a key, and there is none yet.
+		 * key_derivation is set explicitly because zero reads as
+		 * TPM_AIK_KEY_DERIVATION_SHARED, and every key this build
+		 * creates is per-publisher. Provisioning overwrites the record
+		 * with what the bound profile produced.
+		 */
 		memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
 		ctx->aik_meta.magic = TPM_AIK_META_MAGIC;
 		ctx->aik_meta.version = TPM_AIK_META_VERSION;
 		ctx->aik_meta.generation = 1;
 		ctx->aik_meta.provisioned_at = (int64_t)time(NULL);
 		ctx->aik_meta.last_rotated_at = 0;
+		ctx->aik_meta.key_derivation =
+			TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
 		ctx->aik_meta_loaded = true;
 
-		return tpm_aik_save_metadata(ctx);
+		return 0;
 	}
 
 	n = read(fd, &meta, sizeof(meta));

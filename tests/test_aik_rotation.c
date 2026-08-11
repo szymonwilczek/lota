@@ -294,7 +294,7 @@ static void test_metadata_default_creation(void)
 	int ret;
 	time_t before, after;
 
-	TEST("load creates default metadata if missing");
+	TEST("load fills defaults without writing a record");
 	make_ctx(&ctx);
 	/* make sure file does not exist */
 	unlink(ctx.aik_meta_path);
@@ -326,9 +326,13 @@ static void test_metadata_default_creation(void)
 		return;
 	}
 
-	/* verify file was persisted */
-	if (access(ctx.aik_meta_path, F_OK) != 0) {
-		FAIL("metadata file not created");
+	/*
+	 * Nothing is written.
+	 * The defaults describe a key that does not exist;
+	 * the record is written when the key is created.
+	 */
+	if (access(ctx.aik_meta_path, F_OK) == 0) {
+		FAIL("metadata file created for a key that does not exist");
 		return;
 	}
 
