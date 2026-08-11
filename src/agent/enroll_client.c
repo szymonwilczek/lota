@@ -513,7 +513,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 
 	/* this is the command that comes back with a certificate */
 	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0 &&
-	    tpm_aik_key_is_shared(&g_agent.tpm_ctx))
+	    tpm_aik_replacing_shared_key(&g_agent.tpm_ctx,
+					 tpm_aik_key_present(&g_agent.tpm_ctx)))
 		printf("Replacing the attestation key this publisher shares "
 		       "with every other one enrolled here.\n");
 

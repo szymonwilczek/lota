@@ -242,6 +242,46 @@ static void test_recorded_shared_key_still_reads_shared(void)
 	PASS();
 }
 
+/*
+ * A record is not a key.
+ * An upgraded host carries a record saying shared in every profile an older
+ * build ever read, including profiles that never enrolled, so the question
+ * the enrollment path asks -- am I about to replace the key this publisher
+ * shares -- has to be answered by the key, not by the file describing one.
+ */
+static void test_shared_replacement_needs_a_key(void)
+{
+	struct tpm_context ctx;
+
+	TEST("replacing a shared key takes a key, not just a record");
+	make_ctx(&ctx);
+	snprintf(
+		ctx.aik_profile_id, sizeof(ctx.aik_profile_id), "%s",
+		"0d96137b233ee2743da7d4a676b8734b51035598a0bf2a429c805b730ee22a43");
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_SHARED;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_replacing_shared_key(&ctx, 0)) {
+		FAIL("a record with no key behind it was called a replacement");
+		return;
+	}
+
+	if (!tpm_aik_replacing_shared_key(&ctx, 1)) {
+		FAIL("a shared key that is there was not called a replacement");
+		return;
+	}
+
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	if (tpm_aik_replacing_shared_key(&ctx, 1)) {
+		FAIL("a per-publisher key was called a shared one");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -1648,6 +1688,7 @@ int main(void)
 	test_metadata_key_derivation_round_trip();
 	test_absent_metadata_claims_nothing();
 	test_recorded_shared_key_still_reads_shared();
+	test_shared_replacement_needs_a_key();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();

@@ -586,6 +586,28 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
 
 /*
+ * tpm_aik_key_present - does the TPM hold a key at this profile's handle
+ *
+ * Returns 1 when a key is there, 0 when it is not (including when there is
+ * no TPM connection to ask), negative errno when the TPM could not answer.
+ */
+int tpm_aik_key_present(struct tpm_context *ctx);
+
+/*
+ * tpm_aik_replacing_shared_key - is enrollment about to replace a key that
+ * every publisher on this host shares
+ *
+ * @key_present: what tpm_aik_key_present() answered
+ *
+ * A record is not a key. Every profile an older build ever read carries
+ * a record saying shared, including profiles that never enrolled,
+ * so the answer takes both: a key that is there, and a record saying it
+ * predates per-publisher keys.
+ */
+bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
+				  int key_present);
+
+/*
  * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
  * @ctx:   initialized context
  * @allow: true on the enrollment path, false everywhere else

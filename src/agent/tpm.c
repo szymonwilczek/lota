@@ -70,6 +70,7 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					 int had_existing_aik);
 static int mkdirs(const char *path, mode_t mode);
 static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx);
+static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out);
 
 /*
  * Detach an ESYS handle, unless there is nothing to detach.
@@ -1173,6 +1174,33 @@ bool tpm_aik_key_is_shared(const struct tpm_context *ctx)
 
 	return ctx->aik_meta.key_derivation !=
 	       TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+}
+
+int tpm_aik_key_present(struct tpm_context *ctx)
+{
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	/* no connection to ask: nothing is known to be there */
+	if (!ctx->esys_ctx)
+		return 0;
+
+	ret = aik_exists(ctx, NULL);
+	if (ret < 0)
+		return ret;
+
+	return ret == 1 ? 1 : 0;
+}
+
+bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
+				  int key_present)
+{
+	if (key_present != 1)
+		return false;
+
+	return tpm_aik_key_is_shared(ctx);
 }
 
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
