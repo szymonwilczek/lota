@@ -1244,6 +1244,18 @@ static bool target_reporting_now(struct attest_target *t)
 	if (t->token_only)
 		return false;
 
+	/*
+	 * The end of a session is announced below.
+	 * A target that has never had one reports to nobody,
+	 * and a caller watching the loop has nothing to tell
+	 * that apart from a stall.
+	 */
+	if (attest_target_should_announce_wait(t))
+		lota_info("Nothing is reported to %s until a title of theirs "
+			  "runs; enrollment, key rotation and certificate "
+			  "renewal continue meanwhile",
+			  t->label);
+
 	if (t->attested) {
 		lota_info("No session left for %s; reporting stops until a "
 			  "title of theirs runs again",

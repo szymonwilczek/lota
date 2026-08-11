@@ -66,6 +66,14 @@ struct attest_target {
 	bool session_gated;
 	int sessions;
 
+	/*
+	 * Whether this target has already said it is waiting for a title of
+	 * this publisher's to start.
+	 * Said once: a loop that repeats it every round is the same silence
+	 * with more lines.
+	 */
+	bool wait_announced;
+
 	struct profile_paths paths;
 	bool has_profile;
 	/* why the anchor produced no profile, 0 when it did or none was set */
@@ -158,6 +166,9 @@ int attest_targets_reload(const char *config_path, const char *server, int port,
  * true once per target.
  *
  * A publisher who runs no verifier is not waiting to report to one.
+ *
+ * Not pure: it records having answered, so the caller is not asked to keep
+ * that state itself at every site that could say it.
  */
 bool attest_target_should_announce_wait(struct attest_target *t);
 

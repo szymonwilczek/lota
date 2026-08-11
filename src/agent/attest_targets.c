@@ -16,15 +16,15 @@
 
 #include "attest_targets.h"
 
-/*
- * Stated here, answered in the commit that follows: the test that pins the
- * contract fails against this.
- */
 bool attest_target_should_announce_wait(struct attest_target *t)
 {
-	(void)t;
+	if (!t || !t->session_gated || t->token_only)
+		return false;
+	if (t->sessions > 0 || t->wait_announced)
+		return false;
 
-	return false;
+	t->wait_announced = true;
+	return true;
 }
 
 /*
