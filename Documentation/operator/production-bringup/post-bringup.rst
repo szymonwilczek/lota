@@ -552,4 +552,6 @@ operator works around it.
 
       sudo restorecon -v /usr/bin/lota-agent
       ls -lZ /usr/bin/lota-agent
-      # expect: system_u:object_r:lota_agent_exec_t:s0
+      # expect the type lota_agent_exec_t; the SELinux user in front of it is
+      # system_u from a package and unconfined_u from a hand install,
+      # and restorecon leaves either alone

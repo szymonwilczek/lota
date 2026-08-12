@@ -61,6 +61,13 @@ caught at the next boot. Two mechanisms satisfy this, and the agent accepts
     sudo fsverity enable /usr/bin/lota-agent
     sudo fsverity measure /usr/bin/lota-agent
 
+Verity is enabled once per inode and cannot be enabled twice, so on a binary
+that already carries it ``enable`` exits non-zero with
+``FS_IOC_ENABLE_VERITY failed on '/usr/bin/lota-agent': File exists``. That is
+the armed state, not a failure; ``measure`` printing a digest is the check.
+A re-install replaces the inode and the bit with it, which is why bring-up
+runs ``enable`` on every pass.
+
 If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
 support. Production lays this down at install time via dracut + an
 fs-verity-enabled rootfs.
@@ -154,6 +161,12 @@ device-add. After ``make install``:
     sudo udevadm control --reload-rules
     sudo udevadm trigger /dev/tpmrm0 /dev/tpm0
     ls -lZ /dev/tpm0 /dev/tpmrm0                # expect lota_tpm_device_t
+
+The **type** is the check: ``lota_tpm_device_t`` is what the agent's gate looks
+for. The SELinux user in front of it follows from how the file arrived --
+``system_u`` on a device the policy labelled, ``unconfined_u`` on a file an
+unconfined session installed -- and neither the gate nor ``restorecon`` treats
+it as wrong.
 
 5. AIK + PCR14 reset
 ====================

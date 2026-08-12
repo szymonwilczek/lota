@@ -17,3 +17,9 @@ TRUSTED / UNTRUSTED / OFFLINE
 # separately and the handler renders them together, so no format string in the
 # tree carries the rendered text.
 Postgres store initialized schema_version=1
+
+# Output of a tool this project does not ship.
+# fsverity-utils prints it when verity is already enabled on the inode,
+# and the message table is built from this tree, so the gate cannot confirm
+# what another program says.
+FS_IOC_ENABLE_VERITY failed on '/usr/bin/lota-agent': File exists
