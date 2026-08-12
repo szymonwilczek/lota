@@ -42,6 +42,28 @@ Each must compile on its own against the installed set alone. A public
 header that pulls in one that is not installed builds in tree, where
 everything is under ``-Iinclude``, and fails for the integrator.
 
+How an integrator finds them
+----------------------------
+
+The ``-devel`` package ships a pkg-config module per library --
+``lota-gaming``, ``lota-server``, ``lota-anticheat``, ``lota-wine-hook`` --
+generated from the templates in ``packaging/pkgconfig``:
+
+.. code-block:: sh
+
+   cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
+      $(pkg-config --libs lota-anticheat)
+
+Each module reports the **ABI** version rather than the release version,
+because the ``.pc`` describes the linkable contract and that is what governs
+it: ``pkg-config --atleast-version=1 lota-gaming`` asks the question an
+integrator means.
+
+Each resolves its prefix from the file's own location, so the SDK is
+consumable from a staged prefix -- a ``DESTDIR`` install, a container layer,
+an unpacked package in CI -- and not only from ``/usr``. That is also how
+the gate below builds against it without installing anything.
+
 ``include/lota_ipc.h`` is deliberately **not** installed. It is the wire
 between the agent and the SDK that ships with it, so a caller that speaks
 the socket directly is pinned to the agent build it compiled against, and
@@ -130,9 +152,14 @@ The gate
 ``packaging/abi``: the exported symbols of each library, the soname each one
 carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
 three places that must agree -- ``packaging/abi/public-headers.list``, the
-``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``. It then
-compiles every public header on its own against a prefix holding the
-installed set and nothing else.
+``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``.
+
+It then stages a prefix holding exactly what the packages install and builds
+against it the way an integrator does: every public header on its own, and a
+compile-and-link through each pkg-config module that calls one function from
+the library it names. In tree everything builds with ``-Iinclude`` and
+``-Lbuild``, so a header the package does not ship, or a ``.pc`` naming a
+library that is not there, works in tree and fails for the integrator.
 
 ``scripts/check-patch`` runs it on every patch and CI runs it as its own
 ``abi`` job, which is what makes it blocking: CI drives selected gates

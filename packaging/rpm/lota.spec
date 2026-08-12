@@ -95,6 +95,7 @@ Proton/Steam hook. Install lota-sdk-devel to build against them.
 Summary:        LOTA SDK headers and shared libraries
 License:        MIT
 Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
+Requires:       pkgconfig(libcrypto)
 
 %description sdk-devel
 Headers and shared libraries for the gaming, anti-cheat and server SDKs,
@@ -196,6 +197,10 @@ EOF
 %{_libdir}/liblotaserver.so
 %{_libdir}/liblota_wine_hook.so
 %{_libdir}/liblota_anticheat.so
+%{_libdir}/pkgconfig/lota-gaming.pc
+%{_libdir}/pkgconfig/lota-server.pc
+%{_libdir}/pkgconfig/lota-anticheat.pc
+%{_libdir}/pkgconfig/lota-wine-hook.pc
 
 %changelog
 * Sun Jun 21 2026 Szymon Wilczek <swilczek.lx@gmail.com> - 0.4.0~rc2-1

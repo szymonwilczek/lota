@@ -12,15 +12,19 @@
 # and fails when they drift, so widening or breaking the surface is deliberate edit
 # to that baseline rather than side effect of making a helper non-static.
 #
-# It also compiles each public header on its own against the installed set alone.
-# In tree everything builds with -Iinclude, so public header that includes header
-# the package does not ship compiles here and fails for the integrator.
+# It then stages a prefix holding exactly what the packages install and builds
+# against it the way an integrator does: each public header on its own,
+# and compile-and-link through each pkg-config module.
+# In tree everything builds with -Iinclude and -Lbuild, so a header the package
+# does not ship, or a .pc naming a library that is not there, works here and fails
+# for the integrator.
 #
 # Usage:
 #   scripts/check-abi.sh            check against the baseline
 #   scripts/check-abi.sh --update   rewrite the baseline from the build
 #
 # Requires: git, make, a C toolchain, nm and readelf (binutils)
+# pkg-config module checks are skipped when pkg-config is absent
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,6 +32,7 @@ cd "$(dirname "$0")/.."
 BUILD_DIR="build"
 ABI_DIR="packaging/abi"
 HEADER_LIST="$ABI_DIR/public-headers.list"
+PKGCONFIG_DIR="$BUILD_DIR/pkgconfig"
 DEVEL_PKG="packaging/nfpm/lota-sdk-devel.yaml"
 
 LIBRARIES=(
@@ -72,7 +77,7 @@ exported_symbols() {
 	nm --dynamic --defined-only "$1" | awk '$2 == "T" { print $3 }' | LC_ALL=C sort
 }
 
-make sdk server-sdk wine-hook anticheat >/dev/null
+make sdk server-sdk wine-hook anticheat pkgconfig >/dev/null
 
 for lib in "${LIBRARIES[@]}"; do
 	so="$BUILD_DIR/$lib.so.$ABI_VERSION"
@@ -140,11 +145,14 @@ if [[ "$(installed_by_package)" != "$expected" ]]; then
 		sed 's/^/  /' >&2 || true
 fi
 
-# Compile each public header alone,
-# against prefix holding the installed set and nothing else
+# Stage a prefix holding exactly what the packages install
+# -- headers, libraries and the pkg-config files -- and exercise it the way
+# integrator does.
+# .pc files resolve their prefix from their own location, so staged tree is enough
+# nothing has to be installed into /usr for this to be the real path
 PREFIX="$(mktemp -d)"
 trap 'rm -rf "$PREFIX"' EXIT
-mkdir -p "$PREFIX/include/lota"
+mkdir -p "$PREFIX/include/lota" "$PREFIX/lib64/pkgconfig"
 
 for header in "${PUBLIC_HEADERS[@]}"; do
 	if [[ ! -f "include/$header" ]]; then
@@ -152,6 +160,13 @@ for header in "${PUBLIC_HEADERS[@]}"; do
 		continue
 	fi
 	cp "include/$header" "$PREFIX/include/lota/"
+done
+
+for lib in "${LIBRARIES[@]}"; do
+	[[ -f "$BUILD_DIR/$lib.so.$ABI_VERSION" ]] || continue
+	cp "$BUILD_DIR/$lib.so.$ABI_VERSION" "$PREFIX/lib64/"
+	ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so.$ABI_MAJOR"
+	ln -sf "$lib.so.$ABI_VERSION" "$PREFIX/lib64/$lib.so"
 done
 
 for header in "${PUBLIC_HEADERS[@]}"; do
@@ -164,11 +179,76 @@ for header in "${PUBLIC_HEADERS[@]}"; do
 	fi
 done
 
+# pkg-config module per library, and a compile-and-link through each one.
+# `make install` copies whatever the templates produce,
+# so the templates are the enumeration;
+# the package has to be checked against them
+declare -A PC_NAME=(
+	[liblotagaming]=lota-gaming
+	[liblotaserver]=lota-server
+	[liblota_anticheat]=lota-anticheat
+	[liblota_wine_hook]=lota-wine-hook
+)
+
+# One trivially callable function per library,
+# so the link is real and not dropped by --as-needed
+declare -A PC_PROBE=(
+	[liblotagaming]='lota_gaming.h|(void)lota_sdk_version();'
+	[liblotaserver]='lota_server.h|(void)lota_server_sdk_version();'
+	[liblota_anticheat]='lota_anticheat.h|(void)lota_ac_state_str(0);'
+	[liblota_wine_hook]='lota_wine_hook.h|(void)lota_hook_active();'
+)
+
+packaged_pkgconfig() {
+	sed -n 's|^[[:space:]]*- src: \./build/pkgconfig/\(.*\.pc\)$|\1|p' \
+		"$DEVEL_PKG" | LC_ALL=C sort
+}
+
+expected_pc="$(printf '%s\n' "${PC_NAME[@]}" | sed 's/$/.pc/' | LC_ALL=C sort)"
+
+if [[ "$(packaged_pkgconfig)" != "$expected_pc" ]]; then
+	fail "$DEVEL_PKG ships a different pkg-config set than the libraries"
+	diff -u <(printf '%s\n' "$expected_pc") <(packaged_pkgconfig) |
+		sed 's/^/  /' >&2 || true
+fi
+
+if ! command -v pkg-config >/dev/null 2>&1; then
+	printf 'ABI: pkg-config is absent; skipping the module checks\n' >&2
+else
+	for lib in "${LIBRARIES[@]}"; do
+		pc="${PC_NAME[$lib]}"
+		generated="$PKGCONFIG_DIR/$pc.pc"
+
+		if [[ ! -f "$generated" ]]; then
+			fail "$pc.pc was not generated (template missing?)"
+			continue
+		fi
+		cp "$generated" "$PREFIX/lib64/pkgconfig/"
+
+		if [[ "$(PKG_CONFIG_PATH="$PREFIX/lib64/pkgconfig" \
+			pkg-config --modversion "$pc")" != "$ABI_VERSION" ]]; then
+			fail "$pc.pc does not report the ABI version $ABI_VERSION"
+		fi
+
+		header="${PC_PROBE[$lib]%%|*}"
+		call="${PC_PROBE[$lib]#*|}"
+		printf '#include <lota/%s>\nint main(void){%s return 0;}\n' \
+			"$header" "$call" >"$PREFIX/tu.c"
+
+		if ! output="$(PKG_CONFIG_PATH="$PREFIX/lib64/pkgconfig" sh -c \
+			"${CC:-cc} \$(pkg-config --cflags $pc) -o $PREFIX/tu \
+				$PREFIX/tu.c \$(pkg-config --libs $pc)" 2>&1)"; then
+			fail "$pc: an integrator cannot build against the staged prefix"
+			printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fi
+	done
+fi
+
 if [[ $FAILURES -gt 0 ]]; then
 	printf 'ABI: %d problem(s); see %s\n' "$FAILURES" \
 		"Documentation/contributor/development/api-stability.rst" >&2
 	exit 1
 fi
 
-printf 'ABI: %d libraries and %d public headers match the baseline\n' \
-	"${#LIBRARIES[@]}" "${#PUBLIC_HEADERS[@]}"
+printf 'ABI: %d libraries, %d public headers and %d pkg-config modules match the baseline\n' \
+	"${#LIBRARIES[@]}" "${#PUBLIC_HEADERS[@]}" "${#LIBRARIES[@]}"

@@ -256,9 +256,17 @@ ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 SDK_VERSION_SCRIPT = $(SDK_DIR)/$(basename $(notdir $(1))).map
 VERSION_SCRIPT_LDFLAGS = -Wl,--version-script=$(call SDK_VERSION_SCRIPT,$(1))
 
+# pkg-config files for the installed SDK.
+# Generated from the templates so the version an integrator queries is the ABI version
+# -- the .pc describes the linkable contract, and that is what governs it.
+PKGCONFIG_DIR := $(BUILD_DIR)/pkgconfig
+PKGCONFIG_TEMPLATES := $(wildcard packaging/pkgconfig/*.pc.in)
+PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,\
+	$(PKGCONFIG_TEMPLATES))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
 
 # build directories
 $(BUILD_DIR):
@@ -333,6 +341,16 @@ $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
+# generate the pkg-config files
+$(PKGCONFIG_DIR):
+	$(Q)mkdir -p $@
+
+pkgconfig: $(PKGCONFIG_FILES)
+
+$(PKGCONFIG_DIR)/%.pc: packaging/pkgconfig/%.pc.in Makefile | $(PKGCONFIG_DIR)
+	$(QUIET_GEN)
+	$(Q)sed 's|@LOTA_ABI_VERSION@|$(LOTA_ABI_VERSION)|g' $< > $@
+
 # build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(QUIET_AR)
@@ -389,7 +407,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -959,6 +977,8 @@ install: check-version-tag all
 	install -m 644 $(INC_DIR)/lota_anticheat.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_token.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_snapshot.h $(DESTDIR)/usr/include/lota/
+	install -d $(DESTDIR)/usr/lib64/pkgconfig
+	install -m 644 $(PKGCONFIG_FILES) $(DESTDIR)/usr/lib64/pkgconfig/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries

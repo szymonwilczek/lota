@@ -25,6 +25,7 @@ overrides:
   rpm:
     depends:
       - lota-sdk
+      - pkgconfig(libcrypto)
 
 contents:
   # unversioned libX.so linker symlinks only;
@@ -61,6 +62,22 @@ contents:
       mode: 0644
   - src: ./include/lota_snapshot.h
     dst: /usr/include/lota/lota_snapshot.h
+    file_info:
+      mode: 0644
+  - src: ./build/pkgconfig/lota-gaming.pc
+    dst: /usr/lib64/pkgconfig/lota-gaming.pc
+    file_info:
+      mode: 0644
+  - src: ./build/pkgconfig/lota-server.pc
+    dst: /usr/lib64/pkgconfig/lota-server.pc
+    file_info:
+      mode: 0644
+  - src: ./build/pkgconfig/lota-anticheat.pc
+    dst: /usr/lib64/pkgconfig/lota-anticheat.pc
+    file_info:
+      mode: 0644
+  - src: ./build/pkgconfig/lota-wine-hook.pc
+    dst: /usr/lib64/pkgconfig/lota-wine-hook.pc
     file_info:
       mode: 0644
   - src: ./scripts/lota-proton-hook
