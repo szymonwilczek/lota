@@ -135,9 +135,11 @@ CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
 
-# Version string injected into the server-side SDK at build time.
+# Build identity injected into both SDKs.
+# One source, so the two libraries cannot report different builds;
+# objects that carry it take VERSION as a prerequisite so a version bump rebuilds them.
 LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
-SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
+SDK_VERSION_CFLAGS := -DLOTA_BUILD_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 
 # Linker hardening
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
@@ -327,9 +329,11 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
-# server SDK version string (liblotaserver + dependents)
-$(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
+# build identity (both SDKs report it; see lota_sdk_version)
+$(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
+$(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/sdk/lota_gaming.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
@@ -1112,9 +1116,10 @@ $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/stea
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_TESTING -o $@ $^ -lpthread
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
+		-o $@ $(filter-out $(VERSION_FILE),$^) -lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1140,13 +1145,15 @@ $(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
 
-$(TEST_BIN_DIR)/test_publisher_profile: tests/test_publisher_profile.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_publisher_profile: tests/test_publisher_profile.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
 
 $(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1237,19 +1244,20 @@ $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c 
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
-$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
 
 $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1584,9 +1592,9 @@ $(BUILD_DIR)/fuzz/fuzz_server_sdk.o: fuzz/fuzz_server_sdk.c include/lota_server.
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
 	$(QUIET_CLANG)
@@ -1841,9 +1849,11 @@ bench-c: $(BENCH_C_BIN)
 		| tee $(BENCH_RESULTS)/c-sdk.txt
 
 $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
-		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) | $(BUILD_DIR)
+		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) $(VERSION_FILE) \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -I$(BENCH_DIR)/include -o $@ $^ -lcrypto -lm
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -I$(BENCH_DIR)/include \
+		-o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto -lm
 
 bench-clean:
 	rm -rf $(BENCH_RESULTS)/*.txt $(BENCH_RESULTS)/*.json $(BENCH_C_BIN)

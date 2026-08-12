@@ -45,13 +45,6 @@ extern "C" {
 #endif
 
 /*
- * SDK version
- */
-#define LOTA_SDK_VERSION_MAJOR 1
-#define LOTA_SDK_VERSION_MINOR 0
-#define LOTA_SDK_VERSION_PATCH 0
-
-/*
  * Error codes
  */
 enum lota_error {
@@ -440,9 +433,24 @@ int lota_poll_events(struct lota_client *client, int timeout_ms);
 const char *lota_strerror(int error);
 
 /*
- * lota_sdk_version - Get SDK version string
+ * lota_sdk_version - Identify the build this library came from
  *
- * Returns a static string like "1.0.0".
+ * Returns static string naming the LOTA release the library was compiled from,
+ * the same one lota_server_sdk_version() reports.
+ * It answers "which build is this" for a log line, a support ticket
+ * or an advisory.
+ * Treat it as opaque: the format carries no promise, so match it, do not parse it.
+ *
+ * It is NOT the answer to "what may I link against".
+ * Binary compatibility is the soname the loader resolves and the ABI version
+ * the pkg-config module reports;
+ * see Documentation/contributor/development/api-stability.rst.
+ *
+ * SECURITY:
+ * This executes inside the calling process, which on a player's machine is memory
+ * an attacker controls. Relying party must never decide trust from a version
+ * a client reports about itself. The build identity that carries weight is
+ * the agent binary hash pinned in the verifier's policy and committed to PCR 14.
  */
 const char *lota_sdk_version(void);
 

@@ -145,6 +145,39 @@ work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
 version script cannot catch.
 
+Which version answers which question
+====================================
+
+Two different questions get called "the version", and conflating them is how
+a surface ends up stating its version in several places that drift apart.
+
+**"What may I link against?"** is compatibility, and it is answered by the ABI
+in two places and no others: the soname the loader resolves at run time, and
+the ABI version the pkg-config module reports at build time. Both derive from
+``LOTA_ABI_MAJOR``. No header defines a version macro for this -- a macro
+would be a third statement of the same number with nothing reconciling it, and
+``pkg-config --atleast-version`` already asks the question properly.
+
+**"Which build is this?"** is provenance -- the question an advisory, a
+support ticket, a log line or a reproducible-build check asks.
+``lota_sdk_version()`` and ``lota_server_sdk_version()`` both answer it, both
+return the same string, and that string is the release from the ``VERSION``
+file, injected at build time as ``LOTA_BUILD_VERSION_STRING`` by the objects'
+own Makefile rules, which take ``VERSION`` as a prerequisite so a bump
+recompiles them. There is no fallback value: a translation unit compiled
+without the define fails with ``#error``, because a library reporting
+``unknown`` is worse in an incident than one that refused to build.
+
+The string is **opaque**. Match it, do not parse it; its format carries no
+promise, and a compatibility decision made by parsing it is asking the
+provenance question and reading it as the compatibility answer.
+
+Neither function is an authentication input. ``lota_sdk_version()`` runs
+inside the calling process -- on a player's machine, memory an attacker
+controls -- so a relying party must never decide trust from a version a client
+reports about itself. The build identity that carries weight is the agent
+binary hash pinned in the verifier's policy and committed to PCR 14.
+
 The gate
 ========
 

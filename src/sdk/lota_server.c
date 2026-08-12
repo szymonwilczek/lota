@@ -24,8 +24,13 @@
 #include "../../include/lota_token_quote_nonce.h"
 #include "lota_token.h"
 
-#ifndef LOTA_SERVER_SDK_VERSION_STRING
-#define LOTA_SERVER_SDK_VERSION_STRING "unknown"
+/*
+ * Build identity, injected from the VERSION file by the Makefile.
+ * Library that cannot name the build it came from is useless to advisory
+ * or a support ticket, so refuse to compile instead of reporting a placeholder.
+ */
+#ifndef LOTA_BUILD_VERSION_STRING
+#error "LOTA_BUILD_VERSION_STRING must be defined at build time"
 #endif
 
 #define TPM_GENERATED_VALUE 0xff544347
@@ -688,5 +693,5 @@ const char *lota_server_strerror(int error)
 
 const char *lota_server_sdk_version(void)
 {
-	return LOTA_SERVER_SDK_VERSION_STRING;
+	return LOTA_BUILD_VERSION_STRING;
 }

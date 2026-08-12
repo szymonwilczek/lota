@@ -33,8 +33,16 @@
  * Maximum number of candidate socket paths to try during autodiscovery.
  */
 #define MAX_DISCOVERY_PATHS 4
-#define VERSION_STRING "1.0.0"
 #define DRAIN_READ_TIMEOUT_MS 50
+
+/*
+ * Build identity, injected from the VERSION file by the Makefile.
+ * Library that cannot name the build it came from is useless to advisory
+ * or a support ticket, so refuse to compile instead of reporting a placeholder.
+ */
+#ifndef LOTA_BUILD_VERSION_STRING
+#error "LOTA_BUILD_VERSION_STRING must be defined at build time"
+#endif
 
 /*
  * Client context
@@ -1265,7 +1273,7 @@ const char *lota_strerror(int error)
 
 const char *lota_sdk_version(void)
 {
-	return VERSION_STRING;
+	return LOTA_BUILD_VERSION_STRING;
 }
 
 int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
