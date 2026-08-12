@@ -1193,6 +1193,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
 	$(TEST_BIN_DIR)/test_runtime_measure_failure \
 	$(TEST_BIN_DIR)/test_rt_verity_cache \
+	$(TEST_BIN_DIR)/test_verity_digest_key \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_protect_pids \
 	$(TEST_BIN_DIR)/test_terminate_policy \
@@ -1453,6 +1454,11 @@ $(TEST_BIN_DIR)/test_rt_verity_cache: tests/test_rt_verity_cache.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_verity_digest_key: tests/test_verity_digest_key.c \
+		$(INC_DIR)/lota.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_runtime_measure_failure: tests/test_runtime_measure_failure.c \
 		$(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1641,6 +1647,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_runtime_image_measure
 	@$(BUILD_DIR)/test_runtime_measure_failure
 	@$(BUILD_DIR)/test_rt_verity_cache
+	@$(BUILD_DIR)/test_verity_digest_key
 	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_protect_pids
 	@$(BUILD_DIR)/test_terminate_policy

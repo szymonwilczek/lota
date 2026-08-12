@@ -215,6 +215,16 @@ struct {
 } lota_task_auth SEC(".maps");
 
 /*
+ * Scratch holds what the kernel writes and the key built from it.
+ * The kernel fills a struct fsverity_digest -- header, then digest
+ * -- so the raw buffer is not itself a key.
+ */
+struct lota_verity_scratch {
+	__u8 buf[LOTA_FSVERITY_DIGEST_BUF_SIZE];
+	struct lota_verity_digest_key key;
+};
+
+/*
  * Per-CPU scratch map for the fs-verity digest key passed to
  * bpf_dynptr_from_mem(). The kernel BPF verifier on 6.6+ refuses
  * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem and
@@ -228,7 +238,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, u32);
-	__type(value, struct lota_verity_digest_key);
+	__type(value, struct lota_verity_scratch);
 } verity_scratch SEC(".maps");
 
 /*
@@ -629,7 +639,7 @@ static __always_inline int in_non_init_userns(void)
 
 static __noinline int is_verity_allowed(struct file *file)
 {
-	struct lota_verity_digest_key *key;
+	struct lota_verity_scratch *scratch;
 	struct bpf_dynptr digest_ptr;
 	u32 zero = 0;
 	u32 *allowed;
@@ -642,27 +652,28 @@ static __noinline int is_verity_allowed(struct file *file)
 		return 0;
 
 	/*
-	 * Per-CPU scratch for the digest key. See the comment on
-	 * verity_scratch above: the verifier refuses
-	 * PTR_TO_STACK as the data argument of bpf_dynptr_from_mem
-	 * on 6.6+ kernels, so the key has to live in a map value.
+	 * Per-CPU scratch.
+	 * See the comment on verity_scratch above: the verifier accepts only
+	 * a map value as the data argument of bpf_dynptr_from_mem,
+	 * so the buffer has to live in one.
 	 */
-	key = bpf_map_lookup_elem(&verity_scratch, &zero);
-	if (!key)
+	scratch = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!scratch)
 		return 0;
-	__builtin_memset(key, 0, sizeof(*key));
+	__builtin_memset(scratch, 0, sizeof(*scratch));
 
-	ret = bpf_dynptr_from_mem(key->digest, sizeof(key->digest), 0,
+	ret = bpf_dynptr_from_mem(scratch->buf, sizeof(scratch->buf), 0,
 				  &digest_ptr);
 	if (ret < 0)
 		return 0;
 
-	ret = bpf_get_fsverity_digest(file, &digest_ptr);
-	if (ret < 0 || !LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret))
+	/* success is 0, and the digest is what the header points past */
+	if (bpf_get_fsverity_digest(file, &digest_ptr) != 0)
 		return 0;
-	key->len = (u32)ret;
+	if (lota_verity_key_from_digest_buf(scratch->buf, &scratch->key) != 0)
+		return 0;
 
-	allowed = bpf_map_lookup_elem(&allow_verity, key);
+	allowed = bpf_map_lookup_elem(&allow_verity, &scratch->key);
 	return (allowed && *allowed) ? 1 : 0;
 }
 
@@ -933,7 +944,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 {
 	struct file *file;
 	struct lota_exec_event *event = NULL;
-	struct lota_verity_digest_key *verity_key;
+	struct lota_verity_scratch *scratch;
 	u32 zero = 0;
 	u32 mode;
 	int blocked = 0;
@@ -956,17 +967,16 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 	 */
 	file = bprm->file;
 
-	verity_key = bpf_map_lookup_elem(&verity_scratch, &zero);
-	if (!verity_key)
+	scratch = bpf_map_lookup_elem(&verity_scratch, &zero);
+	if (!scratch)
 		return 0;
-	__builtin_memset(verity_key, 0, sizeof(*verity_key));
+	__builtin_memset(scratch, 0, sizeof(*scratch));
 
 	/* fetch fs-verity digest once (if supported) and reuse it below */
 	if (bpf_get_fsverity_digest && file) {
 		struct bpf_dynptr digest_ptr;
-		int ret = bpf_dynptr_from_mem(verity_key->digest,
-					      sizeof(verity_key->digest), 0,
-					      &digest_ptr);
+		int ret = bpf_dynptr_from_mem(
+			scratch->buf, sizeof(scratch->buf), 0, &digest_ptr);
 		if (ret == 0) {
 			/*
 			 * Note on TOCTOU:
@@ -977,13 +987,18 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 * verity makes the inode content immutable and the
 			 * helper returns an error if verity is not enabled for
 			 * this file.
+			 *
+			 * The kernel reports success as 0, not as a length,
+			 * and writes a header before the digest. Reading the
+			 * return value as a length leaves every file without
+			 * a digest, which under STRICT_EXEC blocks even the
+			 * files the allowlist names.
 			 */
 			ret = bpf_get_fsverity_digest(file, &digest_ptr);
-			if (ret > 0 &&
-			    LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret)) {
-				verity_key->len = (u32)ret;
+			if (ret == 0 &&
+			    lota_verity_key_from_digest_buf(scratch->buf,
+							    &scratch->key) == 0)
 				have_digest = 1;
-			}
 		}
 	}
 
@@ -995,8 +1010,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 		} else if (!have_digest) {
 			blocked = 1;
 		} else {
-			u8 *allowed =
-				bpf_map_lookup_elem(&allow_verity, verity_key);
+			u8 *allowed = bpf_map_lookup_elem(&allow_verity,
+							  &scratch->key);
 			if (!(allowed && *allowed))
 				blocked = 1;
 		}
@@ -1044,7 +1059,7 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 * bytes in event hash */
 			if (have_digest)
 				__builtin_memcpy(event->hash,
-						 verity_key->digest,
+						 scratch->key.digest,
 						 LOTA_HASH_SIZE);
 
 			bpf_ringbuf_submit(event, 0);
