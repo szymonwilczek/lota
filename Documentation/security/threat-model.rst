@@ -61,7 +61,10 @@ Attestation CA
 
 The attestation CA verifies the EK certificate chain, runs credential
 activation against the TPM, and issues a short-lived AIK certificate. Verifiers
-trust the CA certificate, not an agent-asserted public key.
+trust the CA certificate, not an agent-asserted public key. The EK reaches the
+CA and stops there: the attestation report carries no EK certificate field at
+all, so an attestation cannot be linked back to the hardware even by the party
+verifying it.
 
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare

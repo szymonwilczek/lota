@@ -18,7 +18,9 @@ import (
 // Test report matching C struct layout
 // IMPORTANT: Any misalignment causes verification failures
 func createTestReportBytes() []byte {
-	buf := make([]byte, MinReportSize)
+	// fixed struct plus the two variable-section length prefixes;
+	// mandatory ESRT section is appended at the end
+	buf := make([]byte, FixedReportSize+8)
 	offset := 0
 
 	// Header (32 bytes)
@@ -64,11 +66,6 @@ func createTestReportBytes() []byte {
 	// aik_certificate (2048 bytes, optional - leave empty)
 	offset += MaxAIKCertSize
 	// aik_cert_size
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
-	offset += 2
-	// ek_certificate (2048 bytes, optional - leave empty)
-	offset += MaxEKCertSize
-	// ek_cert_size
 	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 	// nonce (32 bytes)
@@ -129,17 +126,23 @@ func createTestReportBytes() []byte {
 	offset += 8
 	binary.LittleEndian.PutUint64(buf[offset:], 1700000000) // last_event_ts
 
+	// mandatory trailing ESRT section
+	// all-zero means present == false
+	buf = append(buf, make([]byte, ESRTWireSize)...)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf))) // report_size
+
 	return buf
 }
 
 // TestParseReport_OversizedEventCountRejected pins the BPF event_count bound.
 // event_count is attacker-controlled u32; parser must reject count whose byte
 // span cannot fit the buffer without overflowing the size computation.
-// createTestReportBytes() lays event_count as the u32 at len-8
-// (event_log_size is the trailing u32), both zero in the valid baseline.
+//
+// createTestReportBytes() lays event_count as the u32 right after the fixed struct,
+// followed by event_log_size and the mandatory ESRT section, all zero in the valid baseline.
 func TestParseReport_OversizedEventCountRejected(t *testing.T) {
 	data := createTestReportBytes()
-	binary.LittleEndian.PutUint32(data[len(data)-8:], 0xFFFFFFFF)
+	binary.LittleEndian.PutUint32(data[FixedReportSize:], 0xFFFFFFFF)
 
 	report, err := ParseReport(data)
 	if err == nil {
@@ -304,62 +307,142 @@ func TestParseReport_TruncatedData(t *testing.T) {
 	}
 }
 
-func TestParseReport_Alignment(t *testing.T) {
-	t.Log("TEST: Verifying field alignment matches C struct")
-	t.Log("CRITICAL: Misalignment causes silent data corruption")
+// TestParseReport_FieldOffsetsMatchCLayout proves the Go parser walks
+// the same byte layout the C serializer writes.
+//
+// Nothing links the two languages at build time:
+// src/agent/report.c memcpy's the packed C struct onto the wire and ParseReport
+// re-reads it from hand-computed offsets.
+// C side pins its own sizes with static asserts; this is the Go side of the same contract.
+//
+// Check is positive, not bounds test: unique marker is written at each expected offset
+// and the parsed report must expose that marker in the matching field.
+// Field that moved -- because one was added, removed or reordered on either side
+// -- lands the marker somewhere else and fails here instead of silently misreading
+// production reports.
+func TestParseReport_FieldOffsetsMatchCLayout(t *testing.T) {
+	// Offsets derived from struct lota_tpm_evidence in include/attestation.h
+	// Report version 2 carries no ek_certificate
+	const (
+		tpmBase          = 16
+		offPCRValues     = tpmBase
+		offPCRMask       = offPCRValues + PCRCount*HashSize
+		offQuoteSig      = offPCRMask + 4
+		offQuoteSigSize  = offQuoteSig + MaxSigSize
+		offAttestData    = offQuoteSigSize + 2
+		offAttestSize    = offAttestData + MaxAttestSize
+		offAIKPublic     = offAttestSize + 2
+		offAIKPublicSize = offAIKPublic + MaxAIKPubSize
+		offAIKCert       = offAIKPublicSize + 2
+		offAIKCertSize   = offAIKCert + MaxAIKCertSize
+		offNonce         = offAIKCertSize + 2
+		offHardwareID    = offNonce + NonceSize
+		offAIKGeneration = offHardwareID + HardwareIDSize
+		offPrevAIKPublic = offAIKGeneration + 8
+		offPrevAIKSize   = offPrevAIKPublic + MaxAIKPubSize
+		offQuoteSigAlg   = offPrevAIKSize + 2
+		offQuoteHashAlg  = offQuoteSigAlg + 2
+		tpmEnd           = offQuoteHashAlg + 2
 
-	// These offsets MUST match C struct with __attribute__((packed))
-	// See include/attestation.h
-	// TPM evidence section: 6992 bytes
-	expectedOffsets := map[string]int{
-		"Header.Magic":       0,
-		"Header.Version":     4,
-		"Header.ReportSize":  8,
-		"Header.Flags":       12,
-		"TPM.PCRValues":      16,
-		"TPM.PCRMask":        16 + 768,
-		"TPM.QuoteSignature": 16 + 768 + 4,
-		"TPM.QuoteSigSize":   16 + 768 + 4 + 512,
-		"TPM.AttestData":     16 + 768 + 4 + 512 + 2,
-		"TPM.AttestSize":     16 + 768 + 4 + 512 + 2 + 1024,
-		"TPM.AIKPublic":      16 + 768 + 4 + 512 + 2 + 1024 + 2,
-		"TPM.AIKPublicSize":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512,
-		"TPM.AIKCertificate": 16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2,
-		"TPM.AIKCertSize":    16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048,
-		"TPM.EKCertificate":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2,
-		"TPM.EKCertSize":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048,
-		"TPM.Nonce":          16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2,
-		"TPM.HardwareID":     16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32,
-		"TPM.AIKGeneration":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32,
-		"TPM.PrevAIKPublic":  16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8,
-		"TPM.PrevAIKSize":    16 + 768 + 4 + 512 + 2 + 1024 + 2 + 512 + 2 + 2048 + 2 + 2048 + 2 + 32 + 32 + 8 + 512,
-		"System.KernelHash":  16 + 7516,
-		"System.AgentHash":   16 + 7516 + 32,
-		"System.KernelPath":  16 + 7516 + 64,
-		"System.IOMMU":       16 + 7516 + 64 + 256,
-		"BPF.TotalExec":      16 + 7516 + 396,
+		offKernelHash = tpmEnd
+		offAgentHash  = offKernelHash + HashSize
+		offKernelPath = offAgentHash + HashSize
+		offIOMMU      = offKernelPath + MaxKernelPath
+		offBPFTotal   = offIOMMU + 4 + 4 + 4 + CmdlineParamMax
+	)
+
+	// layout must close exactly on the published constants
+	assertEqual := func(got, want int, msg string) {
+		t.Helper()
+		if got != want {
+			t.Fatalf("%s: got %d, want %d", msg, got, want)
+		}
+	}
+	assertEqual(tpmEnd-tpmBase, 5466, "TPM evidence section")
+	assertEqual(offBPFTotal+24, FixedReportSize, "fixed section")
+
+	// byte-slice fields: write a marker, parse, require it in the field
+	sliceCases := []struct {
+		name   string
+		offset int
+		size   int
+		get    func(*AttestationReport) []byte
+	}{
+		{"TPM.PCRValues[0]", offPCRValues, HashSize, func(r *AttestationReport) []byte { return r.TPM.PCRValues[0][:] }},
+		{"TPM.QuoteSignature", offQuoteSig, 16, func(r *AttestationReport) []byte { return r.TPM.QuoteSignature[:16] }},
+		{"TPM.AttestData", offAttestData, 16, func(r *AttestationReport) []byte { return r.TPM.AttestData[:16] }},
+		{"TPM.AIKPublic", offAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.AIKPublic[:16] }},
+		{"TPM.AIKCertificate", offAIKCert, 16, func(r *AttestationReport) []byte { return r.TPM.AIKCertificate[:16] }},
+		{"TPM.Nonce", offNonce, NonceSize, func(r *AttestationReport) []byte { return r.TPM.Nonce[:] }},
+		{"TPM.HardwareID", offHardwareID, HardwareIDSize, func(r *AttestationReport) []byte { return r.TPM.HardwareID[:] }},
+		{"TPM.PrevAIKPublic", offPrevAIKPublic, 16, func(r *AttestationReport) []byte { return r.TPM.PrevAIKPublic[:16] }},
+		{"System.KernelHash", offKernelHash, HashSize, func(r *AttestationReport) []byte { return r.System.KernelHash[:] }},
+		{"System.AgentHash", offAgentHash, HashSize, func(r *AttestationReport) []byte { return r.System.AgentHash[:] }},
+		{"System.KernelPath", offKernelPath, 8, func(r *AttestationReport) []byte { return r.System.KernelPath[:8] }},
 	}
 
-	data := createTestReportBytes()
-
-	for field, offset := range expectedOffsets {
-		t.Run(field, func(t *testing.T) {
-			if offset >= len(data) {
-				t.Errorf("Offset %d exceeds data length %d", offset, len(data))
-				return
+	for i, tc := range sliceCases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := createTestReportBytes()
+			marker := make([]byte, tc.size)
+			for j := range marker {
+				// distinct per field and per byte, and never all-zero
+				marker[j] = byte(0x40 + i)
+				marker[j] ^= byte(j)
 			}
-			t.Logf("✓ %s at offset %d", field, offset)
+			copy(data[tc.offset:], marker)
+
+			report, err := ParseReport(data)
+			if err != nil {
+				t.Fatalf("ParseReport: %v", err)
+			}
+			if got := tc.get(report); !bytes.Equal(got, marker) {
+				t.Fatalf("%s: field holds %x, marker written at offset %d was %x",
+					tc.name, got, tc.offset, marker)
+			}
 		})
 	}
 
-	// final check: fixed size matches C struct, min size includes variable sections header
-	if FixedReportSize != 7952 {
-		t.Errorf("FixedReportSize: got %d, want 7952", FixedReportSize)
-	}
-	if MinReportSize != 7960 {
-		t.Errorf("MinReportSize: got %d, want 7960", MinReportSize)
-	}
-	t.Logf("✓ Fixed report size: %d bytes, minimum wire size: %d bytes", FixedReportSize, MinReportSize)
+	// scalar fields: same idea with distinct values
+	t.Run("scalars", func(t *testing.T) {
+		data := createTestReportBytes()
+		binary.LittleEndian.PutUint32(data[offPCRMask:], 0x0BADF00D)
+		binary.LittleEndian.PutUint16(data[offQuoteSigSize:], 0x0101)
+		binary.LittleEndian.PutUint16(data[offAttestSize:], 0x0202)
+		binary.LittleEndian.PutUint16(data[offAIKPublicSize:], 499)
+		binary.LittleEndian.PutUint16(data[offAIKCertSize:], 0x0404)
+		binary.LittleEndian.PutUint64(data[offAIKGeneration:], 0x0505050505050505)
+		binary.LittleEndian.PutUint16(data[offPrevAIKSize:], 0x0006)
+		binary.LittleEndian.PutUint16(data[offQuoteSigAlg:], TPMAlgRSASSA)
+		binary.LittleEndian.PutUint16(data[offQuoteHashAlg:], TPMAlgSHA256)
+		binary.LittleEndian.PutUint32(data[offBPFTotal:], 0x07070707)
+
+		report, err := ParseReport(data)
+		if err != nil {
+			t.Fatalf("ParseReport: %v", err)
+		}
+		checks := []struct {
+			name string
+			got  uint64
+			want uint64
+		}{
+			{"TPM.PCRMask", uint64(report.TPM.PCRMask), 0x0BADF00D},
+			{"TPM.QuoteSigSize", uint64(report.TPM.QuoteSigSize), 0x0101},
+			{"TPM.AttestSize", uint64(report.TPM.AttestSize), 0x0202},
+			{"TPM.AIKPublicSize", uint64(report.TPM.AIKPublicSize), 499},
+			{"TPM.AIKCertSize", uint64(report.TPM.AIKCertSize), 0x0404},
+			{"TPM.AIKGeneration", report.TPM.AIKGeneration, 0x0505050505050505},
+			{"TPM.PrevAIKSize", uint64(report.TPM.PrevAIKSize), 0x0006},
+			{"TPM.QuoteSigAlg", uint64(report.TPM.QuoteSigAlg), uint64(TPMAlgRSASSA)},
+			{"TPM.QuoteSigHashAlg", uint64(report.TPM.QuoteSigHashAlg), uint64(TPMAlgSHA256)},
+			{"BPF.TotalExecEvents", uint64(report.BPF.TotalExecEvents), 0x07070707},
+		}
+		for _, c := range checks {
+			if c.got != c.want {
+				t.Errorf("%s: got %#x, want %#x", c.name, c.got, c.want)
+			}
+		}
+	})
 }
 
 func TestChallenge_Serialize(t *testing.T) {
@@ -516,15 +599,27 @@ func BenchmarkParseReport(b *testing.B) {
 	}
 }
 
-// report without the trailing ESRT section (legacy agent) must parse with
-// ESRT left nil, so the verifier treats it as no-ESRT (no failing)
-func TestParseReport_NoESRT_Legacy(t *testing.T) {
-	report, err := ParseReport(createTestReportBytes())
-	if err != nil {
-		t.Fatalf("ParseReport failed: %v", err)
+// ESRT section is mandatory: agent always emits it and reports Present == false
+// where the platform exposes no System Firmware entry, so report that stops
+// before the section is truncated, not an older agent
+func TestParseReport_RejectsMissingESRT(t *testing.T) {
+	full := createTestReportBytes()
+	truncated := full[:len(full)-ESRTWireSize]
+	binary.LittleEndian.PutUint32(truncated[8:12], uint32(len(truncated)))
+
+	report, err := ParseReport(truncated)
+	if err == nil {
+		t.Fatalf("report without the ESRT section accepted: %+v", report)
 	}
-	if report.ESRT != nil {
-		t.Errorf("expected ESRT nil for legacy report, got %+v", report.ESRT)
+	if !errors.Is(err, ErrInvalidSize) {
+		t.Fatalf("missing ESRT: got %v, want ErrInvalidSize", err)
+	}
+
+	// one byte short of the section is refused just the same
+	short := full[:len(full)-1]
+	binary.LittleEndian.PutUint32(short[8:12], uint32(len(short)))
+	if _, err := ParseReport(short); !errors.Is(err, ErrInvalidSize) {
+		t.Fatalf("report one byte short of the ESRT section: got %v, want ErrInvalidSize", err)
 	}
 }
 
@@ -537,7 +632,11 @@ func TestParseReport_ESRT(t *testing.T) {
 	esrt[12] = 0xb5                              // fw_class[0]
 	esrt[13] = 0x3e                              // fw_class[1]
 
-	data := append(createTestReportBytes(), esrt...)
+	// createTestReportBytes() already carries all-zero ESRT section
+	// overwrite it rather than appending second one
+	data := createTestReportBytes()
+	copy(data[len(data)-ESRTWireSize:], esrt)
+
 	report, err := ParseReport(data)
 	if err != nil {
 		t.Fatalf("ParseReport failed: %v", err)
@@ -565,7 +664,12 @@ func TestParseReport_ESRT(t *testing.T) {
 // -> Low-Firmware-Assurance path
 func TestParseReport_ESRT_NotPresent(t *testing.T) {
 	esrt := make([]byte, ESRTWireSize) // all zero -> present=0
-	data := append(createTestReportBytes(), esrt...)
+
+	// createTestReportBytes() already carries all-zero ESRT section
+	// overwrite it rather than appending second one
+	data := createTestReportBytes()
+	copy(data[len(data)-ESRTWireSize:], esrt)
+
 	report, err := ParseReport(data)
 	if err != nil {
 		t.Fatalf("ParseReport failed: %v", err)

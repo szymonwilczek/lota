@@ -190,9 +190,6 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	off += types.MaxAIKCertSize
 	binary.LittleEndian.PutUint16(buf[off:], narrow16(len(a.CertDER)))
 	off += 2
-	off += types.MaxEKCertSize // no EK certificate
-	binary.LittleEndian.PutUint16(buf[off:], 0)
-	off += 2
 	copy(buf[off:], challengeNonce[:])
 	off += types.NonceSize
 	copy(buf[off:], a.HardwareID[:])
@@ -243,6 +240,11 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 	binary.LittleEndian.PutUint32(tail[4:8], narrow32(len(eventLog)))
 	buf = append(buf, tail[:]...)
 	buf = append(buf, eventLog...)
+
+	// mandatory trailing ESRT section
+	// synthetic platform exposes no ESRT System Firmware entry,
+	// which is present == 0 -- the same thing real host without one reports
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 
 	binary.LittleEndian.PutUint32(buf[8:12], narrow32(len(buf)))
 	return buf, nil

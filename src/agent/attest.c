@@ -539,15 +539,6 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 	}
 
 	/*
-	 * The EK certificate is intentionally not sent in attestation
-	 * reports. Under the Privacy CA model the verifier authenticates the
-	 * AIK through its CA-issued certificate alone and never sees the EK,
-	 * so attestations stay unlinkable to the hardware. The EK certificate
-	 * is presented only to the attestation CA during --enroll.
-	 */
-	report->tpm.ek_cert_size = 0;
-
-	/*
 	 * Include the CA-issued AIK certificate from the last --enroll against
 	 * this profile.
 	 * Verifier chains it to the attestation CA root to authenticate the AIK;
@@ -712,7 +703,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 		 * Always sent, present=0 when absent */
 		esrt_read_system_firmware(&esrt);
 
-		total = calculate_report_size(0, (uint32_t)event_log_size, 1);
+		total = calculate_report_size(0, (uint32_t)event_log_size);
 		wire_buf_size = total;
 		wire_buf = malloc(total);
 		if (!wire_buf) {
