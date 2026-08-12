@@ -497,11 +497,13 @@ operator works around it.
   The state that does survive is the TPM's: a guest reused across agent builds
   carries the earlier run's persistent AIK and the witness that names it. To
   start a test run from a clean slate, wipe the witness and evict the
-  persistent AIK:
+  persistent AIK. ``lota-attest.service`` runs an agent of its own and rewrites
+  the witness on its next round, so it has to stop with the daemon:
 
   .. code-block:: sh
 
-      sudo systemctl stop lota-agent.service lota-agent.socket
+      sudo systemctl stop lota-agent.service lota-agent.socket \
+          lota-attest.service
       sudo find /var/lib/lota -mindepth 1 -delete
       for h in 0x81010002 0x81010003 0x81010004 0x81010005 \
                0x81010010 0x81010011 0x81010012 0x81010013 \

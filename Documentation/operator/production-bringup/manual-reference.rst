@@ -213,11 +213,16 @@ the unauthenticated clock and must be rebound on the next start. A re-install
 that changes either the initramfs helper or the agent binary without rebuilding
 initramfs and cold-rebooting reports a PCR14 derivation mismatch or
 ``This is not the lota-agent build PCR 14 committed to when the host booted``.
-Wipe the witness file and the persistent AIK, then reboot:
+Wipe the witness file and the persistent AIK, then reboot. **Stop every unit
+that runs an agent, not only the daemon**: ``lota-attest.service`` runs
+``lota-agent --attest`` and keeps the TPM clock witness current, so a wipe that
+leaves it running deletes a file the next attestation round rewrites seconds
+later.
 
 .. code-block:: sh
 
-    sudo systemctl stop lota-agent.service lota-agent.socket
+    sudo systemctl stop lota-agent.service lota-agent.socket \
+        lota-attest.service
     sudo find /var/lib/lota -mindepth 1 -maxdepth 1 \
         \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
            -o -name 'snapshot*' \) -delete
