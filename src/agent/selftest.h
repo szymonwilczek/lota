@@ -31,7 +31,7 @@ enum selftest_aik_plan {
 static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 {
 	return holds_object == 1 ? SELFTEST_AIK_USE_EXISTING :
-				   SELFTEST_AIK_USE_EXISTING;
+				   SELFTEST_AIK_SKIP;
 }
 
 /*

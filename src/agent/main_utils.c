@@ -63,7 +63,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --config PATH     Configuration file path\n");
 	printf("                    (default: %s)\n", LOTA_CONFIG_DEFAULT_PATH);
 	printf("  --dump-config     Print loaded configuration and exit\n");
-	printf("  --test-tpm        Test TPM operations and exit\n");
+	printf("  --test-tpm        Report on TPM operations and exit.\n"
+	       "                    Creates no persistent key: the quote is\n"
+	       "                    skipped when the attestation handle is\n"
+	       "                    free, since a key made here would\n"
+	       "                    outlive the command\n");
 	printf("  --test-iommu      Test IOMMU verification and exit\n");
 	printf("  --seal            Seal a secret read from stdin to the PCR "
 	       "state;\n");
