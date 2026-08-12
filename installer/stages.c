@@ -1150,7 +1150,9 @@ after_cert:
 		      "absent (firmware re-anchor is low-assurance; the first "
 		      "one needs operator approval)");
 
-	if (ctx->opts.verifier) {
+	switch (probe_selfcheck_plan(
+		ctx->opts.verifier, probe_conf_profile_count(PATH_LOTA_CONF))) {
+	case SELFCHECK_ONE_ROUND: {
 		const char *argv[10];
 		int n = 0;
 		int rc;
@@ -1175,10 +1177,14 @@ after_cert:
 			     argv);
 		if (rc != 0)
 			ok = 0;
-	} else {
+		break;
+	}
+	case SELFCHECK_PUBLISHERS_REPORT:
+	case SELFCHECK_SKIP_NO_VERIFIER:
 		ui_text(&ctx->ui, "Attestation round-trip skipped (no "
 				  "--verifier given). First game launch "
 				  "performs it.");
+		break;
 	}
 
 	ui_explain(&ctx->ui, telemetry_summary);

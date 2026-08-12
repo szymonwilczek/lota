@@ -261,6 +261,31 @@ int probe_conf_buf_has_key(const char *buf, const char *key);
  * 1/0 or -errno */
 int probe_conf_has_key(const char *conf_path, const char *key);
 
+/* Pure parser:
+ * How many [profile "name"] sections the configuration carries.
+ * Publisher profiles are the agent's target list, so the count is what
+ * decides where this host reports */
+int probe_conf_buf_profile_count(const char *buf);
+
+/* File-backed wrapper for probe_conf_buf_profile_count().
+ * count or -errno */
+int probe_conf_profile_count(const char *conf_path);
+
+/* How the self-check proves this host attests. */
+enum probe_selfcheck_plan {
+	/* Nobody named a verifier: the first title launch performs the round */
+	SELFCHECK_SKIP_NO_VERIFIER,
+	/* One verifier named and no profiles: one round against it, then exit */
+	SELFCHECK_ONE_ROUND,
+	/* Publisher profiles are the target list, so no single verifier can be
+	 * named -- the agent refuses that combination */
+	SELFCHECK_PUBLISHERS_REPORT,
+};
+
+/* Pure decision from the two inputs the stage has */
+enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
+					       int profile_count);
+
 /* 1 when this host has opted into unattended boot-path bring-up,
  * either by the marker file at path or by LOTA_AUTO_BRINGUP=1 in the environment.
  *
