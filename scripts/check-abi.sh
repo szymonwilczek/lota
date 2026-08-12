@@ -98,11 +98,10 @@ for lib in "${LIBRARIES[@]}"; do
 		continue
 	fi
 
-	if ! diff -u "$baseline" <(exported_symbols "$so") >/tmp/lota-abi-diff.$$ 2>&1; then
+	if ! symbol_diff="$(diff -u "$baseline" <(exported_symbols "$so") 2>&1)"; then
 		fail "$lib: exported symbols differ from $baseline"
-		sed 's/^/  /' /tmp/lota-abi-diff.$$ >&2
+		printf '%s\n' "$symbol_diff" | sed 's/^/  /' >&2
 	fi
-	rm -f /tmp/lota-abi-diff.$$
 
 	soname="$(readelf --dynamic "$so" |
 		sed -n 's/.*Library soname: \[\(.*\)\]/\1/p')"
