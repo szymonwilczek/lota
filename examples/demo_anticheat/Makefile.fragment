@@ -9,8 +9,11 @@ TARGET := $(BUILD_DIR)/demo_anticheat
 SRCS := heartbeat_loop.c
 
 CC ?= gcc
+STAGE_DIR ?= $(TOP_DIR)/build/stage
+export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
+
 CFLAGS := -Wall -Wextra -Werror -O2 -g
-CFLAGS += -I$(INC_DIR)
+CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-anticheat)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong -fstack-clash-protection
 CFLAGS += -fcf-protection=full
@@ -23,21 +26,21 @@ ifdef SANITIZE
 CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
-CFLAGS += $(shell pkg-config --cflags libcurl)
+CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags libcurl)
 
 LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 ifdef SANITIZE
 LDFLAGS += -fsanitize=$(SANITIZE)
 endif
-LDLIBS := -L$(SDK_BUILD_DIR) -llota_anticheat -llotagaming -llotaserver -lcrypto
-LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR)
-LDLIBS += $(shell pkg-config --libs libcurl)
+LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-anticheat)
+LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
+LDLIBS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs libcurl)
 
 .PHONY: all clean
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS) $(SDK_BUILD_DIR)/liblota_anticheat.so
+$(TARGET): $(SRCS) $(STAGE_DIR)/lib64/liblota_anticheat.so
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
 	@echo "Built: $@"
 

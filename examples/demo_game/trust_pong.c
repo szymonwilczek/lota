@@ -29,7 +29,7 @@
 #include <curl/curl.h>
 #include <SDL.h>
 
-#include "lota_gaming.h"
+#include <lota/lota_gaming.h>
 #include "ui.h"
 
 #define POLL_INTERVAL_MS 750

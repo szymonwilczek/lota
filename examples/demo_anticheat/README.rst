@@ -13,8 +13,23 @@ EAC- or BattlEye-style integrator: every production-relevant decision (provider
 id, game id, socket path, heartbeat interval) is a flag.
 
 Build with ``make examples`` from the repository root. The binary lands at
-``build/examples/demo_anticheat`` and links against the gaming + anticheat +
-server SDKs that ``make all`` already produces under ``build/``.
+``build/examples/demo_anticheat``.
+
+It builds the way a studio's build does: through ``pkg-config`` against the
+**installed** SDK, never against the build tree. ``make examples`` first
+lays the package contents out under ``build/stage`` (the ``sdk-stage``
+target), so the flags come from the same ``.pc`` files ``lota-sdk-devel``
+ships:
+
+.. code:: sh
+
+   cc $(pkg-config --cflags lota-anticheat) -o producer producer.c \
+      $(pkg-config --libs lota-anticheat) $(pkg-config --libs libcurl)
+
+``lota-anticheat`` is the only LOTA module on that line: the library
+carries the gaming and server SDK inside it, so a producer that only calls
+``lota_ac_*`` links one thing. Add ``lota-gaming`` or ``lota-server`` when
+the same binary also calls those APIs directly.
 
 Which half of the evidence you run
 ----------------------------------
@@ -121,6 +136,20 @@ was malformed, the options were not sized, or the agent refused the request
 itself. It never means the publisher is unknown to that machine, so a title
 that hits it should report a fault rather than send the player to a consent
 screen.
+
+End-to-end proof
+----------------
+
+``./run.sh`` verifies the whole path without root and without a real TPM: a
+throwaway swTPM, ``lota-agent`` under ``systemd-socket-activate`` so it
+listens in ``/tmp`` instead of ``/run/lota``, the reference server on the
+AIK that TPM provisioned, and two assertions -- a heartbeat from an attested
+host is ``TRUSTED``, and a heartbeat whose signature byte was flipped is
+``UNTRUSTED`` with the server naming the signature as the reason.
+
+Requires ``swtpm``, ``swtpm_setup``, ``tpm2_readpublic`` and
+``systemd-socket-activate``. Set ``KEEP_LOGS=1`` to keep the run directory
+for inspection.
 
 Flags
 -----
@@ -260,10 +289,14 @@ Tamper hook
 
 ``--tamper-marker PATH`` (or ``LOTA_DEMO_TAMPER_MARKER=PATH``) arms a per-tick
 poll: when the file at ``PATH`` exists at heartbeat time, the producer XORs
-``0xFF`` into the first byte of the signed token blob before POSTing. The LACH
-header stays well-formed, so the server takes the verification branch rather
-than the wire-format reject branch and answers ``UNTRUSTED`` with the
-signature-verify error string surfaced from ``sdk/server.VerifyToken``. This is
+``0xFF`` into the **last** byte of the packet, which is the tail of the TPM
+signature. Both the LACH header and the token's own header stay well-formed,
+so the server parses everything and then fails the signature check: it
+answers ``UNTRUSTED`` with the signature-verify error string surfaced from
+``sdk/server.VerifyToken``, rather than the wire-format reject branch.
+
+The first byte of the token is not a usable target -- it is the token magic,
+and corrupting it exercises the parser instead of the integrity check. This is
 the integration point that ``examples/demo/demo_tamper.sh`` uses to flip the
 live demo's banner from green TRUSTED to red INTEGRITY LOSS without touching
 the agent process or the swtpm sandbox.

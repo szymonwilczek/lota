@@ -29,7 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "../../include/lota_gaming.h"
+#include <lota/lota_gaming.h>
 
 static const char *DEFAULT_EVIL_PATH = "/tmp/evil.so";
 

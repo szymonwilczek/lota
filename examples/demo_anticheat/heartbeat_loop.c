@@ -27,7 +27,7 @@
 
 #include <curl/curl.h>
 
-#include "lota_anticheat.h"
+#include <lota/lota_anticheat.h>
 
 #define DEMO_DEFAULT_URL "http://127.0.0.1:7443/heartbeat"
 #define DEMO_DEFAULT_GAME_ID "trust-pong"
@@ -403,21 +403,24 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 		   ((uint32_t)buf[26] << 16) | ((uint32_t)buf[27] << 24);
 
 	/*
-	 * Tamper hook for the live demo. Flip the first byte of the
-	 * signed token blob so the server's signature verification
-	 * fails while the LACH wire format itself remains structurally
-	 * valid. The verdict path is the UNTRUSTED branch in
-	 * heartbeat.go rather than REJECT, which is the path a
-	 * production verifier would also take against a genuinely
-	 * mangled signature.
+	 * Tamper hook for the live demo.
+	 * Flip the last byte of the packet, which is the tail of the TPM signature:
+	 * the token's own header fields are untouched, so the server parses
+	 * the heartbeat and the token fully and then fails the signature check.
+	 * That is the UNTRUSTED branch in heartbeat.go rather than REJECT,
+	 * and it is the path a production verifier takes against mangled signature.
+	 *
+	 * The first byte of the token is not a usable target:
+	 * it is the token magic, and corrupting it exercises the parser,
+	 * which is the one thing this hook is meant not to test.
 	 */
 	if (written > LOTA_AC_HEADER_SIZE &&
 	    tamper_marker_armed(opt->tamper_marker)) {
-		buf[LOTA_AC_HEADER_SIZE] ^= 0xFF;
+		buf[written - 1] ^= 0xFF;
 		fprintf(stderr,
 			"demo_anticheat: tamper marker %s present, flipped "
-			"token byte at offset %u\n",
-			opt->tamper_marker, (unsigned int)LOTA_AC_HEADER_SIZE);
+			"signature byte at offset %zu\n",
+			opt->tamper_marker, written - 1);
 	}
 
 	struct response_buf resp = { 0 };

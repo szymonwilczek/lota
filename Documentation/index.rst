@@ -86,6 +86,7 @@ Game or anti-cheat integrator
 LOTA exposes trust decisions and token verification material. Gameplay policy
 remains outside this repository.
 
+* Integration guide: :ghsrc:`examples/anticheat-integration.rst`
 * Example index: :ghsrc:`examples/README.rst`
 * CI/CD release gate example: :ghsrc:`examples/ci-gate/README.rst`
 * Reference server: :ghsrc:`examples/demo_server/README.rst`

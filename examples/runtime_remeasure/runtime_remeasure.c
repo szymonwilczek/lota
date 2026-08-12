@@ -36,7 +36,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-#include "lota_anticheat.h"
+#include <lota/lota_anticheat.h>
 
 static void print_digest(const char *label,
 			 const uint8_t d[LOTA_AC_RUNTIME_MEASURE_SIZE])
