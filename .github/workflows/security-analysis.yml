@@ -65,7 +65,7 @@ jobs:
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
-            src/sdk/server/go.sum
+            sdk/server/go.sum
             examples/demo_server/go.sum
 
       - name: Initialize CodeQL
@@ -85,7 +85,7 @@ jobs:
         if: matrix.language == 'go'
         run: |
           set -eu
-          for mod in src/verifier src/attestca src/sdk/server src/crl examples/demo_server src/fleetctl; do
+          for mod in src/verifier src/attestca sdk/server src/crl examples/demo_server src/fleetctl; do
             (cd "$mod" && go test ./...)
           done
 
@@ -156,7 +156,7 @@ jobs:
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
-            src/sdk/server/go.sum
+            sdk/server/go.sum
             examples/demo_server/go.sum
 
       - name: Install gosec
@@ -180,7 +180,7 @@ jobs:
           set -eu
           gosec="$(go env GOPATH)/bin/gosec"
           rc=0
-          for mod in src/verifier src/attestca src/sdk/server src/crl examples/demo_server src/fleetctl; do
+          for mod in src/verifier src/attestca sdk/server src/crl examples/demo_server src/fleetctl; do
             echo "::group::gosec $mod"
             (cd "$mod" && "$gosec" -exclude=G104,G304,G115 -severity=low ./...) || rc=1
             echo "::endgroup::"
@@ -248,7 +248,7 @@ jobs:
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
-            src/sdk/server/go.sum
+            sdk/server/go.sum
             examples/demo_server/go.sum
 
       - name: Install govulncheck
@@ -265,7 +265,7 @@ jobs:
           set -eu
           govulncheck="$(go env GOPATH)/bin/govulncheck"
           rc=0
-          for mod in src/verifier src/attestca src/sdk/server src/crl examples/demo_server src/fleetctl; do
+          for mod in src/verifier src/attestca sdk/server src/crl examples/demo_server src/fleetctl; do
             echo "::group::govulncheck $mod"
             (cd "$mod" && "$govulncheck" ./...) || rc=1
             echo "::endgroup::"

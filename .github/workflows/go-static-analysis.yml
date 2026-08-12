@@ -37,7 +37,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -eu
-          for mod in src/verifier src/attestca src/sdk/server src/crl src/fleetctl; do
+          for mod in src/verifier src/attestca sdk/server src/crl src/fleetctl; do
             (cd "$mod" && go mod tidy)
           done
           if ! git diff --exit-code -- '**/go.mod' '**/go.sum'; then
@@ -89,6 +89,7 @@ jobs:
           args: --config ../../.golangci.yml ./...
 
       - name: Locate the server SDK module
+        working-directory: ${{ github.workspace }}
         run: |
           set -eu
           if [ -f sdk/server/go.mod ]; then
@@ -213,7 +214,7 @@ jobs:
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
-            src/sdk/server/go.sum
+            sdk/server/go.sum
             examples/demo_server/go.sum
 
       - name: Install go-licenses
@@ -233,7 +234,7 @@ jobs:
           go_licenses="$(go env GOPATH)/bin/go-licenses"
           allow="MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC,MPL-2.0"
           rc=0
-          for mod in src/verifier src/attestca src/sdk/server examples/demo_server src/fleetctl; do
+          for mod in src/verifier src/attestca sdk/server examples/demo_server src/fleetctl; do
             echo "::group::go-licenses $mod"
             (cd "$mod" && "$go_licenses" check ./... \
               --allowed_licenses="$allow" \

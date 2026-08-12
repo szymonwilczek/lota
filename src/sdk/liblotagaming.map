@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Exported ABI of liblotagaming.so.
+ *
+ * The list is the set of functions include/lota_gaming.h declares.
+ * Every other symbol in the library is an implementation detail and is local,
+ * so helper that is non-static only because two translation units share it does
+ * not become API by accident.
+ *
+ * Adding a function means a new version node (LOTAGAMING_1.1) below this one;
+ * removing or changing one is an ABI break and bumps LOTA_ABI_MAJOR.
+ * See Documentation/contributor/development/api-stability.rst
+ *
+ * Copyright (C) 2026 Szymon Wilczek
+ */
+
+LOTAGAMING_1.0 {
+	global:
+		lota_connect;
+		lota_connect_last_error;
+		lota_connect_opts;
+		lota_disconnect;
+		lota_flags_to_string;
+		lota_get_fd;
+		lota_get_status;
+		lota_get_token;
+		lota_is_attested;
+		lota_ping;
+		lota_poll_events;
+		lota_protect_self;
+		lota_sdk_version;
+		lota_strerror;
+		lota_subscribe;
+		lota_token_free;
+		lota_token_serialize;
+		lota_token_serialized_size;
+		lota_unsubscribe;
+
+	local:
+		*;
+};

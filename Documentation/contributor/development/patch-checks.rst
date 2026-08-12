@@ -13,7 +13,8 @@ branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
 commit signatures, message and patch whitespace, clang-format, gofmt, the full
 build, include hygiene, the license boundary
-(:doc:`license-boundary`), the same hotpath documentation policy enforced by
+(:doc:`license-boundary`), the public API and ABI surface
+(:doc:`api-stability`), the same hotpath documentation policy enforced by
 CI, and -- when the patch touches C -- the Sparse, Smatch and Coccinelle
 analyzers described below.
 

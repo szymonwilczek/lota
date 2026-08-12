@@ -79,8 +79,13 @@ SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 # Shared-library ABI version. The soname carries the major only (bumped on an
 # incompatible ABI change); the on-disk file carries the full version and the
 # soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
-# layout. Independent of the release VERSION -- pre-1.0 ABI starts at 0.
-LOTA_ABI_MAJOR := 0
+# layout.
+#
+# Independent of the release VERSION: it moves when the ABI moves, not when the product does.
+#
+# Major 1 is the frozen surface
+# -- see Documentation/contributor/development/api-stability.rst.
+LOTA_ABI_MAJOR := 1
 LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
 
 # Detect target architecture (overridable)
@@ -245,6 +250,12 @@ ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
 ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
+# Linker version script per shared library:
+# exports the functions the installed header declares and makes every other symbol local.
+# Named $(notdir $(lib)).map next to the sources it filters.
+SDK_VERSION_SCRIPT = $(SDK_DIR)/$(basename $(notdir $(1))).map
+VERSION_SCRIPT_LDFLAGS = -Wl,--version-script=$(call SDK_VERSION_SCRIPT,$(1))
+
 # Default target
 .PHONY: all
 all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
@@ -313,10 +324,12 @@ $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
-$(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
+$(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SDK_OBJS)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -326,10 +339,13 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build server SDK shared library (versioned)
-$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) \
+		Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -339,18 +355,26 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lpthread
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(WINE_HOOK_OBJS) $(SDK_OBJS) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
-$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -365,7 +389,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -740,6 +764,17 @@ check-includes:
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
+# Public API/ABI gate
+# Compares the SDK's exported symbols, sonames and installed header set against
+# the baseline in packaging/abi/, and compiles every public header against the installed set alone.
+# abi-baseline rewrites the symbol lists after deliberate surface change;
+# see Documentation/contributor/development/api-stability.rst
+check-abi:
+	@scripts/check-abi.sh
+
+abi-baseline:
+	@scripts/check-abi.sh --update
+
 # Combined lint:
 # clang-format style check on the C sources and headers plus golangci-lint
 # on every Go module.
@@ -921,8 +956,9 @@ install: check-version-tag all
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
-	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_anticheat.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_token.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_snapshot.h $(DESTDIR)/usr/include/lota/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries
@@ -1327,7 +1363,7 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
 	fi
 	@if command -v go >/dev/null 2>&1; then \
-		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang/test_gen.go && \
+		cd sdk/server && go run ../../tests/cross_lang/test_gen.go && \
 		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
 	else \
 		echo "SKIP: test_gen.go (go not installed)"; \
@@ -1668,6 +1704,8 @@ help:
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
+	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
@@ -1727,7 +1765,7 @@ help:
 BENCH_DIR := benchmarks
 BENCH_RESULTS := $(BENCH_DIR)/results
 BENCH_C_BIN := $(BUILD_DIR)/bench_sdk
-GO_BENCH_MODULES := $(SRC_DIR)/verifier $(SRC_DIR)/sdk/server $(SRC_DIR)/attestca
+GO_BENCH_MODULES := $(SRC_DIR)/verifier sdk/server $(SRC_DIR)/attestca
 # -count feeds benchstat
 BENCH_COUNT ?= 6
 BENCH_TIME ?= 1s

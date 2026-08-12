@@ -4,6 +4,13 @@
  * LOTA IPC Protocol
  *
  * Binary protocol for local attestation queries.
+ *
+ * Internal to the agent and the SDK that ships with it:
+ * this is the wire between the two, not surface an integrator builds against.
+ * It is not installed, and it carries no compatibility promise -- caller that
+ * speaks the socket directly is pinned to the agent build it was compiled against.
+ *
+ * Use the gaming SDK (include/lota_gaming.h), which owns this protocol and keeps its own ABI.
  */
 
 #ifndef LOTA_IPC_H

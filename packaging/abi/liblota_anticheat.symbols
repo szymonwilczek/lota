@@ -1,0 +1,14 @@
+lota_ac_compute_expected_runtime_measure@@LOTA_ANTICHEAT_1.0
+lota_ac_compute_expected_runtime_measure_set@@LOTA_ANTICHEAT_1.0
+lota_ac_compute_game_binding_hash@@LOTA_ANTICHEAT_1.0
+lota_ac_compute_runtime_measure@@LOTA_ANTICHEAT_1.0
+lota_ac_get_info@@LOTA_ANTICHEAT_1.0
+lota_ac_get_state@@LOTA_ANTICHEAT_1.0
+lota_ac_heartbeat@@LOTA_ANTICHEAT_1.0
+lota_ac_init@@LOTA_ANTICHEAT_1.0
+lota_ac_list_runtime_objects@@LOTA_ANTICHEAT_1.0
+lota_ac_provider_str@@LOTA_ANTICHEAT_1.0
+lota_ac_shutdown@@LOTA_ANTICHEAT_1.0
+lota_ac_state_str@@LOTA_ANTICHEAT_1.0
+lota_ac_tick@@LOTA_ANTICHEAT_1.0
+lota_ac_verify_heartbeat@@LOTA_ANTICHEAT_1.0
