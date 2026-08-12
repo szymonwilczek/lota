@@ -938,8 +938,13 @@ int probe_conf_profile_count(const char *conf_path)
 enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
 					       int profile_count)
 {
-	(void)profile_count;
-
+	/*
+	 * Publishers first: they are the agent's target list, so they decide
+	 * where this host reports whether or not a verifier was named.
+	 * A round that named one as well is the combination the agent refuses.
+	 */
+	if (profile_count > 0)
+		return SELFCHECK_PUBLISHERS_REPORT;
 	if (!verifier || !verifier[0])
 		return SELFCHECK_SKIP_NO_VERIFIER;
 	return SELFCHECK_ONE_ROUND;

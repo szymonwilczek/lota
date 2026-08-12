@@ -1078,6 +1078,7 @@ int install_self_check(struct install_ctx *ctx)
 	struct profile_paths paths;
 	int days = 0;
 	int ok = 1;
+	int profiles;
 	int rc_cert;
 
 	ui_stage_begin(&ctx->ui, install_stage_count + 1,
@@ -1150,8 +1151,11 @@ after_cert:
 		      "absent (firmware re-anchor is low-assurance; the first "
 		      "one needs operator approval)");
 
-	switch (probe_selfcheck_plan(
-		ctx->opts.verifier, probe_conf_profile_count(PATH_LOTA_CONF))) {
+	profiles = probe_conf_profile_count(PATH_LOTA_CONF);
+	if (profiles < 0)
+		profiles = 0;
+
+	switch (probe_selfcheck_plan(ctx->opts.verifier, profiles)) {
 	case SELFCHECK_ONE_ROUND: {
 		const char *argv[10];
 		int n = 0;
@@ -1180,6 +1184,26 @@ after_cert:
 		break;
 	}
 	case SELFCHECK_PUBLISHERS_REPORT:
+		/*
+		 * The host answers to publishers, so they are who it reports to,
+		 * each on their own cadence and their own trust anchor.
+		 * Naming one verifier as well is what the agent refuses,
+		 * and that refusal is not this host failing to attest.
+		 */
+		ui_text(&ctx->ui,
+			"Attestation round-trip belongs to the %d publisher(s) "
+			"this host answers to: they are the agent's target "
+			"list, each with its own verifier and cadence, so no "
+			"single verifier stands for them. A publisher whose "
+			"titles gate on a session is reported to when one of "
+			"their titles runs. %slota-agent --list-publishers "
+			"says who they are.",
+			profiles,
+			ctx->opts.verifier ?
+				"The --verifier given here is not used for "
+				"that reason. " :
+				"");
+		break;
 	case SELFCHECK_SKIP_NO_VERIFIER:
 		ui_text(&ctx->ui, "Attestation round-trip skipped (no "
 				  "--verifier given). First game launch "

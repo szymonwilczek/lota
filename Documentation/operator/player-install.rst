@@ -177,8 +177,19 @@ What the stages do
    machine answers to and ``--forget-publisher`` takes one back.
 
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
-and -- when ``--verifier`` is given -- a full attestation round-trip) and a
-plain-language summary of exactly what telemetry leaves the machine.
+and an attestation round-trip) and a plain-language summary of exactly what
+telemetry leaves the machine.
+
+Who performs that round-trip depends on whether the host answers to
+publishers. On a machine with no publisher profiles, ``--verifier`` names the
+one verifier and the self-check runs a round against it; with no
+``--verifier``, the first title launch performs it. **On a machine that has
+publisher profiles, the publishers are the agent's target list** -- each with
+its own trust anchor, verifier and cadence -- so no single verifier stands for
+them and the self-check says so instead of naming one. That is not a host
+failing to attest: a ``--verifier`` passed alongside profiles is reported as
+unused, and a publisher whose titles gate on a session is reported to when one
+of their titles runs.
 
 What the operator must ship
 ===========================
