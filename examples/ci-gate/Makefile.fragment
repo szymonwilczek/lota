@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: MIT
+#
+# Build rules for the CI attestation step.
+# Invoked by the top-level Makefile under `make examples`.
+#
+# TOP_DIR / BUILD_DIR / INC_DIR / SDK_BUILD_DIR are passed in from the parent
+# so this fragment never reaches back into the top Makefile's private state.
+#
+# This reference builds the way an integrator does: against the installed SDK
+# through pkg-config, never against the build tree.
+#
+# `make examples` lays the package contents out under build/stage first
+# (`make sdk-stage`), so the flags below come from the same .pc files
+# lota-sdk-devel ships and resolve to the same layout.
+# Point PKG_CONFIG_PATH at a real prefix and nothing here changes.
+
+TARGET := $(BUILD_DIR)/lota-ci-attest
+SRCS := attest_step.c
+
+CC ?= gcc
+
+# Staged prefix only
+# Integrator sets PKG_CONFIG_PATH for real one,
+# or leaves it unset when the package is installed system-wide
+STAGE_DIR ?= $(TOP_DIR)/build/stage
+export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
+
+LOTA_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-gaming)
+LOTA_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-gaming)
+
+CFLAGS := -Wall -Wextra -Werror -O2 -g
+CFLAGS += -D_GNU_SOURCE
+CFLAGS += -fstack-protector-strong -fstack-clash-protection
+CFLAGS += -fcf-protection=full
+CFLAGS += -D_FORTIFY_SOURCE=2 -fPIE
+CFLAGS += -Wformat -Wformat-security
+CFLAGS += -Wshadow -Wpointer-arith -Wcast-align
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS += -Wundef -Wvla
+ifdef SANITIZE
+CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
+CFLAGS += -fno-sanitize-recover=all
+endif
+CFLAGS += $(LOTA_CFLAGS)
+CFLAGS += $(shell pkg-config --cflags libcurl)
+
+LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
+ifdef SANITIZE
+LDFLAGS += -fsanitize=$(SANITIZE)
+endif
+LDLIBS := $(LOTA_LIBS)
+LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
+LDLIBS += $(shell pkg-config --libs libcurl)
+
+GATE := $(BUILD_DIR)/lota-release-gate
+
+.PHONY: all clean
+
+all: $(TARGET) $(GATE)
+
+$(TARGET): $(SRCS) $(STAGE_DIR)/lib64/liblotagaming.so
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
+	@echo "Built: $@"
+
+$(GATE):
+	@if command -v go >/dev/null 2>&1; then \
+		cd gate && go build -o $@ . && echo "Built: $@"; \
+	else \
+		echo "SKIP: $@ (go not installed)"; \
+	fi
+
+clean:
+	rm -f $(TARGET) $(GATE)

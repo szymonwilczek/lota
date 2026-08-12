@@ -347,6 +347,34 @@ $(PKGCONFIG_DIR):
 
 pkgconfig: $(PKGCONFIG_FILES)
 
+# Staged SDK prefix:
+# what lota-sdk and lota-sdk-devel install, laid out as a prefix, without needing
+# root or a package manager.
+# It is how anything in tree builds "against the published packages"
+# -- the reference integrations point PKG_CONFIG_PATH here, so they resolve headers
+# and libraries the way an integrator's build does instead of reaching into build/
+# or, worse, finding a stale copy under /usr.
+# The header set is read from the ABI baseline rather than restated.
+STAGE_DIR := $(BUILD_DIR)/stage
+STAGE_HEADERS := $(shell grep -v '^[[:space:]]*\#' packaging/abi/public-headers.list 2>/dev/null | grep -v '^[[:space:]]*$$')
+
+sdk-stage: $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) \
+		$(PKGCONFIG_FILES)
+	$(Q)rm -rf $(STAGE_DIR)
+	$(Q)install -d $(STAGE_DIR)/include/lota $(STAGE_DIR)/lib64/pkgconfig
+	$(Q)for h in $(STAGE_HEADERS); do \
+		install -m 644 $(INC_DIR)/$$h $(STAGE_DIR)/include/lota/; \
+	done
+	$(Q)for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
+		install -m 755 $(BUILD_DIR)/$$l.so.$(LOTA_ABI_VERSION) \
+			$(STAGE_DIR)/lib64/; \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
+			$(STAGE_DIR)/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(STAGE_DIR)/lib64/$$l.so; \
+	done
+	$(Q)install -m 644 $(PKGCONFIG_FILES) $(STAGE_DIR)/lib64/pkgconfig/
+	@echo "  STAGE   $(STAGE_DIR)"
+
 $(PKGCONFIG_DIR)/%.pc: packaging/pkgconfig/%.pc.in Makefile | $(PKGCONFIG_DIR)
 	$(QUIET_GEN)
 	$(Q)sed 's|@LOTA_ABI_VERSION@|$(LOTA_ABI_VERSION)|g' $< > $@
@@ -407,7 +435,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -446,7 +474,7 @@ EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
 $(EXAMPLES_BUILD_DIR): | $(BUILD_DIR)
 	$(Q)mkdir -p $@
 
-examples: $(EXAMPLES_BUILD_DIR)
+examples: $(EXAMPLES_BUILD_DIR) sdk-stage
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
 		dir=$$(dirname $$frag); \
 		echo "==> examples: $$dir"; \
@@ -454,7 +482,8 @@ examples: $(EXAMPLES_BUILD_DIR)
 			TOP_DIR=$(CURDIR) \
 			BUILD_DIR=$(abspath $(EXAMPLES_BUILD_DIR)) \
 			INC_DIR=$(CURDIR)/$(INC_DIR) \
-			SDK_BUILD_DIR=$(abspath $(BUILD_DIR)) || exit $$?; \
+			SDK_BUILD_DIR=$(abspath $(BUILD_DIR)) \
+			STAGE_DIR=$(abspath $(STAGE_DIR)) || exit $$?; \
 	done
 	@if command -v go >/dev/null 2>&1 && [ -f $(EXAMPLES_DIR)/demo_server/main.go ]; then \
 		echo "==> examples: $(EXAMPLES_DIR)/demo_server"; \
@@ -1726,6 +1755,7 @@ help:
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
+	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"

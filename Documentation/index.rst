@@ -87,6 +87,7 @@ LOTA exposes trust decisions and token verification material. Gameplay policy
 remains outside this repository.
 
 * Example index: :ghsrc:`examples/README.rst`
+* CI/CD release gate example: :ghsrc:`examples/ci-gate/README.rst`
 * Reference server: :ghsrc:`examples/demo_server/README.rst`
 * Anti-cheat heartbeat producer: :ghsrc:`examples/demo_anticheat/README.rst`
 * Proton and Wine titles: :ghsrc:`examples/cs2/README.rst`

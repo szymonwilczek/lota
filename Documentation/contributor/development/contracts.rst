@@ -268,6 +268,41 @@ ceiling must cover at least two sessions, and the session budget must stay
 the tighter of the two. Changing either constant without the other fails the
 build rather than starving a title at runtime.
 
+Attestation token quote binding
+===============================
+
+The token's TPM quote signs one 32-byte value, its ``extraData``, and that
+value is what ties every other field in the token to the signature:
+
+.. code-block:: text
+
+   extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
+                      policy_digest || runtime_protect_digest ||
+                      runtime_protect_epoch)
+
+Integers are little-endian. Three implementations must agree on it byte for
+byte: the agent that builds the quote
+(``include/lota_token_quote_nonce.h``), the C verifier
+(``lota_server_verify_token()`` in ``src/sdk/lota_server.c``) and the Go one
+(``ComputeTokenQuoteNonce`` in ``sdk/server/verify.go``). A field that is not
+in this digest is *not* signed, however trustworthy it looks in the struct,
+so adding one to the token means adding it here in all three places.
+
+A relying party should call one of the two verifiers rather than
+reimplement the binding.
+
+Both also apply the same freshness window, and that is the second thing
+they must agree on. The token carries an expiry and no issue time, so
+``valid_until`` is the only temporal anchor: an agent on the default
+attestation interval mints a token expiring one interval from now, and both
+verifiers refuse one whose expiry is further ahead than
+``LOTA_SERVER_MAX_TOKEN_AGE_SEC`` plus ``LOTA_SERVER_MAX_CLOCK_SKEW_SEC``
+(``DefaultMaxTokenAge`` and ``MaxClockSkew`` in Go). Raising the agent's
+``attest_interval`` above that window makes every token it mints
+unverifiable, so the two move together. A relying party that wants a
+tighter bound than the window applies it to the verified ``valid_until``
+itself.
+
 IPC token payload budget
 ========================
 

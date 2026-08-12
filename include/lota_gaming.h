@@ -14,14 +14,18 @@
  *       return;
  *   }
  *
+ *   Pass the 32-byte challenge the server issued,
+ *   never NULL in production:
+ *   it is what stops the server accepting a replayed token.
+ *
  *   if (lota_is_attested(client)) {
  *       struct lota_token token;
- *       if (lota_get_token(client, NULL, &token) == LOTA_OK) {
- *           Serialize token and send to game server.
+ *       if (lota_get_token(client, nonce, &token) == LOTA_OK) {
  *           size_t sz = lota_token_serialized_size(&token);
  *           uint8_t *buf = malloc(sz);
- *           lota_token_serialize(&token, buf, sz);
- *           Send buf (sz bytes) to game server.
+ *           size_t written = 0;
+ *           if (lota_token_serialize(&token, buf, sz, &written) == LOTA_OK)
+ *               Send buf (written bytes) to the game server.
  *           free(buf);
  *           lota_token_free(&token);
  *       }
@@ -133,11 +137,16 @@ struct lota_status {
  *
  * Contains a TPM Quote-based attestation statement.
  * The server validates by:
- * - Computing expected_nonce = SHA256(issued_at || valid_until || flags ||
- * nonce)
- * - Verifying TPM signature over attest_data using AIK public key
- * - Checking extraData in TPMS_ATTEST matches expected_nonce
+ * - Verifying the TPM signature over attest_data with the AIK public key
+ * - Checking extraData in TPMS_ATTEST equals
+ *   SHA256(valid_until || flags || pcr_mask || nonce || policy_digest ||
+ *   runtime_protect_digest || runtime_protect_epoch),
+ *   which is what puts every field above inside the signature
+ * - Checking the nonce is the one it issued
  * - Verifying PCR digest matches expected policy
+ *
+ * lota_server_verify_token() in lota_server.h does all of this;
+ * relying party should call it rather than reimplement the binding.
  */
 struct lota_token {
 	uint64_t valid_until; /* Token expiration (Unix timestamp) */

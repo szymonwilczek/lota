@@ -117,7 +117,9 @@ jobs:
         # development headers for the examples binaries, and the
         # runtime helpers (curl CLI, swtpm, tpm2-tools) that
         # examples/demo/setup.sh probes via `need_cmd` even in
-        # --dry-run mode
+        # --dry-run mode, plus systemd for the socket-activate
+        # helper examples/ci-gate/run.sh binds the agent listener
+        # with
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -127,7 +129,7 @@ jobs:
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev \
             libsdl2-dev libcurl4-openssl-dev \
-            curl swtpm swtpm-tools tpm2-tools
+            curl swtpm swtpm-tools tpm2-tools systemd
 
       - name: Install libbpf >= 1.0
         env:
@@ -170,6 +172,10 @@ jobs:
         # disappeared from the deps install
         run: |
           bash examples/demo/setup.sh --dry-run --no-build --yes
+
+      - name: Run the CI release gate reference end to end
+        run: |
+          bash examples/ci-gate/run.sh
 
       - name: Verify block-demo artefacts exist
         # block-demo proves the BPF LSM strict_mmap gate at
@@ -334,6 +340,7 @@ jobs:
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
+            examples/ci-gate/run.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \

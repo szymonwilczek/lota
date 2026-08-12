@@ -55,8 +55,21 @@ extern "C" {
 /* TPM2 PCR composite digest can be SHA-256, SHA-384, or SHA-512. */
 #define LOTA_SERVER_MAX_PCR_DIGEST_SIZE 64
 
-/* Reject tokens whose valid_until is unreasonably far in the future. */
-#define LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC (2 * 3600U)
+/*
+ * Freshness window.
+ * Token carries an expiry and no issue time, so valid_until is the only temporal
+ * anchor: agent on the default attestation interval mints one expiring that
+ * interval from now, and token claiming to live much longer is either from
+ * misconfigured agent or replayed from elsewhere.
+ * Verification refuses one whose expiry is beyond the interval plus allowance
+ * for clock skew between the agent and the relying party.
+ *
+ * sdk/server computes the same bound from the same two values,
+ * so the C and Go verifiers accept exactly the same set of tokens.
+ * Keep the agent's attest_interval at or below LOTA_SERVER_MAX_TOKEN_AGE_SEC.
+ */
+#define LOTA_SERVER_MAX_TOKEN_AGE_SEC 300U
+#define LOTA_SERVER_MAX_CLOCK_SKEW_SEC 60U
 
 /*
  * Server-side error codes
@@ -104,27 +117,32 @@ struct lota_server_claims {
  * @aik_pub_len:    Length of aik_pub_der
  * @expected_nonce: Required 32-byte nonce expected by the server for this
  *                  verification attempt
- * @max_age_sec:    Maximum acceptable token age in seconds.
- *                  0 -> use LOTA_TOKEN_DEFAULT_MAX_AGE (300s).
- * @claims:         Output claims structure (always populated when the
- *                  return code is OK, TOO_OLD, EXPIRED, or FUTURE so
- *                  the caller can inspect age_seconds on rejection)
+ * @claims:         Output claims structure, populated whenever the token
+ *                  parses far enough to fill it -- including on EXPIRED,
+ *                  so the caller can report valid_until
  *
  * Verification steps:
  *  1. Parse token wire format
- *  2. Verify RSA signature over attest_data using AIK public key
- *  3. Parse TPMS_ATTEST and extract extraData
- *  4. extraData == SHA256(issued_at || valid_until || flags || nonce)
- *  5. Verify client nonce matches expected_nonce
- *  6. Check token expiry against current time
- *  7. Hard freshness check: reject if age > max_age_sec
- *  8. Hard future check: reject if issued_at > now + MAX_CLOCK_SKEW
- *  9. Extract PCR digest from TPMS_ATTEST QuoteInfo
+ *  2. Verify the TPM signature over attest_data with the AIK public key
+ *  3. Parse TPMS_ATTEST, extract extraData and the quoted PCR mask
+ *  4. Quoted PCR mask == the mask the token header claims
+ *  5. extraData == SHA256(valid_until || flags || pcr_mask || nonce ||
+ *     policy_digest || runtime_protect_digest || runtime_protect_epoch),
+ *     so every field the caller acts on is inside the TPM signature
+ *  6. Token nonce == expected_nonce
+ *  7. valid_until has not passed and is not further ahead than
+ *     LOTA_SERVER_MAX_TOKEN_AGE_SEC + LOTA_SERVER_MAX_CLOCK_SKEW_SEC
+ *  8. Extract the PCR digest from the TPMS_ATTEST QuoteInfo
+ *
+ * There is no token-age parameter:
+ * Token carries an expiry and no issue time, so the freshness window is expressed
+ * as a bound on `valid_until` and applied here rather than passed in.
+ * Relying party that wants a tighter one applies it to `claims.valid_until` itself.
  *
  * Returns: LOTA_SERVER_OK on success.
  *          LOTA_SERVER_ERR_EXPIRED if now > valid_until.
- *          LOTA_SERVER_ERR_TOO_OLD if token age > max_age_sec.
- *          LOTA_SERVER_ERR_FUTURE if token issued in the future.
+ *          LOTA_SERVER_ERR_FUTURE if valid_until is too far ahead.
+ *          LOTA_SERVER_ERR_NONCE_FAIL if either nonce check fails.
  *          Other negative error codes on verification failure.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,

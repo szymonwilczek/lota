@@ -17,6 +17,11 @@ once every piece is in tree.
 |                     | activation, attest to a verifier that trusts only the |
 |                     | CA root.                                              |
 +---------------------+-------------------------------------------------------+
+| ``ci-gate/``        | Enterprise reference: a CI/CD step proves its host is  |
+|                     | attested before a relying party releases a secret to   |
+|                     | it. Fail-closed, exit-code driven, with a rootless     |
+|                     | swTPM-backed end-to-end run.                           |
++---------------------+-------------------------------------------------------+
 | ``demo_server/``    | Go reference server: nonce issuance + heartbeat       |
 |                     | verification                                          |
 +---------------------+-------------------------------------------------------+
