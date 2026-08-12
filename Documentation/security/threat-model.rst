@@ -189,6 +189,14 @@ Active threats
    * - Agent binary drift
      - | PCR14 boot commitment and agent hash policy bind the agent image.
        | fs-verity protects the installed binary.
+       | Between a package update and the next cold boot the file on disk and
+         the running image differ by construction, and the agent reports that
+         as ``LOTA_FLAG_UPDATE_PENDING``. It is **not** a tamper signal and
+         carries no verdict: PCR 14 still commits to the running build, the
+         report still names it, and the divergence resolves at the reboot the
+         flag exists to announce. An offline swap of the on-disk file is a
+         different question and is answered by fs-verity plus the boot
+         commitment, not by this flag.
      - Replacing the agent binary requires cold reboot, fs-verity re-enable,
        policy update, and re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)

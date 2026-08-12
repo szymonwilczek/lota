@@ -145,6 +145,21 @@ work around a break by leaving the symbol in the
 version script with different semantics behind it -- that is the one failure a
 version script cannot catch.
 
+Status flags
+============
+
+``LOTA_FLAG_*`` in ``lota_gaming.h`` is a bitmask, so a release may define a
+new bit and a program built against an older header keeps working: it reads
+the bits it knows and ignores the rest. The values already assigned never
+change meaning, which is what makes ignoring the unknown ones safe.
+
+A caller must therefore test the bits it cares about rather than compare the
+word, and must not treat an unfamiliar bit as a failure. ``LOTA_FLAG_UPDATE_PENDING``
+is the case that makes this concrete: it reports that a package update takes
+effect on the next cold boot, on a session that is attesting perfectly well,
+so a caller that read the whole word as a health check would refuse a healthy
+machine.
+
 Which version answers which question
 ====================================
 

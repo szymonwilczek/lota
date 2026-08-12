@@ -1221,6 +1221,44 @@ static void test_sdk_version(void)
 }
 
 /*
+ * Pending-update flag has to be reportable and must not collide with existing bit:
+ * it rides in the same word the token carries, and collision would silently turn
+ * one condition into another.
+ */
+static void test_update_pending_flag_is_distinct_and_named(void)
+{
+	TEST("LOTA_FLAG_UPDATE_PENDING - distinct bit, rendered by name");
+
+	const uint32_t others = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK |
+				LOTA_FLAG_IOMMU_OK | LOTA_FLAG_BPF_LOADED |
+				LOTA_FLAG_SECURE_BOOT;
+	char buf[128];
+
+	if (LOTA_FLAG_UPDATE_PENDING & others) {
+		FAIL("collides with an existing status flag");
+		return;
+	}
+
+	int n = lota_flags_to_string(LOTA_FLAG_ATTESTED |
+					     LOTA_FLAG_UPDATE_PENDING,
+				     buf, sizeof(buf));
+	if (n < 0) {
+		FAIL("lota_flags_to_string failed");
+		return;
+	}
+	if (!strstr(buf, "UPDATE_PENDING")) {
+		FAIL("flag is not rendered by name");
+		return;
+	}
+	/* attested machine with update pending is still attested */
+	if (!strstr(buf, "ATTESTED")) {
+		FAIL("pending update masked the attested flag");
+		return;
+	}
+	PASS();
+}
+
+/*
  * Both libraries report the build they were compiled from,
  * so they must report the same one.
  * Caller correlating a heartbeat with the client that produced it reads one of
@@ -1320,6 +1358,7 @@ int main(void)
 	test_strerror();
 	test_strerror_new_codes();
 	test_sdk_version();
+	test_update_pending_flag_is_distinct_and_named();
 	test_sdk_version_agrees_across_libraries();
 	test_sdk_version_is_a_real_build();
 

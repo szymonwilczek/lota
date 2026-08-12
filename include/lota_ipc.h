@@ -102,9 +102,15 @@ enum lota_ipc_result {
 	(1                        \
 	 << 6) /* BPF events ringbuf dropped at least one event since last     \
 		  poll; forensic stream incomplete, enforcement unaffected */
+#define LOTA_STATUS_UPDATE_PENDING \
+	(1                         \
+	 << 7) /* Agent binary on disk differs from the running one: package \
+		  update landed and takes effect on the next cold boot.        \
+		  Attestation is unaffected until then */
+
 #define LOTA_STATUS_TOKEN_ONLY \
 	(1                     \
-	 << 7) /* the publisher this connection named runs no verifier here,  \
+	 << 8) /* the publisher this connection named runs no verifier here,  \
 		  so ATTESTED carries no verdict of theirs and the token is   \
 		  the evidence */
 
