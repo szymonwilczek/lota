@@ -900,6 +900,40 @@ static void client_attestation_view(const struct ipc_context *ctx,
 	}
 }
 
+/*
+ * Whether the runtime measurement would cover every object of every protected
+ * process right now.
+ *
+ * Status word and the token have to agree on this bit:
+ * the anti-cheat heartbeat binds the flags it read from the status into the nonce
+ * the token is then quoted over, so a bit that appears in one and not the other
+ * breaks that binding.
+ * The coverage walk is the same enumeration the measurement performs, without
+ * the fold, and the digests it reads come from the cache the measurement fills.
+ */
+static bool runtime_coverage_is_full(void)
+{
+	int count;
+
+	agent_globals_lock(&g_agent);
+	count = g_agent.policy_protect_pid_count;
+	agent_globals_unlock(&g_agent);
+
+	if (count <= 0 || !g_agent.policy_protect_pids)
+		return true; /* nothing to leave out */
+
+	for (int i = 0; i < count; i++) {
+		struct lota_runtime_measure_coverage cov;
+
+		if (lota_runtime_coverage_pid(
+			    (pid_t)g_agent.policy_protect_pids[i], &cov) != 0)
+			return false;
+		if (cov.unmeasurable > 0)
+			return false;
+	}
+	return true;
+}
+
 static void handle_get_status(struct ipc_context *ctx,
 			      struct ipc_client *client)
 {
@@ -914,6 +948,10 @@ static void handle_get_status(struct ipc_context *ctx,
 	resp->payload_len = sizeof(*status);
 
 	client_attestation_view(ctx, client, &flags, &valid_until);
+	if (runtime_coverage_is_full())
+		flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	else
+		flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
 
 	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	status->flags = flags;

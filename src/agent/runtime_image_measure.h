@@ -104,6 +104,19 @@ struct lota_runtime_measure_coverage {
 };
 
 /*
+ * Coverage of a process's mapped code, without folding a digest.
+ *
+ * Same enumeration and the same per-object read as the measurement,
+ * minus the hash: it answers "how much of this process could be measured"
+ * for a caller that needs the answer rather than the value
+ * -- the status word, which has to agree with the token the same connection
+ * later fetches.
+ * Returns 0 and fills cov, or a negative errno.
+ */
+int lota_runtime_coverage_pid(pid_t pid,
+			      struct lota_runtime_measure_coverage *cov);
+
+/*
  * Whether a measurement round may be issued at all.
  *
  * Full coverage is a publisher's policy question, but two properties are the host's
