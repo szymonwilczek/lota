@@ -65,6 +65,14 @@ If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
 support. Production lays this down at install time via dracut + an
 fs-verity-enabled rootfs.
 
+The hash algorithm is the operator's choice: LOTA reads whichever digest the
+kernel reports, SHA-256 (the ``fsverity enable`` default, and what the RPM
+fs-verity plugin and composefs produce) or SHA-512
+(``--hash-alg=sha512``). An allowlist entry matches only under the algorithm
+it was captured with, so re-capture the digest after changing it -- and note
+that the algorithm is fixed when verity is enabled, so changing it on an
+existing file means writing a fresh copy of that file.
+
 **Signed IMA xattr** -- any filesystem with a ``security`` xattr namespace,
 including XFS and ZFS where fs-verity is unavailable. Under
 ``ima_appraise=enforce`` (see section 3) the kernel refuses to exec or read a

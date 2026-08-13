@@ -673,7 +673,7 @@ static __noinline int is_verity_allowed(struct file *file)
 		return 0;
 
 	ret = bpf_get_fsverity_digest(file, &digest_ptr);
-	if (ret != LOTA_VERITY_DIGEST_SHA512_SIZE)
+	if (ret < 0 || !LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret))
 		return 0;
 	key->len = (u32)ret;
 
@@ -971,7 +971,8 @@ int BPF_PROG(lota_bprm_check_security, struct linux_binprm *bprm)
 			 * this file.
 			 */
 			ret = bpf_get_fsverity_digest(file, &digest_ptr);
-			if (ret == LOTA_VERITY_DIGEST_SHA512_SIZE) {
+			if (ret > 0 &&
+			    LOTA_VERITY_DIGEST_LEN_SUPPORTED((u32)ret)) {
 				verity_key->len = (u32)ret;
 				have_digest = 1;
 			}

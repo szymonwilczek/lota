@@ -345,7 +345,7 @@ static int read_pid_exe_path(pid_t pid, char *out, size_t out_len)
 
 static int is_allowed_verity_digest(const struct lota_verity_digest_key *key)
 {
-	if (!key || key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+	if (!key || !LOTA_VERITY_DIGEST_LEN_SUPPORTED(key->len))
 		return 0;
 
 	if (!g_agent.policy_verity_digests ||
@@ -355,10 +355,9 @@ static int is_allowed_verity_digest(const struct lota_verity_digest_key *key)
 	for (int i = 0; i < g_agent.policy_verity_digest_count; i++) {
 		const struct lota_verity_digest_key *allowed =
 			&g_agent.policy_verity_digests[i];
-		if (!allowed || allowed->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+		if (!allowed || allowed->len != key->len)
 			continue;
-		if (CRYPTO_memcmp(allowed->digest, key->digest,
-				  LOTA_VERITY_DIGEST_SHA512_SIZE) == 0)
+		if (CRYPTO_memcmp(allowed->digest, key->digest, key->len) == 0)
 			return 1;
 	}
 
