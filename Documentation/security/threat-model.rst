@@ -233,8 +233,14 @@ Active threats
      - | BPF LSM gates executable mmap and mprotect for protected processes
          against the fs-verity allow-list.
        | The agent re-measures file-backed executable mappings from the kernel side.
+       | A digest read from an inode is cached against that inode's device,
+         number, size and modification time, all read from the descriptor the
+         measurement holds open; fs-verity makes the contents behind such an
+         inode immutable, and any other file is a different key.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
+       | An object the kernel holds no fs-verity digest for is absent from the
+         measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation
      - BPF LSM hooks protect the agent and protected PIDs, including
        ``__ptrace_may_access`` where available.

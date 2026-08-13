@@ -18,6 +18,16 @@
 #include <unistd.h>
 
 #include "runtime_image_measure.h"
+#include "rt_verity_cache.h"
+
+/*
+ * Digests already read from the kernel this boot.
+ *
+ * One instance for the daemon, which runs a single event-loop thread
+ * (see agent_globals_lock())
+ * It holds no secret, only public file properties.
+ */
+static struct lota_rt_verity_cache rt_digest_cache;
 
 static const char *rt_basename(const char *path)
 {
@@ -239,6 +249,20 @@ int lota_rt_measure_entry_verity(pid_t pid,
 				    LOTA_VERITY_DIGEST_MAX_SIZE];
 			struct fsverity_digest hdr;
 		} d;
+		struct lota_rt_verity_key ckey;
+
+		/*
+		 * fs-verity fixes inode's contents, so digest already read from
+		 * this exact inode -- same device, size and mtime -- cannot have
+		 * changed.
+		 * Anything else is a miss and re-reads.
+		 */
+		lota_rt_verity_key_from_stat(&st, &ckey);
+		if (lota_rt_verity_cache_get(&rt_digest_cache, &ckey, out)) {
+			if (reported_len)
+				*reported_len = out->len;
+			goto out;
+		}
 
 		memset(&d, 0, sizeof(d));
 		d.hdr.digest_size = (uint16_t)LOTA_VERITY_DIGEST_MAX_SIZE;
@@ -257,6 +281,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 		memset(out, 0, sizeof(*out));
 		out->len = d.hdr.digest_size;
 		memcpy(out->digest, d.hdr.digest, (size_t)out->len);
+		lota_rt_verity_cache_put(&rt_digest_cache, &ckey, out);
 	}
 
 out:
