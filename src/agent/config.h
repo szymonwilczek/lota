@@ -20,9 +20,37 @@
 #include <stdio.h>
 
 #include "../../include/lota.h"
+#include "profile.h"
 
 /* Default config file path */
 #define LOTA_CONFIG_DEFAULT_PATH "/etc/lota/lota.conf"
+
+/*
+ * Default endpoints.
+ * Stated here rather than beside the CLI because the config file, the CLI
+ * and every publisher profile all need the same two numbers, and config.h
+ * is the header they can all reach.
+ */
+#define LOTA_DEFAULT_VERIFIER_PORT 8443
+#define LOTA_DEFAULT_CA_PORT 8444
+
+/*
+ * The key the enforcement object's signature is verified against.
+ *
+ * The packaged key is data, not configuration: it ships beside the object
+ * and its signature, and an upgrade replaces all three together, so key can never
+ * be left behind by the object it verifies.
+ * Fleet that signs enforcement itself puts its own key at the override path
+ * (or names one with policy_pubkey), and that answer survives every upgrade
+ * because the package does not own that file.
+ */
+#define LOTA_ENFORCEMENT_PUBKEY_PATH "/usr/lib/lota/enforcement.pub"
+#define LOTA_POLICY_PUBKEY_OVERRIDE "/etc/lota/policy.pub"
+
+/* Largest lota.conf the agent will read back when appending a profile.
+ * Far above any real file.
+ * The bound exists so caller cannot be made to allocate on file's say-so */
+#define LOTA_CONFIG_MAX_FILE 262144
 
 /* Maximum line length in config file */
 #define LOTA_CONFIG_MAX_LINE 1024
@@ -43,6 +71,82 @@
  * struct ipc_context.extra[]. Asserted in main_utils.c.
  */
 #define LOTA_CONFIG_MAX_CONTAINER_LISTENERS 4
+
+/*
+ * Publisher profiles.
+ *
+ * Player's machine has one state and several publishers judging it, each with
+ * its own attestation CA, its own verifier and its own cadence.
+ *
+ * Profile list is how the agent is told about more than one of them, so that
+ * buying a second game does not mean re-provisioning the host.
+ *
+ * The section name is an operator-facing label only.
+ * Profile's identity is the SHA-256 of its CA trust anchor's SubjectPublicKeyInfo
+ * -- the endpoint is mutable and spoofable, while the anchor is what enrollment
+ *  actually verifies against, so it survives an address change and cannot collide
+ *  between two publishers sharing a hostname.
+ */
+#define LOTA_CONFIG_MAX_PROFILES 8
+#define LOTA_CONFIG_MAX_PROFILE_NAME 64
+
+/* Every configured profile has to have an AIK handle to be given */
+_Static_assert(LOTA_PROFILE_MAX_AIK_HANDLES >= LOTA_CONFIG_MAX_PROFILES,
+	       "the AIK handle range must cover every configurable profile");
+
+struct lota_profile {
+	char name[LOTA_CONFIG_MAX_PROFILE_NAME];
+
+	/* Attestation CA the profile enrolls against */
+	char ca[256];
+	int ca_port;
+
+	/*
+	 * Trust anchor for both the CA and the verifier connection.
+	 * Required: it is what the profile's identity is derived from
+	 */
+	char ca_cert[PATH_MAX];
+
+	/*
+	 * Verifier the profile reports to, empty when the publisher runs
+	 * none.
+	 *
+	 * Publisher can adopt either half of the evidence.
+	 * Running a verifier buys a judgement over the full attestation report
+	 * -- boot PCR pins, agent-hash allow-list, firmware floor, revocation.
+	 * Taking tokens only buys the TPM signature over the flags and the PCR
+	 * digest, checked in the publisher's own backend with the server SDK,
+	 * and costs the player less: no report, no event log and no runtime
+	 * manifest leaves the machine for that publisher.
+	 *
+	 * `verifier = none` is how the second one is said, and saying it is required:
+	 * omitted key is a mistake that would otherwise produce host that starts,
+	 * enrolls, mints tokens and reports to nobody, which fails only at whatever
+	 * was waiting for a report.
+	 */
+	char verifier[256];
+	int verifier_port;
+	bool token_only;
+
+	/* 0 = inherit the top-level attest_interval */
+	int attest_interval;
+
+	/*
+	 * Report to this publisher only while a title of theirs is running.
+	 *
+	 * Player's machine is not a fleet asset:
+	 * Verifier receiving quote every five minutes from boot to poweroff
+	 * learns when the machine is on, and learns it for a publisher whose
+	 * game is closed.
+	 * Enforcement and the PCR 14 boot commitment stay always-on either way
+	 * and never send a byte, which is what keeps a session's quote able to
+	 * prove the whole boot-to-now window.
+	 *
+	 * Default for a profile; Operator fleet that wants continuous stream
+	 * sets `reporting = continuous`
+	 */
+	bool session_gated;
+};
 
 struct lota_config {
 	/* Verifier connection */
@@ -116,6 +220,10 @@ struct lota_config {
 	uint32_t container_listener_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	int container_listener_uid_count;
 
+	/* Publisher profiles, in the order the config file lists them. */
+	struct lota_profile profiles[LOTA_CONFIG_MAX_PROFILES];
+	int profile_count;
+
 	/* Log level: "debug", "info", "warn", "error" */
 	char log_level[16];
 };
@@ -136,6 +244,11 @@ void config_init(struct lota_config *cfg);
  *
  * Unknown keys are logged to stderr and cause an error return (fail-closed).
  * Malformed lines are logged but do not stop parsing.
+ *
+ * Line of the form [profile "name"] opens a publisher profile.
+ * Every key after it belongs to that profile until the next section header
+ * or the end of the file; there is no way back to the top level,
+ * so the top-level keys belong above the first profile.
  */
 int config_load(struct lota_config *cfg, const char *path);
 
@@ -158,5 +271,56 @@ int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
  * can be fed back into config_load().
  */
 void config_dump(const struct lota_config *cfg, FILE *fp);
+
+/*
+ * config_profile_append_text - add a publisher profile to a config's text
+ * @existing: current file contents (may be empty, never NULL)
+ * @p:        the publisher to add
+ * @out:      receives the new contents
+ * @out_cap:  size of @out
+ *
+ * Game's installer registers its publisher this way rather than asking the player
+ * to edit a file. Existing text is copied through untouched: installer that rewrote
+ * the file would drop whatever the operator put there, and the profile section
+ * is appended at the end, which is always valid because every key after a section
+ * header belongs to that section.
+ *
+ * Returns 1 when the profile was appended, 0 when the same publisher is already
+ * present under the same name (an installer that runs twice), or negative errno:
+ * -EEXIST when the name is taken by a different publisher,
+ * E2BIG at LOTA_CONFIG_MAX_PROFILES,
+ * -EOVERFLOW when @out cannot hold the result,
+ * -EINVAL on a profile the parser would refuse.
+ */
+int config_profile_append_text(const char *existing,
+			       const struct lota_profile *p, char *out,
+			       size_t out_cap);
+
+/*
+ * config_profile_append - the same, applied to a file at @path
+ *
+ * Writes through a temporary file in the same directory and renames it into place,
+ * so crash mid-write leaves the old config rather than half of one.
+ * Same return values.
+ */
+int config_profile_append(const char *path, const struct lota_profile *p);
+
+/*
+ * config_resolve_policy_pubkey - Which key verifies the enforcement object.
+ *
+ * @configured:    policy_pubkey from the config file or the CLI, or NULL.
+ * @override_path: operator-owned key, used when it exists (no package owns it).
+ * @packaged_path: key the agent package shipped beside the object.
+ *
+ * Returns the path to use, or NULL when nothing readable was found
+ * -- which the caller must treat as fatal, since an object nobody can verify
+ *  is an object the agent refuses to load.
+ *
+ * The paths are arguments rather than constants so the order can be tested
+ * without writing to /usr or /etc.
+ */
+const char *config_resolve_policy_pubkey(const char *configured,
+					 const char *override_path,
+					 const char *packaged_path);
 
 #endif /* LOTA_CONFIG_H */

@@ -327,10 +327,60 @@ static void test_init_null_config(void)
 	}
 }
 
+/*
+ * struct_size is what lets this structure grow without second entry point,
+ * so caller that does not set it has to be refused: reading members it never
+ * wrote is exactly what the field exists to prevent.
+ */
+static void test_init_struct_size(void)
+{
+	TEST("init: unset struct_size -> NULL");
+	struct lota_ac_config zero = {
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game",
+	};
+	struct lota_ac_session *s = lota_ac_init(&zero);
+	if (s) {
+		FAIL("a config that never set struct_size was accepted");
+		lota_ac_shutdown(s);
+	} else {
+		PASS();
+	}
+
+	TEST("init: undersized struct_size -> NULL");
+	struct lota_ac_config small = {
+		.struct_size = LOTA_AC_CONFIG_SIZE_MIN - 1,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game",
+	};
+	s = lota_ac_init(&small);
+	if (s) {
+		FAIL("a config smaller than the 1.0 surface was accepted");
+		lota_ac_shutdown(s);
+	} else {
+		PASS();
+	}
+
+	TEST("init: struct_size from a newer caller is accepted");
+	struct lota_ac_config bigger = {
+		.struct_size = sizeof(bigger) + 64,
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game",
+	};
+	s = lota_ac_init(&bigger);
+	if (!s) {
+		FAIL("a caller built against a newer header was refused");
+	} else {
+		PASS();
+		lota_ac_shutdown(s);
+	}
+}
+
 static void test_init_empty_game_id(void)
 {
 	TEST("init: empty game_id -> NULL");
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "",
 	};
@@ -347,6 +397,7 @@ static void test_init_null_game_id(void)
 {
 	TEST("init: NULL game_id -> NULL");
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = NULL,
 	};
@@ -366,6 +417,7 @@ static void test_init_game_id_too_long(void)
 	memset(long_id, 'A', sizeof(long_id) - 1);
 	long_id[sizeof(long_id) - 1] = '\0';
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = long_id,
 	};
@@ -382,6 +434,7 @@ static void test_init_invalid_provider(void)
 {
 	TEST("init: provider=99 -> NULL");
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = 99,
 		.game_id = "test-game",
 		.token_dir = test_dir,
@@ -401,6 +454,7 @@ static void test_init_eac_file_mode(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-game-eac",
 		.token_dir = test_dir,
@@ -427,6 +481,7 @@ static void test_init_eac_file_mode_snapshot_only(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-game-eac-snap",
 		.token_dir = test_dir,
@@ -452,6 +507,7 @@ static void test_init_battleye_file_mode(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_BATTLEYE,
 		.game_id = "test-game-be",
 		.token_dir = test_dir,
@@ -504,6 +560,7 @@ static void test_get_info_null_info(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-game",
 		.token_dir = test_dir,
@@ -528,6 +585,7 @@ static void test_get_info_fields(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-game-info",
 		.token_dir = test_dir,
@@ -583,6 +641,7 @@ static void test_state_untrusted_zero_flags(void)
 	write_mock_snapshot(test_dir, 0x00);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-untrusted",
 		.token_dir = test_dir,
@@ -609,6 +668,7 @@ static void test_state_required_flags(void)
 			    0x03); /* ATTESTED + TPM_OK but no IOMMU */
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_BATTLEYE,
 		.game_id = "test-required",
 		.token_dir = test_dir,
@@ -634,6 +694,7 @@ static void test_state_required_flags_met(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-met",
 		.token_dir = test_dir,
@@ -662,6 +723,7 @@ static void test_state_no_files(void)
 	mkdir(empty_dir, 0700);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-nofiles",
 		.token_dir = empty_dir,
@@ -696,6 +758,7 @@ static void test_heartbeat_generation(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-heartbeat",
 		.token_dir = test_dir,
@@ -722,6 +785,7 @@ static void test_heartbeat_sequence_increments(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-seq",
 		.token_dir = test_dir,
@@ -756,6 +820,7 @@ static void test_heartbeat_session_id_stable(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_BATTLEYE,
 		.game_id = "test-stable",
 		.token_dir = test_dir,
@@ -788,6 +853,7 @@ static void test_heartbeat_game_id_hash(void)
 	size_t w1, w2;
 
 	struct lota_ac_config cfg1 = {
+		.struct_size = sizeof(cfg1),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "game-alpha",
 		.token_dir = test_dir,
@@ -797,6 +863,7 @@ static void test_heartbeat_game_id_hash(void)
 	lota_ac_shutdown(s1);
 
 	struct lota_ac_config cfg2 = {
+		.struct_size = sizeof(cfg2),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "game-beta",
 		.token_dir = test_dir,
@@ -854,6 +921,7 @@ static void test_heartbeat_buf_too_small(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-small",
 		.token_dir = test_dir,
@@ -885,6 +953,7 @@ static void test_heartbeat_no_token(void)
 	write_mock_snapshot_no_token(empty_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-notoken",
 		.token_dir = empty_dir,
@@ -917,6 +986,7 @@ static void test_heartbeat_null_args(void)
 
 	write_mock_snapshot(test_dir, 0x07);
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-null",
 		.token_dir = test_dir,
@@ -1328,6 +1398,7 @@ static void test_direct_mode_no_agent(void)
 {
 	TEST("direct mode: no agent -> ERROR state (graceful)");
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-direct",
 		.direct = 1,
@@ -1453,6 +1524,7 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
 	write_mock_snapshot(dir, attested_flags);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "wine-to-eac",
 		.token_dir = dir,
@@ -1490,6 +1562,7 @@ static void test_integration_eac_detects_agent_death(void)
 	write_mock_snapshot(dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "agent-death",
 		.token_dir = dir,
@@ -1544,6 +1617,7 @@ static void test_integration_eac_detects_attestation_loss(void)
 	write_mock_snapshot(dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "attestation-loss",
 		.token_dir = dir,
@@ -1584,6 +1658,7 @@ static void test_session_id_unique(void)
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = LOTA_AC_PROVIDER_EAC,
 		.game_id = "test-unique",
 		.token_dir = test_dir,
@@ -1617,6 +1692,7 @@ int main(void)
 
 	printf("Config Validation:\n");
 	test_init_null_config();
+	test_init_struct_size();
 	test_init_empty_game_id();
 	test_init_null_game_id();
 	test_init_game_id_too_long();

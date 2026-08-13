@@ -79,8 +79,13 @@ SERVER_SDK_STATIC := $(BUILD_DIR)/liblotaserver.a
 # Shared-library ABI version. The soname carries the major only (bumped on an
 # incompatible ABI change); the on-disk file carries the full version and the
 # soname/linker symlinks point at it, the usual libX.so.MAJOR.MINOR.PATCH
-# layout. Independent of the release VERSION -- pre-1.0 ABI starts at 0.
-LOTA_ABI_MAJOR := 0
+# layout.
+#
+# Independent of the release VERSION: it moves when the ABI moves, not when the product does.
+#
+# Major 1 is the frozen surface
+# -- see Documentation/contributor/development/api-stability.rst.
+LOTA_ABI_MAJOR := 1
 LOTA_ABI_VERSION := $(LOTA_ABI_MAJOR).0.0
 
 # Detect target architecture (overridable)
@@ -130,9 +135,11 @@ CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
 
-# Version string injected into the server-side SDK at build time.
+# Build identity injected into both SDKs.
+# One source, so the two libraries cannot report different builds;
+# objects that carry it take VERSION as a prerequisite so a version bump rebuilds them.
 LOTA_VERSION_STRING ?= $(PROJECT_VERSION)
-SERVER_SDK_VERSION_CFLAGS := -DLOTA_SERVER_SDK_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
+SDK_VERSION_CFLAGS := -DLOTA_BUILD_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 
 # Linker hardening
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
@@ -217,7 +224,11 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/enroll.c \
               $(AGENT_DIR)/enroll_client.c \
               $(AGENT_DIR)/enroll_state.c \
+              $(AGENT_DIR)/publishers.c \
+              $(AGENT_DIR)/profile.c \
               $(AGENT_DIR)/aik_cert.c \
+              $(AGENT_DIR)/attest_targets.c \
+              $(AGENT_DIR)/attest_peer.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -241,9 +252,23 @@ ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
 ANTICHEAT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(ANTICHEAT_SRCS))
 
+# Linker version script per shared library:
+# exports the functions the installed header declares and makes every other symbol local.
+# Named $(notdir $(lib)).map next to the sources it filters.
+SDK_VERSION_SCRIPT = $(SDK_DIR)/$(basename $(notdir $(1))).map
+VERSION_SCRIPT_LDFLAGS = -Wl,--version-script=$(call SDK_VERSION_SCRIPT,$(1))
+
+# pkg-config files for the installed SDK.
+# Generated from the templates so the version an integrator queries is the ABI version
+# -- the .pc describes the linkable contract, and that is what governs it.
+PKGCONFIG_DIR := $(BUILD_DIR)/pkgconfig
+PKGCONFIG_TEMPLATES := $(wildcard packaging/pkgconfig/*.pc.in)
+PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,\
+	$(PKGCONFIG_TEMPLATES))
+
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
 
 # build directories
 $(BUILD_DIR):
@@ -270,10 +295,16 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # (PCR14 lock-constant derivation + AIK certificate expiry)
 # Every privileged action shells out to the same tooling the documentation names
 # (dracut, grubby, systemctl, ...)
+#
+# profile.c comes from the agent on purpose:
+# the installer has to name the same publisher profile directory the agent enrolls
+# into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
-	installer/ui.c installer/run.c installer/probe.c
+	installer/ui.c installer/run.c installer/probe.c \
+	$(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
-		installer/run.h installer/tui.h installer/ui.h | $(BUILD_DIR)
+		installer/run.h installer/tui.h installer/ui.h \
+		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INSTALL_VERSION=\"$(LOTA_VERSION_STRING)\" \
 		-o $@ $(INSTALLER_SRCS) -pie -Wl,-z,relro,-z,now -lcrypto
@@ -298,17 +329,59 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
-# server SDK version string (liblotaserver + dependents)
-$(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SERVER_SDK_VERSION_CFLAGS)
+# build identity (both SDKs report it; see lota_sdk_version)
+$(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
+$(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/sdk/lota_gaming.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
-$(SDK_LIB): $(SDK_OBJS) | $(BUILD_DIR)
+$(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SDK_OBJS)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
+
+# generate the pkg-config files
+$(PKGCONFIG_DIR):
+	$(Q)mkdir -p $@
+
+pkgconfig: $(PKGCONFIG_FILES)
+
+# Staged SDK prefix:
+# what lota-sdk and lota-sdk-devel install, laid out as a prefix, without needing
+# root or a package manager.
+# It is how anything in tree builds "against the published packages"
+# -- the reference integrations point PKG_CONFIG_PATH here, so they resolve headers
+# and libraries the way an integrator's build does instead of reaching into build/
+# or, worse, finding a stale copy under /usr.
+# The header set is read from the ABI baseline rather than restated.
+STAGE_DIR := $(BUILD_DIR)/stage
+STAGE_HEADERS := $(shell grep -v '^[[:space:]]*\#' packaging/abi/public-headers.list 2>/dev/null | grep -v '^[[:space:]]*$$')
+
+sdk-stage: $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) \
+		$(PKGCONFIG_FILES)
+	$(Q)rm -rf $(STAGE_DIR)
+	$(Q)install -d $(STAGE_DIR)/include/lota $(STAGE_DIR)/lib64/pkgconfig
+	$(Q)for h in $(STAGE_HEADERS); do \
+		install -m 644 $(INC_DIR)/$$h $(STAGE_DIR)/include/lota/; \
+	done
+	$(Q)for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
+		install -m 755 $(BUILD_DIR)/$$l.so.$(LOTA_ABI_VERSION) \
+			$(STAGE_DIR)/lib64/; \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) \
+			$(STAGE_DIR)/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
+		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(STAGE_DIR)/lib64/$$l.so; \
+	done
+	$(Q)install -m 644 $(PKGCONFIG_FILES) $(STAGE_DIR)/lib64/pkgconfig/
+	@echo "  STAGE   $(STAGE_DIR)"
+
+$(PKGCONFIG_DIR)/%.pc: packaging/pkgconfig/%.pc.in Makefile | $(PKGCONFIG_DIR)
+	$(QUIET_GEN)
+	$(Q)sed 's|@LOTA_ABI_VERSION@|$(LOTA_ABI_VERSION)|g' $< > $@
 
 # build SDK static library
 $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
@@ -316,10 +389,13 @@ $(SDK_STATIC): $(SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build server SDK shared library (versioned)
-$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(SERVER_SDK_LIB): $(SERVER_SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SERVER_SDK_LIB)) \
+		Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -329,18 +405,26 @@ $(SERVER_SDK_STATIC): $(SERVER_SDK_OBJS) | $(BUILD_DIR)
 	$(Q)$(AR) rcs $@ $^
 
 # build Wine/Proton hook (self-contained: includes gaming SDK; versioned)
-$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) | $(BUILD_DIR)
+$(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) $(SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(WINE_HOOK_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lpthread
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(WINE_HOOK_OBJS) $(SDK_OBJS) -lpthread
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
-$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) | $(BUILD_DIR)
+$(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
+		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)
 	$(QUIET_LD)
+	$(Q)rm -f $@ $@.*
 	$(Q)$(CC) -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
-		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) $^ -lcrypto
+		$(call VERSION_SCRIPT_LDFLAGS,$@) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) -lcrypto
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
@@ -355,7 +439,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -394,7 +478,7 @@ EXAMPLES_FRAGMENTS := $(wildcard $(EXAMPLES_DIR)/*/Makefile.fragment)
 $(EXAMPLES_BUILD_DIR): | $(BUILD_DIR)
 	$(Q)mkdir -p $@
 
-examples: $(EXAMPLES_BUILD_DIR)
+examples: $(EXAMPLES_BUILD_DIR) sdk-stage
 	@for frag in $(EXAMPLES_FRAGMENTS); do \
 		dir=$$(dirname $$frag); \
 		echo "==> examples: $$dir"; \
@@ -402,7 +486,8 @@ examples: $(EXAMPLES_BUILD_DIR)
 			TOP_DIR=$(CURDIR) \
 			BUILD_DIR=$(abspath $(EXAMPLES_BUILD_DIR)) \
 			INC_DIR=$(CURDIR)/$(INC_DIR) \
-			SDK_BUILD_DIR=$(abspath $(BUILD_DIR)) || exit $$?; \
+			SDK_BUILD_DIR=$(abspath $(BUILD_DIR)) \
+			STAGE_DIR=$(abspath $(STAGE_DIR)) || exit $$?; \
 	done
 	@if command -v go >/dev/null 2>&1 && [ -f $(EXAMPLES_DIR)/demo_server/main.go ]; then \
 		echo "==> examples: $(EXAMPLES_DIR)/demo_server"; \
@@ -521,7 +606,29 @@ $(SELINUX_PP):
 .PHONY: selinux-pp
 selinux-pp: $(SELINUX_PP)
 
+# Enforcement object ships signed, and the key it is verified against ships with it.
+# Enforcement is host-owned singleton -- one kernel, one LSM, so no publisher pushes
+# kernel policy -- which makes signing it the job of whoever builds the package:
+# the distribution, or this project for its own releases.
+# Package built without that step installs an object the agent refuses to load,
+# so the machine stops enforcing for reason nobody chose; refuse to build it instead.
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 packages: all selinux-pp
+	$(Q)test -r $(BPF_OBJ).sig || { \
+		echo "packages: $(BPF_OBJ).sig is missing." >&2; \
+		echo "  The enforcement object must be signed by whoever builds" >&2; \
+		echo "  the package: make sign-bpf SIGNING_KEY=<release key>" >&2; \
+		exit 1; \
+	}
+	$(Q)test -r $(SIGNING_PUBKEY) || { \
+		echo "packages: $(SIGNING_PUBKEY) is missing." >&2; \
+		echo "  The public half of the signing key ships with the object" >&2; \
+		echo "  so the host can verify it; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	$(Q)mkdir -p $(PKG_DIR)
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
@@ -701,6 +808,24 @@ check-package-manifests:
 check-includes:
 	@scripts/check-includes.sh
 
+# License-boundary gate
+# Fails when MIT file depends on GPL-2.0-only one,
+# or when source file declares no license at all.
+# See Documentation/contributor/development/license-boundary.rst
+check-license-boundary:
+	@scripts/check-license-boundary.sh
+
+# Public API/ABI gate
+# Compares the SDK's exported symbols, sonames and installed header set against
+# the baseline in packaging/abi/, and compiles every public header against the installed set alone.
+# abi-baseline rewrites the symbol lists after deliberate surface change;
+# see Documentation/contributor/development/api-stability.rst
+check-abi:
+	@scripts/check-abi.sh
+
+abi-baseline:
+	@scripts/check-abi.sh --update
+
 # Combined lint:
 # clang-format style check on the C sources and headers plus golangci-lint
 # on every Go module.
@@ -709,7 +834,15 @@ check-includes:
 CLANG_FORMAT ?= $(shell command -v clang-format-22 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
 GOLANGCI_LINT ?= golangci-lint
-LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl
+# Every Go module in the tree.
+# SDK and the examples are the code an integrator copies,
+# so they are linted at least as strictly as the rest.
+LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
+	$(SERVER_SDK_MODULE) examples/demo_server
+# Server SDK module is at src/sdk/server today and moves to sdk/server when
+# the public Go module lands where its import path points, so the list asks
+# the tree where it is rather than stating a path that goes stale.
+SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/server)
 
 lint: lint-c lint-go
 
@@ -820,6 +953,7 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/include/lota
 	install -d $(DESTDIR)/usr/share/lota
 	install -d $(DESTDIR)/var/lib/lota/aiks
+	install -d $(DESTDIR)/var/lib/lota/profiles
 	install -m 755 $(AGENT_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INSTALLER_BIN) $(DESTDIR)/usr/bin/
 	install -m 755 $(INITRAMFS_LOCK_BIN) $(DESTDIR)/usr/lib/lota/
@@ -834,6 +968,12 @@ install: check-version-tag all
 	@# the agent will refuse to load until sign-bpf runs.
 	@if [ -f $(BPF_OBJ).sig ]; then \
 		install -m 644 $(BPF_OBJ).sig $(DESTDIR)/usr/lib/lota/; \
+	fi
+	@# Same for the public half of the key it was signed with:
+	@# it is the other end of that signature, so it ships beside it or not at all
+	@if [ -f $(PKG_ENFORCEMENT_PUB) ]; then \
+		install -m 644 $(PKG_ENFORCEMENT_PUB) \
+			$(DESTDIR)/usr/lib/lota/enforcement.pub; \
 	fi
 	install -m 644 $(VERSION_FILE) $(DESTDIR)/usr/share/lota/VERSION
 	for l in liblotagaming liblotaserver liblota_wine_hook liblota_anticheat; do \
@@ -867,8 +1007,11 @@ install: check-version-tag all
 	install -m 644 $(INC_DIR)/lota_gaming.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_wine_hook.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_server.h $(DESTDIR)/usr/include/lota/
-	install -m 644 $(INC_DIR)/lota_ipc.h $(DESTDIR)/usr/include/lota/
 	install -m 644 $(INC_DIR)/lota_anticheat.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_token.h $(DESTDIR)/usr/include/lota/
+	install -m 644 $(INC_DIR)/lota_snapshot.h $(DESTDIR)/usr/include/lota/
+	install -d $(DESTDIR)/usr/lib64/pkgconfig
+	install -m 644 $(PKGCONFIG_FILES) $(DESTDIR)/usr/lib64/pkgconfig/
 	@echo "Installed to $(DESTDIR)/usr"
 
 # Build test binaries
@@ -887,6 +1030,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_config \
+	$(TEST_BIN_DIR)/test_config_add_profile \
 	$(TEST_BIN_DIR)/test_subscribe \
 	$(TEST_BIN_DIR)/test_policy_sign \
 	$(TEST_BIN_DIR)/test_policy_export \
@@ -895,6 +1039,11 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
+	$(TEST_BIN_DIR)/test_profile_id \
+	$(TEST_BIN_DIR)/test_attest_targets \
+	$(TEST_BIN_DIR)/test_attest_aggregate \
+	$(TEST_BIN_DIR)/test_status_flags \
+	$(TEST_BIN_DIR)/test_publisher_profile \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
@@ -908,12 +1057,18 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_server_sdk \
 	$(TEST_BIN_DIR)/demo_sdk \
 	$(TEST_BIN_DIR)/test_ipc_client \
+	$(TEST_BIN_DIR)/test_ipc_payload_len \
 	$(TEST_BIN_DIR)/test_cross_lang_verify \
+	$(TEST_BIN_DIR)/test_cross_lang_report_gen \
 	$(TEST_BIN_DIR)/test_anticheat \
+	$(TEST_BIN_DIR)/test_flag_names \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
+	$(TEST_BIN_DIR)/test_runtime_measure_failure \
+	$(TEST_BIN_DIR)/test_rt_verity_cache \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_protect_pids \
+	$(TEST_BIN_DIR)/test_terminate_policy \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
 	$(TEST_BIN_DIR)/test_seal_blob \
@@ -964,9 +1119,10 @@ $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/stea
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
 
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -DLOTA_HOOK_TESTING -o $@ $^ -lpthread
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
+		-o $@ $(filter-out $(VERSION_FILE),$^) -lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -984,13 +1140,23 @@ $(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AG
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_subscribe: tests/test_subscribe.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
+
+$(TEST_BIN_DIR)/test_publisher_profile: tests/test_publisher_profile.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
 
 $(TEST_BIN_DIR)/test_policy_sign: tests/test_policy_sign.c $(AGENT_DIR)/policy_sign.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1000,15 +1166,15 @@ $(TEST_BIN_DIR)/test_policy_export: tests/test_policy_export.c $(AGENT_DIR)/poli
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_aik_rotation: tests/test_aik_rotation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_signed_clockinfo: tests/test_signed_clockinfo.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
@@ -1019,6 +1185,25 @@ $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c
 $(TEST_BIN_DIR)/test_enroll_state: tests/test_enroll_state.c $(AGENT_DIR)/enroll_state.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c \
+		$(AGENT_DIR)/publishers.c $(AGENT_DIR)/enroll_state.c \
+		$(AGENT_DIR)/aik_cert.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_status_flags: tests/test_status_flags.c \
+		$(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1062,26 +1247,42 @@ $(TEST_BIN_DIR)/test_hardening: tests/test_hardening.c $(AGENT_DIR)/hardening.c 
 
 $(TEST_BIN_DIR)/test_server_sdk: tests/test_server_sdk.c $(SDK_DIR)/lota_server.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
-$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/demo_sdk: tests/demo_sdk.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ \
+		$(filter-out $(VERSION_FILE),$^)
 
 $(TEST_BIN_DIR)/test_anticheat: tests/test_anticheat.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_measure: tests/test_runtime_measure.c $(SDK_DIR)/lota_anticheat.c $(SDK_DIR)/lota_gaming.c $(SDK_DIR)/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) $(SERVER_SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_rt_verity_cache: tests/test_rt_verity_cache.c \
+		$(AGENT_DIR)/rt_verity_cache.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_runtime_measure_failure: tests/test_runtime_measure_failure.c \
+		$(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
 $(TEST_BIN_DIR)/test_protect_pids: tests/test_protect_pids.c \
 		$(AGENT_DIR)/protect_pids.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_terminate_policy: tests/test_terminate_policy.c \
+		$(AGENT_DIR)/terminate_policy.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
@@ -1105,17 +1306,33 @@ $(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_tpm: tests/test_seal_tpm.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
 
-$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_aik: tests/test_seal_aik.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+
+$(TEST_BIN_DIR)/test_ipc_payload_len: tests/test_ipc_payload_len.c \
+		$(AGENT_DIR)/ipc_payload.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_flag_names: tests/test_flag_names.c $(SDK_LIB) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+# C half of the report layout cross-check:
+# serializes fully patterned report with the production serializer
+# for report_verify.go to parse
+$(TEST_BIN_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1158,6 +1375,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_signal_shutdown
 	@$(BUILD_DIR)/test_daemon_loop
 	@$(BUILD_DIR)/test_config
+	@$(BUILD_DIR)/test_config_add_profile
 	@$(BUILD_DIR)/test_subscribe
 	@$(BUILD_DIR)/test_policy_sign
 	@$(BUILD_DIR)/test_policy_export
@@ -1166,6 +1384,11 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
+	@$(BUILD_DIR)/test_profile_id
+	@$(BUILD_DIR)/test_attest_targets
+	@$(BUILD_DIR)/test_attest_aggregate
+	@$(BUILD_DIR)/test_status_flags
+	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_path_sanitize
@@ -1179,10 +1402,14 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_hardening
 	@$(BUILD_DIR)/test_server_sdk
 	@$(BUILD_DIR)/test_anticheat
+	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
+	@$(BUILD_DIR)/test_runtime_measure_failure
+	@$(BUILD_DIR)/test_rt_verity_cache
 	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_protect_pids
+	@$(BUILD_DIR)/test_terminate_policy
 	@$(BUILD_DIR)/test_runtime_image_collect
 	@$(BUILD_DIR)/test_runtime_measure_pid
 	@$(BUILD_DIR)/test_seal_blob
@@ -1214,10 +1441,18 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_tls_verify (missing /tmp/lota-tls-test/ca.pem)"; \
 	fi
 	@if command -v go >/dev/null 2>&1; then \
-		cd $(SRC_DIR)/sdk/server && go run ../../../tests/cross_lang/test_gen.go && \
+		cd sdk/server && go run ../../tests/cross_lang/test_gen.go && \
 		cd $(CURDIR) && $(BUILD_DIR)/test_cross_lang_verify; \
 	else \
 		echo "SKIP: test_gen.go (go not installed)"; \
+	fi
+	@echo ""
+	@$(BUILD_DIR)/test_cross_lang_report_gen
+	@if command -v go >/dev/null 2>&1; then \
+		cd $(SRC_DIR)/verifier && \
+		go run ../../tests/cross_lang/report_verify.go; \
+	else \
+		echo "SKIP: report_verify.go (go not installed)"; \
 	fi
 	@echo ""
 	@echo "Tests complete. Run 'make test-hardware' (as root) for hardware tests."
@@ -1256,7 +1491,10 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_subscribe test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_event_budget \
-	test_server_sdk test_anticheat test_loader_symbols test_enroll_state
+	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
+	test_profile_id test_attest_targets test_attest_aggregate \
+	test_status_flags test_terminate_policy \
+	test_publisher_profile
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
@@ -1375,9 +1613,9 @@ $(BUILD_DIR)/fuzz/fuzz_server_sdk.o: fuzz/fuzz_server_sdk.c include/lota_server.
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
+	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
 fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
 	$(QUIET_CLANG)
@@ -1544,6 +1782,9 @@ help:
 	@echo "  valgrind-unit    Run unit tests under valgrind memcheck"
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
+	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
+	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources (advisory)"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
@@ -1603,7 +1844,7 @@ help:
 BENCH_DIR := benchmarks
 BENCH_RESULTS := $(BENCH_DIR)/results
 BENCH_C_BIN := $(BUILD_DIR)/bench_sdk
-GO_BENCH_MODULES := $(SRC_DIR)/verifier $(SRC_DIR)/sdk/server $(SRC_DIR)/attestca
+GO_BENCH_MODULES := $(SRC_DIR)/verifier sdk/server $(SRC_DIR)/attestca
 # -count feeds benchstat
 BENCH_COUNT ?= 6
 BENCH_TIME ?= 1s
@@ -1629,9 +1870,11 @@ bench-c: $(BENCH_C_BIN)
 		| tee $(BENCH_RESULTS)/c-sdk.txt
 
 $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
-		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) | $(BUILD_DIR)
+		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) $(VERSION_FILE) \
+		| $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -I$(BENCH_DIR)/include -o $@ $^ -lcrypto -lm
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -I$(BENCH_DIR)/include \
+		-o $@ $(filter-out $(VERSION_FILE),$^) -lcrypto -lm
 
 bench-clean:
 	rm -rf $(BENCH_RESULTS)/*.txt $(BENCH_RESULTS)/*.json $(BENCH_C_BIN)

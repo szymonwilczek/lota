@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# The prefix is resolved from this file's own location
+# so the SDK is consumable from a staged prefix
+# (DESTDIR, a container layer, a CI checkout)
+# and not only from /usr.
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib64
+includedir=${prefix}/include
+
+Name: lota-wine-hook
+Description: LOTA Wine/Proton hook - status and token file accessors
+URL: https://github.com/szymonwilczek/lota
+Version: @LOTA_ABI_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -llota_wine_hook

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +37,22 @@ type PCRPolicy struct {
 	// Empty means no binding.
 	// Binding travels inside the policy file, so signed policy authenticates its own scope.
 	Tenant string `yaml:"tenant"`
+
+	// names the kind of fleet this policy governs, which is what decides how
+	// firmware drift is handled.
+	//
+	// Drift means different things to the two markets.
+	// On a fleet the relying party owns, an unexplained PCR 0/1/7 change is
+	// finding and stopping is the correct answer.
+	// On a fleet of machines the relying party does not own, the same change
+	// is player installing BIOS update, and stopping means a game that refuses
+	// to start for a reason nobody on either side chose.
+	//
+	// ProfileEnterprise (the default, including when unset) leaves self-service
+	// re-anchor off.
+	// ProfileConsumer turns it on, and the re-anchor discriminator still has
+	// to find the Secure Boot root of trust intact before anything moves.
+	Profile string `yaml:"profile"`
 
 	// maps PCR index to expected hash value (hex-encoded)
 	// IMPORTANT: only PCRs listed here are checked; others are ignored
@@ -262,6 +279,9 @@ func (v *PCRVerifier) AddPolicy(policy *PCRPolicy) error {
 	if err := validatePolicyPCRIndices(policy); err != nil {
 		return err
 	}
+	if err := validateProfile(policy); err != nil {
+		return err
+	}
 	for _, w := range ValidatePolicy(policy) {
 		slog.Warn(w)
 	}
@@ -402,6 +422,51 @@ func (v *PCRVerifier) PolicyRequiresCmdlineForTenant(tenant string) bool {
 	return ok && policy != nil && policy.RequireCmdlinePolicy
 }
 
+// Fleet profiles a policy may declare.
+// Unset profile reads as ProfileEnterprise.
+const (
+	ProfileEnterprise = "enterprise"
+	ProfileConsumer   = "consumer"
+)
+
+// validateProfile refuses a profile the verifier does not know.
+//
+// Typo must not be read as "not consumer" and quietly leave a diverse fleet
+// on the enterprise handling:
+// the operator would have written down intention the verifier never carried out,
+// and would find out from players whose games stopped after a BIOS update.
+func validateProfile(policy *PCRPolicy) error {
+	switch policy.Profile {
+	case "", ProfileEnterprise, ProfileConsumer:
+		return nil
+	default:
+		return fmt.Errorf("policy %q: unknown profile %q (want %q or %q)",
+			policy.Name, policy.Profile, ProfileEnterprise, ProfileConsumer)
+	}
+}
+
+// PolicyEnablesSelfServiceReanchorForTenant reports whether the tenant's policy
+// asks the verifier to re-anchor a drifted boot baseline itself.
+//
+// Tenant with no policy gets false: no policy is not consent.
+func (v *PCRVerifier) PolicyEnablesSelfServiceReanchorForTenant(tenant string) bool {
+	policy, ok := v.policyForTenant(tenant)
+	return ok && policy != nil && policy.Profile == ProfileConsumer
+}
+
+// agentHashAllowed reports whether the reported agent hash is one the active
+// policy lists, ie build the publisher has blessed.
+// It is named predicate rather than inline loop because more than one gate has
+// to ask the same question, and two independent comparisons of one list are two
+// places for it to be read differently.
+//
+// The comparison is over lower-case hex, which is what the agent reports
+// and what a policy file carries; upper-case entry does not match and is policy
+// authoring error rather than hash to accept leniently.
+func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) bool {
+	return slices.Contains(allowedHashes, hex.EncodeToString(reported[:]))
+}
+
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	for pcrIdx, expectedHex := range policy.PCRs {
@@ -443,16 +508,9 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 	// verify agent binary hash if policy specifies allowed hashes
 	if len(policy.AgentHashes) > 0 {
-		agentHashHex := hex.EncodeToString(report.System.AgentHash[:])
-		found := false
-		for _, allowed := range policy.AgentHashes {
-			if agentHashHex == allowed {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("agent hash not in allowed list: %s", agentHashHex)
+		if !agentHashAllowed(report.System.AgentHash, policy.AgentHashes) {
+			return fmt.Errorf("agent hash not in allowed list: %s",
+				hex.EncodeToString(report.System.AgentHash[:]))
 		}
 	}
 

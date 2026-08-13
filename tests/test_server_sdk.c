@@ -571,8 +571,10 @@ static void test_verify_full_success(EVP_PKEY *key, const uint8_t *aik_der,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
-	int ret = build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
-					  sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0x07, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -619,7 +621,8 @@ static void test_verify_full_success_sha384(EVP_PKEY *key,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
-	int ret = build_full_token(key, 0x000C, EVP_sha384(), now + 3600, 0x07,
+	int ret = build_full_token(key, 0x000C, EVP_sha384(),
+				   now + LOTA_SERVER_MAX_TOKEN_AGE_SEC, 0x07,
 				   nonce, tokbuf, sizeof(tokbuf), &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token(SHA-384) failed");
@@ -659,7 +662,8 @@ static void test_verify_full_success_sha512(EVP_PKEY *key,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written;
-	int ret = build_full_token(key, 0x000D, EVP_sha512(), now + 3600, 0x07,
+	int ret = build_full_token(key, 0x000D, EVP_sha512(),
+				   now + LOTA_SERVER_MAX_TOKEN_AGE_SEC, 0x07,
 				   nonce, tokbuf, sizeof(tokbuf), &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token(SHA-512) failed");
@@ -699,8 +703,10 @@ static void test_verify_with_expected_nonce(EVP_PKEY *key,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
-	int ret = build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
-					  sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -727,8 +733,10 @@ static void test_verify_wrong_nonce(EVP_PKEY *key, const uint8_t *aik_der,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
-	int ret = build_full_token_sha256(key, now + 3600, 0, nonce, tokbuf,
-					  sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -762,8 +770,10 @@ static void test_verify_bad_signature(EVP_PKEY *key, const uint8_t *aik_der,
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
 	/* sign with wrong_key, but verify with original aik_der */
-	int ret = build_full_token_sha256(wrong_key, now + 3600, 0, nonce,
-					  tokbuf, sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(wrong_key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		EVP_PKEY_free(wrong_key);
 		FAIL("build_full_token failed");
@@ -794,8 +804,10 @@ static void test_verify_tampered_flags(EVP_PKEY *key, const uint8_t *aik_der,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
-	int ret = build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
-					  sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0x07, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -826,8 +838,10 @@ static void test_verify_tampered_pcr_mask(EVP_PKEY *key, const uint8_t *aik_der,
 
 	uint8_t tokbuf[2048];
 	size_t tok_written = 0;
-	int ret = build_full_token_sha256(key, now + 3600, 0x07, nonce, tokbuf,
-					  sizeof(tokbuf), &tok_written);
+	int ret = build_full_token_sha256(key,
+					  now + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+					  0x07, nonce, tokbuf, sizeof(tokbuf),
+					  &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
 		return;
@@ -859,7 +873,7 @@ static void test_verify_mixed_pcr_banks_rejected(EVP_PKEY *key,
 	TEST("lota_server_verify_token - mixed PCR banks -> ERR_ATTEST_PARSE");
 
 	uint64_t now = (uint64_t)time(NULL);
-	uint64_t valid_until = now + 3600;
+	uint64_t valid_until = now + LOTA_SERVER_MAX_TOKEN_AGE_SEC;
 	uint32_t flags = 0x07;
 	uint32_t pcr_mask_union = 0x0007; /* SHA-1: PCR0, SHA-256: PCR1|PCR2 */
 	uint8_t nonce[32] = { 0 };
@@ -982,11 +996,17 @@ static void test_verify_expired(EVP_PKEY *key, const uint8_t *aik_der,
 	PASS();
 }
 
-static void test_verify_far_future_valid_until(EVP_PKEY *key,
-					       const uint8_t *aik_der,
-					       size_t aik_len)
+/*
+ * The freshness window is the SDK's, not the caller's, and both implementations
+ * of it have to accept the same set: token whose expiry is beyond one attestation
+ * interval plus clock skew is refused here exactly as sdk/server refuses it in Go.
+ * Sized just past the window so token that legitimate agent would mint still passes.
+ */
+static void test_verify_beyond_freshness_window(EVP_PKEY *key,
+						const uint8_t *aik_der,
+						size_t aik_len)
 {
-	TEST("lota_server_verify_token - far-future valid_until -> ERR_FUTURE");
+	TEST("lota_server_verify_token - beyond freshness window -> ERR_FUTURE");
 
 	uint64_t now = (uint64_t)time(NULL);
 	uint8_t nonce[32] = { 0 };
@@ -995,8 +1015,8 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 	size_t tok_written = 0;
 	int ret = build_full_token_sha256(
 		key,
-		now + (uint64_t)LOTA_SERVER_MAX_FUTURE_VALID_UNTIL_SEC +
-			24ULL * 3600ULL,
+		now + (uint64_t)LOTA_SERVER_MAX_TOKEN_AGE_SEC +
+			(uint64_t)LOTA_SERVER_MAX_CLOCK_SKEW_SEC + 60ULL,
 		0, nonce, tokbuf, sizeof(tokbuf), &tok_written);
 	if (ret != LOTA_OK) {
 		FAIL("build_full_token failed");
@@ -1009,6 +1029,38 @@ static void test_verify_far_future_valid_until(EVP_PKEY *key,
 	if (ret != LOTA_SERVER_ERR_FUTURE) {
 		char msg[64];
 		snprintf(msg, sizeof(msg), "expected ERR_FUTURE, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+/* Token an agent on the default interval mints must stay acceptable */
+static void test_verify_at_freshness_window(EVP_PKEY *key,
+					    const uint8_t *aik_der,
+					    size_t aik_len)
+{
+	TEST("lota_server_verify_token - default agent interval -> OK");
+
+	uint64_t now = (uint64_t)time(NULL);
+	uint8_t nonce[32] = { 0 };
+
+	uint8_t tokbuf[2048];
+	size_t tok_written = 0;
+	int ret = build_full_token_sha256(
+		key, now + (uint64_t)LOTA_SERVER_MAX_TOKEN_AGE_SEC + 60ULL, 0,
+		nonce, tokbuf, sizeof(tokbuf), &tok_written);
+	if (ret != LOTA_OK) {
+		FAIL("build_full_token failed");
+		return;
+	}
+
+	struct lota_server_claims claims;
+	ret = lota_server_verify_token(tokbuf, tok_written, aik_der, aik_len,
+				       nonce, &claims);
+	if (ret != LOTA_SERVER_OK) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected OK, got %d", ret);
 		FAIL(msg);
 		return;
 	}
@@ -1168,6 +1220,90 @@ static void test_sdk_version(void)
 	}
 }
 
+/*
+ * Pending-update flag has to be reportable and must not collide with existing bit:
+ * it rides in the same word the token carries, and collision would silently turn
+ * one condition into another.
+ */
+static void test_update_pending_flag_is_distinct_and_named(void)
+{
+	TEST("LOTA_FLAG_UPDATE_PENDING - distinct bit, rendered by name");
+
+	const uint32_t others = LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK |
+				LOTA_FLAG_IOMMU_OK | LOTA_FLAG_BPF_LOADED |
+				LOTA_FLAG_SECURE_BOOT;
+	char buf[128];
+
+	if (LOTA_FLAG_UPDATE_PENDING & others) {
+		FAIL("collides with an existing status flag");
+		return;
+	}
+
+	int n = lota_flags_to_string(LOTA_FLAG_ATTESTED |
+					     LOTA_FLAG_UPDATE_PENDING,
+				     buf, sizeof(buf));
+	if (n < 0) {
+		FAIL("lota_flags_to_string failed");
+		return;
+	}
+	if (!strstr(buf, "UPDATE_PENDING")) {
+		FAIL("flag is not rendered by name");
+		return;
+	}
+	/* attested machine with update pending is still attested */
+	if (!strstr(buf, "ATTESTED")) {
+		FAIL("pending update masked the attested flag");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Both libraries report the build they were compiled from,
+ * so they must report the same one.
+ * Caller correlating a heartbeat with the client that produced it reads one of
+ * these and cannot tell which.
+ */
+static void test_sdk_version_agrees_across_libraries(void)
+{
+	TEST("SDK version - gaming and server report the same build");
+
+	const char *gaming = lota_sdk_version();
+	const char *server = lota_server_sdk_version();
+
+	if (!gaming || !server) {
+		FAIL("NULL version string");
+		return;
+	}
+	if (strcmp(gaming, server) != 0) {
+		FAIL("gaming and server report different versions");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Version identifies a build for an advisory, a support ticket
+ * or reproducible-build check, so library that cannot name its build is worse
+ * than one that fails to compile.
+ */
+static void test_sdk_version_is_a_real_build(void)
+{
+	TEST("SDK version - names a build, not a placeholder");
+
+	const char *v = lota_server_sdk_version();
+
+	if (!v || v[0] == '\0') {
+		FAIL(v ? "empty" : "NULL");
+		return;
+	}
+	if (strcmp(v, "unknown") == 0) {
+		FAIL("built without a version string");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf(BOLD "\n=== LOTA Server SDK - Test Suite ===\n\n" RESET);
@@ -1212,7 +1348,8 @@ int main(void)
 	test_verify_tampered_pcr_mask(key, aik_der, aik_len);
 	test_verify_mixed_pcr_banks_rejected(key, aik_der, aik_len);
 	test_verify_expired(key, aik_der, aik_len);
-	test_verify_far_future_valid_until(key, aik_der, aik_len);
+	test_verify_beyond_freshness_window(key, aik_der, aik_len);
+	test_verify_at_freshness_window(key, aik_der, aik_len);
 
 	printf(BOLD "\nEdge Cases & Error Handling:\n" RESET);
 	test_malformed_inputs();
@@ -1221,6 +1358,9 @@ int main(void)
 	test_strerror();
 	test_strerror_new_codes();
 	test_sdk_version();
+	test_update_pending_flag_is_distinct_and_named();
+	test_sdk_version_agrees_across_libraries();
+	test_sdk_version_is_a_real_build();
 
 	printf(BOLD "\n=== Results: %d/%d passed" RESET, tests_pass, tests_run);
 	if (tests_fail > 0) {

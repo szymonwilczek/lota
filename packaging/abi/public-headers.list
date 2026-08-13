@@ -1,0 +1,10 @@
+# Public C API:
+# the headers lota-sdk-devel installs into /usr/include/lota.
+# Adding one widens the frozen surface; removing one is a breaking change.
+# See Documentation/contributor/development/api-stability.rst
+lota_gaming.h
+lota_server.h
+lota_anticheat.h
+lota_wine_hook.h
+lota_token.h
+lota_snapshot.h

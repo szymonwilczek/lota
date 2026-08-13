@@ -12,20 +12,23 @@
 #define LOTA_AGENT_ENROLL_H
 
 #include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
 #include "../../include/lota_enroll.h"
 #include "net.h"
+#include "profile.h"
 
 struct tpm_context;
 
-/* On-disk location of the CA-issued AIK certificate (DER). */
-#define LOTA_AIK_CERT_PATH "/var/lib/lota/aik_cert.der"
-
-/* On-disk record of the endpoint a host last enrolled against. */
-#define LOTA_ENROLL_STATE_PATH "/var/lib/lota/enroll_state.dat"
+/*
+ * AIK certificate and the enrollment record live inside the publisher profile
+ * the CA trust anchor names -- see profile.h
+ * Host that enrolls with two publishers keeps two of each and one AIK per
+ * publisher, so the two cannot correlate the machine between them.
+ */
 #define LOTA_ENROLL_STATE_MAGIC 0x4C455354 /* "LEST" */
 #define LOTA_ENROLL_STATE_VERSION 2
 
@@ -55,10 +58,7 @@ struct enroll_state {
 	char enroll_token[LOTA_ENROLL_MAX_TOKEN + 1];
 } __attribute__((packed));
 
-int enroll_state_save(const struct enroll_state *st);
-int enroll_state_load(struct enroll_state *out); /* -ENOENT if never enrolled */
-
-/* Path-parameterized variants behind the fixed-path wrappers above. */
+/* -ENOENT from the load when this profile has never enrolled */
 int enroll_state_save_path(const char *path, const struct enroll_state *st);
 int enroll_state_load_path(const char *path, struct enroll_state *out);
 
@@ -124,8 +124,9 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 /*
  * Top-level --enroll handler: bring up the TPM, provision the AIK, run
- * one enrollment against the CA, and store the issued certificate at
- * LOTA_AIK_CERT_PATH.
+ * one enrollment against the CA, and store the issued certificate in the profile
+ * ca_cert names.
+ * ca_cert is required -- it is the profile's identity, not only verification input.
  * token_file optionally names file holding the enrollment token to present
  * (--enroll-token-file).
  * Returns 0 on success, negative errno on failure.
@@ -134,23 +135,88 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin, const char *token_file);
 
 /*
- * Guided re-enrollment: reuse the endpoint recorded by the last successful
- * --enroll, run a fresh credential activation, and refresh the certificate
- * and recorded state. Needs no CA arguments and no manual CA steps.
+ * Guided re-enrollment:
+ * Reuse the endpoint recorded by the last successful -enroll against the same
+ * CA trust anchor, run fresh credential activation, and refresh the certificate
+ * and recorded state.
+ *
+ * Needs no other CA arguments and no manual CA steps.
  * Returns 0 on success, 1 on failure.
  */
-int do_reenroll(void);
+int do_reenroll(const char *ca_cert);
 
 /*
- * Daemon-side certificate renewal: reuse the recorded CA endpoint and run a
- * fresh credential activation against the CA using the already-provisioned
- * AIK in tpm, refreshing LOTA_AIK_CERT_PATH and the recorded generation.
- * Caller owns TPM and network initialization (unlike do_reenroll, this does
- * not bring up the TPM or the global net layer).
- * Returns 0 on success, or a negative errno on failure:
- * -ENOENT when no endpoint was recorded, so the caller can disable
+ * Daemon-side certificate renewal:
+ * Reuse the endpoint recorded in the given profile and run fresh credential
+ * activation against the CA using the already-provisioned AIK in tpm,
+ * refreshing the profile's certificate and recorded generation.
+ *
+ * Caller owns TPM and network initialization (unlike do_reenroll, this does not
+ * bring up the TPM or the global net layer).
+ * Returns 0 on success, or negative errno on failure:
+ * -ENOENT when the profile has no recorded endpoint, so the caller can disable
  * auto-renewal.
  */
-int enroll_renew_cert(struct tpm_context *tpm);
+int enroll_renew_cert(struct tpm_context *tpm,
+		      const struct profile_paths *paths);
+
+/*
+ * Record that somebody on this machine agreed to answer to a publisher,
+ * named by the hex SHA-256 of its CA trust anchor's SubjectPublicKeyInfo.
+ *
+ * Nothing enrolls without this: AIK is stable handle a publisher can recognise
+ * the machine by, so the decision to hand one out is the player's (or the operator's)
+ * and is recorded before the key exists.
+ * Whatever shows the player what publisher would learn calls this when they accept.
+ *
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_allow_publisher(const char *profile_id);
+
+/*
+ * Write a publisher's [profile] section into lota.conf.
+ * Records no consent -- that stays a separate act by the person at the machine.
+ */
+int do_add_publisher(const char *config_path, const char *name,
+		     const char *ca_server, int ca_port, const char *ca_cert,
+		     const char *verifier, int verifier_port, int interval,
+		     bool session_gated);
+
+/*
+ * Show every publisher this host stores anything for, and what it stores.
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_list_publishers(void);
+
+/*
+ * Take publisher back: destroy the AIK they can recognise this machine by,
+ * delete their enrollment, certificate and consent, and leave nothing that
+ * could hand them the same identity again.
+ *
+ * A profile still configured in lota.conf will enroll again
+ * -- with a *new* key -- the next time a title of theirs runs and somebody
+ * agrees to it, which is the point: forgetting is about the identity,
+ * not about refusing the publisher forever.
+ *
+ * Returns 0 on success, 1 on failure (one-shot CLI mode).
+ */
+int do_forget_publisher(const char *profile_id);
+
+/*
+ * First enrollment for a publisher, from inside a running agent.
+ *
+ * Same ceremony as --enroll, minus the process-level bring-up:
+ * the caller already holds an initialised TPM with the profile bound
+ * and initialised net layer, which is what makes this callable from attestation
+ * loop when a title asks for a publisher this host has never enrolled with.
+ *
+ * Creates the profile directory, stores the issued certificate in it
+ * and records the endpoint, so later renewal needs no arguments.
+ *
+ * Returns 0 on success, or a negative errno.
+ */
+int enroll_profile_now(struct tpm_context *tpm,
+		       const struct profile_paths *paths, const char *ca_server,
+		       int ca_port, const char *ca_cert);
 
 #endif /* LOTA_AGENT_ENROLL_H */

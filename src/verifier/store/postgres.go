@@ -43,25 +43,27 @@ var pgMigrations = []migration{
 			CREATE UNIQUE INDEX idx_clients_aik_der_unique ON clients(aik_der);
 
 			CREATE TABLE baselines (
-				client_id          TEXT PRIMARY KEY,
-				pcr14              BYTEA NOT NULL CHECK(octet_length(pcr14) = 32),
-				first_seen         TIMESTAMPTZ NOT NULL,
-				last_seen          TIMESTAMPTZ NOT NULL,
-				attest_count       BIGINT NOT NULL DEFAULT 1,
-				pcr0               BYTEA,
-				pcr1               BYTEA,
-				pcr7               BYTEA,
-				boot_first_seen    TIMESTAMPTZ,
-				boot_last_seen     TIMESTAMPTZ,
-				agent_hash         BYTEA,
-				eventlog_baseline  BYTEA,
-				esrt_version       BIGINT,
-				esrt_capable       BOOLEAN NOT NULL DEFAULT FALSE,
-				lfa                BOOLEAN NOT NULL DEFAULT FALSE,
-				reanchor_count     BIGINT NOT NULL DEFAULT 0,
-				last_reanchor_at   TIMESTAMPTZ,
-				lfa_review_pending BOOLEAN NOT NULL DEFAULT FALSE,
-				tenant             TEXT NOT NULL DEFAULT 'default'
+				client_id                TEXT PRIMARY KEY,
+				pcr14                    BYTEA NOT NULL CHECK(octet_length(pcr14) = 32),
+				first_seen               TIMESTAMPTZ NOT NULL,
+				last_seen                TIMESTAMPTZ NOT NULL,
+				attest_count             BIGINT NOT NULL DEFAULT 1,
+				pcr0                     BYTEA,
+				pcr1                     BYTEA,
+				pcr7                     BYTEA,
+				boot_first_seen          TIMESTAMPTZ,
+				boot_last_seen           TIMESTAMPTZ,
+				agent_hash               BYTEA,
+				eventlog_baseline        BYTEA,
+				esrt_version             BIGINT,
+				esrt_capable             BOOLEAN NOT NULL DEFAULT FALSE,
+				lfa                      BOOLEAN NOT NULL DEFAULT FALSE,
+				reanchor_count           BIGINT NOT NULL DEFAULT 0,
+				last_reanchor_at         TIMESTAMPTZ,
+				lfa_review_pending       BOOLEAN NOT NULL DEFAULT FALSE,
+				tenant                   TEXT NOT NULL DEFAULT 'default',
+				agent_hash_repin_count   BIGINT NOT NULL DEFAULT 0,
+				last_agent_hash_repin_at TIMESTAMPTZ
 			);
 
 			CREATE INDEX idx_baselines_tenant ON baselines(tenant);
@@ -148,6 +150,7 @@ var pgMigrations = []migration{
 				pcr0         BYTEA,
 				pcr1         BYTEA,
 				pcr7         BYTEA,
+				agent_hash   BYTEA,
 				esrt_version BIGINT,
 				reason       TEXT NOT NULL DEFAULT ''
 			);

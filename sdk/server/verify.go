@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -255,8 +256,17 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		return nil, fmt.Errorf("%w: client nonce does not match expected", ErrNonceFail)
 	}
 
+	// token whose expiry does not fit signed 64-bit Unix time is malformed:
+	// time.Unix cannot represent it, and every comparison below would flip
+	// sign on the way in.
+	// Bound it once, here, rather than at each use.
+	if hdr.validUntil > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: valid_until out of range", ErrBadToken)
+	}
+	validUntil := int64(hdr.validUntil) // #nosec G115 -- bounded above
+
 	claims := &Claims{
-		ExpiresAt:            time.Unix(int64(hdr.validUntil), 0),
+		ExpiresAt:            time.Unix(validUntil, 0),
 		Flags:                hdr.flags,
 		Nonce:                hdr.nonce,
 		PCRMask:              hdr.pcrMask,
@@ -271,7 +281,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 
 	// check expiry
 	now := time.Now()
-	if hdr.validUntil > 0 && now.Unix() > int64(hdr.validUntil) {
+	if hdr.validUntil > 0 && now.Unix() > validUntil {
 		claims.Expired = true
 	}
 
@@ -289,7 +299,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 	// Callers must size validUntil accordingly:
 	// keep the agent attest_interval at or below DefaultMaxTokenAge
 	if hdr.validUntil > 0 &&
-		int64(hdr.validUntil) > now.Unix()+DefaultMaxTokenAge+MaxClockSkew {
+		validUntil > now.Unix()+DefaultMaxTokenAge+MaxClockSkew {
 		return claims, ErrFutureToken
 	}
 
@@ -317,8 +327,13 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		return nil, err
 	}
 
+	if hdr.validUntil > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: valid_until out of range", ErrBadToken)
+	}
+	validUntil := int64(hdr.validUntil) // #nosec G115 -- bounded above
+
 	claims := &Claims{
-		ExpiresAt:            time.Unix(int64(hdr.validUntil), 0),
+		ExpiresAt:            time.Unix(validUntil, 0),
 		Flags:                hdr.flags,
 		Nonce:                hdr.nonce,
 		PCRMask:              hdr.pcrMask,
@@ -343,7 +358,7 @@ func ParseToken(tokenData []byte) (*Claims, error) {
 		}
 	}
 
-	if hdr.validUntil > 0 && time.Now().Unix() > int64(hdr.validUntil) {
+	if hdr.validUntil > 0 && time.Now().Unix() > validUntil {
 		claims.Expired = true
 	}
 
@@ -380,7 +395,7 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	// header
 	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
-	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize))
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize)) // #nosec G115 -- bounded by the size checks above
 	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
 	binary.LittleEndian.PutUint32(buf[16:20], flags)
 	copy(buf[20:52], nonce[:])
@@ -389,11 +404,11 @@ func SerializeToken(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
 	copy(buf[60:92], policyDigest[:])
 	copy(buf[92:124], runtimeProtectDigest[:])
-	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs)))
+	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs))) // #nosec G115 -- bounded by MaxProtectPIDs above
 	binary.LittleEndian.PutUint64(buf[128:136], 0)
-	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))
-	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData)))
-	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))
+	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))     // #nosec G115 -- bounded by MaxProtectPIDs above
+	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData))) // #nosec G115 -- bounded by MaxAttestSize above
+	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))  // #nosec G115 -- bounded by MaxSigSize above
 	binary.LittleEndian.PutUint16(buf[142:144], runtimeProtectV1)
 
 	// variable data
@@ -442,7 +457,9 @@ func SerializeTokenV2(validUntil uint64, flags uint32, nonce [32]byte,
 
 	binary.LittleEndian.PutUint32(buf[0:4], TokenMagic)
 	binary.LittleEndian.PutUint16(buf[4:6], TokenVersion)
-	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize))
+	// every length below is bounded by the Max* checks at the top of this
+	// function, which together keep totalSize under 40 KiB
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(totalSize)) // #nosec G115 -- bounded by the size checks above
 	binary.LittleEndian.PutUint64(buf[8:16], validUntil)
 	binary.LittleEndian.PutUint32(buf[16:20], flags)
 	copy(buf[20:52], nonce[:])
@@ -451,11 +468,11 @@ func SerializeTokenV2(validUntil uint64, flags uint32, nonce [32]byte,
 	binary.LittleEndian.PutUint32(buf[56:60], pcrMask)
 	copy(buf[60:92], policyDigest[:])
 	copy(buf[92:124], runtimeProtectDigest[:])
-	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs)))
+	binary.LittleEndian.PutUint32(buf[124:128], uint32(len(protectedPIDs))) // #nosec G115 -- bounded by MaxProtectPIDs above
 	binary.LittleEndian.PutUint64(buf[128:136], runtimeProtectEpoch)
-	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))
-	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData)))
-	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))
+	binary.LittleEndian.PutUint16(buf[136:138], uint16(pidListSize))     // #nosec G115 -- bounded by MaxProtectPIDs above
+	binary.LittleEndian.PutUint16(buf[138:140], uint16(len(attestData))) // #nosec G115 -- bounded by MaxAttestSize above
+	binary.LittleEndian.PutUint16(buf[140:142], uint16(len(signature)))  // #nosec G115 -- bounded by MaxSigSize above
 	binary.LittleEndian.PutUint16(buf[142:144], runtimeProtectV2)
 
 	off := TokenHeaderSize
@@ -472,6 +489,15 @@ func SerializeTokenV2(validUntil uint64, flags uint32, nonce [32]byte,
 	copy(buf[off:], signature)
 
 	return buf, nil
+}
+
+// ComputeRuntimeProtectDigest exposes the v1 protect-digest fold.
+// v1 token built with SerializeToken has to bind this value under the quote,
+// so every relying party's own test suite needs it -- and without it exported,
+// each one re-derives a domain-separated hash by hand, which is exactly the drift
+// the domain string exists to prevent.
+func ComputeRuntimeProtectDigest(pids []uint32) [32]byte {
+	return computeRuntimeProtectDigest(pids)
 }
 
 // ComputeRuntimeProtectDigestV2 exposes the v2 protect-digest fold so callers
@@ -527,7 +553,7 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 	if hdr.protectPIDCount > MaxProtectPIDs {
 		return nil, fmt.Errorf("%w: protect_pid_count too large", ErrBadToken)
 	}
-	if hdr.pidListSize != uint16(hdr.protectPIDCount*4) {
+	if uint32(hdr.pidListSize) != hdr.protectPIDCount*4 {
 		return nil, fmt.Errorf("%w: pid list size mismatch", ErrBadToken)
 	}
 
@@ -548,7 +574,7 @@ func parseWireHeader(data []byte) (*tokenWire, error) {
 }
 
 // verifies the TPM RSA signature over attest_data
-func verifyRSASignature(attestData, signature []byte, sigAlg uint16, hashAlg uint16, aikPub *rsa.PublicKey) error {
+func verifyRSASignature(attestData, signature []byte, sigAlg, hashAlg uint16, aikPub *rsa.PublicKey) error {
 	h, err := tpmHashAlgToCryptoHash(hashAlg)
 	if err != nil {
 		return err
@@ -577,7 +603,7 @@ func verifyRSASignature(attestData, signature []byte, sigAlg uint16, hashAlg uin
 	}
 }
 
-func computeExpectedNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
+func computeExpectedNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
 	var buf [120]byte // 8 + 4 + 4 + 32 + 32 + 32 + 8
 	binary.LittleEndian.PutUint64(buf[0:8], validUntil)
 	binary.LittleEndian.PutUint32(buf[8:12], flags)
@@ -597,7 +623,7 @@ func computeExpectedNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce
 //
 // NOTE: This is intentionally different from the attestation report binding
 // nonce used by the remote attestation verifier/agent report path.
-func ComputeTokenQuoteNonce(validUntil uint64, flags uint32, pcrMask uint32, nonce [32]byte, policyDigest [32]byte, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
+func ComputeTokenQuoteNonce(validUntil uint64, flags, pcrMask uint32, nonce, policyDigest, runtimeProtectDigest [32]byte, runtimeProtectEpoch uint64) [32]byte {
 	return computeExpectedNonce(validUntil, flags, pcrMask, nonce, policyDigest, runtimeProtectDigest, runtimeProtectEpoch)
 }
 
@@ -629,6 +655,7 @@ func computeRuntimeProtectDigest(pids []uint32) [32]byte {
 	var countLE [4]byte
 	h := sha256.New()
 	_, _ = h.Write([]byte("lota-runtime-protect-pids:v1\x00"))
+	// #nosec G115 -- a PID list this fold can be asked for is a wire field capped at MaxProtectPIDs
 	binary.LittleEndian.PutUint32(countLE[:], uint32(len(pids)))
 	_, _ = h.Write(countLE[:])
 	for _, pid := range pids {
@@ -648,6 +675,7 @@ func computeRuntimeProtectDigestV2(pids []uint32, imageList []byte) [32]byte {
 	var le [4]byte
 	h := sha256.New()
 	_, _ = h.Write([]byte("lota-runtime-protect-pids:v2\x00"))
+	// #nosec G115 -- same bound as v1: the PID list is a wire field capped at MaxProtectPIDs
 	binary.LittleEndian.PutUint32(le[:], uint32(len(pids)))
 	_, _ = h.Write(le[:])
 	for i, pid := range pids {

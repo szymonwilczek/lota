@@ -99,7 +99,7 @@ func TestNonceStore_GenerateAndVerify(t *testing.T) {
 
 func TestNonceStore_GenerateChallengeAdvertisesBootCommitmentV1(t *testing.T) {
 	t.Log("SECURITY TEST: Challenge capability advertisement")
-	t.Log("Verifies the verifier explicitly negotiates boot-commitment v1")
+	t.Log("Verifies every challenge names the boot-commitment v1 derivation")
 
 	store := NewNonceStore(5 * time.Minute)
 
@@ -113,92 +113,12 @@ func TestNonceStore_GenerateChallengeAdvertisesBootCommitmentV1(t *testing.T) {
 			challenge.Flags)
 	}
 
-	key := hex.EncodeToString(challenge.Nonce[:])
-	store.mu.Lock()
-	entry := store.pending[key]
-	store.mu.Unlock()
-
-	if entry.challengeFlags&types.ChallengeFlagBootCommitmentV1 == 0 {
-		t.Fatalf("Stored challenge flags 0x%08X lost boot-commitment v1",
-			entry.challengeFlags)
-	}
-
-	t.Log("✓ Challenge and nonce entry carry boot-commitment v1 capability")
+	t.Log("✓ Challenge carries the boot-commitment v1 capability")
 }
 
-func TestNonceStore_RejectsBootCommitmentV1WhenChallengeDidNotAdvertise(t *testing.T) {
-	t.Log("SECURITY TEST: Challenge capability enforcement")
-	t.Log("Rejects reports claiming boot-commitment v1 for a nonce that did not advertise it")
-
-	store := NewNonceStore(5 * time.Minute)
-
-	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
-	if err != nil {
-		t.Fatalf("Failed to generate challenge: %v", err)
-	}
-
-	key := hex.EncodeToString(challenge.Nonce[:])
-	store.mu.Lock()
-	entry := store.pending[key]
-	entry.challengeFlags = 0
-	store.pending[key] = entry
-	store.mu.Unlock()
-
-	report := &types.AttestationReport{}
-	report.Header.Flags = types.FlagBootCommitmentV1
-	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-
-	err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
-	if err == nil {
-		t.Fatal("SECURITY: Accepted boot-commitment v1 report without challenge capability")
-	}
-	if err.Error() != "report requested boot-commitment v1 not advertised by challenge" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	t.Logf("✓ Correctly rejected unadvertised boot-commitment v1: %v", err)
-}
-
-func TestNonceStore_RejectsInitramfsLockV1WhenChallengeDidNotAdvertise(t *testing.T) {
-	t.Log("SECURITY TEST: Initramfs-lock capability enforcement")
-	t.Log("Rejects locked v1 reports for a nonce that did not advertise boot-commitment v1")
-
-	store := NewNonceStore(5 * time.Minute)
-
-	challenge, err := store.GenerateChallenge("binding-1", 0x00004003)
-	if err != nil {
-		t.Fatalf("Failed to generate challenge: %v", err)
-	}
-
-	key := hex.EncodeToString(challenge.Nonce[:])
-	store.mu.Lock()
-	entry := store.pending[key]
-	entry.challengeFlags = 0
-	store.pending[key] = entry
-	store.mu.Unlock()
-
-	report := &types.AttestationReport{}
-	report.Header.Flags = types.FlagInitramfsLockV1
-	copy(report.TPM.Nonce[:], challenge.Nonce[:])
-	report.TPM.AttestSize = uint16(len(createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce))))
-	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
-
-	err = store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:]))
-	if err == nil {
-		t.Fatal("SECURITY: Accepted initramfs-lock v1 report without challenge capability")
-	}
-	if err.Error() != "report requested initramfs-lock v1 without boot-commitment v1 challenge support" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	t.Logf("✓ Correctly rejected unadvertised initramfs-lock v1: %v", err)
-}
-
-func TestNonceStore_AcceptsBootCommitmentV1WhenAdvertised(t *testing.T) {
-	t.Log("SECURITY TEST: Negotiated boot-commitment v1 acceptance")
-	t.Log("Accepts v1 report flags when the matching challenge capability was offered")
+func TestNonceStore_AcceptsBootCommitmentV1(t *testing.T) {
+	t.Log("SECURITY TEST: boot-commitment v1 acceptance")
+	t.Log("Accepts the v1 report flags every agent emits")
 
 	store := NewNonceStore(5 * time.Minute)
 
@@ -214,10 +134,10 @@ func TestNonceStore_AcceptsBootCommitmentV1WhenAdvertised(t *testing.T) {
 	copy(report.TPM.AttestData[:], createMockAttestWithNonce(testBindingNonce(report, challenge.Nonce)))
 
 	if err := store.VerifyNonce(report, "binding-1", hex.EncodeToString(report.TPM.HardwareID[:])); err != nil {
-		t.Fatalf("Negotiated boot-commitment v1 report was rejected: %v", err)
+		t.Fatalf("boot-commitment v1 report was rejected: %v", err)
 	}
 
-	t.Log("✓ Negotiated boot-commitment v1 report accepted")
+	t.Log("✓ boot-commitment v1 report accepted")
 }
 
 func TestNonceStore_OneTimeUse(t *testing.T) {

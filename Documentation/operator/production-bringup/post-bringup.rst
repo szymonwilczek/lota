@@ -21,9 +21,15 @@ The most common failures, with the gate that produced them:
   and the bring-up script re-enables on every run. On XFS/ZFS (no verity)
   re-sign the binary into its ``security.ima`` xattr and confirm
   ``ima_appraise=enforce``; the agent accepts the signed xattr as equivalent.
-* ``BPF object signature verification failed``. The ``.sig`` is from a different
-  key. Re-sign with the key that ``policy_pubkey`` points at, or update
-  ``policy_pubkey`` to match the signing key.
+* ``BPF object signature verification failed``. The object and the key no
+  longer belong to each other. A ``policy_pubkey`` line naming a file that is
+  no longer there does not cause this: the agent treats a key that has stopped
+  resolving as absent and falls back, so a host an older installer configured
+  keeps enforcing after an upgrade moved the key. The packaged key at
+  ``/usr/lib/lota/enforcement.pub`` always matches the packaged object, so this
+  means a key at ``/etc/lota/policy.pub`` (or one named by ``policy_pubkey``)
+  is taking precedence and did not sign this object: move it aside to fall back
+  to the packaged one, or re-sign the object with the fleet key.
 * ``Failed to load AIK metadata: Key has been revoked``. The TPM has a
   persistent AIK but the operator wiped ``/var/lib/lota``. Either restore the
   metadata backup or evict the AIK handle and reboot so the agent re-provisions
@@ -101,10 +107,42 @@ The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
 independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
 TLS socket misses the deadline and systemd restarts it.
 
+Which unit a title talks to
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``lota-agent.service`` owns ``/run/lota/lota.sock``, and it is the only unit
+that does. It is the always-on one, it is what ``lota-agent.socket`` activates,
+and it holds everything about the machine a title asks after: the BPF LSM
+state, the enforcement policy digest a token carries, the Secure Boot and IOMMU
+findings, and the publisher list a title selects from.
+
+What it does not hold is a verifier's verdict, so the attestation loop connects
+to that same socket as a local peer and trades state with it once per round --
+verdicts out, sessions and enrollment requests in. That exchange is refused
+unless the peer is the same agent binary running as the same user, and it is
+never something an integrator sends: the SDK has no such call.
+
+Two consequences worth knowing:
+
+* **Stopping ``lota-attest.service`` does not stop a title from getting an
+  answer.** The socket stays up and enforcement keeps running; what goes stale
+  is the verdict, which is exactly what a verifier is watching for. Session-gated
+  publishers stop being reported to, which is the safe direction.
+* **Stopping ``lota-agent.service`` takes the socket down with it.** A title
+  gets a connection failure rather than a wrong answer, and the attest loop
+  keeps attesting and retries the link every 30 s. Session gating and runtime
+  enrollment are off for that window, and the loop says so in the journal.
+
 The verifier, port, CA certificate and cadence come from
 ``/etc/lota/lota.conf`` (``server``, ``port``, ``ca_cert``, ``attest_interval``);
-no attestation flags are hardcoded in the unit. Keep ``attest_interval``
-non-zero -- a zero interval attests once and exits.
+no attestation flags are hardcoded in the unit. A zero ``attest_interval``
+means this host never chose a cadence: with a ``[profile]`` list it attests to
+every configured publisher at the default 300 s, and only a host with no
+profile at all falls back to attesting once to ``server`` and exiting. A
+non-zero value has to fall between the floor and the ceiling the agent prints
+in ``--help``; the agent refuses to start on anything else, since an interval
+past the ceiling mints tokens that sit outside every relying party's freshness
+window.
 
 ``ca_cert`` must point at a path the hardened unit can read. The service runs
 with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
@@ -116,10 +154,171 @@ there, for example::
    sudo install -m 0644 verifier-ca.crt /etc/lota/verifier-ca.crt
    # then in /etc/lota/lota.conf: ca_cert = /etc/lota/verifier-ca.crt
 
+A host that answers to more than one publisher lists them as ``[profile "name"]``
+sections instead. Each section names the attestation CA it enrolls against, the
+trust anchor that CA is verified with, the verifier it reports to, and
+optionally its own cadence; ``ca_port`` and ``verifier_port`` default to the
+same ports as the top-level keys. A profile missing the CA, the anchor or the
+verifier is refused at load, and every anchor has to satisfy the same
+readability constraint as the top-level ``ca_cert`` above.
+
+``verifier = none`` is how a profile says that publisher runs no verifier and
+checks the tokens their titles fetch in their own backend. Nothing is reported
+to them and this host holds no verdict of theirs, so their titles read the
+token rather than the attested bit; the profile still enrolls, holds its own
+AIK and renews that key's certificate, which is what the publisher's backend
+chains a token to. It has to be said rather than left out -- an omitted
+``verifier`` stays a refused config, so a typo cannot turn a publisher who
+expects reports into one who silently receives none -- and ``verifier_port``
+must not accompany it.
+
+Adding a publisher does not have to be a text edit. ``lota-agent
+--add-publisher`` writes the section, which is how a game's installer registers
+the publisher it ships for::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem \
+        --server verifier.studio.example --port 8443 \
+        --publisher-name studio
+
+The rest of the file is copied through untouched and the section is appended,
+so whatever the operator put there survives. A publisher is its trust anchor
+rather than its label: adding the same anchor again is a no-op whichever name
+it carries, and a label already spoken for by a different anchor is refused
+with a note to pass another ``--publisher-name``.
+
+**It records no consent.** Nothing enrols with the publisher until somebody at
+the machine runs the ``--allow-publisher`` command it prints. That separation
+is deliberate: an installer must not be able to agree, on the player's behalf,
+to a publisher holding an attestation key on their hardware.
+
+**A running agent has to be told.** The daemon answers titles from the
+publisher list it read when it started, so one added since is unknown to it and
+a title naming it is refused with ``LOTA_ERR_UNKNOWN_PROFILE``. ``systemctl
+reload lota-agent`` (SIGHUP) re-reads ``lota.conf`` and hands the new list to
+the socket, with no effect on enforcement, PCR 14 or any existing enrollment --
+the command ``--add-publisher`` prints alongside the consent line. A rebuild
+that fails leaves the previous list in place rather than answering no title at
+all.
+
+Every key below a section header belongs to that section, so the top-level keys
+go above the first profile and nothing top-level may follow one.
+``lota-agent --dump-config`` prints profiles last for the same reason, which is
+also what makes its output loadable again. See :ghsrc:`configs/lota.conf.example`
+for a worked pair of profiles.
+
+The section name is a label for the operator. A profile is identified by its
+trust anchor's public key, so a publisher moving their CA to another address
+keeps the same profile, and two publishers sharing a hostname cannot collide.
+Publisher policy stays with the publisher: a profile grants no publisher any
+say over this host's enforcement.
+
+The list is what the attestation loop reports to. Every profile's verifier gets
+its own report on that profile's cadence, signed with that publisher's own AIK,
+and each profile carries its own failure state -- one unreachable verifier
+backs off its own reporting and leaves the others on schedule. Since the list
+replaces the single verifier rather than adding to it, ``--server`` and
+``--pin-sha256`` are refused while profiles are configured; each profile is
+anchored by its own ``ca_cert``.
+
+A title says which publisher it plays for, and gets that publisher's answers.
+It names the profile by the lowercase hex SHA-256 of that publisher's CA trust
+anchor SubjectPublicKeyInfo -- the identity the profile directory is named
+after, which the publisher knows about their own CA -- through
+``publisher_profile`` in ``struct lota_connect_opts`` or
+``struct lota_ac_config``. The connection's tokens are then signed by that
+publisher's AIK, and the attested state it reads is that publisher's verifier's
+verdict rather than every publisher on the host agreeing. Naming a publisher
+this machine holds no enrollment for fails the connection: handing a title
+another publisher's evidence under its own name would be worse than telling it
+plainly.
+
+A title that names nobody -- which is every enterprise integration, where the
+host has one publisher -- gets the first profile's token and the host-wide
+answer: attested only while **every** configured publisher is satisfied, with
+the window closing at the earliest of theirs. Publishers who run no verifier
+are left out of that answer, since a host holds no verdict for a publisher it
+never reports to. On a host where no publisher runs one, that answer carries
+``LOTA_FLAG_TOKEN_ONLY`` so a title reads "nothing is verified here, check the
+token you fetched" rather than "this machine failed".
+
+**A profile reports only while a title of its publisher is running.** That is
+what ``reporting`` selects, and ``session`` is a profile's default: a report is
+the only thing that leaves the machine, and a verifier receiving one every few
+minutes from boot to poweroff learns when the player's machine is on, for a
+game that is closed. A session is a title's connection to the agent, so it ends
+when the process does, whether it exited or was killed. Set
+``reporting = continuous`` on a profile whose fleet the operator owns and whose
+continuous stream is the point; the single-verifier configuration keeps that
+behaviour unchanged.
+
+Enforcement and the PCR 14 boot commitment are never gated. They are local,
+they send nothing, and they are what lets a session's first quote still prove
+the whole boot-to-now window: the quote is a fresh signed read of state that
+already existed. On-demand *enforcement* would prove nothing, which is why only
+reporting follows the session.
+
+Neither is the enrollment ceremony. Every configured publisher is enrolled
+with, has its AIK rotated and its certificate renewed on the host's cadence,
+whether or not a title of theirs is running. Waiting for a session would leave
+a session-gated publisher unreachable: a title cannot select a publisher this
+machine never enrolled with, so the session that would trigger the enrollment
+could never be opened. What the gate withholds is the report, not the key.
+
+While no title of a publisher's is running, that publisher has no live verdict:
+the agent stops reporting to them and reports the host as not attested for
+them. A title that names no publisher reads the host-wide answer, which is now
+every *currently reporting* publisher agreeing -- and not attested when nothing
+is reporting at all, since nothing is being checked.
+
+**Nothing enrolls with a publisher until somebody here agrees to it.** An
+attestation key is a stable handle that publisher can recognise this machine
+by, so the decision to hand one out is recorded before the key exists, in the
+profile directory. ``lota-agent --allow-publisher <hex>`` writes it, naming the
+publisher by the SHA-256 of their CA anchor's SubjectPublicKeyInfo -- the same
+identity everything else uses. ``lota-agent --enroll`` records it too: somebody
+with root named that CA and asked for the key, which is the same decision made
+a different way, and it keeps one rule for the agent to enforce.
+
+A title that selects a publisher nobody has agreed to is refused with a
+distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
+``lota_connect_last_error()``) rather than a generic failure, because it is a
+screen to show the player rather than a fault to report. Whatever shows that
+screen calls ``--allow-publisher`` when they accept.
+
+**What this machine holds for whom is inspectable, and revocable.**
+``lota-agent --list-publishers`` shows every publisher with anything stored
+here: when it was agreed to, where it enrolled, which TPM handle holds its
+attestation key and how much validity that key's certificate has left.
+``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
+in that order -- a key with no directory left to name it would be worse than
+either state alone, so nothing is deleted if the eviction fails.
+
+Forgetting is about the identity, not about refusing the publisher. A profile
+still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
+that the old evidence cannot be linked to.
+
+**Enrollment with a profile's publisher is a runtime action.** A profile that
+names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is
+enrolled by the agent itself: when the loop first reaches that publisher, and
+immediately when a title selects it, which is the moment that matters on a
+player's machine. Until it completes, that publisher's status is not attested
+and the agent sends no report to their verifier -- evidence with no certificate
+to chain is refused anyway. A failing CA backs off rather than being retried
+every round, and the other publishers keep their cadence throughout.
+
+Operator fleets that enroll at install time are unaffected: ``lota-agent
+--enroll`` writes the same record, and a profile that already has one is never
+re-enrolled. An enrollment token cannot be presented on the runtime path (a
+publisher admitting players has no way to hand each of them a secret in
+advance), so a CA that requires one has to be enrolled against with
+``--enroll --enroll-token-file``.
+
 First enrollment stays operator-driven. ``lota-attest.service`` carries
-``ConditionPathExists=/var/lib/lota/enroll_state.dat`` and stays inactive until
-the operator's first ``lota-agent --enroll`` records that state; afterwards the
-loop renews the certificate automatically. Start it after the first enrollment
+``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until
+the operator's first ``lota-agent --enroll`` creates a profile there (the
+directory itself ships with the package, so only its contents say anything);
+afterwards the loop renews the certificate automatically. Start it after the first enrollment
 (or it activates on the next boot):
 
 .. code-block:: sh
@@ -157,7 +356,9 @@ around them.
 
       sudo systemctl stop lota-agent.service lota-agent.socket
       sudo find /var/lib/lota -mindepth 1 -delete
-      for h in 0x81010002 0x81010003 0x81010004 0x81010005; do
+      for h in 0x81010002 0x81010003 0x81010004 0x81010005 \
+               0x81010010 0x81010011 0x81010012 0x81010013 \
+               0x81010014 0x81010015 0x81010016 0x81010017; do
           sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true
       done
 

@@ -1,10 +1,11 @@
 go 1.25.8
 
 use (
+	./examples/ci-gate/gate
 	./examples/demo_server
+	./sdk/server
 	./src/attestca
 	./src/crl
 	./src/fleetctl
-	./src/sdk/server
 	./src/verifier
 )

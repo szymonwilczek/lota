@@ -258,13 +258,11 @@ func TestSQLiteBaseline_Persistence(t *testing.T) {
 	t.Log("✓ Baseline and counters persist across instances")
 }
 
-// TestSQLiteBaseline_LegacyBackfillSignal exercises the pre-FlagBootCommitment
-// migration path: a baseline row that was inserted by CheckAndUpdate (pre-v4
-// schema, no agent_hash column populated) must surface a TOFULegacyBackfill
-// signal the first time CheckAndUpdateAgentHash sees it, so the verifier can
-// audit and optionally reject the implicit trust upgrade. Subsequent rounds
-// must take the TOFUMatch branch.
-func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
+// TestSQLiteBaseline_RefusesUnpinnedRow mirrors the in-memory case on the SQL store:
+// a baselines row whose agent_hash column is NULL
+// (only an out-of-band CheckAndUpdate can produce one)
+// is refused instead of being backfilled with the hash the report happens to carry
+func TestSQLiteBaseline_RefusesUnpinnedRow(t *testing.T) {
 	db, err := store.OpenDB(":memory:")
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
@@ -274,7 +272,7 @@ func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
 	bs := NewSQLiteBaselineStore(db)
 
 	pcr14 := [types.HashSize]byte{0xAA, 0xBB, 0xCC}
-	if r, _ := bs.CheckAndUpdate("legacy-sqlite", pcr14); r != TOFUFirstUse {
+	if r, _ := bs.CheckAndUpdate("unpinned-sqlite", pcr14); r != TOFUFirstUse {
 		t.Fatalf("CheckAndUpdate seeding: expected TOFUFirstUse, got %v", r)
 	}
 
@@ -283,28 +281,17 @@ func TestSQLiteBaseline_LegacyBackfillSignal(t *testing.T) {
 		agentHash[i] = 0x99
 	}
 
-	r1, snap := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, agentHash)
-	if r1 != TOFULegacyBackfill {
-		t.Fatalf("first agent_hash on legacy row: expected TOFULegacyBackfill, got %v", r1)
+	r1, snap := bs.CheckAndUpdateAgentHash("unpinned-sqlite", pcr14, agentHash)
+	if r1 != TOFUMismatch {
+		t.Fatalf("NULL agent_hash row: expected TOFUMismatch, got %v", r1)
 	}
-	if snap == nil || snap.AgentHash != agentHash {
-		t.Fatalf("returned snapshot must carry the freshly pinned agent_hash")
-	}
-
-	r2, _ := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, agentHash)
-	if r2 != TOFUMatch {
-		t.Fatalf("second round on backfilled row: expected TOFUMatch, got %v", r2)
+	var zero [types.HashSize]byte
+	if snap == nil || snap.AgentHash != zero {
+		t.Fatalf("refused round must not pin the incoming agent_hash")
 	}
 
-	// distinct agent_hash on a backfilled row must now mismatch, not
-	// reopen the backfill window.
-	var rogue [types.HashSize]byte
-	for i := range rogue {
-		rogue[i] = 0x77
-	}
-	r3, _ := bs.CheckAndUpdateAgentHash("legacy-sqlite", pcr14, rogue)
-	if r3 != TOFUMismatch {
-		t.Fatalf("post-backfill drift: expected TOFUMismatch, got %v", r3)
+	if r2, _ := bs.CheckAndUpdateAgentHash("unpinned-sqlite", pcr14, agentHash); r2 != TOFUMismatch {
+		t.Fatalf("second round: expected TOFUMismatch, got %v", r2)
 	}
 }
 
@@ -599,8 +586,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -613,7 +599,7 @@ func TestSQLiteIntegration_FullFlow(t *testing.T) {
 	}
 
 	clientID := "sqlite-client"
-	pcr14 := [32]byte{0x14, 0x14}
+	pcr14 := sqliteFixturePCR14()
 
 	// first attestation (TOFU)
 	challenge, err := verifier.GenerateChallenge(clientID)
@@ -657,13 +643,12 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	}
 	defer db.Close()
 
-	pcr14 := [32]byte{0x14}
+	pcr14 := sqliteFixturePCR14()
 
 	// first verifier instance
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireBootPCRs = false
-	cfg1.RequireInitramfsLock = false
+	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -687,9 +672,8 @@ func TestSQLiteIntegration_ReplayAfterRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireBootPCRs = false
-	cfg2.RequireInitramfsLock = false
 
+	cfg2.RequireBootEnrollment = false
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -722,14 +706,13 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	}
 	defer db.Close()
 
-	originalPCR14 := [32]byte{0x22, 0x33}
+	originalPCR14 := sqliteFixturePCR14()
 	tamperedPCR14 := [32]byte{0xFF, 0xFF}
 
 	// establish baseline
 	aikStore1 := newCertStore(t)
 	cfg1 := DefaultConfig()
-	cfg1.RequireBootPCRs = false
-	cfg1.RequireInitramfsLock = false
+	cfg1.RequireBootEnrollment = false
 	cfg1.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg1.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -752,9 +735,8 @@ func TestSQLiteIntegration_BaselineSurvivesRestart(t *testing.T) {
 	// new verifier with same DB
 	aikStore2 := newCertStore(t)
 	cfg2 := DefaultConfig()
-	cfg2.RequireBootPCRs = false
-	cfg2.RequireInitramfsLock = false
 
+	cfg2.RequireBootEnrollment = false
 	cfg2.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg2.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -798,8 +780,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 
 	aikStore := newCertStore(t)
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = NewSQLiteBaselineStore(db)
 	cfg.UsedNonceBackend = NewSQLiteUsedNonceBackend(db)
 
@@ -820,7 +801,7 @@ func TestSQLiteIntegration_ConcurrentAttestations(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			clientID := fmt.Sprintf("concurrent-sqlite-%d", n)
-			pcr14 := [32]byte{byte(n)}
+			pcr14 := sqliteFixturePCR14()
 			clientKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
 			if keyErr != nil {
 				errCh <- fmt.Errorf("client %d: keygen: %w", n, keyErr)
@@ -872,6 +853,14 @@ func init() {
 	}
 }
 
+// sqliteFixturePCR14 is the PCR14 a report from this builder must carry:
+// the locked boot-commitment chain over the zero agent_hash the builder
+// leaves in the system measurement.
+func sqliteFixturePCR14() [types.HashSize]byte {
+	var agentHash [types.HashSize]byte
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 0, 0)
+}
+
 func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
 	return createSQLiteTestReportWithKey(t, clientID, nonce, pcr14, sqliteTestKey)
 }
@@ -882,7 +871,9 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	}
 	hwID := sha256.Sum256([]byte(clientID))
 
-	buf := make([]byte, types.MinReportSize)
+	// fixed struct plus the two variable-section length prefixes;
+	// mandatory ESRT section is appended at the end
+	buf := make([]byte, types.FixedReportSize+8)
 	offset := 0
 
 	// Header
@@ -893,15 +884,19 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
+	binary.LittleEndian.PutUint32(buf[offset:], productionFlags)
 	offset += 4
 
 	// PCR values
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -909,15 +904,15 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	}
 
 	// PCR mask
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
+	binary.LittleEndian.PutUint32(buf[offset:], productionPCRMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, productionPCRMask)
 
 	// TPMS_ATTEST with binding nonce including security-relevant report fields
 	bindingReport := &types.AttestationReport{}
-	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingReport.Header.Flags = productionFlags
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07
@@ -955,11 +950,6 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
-	offset += 2
-
-	// EK certificate (empty)
-	offset += types.MaxEKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0)
 	offset += 2
 
 	// nonce
@@ -1012,9 +1002,14 @@ func createSQLiteTestReportWithKey(t testing.TB, clientID string, nonce [32]byte
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	eventLog := buildTestEventLog(nil)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
+
+	// mandatory trailing ESRT section
+	// all-zero means present == false,
+	// which is what a platform with no ESRT System Firmware entry reports
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf

@@ -4,11 +4,12 @@
  * Implements variable-length wire format for attestation reports.
  *
  * Wire format:
- *   [lota_attestation_report]    (fixed 7444 bytes)
+ *   [lota_attestation_report]    (fixed struct, see the static asserts below)
  *   [event_count: uint32_t]
  *   [lota_exec_event * event_count]
  *   [event_log_size: uint32_t]
  *   [tpm_event_log: uint8_t * event_log_size]
+ *   [lota_esrt]                  (mandatory trailing section)
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -22,8 +23,30 @@
 #include "../../include/attestation.h"
 #include "lota.h"
 
-size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
-			     int with_esrt)
+/*
+ * Go verifier parses this layout from hand-computed offsets
+ * (src/verifier/types/report.go: FixedReportSize, MinReportSize
+ * and the offset walk in ParseReport).
+ * Nothing links the two languages at build time, so pin the sizes here:
+ * field added, removed or reordered on either side breaks this build instead
+ * of producing reports the verifier silently misreads.
+ *
+ * Keep these in step with the constants in report.go
+ */
+_Static_assert(sizeof(struct lota_tpm_evidence) == 5466,
+	       "lota_tpm_evidence size changed; update types/report.go and its "
+	       "layout test");
+_Static_assert(sizeof(struct lota_system_measurement) == 396,
+	       "lota_system_measurement size changed; update types/report.go");
+_Static_assert(sizeof(struct lota_bpf_summary) == 24,
+	       "lota_bpf_summary size changed; update types/report.go");
+_Static_assert(sizeof(struct lota_attestation_report) == 5902,
+	       "fixed report size changed; update FixedReportSize in "
+	       "types/report.go");
+_Static_assert(sizeof(struct lota_esrt) == 28,
+	       "lota_esrt size changed; update ESRTWireSize in types/report.go");
+
+size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
 {
 	size_t size = sizeof(struct lota_attestation_report);
 	size_t events_size;
@@ -51,12 +74,10 @@ size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size,
 		return 0;
 	size += event_log_size;
 
-	/* Optional trailing ESRT section (fixed size) */
-	if (with_esrt) {
-		if (size + sizeof(struct lota_esrt) < size)
-			return 0;
-		size += sizeof(struct lota_esrt);
-	}
+	/* Mandatory trailing ESRT section (fixed size) */
+	if (size + sizeof(struct lota_esrt) < size)
+		return 0;
+	size += sizeof(struct lota_esrt);
 
 	return size;
 }
@@ -70,7 +91,13 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	size_t total;
 	size_t offset = 0;
 
-	if (!report || !out_buf)
+	/*
+	 * esrt is mandatory:
+	 * verifier requires the section and reads present == 0 as
+	 * "this platform exposes no ESRT System Firmware entry",
+	 * so there is no such thing as a report without it
+	 */
+	if (!report || !out_buf || !esrt)
 		return -EINVAL;
 
 	/* count without data pointer means no events */
@@ -79,8 +106,7 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 	if (!event_log)
 		event_log_size = 0;
 
-	total = calculate_report_size(event_count, event_log_size,
-				      esrt != NULL);
+	total = calculate_report_size(event_count, event_log_size);
 	if (total == 0)
 		return -EOVERFLOW;
 
@@ -119,8 +145,8 @@ ssize_t serialize_report(const struct lota_attestation_report *report,
 		offset += event_log_size;
 	}
 
-	/* Optional trailing ESRT section, little-endian fields */
-	if (esrt) {
+	/* mandatory trailing ESRT section, little-endian fields */
+	{
 		uint32_t present_le = htole32(esrt->present);
 		uint32_t ver_le = htole32(esrt->fw_version);
 		uint32_t low_le = htole32(esrt->lowest_supported);

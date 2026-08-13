@@ -23,8 +23,6 @@
 #include "net.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
-#define LOTA_CLI_DEFAULT_VERIFIER_PORT 8443
-#define LOTA_CLI_DEFAULT_CA_PORT 8444
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
 
 struct cli_options {
@@ -34,6 +32,16 @@ struct cli_options {
 	int test_ipc_flag;
 	int test_signed_flag;
 	int shutdown_flag;
+	/*
+	 * --terminate-protected PID:
+	 * end a process that asked to be protected, which no signal from terminal
+	 * or a task manager can reach.
+	 * SIGTERM unless --force, which sends SIGKILL to a title that is too far
+	 * gone to handle anything.
+	 */
+	uint32_t terminate_protected_pid;
+	int terminate_protected_flag;
+	int force_flag;
 	int dump_config_flag;
 	int export_policy_flag;
 	int attest_flag;
@@ -80,6 +88,25 @@ struct cli_options {
 	const char *ca_server;
 	int ca_port;
 	const char *enroll_token_file; /* --enroll-token-file: tenant token */
+	/* --allow-publisher: record consent to answer to one publisher,
+	 * named by the hex SHA-256 of its CA anchor's SPKI */
+	const char *allow_publisher;
+
+	/*
+	 * --add-publisher writes a [profile] section into lota.conf
+	 * so game's installer can register its publisher without asking
+	 * the player to edit a file.
+	 *
+	 * It records no consent:
+	 * that stays separate, deliberate act, because installer must not be
+	 * able to agree on the player's behalf to publisher holding a key
+	 * on their machine.
+	 */
+	const char *add_publisher; /* CA host, or host:port */
+	const char *publisher_name; /* --publisher-name, the section label */
+	int list_publishers_flag; /* --list-publishers */
+	/* --forget-publisher: destroy one publisher's key and stored state */
+	const char *forget_publisher;
 	int no_verify_tls;
 	int insecure_allow_no_verify_tls;
 	int insecure_allow_mode_downgrade;

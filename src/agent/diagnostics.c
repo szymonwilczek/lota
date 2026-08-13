@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -75,6 +76,106 @@ static int ipc_request_shutdown(void)
 	return 0;
 }
 
+/*
+ * Ask the agent to end a protected process.
+ *
+ * Socket owner is the only thing on the machine that can:
+ * protected task takes no signal from a terminal, task manager or a root shell.
+ * The agent answers for a caller kill(2) would already have allowed,
+ * so this runs as the player who owns the title, without sudo.
+ *
+ * @out_count receives the protected-set size the agent reported,
+ * which is what the caller can observe rather than a promise the process has gone.
+ */
+static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
+					   uint32_t *out_count)
+{
+	struct sockaddr_un addr;
+	struct lota_ipc_request req = {
+		.magic = LOTA_IPC_MAGIC,
+		.version = LOTA_IPC_VERSION,
+		.cmd = LOTA_IPC_CMD_TERMINATE_PROTECTED,
+		.payload_len = sizeof(struct lota_ipc_terminate_request),
+	};
+	struct lota_ipc_terminate_request payload = {
+		.pid = pid,
+		.signal = sig,
+	};
+	struct lota_ipc_terminate_response body;
+	struct lota_ipc_response resp;
+	int fd;
+	int ret;
+
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -errno;
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, LOTA_IPC_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		ret = -errno;
+		close(fd);
+		return ret;
+	}
+
+	ret = lota_write_full(fd, &req, sizeof(req));
+	if (ret == 0)
+		ret = lota_write_full(fd, &payload, sizeof(payload));
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
+
+	ret = lota_read_full(fd, &resp, sizeof(resp));
+	if (ret < 0) {
+		close(fd);
+		return ret;
+	}
+
+	if (resp.magic != LOTA_IPC_MAGIC || resp.version != LOTA_IPC_VERSION) {
+		close(fd);
+		return -EPROTO;
+	}
+
+	if (resp.result != LOTA_IPC_OK) {
+		close(fd);
+		/*
+		 * Each refusal keeps its own errno so the caller can say what
+		 * happened rather than guessing:
+		 * a process nobody protected, a target no caller may end this way,
+		 * one that is not there at all,
+		 * and a request that is not this caller's to make.
+		 */
+		switch (resp.result) {
+		case LOTA_IPC_ERR_NOT_PROTECTED:
+			return -EINVAL;
+		case LOTA_IPC_ERR_TARGET_REFUSED:
+			return -EPERM;
+		case LOTA_IPC_ERR_BAD_REQUEST:
+			return -ESRCH;
+		default:
+			return -EACCES;
+		}
+	}
+
+	if (resp.payload_len != sizeof(body)) {
+		close(fd);
+		return -EPROTO;
+	}
+
+	ret = lota_read_full(fd, &body, sizeof(body));
+	close(fd);
+	if (ret < 0)
+		return ret;
+
+	if (out_count)
+		*out_count = body.protect_pid_count;
+
+	return 0;
+}
+
 static int diagnostic_exit_code(int ret)
 {
 	if (ret < 0)
@@ -100,6 +201,57 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 				strerror(-sret));
 			return 1;
 		}
+		return 0;
+	}
+
+	if (opts->terminate_protected_flag) {
+		uint32_t sig = opts->force_flag ? SIGKILL : SIGTERM;
+		uint32_t count = 0;
+		int tret = ipc_request_terminate_protected(
+			opts->terminate_protected_pid, sig, &count);
+
+		if (tret == -EINVAL) {
+			fprintf(stderr,
+				"PID %u is not a protected process, so an "
+				"ordinary kill reaches it.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -ESRCH) {
+			fprintf(stderr,
+				"No process with PID %u, or it is out of this "
+				"agent's reach.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -EPERM) {
+			fprintf(stderr,
+				"PID %u is not a process this verb ends. The "
+				"agent stops with --shutdown, and PID 1 stops "
+				"by rebooting.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret == -EACCES) {
+			fprintf(stderr,
+				"The agent refused to end PID %u: it belongs "
+				"to another user, so ending it needs root. Its "
+				"journal names the reason.\n",
+				opts->terminate_protected_pid);
+			return 1;
+		}
+		if (tret < 0) {
+			fprintf(stderr,
+				"Could not ask the agent to end PID %u: %s\n",
+				opts->terminate_protected_pid, strerror(-tret));
+			return 1;
+		}
+
+		printf("Sent %s to protected PID %u; %u process%s still "
+		       "protected.\n",
+		       opts->force_flag ? "SIGKILL" : "SIGTERM",
+		       opts->terminate_protected_pid, count,
+		       count == 1 ? "" : "es");
 		return 0;
 	}
 
@@ -152,8 +304,26 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->test_signed_flag)
 		return diagnostic_exit_code(run_signed_ipc_test_server(cfg));
 
+	if (opts->list_publishers_flag)
+		return diagnostic_exit_code(do_list_publishers());
+
+	if (opts->forget_publisher)
+		return diagnostic_exit_code(
+			do_forget_publisher(opts->forget_publisher));
+
+	if (opts->allow_publisher)
+		return diagnostic_exit_code(
+			do_allow_publisher(opts->allow_publisher));
+
+	if (opts->add_publisher)
+		return diagnostic_exit_code(do_add_publisher(
+			opts->config_path, opts->publisher_name,
+			opts->add_publisher, opts->ca_port, opts->ca_cert_path,
+			opts->server_addr, opts->server_port,
+			opts->attest_interval, true));
+
 	if (opts->reenroll_flag)
-		return diagnostic_exit_code(do_reenroll());
+		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
 
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {
@@ -178,6 +348,8 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	}
 
 	if (opts->attest_flag) {
+		int interval;
+
 		if (opts->no_verify_tls &&
 		    !opts->insecure_allow_no_verify_tls) {
 			fprintf(stderr, "ERROR: --no-verify-tls is INSECURE "
@@ -188,15 +360,58 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			return 1;
 		}
 		if (opts->no_verify_tls && opts->ca_cert_path) {
-			fprintf(stderr, "Warning: --ca-cert ignored when "
-					"--no-verify-tls is set\n");
+			fprintf(stderr,
+				"Warning: --ca-cert is not verified against "
+				"when --no-verify-tls is set; it still names "
+				"the publisher profile the AIK certificate is "
+				"read from\n");
 		}
-		if (opts->attest_interval > 0)
+		/*
+		 * profile list is the target list, so the single-verifier flags
+		 * no longer have one target to apply to.
+		 * Refusing beats ignoring them: operator who passed --server means it
+		 */
+		if (cfg && cfg->profile_count > 0) {
+			if (opts->server_overridden) {
+				fprintf(stderr,
+					"ERROR: --server names one verifier, "
+					"but %d publisher profile(s) are "
+					"configured.\nRemove the flag, or the "
+					"profiles, so there is one answer to "
+					"where this host reports.\n",
+					cfg->profile_count);
+				return 1;
+			}
+			if (opts->has_pin) {
+				fprintf(stderr,
+					"ERROR: --pin-sha256 pins one "
+					"verifier's certificate, but %d "
+					"publisher profile(s) are "
+					"configured.\nEach profile is anchored "
+					"by its own ca_cert instead.\n",
+					cfg->profile_count);
+				return 1;
+			}
+		}
+
+		/*
+		 * Profile list is the target list, so host that names publishers
+		 * attests to them continuously.
+		 * Unset cadence says the host never chose one, not that it wants
+		 * the single-verifier one-shot below:
+		 * that path has no target list and would attest to the top-level
+		 * verifier -- unset on consumer install -- while every configured
+		 * publisher waited.
+		 */
+		interval = attest_effective_interval(
+			opts->attest_interval, cfg ? cfg->profile_count : 0);
+
+		if (interval > 0)
 			return diagnostic_exit_code(do_continuous_attest(
-				opts->server_addr, opts->server_port,
+				cfg, opts->server_addr, opts->server_port,
 				opts->ca_cert_path, opts->no_verify_tls,
 				opts->has_pin ? opts->pin_sha256_bin : NULL,
-				opts->attest_interval, opts->aik_ttl));
+				interval, opts->aik_ttl));
 		return diagnostic_exit_code(
 			do_attest(opts->server_addr, opts->server_port,
 				  opts->ca_cert_path, opts->no_verify_tls,

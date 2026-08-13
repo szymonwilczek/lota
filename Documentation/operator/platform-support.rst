@@ -56,7 +56,9 @@ Distributions
      - Experimental
      - The RPM/dracut family the agent targets beyond Fedora. The RPMs build
        and install on el9 and el10 userspaces, and on el10 the agent enrolls,
-       commits the boot state to PCR 14 and passes its TPM attestation. The
+       commits the boot state to PCR 14 and passes its TPM attestation. On el9
+       the agent's ``fsverity-utils`` dependency is served by EPEL rather than
+       the distribution, so that repository has to be enabled first. The
        BPF LSM does not arm on the el-family kernels, however -- see the
        Kernel section below -- so runtime enforcement stays a Fedora-class
        capability there.
@@ -103,15 +105,21 @@ Firmware and boot
        initramfs, and the boot commitment is baseline-aware over it (see
        :doc:`production-bringup/ca-enrollment`). The verifier replays the TPM
        event log and establishes Secure Boot from the log rather than the
-       self-report.
+       self-report. A boot chain without shim (own PK/KEK/db, a directly signed
+       systemd-boot or UKI) measures nothing into PCR 14; the boot commitment
+       then chains onto a zero baseline, which is supported.
    * - UEFI without Secure Boot
      - The agent runs, but the firmware root of trust is weaker. Pass
        ``lockdown=integrity`` on the kernel command line so the BPF-load gate is
        satisfied (see :doc:`production-bringup/gate-matrix`).
-   * - Legacy BIOS
-     - The agent runs with a reduced PCR set: without shim there is no PCR 14
-       MOK baseline and no Secure Boot event-log evidence, so the boot
-       commitment starts from a zero baseline.
+   * - Legacy BIOS / CSM
+     - **Unsupported.** BIOS measures neither the firmware and Secure Boot
+       state the verifier pins nor an EFI variable the event log can carry, so
+       a BIOS host cannot produce the evidence an attestation is built from.
+       The installer refuses such a host, the initramfs helper refuses to lock
+       PCR 14 on it, the agent refuses to form a boot commitment, and the
+       verifier rejects the report. Switch the firmware out of legacy/CSM mode
+       and reinstall.
 
 TPM
 ===
@@ -122,3 +130,44 @@ development environment is a KVM guest with a swTPM backend over TIS; its two
 divergences from hardware (persistent state across guest reboots, and a quote
 clock quirk) and the operator workarounds are covered under
 :doc:`production-bringup/post-bringup`.
+
+Runtime measurement coverage
+============================
+
+Every token folds a kernel-anchored measurement of the live code of each
+protected process, and that measurement can cover an object only when the
+kernel holds an fs-verity digest for it. What a platform provides therefore
+decides how much of a process's code the measurement can account for.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Platform
+     - Coverage
+   * - A title's own binaries
+     - Full, on any verity-capable filesystem. Whoever ships the title
+       enables it, with ``lota-install --verity-manifest`` or the
+       equivalent in their own packaging. The agent refuses a token when a
+       protected process's own executable carries no digest.
+   * - Distribution libraries on a package-managed host
+     - **None, today.** Fedora ships ``libc``, ``libcurl`` and the rest
+       without fs-verity, so those objects are absent from the fold and the
+       token reports partial coverage
+       (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear). Enabling verity on them
+       by hand lasts until the next update of the owning package, which
+       replaces the inode and the digest with it. Whether partial coverage
+       is acceptable is the relying party's policy.
+   * - Image-based and composed filesystems
+     - Not consumed yet. An image-based host (composefs, an OSTree
+       deployment, a dm-verity root) already carries per-file or
+       whole-image integrity, and consuming that as measurement evidence
+       would give full coverage without per-file enablement. LOTA does not
+       read those sources today; a protected process on such a host reports
+       coverage over whatever fs-verity digests are present.
+
+A relying party that requires full coverage asks for
+``LOTA_FLAG_IMAGE_FULLY_MEASURED`` and, on a package-managed host, will not
+get it. That is a statement about the platform, not about the machine
+concealing anything: an unmeasurable object is reported as unmeasured and is
+never folded in as though it had been measured.

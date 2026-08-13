@@ -1,0 +1,4 @@
+lota_server_parse_token@@LOTASERVER_1.0
+lota_server_sdk_version@@LOTASERVER_1.0
+lota_server_strerror@@LOTASERVER_1.0
+lota_server_verify_token@@LOTASERVER_1.0

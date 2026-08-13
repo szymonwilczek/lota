@@ -61,9 +61,6 @@ func FuzzParseReport(f *testing.F) {
 		if report.TPM.AIKCertSize > MaxAIKCertSize {
 			t.Fatalf("aik_cert_size %d exceeds max %d", report.TPM.AIKCertSize, MaxAIKCertSize)
 		}
-		if report.TPM.EKCertSize > MaxEKCertSize {
-			t.Fatalf("ek_cert_size %d exceeds max %d", report.TPM.EKCertSize, MaxEKCertSize)
-		}
 		if report.TPM.PrevAIKSize > MaxAIKPubSize {
 			t.Fatalf("prev_aik_size %d exceeds max %d", report.TPM.PrevAIKSize, MaxAIKPubSize)
 		}

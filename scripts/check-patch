@@ -563,6 +563,30 @@ check_build() {
 # Heavy (a full bear-built compile database), so it only runs when the patch
 # touches C, and skips when the tooling is absent rather than forcing every
 # contributor to install it
+#
+# Public API/ABI:
+# SDK's exported symbols, sonames and installed header set against the baseline
+# in packaging/abi/
+# Runs on every patch: non-static helper added anywhere the libraries link,
+# or header list edited in packaging, moves the frozen surface.
+check_abi() {
+	local output
+
+	if ! command -v nm >/dev/null 2>&1 ||
+		! command -v readelf >/dev/null 2>&1; then
+		skip "abi" "install binutils (nm, readelf) to run the ABI gate."
+		return
+	fi
+
+	if output="$(scripts/check-abi.sh 2>&1)"; then
+		pass "abi"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "abi" \
+			"a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
+	fi
+}
+
 check_includes() {
 	local path
 	local touches_c=0
@@ -593,6 +617,20 @@ check_includes() {
 	else
 		fail "include-hygiene" \
 			"remove transitive includes; auto-fix with scripts/fix-includes.sh."
+	fi
+}
+
+# License boundary:
+# MIT files must not depend on GPL-2.0-only ones,
+# and every source file must name its license
+check_license_boundary() {
+	local output
+	if output="$(scripts/check-license-boundary.sh 2>&1)"; then
+		pass "license-boundary"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "license-boundary" \
+			"an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
 	fi
 }
 
@@ -781,6 +819,8 @@ main() {
 	check_gofmt "${changed_files[@]}"
 	check_build
 	check_includes "${changed_files[@]}"
+	check_license_boundary
+	check_abi
 	check_sparse "${changed_files[@]}"
 	check_smatch "${changed_files[@]}"
 	check_coccinelle "${changed_files[@]}"

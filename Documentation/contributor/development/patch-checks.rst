@@ -12,9 +12,11 @@ Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
 branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
 commit signatures, message and patch whitespace, clang-format, gofmt, the full
-build, include hygiene, the same hotpath documentation policy enforced by CI,
-and -- when the patch touches C -- the Sparse, Smatch and Coccinelle analyzers
-described below.
+build, include hygiene, the license boundary
+(:doc:`license-boundary`), the public API and ABI surface
+(:doc:`api-stability`), the same hotpath documentation policy enforced by
+CI, and -- when the patch touches C -- the Sparse, Smatch and Coccinelle
+analyzers described below.
 
 Every commit in ``base..head`` must carry a good GPG or SSH signature; the
 check fails on any commit whose signature is missing, bad, or unverifiable.

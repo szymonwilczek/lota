@@ -23,6 +23,7 @@
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../src/agent/profile.h"
 
 static int file_exists(const char *path)
 {
@@ -42,6 +43,27 @@ static int tool_exists(const char *name)
 			return 1;
 	}
 	return 0;
+}
+
+/*
+ * 1 when this host is a guest.
+ *
+ * systemd-detect-virt answers it from the CPUID hypervisor bit, DMI,
+ * the container environment and several more signals, and exits 0 only when it
+ * found one -- which is why the output is ignored here.
+ * Vendor table over DMI strings would be this project maintaining a worse
+ * copy of that.
+ *
+ * Missing tool, or spawn failure, reads as bare metal:
+ * those instructions are the ones a guest can most safely be given by mistake,
+ * since they send the reader to firmware menu instead of to the wrong machine.
+ */
+static int host_is_virtual(void)
+{
+	const char *const argv[] = { "systemd-detect-virt", "-q", NULL };
+	char out[64];
+
+	return run_capture(argv, out, sizeof(out)) == 0;
 }
 
 /* stage 1: preflight */
@@ -66,21 +88,52 @@ static enum stage_state st_preflight_probe(struct install_ctx *ctx, char *note,
 	}
 
 	sb = probe_secureboot();
-	if (sb == -ENOENT) {
+	if (sb == -ENOENT && !probe_firmware_is_uefi()) {
 		snprintf(note, cap,
 			 "This host booted via legacy BIOS/CSM, not UEFI. "
-			 "LOTA's verifier proves Secure Boot from the TPM "
-			 "event log, which needs a UEFI boot. Switch the "
-			 "firmware to UEFI mode.");
+			 "BIOS is unsupported: it measures neither the "
+			 "firmware and Secure Boot state the verifier pins "
+			 "nor an EFI variable the event log can carry, so "
+			 "the initramfs helper, the agent and the verifier "
+			 "each refuse such a host. Switch the firmware to "
+			 "UEFI mode and reinstall.");
+		return STAGE_BLOCKED;
+	}
+	if (sb == -ENOENT) {
+		/* UEFI, but the firmware carries no SecureBoot variable at all:
+		 * the feature is absent from this build rather than turned off.
+		 * Telling this machine to switch to UEFI mode would send player
+		 * after something already true, so name what is actually missing
+		 * and where it comes from. */
+		if (host_is_virtual())
+			snprintf(note, cap,
+				 "This guest booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from the firmware build "
+				 "rather than switched off. Give the VM a "
+				 "Secure Boot capable firmware -- on libvirt "
+				 "that is an OVMF secboot build with enrolled "
+				 "keys -- and boot it again. The verifier pins "
+				 "the Secure Boot state, so a guest without it "
+				 "cannot attest.");
+		else
+			snprintf(note, cap,
+				 "This host booted via UEFI, but its firmware "
+				 "exposes no Secure Boot variable, so the "
+				 "feature is absent from this firmware build "
+				 "rather than switched off. A firmware update "
+				 "from the board vendor is what adds it; there "
+				 "is no setting to change on the running "
+				 "build. The verifier pins the Secure Boot "
+				 "state, so a host without it cannot attest.");
 		return STAGE_BLOCKED;
 	}
 	if (sb == 0) {
-		snprintf(note, cap,
-			 "Secure Boot is disabled. The verifier rejects "
-			 "hosts that boot with Secure Boot off (it is the "
-			 "machine-independent kernel-trust anchor). Enable "
-			 "it in firmware setup and re-run. Custom MOK-signed "
-			 "kernels keep working with Secure Boot on.");
+		/* most common reason an install stops, and the one thing here
+		 * LOTA cannot do on the player's behalf:
+		 * name the setting, this machine's way into firmware setup,
+		 * and the menu it lives under */
+		probe_secureboot_guidance(host_is_virtual(), note, cap);
 		return STAGE_BLOCKED;
 	}
 	if (sb < 0) {
@@ -135,71 +188,101 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 	return STAGE_DONE;
 }
 
-/* stage 3: operator trust material */
+/* stage 3: enforcement trust material */
+
+/*
+ * Which key the agent will verify the enforcement object against.
+ *
+ * Reported, not decided: the agent owns the order, and this only says which
+ * file the operator should look at when the signature does not verify.
+ */
+static const char *trust_key_in_use(const struct install_ctx *ctx)
+{
+	if (ctx->opts.policy_pubkey)
+		return ctx->opts.policy_pubkey;
+	if (file_exists(PATH_POLICY_PUB_OVERRIDE))
+		return PATH_POLICY_PUB_OVERRIDE;
+	return PATH_ENFORCEMENT_PUB;
+}
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
+	const char *key = trust_key_in_use(ctx);
 	char sig[512];
 	char out[4096];
 	int rc;
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
-	if (!file_exists(ctx->opts.policy_pubkey)) {
+	if (!file_exists(key)) {
 		snprintf(note, cap,
-			 "Operator public key %s is missing. The key that "
-			 "signed the BPF enforcement object must come from "
-			 "the operator's install bundle - the installer "
-			 "never generates trust material on this machine "
-			 "(a locally generated key would let local malware "
-			 "re-sign a tampered object).",
-			 ctx->opts.policy_pubkey);
+			 "No key to verify the enforcement object against. "
+			 "One ships with the agent package at %s, beside the "
+			 "object whoever built that package signed - the "
+			 "installer never generates trust material on this "
+			 "machine, since a locally generated key would let "
+			 "local malware re-sign a tampered object. A fleet "
+			 "that signs enforcement itself puts its key at %s.",
+			 PATH_ENFORCEMENT_PUB, PATH_POLICY_PUB_OVERRIDE);
 		return STAGE_BLOCKED;
 	}
 	if (!file_exists(sig)) {
 		snprintf(note, cap,
-			 "BPF object signature %s is missing from the "
-			 "operator bundle. The agent refuses to load an "
-			 "unsigned enforcement object.",
+			 "BPF object signature %s is missing. It ships with "
+			 "the object; a package built without the signing "
+			 "step installs enforcement the agent refuses to "
+			 "load.",
 			 sig);
 		return STAGE_BLOCKED;
 	}
 
 	{
-		const char *const argv[] = { PATH_AGENT_BIN,
-					     "--verify-policy",
-					     PATH_BPF_OBJ,
-					     "--policy-pubkey",
-					     ctx->opts.policy_pubkey,
-					     NULL };
+		/*
+		 * No --policy-pubkey unless the operator named one:
+		 * the agent resolves the key, and asking it rather than deciding
+		 * here is what keeps the installer and the daemon from answering
+		 * that differently.
+		 */
+		const char *argv[6] = { PATH_AGENT_BIN, "--verify-policy",
+					PATH_BPF_OBJ,	NULL,
+					NULL,		NULL };
 
+		if (ctx->opts.policy_pubkey) {
+			argv[3] = "--policy-pubkey";
+			argv[4] = ctx->opts.policy_pubkey;
+		}
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(
-			note, cap,
-			"The BPF object signature does not verify against "
-			"%s. Expected after a package upgrade replaces the "
-			"unsigned BPF object: re-sign it with the operator key "
-			"(lota-agent --sign-policy %s --signing-key <key>), or "
-			"obtain a matching signed bundle from the operator. The "
-			"installer never signs on this host by design.",
-			ctx->opts.policy_pubkey, PATH_BPF_OBJ);
+		snprintf(note, cap,
+			 "The BPF object signature does not verify against "
+			 "%s. The package ships object, signature and key "
+			 "together and replaces all three on an upgrade, so "
+			 "this means they no longer belong to each other: "
+			 "either this host carries an operator key at %s that "
+			 "did not sign the shipped object - move it aside to "
+			 "fall back to the packaged one - or the fleet signs "
+			 "enforcement itself and has to re-sign this object "
+			 "(lota-agent --sign-policy %s --signing-key <key>). "
+			 "The installer never signs on this host by design.",
+			 key, PATH_POLICY_PUB_OVERRIDE, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
+	if (!ctx->opts.policy_pubkey) {
+		snprintf(note, cap, "Signature verifies against %s.", key);
+		return STAGE_DONE;
+	}
 	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");
 	if (rc == 1) {
-		snprintf(note, cap,
-			 "Signature verifies, %s references the "
-			 "operator key",
+		snprintf(note, cap, "Signature verifies, %s names the key",
 			 PATH_LOTA_CONF);
 		return STAGE_DONE;
 	}
 	snprintf(note, cap,
-		 "Signature verifies. %s still needs the "
-		 "policy_pubkey reference.",
+		 "Signature verifies against the key you named. %s still needs "
+		 "the policy_pubkey reference.",
 		 PATH_LOTA_CONF);
 	return STAGE_PENDING;
 }
@@ -210,6 +293,15 @@ static int st_trust_apply(struct install_ctx *ctx)
 	int fresh;
 	int fd;
 	FILE *f;
+
+	/*
+	 * Only a key the operator named outright is written into lota.conf.
+	 * Recording the resolved default would pin a path the agent already
+	 * decides, and would survive a later decision to sign enforcement
+	 * with a fleet key.
+	 */
+	if (!ctx->opts.policy_pubkey)
+		return 0;
 
 	if (mkdir("/etc/lota", 0755) != 0 && errno != EEXIST)
 		return -errno;
@@ -229,7 +321,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 		fprintf(f, "# LOTA agent configuration (created by "
 			   "lota-install)\n");
 	fprintf(f,
-		"\n# Operator key the BPF object signature is verified "
+		"\n# Key the enforcement object's signature is verified "
 		"against.\npolicy_pubkey = %s\n",
 		ctx->opts.policy_pubkey);
 	fclose(f);
@@ -754,11 +846,52 @@ static int st_agent_apply(struct install_ctx *ctx)
 
 /* stage 10: enrollment */
 
+/*
+ * Locate the publisher profile this host enrolls into.
+ *
+ * CA trust anchor names it (see src/agent/profile.h), so the installer cannot
+ * say whether the host is enrolled until the operator has named the anchor
+ * -- there is no host-wide certificate to look at.
+ */
+static int enroll_profile(const struct install_ctx *ctx,
+			  struct profile_paths *paths)
+{
+	if (!ctx->opts.ca_cert)
+		return -EINVAL;
+	return profile_paths_from_anchor(ctx->opts.ca_cert, paths);
+}
+
 static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
 {
+	struct profile_paths paths;
 	int days = 0;
-	int rc = probe_cert_days_left(PATH_AIK_CERT, &days);
+	int rc;
+
+	rc = enroll_profile(ctx, &paths);
+	if (rc == -EINVAL) {
+		/*
+		 * No publisher named at install time, which is the normal case
+		 * for player:
+		 * the publisher is whoever they buy title from, and the agent
+		 * enrolls with each of them the first time title asks.
+		 * Operator installing fleet names the CA here and gets
+		 * the enrollment done before the machine is handed over.
+		 */
+		snprintf(note, cap,
+			 "No attestation CA named, so nothing to enroll with "
+			 "yet. The agent enrolls with each publisher the first "
+			 "time a title asks for one. Pass --ca-server and "
+			 "--ca-cert to enroll here instead.");
+		return STAGE_DONE;
+	}
+	if (rc < 0) {
+		snprintf(note, cap, "Cannot read the CA trust anchor %s (%s)",
+			 ctx->opts.ca_cert, strerror(-rc));
+		return STAGE_ERROR;
+	}
+
+	rc = probe_cert_days_left(paths.aik_cert, &days);
 
 	if (rc == 0 && days > 0) {
 		snprintf(note, cap,
@@ -780,17 +913,16 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 		return STAGE_PENDING;
 	}
 	if (rc != -ENOENT) {
-		snprintf(note, cap, "Cannot parse %s (%s)", PATH_AIK_CERT,
+		snprintf(note, cap, "Cannot parse %s (%s)", paths.aik_cert,
 			 strerror(-rc));
 		return STAGE_ERROR;
 	}
 
 	if (!ctx->opts.ca_server) {
 		snprintf(note, cap,
-			 "This host has never enrolled and no attestation CA "
-			 "endpoint was given. Re-run with --ca-server (and "
-			 "usually --ca-cert) from the operator's install "
-			 "instructions.");
+			 "A CA trust anchor was given but no --ca-server to "
+			 "enroll against. Pass both, or neither and let the "
+			 "agent enroll when a title first asks.");
 		return STAGE_BLOCKED;
 	}
 	snprintf(note, cap,
@@ -802,14 +934,22 @@ static enum stage_state st_enroll_probe(struct install_ctx *ctx, char *note,
 static int st_enroll_apply(struct install_ctx *ctx)
 {
 	const char *argv[12];
+	struct profile_paths paths;
 	int days = 0;
 	int n = 0;
 	int rc;
 
-	if (probe_cert_days_left(PATH_AIK_CERT, &days) == 0) {
-		/* expired certificate: the agent recorded the CA endpoint
-		 * at first enrollment, so the guided path needs no flags */
-		const char *const rv[] = { PATH_AGENT_BIN, "--reenroll", NULL };
+	rc = enroll_profile(ctx, &paths);
+	if (rc < 0)
+		return rc;
+
+	if (probe_cert_days_left(paths.aik_cert, &days) == 0) {
+		/* expired certificate:
+		 * the profile recorded the CA endpoint at first enrollment,
+		 * so the guided path needs only the anchor that names the profile */
+		const char *const rv[] = { PATH_AGENT_BIN, "--reenroll",
+					   "--ca-cert", ctx->opts.ca_cert,
+					   NULL };
 
 		rc = run_cmd(&ctx->ui,
 			     "Refreshing the AIK certificate "
@@ -826,10 +966,8 @@ static int st_enroll_apply(struct install_ctx *ctx)
 		argv[n++] = "--ca-port";
 		argv[n++] = ctx->opts.ca_port;
 	}
-	if (ctx->opts.ca_cert) {
-		argv[n++] = "--ca-cert";
-		argv[n++] = ctx->opts.ca_cert;
-	}
+	argv[n++] = "--ca-cert";
+	argv[n++] = ctx->opts.ca_cert;
 	argv[n] = NULL;
 
 	rc = run_cmd(&ctx->ui,
@@ -864,6 +1002,7 @@ static const char telemetry_summary[] =
 int install_self_check(struct install_ctx *ctx)
 {
 	struct floor_state st;
+	struct profile_paths paths;
 	int days = 0;
 	int ok = 1;
 	int rc_cert;
@@ -890,7 +1029,19 @@ int install_self_check(struct install_ctx *ctx)
 	if (!agent_service_active())
 		ok = 0;
 
-	rc_cert = probe_cert_days_left(PATH_AIK_CERT, &days);
+	rc_cert = enroll_profile(ctx, &paths);
+	if (rc_cert == -EINVAL) {
+		/*
+		 * Nothing was enrolled because no publisher was named.
+		 * Not a failure: the machine is ready and the enrollment happens
+		 * when a title brings a publisher with it.
+		 */
+		ui_kv(&ctx->ui, "AIK certificate",
+		      "None yet (enrolled when a title first asks)");
+		goto after_cert;
+	}
+	if (rc_cert == 0)
+		rc_cert = probe_cert_days_left(paths.aik_cert, &days);
 	if (rc_cert == 0 && days > 0) {
 		char buf[64];
 
@@ -913,6 +1064,8 @@ int install_self_check(struct install_ctx *ctx)
 		ui_kv(&ctx->ui, "AIK certificate", "NOT valid");
 		ok = 0;
 	}
+
+after_cert:
 
 	/* Informational:
 	 * tells the player which firmware-update recovery path this machine
@@ -1000,11 +1153,13 @@ const struct stage install_stages[] = {
 		.probe = st_artifacts_probe,
 	},
 	{
-		.title = "Operator trust material",
+		.title = "Enforcement trust material",
 		.explain =
-			"The agent only loads a BPF enforcement object signed by "
-			"the game operator's key. "
-			"This step records the operator public key location in "
+			"The agent only loads a BPF enforcement object it can "
+			"verify. Enforcement is host-owned -- one kernel, one "
+			"LSM -- so the object is signed by whoever built the "
+			"agent package, never by a game publisher.\n"
+			"This step records the public key location in "
 			"/etc/lota/lota.conf so the agent knows what to verify against."
 			" Nothing is downloaded and no key is generated on this machine.",
 		.probe = st_trust_probe,
@@ -1036,6 +1191,7 @@ const struct stage install_stages[] = {
 			"take effect.",
 		.probe = st_initrd_probe,
 		.apply = st_initrd_apply,
+		.boot_path = 1,
 	},
 	{
 		.title = "Kernel integrity floor on the cmdline",
@@ -1051,6 +1207,7 @@ const struct stage install_stages[] = {
 			"Removing them restores the previous behaviour.",
 		.probe = st_cmdline_probe,
 		.apply = st_cmdline_apply,
+		.boot_path = 1,
 	},
 	{
 		.title = "SELinux fence on the TPM device",
@@ -1085,14 +1242,18 @@ const struct stage install_stages[] = {
 		.apply = st_agent_apply,
 	},
 	{
-		.title = "Enrollment with the operator's attestation CA",
+		.title = "Enrollment with a publisher's attestation CA",
 		.explain =
-			"TPM proves to the operator's CA that it is a genuine "
+			"TPM proves to a publisher's CA that it is a genuine "
 			"hardware TPM (credential activation) and receives a "
 			"short-lived certificate for its attestation key.\n"
 			"The CA sees the TPM's endorsement key certificate once, during "
 			"this step.\nGame servers only ever see a pseudonym.\n"
-			"The certificate lands in /var/lib/lota/aik_cert.der.",
+			"Each publisher gets its own key and certificate, under "
+			"/var/lib/lota/profiles/.\n"
+			"Naming a CA here enrolls with it now; naming none leaves it "
+			"to the agent, which enrolls the first time a title asks for "
+			"a publisher.",
 		.probe = st_enroll_probe,
 		.apply = st_enroll_apply,
 	},

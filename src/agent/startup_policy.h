@@ -23,12 +23,13 @@ struct agent_startup_policy {
 	int allow_verity_count;
 
 	/*
-	 * When true, skip the fs-verity self-binary check inside
-	 * bpf_loader_verify_kernel_runtime_hardening(). Reserved for
-	 * legacy hosts whose rootfs cannot yet ship fs-verity; the
-	 * --insecure-allow-mutable-rootfs CLI flag is the only path
-	 * that flips this on, and operators are warned that the
-	 * dirty-shutdown coverage gap stays open on that host.
+	 * When true, skip the agent-binary immutability check inside
+	 * bpf_loader_verify_kernel_runtime_hardening().
+	 * It is for a host that can offer neither proof
+	 * -- no fs-verity (XFS and ZFS have none) and no signed security.ima xattr.
+	 * --insecure-allow-mutable-rootfs CLI flag is the only path that flips
+	 *  this on, and operators are warned that the dirty-shutdown coverage
+	 *  gap stays open on that host.
 	 */
 	bool allow_mutable_rootfs;
 };

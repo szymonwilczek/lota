@@ -17,14 +17,13 @@
 
 #include "../../include/lota.h"
 #include "agent.h"
+#include "attest.h"
 #include "config.h"
 #include "main_utils.h"
 #include "net.h"
 #include "parse_utils.h"
 #include "path_validate.h"
 #include "tpm.h"
-
-#define MIN_ATTEST_INTERVAL 30
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
 static uint32_t *g_protect_pids = NULL;
@@ -163,8 +162,9 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
 	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
-	opts->policy_pubkey_path = cfg->policy_pubkey[0] ? cfg->policy_pubkey :
-							   NULL;
+	opts->policy_pubkey_path = config_resolve_policy_pubkey(
+		cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL,
+		LOTA_POLICY_PUBKEY_OVERRIDE, LOTA_ENFORCEMENT_PUBKEY_PATH);
 
 	g_protect_pid_count = 0;
 	if (cfg->protect_pid_count > 0) {
@@ -217,12 +217,19 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		{ "test-ipc", no_argument, 0, 'c' },
 		{ "test-signed", no_argument, 0, 'S' },
 		{ "shutdown", no_argument, 0, 1001 },
+		{ "terminate-protected", required_argument, 0, 1042 },
+		{ "force", no_argument, 0, 1043 },
 		{ "export-policy", no_argument, 0, 'E' },
 		{ "attest", no_argument, 0, 'a' },
 		{ "attest-interval", required_argument, 0, 'I' },
 		{ "enroll", no_argument, 0, 1004 },
 		{ "reenroll", no_argument, 0, 1014 },
 		{ "enroll-token-file", required_argument, 0, 1015 },
+		{ "allow-publisher", required_argument, 0, 1016 },
+		{ "add-publisher", required_argument, 0, 1040 },
+		{ "publisher-name", required_argument, 0, 1041 },
+		{ "list-publishers", no_argument, 0, 1017 },
+		{ "forget-publisher", required_argument, 0, 1018 },
 		{ "seal", no_argument, 0, 1007 },
 		{ "unseal", no_argument, 0, 1008 },
 		{ "seal-pcrs", required_argument, 0, 1009 },
@@ -265,9 +272,9 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 	memset(opts, 0, sizeof(*opts));
 	opts->bpf_path = LOTA_CLI_DEFAULT_BPF_PATH;
 	opts->server_addr = "localhost";
-	opts->server_port = LOTA_CLI_DEFAULT_VERIFIER_PORT;
+	opts->server_port = LOTA_DEFAULT_VERIFIER_PORT;
 	opts->aik_ttl = LOTA_CLI_DEFAULT_AIK_TTL;
-	opts->ca_port = LOTA_CLI_DEFAULT_CA_PORT;
+	opts->ca_port = LOTA_DEFAULT_CA_PORT;
 	opts->config_file_mode = -1;
 
 	/* Pre-scan for --config so config_load() runs before option defaults.
@@ -332,6 +339,17 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 					MIN_ATTEST_INTERVAL);
 				opts->attest_interval = MIN_ATTEST_INTERVAL;
 			}
+			if (opts->attest_interval > MAX_ATTEST_INTERVAL) {
+				fprintf(stderr,
+					"Invalid interval: %d exceeds the "
+					"maximum of %d seconds; beyond it "
+					"every minted token outlives the "
+					"freshness window a relying party "
+					"accepts\n",
+					opts->attest_interval,
+					MAX_ATTEST_INTERVAL);
+				return 1;
+			}
 			break;
 		case 's':
 			opts->server_addr = optarg;
@@ -357,6 +375,34 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			break;
 		case 1015:
 			opts->enroll_token_file = optarg;
+			break;
+		case 1016:
+			opts->allow_publisher = optarg;
+			break;
+		case 1042: {
+			uint32_t v;
+
+			if (safe_parse_u32_dec(optarg, &v) < 0 || v == 0) {
+				fprintf(stderr, "Invalid PID: %s\n", optarg);
+				return 1;
+			}
+			opts->terminate_protected_pid = v;
+			opts->terminate_protected_flag = 1;
+		} break;
+		case 1043:
+			opts->force_flag = 1;
+			break;
+		case 1040:
+			opts->add_publisher = optarg;
+			break;
+		case 1041:
+			opts->publisher_name = optarg;
+			break;
+		case 1017:
+			opts->list_publishers_flag = 1;
+			break;
+		case 1018:
+			opts->forget_publisher = optarg;
 			break;
 		case 1007:
 			opts->seal_flag = 1;
@@ -546,7 +592,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		case 'h':
 		default:
 			print_usage(argv[0], LOTA_CLI_DEFAULT_BPF_PATH,
-				    LOTA_CLI_DEFAULT_VERIFIER_PORT);
+				    LOTA_DEFAULT_VERIFIER_PORT);
 			return (opt == 'h') ? -1 : 1;
 		}
 	}

@@ -494,6 +494,16 @@ static void sync_config_snapshot(
 		copy_path(cfg->trust_libs[k], trust_libs[k]);
 	}
 
+	/*
+	 * Publisher list moves with the file.
+	 * lota.conf gains publishers while the daemon runs
+	 * -- game's installer writes one -- and the caller rebuilds the attestation
+	 *  targets from this snapshot right after, so publisher that is only
+	 *  in the file is a publisher no title can name.
+	 */
+	memcpy(cfg->profiles, new_cfg->profiles, sizeof(cfg->profiles));
+	cfg->profile_count = new_cfg->profile_count;
+
 	/* allow_verity is applied only at startup; keep existing snapshot */
 	memcpy(cfg->log_level, new_cfg->log_level, sizeof(cfg->log_level));
 

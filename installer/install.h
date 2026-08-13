@@ -35,9 +35,18 @@
 #define PATH_UDEV_RULE "/usr/lib/udev/rules.d/99-lota-tpm.rules"
 #define PATH_DRACUT_MODULE "/usr/lib/dracut/modules.d/90lota/module-setup.sh"
 #define PATH_LOTA_CONF "/etc/lota/lota.conf"
-#define PATH_POLICY_PUB_DEFAULT "/etc/lota/policy.pub"
+
+/*
+ * Enforcement key paths, in the order the agent resolves them:
+ * fleet that signs enforcement itself owns the /etc file,
+ * and the package owns the other.
+ */
+#define PATH_POLICY_PUB_OVERRIDE "/etc/lota/policy.pub"
+#define PATH_ENFORCEMENT_PUB "/usr/lib/lota/enforcement.pub"
 #define PATH_LOTA_STATE_DIR "/var/lib/lota"
-#define PATH_AIK_CERT "/var/lib/lota/aik_cert.der"
+
+/* Presence opts this host into unattended boot-path bring-up */
+#define PATH_AUTO_BRINGUP "/etc/lota/auto-bringup"
 #define PATH_SELINUX_PP_DEFAULT "/usr/share/lota/selinux/lota.pp"
 
 struct install_opts {
@@ -46,14 +55,31 @@ struct install_opts {
 	const char *ca_cert; /* CA TLS certificate (PEM) */
 	const char *verifier; /* Verifier host for the self-check */
 	const char *verifier_port; /* Verifier port */
-	const char *policy_pubkey; /* Operator BPF signing public key */
+	const char *policy_pubkey; /* Key named with --policy-pubkey, or NULL */
 	const char *selinux_module; /* Compiled lota.pp policy package */
 	int yes; /* Skip confirmations */
 	int plain; /* Force non-TUI output */
 	int status_only; /* Probe + report, change nothing */
 	int pause; /* Graceful agent shutdown, then stop */
 	int resume; /* Explain that resume means a reboot */
+	/*
+	 * Driven by package post-install hook rather than by person:
+	 * never prompts, never touches the boot path unless the host opted in,
+	 * and stops at the reboot checkpoint.
+	 */
+	int unattended;
+	/*
+	 * Enable fs-verity on every object named by a runtime manifest,
+	 * then stop.
+	 * Title's own binaries are what its publisher can make measurable,
+	 * and this is the step that does it.
+	 */
+	const char *verity_manifest;
 };
+
+/* Has this host opted into unattended boot-path changes?
+ * Reads /etc/lota/auto-bringup and $LOTA_AUTO_BRINGUP. */
+int install_auto_bringup_opted_in(void);
 
 struct install_ctx {
 	struct install_opts opts;
@@ -71,7 +97,10 @@ enum stage_state {
 	STAGE_ERROR, /* the probe itself failed */
 };
 
-#define STAGE_NOTE_CAP 512
+/* Holds the longest note stage produces:
+ * the Secure-Boot remediation, which names the setting, the route into this
+ * machine's firmware setup and what enabling it does not break */
+#define STAGE_NOTE_CAP 1024
 
 struct stage {
 	const char *title;
@@ -86,6 +115,15 @@ struct stage {
 	 * REBOOT verdict stops the run (exit 10) instead of deferring to
 	 * a later checkpoint */
 	int barrier;
+	/*
+	 * Rewrites how this machine boots:
+	 * the initramfs, or the kernel command line.
+	 * Unattended run leaves these alone unless the host asked for them,
+	 * because package install that changes the boot path of machine nobody
+	 * was sitting at is how player ends up with system that does not come
+	 * back the way it went down.
+	 */
+	int boot_path;
 };
 
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */

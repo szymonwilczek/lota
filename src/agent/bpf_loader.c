@@ -650,9 +650,9 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		 * the other hardening prerequisites: hard-fail by default so
 		 * the operator notices the broken udev relabel at startup;
 		 * the existing --insecure-allow-mutable-rootfs escape hatch
-		 * also tolerates the deviation since a host that opts into a
-		 * mutable rootfs is already in the legacy-acknowledged
-		 * profile and is not running a tight SELinux deployment.
+		 * also tolerates the deviation: a host that already cannot
+		 * prove its own binary is not running a tight SELinux
+		 * deployment either.
 		 */
 		if (allow_mutable_rootfs) {
 			lota_warn("INSECURE: TPM device SELinux label check "
@@ -1321,7 +1321,7 @@ int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
 	if (!ctx || !ctx->loaded || !key)
 		return -EINVAL;
 
-	if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(key->len))
 		return -EINVAL;
 
 	if (ctx->allow_verity_digest_fd < 0)
@@ -1464,7 +1464,7 @@ static int measure_fsverity_digest(const char *path,
 			return ret;
 		}
 
-		if (d.hdr.digest_size != LOTA_VERITY_DIGEST_SHA512_SIZE) {
+		if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(d.hdr.digest_size)) {
 			close(fd);
 			return -EINVAL;
 		}
@@ -1508,7 +1508,7 @@ int bpf_loader_disallow_verity_digest(struct bpf_loader_ctx *ctx,
 	if (!ctx || !ctx->loaded || !key)
 		return -EINVAL;
 
-	if (key->len != LOTA_VERITY_DIGEST_SHA512_SIZE)
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(key->len))
 		return -EINVAL;
 
 	if (ctx->allow_verity_digest_fd < 0)

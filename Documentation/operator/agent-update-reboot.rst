@@ -40,12 +40,12 @@ the new hash *before* the fleet reboots:
    notes publish it alongside the artifacts.
 #. Add it to ``agent_hashes`` **alongside** the current hash -- both are pinned
    for the duration of the rollout -- re-sign the policy, and distribute it to
-   the verifier tier. Policy is configuration, not database state, so push it to
-   every instance and reload them (restart the instances one at a time if they
-   read policy at start).
-#. Leave ``--reject-legacy-baselines`` **off** during the rollout: it is what you
-   turn on *after* the fleet has fully moved, to stop accepting the old
-   pre-upgrade baseline.
+   the verifier tier. Listing it is also what lets each device move its own
+   pinned baseline: a client reporting a listed hash re-pins itself and keeps
+   attesting, so the rollout needs no per-device operator action (see
+   ``policies/README.rst``, "Updating Policies"). Policy is configuration, not
+   database state, so push it to every instance and reload them (restart the
+   instances one at a time if they read policy at start).
 
 Pinning both hashes is what creates the grace window in which old and new agents
 both attest. How wide that window is depends on the deployment (see
@@ -58,9 +58,20 @@ On each host, once the new hash is pinned in the verifier tier:
 
 #. **Update the package.** Install the new agent build (for example
    ``dnf upgrade lota-agent``).
-#. **Re-establish the immutability proof.** Re-enable fs-verity on the new binary
-   (ext4/btrfs), or re-sign its ``security.ima`` xattr with the operator IMA key
-   (XFS). This is mandatory: without it the agent will not run under enforcement.
+#. **Check the immutability proof.** fs-verity is a property of the inode and
+   the upgrade writes a new file, so the proof the old binary carried does not
+   survive it. The package's post-install re-enables fs-verity on the new
+   binary and says so; where the filesystem cannot carry it (XFS below 6.13,
+   for instance) it says that instead, and the ``security.ima`` xattr has to be
+   re-signed with the operator IMA key. One of the two is mandatory: without
+   either, the agent refuses to start under enforcement, so a host that skips
+   this comes back from its reboot with no agent at all.
+
+   While the host waits for that reboot the agent reports
+   ``LOTA_FLAG_UPDATE_PENDING`` alongside its normal flags, so a title can tell
+   the player a restart is coming rather than letting them meet it as a launch
+   failure. Attestation is unaffected until the reboot: PCR 14 commits to the
+   build still running and the token names that build.
 #. **Stop the running daemon.** ``lota-agent --shutdown`` -- ``systemctl stop``
    cannot, because the LSM hook blocks the kill.
 #. **Cold-reboot the host.** A full power cycle, not a warm reboot: PCR 14 only
@@ -74,12 +85,9 @@ On each host, once the new hash is pinned in the verifier tier:
 After the fleet has fully moved
 ===============================
 
-Once every host runs the new build:
-
-#. Remove the old hash from ``agent_hashes``, re-sign, and redistribute, so a
-   host that reappears on the old binary is no longer accepted.
-#. Optionally enable ``--reject-legacy-baselines`` to stop honouring the
-   pre-upgrade baseline rows.
+Once every host runs the new build, remove the old hash from ``agent_hashes``,
+re-sign, and redistribute, so a host that reappears on the old binary is no
+longer accepted.
 
 Grace window
 ============

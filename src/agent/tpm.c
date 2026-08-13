@@ -36,6 +36,7 @@
 #include "../../include/lota_envelope.h"
 #include "../../include/lota_seal.h"
 #include "../../include/lota_tpm_nv.h"
+#include "profile.h"
 #include "quote.h"
 #include "tpm.h"
 #include "attestation.h"
@@ -722,6 +723,7 @@ int tpm_init(struct tpm_context *ctx)
 	aik_meta_path = ctx->allow_env_tpm_overrides ?
 				getenv("LOTA_AIK_META_PATH") :
 				NULL;
+	ctx->aik_meta_path_from_env = false;
 	if (aik_meta_path && aik_meta_path[0]) {
 		if (aik_meta_path[0] != '/')
 			return -EINVAL;
@@ -747,6 +749,7 @@ int tpm_init(struct tpm_context *ctx)
 			     "%s",
 			     aik_meta_path) >= (int)sizeof(ctx->aik_meta_path))
 			return -ENAMETOOLONG;
+		ctx->aik_meta_path_from_env = true;
 	}
 
 	tcti_conf = ctx->allow_env_tpm_overrides ? getenv("LOTA_TCTI") : NULL;
@@ -1009,6 +1012,144 @@ int tpm_read_pcrs_batch(struct tpm_context *ctx, uint32_t pcr_mask,
  * Check if AIK exists at persistent handle.
  * Returns: 1 if exists, 0 if not, negative errno on error
  */
+static int persistent_handle_in_use(struct tpm_context *ctx, uint32_t handle)
+{
+	TPMS_CAPABILITY_DATA *capability_data = NULL;
+	TPMI_YES_NO more_data = TPM2_NO;
+	int found = 0;
+	TSS2_RC rc;
+	int ret;
+
+	{
+		struct esys_get_capability_args args = {
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_HANDLES,
+			.property = handle,
+			.property_count = 1,
+			.more_data_out = &more_data,
+			.capability_data_out = &capability_data,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk,
+					    &args, &rc, 1,
+					    (void **)&capability_data);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!capability_data ||
+	    capability_data->capability != TPM2_CAP_HANDLES) {
+		Esys_Free(capability_data);
+		return -EIO;
+	}
+
+	for (uint32_t i = 0; i < capability_data->data.handles.count; i++) {
+		if (capability_data->data.handles.handle[i] == handle) {
+			found = 1;
+			break;
+		}
+	}
+	Esys_Free(capability_data);
+	return found;
+}
+
+/*
+ * Forget the AIK material cached for whichever profile was bound before.
+ * The rotation record and the userAuth belong to one key; carrying either across
+ * rebind would quote one publisher's key with another's auth.
+ */
+static void tpm_forget_bound_aik(struct tpm_context *ctx)
+{
+	memset(&ctx->aik_meta, 0, sizeof(ctx->aik_meta));
+	ctx->aik_meta_loaded = false;
+	secure_bzero(ctx->aik_auth, sizeof(ctx->aik_auth));
+	ctx->aik_auth_loaded = false;
+}
+
+int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
+{
+	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
+	char previous_meta_path[sizeof(ctx->aik_meta_path)];
+	uint32_t previous_handle;
+	size_t candidate_count = 0;
+	uint32_t handle = 0;
+	int ret;
+
+	if (!ctx || !ctx->initialized || !paths || !paths->aik_meta[0])
+		return -EINVAL;
+
+	previous_handle = ctx->aik_handle;
+	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
+		 ctx->aik_meta_path);
+
+	if (!ctx->aik_meta_path_from_env) {
+		if (snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path),
+			     "%s", paths->aik_meta) >=
+		    (int)sizeof(ctx->aik_meta_path)) {
+			/* truncated path is already in the context */
+			ret = -ENAMETOOLONG;
+			goto restore;
+		}
+		if (strcmp(previous_meta_path, ctx->aik_meta_path) != 0)
+			tpm_forget_bound_aik(ctx);
+	}
+
+	ret = profile_aik_handle_load(paths, &handle);
+	if (ret == 0) {
+		if (handle != previous_handle)
+			tpm_forget_bound_aik(ctx);
+		ctx->aik_handle = handle;
+		return 0;
+	}
+	if (ret != -ENOENT)
+		goto restore;
+
+	/*
+	 * First provisioning for this publisher.
+	 * Take the lowest handle the range offers that no other profile recorded,
+	 * skipping any the TPM already holds an object at:
+	 * unrecorded object is somebody else's (or a wiped profile's)
+	 * and evicting it is not this agent's call
+	 */
+	ret = profile_aik_handle_candidates(
+		LOTA_PROFILE_BASE_DIR, TPM_AIK_PROFILE_HANDLE_BASE,
+		TPM_AIK_PROFILE_HANDLE_COUNT, candidates,
+		sizeof(candidates) / sizeof(candidates[0]), &candidate_count);
+	if (ret < 0)
+		goto restore;
+
+	for (size_t i = 0; i < candidate_count; i++) {
+		ret = persistent_handle_in_use(ctx, candidates[i]);
+		if (ret < 0)
+			goto restore;
+		if (ret == 1)
+			continue;
+
+		ret = profile_aik_handle_save(paths, candidates[i]);
+		if (ret < 0)
+			goto restore;
+		if (candidates[i] != previous_handle)
+			tpm_forget_bound_aik(ctx);
+		ctx->aik_handle = candidates[i];
+		return 0;
+	}
+
+	ret = -ENOSPC;
+
+restore:
+	/*
+	 * Caller that survives a failed bind -- the daemon does, since enforcement
+	 * is host-owned and needs no publisher -- must be left pointing at the key
+	 * it had.
+	 * Half a bind would send it to write this publisher's metadata under
+	 * the previous publisher's handle.
+	 */
+	snprintf(ctx->aik_meta_path, sizeof(ctx->aik_meta_path), "%s",
+		 previous_meta_path);
+	ctx->aik_handle = previous_handle;
+	tpm_forget_bound_aik(ctx);
+	return ret;
+}
+
 static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 {
 	TSS2_RC rc;
@@ -1936,21 +2077,53 @@ static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
 }
 
 /*
+ * UEFI firmware path.
+ * Its presence is what distinguishes UEFI boot from legacy BIOS/CSM:
+ * efivarfs only exists when the kernel booted from UEFI firmware.
+ */
+#define UEFI_FIRMWARE_PATH "/sys/firmware/efi"
+
+/*
+ * Report whether this host booted via UEFI.
+ *
+ * LOTA's boot chain is UEFI-measured end to end:
+ * PCR 0/1/7 carry the firmware, platform configuration and Secure Boot policy,
+ * and the verifier refuses report whose event log proves no UEFI firmware ran.
+ * BIOS/CSM measures none of it. Agent checks locally so such host fails during
+ * bring-up with the cause named.
+ *
+ * The path override follows the LOTA_TCTI / LOTA_AIK_META_PATH rule:
+ * developer one-shot may redirect it, the persistent daemon may not
+ * (allow_env_tpm_overrides stays false there)
+ */
+static bool firmware_is_uefi(const struct tpm_context *ctx)
+{
+	const char *path = ctx->allow_env_tpm_overrides ?
+				   getenv("LOTA_UEFI_FIRMWARE_PATH") :
+				   NULL;
+
+	if (!path || !path[0])
+		path = UEFI_FIRMWARE_PATH;
+
+	return access(path, F_OK) == 0;
+}
+
+/*
  * read_pcr14_baseline - load the pre-LOTA PCR14 baseline written by the
  * initramfs lock helper.
  *
- * On UEFI Secure Boot shim measures the MOK state into PCR14 before the
- * initramfs runs, so PCR14 is non-zero when the lock helper extends it.
- * The helper records the value it observed (raw 32 bytes) at
- * LOTA_PCR14_BASELINE_PATH on the /run tmpfs, which persists across the
- * initramfs -> rootfs switch, so the agent anchors its derivations on the
- * same baseline. A legacy/BIOS host (or one without the lock module)
- * leaves no file; out is then zeroed, reproducing the 0^32 anchor.
+ * On shim-booted host shim measures the MOK state into PCR14 before the initramfs
+ * runs, so PCR14 is non-zero when the lock helper extends it.
+ * The helper records the value it observed (raw 32 bytes) at LOTA_PCR14_BASELINE_PATH
+ * on the /run tmpfs, which persists across the initramfs -> rootfs switch,
+ * so the agent anchors its derivations on the same baseline.
+ * UEFI host that boots without shim has nothing measuring PCR14, so the recorded
+ * baseline is legitimately 0^32; absent file leaves out zeroed and the derivations
+ * below then fail to match the live register, which fails closed.
  *
- * The baseline is not a trust input: a tampered file only makes the
- * agent's own self-check derivations miss the real PCR14 and fail closed.
- * The verifier independently reconstructs the baseline from the signed
- * event log.
+ * The baseline is not trust input: tampered file only makes the agent's own
+ * self-check derivations miss the real PCR14 and fail closed.
+ * The verifier independently reconstructs the baseline from the signed event log.
  *
  * Returns: 0 on success or when no baseline file exists (out zeroed).
  */
@@ -1993,26 +2166,6 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
 
 	memcpy(out, buf, LOTA_HASH_SIZE);
 	return 0;
-}
-
-/*
- * derive_expected_pcr14 - SHA-256(baseline || boot_commit).
- * Final PCR14 value an agent observes when it extends boot commitment
- * onto the pre-LOTA baseline directly (no initramfs lock ran).
- * baseline is 0^32 on a legacy/BIOS host and the firmware/shim MOK
- * measurement on UEFI Secure Boot (see read_pcr14_baseline).
- */
-static int derive_expected_pcr14(const uint8_t self_hash[],
-				 const uint8_t baseline[LOTA_HASH_SIZE],
-				 uint32_t reset_count, uint32_t restart_count,
-				 uint8_t out_pcr14[LOTA_HASH_SIZE])
-{
-	uint8_t commit[LOTA_HASH_SIZE];
-	int ret = tpm_boot_commitment_digest(self_hash, reset_count,
-					     restart_count, commit);
-	if (ret < 0)
-		return ret;
-	return sha256_two_block(baseline, commit, out_pcr14);
 }
 
 /*
@@ -2204,16 +2357,27 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	TSS2_RC rc;
 	uint8_t commit[LOTA_HASH_SIZE];
 	uint8_t current_pcr14[LOTA_HASH_SIZE];
-	uint8_t expected_pcr14[LOTA_HASH_SIZE];
 	uint8_t lock_pcr14_value[LOTA_HASH_SIZE];
 	uint8_t expected_locked_pcr14[LOTA_HASH_SIZE];
-	uint8_t zero_pcr14[LOTA_HASH_SIZE] = { 0 };
 	uint32_t reset_count = 0;
 	uint32_t restart_count = 0;
 	int ret;
 
 	if (!ctx || !ctx->initialized || !self_hash)
 		return -EINVAL;
+
+	if (!firmware_is_uefi(ctx)) {
+		fprintf(stderr,
+			"SECURITY: this host did not boot via UEFI (%s absent). "
+			"LOTA requires UEFI measured boot: legacy BIOS/CSM "
+			"measures neither the firmware and Secure Boot state "
+			"the verifier pins nor the PCR14 baseline the boot "
+			"commitment chains onto, so such a host cannot attest. "
+			"Switch the firmware out of legacy/CSM mode and "
+			"reinstall\n",
+			UEFI_FIRMWARE_PATH);
+		return -ENOTSUP;
+	}
 
 	/*
 	 * boot_commitment_locked is recomputed on every call: a stale
@@ -2261,11 +2425,12 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 
 	/*
-	 * Baseline = the PCR14 content present before any LOTA extend: 0^32
-	 * on a legacy/BIOS host, or the firmware/shim MOK measurement on
-	 * UEFI Secure Boot, handed off by the initramfs lock helper.
-	 * Every candidate below anchors on it so the chain holds on Secure
-	 * Boot where PCR14 is never pristine
+	 * Baseline = the PCR14 content present before any LOTA extend:
+	 * shim MOK measurement on shim-booted host,
+	 * 0^32 on a UEFI host that boots without shim,
+	 * handed off by the initramfs lock helper.
+	 * Both candidates below anchor on it so the chain holds where PCR14
+	 * is not pristine
 	 */
 	uint8_t baseline[LOTA_HASH_SIZE];
 	ret = read_pcr14_baseline(baseline);
@@ -2273,22 +2438,16 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return ret;
 
 	/*
-	 * Three candidate PCR14 values the agent can legitimately observe:
-	 *   expected_pcr14         = SHA-256(baseline || boot_commit)
-	 *     - unlocked host, agent extended boot commit on top of the
-	 *       baseline directly
+	 * Two PCR14 values the agent can legitimately observe:
 	 *   lock_pcr14_value       = SHA-256(baseline || lock_commit)
-	 *     - locked host where the initramfs helper ran but the agent
-	 *       has not extended its own commitment yet
+	 *     - the initramfs helper ran but the agent has not extended
+	 *       its own commitment yet
 	 *   expected_locked_pcr14  = SHA-256(lock_value || boot_commit)
-	 *     - locked host where both extends have occurred
-	 * Anything else is treated as tamper and routed through the
-	 * attribution logic below.
+	 *     - both extends have occurred
+	 * Register still holding the bare baseline means the lock never ran;
+	 * anything else is treated as tamper and routed through the attribution
+	 * logic below.
 	 */
-	ret = derive_expected_pcr14(self_hash, baseline, reset_count,
-				    restart_count, expected_pcr14);
-	if (ret < 0)
-		return ret;
 	ret = derive_lock_pcr14_value(baseline, reset_count, restart_count,
 				      lock_pcr14_value);
 	if (ret < 0)
@@ -2321,9 +2480,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 			strerror(-ret));
 
 	/*
-	 * Locked-host branches handled before the legacy state machine
-	 * so a host that just deployed the dracut module gets the
-	 * lock-then-extend chain on its first run.
+	 * lock-then-extend chain is the only shape the verifier validates,
+	 * so both accepting branches sit here and everything else falls through
+	 * to attribution
 	 */
 	if (memcmp(current_pcr14, lock_pcr14_value, LOTA_HASH_SIZE) == 0) {
 		/*
@@ -2373,65 +2532,27 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		return 0;
 	}
 
-	if (memcmp(current_pcr14, zero_pcr14, LOTA_HASH_SIZE) == 0) {
+	if (memcmp(current_pcr14, baseline, LOTA_HASH_SIZE) == 0) {
 		/*
-		 * Fresh boot: TPM reset, PCR14 still 0^32. If a prior snapshot
-		 * exists and its resetCount matches the current one, the TPM
-		 * apparently zeroed PCR14 without advancing resetCount - an
-		 * abnormal state worth flagging (operator action with
-		 * tpm2_pcr_reset on a debug PCR, kernel reload, ...).
+		 * PCR14 still holds the firmware baseline:
+		 * the initramfs lock helper never ran this boot.
+		 * Verifier has no derivation for commitment that is not chained
+		 * onto the lock value, so extending here would only produce
+		 * a register nothing can validate.
+		 * Fail closed and name the missing piece.
+		 *
+		 * The zero-baseline case lands here too:
+		 * UEFI host without shim measures nothing into PCR14,
+		 * so unlocked register reads 0^32 and the comparison above
+		 * still holds.
 		 */
-		if (have_prev && prev.reset_count == reset_count) {
-			fprintf(stderr,
-				"SECURITY: PCR14 cleared while resetCount=%u "
-				"unchanged "
-				"since last extend (last saved %lld); refusing "
-				"to attest "
-				"without operator review\n",
-				(unsigned)reset_count,
-				(long long)prev.saved_at);
-			return -EBADMSG;
-		}
-		ret = tpm_pcr_extend(ctx, TPM_BOOT_COMMITMENT_PCR, commit);
-		if (ret < 0)
-			return ret;
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-		};
-		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state save "
-				"failed (%s); "
-				"next run will lose tamper attribution\n",
-				strerror(-save_ret));
-		return 0;
-	}
-
-	if (memcmp(current_pcr14, expected_pcr14, LOTA_HASH_SIZE) == 0) {
-		/*
-		 * Warm restart: PCR14 already bound to (self_hash, resetCount,
-		 * restartCount). Refresh the snapshot so the saved_at stamp
-		 * stays current and a corrupted file gets healed.
-		 */
-		struct lota_clock_state snap = {
-			.reset_count = reset_count,
-			.restart_count = restart_count,
-			.saved_at = (int64_t)time(NULL),
-		};
-		memcpy(snap.pcr14, expected_pcr14, LOTA_HASH_SIZE);
-		memcpy(snap.self_hash, self_hash, LOTA_HASH_SIZE);
-		int save_ret = tpm_clock_state_save(ctx, &snap);
-		if (save_ret < 0)
-			fprintf(stderr,
-				"PCR14 boot-commitment: clock-state refresh "
-				"failed (%s)\n",
-				strerror(-save_ret));
-		return 0;
+		fprintf(stderr,
+			"PCR14 holds the firmware baseline unchanged: the "
+			"initramfs lock helper did not run this boot. Install "
+			"the 90lota dracut module, rebuild the initramfs "
+			"(dracut -f --add lota) and cold reboot; the boot "
+			"commitment must chain onto the initramfs lock\n");
+		return -EBADMSG;
 	}
 
 	/*
@@ -4910,6 +5031,41 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 					 ESYS_TR_NONE, ESYS_TR_NONE,
 					 TPM_SEAL_PRIMARY_HANDLE, &persistent));
 	Esys_FlushContext(ctx->esys_ctx, primary);
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	return 0;
+}
+
+int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
+{
+	ESYS_TR existing = ESYS_TR_NONE;
+	ESYS_TR persistent = ESYS_TR_NONE;
+	TSS2_RC rc;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
+		return -EINVAL;
+
+	ret = persistent_handle_in_use(ctx, handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_TR_FromTPMPublic(ctx->esys_ctx, handle,
+					     ESYS_TR_NONE, ESYS_TR_NONE,
+					     ESYS_TR_NONE, &existing));
+	if (rc != TSS2_RC_SUCCESS)
+		return tss2_rc_to_errno(rc);
+
+	TPM_CALL_RETRY(ctx, rc,
+		       Esys_EvictControl(ctx->esys_ctx, ESYS_TR_RH_OWNER,
+					 existing, ESYS_TR_PASSWORD,
+					 ESYS_TR_NONE, ESYS_TR_NONE, handle,
+					 &persistent));
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 

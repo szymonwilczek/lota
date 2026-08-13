@@ -86,6 +86,15 @@ enum {
 };
 
 struct lota_ac_config {
+	/*
+	 * sizeof(struct lota_ac_config), set by the caller.
+	 * See the same member on struct lota_connect_opts for what it buys.
+	 * Zero is refused rather than guessed at.
+	 *
+	 *     struct lota_ac_config cfg = { .struct_size = sizeof(cfg) };
+	 */
+	size_t struct_size;
+
 	enum lota_ac_provider provider;
 	const char *game_id; /* NUL-terminated, max LOTA_AC_MAX_GAME_ID */
 	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
@@ -115,7 +124,27 @@ struct lota_ac_config {
 	 * NULL -> default (/run/lota/lota.sock).
 	 */
 	const char *socket_path;
+
+	/*
+	 * For direct mode:
+	 * which publisher this session attests for, as the lowercase hex SHA-256
+	 * of that publisher's attestation-CA trust anchor SubjectPublicKeyInfo.
+	 * See struct lota_connect_opts, which this is passed through to.
+	 *
+	 * NULL on a single-publisher host.
+	 * Ignored in file mode, where the Wine hook owns the agent connection.
+	 */
+	const char *publisher_profile;
 };
+
+/*
+ * Size of the structure as of the 1.0 surface.
+ * Caller passing less than this is refused;
+ * Caller passing more has members this library does not read.
+ */
+#define LOTA_AC_CONFIG_SIZE_MIN                               \
+	(offsetof(struct lota_ac_config, publisher_profile) + \
+	 sizeof(const char *))
 
 /*
  * heartbeat wire format (little-endian, packed):
@@ -169,7 +198,17 @@ struct lota_ac_info {
 	uint64_t session_start; /* epoch */
 	uint64_t last_heartbeat; /* epoch */
 	uint32_t heartbeat_seq; /* current counter */
-	uint32_t lota_flags; /* last known attestation flags */
+	/*
+	 * Last known attestation flags (LOTA_FLAG_* from lota_gaming.h)
+	 *
+	 * LOTA_FLAG_UPDATE_PENDING may be set on perfectly healthy session:
+	 * it says a package update replaced the agent binary and takes effect
+	 * on the next cold boot, not that anything is wrong now.
+	 * Surface it to the player if you like, but do not fold it into trust
+	 * decision -- the state field and the heartbeat verification remain
+	 * the only answers to whether this session is trustworthy.
+	 */
+	uint32_t lota_flags;
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
 	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from

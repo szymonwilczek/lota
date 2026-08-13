@@ -5,6 +5,11 @@
 # Keys accept both underscore and hyphen forms (e.g: ca_cert, ca-cert).
 # CLI flags override any value set here.
 #
+# [profile "name"] header opens a publisher profile and every key after it belongs
+# to that profile, so the top-level keys go above the first profile and the profiles
+# go last.
+# See the end of this file.
+#
 # To dump the effective configuration after loading this file:
 #   lota-agent --dump-config
 #   lota-agent --config /path/to/file --dump-config
@@ -62,11 +67,16 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 #
 # Packaged lota-attest.service runs `lota-agent --attest` fire-and-forget
 # and reads this value: non-zero interval keeps the loop running (and renews
-# the AIK certificate before it expires), while 0 attests once and exits.
+# the AIK certificate before it expires).
+#
+# 0 means this host never chose a cadence, not that it wants a single round.
+# With a [profile] list below it attests to every configured publisher at
+# the default 300 s; with no profile at all it falls back to attesting once
+# to the single verifier named by `server` and exiting.
 #
 # Set `server`, `port` and `ca_cert` above to the verifier the loop should reach.
-# Service stays inactive until the first `lota-agent --enroll` records
-# /var/lib/lota/enroll_state.dat.
+# Service stays inactive until the first `lota-agent --enroll` creates publisher
+# profile under /var/lib/lota/profiles/
 attest_interval = 300
 
 # AIK key lifetime in seconds before rotation (0 = default 30 days)
@@ -115,7 +125,11 @@ pid_file = /run/lota/lota-agent.pid
 # Ed25519 private key for signing policies
 # signing_key = /etc/lota/policy.key
 
-# Ed25519 public key for verifying policy signatures
+# Ed25519 public key the enforcement object's signature is verified against.
+# Unset is the normal case: the agent uses /etc/lota/policy.pub when fleet put
+# its own key there, and otherwise the key the package shipped beside the object
+# at /usr/lib/lota/enforcement.pub.
+# Set this only to name a third path.
 # policy_pubkey = /etc/lota/policy.pub
 
 # ---- Logging -------------------------------------------------------------
@@ -132,3 +146,75 @@ log_level = info
 # Multiple protect_pid entries are allowed (one per line).
 # protect_pid = 1234
 # protect_pid = 5678
+
+# ---- Publisher profiles (must stay last) ---------------------------------
+# One machine, several publishers.
+# Each profile names the attestation CA it enrolls against, the trust anchor
+# that CA is verified with, and the verifier it reports to.
+# The publisher's policy is entirely on their side: profile grants no publisher
+# any say over this host's enforcement.
+#
+# The section name is label for the operator.
+# Profile is identified by the SHA-256 of its ca_cert trust anchor's
+# SubjectPublicKeyInfo, which is why the anchor is required and why moving CA
+# to new address keeps the profile.
+#
+# ca_cert must be readable by the hardened lota-attest.service, exactly as the
+# top-level ca_cert above.
+#
+# ca_port defaults to 8444 and verifier_port to 8443.
+# interval defaults to the attest_interval above; set it only where publisher
+# wants different cadence, and keep it inside the range lota-agent --help prints
+#
+# reporting = session (the default) sends reports only while a title of that
+# publisher's is running -- report is the only thing that leaves this machine,
+# and closed game has no reason to produce one.
+# reporting = continuous keeps the always-on stream, which is what an operator-owned
+# fleet wants.
+# Enforcement and the PCR 14 boot commitment are always-on either way and send nothing.
+#
+# Every key below a header belongs to that profile, so nothing top-level may
+# follow.
+# `lota-agent --dump-config` prints profiles last for the same reason.
+#
+# Profile whose CA this host has never enrolled with is enrolled by the agent itself
+# -- when the loop first reaches it, and immediately when a title selects that
+# publisher. That is why `ca` and `ca_cert` belong in the profile:
+# on player's machine there is no install-time step at which the publisher is
+# even known yet.
+#
+# Profile list is the attestation loop's target list:
+# the agent reports to every profile's verifier on that profile's cadence,
+# signing each report with that publisher's own AIK, and one unreachable verifier
+# backs off only its own reporting.
+# Because the list replaces the single verifier above, --server and --pin-sha256
+# are refused while profiles are configured.
+#
+# verifier = none is for a publisher who runs no verifier and checks the tokens
+# their titles fetch in their own backend instead. Nothing is reported to them:
+# no attestation report, no event log and no runtime manifest leaves this
+# machine for that publisher, and this host holds no verdict of theirs.
+# Their profile still enrolls, holds its own AIK and renews that key's certificate,
+# because the certificate is what their backend chains a token to.
+# Saying it is required -- omitted verifier key is refused, so typo cannot quietly
+# turn a publisher who expects reports into one who receives none.
+# verifier_port must not be set alongside it.
+#
+# [profile "publisher-a"]
+# ca = ca.publisher-a.example
+# ca_cert = /etc/lota/publisher-a.pem
+# verifier = verifier.publisher-a.example
+#
+# [profile "publisher-b"]
+# reporting = continuous
+# ca = ca.publisher-b.example
+# ca_port = 9444
+# ca_cert = /etc/lota/publisher-b.pem
+# verifier = verifier.publisher-b.example
+# verifier_port = 9443
+# interval = 120
+#
+# [profile "publisher-c"]
+# ca = ca.publisher-c.example
+# ca_cert = /etc/lota/publisher-c.pem
+# verifier = none

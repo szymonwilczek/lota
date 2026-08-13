@@ -27,7 +27,8 @@
 
 #include <curl/curl.h>
 
-#include "lota_anticheat.h"
+#include <lota/lota_anticheat.h>
+#include <lota/lota_gaming.h>
 
 #define DEMO_DEFAULT_URL "http://127.0.0.1:7443/heartbeat"
 #define DEMO_DEFAULT_GAME_ID "trust-pong"
@@ -54,6 +55,8 @@ struct demo_options {
 	unsigned int interval_sec;
 	bool once;
 	bool print_runtime_objects;
+	bool require_full_image;
+	bool protect_self;
 };
 
 struct response_buf {
@@ -75,6 +78,7 @@ static void print_usage(const char *argv0)
 		"Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
 		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
 		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
+		"          [--require-full-image] [--protect-self]\n"
 		"          [--ca-cert PATH] [--client-cert PATH] [--client-key "
 		"PATH]\n"
 		"\n"
@@ -92,6 +96,18 @@ static void print_usage(const char *argv0)
 		"process maps and that the runtime measurement covers,\n"
 		"then exits. Redirect it into a file to capture the trusted\n"
 		"runtime manifest for 'demo_server --anticheat-runtime-manifest'.\n"
+		"\n"
+		"--protect-self puts this process in the agent's protected set,\n"
+		"so its live code is measured from the kernel side and folded\n"
+		"into every token it fetches. That is what an anti-cheat wants\n"
+		"and it is opt-in here, because it needs the objects this\n"
+		"process maps to carry fs-verity digests (see the README).\n"
+		"\n"
+		"--require-full-image demands LOTA_FLAG_IMAGE_FULLY_MEASURED,\n"
+		"so a heartbeat is TRUSTED only when the agent measured every\n"
+		"object the process maps. On a host whose libraries carry no\n"
+		"fs-verity digest that makes every heartbeat UNTRUSTED, which\n"
+		"is the publisher policy choice this flag exists to show.\n"
 		"\n"
 		"When --tamper-marker is set (or LOTA_DEMO_TAMPER_MARKER is\n"
 		"exported) and the named path exists at heartbeat time, the\n"
@@ -155,6 +171,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->interval_sec = DEMO_DEFAULT_INTERVAL_SEC;
 	opt->once = false;
 	opt->print_runtime_objects = false;
+	opt->require_full_image = false;
+	opt->protect_self = false;
 
 	const char *env_interval = getenv("LOTA_DEMO_INTERVAL_SEC");
 	if (env_interval && *env_interval) {
@@ -176,6 +194,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "once", no_argument, NULL, '1' },
 		{ "tamper-marker", required_argument, NULL, 'T' },
 		{ "print-runtime-objects", no_argument, NULL, 'O' },
+		{ "require-full-image", no_argument, NULL, 'F' },
+		{ "protect-self", no_argument, NULL, 'P' },
 		{ "ca-cert", required_argument, NULL, 'A' },
 		{ "client-cert", required_argument, NULL, 'E' },
 		{ "client-key", required_argument, NULL, 'K' },
@@ -184,8 +204,8 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OA:E:K:h", long_opts,
-				NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OFPA:E:K:h",
+				long_opts, NULL)) != -1) {
 		switch (c) {
 		case 's':
 			opt->server_url = optarg;
@@ -213,6 +233,12 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		}
 		case '1':
 			opt->once = true;
+			break;
+		case 'F':
+			opt->require_full_image = true;
+			break;
+		case 'P':
+			opt->protect_self = true;
 			break;
 		case 'O':
 			opt->print_runtime_objects = true;
@@ -403,21 +429,24 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 		   ((uint32_t)buf[26] << 16) | ((uint32_t)buf[27] << 24);
 
 	/*
-	 * Tamper hook for the live demo. Flip the first byte of the
-	 * signed token blob so the server's signature verification
-	 * fails while the LACH wire format itself remains structurally
-	 * valid. The verdict path is the UNTRUSTED branch in
-	 * heartbeat.go rather than REJECT, which is the path a
-	 * production verifier would also take against a genuinely
-	 * mangled signature.
+	 * Tamper hook for the live demo.
+	 * Flip the last byte of the packet, which is the tail of the TPM signature:
+	 * the token's own header fields are untouched, so the server parses
+	 * the heartbeat and the token fully and then fails the signature check.
+	 * That is the UNTRUSTED branch in heartbeat.go rather than REJECT,
+	 * and it is the path a production verifier takes against mangled signature.
+	 *
+	 * The first byte of the token is not a usable target:
+	 * it is the token magic, and corrupting it exercises the parser,
+	 * which is the one thing this hook is meant not to test.
 	 */
 	if (written > LOTA_AC_HEADER_SIZE &&
 	    tamper_marker_armed(opt->tamper_marker)) {
-		buf[LOTA_AC_HEADER_SIZE] ^= 0xFF;
+		buf[written - 1] ^= 0xFF;
 		fprintf(stderr,
 			"demo_anticheat: tamper marker %s present, flipped "
-			"token byte at offset %u\n",
-			opt->tamper_marker, (unsigned int)LOTA_AC_HEADER_SIZE);
+			"signature byte at offset %zu\n",
+			opt->tamper_marker, written - 1);
 	}
 
 	struct response_buf resp = { 0 };
@@ -472,12 +501,64 @@ int main(int argc, char **argv)
 		return DEMO_EXIT_TRANSPORT;
 	}
 
+	/*
+	 * Publisher who requires the runtime measurement to cover every mapped
+	 * object asks for the flag that says it did.
+	 * Which side of that choice a title sits on is the publisher's policy,
+	 * so it is a flag here rather than a default:
+	 * on a host whose distribution ships its libraries without fs-verity,
+	 * requiring it makes every heartbeat UNTRUSTED.
+	 */
 	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
 		.provider = opt.provider,
 		.game_id = opt.game_id,
 		.direct = 1,
 		.socket_path = opt.socket_path,
+		.required_flags = opt.require_full_image ?
+					  LOTA_FLAG_IMAGE_FULLY_MEASURED :
+					  0,
 	};
+
+	/*
+	 * Joining the protected set is a second call on the gaming API:
+	 * the anti-cheat session owns its own agent connection,
+	 * and protection is a property of this process rather than of that
+	 * session, so any connection this process holds can claim it.
+	 */
+	struct lota_client *protect_client = NULL;
+
+	if (opt.protect_self) {
+		struct lota_connect_opts popts = {
+			.struct_size = sizeof(popts),
+			.timeout_ms = 8000,
+			.socket_path = opt.socket_path,
+		};
+
+		protect_client = lota_connect_opts(&popts);
+		if (!protect_client) {
+			fprintf(stderr,
+				"demo_anticheat: --protect-self: cannot reach the "
+				"agent (%d)\n",
+				lota_connect_last_error());
+			curl_global_cleanup();
+			return DEMO_EXIT_TRANSPORT;
+		}
+		int prc = lota_protect_self(protect_client);
+		if (prc != 0) {
+			fprintf(stderr,
+				"demo_anticheat: --protect-self refused: %s\n",
+				lota_strerror(prc));
+			lota_disconnect(protect_client);
+			curl_global_cleanup();
+			return DEMO_EXIT_TRANSPORT;
+		}
+		fprintf(stderr,
+			"demo_anticheat: protected (pid=%d); every token now "
+			"folds this process's measured code\n",
+			(int)getpid());
+	}
+
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {
 		fprintf(stderr,
@@ -485,6 +566,8 @@ int main(int argc, char **argv)
 			"unreachable at %s)\n",
 			opt.socket_path ? opt.socket_path :
 					  "/run/lota/lota.sock");
+		if (protect_client)
+			lota_disconnect(protect_client);
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
@@ -493,6 +576,8 @@ int main(int argc, char **argv)
 	if (!curl) {
 		fprintf(stderr, "demo_anticheat: curl_easy_init failed\n");
 		lota_ac_shutdown(session);
+		if (protect_client)
+			lota_disconnect(protect_client);
 		curl_global_cleanup();
 		return DEMO_EXIT_TRANSPORT;
 	}
@@ -529,6 +614,8 @@ int main(int argc, char **argv)
 
 	curl_easy_cleanup(curl);
 	lota_ac_shutdown(session);
+	if (protect_client)
+		lota_disconnect(protect_client);
 	curl_global_cleanup();
 	return exit_code;
 }

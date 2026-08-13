@@ -49,6 +49,10 @@ Flags
 |                                  |                                    | per line) for the       |
 |                                  |                                    | runtime measurement     |
 +----------------------------------+------------------------------------+-------------------------+
+| ``--require-full-image``         | off                                | refuse a token without  |
+|                                  |                                    | the full-coverage flag  |
+|                                  |                                    | (see below)             |
++----------------------------------+------------------------------------+-------------------------+
 | ``--tls-cert`` / ``--tls-key``   | (none)                             | PEM server keypair;     |
 |                                  |                                    | enables HTTPS           |
 +----------------------------------+------------------------------------+-------------------------+
@@ -79,6 +83,27 @@ A heartbeat whose live measurement does not match the manifest is answered
 ``UNTRUSTED`` with reason ``runtime measurement mismatch``. When the manifest
 is omitted, the runtime measurement falls back to ``--anticheat-binary`` alone,
 which only matches a statically linked producer.
+
+Minting tokens in your own tests
+--------------------------------
+
+A relying party's test suite has to build tokens the way an agent would, and
+the fields a token binds under its quote are computed, not guessed. The server
+SDK exports each of those folds, so nothing downstream re-derives one by hand:
+
+* ``server.ComputeRuntimeProtectDigest(pids)`` for a v1 token built with
+  ``SerializeToken``,
+* ``server.ComputeRuntimeProtectDigestV2(pids, imageDigests)`` for a v2 token
+  built with ``SerializeTokenV2``,
+* ``server.ComputeTokenQuoteNonce(...)`` for the value the quote's extra data
+  has to carry.
+
+Each is domain-separated and has to agree byte for byte with the agent's C
+implementation; both sides carry the same known-answer vectors
+(``TestRuntimeProtectDigest_KAT`` here, ``test_runtime_protect_digest`` there).
+A second copy of one of these folds in a relying party's own tree is the drift
+those domain strings exist to prevent, which is why they are exported rather
+than reimplemented.
 
 Transport security
 ~~~~~~~~~~~~~~~~~~
@@ -172,3 +197,18 @@ TRUSTED, UNTRUSTED-on-bad-signature, UNTRUSTED-on-unknown-game,
 UNTRUSTED-on-tampered-header, UNTRUSTED-on-flag-mismatch, UNTRUSTED-on-replay,
 REJECT-on-bad-magic, REJECT-on-unsupported-domain, REJECT-on-truncated-token,
 plus ``/nonce`` and ``/state`` happy paths and failure modes.
+
+Runtime coverage as a policy
+----------------------------
+
+A token states whether the agent's runtime measurement covered every object
+the producer maps (``LOTA_FLAG_IMAGE_FULLY_MEASURED``) or only those the
+kernel holds an fs-verity digest for. The bit is inside the signed token, so
+it cannot be claimed by a client that did not earn it.
+
+``--require-full-image`` makes this server demand it: a heartbeat without the
+bit is ``UNTRUSTED`` with the missing flags named. On a host whose
+distribution ships libraries without fs-verity that refuses every heartbeat,
+which is the point -- the choice belongs to the publisher, and this is what
+choosing it looks like. Left off, partial coverage is accepted and the bit is
+still reported, so a backend can log or score it instead.

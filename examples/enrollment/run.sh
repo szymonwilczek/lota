@@ -58,7 +58,8 @@ echo "== 2/4 enroll the AIK (credential activation) =="
 sudo "$agent" --enroll \
 	--ca-server "${CA_ADDR%%:*}" --ca-port "${CA_ADDR##*:}" \
 	--ca-cert "$CA_DIR/tls.crt"
-echo "AIK certificate stored at /var/lib/lota/aik_cert.der"
+echo "AIK certificate stored in the publisher profile the CA anchor names," \
+	"under /var/lib/lota/profiles/"
 
 echo "== 3/4 start the verifier (trusts only the CA root) =="
 (
@@ -69,7 +70,7 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
 		-nonce-db "$NONCE_DB" \
 		-policy "$POLICY" \
 		-generate-cert -allow-permissive-policy \
-		-allow-tofu-boot-baseline -allow-no-initramfs-lock
+		-allow-tofu-boot-baseline
 ) &
 VERIFIER_PID=$!
 sleep 1

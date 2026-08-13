@@ -47,7 +47,17 @@ install instructions (see "What the operator must ship" below).
 changing anything.
 
 * ``--yes`` skips the per-stage prompts,
-* ``--plain`` disables the TUI for logs and scripting.
+* ``--plain`` disables the TUI for logs and scripting,
+* ``--unattended`` is the mode a package post-install hook runs in. It implies
+  ``--yes --plain``, does nothing at all inside a container or image build (the
+  host that eventually boots the image is the one bring-up belongs to), and
+  **leaves the two boot-path stages alone** -- the initramfs PCR 14 lock and
+  the kernel integrity floor -- stopping at the reboot checkpoint with the one
+  command that finishes the job. A host that wants those unattended as well
+  says so before installing, with ``/etc/lota/auto-bringup`` or
+  ``LOTA_AUTO_BRINGUP=1``; exactly ``1``, since a hook inherits whatever
+  environment the transaction had and reading ``0`` as consent is how a
+  machine ends up with a boot path nobody chose.
 
 On an interactive terminal ``lota-install`` is a full-screen application
 (alternate screen): a stage list on the left, a details pane explaining the selected
@@ -99,7 +109,18 @@ What the stages do
 #. **Preflight** -- TPM 2.0 device present, UEFI Secure Boot enabled, required
    tooling installed. Secure Boot off is a hard stop: the verifier proves it
    from the TPM event log and rejects hosts without it (MOK-signed custom
-   kernels keep working).
+   kernels keep working). It is also the one requirement nobody but the person
+   at the keyboard can satisfy, so the blocked stage prints a route instead of
+   a rule: the machine as DMI names it, ``systemctl reboot --firmware-setup``
+   where the firmware advertises that it honours the request, the extra
+   "restore the factory keys" step when the firmware is in setup mode, and
+   that enabling Secure Boot leaves distribution kernels bootable. A guest is
+   sent to its VM definition instead, since a virtual machine has no firmware
+   menu of its own -- ``systemd-detect-virt`` decides that, so the installer
+   keeps no list of hypervisors. Everything in that message is read off the
+   machine; the installer names no per-vendor menu path or setup key, because
+   those differ between firmware revisions of a single model and a confidently
+   wrong instruction costs more than a general one.
 #. **Package artifacts** -- agent binary, BPF object, systemd units, udev rule
    and dracut module are installed. The installer does not build or download
    anything. Missing artifacts mean the LOTA package has not been installed yet.
@@ -126,11 +147,16 @@ What the stages do
    hardware reset, so this cannot be skipped.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
-#. **Enrollment** -- the TPM proves itself to the operator's attestation CA
-   (credential activation) and receives a short-lived AIK certificate. The
-   running agent renews that certificate on its own against the recorded
-   endpoint as it nears expiry, so no terminal is needed after install;
-   ``lota-agent --reenroll`` stays as a manual fallback.
+#. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
+   (credential activation) and receives a short-lived AIK certificate, one per
+   publisher. Naming a CA here (``--ca-server`` with ``--ca-cert``) enrolls
+   with it during the install, which is what an operator provisioning a fleet
+   wants. Naming none is the normal player case and is not a blocked stage:
+   the publisher is whoever they buy a title from, so the agent enrolls with
+   each publisher the first time a title asks for one. Either way the running
+   agent renews the certificate on its own against the endpoint recorded in
+   the profile, and ``lota-agent --reenroll --ca-cert ...`` stays as a manual
+   fallback.
 
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
 and -- when ``--verifier`` is given -- a full attestation round-trip) and a
@@ -139,21 +165,76 @@ plain-language summary of exactly what telemetry leaves the machine.
 What the operator must ship
 ===========================
 
-A player install needs four operator-provided inputs, all fail-closed:
+A player install needs these inputs, all fail-closed:
 
-* **BPF signing public key** (default ``/etc/lota/policy.pub``, override with
-  ``--policy-pubkey``) and the matching ``.sig`` next to
-  ``/usr/lib/lota/lota_lsm.bpf.o``;
-* **attestation CA endpoint** (``--ca-server``, ``--ca-port``, ``--ca-cert``);
+* nothing for **enforcement**: the agent package ships the BPF object, its
+  ``.sig`` and the public key at ``/usr/lib/lota/enforcement.pub``, because
+  enforcement is host-owned and signed by whoever built the package. All three
+  are replaced together by an upgrade. A fleet that signs it with its own key
+  re-signs the object and puts its key at ``/etc/lota/policy.pub``, which no
+  package owns and the agent prefers whenever it is there;
+* optionally an **attestation CA endpoint** (``--ca-server``, ``--ca-port``)
+  and its **trust anchor** (``--ca-cert``), to enroll during the install. Both
+  or neither: an anchor without an endpoint has nothing to enroll against. A
+  player install normally passes neither and lets the agent enroll with each
+  publisher when a title first asks;
 * optionally the **verifier endpoint** (``--verifier``) for the final
   round-trip check;
 * compiled **SELinux module** (``lota.pp``, default
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.
 
-Distro-native packaging (RPM/DEB whose post-install hooks drive the same stage
-engine) is the planned follow-up. Until then the package step is
-``sudo make install`` from a release tree plus the operator's bundle.
+The RPM and DEB post-install hook drives this same stage engine
+(``lota-install --unattended``), so installing the package leaves the
+host-local half of bring-up already done and this command finishes the boot
+path. Building from a release tree instead (``sudo make install``) does none of
+it, and every stage below is then this command's work.
+
+Titles that run under Proton or Wine
+====================================
+
+A Windows title reaches the agent through a Linux-side bridge
+(``liblota_wine_hook.so``), because a DLL inside the Wine prefix cannot open a
+host socket. Steam has to be told to preload it, which is one line pasted into
+that title's launch options -- ``lota-steam-setup`` prints the exact string,
+including the ``PRESSURE_VESSEL_FILESYSTEMS_RW`` entry the container manager
+needs to see the socket at all.
+
+It is the only step in this document that asks anyone to type something, and
+it stays until Steam supports a compatibility-tool layer that composes with
+the player's Proton choice rather than replacing it. A publisher shipping
+their own launcher avoids it entirely by setting the same variables on the
+process they spawn. The reasoning, and the three alternatives that were
+examined and rejected, are in :ghsrc:`examples/cs2/README.rst`.
+
+When a title will not close
+===========================
+
+A game that asks to be protected (``lota_protect_self()``) is taken out of
+reach of every signal on the machine: the LSM passes one only from the process
+itself, from the agent or from the kernel. That is what stops a cheat from
+killing the process being measured, and it also means a hung title survives a
+terminal, a desktop task manager and a root shell alike.
+
+The agent holds the identity the kernel accepts, so it delivers the signal on
+request::
+
+    lota-agent --terminate-protected <pid>
+    lota-agent --terminate-protected <pid> --force   # SIGKILL
+
+It answers for whoever ``kill(2)`` would already have allowed -- the owner of
+the process, or root -- so a player ends their own game as themselves, with no
+``sudo``. Nothing else widens: only ``SIGTERM`` and ``SIGKILL`` are relayed, a
+process nobody protected is refused because an ordinary ``kill`` reaches it,
+and the agent will not end itself this way.
+
+The exchange is that the host says so. Every relayed termination is journalled
+with the target, its owner and the caller, and the host reports
+``PROTECTED_TERMINATED`` in its status and in every token until it reboots.
+A publisher then sees a session that was ended on the machine rather than a
+process that silently disappeared -- closing a hung game is the ordinary reason
+for it, and what says *which* process left is the protected set the token
+already carries.
 
 Pausing and removing
 ====================

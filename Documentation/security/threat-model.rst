@@ -61,7 +61,10 @@ Attestation CA
 
 The attestation CA verifies the EK certificate chain, runs credential
 activation against the TPM, and issues a short-lived AIK certificate. Verifiers
-trust the CA certificate, not an agent-asserted public key.
+trust the CA certificate, not an agent-asserted public key. The EK reaches the
+CA and stops there: the attestation report carries no EK certificate field at
+all, so an attestation cannot be linked back to the hardware even by the party
+verifying it.
 
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
@@ -102,7 +105,10 @@ is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rej
 so a misconfigured or compromised agent cannot mint an effectively immortal token.
 
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
-window -- keep the agent ``attest_interval`` at or below ``DefaultMaxTokenAge``.
+window. The agent enforces this where the interval is read: an ``attest_interval``
+past ``DefaultMaxTokenAge`` is refused by the config parser and by
+``--attest-interval``, because every token such an agent mints would be rejected by
+every relying party while the agent itself kept running and reporting success.
 
 Active threats
 ==============
@@ -183,6 +189,14 @@ Active threats
    * - Agent binary drift
      - | PCR14 boot commitment and agent hash policy bind the agent image.
        | fs-verity protects the installed binary.
+       | Between a package update and the next cold boot the file on disk and
+         the running image differ by construction, and the agent reports that
+         as ``LOTA_FLAG_UPDATE_PENDING``. It is **not** a tamper signal and
+         carries no verdict: PCR 14 still commits to the running build, the
+         report still names it, and the divergence resolves at the reboot the
+         flag exists to announce. An offline swap of the on-disk file is a
+         different question and is answered by fs-verity plus the boot
+         commitment, not by this flag.
      - Replacing the agent binary requires cold reboot, fs-verity re-enable,
        policy update, and re-attestation.
    * - Modified, non-enforcing agent (self-compiled client)
@@ -194,6 +208,17 @@ Active threats
          refuses a ``require_secureboot`` policy with empty ``agent_hashes``
          (advisory ``kernel_hashes`` do not substitute) unless ``--allow-unpinned-agent``
          is set.
+       | The per-device pin is established once, on the client's first
+         attestation: a stored baseline whose ``agent_hash`` is absent is
+         refused rather than adopted from the report presenting it.
+       | It re-opens for one reason only, a package update, and only toward a
+         build ``agent_hashes`` already names. The reported hash is not taken
+         on trust: PCR 14 is rederived from it and matched against the quoted
+         register first, so it is the binary that actually booted. The pin
+         then moves, the outgoing hash is archived, and one client may move
+         at most once per 24 hours.
+       | With an empty ``agent_hashes`` there is no authority to appeal to and
+         the pin never re-opens; the drift is refused and an operator decides.
        | Official hash comes from the reproducible signed release.
      - Without a pinned ``agent_hash``, a first-use modified agent would TOFU its
        own hash and attest while skipping enforcement. Operator must populate
@@ -208,13 +233,37 @@ Active threats
      - | BPF LSM gates executable mmap and mprotect for protected processes
          against the fs-verity allow-list.
        | The agent re-measures file-backed executable mappings from the kernel side.
+       | A digest read from an inode is cached against that inode's device,
+         number, size and modification time, all read from the descriptor the
+         measurement holds open; fs-verity makes the contents behind such an
+         inode immutable, and any other file is a different key.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
+       | An object the kernel holds no fs-verity digest for is absent from the
+         measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation
      - BPF LSM hooks protect the agent and protected PIDs, including
        ``__ptrace_may_access`` where available.
      - Hook availability and verifier behavior must be validated on the target
        kernel.
+   * - Ending a protected process
+     - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
+         no signal to a protected task from anything but itself, the agent or
+         the kernel, and the agent relays only ``SIGTERM`` and ``SIGKILL``, only
+         for a caller ``kill(2)`` would have allowed.
+       | Every relayed termination is journalled, and the host reports
+         ``PROTECTED_TERMINATED`` in its status word and in every token it
+         issues until it reboots.
+       | The protected set the token carries names who is left, so a publisher
+         that knows which of its processes belongs there sees which one went.
+     - | The owner of a protected process can end it, which the LSM alone would
+         have refused. The bound is that no route to it avoids the agent, so
+         the termination is reported rather than silent.
+       | The sticky bit says a protected process was ended on this host, not
+         which one -- pairing it with the expected protected set is the relying
+         party's policy.
+       | Ending the agent is not this path: ``--shutdown`` poisons PCR 14, and
+         resuming is a reboot.
    * - Kernel module or memory-only load
      - Kernel lockdown, module signature enforcement, and BPF LSM gates reject
        unsafe load paths.
@@ -318,6 +367,34 @@ PCRs, a compromised kernel cannot forge them after the fact. The practical trust
 anchor for "a trusted kernel booted" is PCR 7: it reflects the Secure Boot
 signing chain and stays constant across kernel updates, so a fleet trusts the
 distribution's signing key without maintaining a per-kernel hash.
+
+Pinning these registers is not optional. A report whose ``pcr_mask`` omits
+PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
+configuration accepts one. This closes the downgrade an attacker would
+otherwise ask for: an agent that simply declined to quote the firmware and
+Secure Boot registers would bypass the pin while still presenting a
+well-formed, correctly signed report.
+
+All of it presumes a UEFI firmware, and the verifier proves that rather
+than assuming it: a report is refused unless its event log carries the
+firmware's own measurement of the EFI global ``SecureBoot`` variable into a
+quote-authenticated PCR 7. Legacy BIOS/CSM has no EFI variables to measure,
+so it cannot produce that evidence and cannot attest. The check is about the
+firmware interface, not the Secure Boot setting -- whether Secure Boot must
+be *enabled* stays a policy question (``require_secureboot``). PCR 14 is not
+usable as the UEFI signal: it holds the shim MOK state, so it is zero both on
+BIOS and on a UEFI host that boots without shim (own PK/KEK/db, a directly
+signed systemd-boot or UKI), and that host attests normally.
+
+The PCR 14 chain is mandatory on the same terms. A report must declare both
+the initramfs lock and the agent boot commitment; the verifier derives the
+expected PCR 14 as the lock value with the commitment chained on top and has
+no second derivation to fall back on. A host without the ``90lota`` dracut
+module therefore does not attest: without the initramfs lock, PCR 14 stays
+OS-writable between the kernel handoff and the agent's first extend, and any
+code running in that window could seed the value the baseline would pin. The
+agent refuses to build such a report locally, so the missing module is named
+on the host rather than surfacing as a remote rejection.
 
 Dynamic Root of Trust for Measurement (DRTM) -- Intel TXT, AMD SKINIT, driven
 on Linux by the TrenchBoot / Secure Launch project -- would re-measure the

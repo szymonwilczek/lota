@@ -11,6 +11,7 @@ package verify
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -74,12 +75,13 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 		t.Fatal("GetBootBaseline")
 	}
 
-	// legacy backfill: PCR14-only row then agent_hash pin
+	// PCR14-only row carries no agent_hash pin,
+	// so the store refuses it instead of adopting the incoming hash
 	if r, _ := s.CheckAndUpdate("leg", fill(0x14)); r != TOFUFirstUse {
 		t.Fatal("PCR14 first use")
 	}
-	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFULegacyBackfill {
-		t.Fatalf("legacy backfill: got %v", r)
+	if r, _ := s.CheckAndUpdateAgentHash("leg", fill(0x14), fill(0xCC)); r != TOFUMismatch {
+		t.Fatalf("unpinned row: got %v", r)
 	}
 }
 
@@ -269,10 +271,10 @@ func TestPostgresBaselineInspection(t *testing.T) {
 	}
 }
 
-// TestPostgresBootPCRsLegacyPath covers the standalone boot-PCR pin used by
-// the non-FlagBootCommitment flow: first use, match, drift, and the
-// backfill of a PCR14-only legacy row.
-func TestPostgresBootPCRsLegacyPath(t *testing.T) {
+// TestPostgresBootPCRsPinnedAfterPCR14Row covers the standalone boot-PCR pin:
+// fail-closed before the PCR14 row exists, first use, match, drift,
+// and a row whose boot columns are still unpinned.
+func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	s := pgBaselineStore(t)
 	boot := BootBaseline{PCR0: fill(0xA0), PCR1: fill(0xA1), PCR7: fill(0xA7)}
 
@@ -301,15 +303,15 @@ func TestPostgresBootPCRsLegacyPath(t *testing.T) {
 		t.Fatalf("drift must report the pinned baseline: %+v", stored)
 	}
 
-	// legacy PCR14-only row TOFU-establishes boot columns on next sight
-	if r, _ := s.CheckAndUpdate("boot-leg", fill(0x14)); r != TOFUFirstUse {
-		t.Fatal("legacy PCR14 first use")
+	// PCR14 row whose boot columns are unpinned establishes them on next sight
+	if r, _ := s.CheckAndUpdate("boot-unpinned", fill(0x14)); r != TOFUFirstUse {
+		t.Fatal("PCR14 first use boot-unpinned")
 	}
-	if s.GetBootBaseline("boot-leg") != nil {
-		t.Fatal("legacy row should have no boot baseline yet")
+	if s.GetBootBaseline("boot-unpinned") != nil {
+		t.Fatal("unpinned row should have no boot baseline yet")
 	}
-	if r, _ := s.CheckAndUpdateBootPCRs("boot-leg", boot); r != TOFUFirstUse {
-		t.Fatal("legacy boot backfill should be first use")
+	if r, _ := s.CheckAndUpdateBootPCRs("boot-unpinned", boot); r != TOFUFirstUse {
+		t.Fatal("boot pin on an unpinned row should be first use")
 	}
 }
 
@@ -581,4 +583,38 @@ func TestPostgresAttestationIndependentClientsDoNotSerialize(t *testing.T) {
 		t.Fatalf("release blocker lock: %v", err)
 	}
 	<-blockedDone
+}
+
+// The agent-update re-pin against real database:
+// the archive insert, the counter bump and the rate-limit read that must happen
+// under the row lock
+func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
+	bs := pgBaselineStore(t)
+	const clientID = "pg-repin"
+
+	oldHash := fill(0xBB)
+	newHash := fill(0xC7)
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x14), oldHash, nil); r.AgentHashResult != TOFUFirstUse {
+		t.Fatalf("expected TOFUFirstUse, got %v", r.AgentHashResult)
+	}
+
+	now := time.Now()
+	if err := bs.ArchiveAndRepinAgentHash(clientID, newHash, fill(0x15), now); err != nil {
+		t.Fatalf("re-pin: %v", err)
+	}
+
+	st := bs.GetAgentHashRepinState(clientID)
+	if !st.Present || st.RepinCount != 1 {
+		t.Fatalf("expected one re-pin on a present row, got present=%v count=%d",
+			st.Present, st.RepinCount)
+	}
+
+	if r := bs.CheckAndUpdateAttestation(clientID, fill(0x15), newHash, nil); r.AgentHashResult != TOFUMatch {
+		t.Fatalf("expected TOFUMatch after the re-pin, got %v", r.AgentHashResult)
+	}
+
+	if err := bs.ArchiveAndRepinAgentHash(clientID, fill(0xD3), fill(0x16),
+		now.Add(AgentHashRepinMinInterval-time.Minute)); !errors.Is(err, ErrAgentHashRepinRateLimited) {
+		t.Fatalf("expected ErrAgentHashRepinRateLimited, got %v", err)
+	}
 }

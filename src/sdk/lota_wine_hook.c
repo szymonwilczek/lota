@@ -539,6 +539,7 @@ static struct lota_client *hook_connect(void)
 	struct lota_connect_opts opts;
 
 	memset(&opts, 0, sizeof(opts));
+	opts.struct_size = sizeof(opts);
 
 	if (g_hook.socket_path[0])
 		opts.socket_path = g_hook.socket_path;

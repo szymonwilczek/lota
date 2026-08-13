@@ -60,8 +60,19 @@ jobs:
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
 
+      - name: Sign the enforcement object with an ephemeral key
+        run: |
+          set -eu
+          umask 077
+          make all
+          ./build/lota-agent --gen-signing-key "$RUNNER_TEMP/ci-enforcement"
+          make sign-bpf SIGNING_KEY="$RUNNER_TEMP/ci-enforcement.key"
+
       - name: Build the RPMs
-        run: make packages
+        run: |
+          make packages \
+            SIGNING_KEY="$RUNNER_TEMP/ci-enforcement.key" \
+            SIGNING_PUBKEY="$RUNNER_TEMP/ci-enforcement.pub"
 
       - name: Lint the RPMs (advisory)
         run: rpmlint build/packages/*.rpm || true

@@ -2,6 +2,16 @@
 /* Copyright (C) 2026 Szymon Wilczek */
 /*
  * LOTA Agent - IPC Server Module
+ *
+ * One process serves LOTA_IPC_SOCKET_PATH: the enforcement daemon.
+ * It is the unit systemd's socket activation starts, the one that stays up whether
+ * or not a publisher is configured, and the one holding the BPF context,
+ * the enforcement policy digest and the boot state a title asks about.
+ *
+ * The attestation loop is a client of this server, not a second one.
+ * It sends SYNC_ATTEST with the verdict it holds for each publisher and reads
+ * back the sessions and enrollment requests only the socket owner can see.
+ * Two servers on one path meant whichever bound last answered, with half the state.
  */
 
 #ifndef LOTA_AGENT_IPC_H
@@ -9,13 +19,65 @@
 
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
 
+#include "attest_targets.h"
+
 struct tpm_context;
 struct dbus_context;
 struct ipc_client;
+
+/*
+ * Rate limiting for GET_TOKEN, in two layers that measure different things.
+ *
+ * Every GET_TOKEN costs fresh TPM quote, so the limiter exists to stop one
+ * caller monopolising the TPM.
+ *
+ * Connection is the session: title holds one, and the agent already authenticates
+ * its peer.
+ * So the per-session budget is what title spends, sized so no realistic heartbeat
+ * reaches it, and the per-UID ceiling stays as the bound on total TPM cost,
+ * sized for several titles at once.
+ *
+ * Neither alone is enough: without the session budget one title can spend the whole
+ * uid allowance, and without the uid ceiling a caller opens connections until
+ * the TPM is saturated.
+ */
+#define TOKEN_RATE_LIMIT_PER_SESSION 20 /* requests, ~3 s heartbeat */
+#define TOKEN_RATE_LIMIT 60 /* requests per uid, several titles */
+#define TOKEN_RATE_WINDOW_SEC 60 /* per minute */
+
+/*
+ * The fastest heartbeat any reference integration uses, in seconds.
+ * Per-session budget is checked against it below so change to either one
+ * cannot quietly starve a title.
+ */
+#define LOTA_REFERENCE_HEARTBEAT_SEC 5
+
+/*
+ * Title on the reference cadence must fit inside its session budget with room
+ * to spare, or the limiter is throttling correct behaviour.
+ */
+_Static_assert(TOKEN_RATE_LIMIT_PER_SESSION >
+		       TOKEN_RATE_WINDOW_SEC / LOTA_REFERENCE_HEARTBEAT_SEC,
+	       "session token budget must exceed the reference heartbeat rate");
+
+/*
+ * The uid ceiling has to hold several sessions at once, or the second title
+ * player launches is refused for what the first one spent.
+ */
+_Static_assert(TOKEN_RATE_LIMIT >= 2 * TOKEN_RATE_LIMIT_PER_SESSION,
+	       "uid token ceiling must cover at least two concurrent sessions");
+
+/*
+ * The session budget is the inner bound; session may never outspend the uid
+ * it belongs to.
+ */
+_Static_assert(TOKEN_RATE_LIMIT_PER_SESSION < TOKEN_RATE_LIMIT,
+	       "session budget must be tighter than the uid ceiling");
 
 /*
  * fd -> client lookup table.
@@ -77,6 +139,18 @@ struct ipc_context {
 	struct dbus_context *dbus;
 	int dbus_fd;
 
+	/*
+	 * Protected process was ended here for its owner.
+	 *
+	 * Sticky for the boot and kept beside status_flags rather than in it,
+	 * because that word is republished wholesale on every attestation round
+	 * and would drop the bit.
+	 *
+	 * ipc_update_status folds it back in, so the status answer, the token
+	 * and the D-Bus property carry it from one source.
+	 */
+	bool protected_terminated;
+
 	/* Attestation state */
 	uint32_t status_flags;
 	uint64_t last_attest_time;
@@ -92,6 +166,44 @@ struct ipc_context {
 	uint64_t aik_rotation_deadline; /* provisioned_at + TTL (0 if unknown) */
 	uint64_t aik_grace_deadline; /* end of post-rotation grace (0 if none) */
 	bool aik_reenroll_required; /* stored cert outdated by a rotation */
+
+	/*
+	 * Publisher profiles this host attests for, borrowed from the attestation
+	 * loop that owns them.
+	 *
+	 * Connection may bind itself to one of these with SET_PROFILE,
+	 * and every later answer is then that publisher's: its AIK signs the token,
+	 * and its verifier's verdict is the status.
+	 * Without the list the agent has nothing to bind to,
+	 * so SET_PROFILE is refused; that is the case for the diagnostic
+	 * IPC servers, which attest to nobody.
+	 *
+	 * Same borrowing rule as tpm above:
+	 * read from the single-threaded epoll loop that also owns the writes.
+	 */
+	struct attest_target *profiles;
+	size_t profile_count;
+
+	/*
+	 * Session opened or closed, or title asked for a publisher this host
+	 * has not enrolled with.
+	 * Raised where it happens and acted on once the epoll pass is over,
+	 * because both places run with a client being created or destroyed
+	 * underneath them.
+	 */
+	bool profiles_changed;
+
+	/*
+	 * Called once the attestation loop has synced.
+	 *
+	 * Loop is the process that rotates the AIK and it writes the rotation
+	 * record to disk, so the socket owner republishes that state by
+	 * re-reading the file rather than carrying it on the wire:
+	 * the file is the source both processes already share,
+	 * and a wire field would be a second copy to keep true.
+	 */
+	void (*on_attest_sync)(void *user);
+	void *on_attest_sync_user;
 
 	/* true when using socket activation (do not unlink socket) */
 	bool activated;
@@ -175,6 +287,32 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
  * @mode: New mode (enum lota_mode)
  */
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
+
+/*
+ * ipc_set_profiles - Hand the IPC layer the publisher profiles
+ * @ctx: Server context
+ * @profiles: Targets owned by the attestation loop, borrowed for the run
+ * @count: How many
+ *
+ * Until this is called a connection has no publisher to bind to
+ * and SET_PROFILE is refused.
+ * Passing NULL/0 clears the list.
+ */
+void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
+		      size_t count);
+
+/*
+ * ipc_set_attest_sync_hook - Run @fn after the attestation loop syncs
+ * @ctx: Server context
+ * @fn: Callback, or NULL to clear
+ * @user: Opaque argument handed back to @fn
+ *
+ * The socket owner learns from a sync that the loop has been round the course,
+ * which is the moment any state the loop keeps on disk -- the AIK rotation
+ * record -- is worth re-reading.
+ */
+void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
+			      void *user);
 
 /*
  * ipc_set_tpm - Set TPM context for token signing

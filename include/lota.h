@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: MIT */
 /*
  * LOTA - Linux Open Trusted Attestation
  * Common definitions shared between user-space and BPF
@@ -19,8 +19,17 @@
 #include <stdbool.h>
 #endif
 
-/* Protocol version */
-#define LOTA_VERSION_MAJOR 1
+/*
+ * Attestation report wire version.
+ * Major changes on breaking report layout change, which is a flag-day:
+ * the verifier accepts exactly one version, so agents and verifiers cross
+ * the boundary together.
+ *
+ * Major 2 dropped the always-empty ek_certificate field and made the trailing
+ * ESRT section mandatory.
+ * See Documentation/operator/version-compatibility.rst
+ */
+#define LOTA_VERSION_MAJOR 2
 #define LOTA_VERSION_MINOR 0
 #define LOTA_VERSION ((LOTA_VERSION_MAJOR << 16) | LOTA_VERSION_MINOR)
 
@@ -91,19 +100,35 @@ enum lota_mode {
 #define LOTA_CFG_LOCK_BPF 6 /* 1 = block non-agent writes to LOTA BPF maps */
 #define LOTA_CFG_MAX_ENTRIES 9
 
-/* fs-verity digest format required by LOTA policy enforcement */
+/*
+ * fs-verity digest sizes LOTA policy enforcement accepts.
+ *
+ * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce
+ * by default, so it is the size a distribution-signed object carries;
+ * SHA-512 is the stronger option an operator may choose.
+ * Key always states its own length, and the map key stays SHA-512 wide with
+ * the unused tail zeroed, so both sizes share one map.
+ */
+#define LOTA_VERITY_DIGEST_SHA256_SIZE 32
 #define LOTA_VERITY_DIGEST_SHA512_SIZE 64
 #define LOTA_VERITY_DIGEST_MAX_SIZE LOTA_VERITY_DIGEST_SHA512_SIZE
 
 /*
  * fs-verity allowlist key used by BPF map and user-space loader.
  *
- * len must be LOTA_VERITY_DIGEST_SHA512_SIZE.
+ * len must be one of the sizes above;
+ * the bytes past len are zero, so key built from either algorithm compares
+ * and hashes as one map key.
  */
 struct lota_verity_digest_key {
 	__u32 len;
 	__u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE];
 };
+
+/* whether a measured digest length is one LOTA policy enforcement takes */
+#define LOTA_VERITY_DIGEST_LEN_SUPPORTED(len)       \
+	((len) == LOTA_VERITY_DIGEST_SHA256_SIZE || \
+	 (len) == LOTA_VERITY_DIGEST_SHA512_SIZE)
 
 _Static_assert(LOTA_VERITY_DIGEST_MAX_SIZE == LOTA_VERITY_DIGEST_SHA512_SIZE,
 	       "fs-verity key width must remain SHA-512 sized");

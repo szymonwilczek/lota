@@ -104,24 +104,32 @@ static void remeasure_protected_image(const struct lota_exec_event *event)
 {
 	uint8_t digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE];
 	char hex[LOTA_RUNTIME_IMAGE_DIGEST_SIZE * 2 + 1];
+	struct lota_runtime_measure_failure mfail;
+	struct lota_runtime_measure_coverage cov;
 	int ret;
 
 	if (!rt_remeasure_due(event->tgid, event->timestamp_ns))
 		return;
 
-	ret = lota_runtime_measure_pid((pid_t)event->tgid, digest);
+	ret = lota_runtime_measure_pid((pid_t)event->tgid, digest, &cov,
+				       &mfail);
 	if (ret < 0) {
+		char reason[320];
+
+		lota_rt_failure_reason(&mfail, ret, reason, sizeof(reason));
 		lota_warn(
 			"event-driven re-measure failed for protected pid=%u: %s",
-			event->tgid, strerror(-ret));
+			event->tgid, reason);
 		return;
 	}
 
 	for (int i = 0; i < LOTA_RUNTIME_IMAGE_DIGEST_SIZE; i++)
 		snprintf(hex + i * 2, 3, "%02x", digest[i]);
 
-	lota_warn("event-driven re-measure: protected pid=%u image=%s",
-		  event->tgid, hex);
+	lota_warn("event-driven re-measure: protected pid=%u image=%s (%u "
+		  "object%s measured, %u unmeasurable)",
+		  event->tgid, hex, cov.measured, cov.measured == 1 ? "" : "s",
+		  cov.unmeasurable);
 }
 
 /*

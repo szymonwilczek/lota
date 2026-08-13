@@ -125,20 +125,40 @@ own before the TTL, default 24h, expires):
 
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
         --ca-cert tls.crt
-    # stores /var/lib/lota/aik_cert.der, sent in every attestation report
-    # also records the CA endpoint for guided re-enrollment
+    # stores the issued certificate and the CA endpoint in the publisher
+    # profile the trust anchor names, under /var/lib/lota/profiles/
 
-The first enrollment records the CA endpoint, so the running agent renews the
-certificate on its own against that endpoint as it nears expiry (it re-enrolls
-once the cert enters its final third of validity, backing off when the CA is
-unreachable). The renewal is automatic whenever an endpoint is on disk, so an
-enrolled host needs no scheduled ``--reenroll``. The same guided command stays
-available as a manual override -- before the certificate TTL expires, or after
-the agent rotates the AIK -- with no CA arguments and no manual CA steps:
+``--ca-cert`` is required. Beyond verifying the TLS peer, the trust anchor is
+what names the publisher: the profile directory is the SHA-256 of the anchor's
+SubjectPublicKeyInfo, so a host answering to several publishers keeps one AIK,
+one certificate and one enrollment record per publisher and no publisher can
+correlate the host through a shared identity. The endpoint is deliberately not
+the identity -- an address is mutable and two publishers can share a hostname,
+while reissuing the CA certificate over the same key keeps the profile.
+
+The AIK is part of the profile, not shared across it. Each publisher's
+enrollment provisions its own key, in its own TPM persistent slot, with its own
+rotation metadata and userAuth -- a shared key would be a stable handle two
+publishers could correlate the same machine through. The slot is taken from a
+bounded range (``0x81010010`` upwards, sized to the profile limit), recorded in
+the profile so a config edit cannot shift a publisher onto another one's key,
+and a slot already holding an object the host did not record is skipped rather
+than evicted. A host that runs out of the range refuses the enrollment instead
+of reusing a key; persistent slots are shared with everything else on the
+machine, so raising the ceiling is a deliberate act, not an automatic one.
+
+The first enrollment records the CA endpoint in that profile, so the running
+agent renews the certificate on its own against that endpoint as it nears
+expiry (it re-enrolls once the cert enters its final third of validity, backing
+off when the CA is unreachable). The renewal is automatic whenever an endpoint
+is on disk, so an enrolled host needs no scheduled ``--reenroll``. The same
+guided command stays available as a manual override -- before the certificate
+TTL expires, or after the agent rotates the AIK -- naming only the anchor that
+selects the profile:
 
 .. code-block:: sh
 
-    sudo lota-agent --reenroll
+    sudo lota-agent --reenroll --ca-cert tls.crt
 
 Point every verifier at the CA root:
 
@@ -156,8 +176,8 @@ Self-service re-anchor (diverse-fleet profile)
 
 On the diverse-fleet profile (a policy with ``require_secureboot``), a
 legitimate firmware update shifts PCR 0/1 and would otherwise reject the host
-until an operator clears its baseline. ``-enable-self-service-reanchor`` lets the
-verifier re-pin the per-device baseline itself when the drift preserves the
+until an operator clears its baseline. ``profile: consumer`` in the policy lets
+the verifier re-pin the per-device baseline itself when the drift preserves the
 Secure Boot root of trust (PK/KEK/db unchanged, ``dbx`` append-only, Secure Boot
 still on, firmware version not rolled back); a hardware platform that reports no
 firmware version (``ESRT``, common on DIY boards flashed with the vendor tool
@@ -168,9 +188,15 @@ devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
 with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (each LFA re-anchor
 is also logged at security level and counted in the ``lfa`` re-anchor metric).
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
-existing endpoints. Leave the flag off for the enterprise profile, where
-firmware drift is a feature and re-baselining stays a deliberate operator
-action.
+existing endpoints.
+
+The profile lives in the policy because it describes the fleet, not the
+deployment, and one verifier can serve several tenants and therefore several
+fleets. ``enterprise`` (and an unset profile) leaves the path off, which is
+right where firmware drift is a finding and re-baselining stays a deliberate
+operator action. ``--enable-self-service-reanchor`` remains as an override in
+both directions for an operator who has to contradict a policy they cannot
+immediately re-sign; left unset, each policy decides for itself.
 
 Operator-forced re-anchor and client removal
 ============================================
@@ -339,8 +365,8 @@ at it:
 
 The token must be 1 to 128 printable, non-whitespace ASCII characters; a
 trailing newline in the file is tolerated. A successful enrollment persists
-the token (not the file path) in the root-only enrollment state next to the
-CA endpoint, so ``--reenroll`` and the daemon's automatic certificate
+the token (not the file path) in the profile's root-only enrollment record
+next to the CA endpoint, so ``--reenroll`` and the daemon's automatic certificate
 renewal keep presenting it without further operator input. Re-run
 ``--enroll`` with a new token file to replace it.
 

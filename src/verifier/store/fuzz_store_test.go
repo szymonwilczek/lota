@@ -101,7 +101,7 @@ func FuzzDecodeBanCursor(f *testing.F) {
 	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789:default")
 	// seed 2: missing hardware ID and tenant
 	f.Add("1700000000000000000")
-	// seed 3: legacy two-part cursor without a tenant
+	// seed 3: two-part cursor, one field short of the three required
 	f.Add("1700000000000000000:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
 	// seed 4: too many colons
 	f.Add("1:2:3:4")

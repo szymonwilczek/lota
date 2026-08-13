@@ -37,11 +37,110 @@ func init() {
 }
 
 // builds a complete attestation report with valid signatures
+// productionPCRMask is the mask a current agent emits: PCR 0/1/7 (firmware,
+// platform configuration, Secure Boot policy) plus PCR 14 (boot commitment).
+// legacyPCRMask drops PCR 7 -- what downgraded or tampered agent would send.
+const (
+	productionPCRMask = uint32(0x00004083)
+	legacyPCRMask     = uint32(0x00004003)
+)
+
+// productionFlags is the flag set a current agent emits:
+// both PCR14 derivation bits are mandatory on the wire,
+// so fixture that omits one is a report the verifier must refuse.
+const productionFlags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce |
+	types.FlagBootCommitmentV1 | types.FlagInitramfsLockV1
+
+// uefiEventLog is the firmware log every fixture report carries:
+// one EV_EFI_VARIABLE_DRIVER_CONFIG measurement of the EFI global SecureBoot
+// variable on PCR 7.
+// That event is the verifier's proof of UEFI boot -- legacy BIOS log has no EFI
+// variable to measure.
+func uefiEventLog() []byte {
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	digest := sha256.Sum256(payload)
+	return buildTestEventLog([]EventLogEntry{{
+		PCRIndex:  7,
+		EventType: EvEFIVariableDriverConfig,
+		Digests:   map[uint16][]byte{AlgSHA256: digest[:]},
+		EventData: payload,
+	}})
+}
+
+// uefiPCR7 is the PCR 7 value uefiEventLog replays to.
+// Fixture report must carry it so the SecureBoot measurement is quote-authenticated
+func uefiPCR7() [types.HashSize]byte {
+	payload := encodeUEFIVariableData(efiGlobalVariableGUID, "SecureBoot", []byte{0x01})
+	digest := sha256.Sum256(payload)
+
+	var pcr7 [types.HashSize]byte
+	h := sha256.New()
+	h.Write(pcr7[:])
+	h.Write(digest[:])
+	copy(pcr7[:], h.Sum(nil))
+	return pcr7
+}
+
+// fixtureAgentHash is the agent_hash every fixture report carries
+// unless test asks for another build
+func fixtureAgentHash() [types.HashSize]byte {
+	return fixtureAgentHashSeed(0xBB)
+}
+
+// fixtureAgentHashSeed builds distinct agent_hash, so test can stand client
+// on one build and then report another the way a package update does
+func fixtureAgentHashSeed(seed byte) [types.HashSize]byte {
+	var agentHash [types.HashSize]byte
+	for i := range agentHash {
+		agentHash[i] = seed ^ byte(i)
+	}
+	return agentHash
+}
+
+// fixturePCR14Seed is the PCR14 a report carrying the seeded agent hash must present:
+// the register content is derived from the agent hash, so the two move together.
+func fixturePCR14Seed(seed byte) [types.HashSize]byte {
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed), 0, 0)
+}
+
+// fixturePCR14 is the only PCR14 a fixture report can carry and still verify:
+// initramfs lock chained with the agent's boot commitment over the baseline
+// the fixture event log replays to (0^32, it holds no PCR14 events)
+// and the zero reset/restart counters in the fixture TPMS_ATTEST ClockInfo
+func fixturePCR14() [types.HashSize]byte {
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHash(), 0, 0)
+}
+
 func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {
+	t.Helper()
+	return createValidReportWithMask(t, clientID, nonce, pcr14, productionPCRMask)
+}
+
+func createValidReportWithMask(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte, pcrMask uint32) []byte {
+	t.Helper()
+	return createValidReportWithFlags(t, clientID, nonce, pcr14, pcrMask, productionFlags)
+}
+
+func createValidReportWithFlags(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
+	pcrMask, flags uint32,
+) []byte {
+	t.Helper()
+	return createValidReportWithAgentHash(t, clientID, nonce, pcr14, pcrMask, flags,
+		fixtureAgentHash())
+}
+
+// createValidReportWithAgentHash is the builder the others delegate to.
+// Agent hash is a parameter because it is bound into the quote nonce and written
+// into the report body, so test that varies it must vary both.
+func createValidReportWithAgentHash(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte,
+	pcrMask, flags uint32, agentHash [types.HashSize]byte,
+) []byte {
 	t.Helper()
 	hwID := sha256.Sum256([]byte(clientID))
 
-	buf := make([]byte, types.MinReportSize)
+	// fixed struct plus the two variable-section length prefixes;
+	// mandatory ESRT section is appended at the end
+	buf := make([]byte, types.FixedReportSize+8)
 	offset := 0
 
 	// Header (32 bytes)
@@ -52,15 +151,19 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
+	binary.LittleEndian.PutUint32(buf[offset:], flags)
 	offset += 4
 
 	// TPM Evidence - PCR values
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
@@ -68,19 +171,19 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	}
 
 	// PCR mask
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003) // PCR 0,1,14
+	binary.LittleEndian.PutUint32(buf[offset:], pcrMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, pcrMask)
 
 	bindingReport := &types.AttestationReport{}
-	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingReport.Header.Flags = flags
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
-		bindingReport.System.AgentHash[i] = byte(0xBB ^ i)
 	}
+	bindingReport.System.AgentHash = agentHash
 	bindingReport.System.IOMMU.Vendor = 0x8086
 	bindingReport.System.IOMMU.Flags = 0x07
 	bindingReport.System.IOMMU.UnitCount = 2
@@ -121,11 +224,6 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
 	offset += 2
 
-	// EK certificate (optional, leave empty)
-	offset += types.MaxEKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // no EK cert
-	offset += 2
-
 	// nonce
 	copy(buf[offset:], nonce[:])
 	offset += types.NonceSize
@@ -157,9 +255,7 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	}
 	offset += types.HashSize
 	// agent_hash
-	for i := 0; i < types.HashSize; i++ {
-		buf[offset+i] = byte(0xBB ^ i)
-	}
+	copy(buf[offset:], agentHash[:])
 	offset += types.HashSize
 	// kernel_path
 	copy(buf[offset:], "/boot/vmlinuz-6.12.0-lota")
@@ -188,10 +284,17 @@ func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	// append minimal valid TCG event log (Spec ID header, zero PCR_EVENT2 entries)
-	eventLog := buildTestEventLog(nil)
+	// append the fixture firmware log
+	// (Spec ID header + the PCR 7 SecureBoot variable measurement
+	// the UEFI gate requires)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
+
+	// mandatory trailing ESRT section
+	// all-zero means present == false,
+	// which is what a platform with no ESRT System Firmware entry reports
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 
 	// keep report_size consistent with wire payload
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
@@ -266,13 +369,10 @@ func persistentClientID(challengeID string) string {
 func createTestVerifier(t *testing.T, aikStore store.AIKStore) *Verifier {
 	t.Helper()
 	cfg := DefaultConfig()
-	// fixtures emit pcr_mask 0x4003 (PCR 0/1/14); production-default
-	// enforcement of PCR 0/1/7 is exercised by dedicated tests.
-	cfg.RequireBootPCRs = false
-	// fixtures predate the initramfs PCR14 lock and emit reports
-	// without FlagInitramfsLockV1; the dedicated lock-policy tests
-	// cover the require path.
-	cfg.RequireInitramfsLock = false
+	// Fixtures carry no signed policy pinning PCR0/1/7 and
+	// no pre-enrolled boot baseline, so they take the same route
+	// as operator running with --allow-tofu-boot-baseline
+	cfg.RequireBootEnrollment = false
 	cfg.NonceLifetime = 1 * time.Second
 	verifier := NewVerifier(cfg, aikStore)
 
@@ -302,10 +402,7 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	}
 	t.Logf("✓ Challenge generated with nonce: %x...", challenge.Nonce[:8])
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	t.Logf("✓ Report created (%d bytes)", len(reportData))
@@ -336,10 +433,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 
 	// establish baseline
 	challenge1, _ := verifier.GenerateChallenge(clientID)
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, pcr14)
 	result1, err := verifier.VerifyReport(clientID, report1)
 	if err != nil || result1.Result != types.VerifyOK {
@@ -372,10 +466,7 @@ func TestIntegration_SessionTokenValidation(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x44 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	res, err := verifier.VerifyReport(clientID, report)
@@ -413,10 +504,7 @@ func TestIntegration_SessionTokenConsume(t *testing.T) {
 		t.Fatalf("GenerateChallenge failed: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x55 ^ i)
-	}
+	pcr14 := fixturePCR14()
 
 	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
 	res, err := verifier.VerifyReport(clientID, report)
@@ -447,10 +535,7 @@ func TestIntegration_PCR14BaselineViolation(t *testing.T) {
 
 	// establish baseline
 	challenge1, _ := verifier.GenerateChallenge(clientID)
-	originalPCR14 := [32]byte{}
-	for i := range originalPCR14 {
-		originalPCR14[i] = byte(0x14 ^ i)
-	}
+	originalPCR14 := fixturePCR14()
 	report1 := createValidReport(t, clientID, challenge1.Nonce, originalPCR14)
 	result1, _ := verifier.VerifyReport(clientID, report1)
 	if result1.Result != types.VerifyOK {
@@ -494,10 +579,7 @@ func TestIntegration_NonceReplayAttack(t *testing.T) {
 	verifier := createTestVerifier(t, aikStore)
 	clientID := "replay-victim"
 	challenge, _ := verifier.GenerateChallenge(clientID)
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
+	pcr14 := fixturePCR14()
 	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
 
 	// should succeed
@@ -529,8 +611,7 @@ func TestIntegration_InvalidSignature(t *testing.T) {
 	clientID := "wrong-key-client"
 
 	challenge, _ := verifier.GenerateChallenge(clientID)
-	pcr14 := [32]byte{}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
 
 	// Corrupt the quote signature so it no longer verifies against the
 	// certificate-authenticated AIK.
@@ -579,10 +660,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 				return
 			}
 
-			pcr14 := [32]byte{}
-			for j := range pcr14 {
-				pcr14[j] = byte(clientNum ^ j)
-			}
+			pcr14 := fixturePCR14()
 
 			reportData := createValidReportWithKey(clientID, challenge.Nonce, pcr14, clientKeys[clientNum])
 
@@ -642,10 +720,7 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 				return
 			}
 
-			pcr14 := [32]byte{}
-			for j := range pcr14 {
-				pcr14[j] = byte(0xA5 ^ j)
-			}
+			pcr14 := fixturePCR14()
 
 			reportData := createValidReportWithKey(hardwareLabel, challenge.Nonce, pcr14, key)
 			result, err := verifier.VerifyReport(challengeID, reportData)
@@ -678,7 +753,9 @@ func TestIntegration_ConcurrentFirstAttestationSameClient(t *testing.T) {
 // helper for concurrent test
 func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, key *rsa.PrivateKey) []byte {
 	hwID := sha256.Sum256([]byte(clientID))
-	buf := make([]byte, types.MinReportSize)
+	// fixed struct plus the two variable-section length prefixes;
+	// mandatory ESRT section is appended at the end
+	buf := make([]byte, types.FixedReportSize+8)
 	offset := 0
 
 	// Header
@@ -689,29 +766,33 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 
 	binary.LittleEndian.PutUint32(buf[offset:], types.MinReportSize)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:], types.FlagTPMQuoteOK|types.FlagModuleSig|types.FlagEnforce)
+	binary.LittleEndian.PutUint32(buf[offset:], productionFlags)
 	offset += 4
 
 	// PCRs
+	pcr7 := uefiPCR7()
 	for i := 0; i < types.PCRCount; i++ {
 		for j := 0; j < types.HashSize; j++ {
-			if i == 14 {
+			switch i {
+			case 14:
 				buf[offset+j] = pcr14[j]
-			} else {
+			case 7:
+				buf[offset+j] = pcr7[j]
+			default:
 				buf[offset+j] = byte(i ^ j)
 			}
 		}
 		offset += types.HashSize
 	}
 
-	binary.LittleEndian.PutUint32(buf[offset:], 0x00004003)
+	binary.LittleEndian.PutUint32(buf[offset:], productionPCRMask)
 	offset += 4
 
 	// compute PCR digest from values just written
-	pcrDigest := computeTestPCRDigest(buf, 16, 0x00004003)
+	pcrDigest := computeTestPCRDigest(buf, 16, productionPCRMask)
 
 	bindingReport := &types.AttestationReport{}
-	bindingReport.Header.Flags = types.FlagTPMQuoteOK | types.FlagModuleSig | types.FlagEnforce
+	bindingReport.Header.Flags = productionFlags
 	copy(bindingReport.TPM.HardwareID[:], hwID[:])
 	for i := 0; i < types.HashSize; i++ {
 		bindingReport.System.KernelHash[i] = byte(0xAA ^ i)
@@ -747,11 +828,6 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	copy(buf[offset:], aikCertDER)
 	offset += types.MaxAIKCertSize
 	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(aikCertDER)))
-	offset += 2
-
-	// EK certificate (optional, leave empty)
-	offset += types.MaxEKCertSize
-	binary.LittleEndian.PutUint16(buf[offset:], 0) // no EK cert
 	offset += 2
 
 	copy(buf[offset:], nonce[:])
@@ -807,9 +883,14 @@ func createValidReportWithKey(clientID string, nonce [32]byte, pcr14 [32]byte, k
 	binary.LittleEndian.PutUint32(buf[offset:], 0)
 	offset += 4
 
-	eventLog := buildTestEventLog(nil)
+	eventLog := uefiEventLog()
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(eventLog)))
 	buf = append(buf, eventLog...)
+
+	// mandatory trailing ESRT section
+	// all-zero means present == false,
+	// which is what a platform with no ESRT System Firmware entry reports
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))
 
 	return buf
@@ -835,19 +916,16 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,14)", challenge.PCRMask)
 }
 
-// TestVerify_RejectsMissingBootPCRsByDefault asserts that the default
-// (production) configuration refuses any attestation whose pcr_mask does
-// not include PCR 0, 1, and 7. createValidReport emits the pre-PCR7
-// legacy mask 0x4003 (PCR 0/1/14); a tampered or downgraded agent that
-// strips the firmware/Secure Boot bits from its mask must therefore be
-// rejected with VerifyPCRFail before the BootBaselineStorer pin is
-// consulted.
-func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
+// TestVerify_RejectsMissingBootPCRs asserts that the verifier refuses any attestation
+// whose pcr_mask does not include PCR 0, 1, and 7.
+// Tampered or downgraded agent that strips the firmware/Secure Boot bits from its mask
+// is rejected with VerifyPCRFail before the BootBaselineStorer pin is consulted.
+// There is no configuration that accepts such report.
+func TestVerify_RejectsMissingBootPCRs(t *testing.T) {
 	aikStore := newCertStore(t)
 
 	cfg := DefaultConfig()
 	cfg.NonceLifetime = 1 * time.Second
-	// RequireBootPCRs left at its DefaultConfig value (true).
 
 	verifier := NewVerifier(cfg, aikStore)
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
@@ -857,128 +935,172 @@ func TestVerify_RejectsMissingBootPCRsByDefault(t *testing.T) {
 		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
-	clientID := "boot-pcr-default-reject"
+	clientID := "boot-pcr-reject"
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+	pcr14 := fixturePCR14()
+	reportData := createValidReportWithMask(t, clientID, challenge.Nonce, pcr14, legacyPCRMask)
 
 	result, err := verifier.VerifyReport(clientID, reportData)
 	if err == nil {
-		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7 under default RequireBootPCRs=true")
+		t.Fatal("expected rejection: pcr_mask 0x4003 omits PCR 0/1/7")
 	}
 	if result.Result != types.VerifyPCRFail {
 		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
 	}
 }
 
-// TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed pairs with
-// TestVerify_RejectsMissingBootPCRsByDefault: with RequireBootPCRs
-// explicitly disabled (the --allow-legacy-pcr-mask CLI escape hatch),
-// the same fixture must continue through the verifier so operators can
-// roll over a pre-PCR0/1/7 fleet without dropping it offline.
-func TestVerify_AcceptsMissingBootPCRsWhenLegacyAllowed(t *testing.T) {
-	aikStore := newCertStore(t)
-
-	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
-	cfg.NonceLifetime = 1 * time.Second
-
-	verifier := NewVerifier(cfg, aikStore)
-	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
-
-	clientID := "boot-pcr-legacy-allow"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge: %v", err)
-	}
-
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
-
-	result, err := verifier.VerifyReport(clientID, reportData)
-	if err != nil {
-		t.Fatalf("VerifyReport: %v", err)
-	}
-	if result.Result != types.VerifyOK {
-		t.Fatalf("expected VerifyOK with RequireBootPCRs=false, got %d", result.Result)
-	}
+// TestVerify_RejectsMissingInitramfsLock asserts that report whose Header.Flags
+// omits FlagInitramfsLockV1 is refused with VerifyPCRFail before any downstream
+// baseline write.
+func TestVerify_RejectsMissingInitramfsLock(t *testing.T) {
+	assertFlagRejected(t, "initramfs-lock-missing",
+		productionFlags&^types.FlagInitramfsLockV1, "FlagInitramfsLockV1")
 }
 
-// TestVerify_RejectsMissingInitramfsLockByDefault asserts that the
-// default (production) configuration refuses any attestation that does
-// not advertise FlagInitramfsLockV1. createValidReport emits a legacy
-// report whose Header.Flags omits the bit, so the verifier must close
-// the kernel-handoff -> lota-agent PCR14 window with VerifyPCRFail
-// before any downstream baseline write.
-func TestVerify_RejectsMissingInitramfsLockByDefault(t *testing.T) {
-	aikStore := newCertStore(t)
+// TestVerify_RejectsMissingBootCommitment is the companion for the other half of
+// the chain: without FlagBootCommitmentV1 the report makes no claim about which
+// agent binary extended PCR14.
+func TestVerify_RejectsMissingBootCommitment(t *testing.T) {
+	assertFlagRejected(t, "boot-commitment-missing",
+		productionFlags&^(types.FlagBootCommitmentV1|types.FlagInitramfsLockV1),
+		"FlagBootCommitmentV1")
+}
 
-	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	// RequireInitramfsLock left at its DefaultConfig value (true).
-	cfg.NonceLifetime = 1 * time.Second
+func assertFlagRejected(t *testing.T, clientID string, flags uint32, wantMsg string) {
+	t.Helper()
 
-	verifier := NewVerifier(cfg, aikStore)
-	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
-		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
-	}
-	if err := verifier.SetActivePolicy("default"); err != nil {
-		t.Fatalf("SetActivePolicy(default): %v", err)
-	}
+	verifier := createTestVerifier(t, newCertStore(t))
 
-	clientID := "initramfs-lock-default-reject"
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
+	reportData := createValidReportWithFlags(t, clientID, challenge.Nonce,
+		fixturePCR14(), productionPCRMask, flags)
 
 	result, err := verifier.VerifyReport(clientID, reportData)
 	if err == nil {
-		t.Fatal("expected rejection: report omits FlagInitramfsLockV1 under default RequireInitramfsLock=true")
+		t.Fatalf("expected rejection: report flags 0x%08x omit %s", flags, wantMsg)
 	}
 	if result.Result != types.VerifyPCRFail {
 		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
 	}
-	if !strings.Contains(err.Error(), "FlagInitramfsLockV1") {
-		t.Fatalf("expected error to mention FlagInitramfsLockV1, got: %v", err)
+	if !strings.Contains(err.Error(), wantMsg) {
+		t.Fatalf("expected error to mention %s, got: %v", wantMsg, err)
 	}
 }
 
-// TestVerify_AcceptsMissingInitramfsLockWhenOptedOut pairs with the
-// reject test above: the --allow-no-initramfs-lock escape hatch must
-// keep a legacy fleet (no 90lota dracut module) attestable while the
-// operator works through the rollout.
-func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
-	aikStore := newCertStore(t)
+// TestVerify_RejectsNonUEFIBoot asserts the UEFI gate:
+// report whose event log carries no EFI variable measurement never came from
+// UEFI firmware (legacy BIOS/CSM has none to measure), so every firmware
+// measurement below it -- the PCR 0/1/7 pin, the Secure Boot state, PCR 14
+// baseline -- would be unauthenticated
+func TestVerify_RejectsNonUEFIBoot(t *testing.T) {
+	verifier := createTestVerifier(t, newCertStore(t))
 
+	clientID := "bios-host"
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+
+	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
+	reportData = stripEventLogEntries(t, reportData)
+
+	result, err := verifier.VerifyReport(clientID, reportData)
+	if err == nil {
+		t.Fatal("expected rejection: event log carries no UEFI evidence")
+	}
+	if result.Result != types.VerifyPCRFail {
+		t.Fatalf("expected VerifyPCRFail, got result=%d err=%v", result.Result, err)
+	}
+	if !strings.Contains(err.Error(), "UEFI") {
+		t.Fatalf("expected the error to name UEFI, got: %v", err)
+	}
+}
+
+// stripEventLogEntries rewrites the report's event log, keeping the Spec ID header
+// and dropping every PCR_EVENT2 entry -- the shape legacy BIOS log has,
+// with no EFI variable measurement to offer.
+func stripEventLogEntries(t *testing.T, reportData []byte) []byte {
+	t.Helper()
+
+	bare := buildTestEventLog(nil)
+
+	// Walk to the length field:
+	// the BPF event array before it is variable, and the wire may carry
+	// mandatory section after the log, so neither end is fixed distance
+	// from it
+	off := types.FixedReportSize
+	if len(reportData) < off+4 {
+		t.Fatalf("report of %d bytes stops before event_count", len(reportData))
+	}
+	eventCount := binary.LittleEndian.Uint32(reportData[off : off+4])
+	off += 4 + int(eventCount)*types.ExecEventSize
+	if len(reportData) < off+4 {
+		t.Fatalf("report of %d bytes stops before event_log_size", len(reportData))
+	}
+	logSize := int(binary.LittleEndian.Uint32(reportData[off : off+4]))
+	logStart := off + 4
+	if len(reportData) < logStart+logSize {
+		t.Fatalf("event log of %d bytes does not fit the report", logSize)
+	}
+	tail := reportData[logStart+logSize:]
+
+	out := append([]byte{}, reportData[:logStart]...)
+	out = append(out, bare...)
+	out = append(out, tail...)
+	binary.LittleEndian.PutUint32(out[off:off+4], uint32(len(bare)))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(len(out)))
+	return out
+}
+
+// TestVerify_BootEnrollmentGateRefusesTOFUFirstUse covers the default production
+// posture: first-attestation client whose PCR0/1/7 are neither pinned by the active
+// policy nor already in the store must be refused, so host booting on tampered
+// firmware cannot self-pin its own baseline.
+func TestVerify_BootEnrollmentGateRefusesTOFUFirstUse(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
 	cfg.NonceLifetime = 1 * time.Second
 
-	verifier := NewVerifier(cfg, aikStore)
+	result, err := attestUnderConfig(t, cfg, "boot-enrollment-refused")
+	if err == nil {
+		t.Fatal("expected rejection: boot baseline not enrolled")
+	}
+	if result.Result != types.VerifyIntegrityMismatch {
+		t.Fatalf("expected VerifyIntegrityMismatch, got result=%d err=%v", result.Result, err)
+	}
+	if !strings.Contains(err.Error(), "boot baseline not enrolled") {
+		t.Fatalf("expected the enrollment-gate error, got: %v", err)
+	}
+}
+
+// TestVerify_BootEnrollmentGateOptOutAllowsTOFU pairs with the refusal above:
+// --allow-tofu-boot-baseline (RequireBootEnrollment=false) lets the same client
+// TOFU-pin its firmware PCRs on first sight.
+func TestVerify_BootEnrollmentGateOptOutAllowsTOFU(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.NonceLifetime = 1 * time.Second
+	cfg.RequireBootEnrollment = false
+
+	result, err := attestUnderConfig(t, cfg, "boot-enrollment-tofu")
+	if err != nil {
+		t.Fatalf("VerifyReport: %v", err)
+	}
+	if result.Result != types.VerifyOK {
+		t.Fatalf("expected VerifyOK, got %d", result.Result)
+	}
+}
+
+func attestUnderConfig(t *testing.T, cfg VerifierConfig, clientID string) (*types.VerifyResult, error) {
+	t.Helper()
+
+	verifier := NewVerifier(cfg, newCertStore(t))
 	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
 		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
 	}
@@ -986,25 +1108,13 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 		t.Fatalf("SetActivePolicy(default): %v", err)
 	}
 
-	clientID := "initramfs-lock-opt-out"
 	challenge, err := verifier.GenerateChallenge(clientID)
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
 
-	pcr14 := [32]byte{}
-	for i := range pcr14 {
-		pcr14[i] = byte(0x14 ^ i)
-	}
-	reportData := createValidReport(t, clientID, challenge.Nonce, pcr14)
-
-	result, err := verifier.VerifyReport(clientID, reportData)
-	if err != nil {
-		t.Fatalf("VerifyReport: %v", err)
-	}
-	if result.Result != types.VerifyOK {
-		t.Fatalf("expected VerifyOK with RequireInitramfsLock=false, got %d", result.Result)
-	}
+	reportData := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
+	return verifier.VerifyReport(clientID, reportData)
 }
 
 // Client whose PCR14 baseline is on record must be visible through ClientInfo
@@ -1016,8 +1126,6 @@ func TestVerify_AcceptsMissingInitramfsLockWhenOptedOut(t *testing.T) {
 func TestClientInfo_BaselineOnlyClientIsFound(t *testing.T) {
 	baselines := NewBaselineStore()
 	cfg := DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
 	cfg.BaselineStore = baselines
 	verifier := NewVerifier(cfg, store.NewMemoryStore())
 

@@ -100,8 +100,7 @@ func newScopedKeyAPI(t *testing.T, set *APIKeySet) *http.ServeMux {
 
 	aikStore := newCertStore(t)
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	auditLog := store.NewMemoryAuditLog()
 	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
 	cfg.BanStore = store.NewMemoryBanStore(auditLog)

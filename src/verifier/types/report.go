@@ -13,8 +13,16 @@ import (
 
 // protocol constants
 const (
-	ReportMagic   uint32 = 0x41544F4C // "LOTA" little-endian
-	ReportVersion uint32 = 0x00010000 // 1.0.0
+	ReportMagic uint32 = 0x41544F4C // "LOTA" little-endian
+	// ReportVersion is the attestation report wire version,
+	// matching LOTA_VERSION in include/lota.h
+	//
+	// Verifier accepts exactly this one:
+	// breaking layout change bumps the major and is a flag-day.
+	//
+	// Major 2 dropped the always-empty ek_certificate field and made
+	// the trailing ESRT section mandatory.
+	ReportVersion uint32 = 0x00020000 // 2.0.0
 
 	HashSize        = 32   // SHA-256
 	NonceSize       = 32   // Challenge nonce
@@ -23,7 +31,6 @@ const (
 	MaxAttestSize   = 1024 // TPMS_ATTEST blob
 	MaxAIKPubSize   = 512  // AIK public key (DER SPKI)
 	MaxAIKCertSize  = 2048 // AIK certificate (DER X.509)
-	MaxEKCertSize   = 2048 // EK certificate (DER X.509)
 	PCRCount        = 24   // TPM PCR bank size
 	MaxKernelPath   = 256
 	CmdlineParamMax = 64
@@ -45,6 +52,9 @@ const (
 	// SHA256(magic || agent_hash || resetCount_be || restartCount_be).
 	// The verifier derives the expected PCR14 from the pinned baseline
 	// agent hash plus the TPMS_ATTEST ClockInfo before comparing.
+	// Every agent sets it and the verifier requires it:
+	// the bit names the v1 construction specifically, so future v2
+	// derivation gets its own flag rather than reusing this one.
 	FlagBootCommitmentV1 uint32 = 1 << 8
 
 	// FlagInitramfsLockV1 is set when the agent observed that an
@@ -57,22 +67,18 @@ const (
 	// two-hop chain:
 	//     pcr14_lock  = SHA256(0^32 || initramfs_lock_commit)
 	//     pcr14_final = SHA256(pcr14_lock || boot_commitment)
-	// The verifier mirrors the derivation when this flag is set.
-	// Legacy v1 fleets without the dracut module continue emitting
-	// FlagBootCommitmentV1 alone; locked v1 hosts add this bit so a
-	// mixed deployment authenticates correctly within the negotiated
-	// v1 boot-commitment family.
+	// Verifier mirrors that two-hop derivation and has no other one:
+	// report without this bit alongside FlagBootCommitmentV1 carries
+	// a PCR14 the verifier cannot interpret and is rejected.
 	FlagInitramfsLockV1 uint32 = 1 << 9
 )
 
 // challenge capability flags (see: include/attestation.h)
 const (
-	// ChallengeFlagBootCommitmentV1 advertises that the verifier will
-	// accept reports carrying FlagBootCommitmentV1 for the issued
-	// nonce. The nonce store remembers this bit and rejects a report
-	// that claims a boot-commitment version not offered by its
-	// challenge, so future derivation versions cannot silently fall
-	// through a generic flag.
+	// ChallengeFlagBootCommitmentV1 names the PCR14 derivation the verifier
+	// validates. Every challenge carries it, because v1 is the only construction
+	// the verifier accepts.
+	// It stays on the wire so future v2 derivation has capability bit to differ from.
 	ChallengeFlagBootCommitmentV1 uint32 = 1 << 0
 )
 
@@ -138,8 +144,6 @@ type ReportHeader struct {
 //	aik_public_size          2 bytes
 //	aik_certificate[2048] 2048 bytes
 //	aik_cert_size            2 bytes
-//	ek_certificate[2048]  2048 bytes
-//	ek_cert_size             2 bytes
 //	nonce[32]               32 bytes
 //	hardware_id[32]         32 bytes
 //	aik_generation           8 bytes
@@ -147,7 +151,7 @@ type ReportHeader struct {
 //	prev_aik_public_size     2 bytes
 //	quote_sig_alg            2 bytes
 //	quote_sig_hash_alg       2 bytes
-//	TOTAL:                7516 bytes
+//	TOTAL:                5466 bytes
 type TPMEvidence struct {
 	PCRValues       [PCRCount][HashSize]byte // 768 bytes
 	PCRMask         uint32                   // 4 bytes
@@ -159,8 +163,6 @@ type TPMEvidence struct {
 	AIKPublicSize   uint16                   // 2 bytes
 	AIKCertificate  [MaxAIKCertSize]byte     // 2048 bytes
 	AIKCertSize     uint16                   // 2 bytes
-	EKCertificate   [MaxEKCertSize]byte      // 2048 bytes
-	EKCertSize      uint16                   // 2 bytes
 	Nonce           [NonceSize]byte          // 32 bytes
 	HardwareID      [HardwareIDSize]byte     // 32 bytes
 	AIKGeneration   uint64                   // 8 bytes
@@ -197,16 +199,16 @@ type BPFSummary struct {
 // struct lota_attestation_report (see: include/attestation.h)
 type AttestationReport struct {
 	Header ReportHeader      // 32 bytes
-	TPM    TPMEvidence       // 2860 bytes
+	TPM    TPMEvidence       // 5466 bytes
 	System SystemMeasurement // 396 bytes (364 + 32 for agent_hash)
 	BPF    BPFSummary        // 24 bytes
 
 	// variable-length sections (not part of fixed wire format)
 	EventLog []byte // raw TCG binary event log from agent
 
-	// ESRT is nil when the agent sent no ESRT section (legacy agent).
-	// When non-nil but Present is false, the agent ran but the platform
-	// exposed no ESRT System Firmware entry (Low-Firmware-Assurance path).
+	// ESRT is always set by ParseReport: the section is mandatory.
+	// Present == false means the platform exposed no ESRT System Firmware entry
+	// (the Low-Firmware-Assurance path), not that the agent omitted the section.
 	ESRT *ESRTInfo
 }
 
@@ -250,13 +252,17 @@ var (
 	ErrInvalidSize    = errors.New("invalid report size")
 )
 
-// minimum binary size of serialized report on wire
-// Header(16) + TPM(7516) + System(396) + BPF(24) + event_count(4) + event_log_size(4) = 7960
-const MinReportSize = 7960
+// minimum binary size of a serialized report on the wire.
+// Header(16) + TPM(5466) + System(396) + BPF(24) + event_count(4) + event_log_size(4) + ESRT(28) = 5938.
+//
+// ESRT section is mandatory, so it counts toward the minimum:
+// report that stops before it is truncated.
+// src/agent/report.c pins the C-side sizes with static asserts
+const MinReportSize = 5938
 
 // fixed struct portion (without variable-length sections)
-// Header(16) + TPM(7516) + System(396) + BPF(24) = 7952
-const FixedReportSize = 7952
+// Header(16) + TPM(5466) + System(396) + BPF(24) = 5902
+const FixedReportSize = 5902
 
 // deserializes a binary attestation report
 func ParseReport(data []byte) (*AttestationReport, error) {
@@ -321,13 +327,6 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	offset += 2
 	if report.TPM.AIKCertSize > MaxAIKCertSize {
 		return nil, fmt.Errorf("%w: aik_cert_size %d exceeds max %d", ErrInvalidSize, report.TPM.AIKCertSize, MaxAIKCertSize)
-	}
-	copy(report.TPM.EKCertificate[:], data[offset:offset+MaxEKCertSize])
-	offset += MaxEKCertSize
-	report.TPM.EKCertSize = binary.LittleEndian.Uint16(data[offset:])
-	offset += 2
-	if report.TPM.EKCertSize > MaxEKCertSize {
-		return nil, fmt.Errorf("%w: ek_cert_size %d exceeds max %d", ErrInvalidSize, report.TPM.EKCertSize, MaxEKCertSize)
 	}
 	copy(report.TPM.Nonce[:], data[offset:offset+NonceSize])
 	offset += NonceSize
@@ -404,20 +403,23 @@ func ParseReport(data []byte) (*AttestationReport, error) {
 	}
 	offset += int(eventLogSize)
 
-	// Optional trailing ESRT section (28 bytes)
-	// Absent for legacy agents, which leaves report.ESRT nil;
-	// verifier treats that as no-ESRT
-	if len(data) >= offset+ESRTWireSize {
-		esrt := &ESRTInfo{}
-		esrt.Present = binary.LittleEndian.Uint32(data[offset:]) != 0
-		offset += 4
-		esrt.FWVersion = binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-		esrt.LowestSupported = binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-		copy(esrt.FWClass[:], data[offset:offset+16])
-		report.ESRT = esrt
+	// Mandatory trailing ESRT section (28 bytes)
+	// Agent always emits it and reports Present == false where the platform
+	// exposes no ESRT System Firmware entry, so report that stops short
+	// is truncated
+	if len(data) < offset+ESRTWireSize {
+		return nil, fmt.Errorf("%w: report ends before the ESRT section (need %d more bytes)",
+			ErrInvalidSize, offset+ESRTWireSize-len(data))
 	}
+	esrt := &ESRTInfo{}
+	esrt.Present = binary.LittleEndian.Uint32(data[offset:]) != 0
+	offset += 4
+	esrt.FWVersion = binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	esrt.LowestSupported = binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	copy(esrt.FWClass[:], data[offset:offset+16])
+	report.ESRT = esrt
 
 	return report, nil
 }

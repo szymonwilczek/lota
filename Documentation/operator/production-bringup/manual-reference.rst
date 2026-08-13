@@ -23,9 +23,12 @@ enrollment and sealed keys are covered in their own documents
     sudo /usr/bin/lota-agent --sign-policy /usr/lib/lota/lota_lsm.bpf.o \
         --signing-key /etc/lota/policy.key
 
-Add ``policy_pubkey = /etc/lota/policy.pub`` to ``/etc/lota/lota.conf`` (or copy
-:ghsrc:`configs/lota.conf.example` and edit). The agent reads this file by default;
-pass ``--config /path`` if the operator policy lives elsewhere.
+A key at ``/etc/lota/policy.pub`` is used without being named: the agent
+prefers it over the key the package shipped, and no package owns that path, so
+it survives every upgrade. ``policy_pubkey`` in ``/etc/lota/lota.conf`` (copy
+:ghsrc:`configs/lota.conf.example` and edit) is only needed to name a key
+somewhere else. The agent reads that file by default; pass ``--config /path``
+if the operator policy lives elsewhere.
 
 The ``make sign-bpf SIGNING_KEY=/etc/lota/policy.key`` target wires the sign
 call into the build system for CI / packaging.
@@ -61,6 +64,14 @@ caught at the next boot. Two mechanisms satisfy this, and the agent accepts
 If ``fsverity enable`` returns ``EOPNOTSUPP``, the filesystem has no verity
 support. Production lays this down at install time via dracut + an
 fs-verity-enabled rootfs.
+
+The hash algorithm is the operator's choice: LOTA reads whichever digest the
+kernel reports, SHA-256 (the ``fsverity enable`` default, and what the RPM
+fs-verity plugin and composefs produce) or SHA-512
+(``--hash-alg=sha512``). An allowlist entry matches only under the algorithm
+it was captured with, so re-capture the digest after changing it -- and note
+that the algorithm is fixed when verity is enabled, so changing it on an
+existing file means writing a fresh copy of that file.
 
 **Signed IMA xattr** -- any filesystem with a ``security`` xattr namespace,
 including XFS and ZFS where fs-verity is unavailable. Under
@@ -164,10 +175,21 @@ the initramfs handoff). The agent reads that file so its derivations anchor on
 the same baseline, and the verifier reconstructs the baseline independently by
 replaying the signed TPM event log -- the LOTA extends happen after
 ExitBootServices and never enter that log, so the log's PCR14 events are exactly
-the firmware/shim baseline. A legacy/BIOS host that never measures PCR14 sees a
-``0^32`` baseline and behaves as before. Because the verifier derives the
-baseline from the signed log, a forged ``/run`` handoff cannot move trust: it
-only makes the host fail closed.
+the firmware/shim baseline. A UEFI host that boots without shim measures nothing
+into PCR14, so its baseline is legitimately ``0^32`` and the chain anchors on
+zero. Because the verifier derives the baseline from the signed log, a forged
+``/run`` handoff cannot move trust: it only makes the host fail closed.
+
+Both halves of that chain are mandatory, and both refuse a non-UEFI host before
+touching the TPM: the initramfs helper exits non-zero (which aborts the boot
+transition, its unit is ordered before ``initrd-root-fs.target``) and the agent
+returns ``ENOTSUP`` from its self-measurement, each naming the absent
+``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
+:doc:`../platform-support`. If PCR14 still holds the bare baseline when the
+agent runs, the initramfs lock did not run: install the ``90lota`` dracut
+module, ``dracut -f --add lota``, and cold reboot. The agent refuses to extend
+a commitment onto an unlocked register, because the verifier validates only the
+lock-then-commit chain.
 
 A MOK change (enrolling a key with ``mokutil``, a shim/SBAT update) shifts the
 baseline and therefore the final PCR14, so an enrolled host reports an
@@ -187,7 +209,12 @@ witness file and the persistent AIK, then reboot:
     sudo find /var/lib/lota -mindepth 1 -maxdepth 1 \
         \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
            -o -name 'snapshot*' \) -delete
-    for h in 0x81010002 0x81010003 0x81010004 0x81010005; do
+    # host that enrolled with publisher keeps that publisher's AIK in its profile;
+    # wiping the key means wiping the enrollment with it
+    sudo rm -rf /var/lib/lota/profiles
+    for h in 0x81010002 0x81010003 0x81010004 0x81010005 \
+             0x81010010 0x81010011 0x81010012 0x81010013 \
+             0x81010014 0x81010015 0x81010016 0x81010017; do
         sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true
     done
     sudo reboot

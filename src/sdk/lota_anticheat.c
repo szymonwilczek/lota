@@ -960,6 +960,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 {
 	if (!cfg)
 		return NULL;
+	/* caller has to say how big its configuration is; see the header */
+	if (cfg->struct_size < LOTA_AC_CONFIG_SIZE_MIN)
+		return NULL;
 	if (!cfg->game_id || cfg->game_id[0] == '\0')
 		return NULL;
 	if (strlen(cfg->game_id) >= LOTA_AC_MAX_GAME_ID)
@@ -993,10 +996,13 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 	s->session_start = (uint64_t)time(NULL);
 
 	if (cfg->direct) {
-		if (cfg->socket_path) {
+		if (cfg->socket_path || cfg->publisher_profile) {
 			struct lota_connect_opts opts = { 0 };
+
+			opts.struct_size = sizeof(opts);
 			opts.socket_path = cfg->socket_path;
 			opts.timeout_ms = 5000;
+			opts.publisher_profile = cfg->publisher_profile;
 			s->client = lota_connect_opts(&opts);
 		} else {
 			s->client = lota_connect();

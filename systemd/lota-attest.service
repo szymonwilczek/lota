@@ -14,10 +14,21 @@
 # BPF policy, and the verifier still notices a host that stops sending fresh
 # attestations.
 #
-# First enrollment is operator-driven (lota-agent --enroll), which records
-# /var/lib/lota/enroll_state.dat.
+# This loop serves no IPC socket.
+# /run/lota/lota.sock belongs to lota-agent.service, which is the always-on unit
+# and the one holding the BPF state, the enforcement policy digest and the publisher
+# list a title asks after.
+# Loop connects to it as a local peer and trades state once per round:
+# verdicts out, sessions and enrollment requests in.
+# Daemon that is not up costs the loop session gating, not reporting.
 #
-# ConditionPathExists below keeps this unit inactive until that bootstrap exists;
+# First enrollment is operator-driven (lota-agent --enroll), which creates publisher
+# profile under /var/lib/lota/profiles/<sha256-of-ca-spki>/ and records the endpoint
+# inside it.
+# Host that answers to several publishers keeps one directory per publisher.
+#
+# ConditionDirectoryNotEmpty below keeps this unit inactive until that bootstrap
+# exists -- the parent directory ships with the package, so its presence says nothing;
 # afterwards the loop renews the AIK certificate automatically (auto-renew keys off
 # the same recorded endpoint).
 #
@@ -33,8 +44,8 @@ Documentation=https://github.com/szymonwilczek/lota
 After=lota-agent.service network-online.target
 Wants=lota-agent.service network-online.target
 # stay inactive on host that has never completed its first enrollment;
-# operator's `lota-agent --enroll` writes this file
-ConditionPathExists=/var/lib/lota/enroll_state.dat
+# operator's `lota-agent --enroll` creates the first profile here
+ConditionDirectoryNotEmpty=/var/lib/lota/profiles
 
 [Service]
 Type=simple

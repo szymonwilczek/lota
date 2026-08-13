@@ -39,8 +39,7 @@ func newScopedAPIFixture(t *testing.T, scopedKeyHash string) *scopedAPIFixture {
 	aikStore := store.NewMemoryStore()
 
 	cfg := verify.DefaultConfig()
-	cfg.RequireBootPCRs = false
-	cfg.RequireInitramfsLock = false
+	cfg.RequireBootEnrollment = false
 	cfg.BaselineStore = baseline
 	cfg.RevocationStore = revStore
 	cfg.BanStore = banStore

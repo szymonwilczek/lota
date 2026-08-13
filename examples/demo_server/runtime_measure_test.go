@@ -19,11 +19,11 @@ func TestComputeExpectedRuntimeMeasure_RealBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
-	a, err := computeExpectedRuntimeMeasure(self)
+	a, err := computeExpectedRuntimeMeasureSet([]string{self})
 	if err != nil {
 		t.Fatalf("measure: %v", err)
 	}
-	b, err := computeExpectedRuntimeMeasure(self)
+	b, err := computeExpectedRuntimeMeasureSet([]string{self})
 	if err != nil {
 		t.Fatalf("measure (second): %v", err)
 	}
@@ -43,7 +43,7 @@ func TestComputeExpectedRuntimeMeasure_RejectsNonELF(t *testing.T) {
 	if err := os.WriteFile(path, []byte("definitely not an ELF\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := computeExpectedRuntimeMeasure(path); err == nil {
+	if _, err := computeExpectedRuntimeMeasureSet([]string{path}); err == nil {
 		t.Fatalf("expected error on non-ELF input")
 	}
 }
@@ -51,8 +51,8 @@ func TestComputeExpectedRuntimeMeasure_RejectsNonELF(t *testing.T) {
 // TestComputeExpectedRuntimeMeasure_RejectsMissing confirms a missing
 // path returns an error rather than a silent zero measurement.
 func TestComputeExpectedRuntimeMeasure_RejectsMissing(t *testing.T) {
-	if _, err := computeExpectedRuntimeMeasure(
-		filepath.Join(t.TempDir(), "nope")); err == nil {
+	if _, err := computeExpectedRuntimeMeasureSet([]string{
+		filepath.Join(t.TempDir(), "nope")}); err == nil {
 		t.Fatalf("expected error on missing path")
 	}
 }
@@ -80,7 +80,7 @@ func TestRuntimeMeasureSet_OrderIndependent(t *testing.T) {
 	if ab != ba {
 		t.Fatalf("order changed the combined digest")
 	}
-	one, err := computeExpectedRuntimeMeasure(self)
+	one, err := computeExpectedRuntimeMeasureSet([]string{self})
 	if err != nil {
 		t.Fatalf("single: %v", err)
 	}

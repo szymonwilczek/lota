@@ -49,13 +49,30 @@ enum probe_pcr14 {
  * Returns byte count >= 0 or -errno. */
 int probe_read_text(const char *path, char *buf, size_t cap);
 
-/* 1 = verity enabled, else enum probe_verity, or -errno on hard
+/* enum probe_verity (PROBE_VERITY_ENABLED is 0), or -errno on hard
  * failure (file missing, permission) */
 int probe_fsverity_state(const char *path);
 
 /* Enables fs-verity (SHA-256, 4K blocks) on the file.
  * 0 or -errno; EOPNOTSUPP/-ENOTTY mean the filesystem lacks the feature. */
 int probe_fsverity_enable(const char *path);
+
+/*
+ * Pure: reads one line of a runtime manifest -- the object list a title captures
+ * with `demo_anticheat --print-runtime-objects` or the equivalent for its own
+ * binary set.
+ *
+ * Writes the path into out and returns 1 when the line names one,
+ * 0 when the line is blank or a '#' comment,
+ * and -EINVAL when it is neither
+ * (relative path, a path carrying a '..' component, or one longer than out holds).
+ *
+ * Absolute paths that read as what they resolve to, only:
+ * the manifest comes from whoever ships the title and is acted on with privilege,
+ * so a path resolved against a working directory or walked back out of the directory
+ * it names is refused rather than guessed at.
+ */
+int probe_manifest_line(const char *line, char *out, size_t cap);
 
 /* Pure: maps statfs f_type magic to probe_fstype */
 enum probe_fstype probe_fstype_from_magic(long magic);
@@ -84,9 +101,66 @@ enum probe_fstype probe_path_fstype(const char *path);
  * 0 when it has none or only a bare digest, errno on read failure. */
 int probe_file_ima_signed(const char *path);
 
+/* 1 when the machine booted through UEFI, 0 when it did not.
+ *
+ * Separate from probe_secureboot(): missing SecureBoot variable is either legacy
+ * BIOS boot or UEFI firmware without Secure Boot support, and the two get
+ * different instructions.
+ * _at form takes the firmware directory so the decision is testable without reboot */
+int probe_firmware_is_uefi(void);
+int probe_firmware_is_uefi_at(const char *dir);
+
 /* 1 = Secure Boot enabled, 0 = disabled/setup mode,
  * -ENOENT = no UEFI (BIOS/CSM host), other -errno on read failure. */
 int probe_secureboot(void);
+
+/* 1 = firmware holds no platform key (setup mode), so enabling Secure Boot also
+ * needs the factory keys restored,
+ * 0 = user mode,
+ * -errno on read failure (-ENOENT on firmware that exposes no SetupMode variable) */
+int probe_secureboot_setup_mode(void);
+
+/* 1 = firmware accepts the OsIndications request to boot straight into its setup
+ * UI, which is what makes 'systemctl reboot --firmware-setup' work,
+ * 0 = unsupported,
+ * -errno on read failure */
+int probe_firmware_setup_supported(void);
+
+/* Path-parameterized variants behind the fixed-path wrappers above.
+ * Both read efivarfs file: 4-byte attribute header, then the payload */
+int probe_efivar_flag_at(const char *path);
+int probe_efivar_bit0_at(const char *path);
+
+/* Pure:
+ * Writes the Secure-Boot remediation a player can act on without a manual:
+ * what the setting is called, how to reach firmware setup on this machine,
+ * and what enabling it does not break.
+ *
+ * It deliberately carries no per-vendor menu path or setup key.
+ * Those differ between firmware revisions of one model, nothing here can verify
+ * them, and confidently wrong instruction costs more than general one.
+ *
+ * machine is the DMI description echoed back (may be NULL);
+ * is_virtual says this is a guest (systemd-detect-virt, decided by the caller);
+ * setup_mode and firmware_setup_supported take the probe results above,
+ * where negative value reads as "could not tell" */
+void probe_secureboot_remediation(const char *machine, int is_virtual,
+				  int setup_mode, int firmware_setup_supported,
+				  char *out, size_t cap);
+
+/* Gathers the live inputs this file owns (DMI, SetupMode, OsIndicationsSupported)
+ * and builds the remediation above.
+ * Whether the host is a guest comes from the caller, since answering it means
+ * running systemd-detect-virt and no probe here spawns a process */
+void probe_secureboot_guidance(int is_virtual, char *out, size_t cap);
+
+/* Describes this machine the way DMI does ("Dell Inc. Latitude 7420"),
+ * for echoing back to whoever is at the keyboard.
+ * Writes empty string when DMI says nothing usable;
+ * placeholder strings a board ships unfilled ("System Product Name") count
+ * as nothing */
+void probe_machine_description(char *out, size_t cap);
+void probe_machine_description_at(const char *dmi_dir, char *out, size_t cap);
 
 /* 1 when the platform exposes an ESRT System Firmware entry (fw_type == 1),
  * 0 otherwise.
@@ -121,8 +195,9 @@ int probe_lockdown_restrictive(void);
 
 /* Derives the post-lock PCR14 value installed by the initramfs lock:
  * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
- * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (0^32 on a
- * legacy/BIOS host, the firmware/shim MOK measurement on UEFI Secure Boot). */
+ * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (the shim MOK
+ * measurement, or 0^32 on a UEFI host whose boot chain never measured
+ * PCR14). */
 void probe_pcr14_lock_value(uint8_t out[PROBE_HASH_SIZE]);
 
 /* Path-parameterized variant behind the fixed-path wrapper above;
@@ -159,5 +234,13 @@ int probe_conf_buf_has_key(const char *buf, const char *key);
 /* File-backed wrapper for probe_conf_buf_has_key().
  * 1/0 or -errno */
 int probe_conf_has_key(const char *conf_path, const char *key);
+
+/* 1 when this host has opted into unattended boot-path bring-up,
+ * either by the marker file at path or by LOTA_AUTO_BRINGUP=1 in the environment.
+ *
+ * Exactly "1": package hook runs with whatever environment the transaction had,
+ * and reading "0" or "false" as consent is how a host ends up with boot path
+ * nobody chose. */
+int probe_auto_bringup_at(const char *path);
 
 #endif /* LOTA_INSTALL_PROBE_H */

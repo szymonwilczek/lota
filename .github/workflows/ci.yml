@@ -117,7 +117,9 @@ jobs:
         # development headers for the examples binaries, and the
         # runtime helpers (curl CLI, swtpm, tpm2-tools) that
         # examples/demo/setup.sh probes via `need_cmd` even in
-        # --dry-run mode
+        # --dry-run mode, plus systemd for the socket-activate
+        # helper examples/ci-gate/run.sh binds the agent listener
+        # with
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -127,7 +129,7 @@ jobs:
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev \
             libsdl2-dev libcurl4-openssl-dev \
-            curl swtpm swtpm-tools tpm2-tools
+            curl swtpm swtpm-tools tpm2-tools systemd
 
       - name: Install libbpf >= 1.0
         env:
@@ -170,6 +172,10 @@ jobs:
         # disappeared from the deps install
         run: |
           bash examples/demo/setup.sh --dry-run --no-build --yes
+
+      - name: Run the CI release gate reference end to end
+        run: |
+          bash examples/ci-gate/run.sh
 
       - name: Verify block-demo artefacts exist
         # block-demo proves the BPF LSM strict_mmap gate at
@@ -240,6 +246,24 @@ jobs:
         # -o so make -B does not regenerate it from a kernel BTF the
         # runner does not have)
         run: make check-includes
+
+  abi:
+    name: abi
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev binutils
+
+      - name: Check the public API and ABI
+        run: make check-abi
 
   benchmarks:
     name: benchmarks (C + Go smoke)
@@ -312,13 +336,19 @@ jobs:
             scripts/lota-proton-hook \
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
+            scripts/check-license-boundary.sh \
+            scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
+            examples/ci-gate/run.sh \
+            examples/demo_anticheat/run.sh \
             examples/demo/demo_tamper.sh \
             examples/block-demo/run.sh \
             examples/cs2/scenarios/verify-attested.sh \
             tests/integration/test_bpf_gates.sh \
             src/initramfs/90lota/module-setup.sh
+          shellcheck -s sh -S error \
+            packaging/nfpm/scripts/agent-postinstall.sh
 
   package-manifests:
     name: package manifests (nfpm vs spec)
@@ -331,6 +361,18 @@ jobs:
 
       - name: Compare the two package manifests
         run: make check-package-manifests
+
+  license-boundary:
+    name: license-boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the license boundary
+        run: make check-license-boundary
 
   yamllint:
     name: yamllint

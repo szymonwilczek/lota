@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Szymon Wilczek
-// Benchmarks for the Go server-side token path: VerifyToken is the
-// per-heartbeat cost a game server pays (RSASSA signature verify + nonce
-// binding check + parse); ParseToken is the untrusted parse alone.
+// Benchmarks for the Go server-side token path:
+// VerifyToken is the per-heartbeat cost game server pays
+// (RSASSA signature verify + nonce binding check + parse);
+// ParseToken is the untrusted parse alone.
 
 package server
 

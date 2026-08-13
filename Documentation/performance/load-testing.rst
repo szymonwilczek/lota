@@ -16,9 +16,17 @@ verifier: each attestation walks the production verification path --
 AIK certificate chain to a rig CA, RSA quote signature over a
 ``TPMS_ATTEST`` blob, the report binding nonce, PCR digest, event-log
 parsing, and the PCR14 boot-commitment derivation (initramfs lock +
-boot commitment over a zero baseline, the legacy/BIOS event-log
-shape). The verifier under test runs its strict production
-configuration; no TOFU or legacy opt-out flags are involved.
+boot commitment). The synthetic event log carries the firmware's
+``SecureBoot`` variable measurement on PCR 7, which is what proves a
+UEFI boot, and no PCR 14 event, so the chain anchors on a zero
+baseline -- the shape of a UEFI host that boots without shim. The
+verifier under test runs its strict production configuration; no TOFU
+opt-out flags are involved.
+
+The synthetic report is built to the same wire version the agent emits
+(``ReportVersion``), including the mandatory trailing ESRT section, so a wire
+change breaks the harness in the build rather than showing up as a fleet of
+rejected attestations mid-run.
 
 What a run measures and what it cannot
 ======================================

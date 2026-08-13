@@ -243,7 +243,7 @@ jobs:
             libbpf-devel elfutils-libelf-devel zlib-devel \
             tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
             dbus-devel golang selinux-policy-devel \
-            rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh
+            rpm-build rpm-sign rpmlint createrepo_c gnupg2 gh openssl
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -258,8 +258,32 @@ jobs:
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
 
+      - name: Sign the enforcement object
+        env:
+          BPF_SIGNING_KEY: ${{ secrets.LOTA_BPF_SIGNING_KEY }}
+        run: |
+          set -eu
+          test -n "$BPF_SIGNING_KEY" || {
+            echo "LOTA_BPF_SIGNING_KEY is not set; a release must not ship" >&2
+            echo "an enforcement object no host can verify." >&2
+            exit 1
+          }
+          umask 077
+          printf '%s' "$BPF_SIGNING_KEY" >"$RUNNER_TEMP/enforcement.key"
+          openssl pkey -in "$RUNNER_TEMP/enforcement.key" -pubout \
+            -out "$RUNNER_TEMP/enforcement.pub"
+          make all
+          make sign-bpf SIGNING_KEY="$RUNNER_TEMP/enforcement.key"
+
       - name: Build the RPMs
-        run: make packages
+        run: |
+          make packages \
+            SIGNING_KEY="$RUNNER_TEMP/enforcement.key" \
+            SIGNING_PUBKEY="$RUNNER_TEMP/enforcement.pub"
+
+      - name: Drop the enforcement signing key
+        if: always()
+        run: shred -u "$RUNNER_TEMP/enforcement.key" 2>/dev/null || true
 
       - name: Import the signing key
         # preset the passphrase into gpg-agent so both rpmsign and the repomd

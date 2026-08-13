@@ -36,8 +36,9 @@ type SessionTokenStore interface {
 }
 
 // in-memory SessionTokenStore; process-local, lost on restart.
-// This keeps the historical single-node behaviour: tokens validate only on
-// the instance that issued them.
+// This is the single-node default: tokens validate only on the instance
+// that issued them, which is all a single verifier needs.
+// Deployment behind a load balancer configures the Postgres store instead.
 type memorySessionTokenStore struct {
 	mu    sync.Mutex
 	index map[[32]byte]sessionTokenRecord

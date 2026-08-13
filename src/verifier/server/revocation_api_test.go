@@ -363,7 +363,7 @@ func TestAPI_ListBans_RejectsOffsetPagination(t *testing.T) {
 		t.Fatalf("Expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "offset pagination is not supported") {
-		t.Fatalf("Expected offset deprecation error, got body=%q", rec.Body.String())
+		t.Fatalf("Expected offset refusal, got body=%q", rec.Body.String())
 	}
 }
 
@@ -525,7 +525,7 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 	mux, v := setupTestAPIListening(t)
 	clientID := "revoke-attest-client"
 	persistentID := persistentClientID(clientID)
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// successful attestation first
 	code := attestClient(t, v, clientID, testAIK, pcr14)
@@ -580,7 +580,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 	mux, v := setupTestAPIListening(t)
 	clientID := "unrevoke-attest-client"
 	persistentID := persistentClientID(clientID)
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// initial attestation
 	code := attestClient(t, v, clientID, testAIK, pcr14)
@@ -624,7 +624,7 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 	mux, v := setupTestAPIListening(t)
 	clientID := "ban-attest-client"
 	persistentID := persistentClientID(clientID)
-	pcr14 := [32]byte{0x14}
+	pcr14 := serverFixturePCR14()
 
 	// successful attestation first
 	code := attestClient(t, v, clientID, testAIK, pcr14)

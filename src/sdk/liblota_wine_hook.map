@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Exported ABI of liblota_wine_hook.so.
+ *
+ * The list is the set of functions include/lota_wine_hook.h declares.
+ * The hook is LD_PRELOADed into a game process, so a symbol it exports
+ * is resolved before the process's own libraries: the gaming SDK objects
+ * it links in statically stay local, or every lota_connect() in the process
+ * would land in the hook's private copy.
+ * Nothing here interposes on libc -- the hook runs from a constructor.
+ *
+ * Adding a function means a new version node (LOTA_WINE_HOOK_1.1) below this one;
+ * removing or changing one is an ABI break and bumps LOTA_ABI_MAJOR.
+ * See Documentation/contributor/development/api-stability.rst
+ *
+ * Copyright (C) 2026 Szymon Wilczek
+ */
+
+LOTA_WINE_HOOK_1.0 {
+	global:
+		lota_hook_active;
+		lota_hook_status_path;
+		lota_hook_token_path;
+
+	local:
+		*;
+};

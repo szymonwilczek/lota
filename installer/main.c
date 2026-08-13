@@ -4,13 +4,16 @@
  * lota-install - Guided, reboot-resumable Player Install
  */
 
+#include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "install.h"
+#include "probe.h"
 #include "run.h"
 #include "tui.h"
 #include "ui.h"
@@ -33,11 +36,15 @@ static void usage(FILE *out)
 		"Operator-provided inputs (from the install instructions):\n"
 		"  --ca-server HOST       Attestation CA for enrollment\n"
 		"  --ca-port PORT         Attestation CA port\n"
-		"  --ca-cert FILE         CA TLS certificate (PEM)\n"
+		"  --ca-cert FILE         CA trust anchor (PEM or DER).\n"
+		"                         Required to enroll: it names the\n"
+		"                         publisher this host enrolls with\n"
 		"  --verifier HOST        Verifier for the final self-check\n"
 		"  --verifier-port PORT   Verifier port\n"
-		"  --policy-pubkey FILE   Operator BPF signing public key\n"
-		"                         (default %s)\n"
+		"  --policy-pubkey FILE   Key the enforcement object is verified\n"
+		"                         against. Default: %s when a fleet\n"
+		"                         put its own key there, otherwise the\n"
+		"                         key the package shipped at %s\n"
 		"  --selinux-module FILE  Compiled LOTA SELinux module\n"
 		"                         (default %s)\n"
 		"\n"
@@ -46,6 +53,19 @@ static void usage(FILE *out)
 		"                         change nothing\n"
 		"  --yes                  Do not ask for confirmation\n"
 		"  --plain                Plain log output (no TUI)\n"
+		"  --unattended           For a package post-install hook:\n"
+		"                         implies --yes --plain, leaves the\n"
+		"                         boot path alone unless this host\n"
+		"                         opted in (%s)\n"
+		"                         or LOTA_AUTO_BRINGUP=1), and stops\n"
+		"                         at the reboot checkpoint\n"
+		"  --verity-manifest FILE Enable fs-verity on every object\n"
+		"                         listed in FILE (one absolute path\n"
+		"                         per line, '#' comments), then stop.\n"
+		"                         A title's runtime measurement covers\n"
+		"                         only objects that carry a digest,\n"
+		"                         and this is how its own binaries\n"
+		"                         get one\n"
 		"  --help, --version\n"
 		"\n"
 		"Lifecycle (after install):\n"
@@ -56,7 +76,8 @@ static void usage(FILE *out)
 		"\n"
 		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
 		"            10 reboot required (re-run to resume).\n",
-		PATH_POLICY_PUB_DEFAULT, PATH_SELINUX_PP_DEFAULT);
+		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
+		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }
 
 static int parse_args(int argc, char **argv, struct install_opts *opts)
@@ -76,12 +97,14 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		{ "version", no_argument, 0, 10 },
 		{ "pause", no_argument, 0, 11 },
 		{ "resume", no_argument, 0, 12 },
+		{ "unattended", no_argument, 0, 13 },
+		{ "verity-manifest", required_argument, 0, 14 },
 		{ 0, 0, 0, 0 },
 	};
 	int c;
 
 	memset(opts, 0, sizeof(*opts));
-	opts->policy_pubkey = PATH_POLICY_PUB_DEFAULT;
+	opts->policy_pubkey = NULL;
 	opts->selinux_module = PATH_SELINUX_PP_DEFAULT;
 
 	while ((c = getopt_long(argc, argv, "yh", longopts, NULL)) != -1) {
@@ -128,6 +151,15 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		case 12:
 			opts->resume = 1;
 			break;
+		case 13:
+			opts->unattended = 1;
+			/* nobody is watching: never prompt, never redraw */
+			opts->yes = 1;
+			opts->plain = 1;
+			break;
+		case 14:
+			opts->verity_manifest = optarg;
+			break;
 		default:
 			usage(stderr);
 			exit(EXIT_INSTALL_USAGE);
@@ -136,6 +168,22 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	if (optind < argc) {
 		fprintf(stderr, "lota-install: Unexpected argument '%s'\n",
 			argv[optind]);
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	if (opts->unattended &&
+	    (opts->pause || opts->resume || opts->status_only)) {
+		fprintf(stderr, "lota-install: --unattended cannot be combined "
+				"with --pause, --resume or --status\n");
+		usage(stderr);
+		exit(EXIT_INSTALL_USAGE);
+	}
+	if (opts->verity_manifest && (opts->pause || opts->resume ||
+				      opts->status_only || opts->unattended)) {
+		fprintf(stderr,
+			"lota-install: --verity-manifest runs on its own and "
+			"cannot be combined with --pause, --resume, --status "
+			"or --unattended\n");
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
@@ -250,6 +298,110 @@ static int do_pause(struct install_ctx *ctx)
 	return EXIT_INSTALL_OK;
 }
 
+/*
+ * Make a title's own objects measurable.
+ *
+ * Runtime measurement folded into every token covers a mapped object only when
+ * the kernel holds an fs-verity digest for it.
+ * Title's binaries belong to whoever ships the title, so this walks the object
+ * list they capture and enables verity on each.
+ * Objects belonging to the distribution are deliberately not this tool's business:
+ * enabling verity on packaged file lasts until the next update of that package.
+ *
+ * List is the title's, the privilege is root's and a digest is permanent,
+ * so a line only names an object when probe_manifest_line() takes it:
+ * absolute, no '..' walking it somewhere else.
+ */
+static int do_verity_manifest(struct install_ctx *ctx)
+{
+	unsigned enabled = 0, already = 0, failed = 0;
+	char line[PATH_MAX];
+	char path[PATH_MAX];
+	char note[STAGE_NOTE_CAP];
+	int lineno = 0;
+	FILE *f;
+
+	if (geteuid() != 0) {
+		ui_error(&ctx->ui, "--verity-manifest enables fs-verity and "
+				   "must run as root");
+		return EXIT_INSTALL_USAGE;
+	}
+
+	f = fopen(ctx->opts.verity_manifest, "re");
+	if (!f) {
+		snprintf(note, sizeof(note), "Cannot read %s: %s",
+			 ctx->opts.verity_manifest, strerror(errno));
+		ui_error(&ctx->ui, "%s", note);
+		return EXIT_INSTALL_FAIL;
+	}
+
+	while (fgets(line, sizeof(line), f)) {
+		int rc, state;
+
+		lineno++;
+		rc = probe_manifest_line(line, path, sizeof(path));
+		if (rc == 0)
+			continue;
+		if (rc < 0) {
+			snprintf(note, sizeof(note),
+				 "%s:%d is not an absolute path free of '..'",
+				 ctx->opts.verity_manifest, lineno);
+			ui_error(&ctx->ui, "%s", note);
+			failed++;
+			continue;
+		}
+
+		state = probe_fsverity_state(path);
+		if (state == PROBE_VERITY_ENABLED) {
+			already++;
+			continue;
+		}
+		if (state == PROBE_VERITY_UNSUPPORTED) {
+			snprintf(note, sizeof(note),
+				 "%.512s: the filesystem has no fs-verity "
+				 "support, so this object cannot be measured "
+				 "here",
+				 path);
+			ui_error(&ctx->ui, "%s", note);
+			failed++;
+			continue;
+		}
+
+		rc = probe_fsverity_enable(path);
+		if (rc == 0) {
+			enabled++;
+			continue;
+		}
+
+		/*
+		 * digest already set under another hash algorithm cannot be changed
+		 * in place -- it is property of the inode -- so the route is fresh
+		 * copy of the file, which is the operator's call and not something
+		 * to do behind their back.
+		 */
+		snprintf(note, sizeof(note), "%.512s: %s%s", path,
+			 strerror(-rc),
+			 rc == -EEXIST ? " (fs-verity is already enabled under "
+					 "a different hash algorithm; replace "
+					 "the file to change it)" :
+					 "");
+		ui_error(&ctx->ui, "%s", note);
+		failed++;
+	}
+	fclose(f);
+
+	snprintf(note, sizeof(note),
+		 "fs-verity: %u object%s enabled, %u already had a digest, "
+		 "%u could not be done",
+		 enabled, enabled == 1 ? "" : "s", already, failed);
+	ui_text(&ctx->ui, "%s", note);
+	ui_text(&ctx->ui,
+		"A digest lives on the inode, so replacing a file drops it: "
+		"re-run this after updating any object listed here.");
+
+	return failed == 0 ? EXIT_INSTALL_OK : EXIT_INSTALL_FAIL;
+}
+
 /* Lifecycle veneer: resuming after a pause is a reboot, by design. */
 static int do_resume(struct install_ctx *ctx)
 {
@@ -284,14 +436,40 @@ static int do_resume(struct install_ctx *ctx)
 		       EXIT_INSTALL_FAIL;
 }
 
+int install_auto_bringup_opted_in(void)
+{
+	return probe_auto_bringup_at(PATH_AUTO_BRINGUP);
+}
+
+/*
+ * Image being built in a chroot or a container has no firmware, no TPM and no
+ * boot entries of its own, and the package hook runs there exactly as it does
+ * on a machine.
+ * Bring-up belongs to the host that eventually boots the image, so a run there
+ * is a no-op rather than a wall of blocked stages.
+ */
+static int not_a_running_host(void)
+{
+	const char *const argv[] = { "systemd-detect-virt", "--container", "-q",
+				     NULL };
+	char out[64];
+
+	if (run_capture(argv, out, sizeof(out)) == 0)
+		return 1;
+	return access("/sys/firmware/efi", F_OK) != 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct install_ctx ctx;
 	char note[STAGE_NOTE_CAP];
+	int deferred_boot_path = 0;
+	int auto_bringup;
 	int i;
 
 	memset(&ctx, 0, sizeof(ctx));
 	parse_args(argc, argv, &ctx.opts);
+	auto_bringup = install_auto_bringup_opted_in();
 	ui_init(&ctx.ui, ctx.opts.plain);
 
 	ui_banner(&ctx.ui, "LOTA Guided Install", LOTA_INSTALL_VERSION,
@@ -305,11 +483,21 @@ int main(int argc, char **argv)
 	if (ctx.opts.status_only)
 		return run_status(&ctx);
 
+	if (ctx.opts.verity_manifest)
+		return do_verity_manifest(&ctx);
+
 	if (geteuid() != 0) {
 		ui_error(&ctx.ui, "lota-install changes system state and "
 				  "must run as root (use --status for a "
 				  "read-only report)");
 		return EXIT_INSTALL_USAGE;
+	}
+	if (ctx.opts.unattended && not_a_running_host()) {
+		ui_text(&ctx.ui,
+			"Not a running host (container or image build): "
+			"leaving bring-up to the machine that boots this "
+			"image.");
+		return EXIT_INSTALL_OK;
 	}
 	if (!ctx.opts.yes && !isatty(STDIN_FILENO)) {
 		ui_error(&ctx.ui, "No terminal to confirm stages on. Re-run "
@@ -336,6 +524,34 @@ int main(int argc, char **argv)
 		enum stage_state st = s->probe(&ctx, note, sizeof(note));
 
 		ui_stage_begin(&ctx.ui, i + 1, install_stage_count, s->title);
+
+		/*
+		 * Everything a package may do on its own is behind us;
+		 * the checkpoint exists to be crossed by whoever chose
+		 * the boot-path change, so unattended run stops here rather than
+		 * reporting reboot nobody asked for.
+		 */
+		if (ctx.opts.unattended && deferred_boot_path && s->barrier) {
+			ui_text(&ctx.ui,
+				"Host-local setup is done. What is left "
+				"changes how this machine boots -- the "
+				"initramfs PCR 14 lock and the kernel "
+				"integrity floor -- so it waits for a person: "
+				"run 'sudo lota-install'. To have a package "
+				"install do it too, create %s (or set "
+				"LOTA_AUTO_BRINGUP=1) before installing.",
+				PATH_AUTO_BRINGUP);
+			return EXIT_INSTALL_OK;
+		}
+
+		if (ctx.opts.unattended && s->boot_path && !auto_bringup &&
+		    st != STAGE_DONE) {
+			ui_stage_result(&ctx.ui, UI_PENDING, s->title,
+					"left to a person: this changes how "
+					"the machine boots");
+			deferred_boot_path = 1;
+			continue;
+		}
 
 		if (st == STAGE_PENDING && s->apply) {
 			ui_explain(&ctx.ui, s->explain);
@@ -378,6 +594,11 @@ int main(int argc, char **argv)
 		case STAGE_BLOCKED:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title, NULL);
 			ui_text(&ctx.ui, "%s.", note);
+			if (ctx.opts.unattended)
+				ui_text(&ctx.ui,
+					"Package install itself succeeded. "
+					"Resolve the above and run "
+					"'sudo lota-install'.");
 			return EXIT_INSTALL_FAIL;
 		case STAGE_ERROR:
 			ui_stage_result(&ctx.ui, UI_FAIL, s->title, note);

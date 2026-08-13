@@ -467,7 +467,7 @@ func TestVerifyEventLog_EmptyLog(t *testing.T) {
 
 	report := &types.AttestationReport{}
 
-	err := VerifyEventLog(report)
+	_, err := VerifyEventLogWithPolicy(report, false)
 	if err == nil {
 		t.Error("Empty event log should produce error")
 	}
@@ -517,7 +517,7 @@ func TestVerifyEventLog_FullPipeline(t *testing.T) {
 	report.TPM.PCRMask = (1 << 0) | (1 << 1)
 	report.EventLog = logData
 
-	err := VerifyEventLog(report)
+	_, err := VerifyEventLogWithPolicy(report, false)
 	if err != nil {
 		t.Errorf("Full pipeline verification should pass: %v", err)
 	}
@@ -543,6 +543,9 @@ func TestParseReport_WithEventLog(t *testing.T) {
 	binary.LittleEndian.PutUint32(eventLogSizeBuf, 5)
 	buf = append(buf, eventLogSizeBuf...)
 	buf = append(buf, []byte("hello")...)
+
+	// mandatory trailing ESRT section (all-zero: present == false)
+	buf = append(buf, make([]byte, types.ESRTWireSize)...)
 
 	// update report_size header (offset 8)
 	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(buf)))

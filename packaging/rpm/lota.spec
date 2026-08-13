@@ -95,6 +95,7 @@ Proton/Steam hook. Install lota-sdk-devel to build against them.
 Summary:        LOTA SDK headers and shared libraries
 License:        MIT
 Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
+Requires:       pkgconfig(libcrypto)
 
 %description sdk-devel
 Headers and shared libraries for the gaming, anti-cheat and server SDKs,
@@ -144,6 +145,8 @@ EOF
 %dir %{_prefix}/lib/lota
 %{_prefix}/lib/lota/lota-pcr14-lock
 %{_prefix}/lib/lota/lota_lsm.bpf.o
+%{_prefix}/lib/lota/lota_lsm.bpf.o.sig
+%{_prefix}/lib/lota/enforcement.pub
 %dir %{_prefix}/lib/dracut/modules.d/90lota
 %{_prefix}/lib/dracut/modules.d/90lota/module-setup.sh
 %{_prefix}/lib/dracut/modules.d/90lota/lota-pcr14-lock.service
@@ -162,6 +165,7 @@ EOF
 %dir %{_datadir}/lota/systemd
 %{_datadir}/lota/systemd/10-xdg-runtime.conf.example
 %dir %attr(0700,root,root) %{_sharedstatedir}/lota/aiks
+%dir %attr(0700,root,root) %{_sharedstatedir}/lota/profiles
 
 %files verifier
 %license LICENSE
@@ -186,12 +190,17 @@ EOF
 %{_includedir}/lota/lota_gaming.h
 %{_includedir}/lota/lota_wine_hook.h
 %{_includedir}/lota/lota_server.h
-%{_includedir}/lota/lota_ipc.h
 %{_includedir}/lota/lota_anticheat.h
+%{_includedir}/lota/lota_token.h
+%{_includedir}/lota/lota_snapshot.h
 %{_libdir}/liblotagaming.so
 %{_libdir}/liblotaserver.so
 %{_libdir}/liblota_wine_hook.so
 %{_libdir}/liblota_anticheat.so
+%{_libdir}/pkgconfig/lota-gaming.pc
+%{_libdir}/pkgconfig/lota-server.pc
+%{_libdir}/pkgconfig/lota-anticheat.pc
+%{_libdir}/pkgconfig/lota-wine-hook.pc
 
 %changelog
 * Sun Jun 21 2026 Szymon Wilczek <swilczek.lx@gmail.com> - 0.4.0~rc2-1

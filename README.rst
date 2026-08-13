@@ -308,10 +308,12 @@ Copyright (C) 2026 Szymon Wilczek.
 LOTA is dual-licensed:
 
 * The userspace components are licensed under the **MIT** license; the full
-  text is in `LICENSE <LICENSE>`_.
-* Kernel-facing BPF programs and the shared kernel-contract headers are
-  licensed **GPL-2.0-only** where required by the Linux kernel interface; the
-  full text is in `LICENSE.GPL-2.0-only <LICENSE.GPL-2.0-only>`_.
+  text is in `LICENSE <LICENSE>`_. That includes the headers the agent and the
+  BPF program share, because those carry LOTA's own definitions rather than
+  anything derived from kernel source.
+* Kernel-facing BPF programs are licensed **GPL-2.0-only**, as the kernel
+  interface they attach to requires; the full text is in
+  `LICENSE.GPL-2.0-only <LICENSE.GPL-2.0-only>`_.
 
 Every source file carries an ``SPDX-License-Identifier`` naming the license
 that applies to it, so the license of any individual file is unambiguous

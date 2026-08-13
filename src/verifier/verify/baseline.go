@@ -39,13 +39,11 @@ const initramfsLockTag = "LOTA-PCR14-INITRAMFS-LOCK-v1"
 //	pcr14  = SHA256(baseline || commit)
 //
 // baseline is the PCR14 content present when the lock helper runs:
-// 0^32 on a legacy/BIOS host where nothing measured PCR14 before userspace,
-// or the firmware/shim MOK measurement (MokList, SbatLevel, MokListRT)
-// on a UEFI Secure Boot host.
+// shim MOK measurement (MokList, SbatLevel, MokListRT) on a shim-booted host,
+// or 0^32 on a UEFI host that boots without shim, since nothing else measures
+// PCR14 before userspace.
 //
-// Verifier reconstructs baseline from the TPM event log;
-// passing zero baseline reproduces the pre-baseline derivation for hosts
-// that never touched PCR14.
+// Verifier reconstructs baseline from the TPM event log.
 //
 // resetCount and restartCount are accepted for API symmetry with the
 // agent helper, but intentionally ignored. The initramfs lock runs long
@@ -77,9 +75,9 @@ func DeriveInitramfsLockPCR14(baseline [types.HashSize]byte, resetCount, restart
 //	boot_commit = SHA256(bootCommitmentTag || agentHash || R || S)
 //	pcr14_final = SHA256(lock_value || boot_commit)
 //
-// The verifier picks this derivation when the report carries
-// FlagInitramfsLockV1 alongside FlagBootCommitment; a report with
-// only FlagBootCommitment falls back to DeriveBootCommitmentPCR14.
+// This is the only PCR14 derivation the verifier validates;
+// report that does not carry both FlagInitramfsLockV1 and FlagBootCommitment
+// is rejected before the chain is rederived.
 func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, restartCount uint32,
 ) [types.HashSize]byte {
@@ -104,38 +102,6 @@ func DeriveLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	return out
 }
 
-// DeriveBootCommitmentPCR14 reproduces the agent's PCR14 derivation on host
-// with no initramfs lock (single-hop):
-//
-//	commit  = SHA256(tag || agent_hash || resetCount_be || restartCount_be)
-//	pcr14   = SHA256(baseline || commit)
-//
-// baseline is the PCR14 content the agent extended on top of:
-// 0^32 on a legacy/BIOS host, or the firmware/shim MOK measurement on UEFI
-// Secure Boot (see DeriveInitramfsLockPCR14).
-// resetCount and restartCount are taken from the TPMS_ATTEST ClockInfo of the quote.
-func DeriveBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
-	resetCount, restartCount uint32,
-) [types.HashSize]byte {
-	var counters [8]byte
-	binary.BigEndian.PutUint32(counters[0:4], resetCount)
-	binary.BigEndian.PutUint32(counters[4:8], restartCount)
-
-	commit := sha256.New()
-	commit.Write([]byte(bootCommitmentTag))
-	commit.Write(agentHash[:])
-	commit.Write(counters[:])
-	commitDigest := commit.Sum(nil)
-
-	pcr := sha256.New()
-	pcr.Write(baseline[:])
-	pcr.Write(commitDigest)
-
-	var out [types.HashSize]byte
-	copy(out[:], pcr.Sum(nil))
-	return out
-}
-
 // pcr14Index is the TPM PCR the LOTA boot-commitment chain anchors in.
 // It is also the PCR shim measures the MOK state into on UEFI Secure Boot.
 const pcr14Index = 14
@@ -148,8 +114,9 @@ const pcr14Index = 14
 // firmware log, so the replayed PCR14 is exactly the baseline the lock chain
 // anchors on.
 //
-// nil log, replay error, or no PCR14 events yields 0^32 - the legacy/BIOS host
-// that never touched PCR14.
+// nil log, replay error, or no PCR14 events yields 0^32 - UEFI host whose boot
+// chain never measured PCR14 (no shim).
+// The log is proven to be a UEFI one before this runs, see UEFIAnchored.
 //
 // baseline needs no separate trust:
 // it is authenticated by the quote, since forged event log makes Derive*(baseline, ...)
@@ -166,10 +133,10 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 	return replay.PCRValues[pcr14Index]
 }
 
-// MatchBootCommitmentPCR14 rederives PCR14 for the agent_hash bound at
-// boot and the (resetCount, restartCount) reported in the quote's
-// ClockInfo, then scans restartCount backward looking for a value whose
-// derivation matches the PCR14 carried in the quote.
+// MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash
+// bound at boot and the (resetCount, restartCount) reported in the quote's
+// ClockInfo, then scans restartCount backward looking for value whose derivation
+// matches the PCR14 carried in the quote.
 //
 // The scan exists because the agent extends PCR14 once at startup using
 // the restartCount in effect at that moment, while the quote carries
@@ -181,10 +148,12 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // the agent process and triggered a fresh extend on the next start.
 //
 // matched is true when some restartCount in [quoteRestartCount-maxRestartSkew,
-// quoteRestartCount] reproduces the PCR14 carried in target. expected
-// is set to the matched derivation (drift accepted) or to the exact
+// quoteRestartCount] reproduces the PCR14 carried in target.
+//
+// expected is set to the matched derivation (drift accepted) or to the exact
 // quote derivation (when no candidate matched) so the caller can log
 // the failure with a deterministic expected_pcr14 column.
+//
 // restartDrift carries the positive distance between the quote value
 // and the matched value (0 when the exact-match branch succeeded).
 //
@@ -192,23 +161,6 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // not know the pinned agent_hash cannot produce a matching PCR14 for
 // any restartCount value, and resetCount is not iterated so a post-cold-boot
 // state cannot be replayed.
-func MatchBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
-	resetCount, quoteRestartCount uint32,
-	target [types.HashSize]byte,
-	maxRestartSkew uint32,
-) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
-	derive := func(ah [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte {
-		return DeriveBootCommitmentPCR14(baseline, ah, reset, restart)
-	}
-	return matchPCR14(derive, agentHash, resetCount,
-		quoteRestartCount, target, maxRestartSkew)
-}
-
-// MatchLockedBootCommitmentPCR14 mirrors MatchBootCommitmentPCR14 for
-// the two-hop derivation used when an initramfs lock has run before
-// the agent. The skew-tolerant scan stays the same; only the per-step
-// derivation function differs so a caller dispatching on
-// FlagInitramfsLockV1 selects the right chain.
 func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	resetCount, quoteRestartCount uint32,
 	target [types.HashSize]byte,
@@ -221,9 +173,9 @@ func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 		quoteRestartCount, target, maxRestartSkew)
 }
 
-// matchPCR14 factors the restartCount-skew scan out of the two
-// derivation paths so a future third derivation (e.g. a v2 lock) can
-// reuse the same exhaustion logic without copy/paste.
+// matchPCR14 keeps the restartCount-skew scan separate from the derivation it
+// scans over, so future derivation can reuse the same exhaustion logic without
+// copy/paste.
 func matchPCR14(
 	derive func(agentHash [types.HashSize]byte, reset, restart uint32) [types.HashSize]byte,
 	agentHash [types.HashSize]byte,
@@ -291,6 +243,14 @@ type ClientBaseline struct {
 
 	// number of successful attestations
 	AttestCount uint64
+
+	// how many times the pinned agent hash has moved to a build the policy
+	// allow-list names, and when it last moved.
+	// Together they are the rate limit on ArchiveAndRepinAgentHash;
+	// Zero LastAgentHashRepinAt means the client has never re-pinned,
+	// so its first update is never rate limited.
+	AgentHashRepinCount  int
+	LastAgentHashRepinAt time.Time
 }
 
 // boot-chain PCR values that must remain stable across reboots.
@@ -463,6 +423,40 @@ type ReanchorStorer interface {
 	AcknowledgeLFAReview(clientID string) error
 }
 
+// AgentHashRepinState is the per-client bookkeeping behind the agent-hash
+// re-pin rate limit.
+// Present is false when the client has no baseline row.
+type AgentHashRepinState struct {
+	Present     bool
+	RepinCount  int
+	LastRepinAt time.Time
+}
+
+// AgentHashRepinStorer is optionally implemented by baseline stores that support
+// moving client's pinned agent hash after a package update.
+//
+// Boot re-anchor above answers "the firmware moved".
+// This answers "the agent binary moved".
+// They are separate because their authorities are separate:
+// boot re-anchor is judged from the event log and the Secure Boot root of trust,
+// while a re-pin is judged from the policy's agent_hashes allow-list,
+// which names the builds the relying party already trusts.
+//
+//   - GetAgentHashRepinState returns the bookkeeping for a client.
+//   - ArchiveAndRepinAgentHash atomically copies the outgoing hash into
+//     the archive table and replaces the pinned agent_hash and PCR14 with
+//     the reported pair, bumping agent_hash_repin_count / last_agent_hash_repin_at.
+//     now is the re-pin clock: the implementation re-reads last_agent_hash_repin_at
+//     under the same lock or transaction as the write and returns
+//     ErrAgentHashRepinRateLimited when now is still inside AgentHashRepinMinInterval,
+//     so concurrent attestations for one client cannot race the cheap-path gate
+//     in agentHashDecision.
+type AgentHashRepinStorer interface {
+	GetAgentHashRepinState(clientID string) AgentHashRepinState
+	ArchiveAndRepinAgentHash(clientID string,
+		agentHash, pcr14 [types.HashSize]byte, now time.Time) error
+}
+
 // manages per-client PCR baselines (TOFU)
 type BaselineStore struct {
 	mu            sync.RWMutex
@@ -497,17 +491,6 @@ const (
 
 	// Database or store error - must not be treated as first use
 	TOFUError
-
-	// TOFULegacyBackfill is returned by CheckAndUpdateAgentHash when a
-	// pre-existing baseline row carries no pinned agent_hash and the
-	// store accepts the incoming value as the canonical one. The
-	// transition can only happen once per client (subsequent rounds
-	// take the TOFUMatch / TOFUMismatch branch), but the row is
-	// indistinguishable from a real first-use after the write, so the
-	// verifier surfaces a security event and operators can opt to
-	// refuse the implicit trust upgrade via
-	// VerifierConfig.RejectLegacyBaselines.
-	TOFULegacyBackfill
 )
 
 // performs TOFU validation for PCR 14
@@ -623,6 +606,51 @@ func (s *BaselineStore) ArchiveAndReanchor(clientID string, boot BootBaseline,
 	st.ReanchorCount++
 	st.LastReanchorAt = now
 	s.reanchor[clientID] = st
+	return nil
+}
+
+// GetAgentHashRepinState returns the in-memory re-pin bookkeeping
+func (s *BaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	b, ok := s.baselines[clientID]
+	if !ok {
+		return AgentHashRepinState{}
+	}
+	return AgentHashRepinState{
+		Present:     true,
+		RepinCount:  b.AgentHashRepinCount,
+		LastRepinAt: b.LastAgentHashRepinAt,
+	}
+}
+
+// ArchiveAndRepinAgentHash moves the pinned agent hash
+// and PCR14 to the reported pair.
+// In-memory store keeps no archive table;
+// the outgoing hash is simply overwritten (durable backends persist it).
+// Refuses when the client has no baseline row:
+// re-pin replaces a pin, and establishing one is TOFU's job, not this path's.
+func (s *BaselineStore) ArchiveAndRepinAgentHash(clientID string,
+	agentHash, pcr14 [types.HashSize]byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.baselines[clientID]
+	if !ok {
+		return errors.New("agent-hash re-pin: no baseline row for client")
+	}
+	if !b.LastAgentHashRepinAt.IsZero() &&
+		now.Sub(b.LastAgentHashRepinAt) < AgentHashRepinMinInterval {
+		return ErrAgentHashRepinRateLimited
+	}
+
+	b.AgentHash = agentHash
+	b.PCR14 = pcr14
+	b.LastSeen = now
+	b.AgentHashRepinCount++
+	b.LastAgentHashRepinAt = now
 	return nil
 }
 
@@ -777,20 +805,10 @@ func (s *BaselineStore) CheckAndUpdateAgentHash(clientID string,
 		return TOFUFirstUse, &out
 	}
 
-	var zero [types.HashSize]byte
-	if existing.AgentHash == zero {
-		// Legacy row from a pre-FlagBootCommitment attestation: the
-		// PCR14 baseline is pinned but agent_hash is not. Record the
-		// incoming hash so future rounds can verify it, but report the
-		// transition as TOFULegacyBackfill so the caller can audit
-		// (and, when configured, reject) the implicit trust upgrade.
-		existing.AgentHash = agentHash
-		existing.LastSeen = now
-		existing.AttestCount++
-		out := *existing
-		return TOFULegacyBackfill, &out
-	}
-
+	// row without a pinned agent_hash can only come from out-of-band PCR14 pin:
+	// every attestation writes the hash.
+	// Mismatch branch below therefore also covers it -- the verifier does not
+	// adopt whichever hash happens to arrive first.
 	if existing.AgentHash != agentHash {
 		out := *existing
 		return TOFUMismatch, &out
@@ -880,11 +898,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		return outcome
 	}
 
-	var zero [types.HashSize]byte
 	switch {
-	case existing.AgentHash == zero:
-		// legacy row backfill - tentative until the boot decision below.
-		outcome.AgentHashResult = TOFULegacyBackfill
 	case existing.AgentHash != agentHash:
 		// agent_hash mismatch terminates the transaction: leave the row
 		// untouched and return the stored snapshot for security logging.
@@ -921,9 +935,6 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	// --- commit phase: both components passed ---
-	if outcome.AgentHashResult == TOFULegacyBackfill {
-		existing.AgentHash = agentHash
-	}
 	existing.LastSeen = now
 	existing.AttestCount++
 	snap := *existing

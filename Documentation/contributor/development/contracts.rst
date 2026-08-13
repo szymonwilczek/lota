@@ -13,14 +13,41 @@ Attestation report wire format
 ==============================
 
 The attestation report (``include/attestation.h``, serialized by
-``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) ends with
-optional variable-length sections. A new trailing section must be appended
-after the existing ones and parsed defensively -- absent for older agents -- so
-a mixed-version fleet keeps interoperating without a wire-version bump. The
-ESRT firmware-version section (``src/agent/esrt.c``, ``test_esrt``) follows
-that pattern.
+``src/agent/report.c``, parsed by ``src/verifier/types/report.go``) has a fixed
+struct followed by variable-length sections: the BPF event array, the TPM event
+log, and the ESRT firmware-version descriptor.
 
-Keep the C serializer and the Go parser in lockstep when the layout changes.
+**Every section is mandatory.** The verifier accepts exactly one report wire
+version and rejects any other, so there is no mixed-version fleet to parse
+defensively for: a report that stops before a section is truncated, not old. A
+platform with nothing to report says so in the section's own fields -- the ESRT
+descriptor carries ``present = 0`` where the firmware exposes no System
+Firmware entry.
+
+A breaking layout change -- adding, removing or reordering a field, or adding a
+section -- bumps ``LOTA_VERSION_MAJOR`` in ``include/lota.h`` and
+``ReportVersion`` in ``types/report.go`` together. That is a flag-day: roll the
+verifier tier first, then the agents. Version 2 dropped the always-empty
+``ek_certificate`` field (the Privacy CA model means the verifier never sees an
+EK) and made the ESRT section mandatory.
+
+Nothing links the C serializer and the Go parser at build time: the serializer
+``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Three
+checks stand in for that missing link, and a layout change must satisfy all
+three:
+
+* ``src/agent/report.c`` pins ``sizeof`` for each wire struct with
+  ``_Static_assert``, so a field added or removed on the C side fails the build
+  with the name of the constant to update.
+* ``TestParseReport_FieldOffsetsMatchCLayout`` (``types/report_test.go``)
+  writes a distinct marker at each expected offset and requires the parsed
+  report to expose it in the matching field -- a positive check, not a bounds
+  test.
+* ``make test`` runs the pair
+  ``tests/cross_lang/report_gen.c`` -> ``report_verify.go``: C serializes a
+  report whose every field carries a position-derived pattern, Go parses it
+  with the production parser and checks each field against the same patterns.
+  The patterns are restated in both files on purpose.
 
 Baseline store migrations
 =========================
@@ -174,6 +201,156 @@ leaves no room for a second instance. Those comparisons stay advisory, and
 an unreadable setting is treated as unknown: behind a connection pooler the
 backend's ``max_connections`` is not the limit that applies, so failing
 closed on it would refuse a legitimate topology.
+
+Publisher selection over IPC
+----------------------------
+
+``LOTA_IPC_CMD_SET_PROFILE`` binds a connection to one publisher, named by the
+SHA-256 of that publisher's CA trust anchor SubjectPublicKeyInfo -- the same
+identity ``/var/lib/lota/profiles/`` is keyed by. It is connection state, not a
+per-request argument, because a title plays for one publisher: after it,
+``GET_TOKEN`` quotes with that publisher's AIK and ``GET_STATUS`` answers with
+that publisher's verdict and validity window.
+
+Three rules the agent holds to:
+
+* An identity the host has no profile for is **refused**
+  (``LOTA_IPC_ERR_UNKNOWN_PROFILE``), never quietly answered for another
+  publisher.
+* The attestation loop leaves the TPM bound to the first profile between
+  rounds, so a connection bound elsewhere rebinds for its quote and restores
+  the binding afterwards. They share one TPM and the loop expects the binding
+  it left.
+* A connection that never sends it keeps the host-wide answers: attested only
+  while every configured publisher is satisfied.
+
+``LOTA_IPC_VERSION`` is 2 for this command. The agent refuses any other
+version outright rather than negotiating: ``lota_ipc.h`` is internal, and the
+agent and the SDK that speaks to it ship together.
+
+Status flags are the same bits on both sides of that boundary:
+``LOTA_STATUS_*`` in ``include/lota_ipc.h`` and ``LOTA_FLAG_*`` in
+``include/lota_gaming.h`` are two names for one wire value, and the SDK copies
+the word through rather than translating it. A flag added to one header
+without the other silently means something different to the title than to the
+agent, so ``test_publisher_profile`` asserts the agreement.
+
+``LOTA_STATUS_TOKEN_ONLY`` is the flag that makes a cleared
+``LOTA_STATUS_ATTESTED`` readable. A publisher configured with
+``verifier = none`` is never reported to, so the host holds no verdict of
+theirs; without a second bit, a title could not tell that from a machine that
+failed verification, and the two call for opposite behaviour. It is set on a
+connection bound to such a publisher, and on the host-wide answer when no
+configured publisher runs a verifier at all.
+
+Ending a protected process
+--------------------------
+
+``LOTA_IPC_CMD_TERMINATE_PROTECTED`` is the only way a protected process can
+be signalled. ``lota_task_kill`` passes a signal to such a task from the task
+itself, from the agent, from a holder of ``LOTA_TASK_AUTH_ADMIN`` or from the
+kernel; that flag is set on the agent's PID before the map is frozen, so
+nothing else on the machine holds it and root is no exception. Without the
+command a hung title costs a reboot.
+
+The handler applies ``kill(2)``'s own rule -- the owner of the target, or root
+-- and nothing wider. It deliberately does **not** call
+``ipc_client_is_privileged()``, which ``UNPROTECT_PID`` and ``SHUTDOWN`` do:
+that gate demands a caller whose executable is on the operator's verity
+allowlist, which is empty on a default install, so requiring it here would
+reproduce the dead end the command exists to end. What keeps the widening
+bounded is that no route to a protected process avoids the agent, so every
+termination is recorded rather than silent.
+
+Four refusals sit around that rule: a signal other than ``SIGTERM`` or
+``SIGKILL``, so the command cannot drive a process that stays in the measured
+set; a target nobody protected, which the caller can already signal; PID 1 and
+PID 0; and the agent itself, whose stopping is ``--shutdown``'s business
+because PCR 14 commits for the whole boot.
+
+Each of those answers with its own result code, because the code is all the
+caller gets and the sentence it turns into has to match what happened:
+``LOTA_IPC_ERR_NOT_PROTECTED`` for a process nobody protected, which an
+ordinary ``kill`` reaches; ``LOTA_IPC_ERR_TARGET_REFUSED`` for a target the
+command does not speak for at all, PID 0, PID 1 and the agent;
+``LOTA_IPC_ERR_ACCESS_DENIED`` for a request that is not this caller's to
+make, which covers both the wrong signal and the wrong owner; and
+``LOTA_IPC_ERR_BAD_REQUEST`` for a target that is not there. Collapsing them
+misdirects: with one code, ending the agent's own PID reads back as a
+permission problem with somebody else's process.
+
+The handler opens a pidfd on the target before reading its owner or sending
+anything. A pidfd pins the PID number for as long as it is held, so the
+``/proc`` entry consulted and the signal delivered address one process and not
+a successor that inherited the number.
+
+``LOTA_STATUS_PROTECTED_TERMINATED`` is then set for the rest of the boot. It
+is kept beside ``status_flags`` rather than inside it, because that word is
+republished wholesale on every attestation round; ``ipc_update_status`` folds
+it back in, so the status answer, the token and the D-Bus property carry it
+from one source. That agreement is load-bearing: the anti-cheat heartbeat
+binds the flags it read from ``GET_STATUS`` into the nonce the token is quoted
+over, so a bit set in one and not the other surfaces as a nonce mismatch.
+
+GET_TOKEN rate limits
+=====================
+
+Every ``GET_TOKEN`` costs a fresh TPM quote, so the agent limits how fast
+they can be asked for. The limits are two, and they measure different things
+(``TOKEN_RATE_LIMIT_PER_SESSION`` and ``TOKEN_RATE_LIMIT`` in
+``src/agent/ipc.h``).
+
+The **session budget** is what one title may spend. A connection is a
+session, and a title holds one, so the budget is held on the connection and
+dies with it. It is sized so no realistic heartbeat reaches it.
+
+The **uid ceiling** is the bound on how much of the TPM one user may consume.
+It has to hold several sessions at once, because on a player's machine every
+title runs as the same uid: a ceiling sized for one title throttles the second
+game for what the first one spent.
+
+Both are needed. Without the session budget one title can spend the whole uid
+allowance; without the uid ceiling a caller opens connections until the TPM is
+saturated. Three ``_Static_assert``\ s in ``ipc.h`` keep the relationship
+honest: the session budget must exceed the reference heartbeat rate, the uid
+ceiling must cover at least two sessions, and the session budget must stay
+the tighter of the two. Changing either constant without the other fails the
+build rather than starving a title at runtime.
+
+Attestation token quote binding
+===============================
+
+The token's TPM quote signs one 32-byte value, its ``extraData``, and that
+value is what ties every other field in the token to the signature:
+
+.. code-block:: text
+
+   extraData = SHA256(valid_until || flags || pcr_mask || nonce ||
+                      policy_digest || runtime_protect_digest ||
+                      runtime_protect_epoch)
+
+Integers are little-endian. Three implementations must agree on it byte for
+byte: the agent that builds the quote
+(``include/lota_token_quote_nonce.h``), the C verifier
+(``lota_server_verify_token()`` in ``src/sdk/lota_server.c``) and the Go one
+(``ComputeTokenQuoteNonce`` in ``sdk/server/verify.go``). A field that is not
+in this digest is *not* signed, however trustworthy it looks in the struct,
+so adding one to the token means adding it here in all three places.
+
+A relying party should call one of the two verifiers rather than
+reimplement the binding.
+
+Both also apply the same freshness window, and that is the second thing
+they must agree on. The token carries an expiry and no issue time, so
+``valid_until`` is the only temporal anchor: an agent on the default
+attestation interval mints a token expiring one interval from now, and both
+verifiers refuse one whose expiry is further ahead than
+``LOTA_SERVER_MAX_TOKEN_AGE_SEC`` plus ``LOTA_SERVER_MAX_CLOCK_SKEW_SEC``
+(``DefaultMaxTokenAge`` and ``MaxClockSkew`` in Go). Raising the agent's
+``attest_interval`` above that window makes every token it mints
+unverifiable, so the two move together. A relying party that wants a
+tighter bound than the window applies it to the verified ``valid_until``
+itself.
 
 IPC token payload budget
 ========================

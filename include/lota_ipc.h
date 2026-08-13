@@ -4,6 +4,13 @@
  * LOTA IPC Protocol
  *
  * Binary protocol for local attestation queries.
+ *
+ * Internal to the agent and the SDK that ships with it:
+ * this is the wire between the two, not surface an integrator builds against.
+ * It is not installed, and it carries no compatibility promise -- caller that
+ * speaks the socket directly is pinned to the agent build it was compiled against.
+ *
+ * Use the gaming SDK (include/lota_gaming.h), which owns this protocol and keeps its own ABI.
  */
 
 #ifndef LOTA_IPC_H
@@ -15,7 +22,13 @@
 
 /* Protocol constants */
 #define LOTA_IPC_MAGIC 0x4C4F5441 /* "LOTA" */
-#define LOTA_IPC_VERSION 1
+/*
+ * Version 2 adds SET_PROFILE.
+ * Agent refuses any other version outright:
+ * this header is internal and the agent and the SDK that speaks to it ship
+ * together, so there is nothing to negotiate with.
+ */
+#define LOTA_IPC_VERSION 2
 /*
  * Practical per-frame payload cap enforced by the agent socket parser.
  * The largest production payload is GET_TOKEN: token header, protected PID
@@ -40,7 +53,22 @@ enum lota_ipc_cmd {
 		0x06, /* Hot-remove protected PID (requires privileged peer) */
 	LOTA_IPC_CMD_SHUTDOWN =
 		0x07, /* Graceful agent self-shutdown (requires privileged peer) */
+	LOTA_IPC_CMD_SET_PROFILE =
+		0x08, /* Bind this connection to one publisher profile */
+	LOTA_IPC_CMD_SYNC_ATTEST =
+		0x09, /* Exchange state with the attestation loop (agent peer only) */
+	LOTA_IPC_CMD_TERMINATE_PROTECTED =
+		0x0A, /* End a protected process on behalf of its owner */
 };
+
+/*
+ * How many publishers one host answers to.
+ *
+ * Mirrors LOTA_CONFIG_MAX_PROFILES, which this header cannot include:
+ * the SDK ships it and the agent's configuration parser is not public surface.
+ * The agent asserts the two against each other.
+ */
+#define LOTA_IPC_MAX_PROFILES 8
 
 /*
  * Response codes
@@ -57,6 +85,13 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_BAD_VERSION = 0x08,
 	LOTA_IPC_ERR_TPM_LOCKOUT = 0x09,
 	LOTA_IPC_ERR_TOO_MANY_PROTECTED_PIDS = 0x0A,
+	LOTA_IPC_ERR_UNKNOWN_PROFILE = 0x0B,
+	/* nobody on this machine has agreed to answer to that publisher */
+	LOTA_IPC_ERR_CONSENT_REQUIRED = 0x0C,
+	/* nobody protected that process, so an ordinary kill(2) reaches it */
+	LOTA_IPC_ERR_NOT_PROTECTED = 0x0D,
+	/* PID 0, PID 1 or the agent: not a process this verb speaks for */
+	LOTA_IPC_ERR_TARGET_REFUSED = 0x0E,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -73,6 +108,32 @@ enum lota_ipc_result {
 	(1                        \
 	 << 6) /* BPF events ringbuf dropped at least one event since last     \
 		  poll; forensic stream incomplete, enforcement unaffected */
+#define LOTA_STATUS_UPDATE_PENDING \
+	(1                         \
+	 << 7) /* Agent binary on disk differs from the running one: package \
+		  update landed and takes effect on the next cold boot.        \
+		  Attestation is unaffected until then */
+
+#define LOTA_STATUS_TOKEN_ONLY \
+	(1                     \
+	 << 8) /* the publisher this connection named runs no verifier here,  \
+		  so ATTESTED carries no verdict of theirs and the token is   \
+		  the evidence */
+
+#define LOTA_STATUS_IMAGE_FULLY_MEASURED \
+	(1                               \
+	 << 9) /* every file-backed executable mapping of every protected     \
+		  process carried an fs-verity digest, so the runtime image   \
+		  measurement covers all of their code. Clear means some      \
+		  object could not be measured and is absent from the fold;   \
+		  what that is worth is the relying party's policy */
+
+#define LOTA_STATUS_PROTECTED_TERMINATED \
+	(1                               \
+	 << 10) /* the agent ended a protected process for its owner since    \
+		   this host booted. Sticky until the next boot, and carried  \
+		   by the status word and the token alike, so session ended   \
+		   locally is visible rather than a process that vanished */
 
 /*
  * Request header
@@ -124,6 +185,25 @@ struct lota_ipc_status {
 	uint32_t fail_count; /* Total failed attestations */
 	uint8_t mode; /* Current mode (enum lota_mode) */
 	uint8_t reserved[3];
+} __attribute__((packed));
+
+/*
+ * SET_PROFILE request payload
+ *
+ * Binds the connection to one publisher, named by the SHA-256 of that publisher's
+ * CA trust anchor SubjectPublicKeyInfo -- the same identity the host stores
+ * the publisher's enrollment under.
+ * The endpoint is not the identity: address is mutable and two publishers can
+ * share a hostname, while the anchor's key is what enrollment verifies against.
+ *
+ * Every later answer on the connection is that publisher's:
+ * GET_TOKEN quotes with their AIK, and GET_STATUS reports whether *their*
+ * verifier is satisfied rather than whether every publisher on the host is.
+ *
+ * Connection that never sends this keeps the host-wide answers.
+ */
+struct lota_ipc_set_profile {
+	uint8_t profile_id[32];
 } __attribute__((packed));
 
 /*
@@ -226,6 +306,15 @@ struct lota_ipc_token {
 	(1U << 1) /* Attestation completed (pass/fail)     \
 				       */
 #define LOTA_IPC_EVENT_MODE (1U << 2) /* Enforcement mode changed */
+
+/*
+ * Title opened or closed session with publisher, or selected one this host has
+ * never enrolled with.
+ * Only the attestation loop subscribes: it acts on the change, and waiting out
+ * its sleep would make title that has just launched wait an interval for its
+ * first report.
+ */
+#define LOTA_IPC_EVENT_PROFILE (1U << 3)
 #define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
 
 /*
@@ -258,6 +347,67 @@ struct lota_ipc_notify {
 	uint8_t reserved[3];
 } __attribute__((packed));
 
+/*
+ * SYNC_ATTEST -- the state exchange between the two agent units.
+ *
+ * Enforcement and attestation run as separate processes so a network-facing
+ * TLS client cannot reach the BPF policy, and only one of them can own
+ * LOTA_IPC_SOCKET_PATH.
+ * Enforcement daemon owns it: it is the always-on unit, it is what the packaged
+ * socket unit activates, and it is the one holding the BPF context,
+ * the enforcement policy digest and the boot state a title asks about.
+ * What it does not have is a verifier's verdict.
+ *
+ * So the attestation loop connects to that socket as a local peer and trades what
+ * each side knows in one round trip: it sends the verdict it holds for every
+ * publisher, and reads back which publishers a title is currently playing for
+ * and which one a title has asked this host to enrol with.
+ *
+ * Not public surface -- the SDK never sends this, and the daemon refuses it
+ * from anything but the agent binary running as the agent's own user.
+ */
+struct lota_ipc_attest_verdict {
+	uint8_t profile_id[32]; /* SHA-256 of the publisher CA anchor SPKI */
+	uint8_t attested; /* the verifier accepted the last report */
+	uint8_t reserved[7];
+	uint64_t valid_until; /* Unix timestamp the verdict lapses at */
+} __attribute__((packed));
+
+struct lota_ipc_attest_sync {
+	uint32_t count; /* verdicts that follow */
+	uint32_t attest_count; /* successful rounds since the loop started */
+	uint32_t fail_count;
+	uint32_t _reserved1;
+	uint64_t last_attest_time;
+	/* struct lota_ipc_attest_verdict verdicts[count] follows */
+} __attribute__((packed));
+
+/*
+ * What a publisher is owed, as only the socket owner can know it:
+ * title holding session with them, or title having selected a publisher this
+ * host has never enrolled with.
+ */
+struct lota_ipc_profile_demand {
+	uint8_t profile_id[32];
+	uint32_t sessions; /* connections currently bound to this publisher */
+	uint8_t enroll_pending; /* title asked for publisher with no enrollment */
+	uint8_t reserved[3];
+} __attribute__((packed));
+
+struct lota_ipc_attest_sync_response {
+	uint32_t count; /* demands that follow */
+	uint32_t _reserved1;
+	/* struct lota_ipc_profile_demand demands[count] follows */
+} __attribute__((packed));
+
+#define LOTA_IPC_ATTEST_SYNC_MAX_SIZE          \
+	(sizeof(struct lota_ipc_attest_sync) + \
+	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_attest_verdict))
+
+#define LOTA_IPC_ATTEST_SYNC_RESPONSE_MAX_SIZE          \
+	(sizeof(struct lota_ipc_attest_sync_response) + \
+	 LOTA_IPC_MAX_PROFILES * sizeof(struct lota_ipc_profile_demand))
+
 /* PROTECT_PID / UNPROTECT_PID request payload */
 struct lota_ipc_pid_request {
 	uint32_t pid;
@@ -266,6 +416,34 @@ struct lota_ipc_pid_request {
 /* PROTECT_PID / UNPROTECT_PID response payload */
 struct lota_ipc_policy_update {
 	uint8_t policy_digest[32];
+	uint32_t protect_pid_count;
+	uint32_t _reserved1;
+} __attribute__((packed));
+
+/*
+ * TERMINATE_PROTECTED request payload
+ *
+ * Protected process takes no signal from anything but itself, the agent
+ * or the kernel, so its owner asks the agent to deliver one.
+ * Only SIGTERM and SIGKILL are relayed: the verb ends a process,
+ * it does not drive one.
+ */
+struct lota_ipc_terminate_request {
+	uint32_t pid;
+	uint32_t signal;
+} __attribute__((packed));
+
+/*
+ * TERMINATE_PROTECTED response payload
+ *
+ * @protect_pid_count is the set as it stands when the answer is written.
+ * SIGKILL'd process is usually still in it: the kernel drops the task
+ * and the agent reaps it on the next round, so the count is what the caller
+ * can observe, not a promise that the process has gone.
+ */
+struct lota_ipc_terminate_response {
+	uint32_t pid;
+	uint32_t signal;
 	uint32_t protect_pid_count;
 	uint32_t _reserved1;
 } __attribute__((packed));

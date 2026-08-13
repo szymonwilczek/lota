@@ -86,9 +86,12 @@ Game or anti-cheat integrator
 LOTA exposes trust decisions and token verification material. Gameplay policy
 remains outside this repository.
 
+* Integration guide: :ghsrc:`examples/anticheat-integration.rst`
 * Example index: :ghsrc:`examples/README.rst`
+* CI/CD release gate example: :ghsrc:`examples/ci-gate/README.rst`
 * Reference server: :ghsrc:`examples/demo_server/README.rst`
 * Anti-cheat heartbeat producer: :ghsrc:`examples/demo_anticheat/README.rst`
+* Proton and Wine titles: :ghsrc:`examples/cs2/README.rst`
 * Demo game client: :ghsrc:`examples/demo_game/README.rst`
 * End-to-end demo: :ghsrc:`examples/demo/README.rst`
 * mTLS example: :ghsrc:`examples/mtls/README.rst`

@@ -17,6 +17,11 @@ once every piece is in tree.
 |                     | activation, attest to a verifier that trusts only the |
 |                     | CA root.                                              |
 +---------------------+-------------------------------------------------------+
+| ``ci-gate/``        | Enterprise reference: a CI/CD step proves its host is  |
+|                     | attested before a relying party releases a secret to   |
+|                     | it. Fail-closed, exit-code driven, with a rootless     |
+|                     | swTPM-backed end-to-end run.                           |
++---------------------+-------------------------------------------------------+
 | ``demo_server/``    | Go reference server: nonce issuance + heartbeat       |
 |                     | verification                                          |
 +---------------------+-------------------------------------------------------+
@@ -43,6 +48,10 @@ once every piece is in tree.
 |                     | state via ``--pg-dsn``, so a token issued by one      |
 |                     | validates on the other.                               |
 +---------------------+-------------------------------------------------------+
+
+``anticheat-integration.rst`` is the map for a studio forking the
+game-side material: what to copy, what to consume, what must change, and
+where the licence line falls.
 
 The whole tree is built with ``make examples`` from the repository root. The
 target is opt-in: ``make all`` does not depend on it, so the agent build stays

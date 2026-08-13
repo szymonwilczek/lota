@@ -18,8 +18,11 @@ VICTIM := $(BUILD_DIR)/block_victim
 EVIL := $(BUILD_DIR)/evil.so
 
 CC ?= gcc
+STAGE_DIR ?= $(TOP_DIR)/build/stage
+export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
+
 CFLAGS := -Wall -Wextra -Werror -O2 -g
-CFLAGS += -I$(INC_DIR)
+CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-gaming)
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -fstack-protector-strong -fstack-clash-protection
 CFLAGS += -fcf-protection=full
@@ -38,8 +41,8 @@ VICTIM_LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
 ifdef SANITIZE
 VICTIM_LDFLAGS += -fsanitize=$(SANITIZE)
 endif
-VICTIM_LDLIBS := -L$(SDK_BUILD_DIR) -llotagaming
-VICTIM_LDLIBS += -Wl,-rpath,$(SDK_BUILD_DIR) -ldl
+VICTIM_LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-gaming)
+VICTIM_LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64 -ldl
 
 # evil.so deliberately drops -Wmissing-prototypes: constructor
 # functions are static + attribute-tagged and the loader resolves
@@ -59,7 +62,7 @@ endif
 
 all: $(VICTIM) $(EVIL)
 
-$(VICTIM): victim.c $(SDK_BUILD_DIR)/liblotagaming.so
+$(VICTIM): victim.c $(STAGE_DIR)/lib64/liblotagaming.so
 	$(CC) $(CFLAGS) -o $@ victim.c $(VICTIM_LDFLAGS) $(VICTIM_LDLIBS)
 	@echo "Built: $@"
 

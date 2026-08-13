@@ -9,8 +9,9 @@
 // baselines, revocations, hardware bans, logs and session tokens are scoped to
 // the tenant carried by the certificate, so one verifier can serve multiple
 // isolated organisations or titles.
-// Certificates issued before tenant assignment carry no OU and fall into
-// the default tenant.
+//
+// Certificate carrying no OU falls into the default tenant, which is how deployment
+// that assigns no tenants works.
 
 package verify
 

@@ -167,30 +167,11 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 		copy(stored[:], storedAgentHash)
 	}
 
-	if !hasStored {
-		// Legacy row from a pre-FlagBootCommitment attestation: the
-		// PCR14 baseline is pinned but agent_hash is NULL. Record the
-		// incoming hash so future rounds can verify it, but report the
-		// transition as TOFULegacyBackfill so the caller can audit
-		// (and, when configured, reject) the implicit trust upgrade.
-		newCount := attestCount + 1
-		if _, err := s.db.Exec(
-			"UPDATE baselines SET agent_hash = ?, last_seen = ?, attest_count = ? WHERE client_id = ?",
-			agentHash[:], now.UTC(), newCount, clientID,
-		); err != nil {
-			slog.Error("agent_hash backfill failed", "client_id", clientID, "error", err)
-			return TOFUError, nil
-		}
-		return TOFULegacyBackfill, &ClientBaseline{
-			PCR14:       pcr14,
-			AgentHash:   agentHash,
-			FirstSeen:   firstSeen,
-			LastSeen:    now,
-			AttestCount: newCount,
-		}
-	}
-
-	if stored != agentHash {
+	// NULL agent_hash can only come from an out-of-band PCR14 pin:
+	// every attestation writes the column
+	// Such a row is refused with the stored (zero) hash rather than
+	// adopting the incoming one
+	if !hasStored || stored != agentHash {
 		return TOFUMismatch, &ClientBaseline{
 			PCR14:       pcr14,
 			AgentHash:   stored,
@@ -388,9 +369,10 @@ func (s *SQLiteBaselineStore) Stats() BaselineStats {
 }
 
 // CheckAndUpdateBootPCRs persists PCR0/PCR1/PCR7 alongside the existing
-// PCR14 baseline. The boot columns are nullable so existing PCR14-only
-// rows from older deployments TOFU-establish the firmware baseline on
-// their next attestation rather than being rejected.
+// PCR14 baseline.
+// Boot columns are nullable because the PCR14 row is written first:
+// client whose firmware baseline is not pinned yet TOFU-establishes it on
+// its next attestation rather than being rejected.
 func (s *SQLiteBaselineStore) CheckAndUpdateBootPCRs(clientID string, boot BootBaseline) (TOFUResult, *BootBaseline) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -626,9 +608,7 @@ func (s *SQLiteBaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	switch {
-	case !hasStored:
-		outcome.AgentHashResult = TOFULegacyBackfill
-	case stored != agentHash:
+	case !hasStored || stored != agentHash:
 		// mismatch terminates the transaction without writes.
 		outcome.AgentHashResult = TOFUMismatch
 		outcome.AgentHashBaseline = &ClientBaseline{
@@ -886,6 +866,103 @@ func (s *SQLiteBaselineStore) ArchiveAndReanchor(clientID string,
 		 WHERE client_id = ?`,
 		boot.PCR0[:], boot.PCR1[:], boot.PCR7[:], now,
 		eventLog, esrtVersion, capVal, lfaVal, lfaVal, now, clientID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetAgentHashRepinState returns the re-pin bookkeeping (SQLite)
+func (s *SQLiteBaselineStore) GetAgentHashRepinState(clientID string) AgentHashRepinState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var (
+		count    sql.NullInt64
+		lastPin  sql.NullTime
+		state    AgentHashRepinState
+		clientPK string
+	)
+	if err := s.db.QueryRow(
+		`SELECT client_id, agent_hash_repin_count, last_agent_hash_repin_at
+		   FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&clientPK, &count, &lastPin); err != nil {
+		// missing row is Present=false,
+		// which the caller treats as "no pin to move";
+		// store error is reported the same way so the decision fails
+		// closed rather than on stale bookkeeping
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Warn("agent-hash re-pin state read failed",
+				"client_id", clientID, "error", err)
+		}
+		return AgentHashRepinState{}
+	}
+	state.Present = true
+	state.RepinCount = int(count.Int64)
+	if lastPin.Valid {
+		state.LastRepinAt = lastPin.Time.UTC()
+	}
+	return state
+}
+
+// ArchiveAndRepinAgentHash archives the outgoing agent hash
+// and moves the pin to the reported (agent_hash, PCR14) pair (SQLite)
+//
+// PCR14 moves with the hash because the two are one statement:
+// the expected register content is derived from the pinned hash,
+// so leaving the old PCR14 behind would pin a value the new binary can
+// never reproduce.
+func (s *SQLiteBaselineStore) ArchiveAndRepinAgentHash(clientID string,
+	agentHash, pcr14 [types.HashSize]byte, now time.Time,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now = now.UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.Warn("agent-hash re-pin tx rollback failed",
+				"client_id", clientID, "error", err)
+		}
+	}()
+
+	var (
+		oldAgentHash []byte
+		lastRepin    sql.NullTime
+	)
+
+	// Read inside the transaction so the rate-limit guard sees value no
+	// concurrent re-pin can have moved between the read and the write
+	if err := tx.QueryRow(
+		`SELECT agent_hash, last_agent_hash_repin_at
+		   FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&oldAgentHash, &lastRepin); err != nil {
+		return err
+	}
+	if lastRepin.Valid &&
+		now.Sub(lastRepin.Time.UTC()) < AgentHashRepinMinInterval {
+		return ErrAgentHashRepinRateLimited
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO baseline_archive
+		   (client_id, archived_at, agent_hash, reason)
+		 VALUES (?, ?, ?, ?)`,
+		clientID, now, oldAgentHash, "agent-update",
+	); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(
+		`UPDATE baselines SET agent_hash = ?, pcr14 = ?, last_seen = ?,
+		   agent_hash_repin_count = COALESCE(agent_hash_repin_count, 0) + 1,
+		   last_agent_hash_repin_at = ?
+		 WHERE client_id = ?`,
+		agentHash[:], pcr14[:], now, now, clientID,
 	); err != nil {
 		return err
 	}

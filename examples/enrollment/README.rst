@@ -99,16 +99,18 @@ Notes for production
 --------------------
 
 - The demo verifier loads ``policies/testing.yaml`` and runs with
-  ``--allow-permissive-policy``, ``--allow-tofu-boot-baseline`` and
-  ``--allow-no-initramfs-lock`` so a fresh host passes without a pinned
-  production policy. A real deployment loads a signed policy that pins PCR
-  0/1/7 and ships the 90lota dracut module; see `Production Bringup
+  ``--allow-permissive-policy`` and ``--allow-tofu-boot-baseline`` so fresh
+  host passes without a pinned production policy. The 90lota dracut module is
+  required either way: the verifier has no derivation for a PCR 14 that the
+  initramfs lock did not pin. A real deployment also loads a signed policy
+  that pins PCR 0/1/7; see `Production Bringup
   <../../Documentation/operator/production-bringup/index.rst>`_
   and `policies/ <../../policies/README.rst>`_.
 - The CA holds no TPM and stores no per-host secret beyond the in-flight
   challenge. Run one per fleet (or per region); every verifier that should
   trust it gets ``--aik-ca-cert ca.crt``.
 - AIK certificates are short-lived (``--aik-cert-ttl``, default 24h); a host
-  refreshes before expiry. The first enrollment records the CA endpoint, so a
-  refresh is a single ``lota-agent --reenroll`` with no CA arguments -- the
-  same guided path the agent points operators to after an AIK rotation.
+  refreshes before expiry. The first enrollment records the CA endpoint in the
+  publisher profile, so a refresh is a single ``lota-agent --reenroll
+  --ca-cert ...`` naming the same trust anchor -- the same guided path the
+  agent points operators to after an AIK rotation.

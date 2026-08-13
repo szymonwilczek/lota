@@ -1,0 +1,26 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Exported ABI of liblotaserver.so.
+ *
+ * The list is the set of functions include/lota_server.h declares.
+ * Every other symbol in the library is an implementation detail and is local,
+ * so helper that is non-static only because two translation units share it does
+ * not become API by accident.
+ *
+ * Adding a function means a new version node (LOTASERVER_1.1) below this one;
+ * removing or changing one is an ABI break and bumps LOTA_ABI_MAJOR.
+ * See Documentation/contributor/development/api-stability.rst
+ *
+ * Copyright (C) 2026 Szymon Wilczek
+ */
+
+LOTASERVER_1.0 {
+	global:
+		lota_server_parse_token;
+		lota_server_sdk_version;
+		lota_server_strerror;
+		lota_server_verify_token;
+
+	local:
+		*;
+};
