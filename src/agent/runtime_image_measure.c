@@ -176,7 +176,8 @@ out:
 
 int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
-				 struct lota_verity_digest_key *out)
+				 struct lota_verity_digest_key *out,
+				 uint32_t *reported_len)
 {
 	char map_files_dir[64];
 	char map_files_leaf[40];
@@ -185,6 +186,9 @@ int lota_rt_measure_entry_verity(pid_t pid,
 	int fd = -1;
 	int ret = 0;
 	int n;
+
+	if (reported_len)
+		*reported_len = 0;
 
 	if (!entry || !out)
 		return -EINVAL;
@@ -243,6 +247,8 @@ int lota_rt_measure_entry_verity(pid_t pid,
 			ret = -errno;
 			goto out;
 		}
+		if (reported_len)
+			*reported_len = d.hdr.digest_size;
 		if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(d.hdr.digest_size)) {
 			ret = -EINVAL;
 			goto out;
@@ -260,6 +266,50 @@ out:
 	return ret;
 }
 
+void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
+			    int err, char *buf, size_t buflen)
+{
+	const char *soname;
+
+	if (!buf || buflen == 0)
+		return;
+
+	if (err < 0)
+		err = -err;
+
+	if (!fail || fail->soname[0] == '\0') {
+		snprintf(buf, buflen, "%s", strerror(err));
+		return;
+	}
+
+	soname = fail->soname;
+
+	/*
+	 * two measurable-object cases are what integrator hits,
+	 * so both name the object and the action that fixes it;
+	 * anything else is ordinary errno against a named object.
+	 */
+	if (err == ENODATA) {
+		snprintf(buf, buflen,
+			 "%s carries no fs-verity digest (enable fs-verity on "
+			 "it, or drop the process from the protected set)",
+			 soname);
+		return;
+	}
+
+	if (err == EINVAL && fail->reported_len != 0) {
+		snprintf(buf, buflen,
+			 "%s carries a %u-byte fs-verity digest; LOTA takes "
+			 "SHA-256 (%d) or SHA-512 (%d)",
+			 soname, fail->reported_len,
+			 LOTA_VERITY_DIGEST_SHA256_SIZE,
+			 LOTA_VERITY_DIGEST_SHA512_SIZE);
+		return;
+	}
+
+	snprintf(buf, buflen, "%s: %s", soname, strerror(err));
+}
+
 /* qsort comparator over the canonical module order */
 static int rt_module_qsort_cmp(const void *a, const void *b)
 {
@@ -267,13 +317,17 @@ static int rt_module_qsort_cmp(const void *a, const void *b)
 }
 
 int lota_runtime_measure_pid(pid_t pid,
-			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE])
+			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+			     struct lota_runtime_measure_failure *fail)
 {
 	struct lota_rt_map_entry *entries = NULL;
 	struct lota_runtime_image_module *mods = NULL;
 	size_t n = 0;
 	size_t i, unique;
 	int ret;
+
+	if (fail)
+		memset(fail, 0, sizeof(*fail));
 
 	if (!out_digest)
 		return -EINVAL;
@@ -298,10 +352,20 @@ int lota_runtime_measure_pid(pid_t pid,
 	for (i = 0; i < n; i++) {
 		snprintf(mods[i].soname, sizeof(mods[i].soname), "%s",
 			 entries[i].soname);
+		uint32_t reported = 0;
+
 		ret = lota_rt_measure_entry_verity(pid, &entries[i],
-						   &mods[i].verity);
-		if (ret != 0)
+						   &mods[i].verity, &reported);
+		if (ret != 0) {
+			if (fail) {
+				snprintf(fail->soname, sizeof(fail->soname),
+					 "%s", entries[i].soname);
+				fail->ino = entries[i].ino;
+				fail->reported_len = reported;
+				fail->err = ret;
+			}
 			goto out;
+		}
 	}
 
 	qsort(mods, n, sizeof(*mods), rt_module_qsort_cmp);

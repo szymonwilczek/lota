@@ -1064,6 +1064,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_flag_names \
 	$(TEST_BIN_DIR)/test_runtime_measure \
 	$(TEST_BIN_DIR)/test_runtime_image_measure \
+	$(TEST_BIN_DIR)/test_runtime_measure_failure \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_protect_pids \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
@@ -1263,6 +1264,11 @@ $(TEST_BIN_DIR)/test_runtime_image_measure: tests/test_runtime_image_measure.c |
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_runtime_measure_failure: tests/test_runtime_measure_failure.c \
+		$(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
 $(TEST_BIN_DIR)/test_protect_pids: tests/test_protect_pids.c \
 		$(AGENT_DIR)/protect_pids.h | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1387,6 +1393,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_flag_names
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
+	@$(BUILD_DIR)/test_runtime_measure_failure
 	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_protect_pids
 	@$(BUILD_DIR)/test_runtime_image_collect

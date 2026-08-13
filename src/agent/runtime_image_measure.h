@@ -62,17 +62,50 @@ int lota_rt_collect_exec_maps(pid_t pid, struct lota_rt_map_entry *entries,
 			      size_t max, size_t *n_out);
 
 /*
+ * Why a runtime image measurement failed, so the caller can name the object
+ * instead of printing a bare errno.
+ *
+ * soname is the basename of the object that stopped the measurement
+ * and is empty when the measurement failed before any object was reached.
+ *
+ * reported_len is the digest length the kernel returned for that object:
+ * zero when it carries no fs-verity digest at all, otherwise a length LOTA
+ * does not take.
+ */
+struct lota_runtime_measure_failure {
+	char soname[LOTA_RUNTIME_IMAGE_SONAME_MAX];
+	unsigned long long ino;
+	uint32_t reported_len;
+	int err;
+};
+
+/*
+ * Render a failure as one operator-readable sentence naming
+ * the object and the reason, into buf.
+ * Always NUL-terminates.
+ * Safe with a NULL failure, which renders the errno alone.
+ */
+void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
+			    int err, char *buf, size_t buflen);
+
+/*
  * Measure the kernel fs-verity digest of one enumerated mapping.
  *
  * Opens the exact backing inode through /proc/<pid>/map_files/<range> (a
  * kernel magic symlink, so no attacker-controlled path is followed),
  * confirms it still resolves to the dev/inode recorded during enumeration,
- * and reads the kernel-computed fs-verity measurement. Fails closed if the
- * object lacks fs-verity. Returns 0 on success, negative errno otherwise.
+ * and reads the kernel-computed fs-verity measurement.
+ * Fails closed if the object lacks fs-verity.
+ *
+ * When reported_len is non-NULL it receives the digest length the kernel reported,
+ * so caller can say what was wrong with a length LOTA does not take.
+ *
+ * Returns 0 on success, negative errno otherwise.
  */
 int lota_rt_measure_entry_verity(pid_t pid,
 				 const struct lota_rt_map_entry *entry,
-				 struct lota_verity_digest_key *out);
+				 struct lota_verity_digest_key *out,
+				 uint32_t *reported_len);
 
 /*
  * Compute the kernel-anchored runtime image digest of a live process.
@@ -82,9 +115,14 @@ int lota_rt_measure_entry_verity(pid_t pid,
  * digest, and writes the 32-byte result. Fails closed (negative errno) if
  * the process has no measurable executable object or if any object lacks
  * fs-verity, so a missing measurement can never be mistaken for a trusted
- * one. Returns 0 on success.
+ * one.
+ * When fail is non-NULL it receives the object that stopped the measurement,
+ * for lota_rt_failure_reason().
+ *
+ * Returns 0 on success.
  */
-int lota_runtime_measure_pid(
-	pid_t pid, uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE]);
+int lota_runtime_measure_pid(pid_t pid,
+			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+			     struct lota_runtime_measure_failure *fail);
 
 #endif /* LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H */
