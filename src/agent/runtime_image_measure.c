@@ -316,18 +316,71 @@ static int rt_module_qsort_cmp(const void *a, const void *b)
 	return lota__runtime_image_module_cmp(a, b);
 }
 
+int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
+			     int exe_measured)
+{
+	if (!cov)
+		return -EINVAL;
+
+	/* nothing measured is not a partial measurement, it is none */
+	if (cov->measured == 0)
+		return -ENODATA;
+
+	/*
+	 * Title's own code is the object its publisher controls,
+	 * so an unmeasurable executable is a packaging decision on their side,
+	 * not a property of the machine the player runs.
+	 */
+	if (!exe_measured)
+		return -ENODATA;
+
+	return 0;
+}
+
+/*
+ * Object at /proc/<pid>/exe, so the measurement can tell the process's own
+ * executable apart from the libraries it loaded.
+ * Returns 0 and fills dev/ino, or a negative errno.
+ */
+static int rt_exe_identity(pid_t pid, dev_t *dev, ino_t *ino)
+{
+	char exe_path[64];
+	struct stat st;
+
+	snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe", (int)pid);
+	if (stat(exe_path, &st) != 0)
+		return -errno;
+
+	*dev = st.st_dev;
+	*ino = st.st_ino;
+	return 0;
+}
+
+/* object the kernel holds no usable fs-verity digest for */
+static int rt_err_is_unmeasurable(int err)
+{
+	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL;
+}
+
 int lota_runtime_measure_pid(pid_t pid,
 			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+			     struct lota_runtime_measure_coverage *cov,
 			     struct lota_runtime_measure_failure *fail)
 {
 	struct lota_rt_map_entry *entries = NULL;
 	struct lota_runtime_image_module *mods = NULL;
+	struct lota_runtime_measure_coverage local_cov = { 0 };
+	int exe_measured = 0;
+	dev_t exe_dev = 0;
+	ino_t exe_ino = 0;
 	size_t n = 0;
 	size_t i, unique;
 	int ret;
 
 	if (fail)
 		memset(fail, 0, sizeof(*fail));
+	if (cov)
+		memset(cov, 0, sizeof(*cov));
 
 	if (!out_digest)
 		return -EINVAL;
@@ -349,13 +402,23 @@ int lota_runtime_measure_pid(pid_t pid,
 		goto out;
 	}
 
+	ret = rt_exe_identity(pid, &exe_dev, &exe_ino);
+	if (ret != 0)
+		goto out;
+
 	for (i = 0; i < n; i++) {
-		snprintf(mods[i].soname, sizeof(mods[i].soname), "%s",
-			 entries[i].soname);
+		struct lota_runtime_image_module *slot =
+			&mods[local_cov.measured];
 		uint32_t reported = 0;
+		int is_exe = major(exe_dev) == entries[i].dev_major &&
+			     minor(exe_dev) == entries[i].dev_minor &&
+			     (unsigned long long)exe_ino == entries[i].ino;
+
+		snprintf(slot->soname, sizeof(slot->soname), "%s",
+			 entries[i].soname);
 
 		ret = lota_rt_measure_entry_verity(pid, &entries[i],
-						   &mods[i].verity, &reported);
+						   &slot->verity, &reported);
 		if (ret != 0) {
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),
@@ -364,10 +427,33 @@ int lota_runtime_measure_pid(pid_t pid,
 				fail->reported_len = reported;
 				fail->err = ret;
 			}
-			goto out;
+			/*
+			 * object with no digest is coverage the relying party
+			 * judges; anything else -- a mapping that will not open,
+			 * or one that no longer resolves to the inode enumerated
+			 * -- is this measurement failing.
+			 */
+			if (!rt_err_is_unmeasurable(ret))
+				goto out;
+			if (is_exe) {
+				ret = -ENODATA;
+				goto out;
+			}
+			local_cov.unmeasurable++;
+			memset(slot, 0, sizeof(*slot));
+			continue;
 		}
+
+		if (is_exe)
+			exe_measured = 1;
+		local_cov.measured++;
 	}
 
+	ret = lota_rt_coverage_verdict(&local_cov, exe_measured);
+	if (ret != 0)
+		goto out;
+
+	n = local_cov.measured;
 	qsort(mods, n, sizeof(*mods), rt_module_qsort_cmp);
 
 	/*
@@ -384,6 +470,8 @@ int lota_runtime_measure_pid(pid_t pid,
 
 	ret = lota_compute_runtime_image_digest(mods, (uint32_t)unique,
 						out_digest);
+	if (ret == 0 && cov)
+		*cov = local_cov;
 out:
 	free(entries);
 	if (mods)

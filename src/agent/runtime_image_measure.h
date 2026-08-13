@@ -89,6 +89,34 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 			    int err, char *buf, size_t buflen);
 
 /*
+ * How much of a process's mapped code the measurement could account for.
+ *
+ * measured counts the objects folded into the image digest;
+ * unmeasurable counts those the kernel holds no fs-verity digest for.
+ *
+ * Distinction is the relying party's to act on: machine that cannot measure
+ * distribution's libc is not a machine that hid something, and a publisher who
+ * wants full coverage asks for the flag that says so.
+ */
+struct lota_runtime_measure_coverage {
+	uint32_t measured;
+	uint32_t unmeasurable;
+};
+
+/*
+ * Whether a measurement round may be issued at all.
+ *
+ * Full coverage is a publisher's policy question, but two properties are the host's
+ * and are not negotiable: something has to have been measured, and the process's
+ * own executable -- the code the title itself ships, which whoever ships it can
+ * make measurable -- has to be one of the objects measured.
+ *
+ * Returns 0 when the digest may be issued, -ENODATA otherwise.
+ */
+int lota_rt_coverage_verdict(const struct lota_runtime_measure_coverage *cov,
+			     int exe_measured);
+
+/*
  * Measure the kernel fs-verity digest of one enumerated mapping.
  *
  * Opens the exact backing inode through /proc/<pid>/map_files/<range> (a
@@ -111,11 +139,19 @@ int lota_rt_measure_entry_verity(pid_t pid,
  * Compute the kernel-anchored runtime image digest of a live process.
  *
  * Enumerates the process's file-backed executable mappings, folds the
- * kernel fs-verity digest of each backing object into the canonical image
- * digest, and writes the 32-byte result. Fails closed (negative errno) if
- * the process has no measurable executable object or if any object lacks
- * fs-verity, so a missing measurement can never be mistaken for a trusted
- * one.
+ * kernel fs-verity digest of every object that carries one into the
+ * canonical image digest, and writes the 32-byte result.
+ *
+ * Objects the kernel holds no digest for are counted, not guessed at:
+ * they are absent from the fold and reported through cov, so partial measurement
+ * can never be read as a complete one.
+ *
+ * Fails closed (negative errno) when lota_rt_coverage_verdict() refuses the round,
+ * and on any error that is not an unmeasurable object -- mapping that cannot
+ * be opened or no longer resolves to the inode enumerated is a failure,
+ * not a coverage gap.
+ *
+ * cov and fail may be NULL.
  * When fail is non-NULL it receives the object that stopped the measurement,
  * for lota_rt_failure_reason().
  *
@@ -123,6 +159,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
  */
 int lota_runtime_measure_pid(pid_t pid,
 			     uint8_t out_digest[LOTA_RUNTIME_IMAGE_DIGEST_SIZE],
+			     struct lota_runtime_measure_coverage *cov,
 			     struct lota_runtime_measure_failure *fail);
 
 #endif /* LOTA_AGENT_RUNTIME_IMAGE_MEASURE_H */

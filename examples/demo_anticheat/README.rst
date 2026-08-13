@@ -231,13 +231,37 @@ Each heartbeat carries a runtime measurement of the producer's live image
    demo_anticheat --print-runtime-objects > runtime-manifest.txt
    demo_server --anticheat-runtime-manifest runtime-manifest.txt ...
 
+How much of the runtime a measurement covers
+--------------------------------------------
+
+The agent measures the producer's mapped objects from the kernel side, and it
+can only measure an object the kernel holds an fs-verity digest for. A
+distribution that ships its libraries without one therefore leaves part of the
+runtime unmeasurable, and that is the common case on a stock host today.
+
+The measurement does not paper over it. Objects with no digest are left out of
+the fold and counted, and the token carries
+``LOTA_FLAG_IMAGE_FULLY_MEASURED`` only when nothing was left out. Requiring
+full coverage is the publisher's policy call:
+
+.. code:: sh
+
+   # accept partial coverage (default here)
+   demo_anticheat --once
+
+   # demand that every mapped object was measured
+   demo_anticheat --once --require-full-image
+
+Two properties are not a policy choice, and the agent refuses a token when
+either fails: something has to have been measured, and the producer's **own
+executable** has to be one of the objects measured -- that binary is the one
+a publisher ships and can make measurable.
+
 When a measurement is refused
 -----------------------------
 
-The agent measures the producer's mapped objects from the kernel side, and
-refuses to issue a token when one of them cannot be measured -- a missing
-measurement is never handed out as a trusted one. The agent log names the
-object rather than the process, so the fix is directed rather than guessed:
+The agent log names the object rather than the process, so the fix is directed
+rather than guessed:
 
 .. code:: text
 

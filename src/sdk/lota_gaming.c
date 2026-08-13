@@ -1297,6 +1297,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		 *  NOT ATTESTED, which is the confusion the flag was added to remove
 		 */
 		{ LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY" },
+		{ LOTA_FLAG_IMAGE_FULLY_MEASURED, "IMAGE_FULLY_MEASURED" },
 	};
 	size_t pos = 0;
 	int first = 1;
