@@ -49,13 +49,30 @@ enum probe_pcr14 {
  * Returns byte count >= 0 or -errno. */
 int probe_read_text(const char *path, char *buf, size_t cap);
 
-/* 1 = verity enabled, else enum probe_verity, or -errno on hard
+/* enum probe_verity (PROBE_VERITY_ENABLED is 0), or -errno on hard
  * failure (file missing, permission) */
 int probe_fsverity_state(const char *path);
 
 /* Enables fs-verity (SHA-256, 4K blocks) on the file.
  * 0 or -errno; EOPNOTSUPP/-ENOTTY mean the filesystem lacks the feature. */
 int probe_fsverity_enable(const char *path);
+
+/*
+ * Pure: reads one line of a runtime manifest -- the object list a title captures
+ * with `demo_anticheat --print-runtime-objects` or the equivalent for its own
+ * binary set.
+ *
+ * Writes the path into out and returns 1 when the line names one,
+ * 0 when the line is blank or a '#' comment,
+ * and -EINVAL when it is neither
+ * (relative path, a path carrying a '..' component, or one longer than out holds).
+ *
+ * Absolute paths that read as what they resolve to, only:
+ * the manifest comes from whoever ships the title and is acted on with privilege,
+ * so a path resolved against a working directory or walked back out of the directory
+ * it names is refused rather than guessed at.
+ */
+int probe_manifest_line(const char *line, char *out, size_t cap);
 
 /* Pure: maps statfs f_type magic to probe_fstype */
 enum probe_fstype probe_fstype_from_magic(long magic);

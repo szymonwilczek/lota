@@ -257,6 +257,27 @@ either fails: something has to have been measured, and the producer's **own
 executable** has to be one of the objects measured -- that binary is the one
 a publisher ships and can make measurable.
 
+Making your own objects measurable
+----------------------------------
+
+The same object list feeds both the server's expected measurement and the
+step that gives those objects a digest:
+
+.. code:: sh
+
+   demo_anticheat --print-runtime-objects > runtime-manifest.txt
+   sudo lota-install --verity-manifest runtime-manifest.txt
+
+``lota-install`` enables fs-verity on each listed object and reports what it
+did. Every line has to be an absolute path with no ``..`` component: the step
+runs as root and a digest cannot be taken back off an inode, so a line that
+would walk somewhere else is named and counted as a failure. A digest lives on
+the inode, so **replacing a file drops it**: run this again after shipping a new
+build, and expect the objects that belong to the distribution (``libc``, ``libcurl``
+and the rest) to lose theirs on the next package update.
+Those are not yours to keep verity on -- what the manifest is for is the binaries
+your title ships.
+
 When a measurement is refused
 -----------------------------
 

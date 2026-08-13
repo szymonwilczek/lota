@@ -689,6 +689,80 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/*
+ * Runtime manifest is acted on with privilege, so what counts as a path matters
+ * more than convenience: comments and blank lines are skipped, and anything that
+ * is not an absolute path -- including one walking back out through '..'
+ * -- is refused.
+ */
+static void test_manifest_line(void)
+{
+	char out[64];
+
+	TEST("a manifest line yields its path");
+	if (probe_manifest_line("/usr/lib64/libc.so.6\n", out, sizeof(out)) ==
+		    1 &&
+	    strcmp(out, "/usr/lib64/libc.so.6") == 0)
+		PASS();
+	else
+		FAIL("path not parsed");
+
+	TEST("surrounding whitespace is trimmed");
+	if (probe_manifest_line("  /usr/bin/title \t\n", out, sizeof(out)) ==
+		    1 &&
+	    strcmp(out, "/usr/bin/title") == 0)
+		PASS();
+	else
+		FAIL("whitespace kept");
+
+	TEST("a comment and a blank line are skipped");
+	if (probe_manifest_line("# /usr/bin/title\n", out, sizeof(out)) == 0 &&
+	    probe_manifest_line("   \n", out, sizeof(out)) == 0 &&
+	    probe_manifest_line("", out, sizeof(out)) == 0)
+		PASS();
+	else
+		FAIL("comment or blank line taken as a path");
+
+	TEST("a relative path is refused");
+	if (probe_manifest_line("lib/libfoo.so\n", out, sizeof(out)) ==
+		    -EINVAL &&
+	    probe_manifest_line("../../etc/shadow\n", out, sizeof(out)) ==
+		    -EINVAL)
+		PASS();
+	else
+		FAIL("accepted a relative path");
+
+	TEST("an absolute path carrying '..' is refused");
+	if (probe_manifest_line("/usr/../etc/shadow\n", out, sizeof(out)) ==
+		    -EINVAL &&
+	    probe_manifest_line("/usr/lib64/..\n", out, sizeof(out)) ==
+		    -EINVAL &&
+	    probe_manifest_line("/..\n", out, sizeof(out)) == -EINVAL)
+		PASS();
+	else
+		FAIL("accepted a path walking out with '..'");
+
+	TEST("a name that merely starts with dots is kept");
+	if (probe_manifest_line("/opt/title/..data/lib.so\n", out,
+				sizeof(out)) == 1 &&
+	    strcmp(out, "/opt/title/..data/lib.so") == 0 &&
+	    probe_manifest_line("/opt/title/.hidden\n", out, sizeof(out)) == 1)
+		PASS();
+	else
+		FAIL("refused a legitimate dotted name");
+
+	TEST("a path longer than the buffer is refused");
+	{
+		char small[8];
+		if (probe_manifest_line("/usr/lib64/libc.so.6\n", small,
+					sizeof(small)) == -EINVAL &&
+		    small[0] == '\0')
+			PASS();
+		else
+			FAIL("overran the buffer");
+	}
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -707,6 +781,7 @@ int main(void)
 	test_efivar_payload();
 	test_secureboot_remediation();
 	test_auto_bringup_opt_in();
+	test_manifest_line();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

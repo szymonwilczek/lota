@@ -115,6 +115,54 @@ int probe_fsverity_enable(const char *path)
 #define PROBE_MAGIC_F2FS 0xF2F52010L
 #define PROBE_MAGIC_ZFS 0x2FC12FC1L
 
+int probe_manifest_line(const char *line, char *out, size_t cap)
+{
+	const char *start;
+	const char *comp;
+	size_t len;
+
+	if (!line || !out || cap == 0)
+		return -EINVAL;
+
+	out[0] = '\0';
+
+	start = line;
+	while (*start == ' ' || *start == '\t')
+		start++;
+
+	len = strcspn(start, "\r\n");
+	while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t'))
+		len--;
+
+	if (len == 0 || start[0] == '#')
+		return 0;
+
+	if (start[0] != '/')
+		return -EINVAL;
+	if (len >= cap)
+		return -EINVAL;
+
+	/*
+	 * '..' component takes the walk out of the directory the line names,
+	 * so manifest a title ships could aim the root-only ioctl at any file
+	 * on the box -- an fs-verity digest is permanent and makes the file
+	 * read-only for good.
+	 * Only paths that mean what they read are taken.
+	 */
+	for (comp = start; comp < start + len; comp++) {
+		if (comp != start && comp[-1] != '/')
+			continue;
+		if (comp[0] != '.' || comp[1] != '.')
+			continue;
+		if (comp + 2 == start + len || comp[2] == '/')
+			return -EINVAL;
+	}
+
+	memcpy(out, start, len);
+	out[len] = '\0';
+	return 1;
+}
+
 enum probe_fstype probe_fstype_from_magic(long magic)
 {
 	switch (magic) {
