@@ -130,3 +130,44 @@ development environment is a KVM guest with a swTPM backend over TIS; its two
 divergences from hardware (persistent state across guest reboots, and a quote
 clock quirk) and the operator workarounds are covered under
 :doc:`production-bringup/post-bringup`.
+
+Runtime measurement coverage
+============================
+
+Every token folds a kernel-anchored measurement of the live code of each
+protected process, and that measurement can cover an object only when the
+kernel holds an fs-verity digest for it. What a platform provides therefore
+decides how much of a process's code the measurement can account for.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Platform
+     - Coverage
+   * - A title's own binaries
+     - Full, on any verity-capable filesystem. Whoever ships the title
+       enables it, with ``lota-install --verity-manifest`` or the
+       equivalent in their own packaging. The agent refuses a token when a
+       protected process's own executable carries no digest.
+   * - Distribution libraries on a package-managed host
+     - **None, today.** Fedora ships ``libc``, ``libcurl`` and the rest
+       without fs-verity, so those objects are absent from the fold and the
+       token reports partial coverage
+       (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear). Enabling verity on them
+       by hand lasts until the next update of the owning package, which
+       replaces the inode and the digest with it. Whether partial coverage
+       is acceptable is the relying party's policy.
+   * - Image-based and composed filesystems
+     - Not consumed yet. An image-based host (composefs, an OSTree
+       deployment, a dm-verity root) already carries per-file or
+       whole-image integrity, and consuming that as measurement evidence
+       would give full coverage without per-file enablement. LOTA does not
+       read those sources today; a protected process on such a host reports
+       coverage over whatever fs-verity digests are present.
+
+A relying party that requires full coverage asks for
+``LOTA_FLAG_IMAGE_FULLY_MEASURED`` and, on a package-managed host, will not
+get it. That is a statement about the platform, not about the machine
+concealing anything: an unmeasurable object is reported as unmeasured and is
+never folded in as though it had been measured.
