@@ -161,6 +161,19 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if missing := s.requiredFlags &^ claims.Flags; missing != 0 {
+		reason := fmt.Sprintf(
+			"token is missing required attestation flags 0x%08x", missing)
+		s.recordVerdict(sessionHex, gameHashHex,
+			verdictUntrust, game.licenseID, hdr)
+		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
+			sessionHex, hdr.sequence, reason)
+		writeJSON(w, http.StatusOK, heartbeatResponse{
+			State: verdictUntrust, Reason: reason,
+		})
+		return
+	}
+
 	s.recordVerdict(sessionHex, gameHashHex,
 		verdictTrusted, game.licenseID, hdr)
 	logf("session=%s seq=%d state=TRUSTED license=%s",
