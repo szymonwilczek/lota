@@ -681,7 +681,9 @@ static void test_flag_constants_agree(void)
 {
 	TEST("the token-only flag is the same bit on both sides");
 	if (LOTA_FLAG_TOKEN_ONLY != LOTA_STATUS_TOKEN_ONLY ||
-	    LOTA_FLAG_ATTESTED != LOTA_STATUS_ATTESTED) {
+	    LOTA_FLAG_ATTESTED != LOTA_STATUS_ATTESTED ||
+	    LOTA_FLAG_PROTECTED_TERMINATED !=
+		    LOTA_STATUS_PROTECTED_TERMINATED) {
 		FAIL("IPC and SDK status flags disagree");
 		return;
 	}

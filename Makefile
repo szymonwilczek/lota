@@ -1068,6 +1068,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_rt_verity_cache \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_protect_pids \
+	$(TEST_BIN_DIR)/test_terminate_policy \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
 	$(TEST_BIN_DIR)/test_seal_blob \
@@ -1280,6 +1281,11 @@ $(TEST_BIN_DIR)/test_protect_pids: tests/test_protect_pids.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_terminate_policy: tests/test_terminate_policy.c \
+		$(AGENT_DIR)/terminate_policy.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_runtime_protect_digest: tests/test_runtime_protect_digest.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1403,6 +1409,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_rt_verity_cache
 	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_protect_pids
+	@$(BUILD_DIR)/test_terminate_policy
 	@$(BUILD_DIR)/test_runtime_image_collect
 	@$(BUILD_DIR)/test_runtime_measure_pid
 	@$(BUILD_DIR)/test_seal_blob
@@ -1486,7 +1493,7 @@ VALGRIND_UNIT_BINS := \
 	test_installer_probe test_devt test_event_budget \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
 	test_profile_id test_attest_targets test_attest_aggregate \
-	test_status_flags \
+	test_status_flags test_terminate_policy \
 	test_publisher_profile
 
 valgrind-unit: $(TEST_BINS)

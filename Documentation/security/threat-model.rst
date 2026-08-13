@@ -246,6 +246,24 @@ Active threats
        ``__ptrace_may_access`` where available.
      - Hook availability and verifier behavior must be validated on the target
        kernel.
+   * - Ending a protected process
+     - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
+         no signal to a protected task from anything but itself, the agent or
+         the kernel, and the agent relays only ``SIGTERM`` and ``SIGKILL``, only
+         for a caller ``kill(2)`` would have allowed.
+       | Every relayed termination is journalled, and the host reports
+         ``PROTECTED_TERMINATED`` in its status word and in every token it
+         issues until it reboots.
+       | The protected set the token carries names who is left, so a publisher
+         that knows which of its processes belongs there sees which one went.
+     - | The owner of a protected process can end it, which the LSM alone would
+         have refused. The bound is that no route to it avoids the agent, so
+         the termination is reported rather than silent.
+       | The sticky bit says a protected process was ended on this host, not
+         which one -- pairing it with the expected protected set is the relying
+         party's policy.
+       | Ending the agent is not this path: ``--shutdown`` poisons PCR 14, and
+         resuming is a reboot.
    * - Kernel module or memory-only load
      - Kernel lockdown, module signature enforcement, and BPF LSM gates reject
        unsafe load paths.

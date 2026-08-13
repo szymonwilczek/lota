@@ -148,6 +148,15 @@ Worth being precise about, because it decides what you can build on it:
   producer's own executable was measured, and that nothing unmeasured was
   folded in as if it had been.
 
+* Whether a protected process was ended on that host since it booted. A
+  protected process takes no signal except through the agent, and the agent
+  relays a termination only for the process's owner or root -- so a player can
+  close a hung title, and ``LOTA_FLAG_PROTECTED_TERMINATED`` says on every
+  later token that it happened. Ordinarily it means exactly that. Read
+  together with the protected set the token carries, it is also how a session
+  that ended locally is told apart from a process that vanished, which is the
+  case worth a second look if the process that left was yours.
+
 It does **not** prove the player is not cheating. It proves the platform
 underneath is what it claims to be, which removes the layer where a cheat
 would otherwise be invisible to you: a tampered kernel, an unsigned

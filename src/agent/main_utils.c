@@ -105,6 +105,16 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "testing)\n");
 	printf("  --shutdown        Request graceful shutdown via "
 	       "authenticated IPC\n");
+	printf("  --terminate-protected PID\n");
+	printf("                    End a process that asked to be protected, "
+	       "which\n");
+	printf("                    no ordinary signal can reach. Sends "
+	       "SIGTERM,\n");
+	printf("                    or SIGKILL with --force. Allowed for the "
+	       "owner\n");
+	printf("                    of the process, or root, and reported to "
+	       "the\n");
+	printf("                    publisher until the host reboots\n");
 	printf("  --export-policy   Export complete YAML policy from live "
 	       "system\n");
 	printf("                    (verifier-ready, pipe to file)\n");

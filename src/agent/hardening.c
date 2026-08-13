@@ -185,8 +185,10 @@ int hardening_apply_no_dumpable(void)
  *   - userfaultfd: classic UAF / heap-spray primitive (CVE-2016-3070
  *     class). The agent does not register a userfault region.
  *   - pidfd_send_signal: delivers signals without kill()/permission
- *     checks via process file descriptors; the agent only signals
- *     itself via signalfd.
+ *     checks via process file descriptors.
+ *     The one path where the agent signals another process, ending protected
+ *     one for its owner, goes through kill() with a pidfd held open only to pin
+ *     the PID number, so the permission checks stay in play.
  *   - modify_ldt: x86 LDT manipulation, recurring local-priv vector.
  *   - personality: ABI-switching primitive abused to weaken ASLR
  *     (READ_IMPLIES_EXEC) on x86.

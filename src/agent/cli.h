@@ -32,6 +32,16 @@ struct cli_options {
 	int test_ipc_flag;
 	int test_signed_flag;
 	int shutdown_flag;
+	/*
+	 * --terminate-protected PID:
+	 * end a process that asked to be protected, which no signal from terminal
+	 * or a task manager can reach.
+	 * SIGTERM unless --force, which sends SIGKILL to a title that is too far
+	 * gone to handle anything.
+	 */
+	uint32_t terminate_protected_pid;
+	int terminate_protected_flag;
+	int force_flag;
 	int dump_config_flag;
 	int export_policy_flag;
 	int attest_flag;

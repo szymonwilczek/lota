@@ -1298,6 +1298,7 @@ int lota_flags_to_string(uint32_t flags, char *buf, size_t buflen)
 		 */
 		{ LOTA_FLAG_TOKEN_ONLY, "TOKEN_ONLY" },
 		{ LOTA_FLAG_IMAGE_FULLY_MEASURED, "IMAGE_FULLY_MEASURED" },
+		{ LOTA_FLAG_PROTECTED_TERMINATED, "PROTECTED_TERMINATED" },
 	};
 	size_t pos = 0;
 	int first = 1;

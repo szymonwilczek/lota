@@ -88,6 +88,21 @@ int main(void)
 				     sizeof(struct lota_ipc_attest_sync) + 1),
 	      "SYNC_ATTEST with a partial verdict is refused");
 
+	/*
+	 * Player closing a hung title reaches this command, and the table
+	 * is the first thing it meets.
+	 * Refusing the length here would answer rescue attempt with bad request
+	 * from a running agent.
+	 */
+	CHECK(ipc_payload_len_valid(LOTA_IPC_CMD_TERMINATE_PROTECTED,
+				    sizeof(struct lota_ipc_terminate_request)),
+	      "TERMINATE_PROTECTED carries a pid and a signal");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_TERMINATE_PROTECTED, 0),
+	      "TERMINATE_PROTECTED naming nobody is refused");
+	CHECK(!ipc_payload_len_valid(LOTA_IPC_CMD_TERMINATE_PROTECTED,
+				     sizeof(struct lota_ipc_pid_request)),
+	      "TERMINATE_PROTECTED without a signal is refused");
+
 	CHECK(!ipc_payload_len_valid(0xdead, 4),
 	      "an unknown command may not carry a payload");
 	CHECK(ipc_payload_len_valid(0xdead, 0),
