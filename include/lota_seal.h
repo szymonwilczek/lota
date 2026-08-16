@@ -49,12 +49,39 @@ extern "C" {
 #define LOTA_SEAL_PCR_MASK_ALL 0x00FFFFFFu
 
 /*
- * Default PCR set: the firmware/kernel boot PCRs 0-7 plus LOTA's PCR14
- * boot-commitment. This binds a sealed secret both to the platform boot
- * chain and to the exact LOTA agent identity, so a firmware, kernel, or
- * agent change intentionally invalidates the seal (anti-tamper).
+ * LOTA's boot-commitment register, which agent.h names LOTA_PCR_SELF.
+ * It is repeated here because the masks below are the reason a caller cares
+ * about it, and this header may not depend on the agent's.
  */
-#define LOTA_SEAL_DEFAULT_PCR_MASK (0xFFu | (1u << 14))
+#define LOTA_SEAL_BOOT_COMMITMENT_PCR 14u
+
+/*
+ * Default PCR set: the firmware and Secure Boot PCRs 0-7, and nothing else.
+ *
+ * These describe the machine. They hold their values across a reboot and across
+ * an agent upgrade, and they cannot be reproduced on other hardware or under
+ * other firmware -- which is exactly the binding at-rest sealing wants,
+ * since the threat it answers is a powered-off disk in someone else's hands.
+ * A firmware or Secure Boot change still invalidates the seal.
+ *
+ * PCR 14 is deliberately absent. It is LOTA's boot commitment, and its value
+ * is a function of the agent binary: it is stable from boot to boot and it moves
+ * when the agent is updated. Binding it would make every agent upgrade destroy
+ * every sealed secret on the host -- and where the plaintext has been dropped,
+ * that means re-enrolling with every publisher after a routine update.
+ * It also buys nothing against the stolen-disk threat, which PCRs 0-7 already
+ * answer.
+ */
+#define LOTA_SEAL_DEFAULT_PCR_MASK 0xFFu
+
+/*
+ * The platform set plus the boot commitment, which additionally binds the
+ * secret to the agent binary that sealed it.
+ * Named, because it is a deliberate trade: it defends against an agent swapped
+ * on this machine, and it costs the secret at every legitimate agent upgrade.
+ */
+#define LOTA_SEAL_AGENT_BOUND_PCR_MASK \
+	(LOTA_SEAL_DEFAULT_PCR_MASK | (1u << LOTA_SEAL_BOOT_COMMITMENT_PCR))
 
 /* Fixed header size on disk (little-endian, packed). */
 #define LOTA_SEAL_HEADER_SIZE 52u

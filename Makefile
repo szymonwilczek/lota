@@ -1497,9 +1497,9 @@ $(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGE
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_seal_blob: tests/test_seal_blob.c $(INC_DIR)/lota_seal.h | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
 $(TEST_BIN_DIR)/test_seal_envelope: tests/test_seal_envelope.c $(AGENT_DIR)/seal_envelope.c | $(BUILD_DIR)
 	$(QUIET_CC)

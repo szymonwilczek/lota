@@ -43,8 +43,32 @@ static void test_mask_selection_default(void)
 	uint8_t sel[3];
 	uint32_t count = 0;
 
-	TEST("mask->selection: default mask sets PCR 0-7 and PCR14");
+	TEST("mask->selection: default mask sets PCR 0-7 and not PCR14");
 	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_DEFAULT_PCR_MASK, sel,
+					   &count) != 0) {
+		FAIL("call");
+		return;
+	}
+	/* PCR 0-7 -> byte0 = 0xFF; nothing above, so byte1 and byte2 stay 0 */
+	if (count != 1 || sel[0] != 0xFF || sel[1] != 0x00 || sel[2] != 0x00) {
+		FAIL("bitmap mismatch");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The agent-bound mask is the one that reaches PCR14, and it has to still
+ * marshal correctly -- a caller who wants the agent binary in the policy is
+ * asking for a supported thing, just not the default one.
+ */
+static void test_mask_selection_agent_bound(void)
+{
+	uint8_t sel[3];
+	uint32_t count = 0;
+
+	TEST("mask->selection: agent-bound mask adds PCR14 to PCR 0-7");
+	if (tpm_test_pcr_mask_to_selection(LOTA_SEAL_AGENT_BOUND_PCR_MASK, sel,
 					   &count) != 0) {
 		FAIL("call");
 		return;
@@ -207,6 +231,7 @@ int main(void)
 	printf("Running LOTA sealed-keys TPM-side tests...\n\n");
 
 	test_mask_selection_default();
+	test_mask_selection_agent_bound();
 	test_mask_selection_edges();
 	test_mask_selection_ignores_out_of_range();
 	test_mask_selection_null_args();

@@ -87,15 +87,18 @@ attest_interval = 300
 aik_ttl = 0
 
 # ---- Sealed AIK auth (at-rest hardening) ---------------------------------
-# Keep a copy of the AIK userAuth sealed to the boot/PCR state (PCRs 0-7 +
-# PCR14) so it is only usable when the host booted as expected. Both keys
-# default to false, which preserves the plaintext-sidecar behaviour exactly.
+# Keep a copy of the AIK userAuth sealed to the platform state (PCRs 0-7,
+# the firmware and Secure Boot set) so it is only usable on this machine booted
+# as expected. Those registers describe the hardware, so the sealed copy survives
+# a reboot and an agent upgrade; PCR 14 is not bound, because it tracks the agent
+# binary and binding it would cost every host its AIK authorization at each update.
+# Both keys default to false, which preserves the plaintext-sidecar behaviour.
 #
 #   seal_aik_auth         also write a sealed copy and prefer it on load;
 #                         falls back to the plaintext sidecar if the sealed
 #                         copy is missing or the boot state changed.
 #   seal_aik_auth_strict  store ONLY the sealed copy (no plaintext on disk)
-#                         and never fall back. A firmware/kernel/agent change
+#                         and never fall back. A firmware or Secure Boot change
 #                         then forces AIK re-provisioning instead of exposing
 #                         the auth.
 # seal_aik_auth = false
