@@ -54,7 +54,7 @@ int test_tpm(void)
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		return ret;
 	}
 	printf("TPM initialized successfully\n\n");
@@ -62,7 +62,8 @@ int test_tpm(void)
 	printf("Running TPM self-test...\n");
 	ret = tpm_self_test(&g_agent.tpm_ctx);
 	if (ret < 0) {
-		fprintf(stderr, "TPM self-test failed: %s\n", strerror(-ret));
+		fprintf(stderr, "TPM self-test failed: %s\n",
+			tpm_strerror(ret));
 	} else {
 		printf("TPM self-test passed\n");
 	}
@@ -71,7 +72,8 @@ int test_tpm(void)
 	printf("Reading PCR 0 (SRTM)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 0, TPM2_ALG_SHA256, pcr_value);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 0: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 0: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 0", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -79,7 +81,8 @@ int test_tpm(void)
 	printf("\nReading PCR 1 (BIOS config/IOMMU)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 1, TPM2_ALG_SHA256, pcr_value);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 1: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 1: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 1", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -87,7 +90,8 @@ int test_tpm(void)
 	printf("\nReading PCR 10 (IMA)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 10, TPM2_ALG_SHA256, pcr_value);
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read PCR 10: %s\n", strerror(-ret));
+		fprintf(stderr, "Failed to read PCR 10: %s\n",
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 10", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -99,14 +103,14 @@ int test_tpm(void)
 			&g_agent.tpm_ctx, kernel_path, sizeof(kernel_path));
 		if (k_err < 0) {
 			fprintf(stderr, "Failed to find kernel: %s\n",
-				strerror(-k_err));
+				tpm_strerror(k_err));
 		} else {
 			printf("Kernel: %s\n", kernel_path);
 			printf("Hashing kernel image...\n");
 			k_err = tpm_hash_file(kernel_path, kernel_hash);
 			if (k_err < 0) {
 				fprintf(stderr, "Failed to hash kernel: %s\n",
-					strerror(-k_err));
+					tpm_strerror(k_err));
 			} else {
 				print_hex("Kernel SHA-256", kernel_hash,
 					  LOTA_HASH_SIZE);
@@ -129,7 +133,7 @@ int test_tpm(void)
 		s_err = tpm_hash_file(exe_path, self_hash);
 		if (s_err < 0) {
 			fprintf(stderr, "Failed to hash agent: %s\n",
-				strerror(-s_err));
+				tpm_strerror(s_err));
 		} else {
 			print_hex("Agent SHA-256", self_hash, LOTA_HASH_SIZE);
 		}
@@ -140,7 +144,7 @@ int test_tpm(void)
 			   pcr_value);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
-			strerror(-ret));
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 14 (before)", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -159,7 +163,7 @@ int test_tpm(void)
 			   pcr_value);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
-			strerror(-ret));
+			tpm_strerror(ret));
 	} else {
 		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
 	}
@@ -190,7 +194,7 @@ int test_tpm(void)
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
 		if (ret < 0) {
 			fprintf(stderr, "AIK could not be loaded: %s\n",
-				strerror(-ret));
+				tpm_strerror(ret));
 			fprintf(stderr,
 				"Note: May require owner hierarchy authorization\n");
 		} else {
@@ -230,7 +234,7 @@ int test_tpm(void)
 				&quote_resp);
 		if (ret < 0) {
 			fprintf(stderr, "TPM Quote failed: %s\n",
-				strerror(-ret));
+				tpm_strerror(ret));
 		} else {
 			printf("Quote generated successfully!\n\n");
 			printf("Attestation data size: %u bytes\n",

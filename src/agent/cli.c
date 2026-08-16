@@ -183,7 +183,7 @@ static int load_config_into_options(struct cli_options *opts,
 							     NULL);
 	if (kret < 0) {
 		fprintf(stderr, "Invalid kernel_path in config: %s\n",
-			strerror(-kret));
+			tpm_strerror(kret));
 		return 1;
 	}
 

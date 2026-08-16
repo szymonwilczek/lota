@@ -423,7 +423,7 @@ static int run_daemon(const struct run_daemon_params *params)
 					  "under %s (%s): enforcing without a "
 					  "publisher, tokens are signed with "
 					  "the host AIK",
-					  profile->dir, strerror(-ret));
+					  profile->dir, tpm_strerror(ret));
 				lota_warn("Enroll with the publisher to bind "
 					  "it: lota-agent --enroll --ca-cert "
 					  "%s",

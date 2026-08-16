@@ -89,7 +89,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		return 1;
 	}
 	printf("TPM initialized\n");
@@ -98,7 +98,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		return 1;
 	}

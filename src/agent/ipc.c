@@ -1128,7 +1128,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		if (ret < 0) {
 			lota_err(
 				"cannot bind publisher profile for GET_TOKEN: %s",
-				strerror(-ret));
+				tpm_strerror(ret));
 			fail = true;
 			fail_code = LOTA_IPC_ERR_INTERNAL;
 			goto out;
@@ -1412,7 +1412,7 @@ out:
 		if (rb < 0)
 			lota_warn("cannot restore the default publisher "
 				  "binding: %s",
-				  strerror(-rb));
+				  tpm_strerror(rb));
 	}
 	ipc_secure_bzero(binding_nonce, sizeof(binding_nonce));
 	ipc_secure_bzero(runtime_protect_digest,
