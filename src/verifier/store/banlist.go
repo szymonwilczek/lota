@@ -71,7 +71,11 @@ type BanStore interface {
 
 	// removes the ban for a hardware identity within a tenant
 	// returns ErrNotBanned if the hardware ID is not currently banned there
-	UnbanHardware(tenant string, hardwareID [32]byte) error
+	//
+	// reason and actor are recorded in the audit trail on the same terms as
+	// BanHardware's: letting a banned machine back in is the act a fleet
+	// most wants signed, so the row that lifts a ban names who and why.
+	UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error
 
 	// returns all active hardware bans across tenants
 	ListBans() []BanEntry
@@ -205,7 +209,7 @@ func (s *MemoryBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry
 	return entry, true
 }
 
-func (s *MemoryBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error {
+func (s *MemoryBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -217,7 +221,7 @@ func (s *MemoryBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error
 	delete(s.bans, key)
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
 			return err
 		}
 	}

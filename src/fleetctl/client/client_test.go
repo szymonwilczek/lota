@@ -242,7 +242,7 @@ func TestUnrevoke(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"unrevoked","client_id":"host1"}`)
 
-	if err := c.Unrevoke("host1"); err != nil {
+	if err := c.Unrevoke("host1", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/clients/host1/revoke" {
@@ -310,7 +310,7 @@ func TestUnbanWithTenant(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"unbanned","hardware_id":"`+hwid+`","tenant":"acme"}`)
 
-	if err := c.Unban(hwid, "acme"); err != nil {
+	if err := c.Unban(hwid, "acme", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/bans/"+hwid {
@@ -325,7 +325,7 @@ func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK, `{"status":"unbanned"}`)
 
-	if err := c.Unban(hwid, ""); err != nil {
+	if err := c.Unban(hwid, "", "appeal upheld", "ops", ""); err != nil {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.query != "" {

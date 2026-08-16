@@ -126,7 +126,7 @@ func TestAPI_UnrevokeClient(t *testing.T) {
 	}
 
 	// then unrevoke
-	req = adminRequest("DELETE", "/api/v1/clients/unrevoke-target/revoke", "")
+	req = adminRequest("DELETE", "/api/v1/clients/unrevoke-target/revoke", `{"actor":"test-operator","reason":"appeal upheld"}`)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -146,7 +146,7 @@ func TestAPI_UnrevokeNotRevoked(t *testing.T) {
 
 	mux, _ := setupTestAPIListening(t)
 
-	req := adminRequest("DELETE", "/api/v1/clients/never-revoked/revoke", "")
+	req := adminRequest("DELETE", "/api/v1/clients/never-revoked/revoke", `{"actor":"test-operator","reason":"appeal upheld"}`)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -285,7 +285,7 @@ func TestAPI_UnbanHardware(t *testing.T) {
 	}
 
 	// unban
-	req = adminRequest("DELETE", "/api/v1/bans/"+hwidHex, "")
+	req = adminRequest("DELETE", "/api/v1/bans/"+hwidHex, `{"actor":"test-operator","reason":"appeal upheld"}`)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -300,7 +300,7 @@ func TestAPI_UnbanNotBanned(t *testing.T) {
 	mux, _ := setupTestAPIListening(t)
 
 	hwidHex := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	req := adminRequest("DELETE", "/api/v1/bans/"+hwidHex, "")
+	req := adminRequest("DELETE", "/api/v1/bans/"+hwidHex, `{"actor":"test-operator","reason":"appeal upheld"}`)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -601,7 +601,7 @@ func TestIntegrationAPI_UnrevokedClientCanAttest(t *testing.T) {
 	}
 
 	// unrevoke
-	req = adminRequest("DELETE", "/api/v1/clients/"+persistentID+"/revoke", "")
+	req = adminRequest("DELETE", "/api/v1/clients/"+persistentID+"/revoke", `{"actor":"test-operator","reason":"appeal upheld"}`)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

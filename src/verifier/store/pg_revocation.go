@@ -82,7 +82,7 @@ func (s *PostgresRevocationStore) IsRevoked(clientID string) (*RevocationEntry, 
 	return &entry, true
 }
 
-func (s *PostgresRevocationStore) Unrevoke(clientID string) error {
+func (s *PostgresRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -97,7 +97,7 @@ func (s *PostgresRevocationStore) Unrevoke(clientID string) error {
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unrevoke", clientID, reason, actor, note); err != nil {
 			return err
 		}
 	}
@@ -190,7 +190,7 @@ func (s *PostgresBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEnt
 	return &entry, true
 }
 
-func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error {
+func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
 	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE tenant = $1 AND hardware_id = $2",
 		tenant, hardwareID[:])
 	if err != nil {
@@ -206,7 +206,7 @@ func (s *PostgresBanStore) UnbanHardware(tenant string, hardwareID [32]byte) err
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
 			return err
 		}
 	}

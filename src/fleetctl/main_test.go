@@ -373,9 +373,57 @@ func TestUnrevoke(t *testing.T) {
 			"client_id":"host1"}`,
 	})
 
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "unrevoke", "host1")
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL, "unrevoke", "host1",
+		"-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "unrevoked host1") {
 		t.Fatalf("exit = %d, output = %q", code, out)
+	}
+}
+
+// Lifting a restriction is the act a fleet most wants signed, so it is refused
+// unattributed on the same terms its inverse is.
+// Asserted beside the ban that records an actor, because the pair is the property:
+// the trail attributed the restriction and not the restoration.
+func TestLiftsRequireAttribution(t *testing.T) {
+	hwid := strings.Repeat("ab", 32)
+	f := newFakeAPI(t, map[string]string{
+		"POST /api/v1/bans":                   `{"status":"banned"}`,
+		"DELETE /api/v1/bans/" + hwid:         `{"status":"unbanned"}`,
+		"DELETE /api/v1/clients/host1/revoke": `{"status":"unrevoked"}`,
+	})
+
+	// the inverse still records one
+	code, _, _ := runCLI(t, noEnv, "-server", f.srv.URL,
+		"ban", hwid, "-reason", "cheating", "-actor", "ops")
+	if code != exitOK {
+		t.Fatalf("ban with an actor should succeed, exit = %d", code)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"unban without an actor", []string{"unban", hwid, "-reason", "appeal upheld"}},
+		{"unban without a reason", []string{"unban", hwid, "-actor", "ops"}},
+		{"unban bare", []string{"unban", hwid}},
+		{"unrevoke without an actor", []string{"unrevoke", "host1", "-reason", "appeal upheld"}},
+		{"unrevoke without a reason", []string{"unrevoke", "host1", "-actor", "ops"}},
+		{"unrevoke bare", []string{"unrevoke", "host1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"-server", f.srv.URL}, tc.args...)
+			code, out, _ := runCLI(t, noEnv, args...)
+			if code == exitOK {
+				t.Fatalf("%s was accepted; output = %q", tc.name, out)
+			}
+		})
+	}
+
+	// and with both it goes through
+	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
+		"unban", hwid, "-reason", "appeal upheld", "-actor", "ops")
+	if code != exitOK || !strings.Contains(out, "unbanned "+hwid) {
+		t.Fatalf("attributed unban: exit = %d, output = %q", code, out)
 	}
 }
 
@@ -408,7 +456,8 @@ func TestBanAndUnban(t *testing.T) {
 		t.Fatalf("ban: exit = %d, output = %q", code, out)
 	}
 
-	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "unban", hwid)
+	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL, "unban", hwid,
+		"-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "unbanned "+hwid) {
 		t.Fatalf("unban: exit = %d, output = %q", code, out)
 	}
@@ -531,7 +580,7 @@ func TestBanUnbanTenantForwarded(t *testing.T) {
 		t.Fatalf("ban body tenant = %v, want acme", body["tenant"])
 	}
 
-	code, out, _ = runCLI(t, noEnv, "-server", srv.URL, "unban", hwid, "-tenant", "acme")
+	code, out, _ = runCLI(t, noEnv, "-server", srv.URL, "unban", hwid, "-tenant", "acme", "-reason", "appeal upheld", "-actor", "ops")
 	if code != exitOK || !strings.Contains(out, "tenant acme") {
 		t.Fatalf("unban: exit = %d, out = %q", code, out)
 	}

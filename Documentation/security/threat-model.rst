@@ -543,6 +543,24 @@ which is per device regardless of tenant:
   binding travels inside the signed policy document, so a signed policy
   authenticates its own scope.
 
+What the audit trail can account for
+====================================
+
+Lifting a restriction is attributed on the same terms as imposing one.
+``unban`` and ``unrevoke`` require an actor and a reason, at the CLI and again
+at the API, and both reach the audit row.
+
+The direction is the point. Imposing a restriction is the reversible,
+conservative act; **lifting** one is what a fleet most wants signed. A trail
+that attributed a ban but not the unban, or a revoke but not the restoration,
+would name the cautious half of every pair and leave the consequential half to
+a row that names nobody.
+
+This is an accountability property and not an access control: an admin key can
+still take either action. What the requirement buys is that the log stays
+evidence -- a reader can tell an operator-initiated lift from any other, and
+can name the operator.
+
 The monitoring API enforces the same boundary. API keys are scoped: an
 operator key names a role (``reader`` or ``admin``, admin implies reader) and a
 tenant set (or ``*`` for every tenant), loaded from a file of key hashes and

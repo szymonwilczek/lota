@@ -913,6 +913,24 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Restoring access is the act a fleet most wants signed, so the lift carries
+	// the same attribution its inverse does.
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
 	// scope on the revocation's recorded tenant;
 	// foreign-tenant revocation is reported as "not revoked"
 	// so a key cannot probe another tenant's revocation state
@@ -924,7 +942,7 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	err := revStore.Unrevoke(clientID)
+	err := revStore.Unrevoke(clientID, req.Reason, req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrNotRevoked {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
@@ -936,7 +954,9 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 	}
 
 	logging.Security(h.log, "client unrevoked",
-		"client_id", logging.SanitizeField(clientID))
+		"client_id", logging.SanitizeField(clientID),
+		"actor", logging.SanitizeField(req.Actor),
+		"reason", logging.SanitizeField(req.Reason))
 
 	writeJSON(w, map[string]string{
 		"status":    "unrevoked",
@@ -1109,6 +1129,24 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Letting a banned machine back in is the act a fleet most wants signed;
+	// the lift carries the same attribution the ban does.
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
 	hwidHex := strings.TrimPrefix(r.URL.Path, "/api/v1/bans/")
 	hwidHex = strings.TrimRight(hwidHex, "/")
 
@@ -1139,7 +1177,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err = banStr.UnbanHardware(tenant, hwid)
+	err = banStr.UnbanHardware(tenant, hwid, req.Reason, req.Actor, req.Note)
 	if err != nil {
 		if err == store.ErrNotBanned {
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "hardware ID is not banned"})
@@ -1616,8 +1654,9 @@ func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Requ
 // JSON request for operator lifecycle actions
 // (forced re-anchor, delete)
 type lifecycleRequest struct {
-	Actor string `json:"actor"` // administrator identifier
-	Note  string `json:"note"`  // free-form justification
+	Actor  string `json:"actor"`  // administrator identifier
+	Reason string `json:"reason"` // why this was done
+	Note   string `json:"note"`   // free-form justification
 }
 
 // POST /api/v1/clients/{clientID}/reanchor
