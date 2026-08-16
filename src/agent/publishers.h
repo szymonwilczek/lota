@@ -68,6 +68,21 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 size_t publishers_keys_held(const struct publisher_entry *list, size_t count);
 
 /*
+ * Whether the pre-profile default AIK is the key this host attests with.
+ *
+ * True only on a host with no publishers, such as an enterprise fleet host.
+ * Once any publisher is listed, each attests with its own key and none of
+ * them uses the default one.
+ *
+ * Host-wide verbs check this so they do not act on the default key of a host
+ * whose publishers never attest with it.
+ */
+static inline bool publishers_default_key_in_use(size_t publisher_count)
+{
+	return publisher_count == 0;
+}
+
+/*
  * Delete everything stored for one publisher.
  *
  * TPM key is not this function's business -- the caller evicts it first,

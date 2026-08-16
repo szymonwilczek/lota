@@ -796,6 +796,64 @@ static void test_publisher_inventory(void)
 	rmdir(base);
 }
 
+/*
+ * How many attestation keys a host-wide verb has to act on.
+ *
+ * --seal-aik-auth and --reprovision-aik act on one key per publisher, each with
+ * its own authorization, and on the pre-profile default only when the host has
+ * no publishers.
+ *
+ * Three publishers, two of them holding a key: the expected count of two
+ * differs from the publisher count (three) and from acting on a single key
+ * (one), so a count that stands for either fails here.
+ */
+static void test_host_wide_verbs_count_every_key(void)
+{
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	const char *ids[3] = {
+		"3333333333333333333333333333333333333333333333333333333333333333",
+		"4444444444444444444444444444444444444444444444444444444444444444",
+		"5555555555555555555555555555555555555555555555555555555555555555",
+	};
+	struct profile_paths paths[3];
+	char base[256];
+	size_t count = 0;
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-seal.%d", getpid());
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 0,
+	      "a host with no publishers offers no per-publisher key");
+
+	for (int i = 0; i < 3; i++)
+		CHECK(profile_paths_from_id(base, ids[i], &paths[i]) == 0 &&
+			      profile_consent_record(&paths[i], 0) == 0,
+		      "three publishers agreed to");
+
+	/* two of the three hold a key; the third consented and stopped there */
+	CHECK(profile_aik_handle_save(&paths[0], 0x81010010) == 0 &&
+		      profile_aik_handle_save(&paths[1], 0x81010011) == 0,
+	      "two of the three hold an attestation key");
+
+	CHECK(publishers_list(base, entries, LOTA_PROFILE_MAX_AIK_HANDLES,
+			      &count) == 0 &&
+		      count == 3,
+	      "all three publishers are listed");
+	CHECK(publishers_keys_held(entries, count) == 2,
+	      "a host-wide verb has two keys to act on, not one and not three");
+
+	/* the default key is in use only on a host with no publishers */
+	CHECK(!publishers_default_key_in_use(count),
+	      "a host with publishers does not attest with the default key");
+	CHECK(publishers_default_key_in_use(0),
+	      "a host with no publisher does attest with the default key");
+
+	for (int i = 0; i < 3; i++)
+		publishers_forget(&paths[i]);
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -809,6 +867,7 @@ int main(void)
 	test_consent_record();
 	test_anchor_is_ca();
 	test_publisher_inventory();
+	test_host_wide_verbs_count_every_key();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

@@ -20,6 +20,8 @@
 #include "../../include/lota_seal.h"
 #include "agent.h"
 #include "iommu.h"
+#include "profile.h"
+#include "publishers.h"
 #include "quote.h"
 #include "selftest.h"
 #include "tpm.h"
@@ -543,9 +545,21 @@ out:
  */
 int do_seal_aik_auth(void)
 {
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	unsigned sealed = 0;
+	unsigned failed = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
 
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -554,22 +568,83 @@ int do_seal_aik_auth(void)
 		return 1;
 	}
 
-	ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+	/*
+	 * Every key this host attests with, not the one the context happens to
+	 * start on.
+	 * Each publisher holds its own AIK with its own auth, and sealing only
+	 * the pre-profile default left every key in use with its authorization
+	 * in plaintext while reporting success.
+	 */
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (!entries[i].has_aik_handle)
+			continue;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0 ||
+		    tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0) {
+			fprintf(stderr, "  %s: could not open the profile\n",
+				entries[i].id);
+			failed++;
+			continue;
+		}
+
+		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "  %s: %s\n", entries[i].id,
+				tpm_strerror(ret));
+			failed++;
+			continue;
+		}
+		sealed++;
+	}
+
+	/*
+	 * Only a host with no publishers attests with the default key.
+	 * With publishers present, sealing it would protect an unused key
+	 * and add it to the sealed count.
+	 */
+	if (publishers_default_key_in_use(count)) {
+		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "Could not seal AIK auth: %s\n",
+				tpm_strerror(ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		sealed++;
+	}
+
 	tpm_cleanup(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Could not seal AIK auth: %s\n",
-			tpm_strerror(ret));
-		return 1;
+
+	if (sealed == 0) {
+		fprintf(stderr,
+			"No attestation key to seal: this host holds none "
+			"yet. Enroll with a publisher first.\n");
+		return failed ? 1 : 0;
 	}
 
 	if (g_agent.tpm_ctx.seal_aik_auth_strict)
 		fprintf(stderr,
-			"AIK auth sealed to the current boot state; plaintext "
-			"sidecar removed (strict).\n");
+			"Sealed the authorization of %u attestation key%s to "
+			"the platform state; plaintext sidecar removed "
+			"(strict).\n",
+			sealed, sealed == 1 ? "" : "s");
 	else
 		fprintf(stderr,
-			"AIK auth sealed to the current boot state (plaintext "
-			"sidecar kept; set seal_aik_auth_strict to drop it).\n");
+			"Sealed the authorization of %u attestation key%s to "
+			"the platform state (plaintext sidecar kept; set "
+			"seal_aik_auth_strict to drop it).\n",
+			sealed, sealed == 1 ? "" : "s");
+
+	if (failed) {
+		fprintf(stderr,
+			"%u could not be sealed and still hold their "
+			"authorization in plaintext.\n",
+			failed);
+		return 1;
+	}
 	return 0;
 }
 
@@ -580,9 +655,21 @@ int do_seal_aik_auth(void)
  */
 int do_reprovision_aik(void)
 {
+	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t count = 0;
+	unsigned rotated = 0;
+	unsigned failed = 0;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
+
+	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
+			      sizeof(entries) / sizeof(entries[0]), &count);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to read %s: %s\n",
+			LOTA_PROFILE_BASE_DIR, strerror(-ret));
+		return 1;
+	}
 
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -591,19 +678,82 @@ int do_reprovision_aik(void)
 		return 1;
 	}
 
-	ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
-	tpm_cleanup(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "AIK re-provisioning failed: %s\n",
-			tpm_strerror(ret));
-		return 1;
+	/*
+	 * Every key this host attests with, for the same reason the adopt verb
+	 * walks them: an operator rotating "the machine's attestation identity"
+	 * on a host with publishers means theirs, and rotating the pre-profile
+	 * default rotates the one key no publisher uses.
+	 */
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (!entries[i].has_aik_handle)
+			continue;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0 ||
+		    tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0) {
+			fprintf(stderr, "  %s: could not open the profile\n",
+				entries[i].id);
+			failed++;
+			continue;
+		}
+
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "  %s: %s\n", entries[i].id,
+				tpm_strerror(ret));
+			failed++;
+			continue;
+		}
+		rotated++;
 	}
 
-	fprintf(stderr,
-		"AIK rotated and its auth re-sealed to the current boot "
-		"state.\n"
-		"The previous AIK certificate is now stale -- re-enroll:\n"
-		"  lota-agent --enroll --ca-server <host> ...\n");
+	if (publishers_default_key_in_use(count)) {
+		ret = tpm_reprovision_aik(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "AIK re-provisioning failed: %s\n",
+				tpm_strerror(ret));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		rotated++;
+	}
+
+	tpm_cleanup(&g_agent.tpm_ctx);
+
+	if (rotated == 0) {
+		fprintf(stderr,
+			"No attestation key to rotate: this host holds none "
+			"yet.\n");
+		return failed ? 1 : 0;
+	}
+
+	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
+		rotated == 1 ? "" : "s");
+
+	/* name the publishers whose certificates the rotation just invalidated */
+	if (count > 0) {
+		fprintf(stderr,
+			"Their certificates are now stale -- re-enroll each:\n");
+		for (size_t i = 0; i < count; i++)
+			if (entries[i].has_aik_handle && entries[i].enrolled)
+				fprintf(stderr,
+					"  lota-agent --reenroll --ca-cert "
+					"<anchor for %s:%d>\n",
+					entries[i].ca_server,
+					entries[i].ca_port);
+	} else {
+		fprintf(stderr,
+			"The previous AIK certificate is now stale -- "
+			"re-enroll:\n"
+			"  lota-agent --enroll --ca-server <host> ...\n");
+	}
+
+	if (failed) {
+		fprintf(stderr, "%u could not be rotated.\n", failed);
+		return 1;
+	}
 	return 0;
 }
 

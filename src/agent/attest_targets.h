@@ -195,7 +195,7 @@ bool attest_target_should_announce_wait(struct attest_target *t);
  * each publisher names its own verifier, its own trust anchor and optionally
  * its own cadence, inheriting @interval_sec when it states none.
  * With no profiles configured the single @server / @port / @ca_cert is the only
- * target, which is the enterprise fleet the agent has always served.
+ * target, as on an enterprise fleet host.
  *
  * Returns 0, -EINVAL on a missing single-target server or bad argument,
  * or E2BIG when @max cannot hold every configured profile.

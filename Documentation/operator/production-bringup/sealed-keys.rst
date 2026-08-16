@@ -55,8 +55,28 @@ An already-enrolled host adopts sealing without re-enrolling:
 
 .. code-block:: sh
 
-    # Set the keys in lota.conf, then seal the current auth in place:
+    # Set the keys in lota.conf, then seal the current auths in place:
     sudo lota-agent --seal-aik-auth
+
+**It seals every key the host attests with, and says how many.** A host that
+answers to publishers holds one attestation key per publisher, each with its
+own authorization, so the count is what tells an operator the adoption covered
+the fleet rather than one key:
+
+.. code-block:: text
+
+    Sealed the authorization of 6 attestation keys to the platform state
+    (plaintext sidecar kept; set seal_aik_auth_strict to drop it).
+
+A host with no publishers -- an operator-owned fleet reporting to a single
+verifier -- has one key, the pre-profile default, and seals that. On a host
+with publishers that key belongs to nobody and is left alone. Any key that
+could not be sealed is named, and the command exits non-zero, because the
+authorization of an unsealed key is still on disk in plaintext.
+
+``--reprovision-aik`` walks the same set: it rotates every publisher's key and
+then names the publishers whose certificates the rotation just invalidated,
+since each has to be re-enrolled against its own CA.
 
 The sealed AIK auth is bound to the platform set, so a reboot and an agent
 upgrade both recover it. That is what makes ``strict`` usable at all: were the
