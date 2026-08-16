@@ -668,6 +668,26 @@ check_stack_frames() {
 	fi
 }
 
+# TPM codes rendered for an operator:
+# tpm_* returns LOTA's private range above POSIX, which strerror() prints as
+# "Unknown error 4098" -- and 4098 is the one that warns of a coming lockout
+check_tpm_strerror() {
+	local output
+
+	if ! patch_touches_c "$@"; then
+		pass "tpm-strerror"
+		return
+	fi
+
+	if output="$(scripts/check-tpm-strerror.sh 2>&1)"; then
+		pass "tpm-strerror"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "tpm-strerror" \
+			"render the code with tpm_strerror(), which falls through to strerror() for ordinary errnos."
+	fi
+}
+
 # License boundary:
 # MIT files must not depend on GPL-2.0-only ones,
 # and every source file must name its license
@@ -892,6 +912,7 @@ main() {
 	check_license_boundary
 	check_doc_diagnostics
 	check_stack_frames "${changed_files[@]}"
+	check_tpm_strerror "${changed_files[@]}"
 	check_abi
 	check_sparse "${changed_files[@]}"
 	check_smatch "${changed_files[@]}"
