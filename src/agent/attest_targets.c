@@ -56,6 +56,8 @@ static void carry_live_state(struct attest_target *to,
 	to->consecutive_failures = from->consecutive_failures;
 	to->backoff_sec = from->backoff_sec;
 	to->last_success = from->last_success;
+	to->key_mismatch_announced = from->key_mismatch_announced;
+	to->auth_fail_announced = from->auth_fail_announced;
 	to->attested = from->attested;
 	to->valid_until = from->valid_until;
 	to->auto_renew = from->auto_renew;

@@ -74,6 +74,22 @@ struct attest_target {
 	 */
 	bool wait_announced;
 
+	/*
+	 * Whether this target has already said that the key at its handle is
+	 * not the key its certificate names. Said once for the same reason,
+	 * and cleared the moment they agree again, so a publisher re-enrolled
+	 * out of band resumes without a restart and a later mismatch is
+	 * announced afresh.
+	 */
+	bool key_mismatch_announced;
+
+	/*
+	 * Whether this target has already said the TPM refused to authorize
+	 * its quote. Same reason, and the same clearing rule: a round that
+	 * succeeds puts it back.
+	 */
+	bool auth_fail_announced;
+
 	struct profile_paths paths;
 	bool has_profile;
 	/* why the anchor produced no profile, 0 when it did or none was set */

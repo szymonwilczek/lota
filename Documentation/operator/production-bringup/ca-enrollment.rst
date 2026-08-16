@@ -309,6 +309,21 @@ The remedy is the one both messages name: re-enroll that publisher, which
 issues a certificate for the key the TPM holds now. The agent picks the change
 up on its next round, with no restart.
 
+Both this refusal and a TPM authorization failure are said **once** and do not
+shorten the interval. A credential that is wrong is wrong on the next attempt
+too, so a backoff would only raise the rate at which nothing can happen -- and
+where the TPM is the one refusing, raise the rate at which the host spends
+attempts. The target keeps its ordinary cadence, the publisher stays listed as
+not attested, and the agent says so again only when the state changes: when the
+key and the certificate agree once more, or when a round succeeds. A
+configuration reload does not re-announce either, because the configuration
+file is not what changed.
+
+Other publishers are unaffected. Each has its own key, schedule and failure
+state, so one publisher standing still does not slow, stop or silence the
+rest -- which the log shows by continuing to report their enrollment, rotation
+and renewal work as usual.
+
 AIK rotation status over D-Bus
 ==============================
 
