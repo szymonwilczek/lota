@@ -545,13 +545,6 @@ static __always_inline int is_protected_current_task(void)
 	return is_protected_task(task);
 }
 
-/*
- * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
- * Mirrored rather than included: this object builds against vmlinux.h,
- * which carries types and not the uapi-adjacent flag definitions.
- */
-#define LOTA_PTRACE_MODE_ATTACH 0x02
-
 static __always_inline int is_current_lota_agent_task(void)
 {
 	struct task_struct *task;
@@ -1675,43 +1668,16 @@ int BPF_PROG(lota_ptrace_access_check, struct task_struct *child,
 
 	child_pid = BPF_CORE_READ(child, pid);
 
-	/*
-	 * Agent measures protected process's live code from the kernel side,
-	 * and procfs authorises that read through this hook:
-	 * reading /proc/<pid>/exe or /proc/<pid>/maps costs PTRACE_MODE_READ check.
-	 *
-	 * Denying it to the agent makes protecting a process and issuing token for
-	 * it mutually exclusive -- measurement cannot be taken, and measurement that
-	 * is missing must never be issued as trusted one, so GET_TOKEN fails closed.
-	 * On the shipped defaults, enforce mode with global ptrace blocking on,
-	 * that is every host.
-	 *
-	 * Read access only.
-	 * PTRACE_MODE_ATTACH stays denied to everyone including the agent, so nothing
-	 * here opens debugger onto protected task; and the agent is identified by
-	 * the same task auth flag the rest of this file trusts, not by pid a caller
-	 * could claim.
-	 */
-	if ((mode & LOTA_PTRACE_MODE_ATTACH) == 0 &&
-	    is_current_lota_agent_task()) {
+	/* the agent's own read exemption; see lota_ptrace_agent_read_exempt() */
+	if (lota_ptrace_agent_read_exempt(mode, is_current_lota_agent_task())) {
 		inc_stat(STAT_PTRACE_ATTEMPTS);
 		return 0;
 	}
 
-	if (is_lota_agent_task(child)) {
-		blocked = 1;
-	}
-
-	if (!blocked && lota_mode != LOTA_MODE_MAINTENANCE &&
-	    is_protected_task(child)) {
-		blocked = 1;
-	}
-
-	/* global ptrace blocking remains ENFORCE-only */
-	if (!blocked && lota_mode == LOTA_MODE_ENFORCE &&
-	    get_config(LOTA_CFG_BLOCK_PTRACE)) {
-		blocked = 1;
-	}
+	blocked = lota_ptrace_denied(mode, lota_mode,
+				     get_config(LOTA_CFG_BLOCK_PTRACE),
+				     is_lota_agent_task(child),
+				     is_protected_task(child));
 
 	/* for logging */
 	emit_event = should_emit_event(lota_mode, blocked);

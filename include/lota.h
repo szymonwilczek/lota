@@ -101,6 +101,72 @@ enum lota_mode {
 #define LOTA_CFG_MAX_ENTRIES 9
 
 /*
+ * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
+ *
+ * Mirrored: the enforcement object builds against vmlinux.h, which carries types
+ * and not the uapi-adjacent flag definitions.
+ */
+#define LOTA_PTRACE_MODE_ATTACH 0x02
+
+/* Whether an access asks to trace the target rather than only to read it */
+static inline int lota_ptrace_is_attach(unsigned int ptrace_mode)
+{
+	return (ptrace_mode & LOTA_PTRACE_MODE_ATTACH) != 0;
+}
+
+/*
+ * The agent measures a protected process's live code from the kernel side,
+ * and procfs charges that read a PTRACE_MODE_READ check: reading /proc/<pid>/exe
+ * or /proc/<pid>/maps goes through this hook.
+ *
+ * Denying it to the agent makes protecting a process and issuing a token for it
+ * mutually exclusive -- the measurement cannot be taken, and a measurement that
+ * is missing must never be issued as a trusted one, so GET_TOKEN fails closed.
+ *
+ * Read access only. PTRACE_MODE_ATTACH stays denied to everyone including
+ * the agent, so nothing here opens a debugger onto a protected task.
+ * The caller identifies the agent by the task auth flag the rest of
+ * the enforcement object trusts, not by a pid a caller could claim.
+ */
+static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
+						int actor_is_agent)
+{
+	return actor_is_agent && !lota_ptrace_is_attach(ptrace_mode);
+}
+
+/*
+ * The ptrace access verdict, stated here so the enforcement object and the tests
+ * answer it the same way.
+ * Returns 1 to deny, 0 to allow; the caller has already settled the agent read
+ * exemption above.
+ *
+ * Three rules, in the order they are asked:
+ *
+ *   - the agent itself is never a ptrace target, in any mode;
+ *   - a process that asked for protection refuses both modes, except in
+ *     maintenance, which is the mode that exists to lift the gates;
+ *   - block_ptrace covers every other task, and only in enforce.
+ */
+static inline int lota_ptrace_denied(unsigned int ptrace_mode,
+				     unsigned int lota_mode, int block_ptrace,
+				     int target_is_agent,
+				     int target_is_protected)
+{
+	(void)ptrace_mode;
+
+	if (target_is_agent)
+		return 1;
+
+	if (lota_mode != LOTA_MODE_MAINTENANCE && target_is_protected)
+		return 1;
+
+	if (lota_mode == LOTA_MODE_ENFORCE && block_ptrace)
+		return 1;
+
+	return 0;
+}
+
+/*
  * fs-verity digest sizes LOTA policy enforcement accepts.
  *
  * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce
