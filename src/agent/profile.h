@@ -51,6 +51,15 @@
 #define LOTA_PROFILE_AIK_HANDLE_FILE "aik_handle"
 #define LOTA_PROFILE_CONSENT_FILE "consent"
 
+/*
+ * The AIK authorization, in each of the two forms it may be kept in.
+ * Both sit beside the metadata, so the TPM layer derives their paths from that
+ * directory; the names live here with the profile's other files so one place
+ * says what a profile directory contains.
+ */
+#define LOTA_PROFILE_AIK_AUTH_FILE "aik_auth.dat"
+#define LOTA_PROFILE_AIK_AUTH_SEALED_FILE "aik_auth.sealed"
+
 struct profile_paths {
 	char id[LOTA_PROFILE_ID_LEN];
 	char dir[PATH_MAX];
@@ -182,6 +191,44 @@ int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
  * Reads nothing: the file either is there or is not.
  */
 bool profile_aik_cert_stored(const struct profile_paths *paths);
+
+/*
+ * How this publisher's AIK authorization is kept at rest.
+ *
+ * The authorization opens the attestation key, so whether a copy of it is on
+ * disk in the clear is what at-rest sealing exists to answer. The state is
+ * read off the files, not taken from the verb that wrote them.
+ *
+ * The four states are what an auditor needs to tell apart:
+ *
+ *   NONE       neither file: this publisher holds no authorization yet
+ *   PLAINTEXT  the sidecar only, which is the shipped default
+ *   SEALED     the sealed copy only, which is seal_aik_auth_strict
+ *   BOTH       sealed, with the sidecar kept -- adopted but not hardened,
+ *              and a copy is still readable from a captured disk
+ *
+ * Reads no file contents and needs no TPM: the two files either are there
+ * or are not, which is exactly what "is it on disk in the clear" asks.
+ */
+enum profile_aik_auth_state {
+	PROFILE_AIK_AUTH_NONE = 0,
+	PROFILE_AIK_AUTH_PLAINTEXT,
+	PROFILE_AIK_AUTH_SEALED,
+	PROFILE_AIK_AUTH_BOTH,
+};
+
+enum profile_aik_auth_state
+profile_aik_auth_state(const struct profile_paths *paths);
+
+/* The state's name, for a caller reporting it. Never NULL. */
+const char *profile_aik_auth_state_str(enum profile_aik_auth_state state);
+
+/*
+ * Whether a copy of the authorization is readable from a powered-off disk.
+ * True for PLAINTEXT and BOTH: sealing a second copy protects nothing while
+ * the first one is still in the clear.
+ */
+bool profile_aik_auth_exposed(enum profile_aik_auth_state state);
 
 /*
  * Consent to answer to a publisher.

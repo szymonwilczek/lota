@@ -61,12 +61,14 @@ An already-enrolled host adopts sealing without re-enrolling:
 **It seals every key the host attests with, and says how many.** A host that
 answers to publishers holds one attestation key per publisher, each with its
 own authorization, so the count is what tells an operator the adoption covered
-the fleet rather than one key:
+the fleet rather than one key. The second line is read back off the disk after
+the fact, not stated from the configuration:
 
 .. code-block:: text
 
-    Sealed the authorization of 6 attestation keys to the platform state
-    (plaintext sidecar kept; set seal_aik_auth_strict to drop it).
+    Sealed the authorization of 6 attestation keys to the platform state.
+    6 still keep a plaintext copy beside the sealed one; set
+    seal_aik_auth_strict to drop it.
 
 A host with no publishers -- an operator-owned fleet reporting to a single
 verifier -- has one key, the pre-profile default, and seals that. On a host
@@ -74,9 +76,30 @@ with publishers that key belongs to nobody and is left alone. Any key that
 could not be sealed is named, and the command exits non-zero, because the
 authorization of an unsealed key is still on disk in plaintext.
 
-``--reprovision-aik`` walks the same set: it rotates every publisher's key and
-then names the publishers whose certificates the rotation just invalidated,
-since each has to be re-enrolled against its own CA.
+``--reprovision-aik`` walks the same set: it rotates every publisher's key,
+names the publishers whose certificates the rotation just invalidated -- each
+has to be re-enrolled against its own CA -- and reports whether the new
+authorizations were sealed or written in the clear, again read back.
+
+Auditing a fleet
+================
+
+Do not take a verb's word for it. ``--list-publishers`` reports how each
+publisher's authorization is kept at rest, which is the question sealing exists
+to answer:
+
+.. code-block:: text
+
+    key auth       sealed to the platform state, no plaintext copy
+    key auth       sealed, and a plaintext copy is kept beside it
+    key auth       plaintext on disk, not sealed
+    key auth       none stored
+
+Only the first is hardened. The second means sealing was adopted without
+``seal_aik_auth_strict``, so a copy is still readable from a captured disk --
+sealing a second copy protects nothing while the first one remains. The line
+reads the two files and nothing else, so it needs no TPM and reports the state
+rather than the intent.
 
 The sealed AIK auth is bound to the platform set, so a reboot and an agent
 upgrade both recover it. That is what makes ``strict`` usable at all: were the

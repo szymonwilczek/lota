@@ -450,6 +450,72 @@ bool profile_aik_cert_stored(const struct profile_paths *paths)
 	return S_ISREG(st.st_mode) && st.st_size > 0;
 }
 
+/* A non-empty regular file at path, which is what "this copy exists" means */
+static bool profile_file_present(const char *dir, const char *name)
+{
+	char path[PATH_MAX];
+	struct stat st;
+
+	if (!dir || !dir[0])
+		return false;
+	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >=
+	    (int)sizeof(path))
+		return false;
+	if (stat(path, &st) != 0)
+		return false;
+
+	/*
+	 * An empty file is not a copy of anything.
+	 * A write interrupted between create and content leaves one,
+	 * and counting it would report an authorization protected that is not
+	 * there at all.
+	 */
+	return S_ISREG(st.st_mode) && st.st_size > 0;
+}
+
+enum profile_aik_auth_state
+profile_aik_auth_state(const struct profile_paths *paths)
+{
+	bool plaintext, sealed;
+
+	if (!paths)
+		return PROFILE_AIK_AUTH_NONE;
+
+	plaintext =
+		profile_file_present(paths->dir, LOTA_PROFILE_AIK_AUTH_FILE);
+	sealed = profile_file_present(paths->dir,
+				      LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
+
+	if (plaintext && sealed)
+		return PROFILE_AIK_AUTH_BOTH;
+	if (sealed)
+		return PROFILE_AIK_AUTH_SEALED;
+	if (plaintext)
+		return PROFILE_AIK_AUTH_PLAINTEXT;
+	return PROFILE_AIK_AUTH_NONE;
+}
+
+const char *profile_aik_auth_state_str(enum profile_aik_auth_state state)
+{
+	switch (state) {
+	case PROFILE_AIK_AUTH_SEALED:
+		return "sealed to the platform state, no plaintext copy";
+	case PROFILE_AIK_AUTH_BOTH:
+		return "sealed, and a plaintext copy is kept beside it";
+	case PROFILE_AIK_AUTH_PLAINTEXT:
+		return "plaintext on disk, not sealed";
+	case PROFILE_AIK_AUTH_NONE:
+	default:
+		return "none stored";
+	}
+}
+
+bool profile_aik_auth_exposed(enum profile_aik_auth_state state)
+{
+	return state == PROFILE_AIK_AUTH_PLAINTEXT ||
+	       state == PROFILE_AIK_AUTH_BOTH;
+}
+
 int profile_consent_record(const struct profile_paths *paths, uid_t by)
 {
 	char line[160];

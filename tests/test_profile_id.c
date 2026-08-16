@@ -854,6 +854,75 @@ static void test_host_wide_verbs_count_every_key(void)
 	rmdir(base);
 }
 
+/*
+ * How the AIK authorization is kept at rest: none, plaintext, sealed, or both.
+ *
+ * It decides whether a captured disk yields the key's authorization.
+ * SEALED and BOTH both hold a sealed copy, but only SEALED has no plaintext
+ * beside it, so only SEALED counts as protected.
+ */
+static void test_aik_auth_at_rest_state(void)
+{
+	const char *id =
+		"6666666666666666666666666666666666666666666666666666666666666666";
+	struct profile_paths paths;
+	char base[256];
+	/* room for dir + '/' + the longest of the two names */
+	char plain[PATH_MAX + 32], sealed[PATH_MAX + 32];
+
+	snprintf(base, sizeof(base), "/tmp/lota-profile-auth.%d", getpid());
+
+	CHECK(profile_paths_from_id(base, id, &paths) == 0 &&
+		      profile_consent_record(&paths, 0) == 0,
+	      "a publisher to hold an authorization");
+
+	snprintf(plain, sizeof(plain), "%s/%s", paths.dir,
+		 LOTA_PROFILE_AIK_AUTH_FILE);
+	snprintf(sealed, sizeof(sealed), "%s/%s", paths.dir,
+		 LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
+
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_NONE,
+	      "a publisher holding no authorization reports none");
+	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_NONE),
+	      "no authorization is not an exposed one");
+
+	CHECK(write_all(plain, (const uint8_t *)"auth", 4) == 0,
+	      "sidecar written");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_PLAINTEXT,
+	      "the shipped default reports plaintext on disk");
+	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_PLAINTEXT),
+	      "plaintext is readable from a captured disk");
+
+	CHECK(write_all(sealed, (const uint8_t *)"blob", 4) == 0,
+	      "sealed written");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_BOTH,
+	      "adopting sealing without strict reports both copies");
+	CHECK(profile_aik_auth_exposed(PROFILE_AIK_AUTH_BOTH),
+	      "sealing a second copy protects nothing while the first remains");
+
+	unlink(plain);
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
+	      "strict reports sealed with no plaintext copy");
+	CHECK(!profile_aik_auth_exposed(PROFILE_AIK_AUTH_SEALED),
+	      "sealed alone is the state that is not exposed");
+
+	/* empty file is not a copy of anything */
+	CHECK(write_all(plain, (const uint8_t *)"", 0) == 0, "empty sidecar");
+	CHECK(profile_aik_auth_state(&paths) == PROFILE_AIK_AUTH_SEALED,
+	      "an interrupted write is not counted as a stored authorization");
+
+	CHECK(profile_aik_auth_state(NULL) == PROFILE_AIK_AUTH_NONE,
+	      "no profile reports no authorization");
+	CHECK(profile_aik_auth_state_str(PROFILE_AIK_AUTH_SEALED) != NULL &&
+		      profile_aik_auth_state_str(PROFILE_AIK_AUTH_NONE) != NULL,
+	      "every state names itself");
+
+	unlink(plain);
+	unlink(sealed);
+	publishers_forget(&paths);
+	rmdir(base);
+}
+
 int main(void)
 {
 	printf("=== Publisher profile identity tests ===\n\n");
@@ -868,6 +937,7 @@ int main(void)
 	test_anchor_is_ca();
 	test_publisher_inventory();
 	test_host_wide_verbs_count_every_key();
+	test_aik_auth_at_rest_state();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
