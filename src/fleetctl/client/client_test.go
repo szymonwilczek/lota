@@ -358,7 +358,7 @@ func TestReanchor(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"reanchored","client_id":"host1"}`)
 
-	if err := c.Reanchor("host1", "ops", "board swap"); err != nil {
+	if err := c.Reanchor("host1", "BIOS rollout", "ops", "board swap"); err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
 	if rec.method != http.MethodPost || rec.path != "/api/v1/clients/host1/reanchor" {
@@ -377,7 +377,7 @@ func TestReanchor(t *testing.T) {
 func TestReanchorUnknownClient(t *testing.T) {
 	c, _ := fakeVerifier(t, http.StatusNotFound, `{"error":"client not found"}`)
 
-	err := c.Reanchor("ghost", "ops", "")
+	err := c.Reanchor("ghost", "BIOS rollout", "ops", "")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
 		t.Fatalf("error = %v, want 404 *APIError", err)
@@ -388,7 +388,7 @@ func TestDeleteClientWithMetadata(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"deleted","client_id":"host1"}`)
 
-	if err := c.DeleteClient("host1", "ops", "decommissioned"); err != nil {
+	if err := c.DeleteClient("host1", "decommissioned", "ops", "decommissioned"); err != nil {
 		t.Fatalf("DeleteClient: %v", err)
 	}
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/clients/host1" {
@@ -404,15 +404,16 @@ func TestDeleteClientWithMetadata(t *testing.T) {
 	}
 }
 
-func TestDeleteClientOmitsEmptyBody(t *testing.T) {
+func TestDeleteClientSendsAttribution(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"deleted","client_id":"host1"}`)
 
-	if err := c.DeleteClient("host1", "", ""); err != nil {
+	if err := c.DeleteClient("host1", "decommissioned", "ops", ""); err != nil {
 		t.Fatalf("DeleteClient: %v", err)
 	}
-	if len(rec.body) != 0 {
-		t.Fatalf("body = %q, want empty (DELETE without metadata)", rec.body)
+	if !strings.Contains(string(rec.body), `"actor":"ops"`) ||
+		!strings.Contains(string(rec.body), `"reason":"decommissioned"`) {
+		t.Fatalf("body = %q, want the actor and reason", rec.body)
 	}
 }
 

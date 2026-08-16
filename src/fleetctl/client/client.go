@@ -402,21 +402,19 @@ func (c *Client) ListBans(limit int, nextID string) (*BanPage, error) {
 
 // Reanchor drops a client's stored baselines so its next attestation
 // re-establishes trust (the operator-forced re-baseline).
-func (c *Client) Reanchor(clientID, actor, note string) error {
+func (c *Client) Reanchor(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor",
-		nil, actionRequest{Actor: actor, Note: note}, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // DeleteClient removes a client's registration and baselines, forcing fresh enrollment.
 // Revocations and hardware bans survive.
 // Actor and note are optional audit metadata.
-func (c *Client) DeleteClient(clientID, actor, note string) error {
-	var body any
-	if actor != "" || note != "" {
-		body = actionRequest{Actor: actor, Note: note}
-	}
+func (c *Client) DeleteClient(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID),
-		nil, body, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // ReanchorReviewList fetches the clients that re-anchored on the

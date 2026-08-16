@@ -1681,6 +1681,10 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
 		return
 	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
 
 	logID := sanitizeLogField(clientID)
 
@@ -1702,7 +1706,7 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log(tenant, "reanchor", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "reanchor", clientID, req.Reason, req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "reanchor", "client_id", logID, "error", err)
 		}
@@ -1722,8 +1726,8 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 // Remove the client's AIK registration and baselines, forcing fresh
 // enrollment (admin only).
 // Revocations and hardware bans survive the delete.
-// Body is optional audit metadata ({"actor","note"}).
-// DELETE has no required payload.
+// Body names who removed the client and why ({"actor", "reason"}),
+// both required.
 func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, clientID string) {
 	var req lifecycleRequest
 	if r.ContentLength != 0 {
@@ -1731,6 +1735,15 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 			return
 		}
+	}
+
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
 	}
 
 	logID := sanitizeLogField(clientID)
@@ -1756,7 +1769,7 @@ func (h *APIHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if h.auditLog != nil {
-		if err := h.auditLog.Log(tenant, "delete_client", clientID, "", req.Actor, req.Note); err != nil {
+		if err := h.auditLog.Log(tenant, "delete_client", clientID, req.Reason, req.Actor, req.Note); err != nil {
 			h.log.Error("audit log write failed",
 				"action", "delete_client", "client_id", logID, "error", err)
 		}

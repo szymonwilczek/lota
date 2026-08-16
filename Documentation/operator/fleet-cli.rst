@@ -72,8 +72,8 @@ Command                                                API tier
 ``ban <hardware-id> -reason R -actor A [-note S]``     admin
 ``unban <hardware-id> -reason R -actor A [-note S]``   admin
 ``bans [-limit N] [-next-id CURSOR]``                  reader
-``reanchor <client-id> -actor A [-note S]``            admin
-``delete <client-id> [-actor A] [-note S]``            admin
+``reanchor <client-id> -reason R -actor A [-note S]``  admin
+``delete <client-id> -reason R -actor A [-note S]``    admin
 ``reanchor-review list``                               reader
 ``reanchor-review ack <client-id>``                    admin
 ``audit [-limit N]``                                   reader
@@ -85,14 +85,20 @@ Command                                                API tier
 ``cheating``, ``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is
 the administrator identity recorded in the audit log.
 
-**Lifting a restriction is attributed on the same terms as imposing one.**
-``unban`` and ``unrevoke`` require ``-actor`` and ``-reason``, and the audit
-row carries both. Restoring a machine that was banned for cheating is the act
-a fleet most wants signed -- banning one is the reversible, conservative
-direction -- so a trail that named who imposed a restriction and not who
-lifted it was attributing the wrong half. Their ``-reason`` is free text:
-"why was this machine let back in" has no fixed vocabulary the way a
-revocation reason does.
+**Every command that changes a client's trust state requires ``-actor`` and
+``-reason``**, and the audit row carries both. There is one rule rather than
+one per verb.
+
+Lifting a restriction is attributed on the same terms as imposing one:
+restoring a machine that was banned for cheating is the act a fleet most wants
+signed -- banning one is the reversible, conservative direction -- so a trail
+that names who imposed a restriction must also name who lifted it. And
+``delete``, which removes a client's trust state entirely, is the last action
+to leave unattributed.
+
+Only ``revoke`` takes a fixed vocabulary. Everywhere else ``-reason`` is free
+text, because "why was this machine let back in" and "why was this one
+removed" have no enumerable answer.
 
 Global ``--json`` prints the raw API response instead of the human
 rendering, for scripting against the full field set.
@@ -151,12 +157,14 @@ stays on the verifier -- the host is told the state, not the case for it.
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       reanchor host-0142 -actor alice@ops -note "BIOS 2.4 rollout"
+       reanchor host-0142 -reason "BIOS 2.4 rollout" -actor alice@ops \
+             -note "fleet-wide firmware update"
 
 Decommission a host::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       delete host-0142 -actor alice@ops -note "decommissioned"
+       delete host-0142 -reason decommissioned -actor alice@ops \
+             -note "returned to vendor"
 
 Check the fleet from a script::
 

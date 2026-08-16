@@ -566,11 +566,11 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("reanchor", stderr, args, false, true)
+	id, reason, actor, note, err := parseActionArgs("reanchor", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.Reanchor(id, actor, note); err != nil {
+	if err := ctx.api.Reanchor(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "reanchored %s: baselines cleared, next attestation re-establishes trust\n", id)
@@ -578,11 +578,11 @@ func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("delete", stderr, args, false, false)
+	id, reason, actor, note, err := parseActionArgs("delete", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.DeleteClient(id, actor, note); err != nil {
+	if err := ctx.api.DeleteClient(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "deleted %s: trust state removed, revocations and bans kept\n", id)

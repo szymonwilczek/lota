@@ -195,9 +195,11 @@ Admin. Body: ``reason`` and ``actor`` required, ``note`` optional.
 DELETE /api/v1/clients/{id}/revoke
 ----------------------------------
 
-Admin. No body. **200**
-``{"status": "unrevoked", "client_id": ...}``; **404** when the client
-is not revoked.
+Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
+lifting a restriction is attributed on the same terms as imposing one.
+The reason is free text rather than the revocation vocabulary. **200**
+``{"status": "unrevoked", "client_id": ...}``; **400** missing actor or
+reason, **404** when the client is not revoked.
 
 GET /api/v1/revocations
 -----------------------
@@ -236,9 +238,10 @@ identity), ``reason`` and ``actor`` required, ``note`` optional.
 DELETE /api/v1/bans/{hwid}
 --------------------------
 
-Admin. No body. **200**
+Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
+lifting a ban is attributed on the same terms as imposing one. **200**
 ``{"status": "unbanned", "hardware_id": ...}``; **400** malformed
-hardware ID, **404** not banned.
+hardware ID or missing actor or reason, **404** not banned.
 
 GET /api/v1/bans
 ----------------
@@ -272,12 +275,12 @@ POST /api/v1/clients/{id}/reanchor
 
 Admin. The operator-forced re-baseline: drops the client's stored PCR14
 and boot baselines so the next attestation re-establishes trust. The
-AIK registration is untouched. Body: ``actor`` required, ``note``
-optional. **200**::
+AIK registration is untouched. Body: ``reason`` and ``actor`` required,
+``note`` optional. **200**::
 
    {"status": "reanchored", "client_id": "host-0001"}
 
-**400** missing actor, **404** unknown client. Writes an audit entry
+**400** missing actor or reason, **404** unknown client. Writes an audit entry
 with action ``reanchor`` and counts toward the forced re-anchor metric.
 
 DELETE /api/v1/clients/{id}
@@ -286,13 +289,13 @@ DELETE /api/v1/clients/{id}
 Admin. Removes the client's verifier-side trust state (baselines and,
 where the store carries one, the AIK registration), forcing a fresh
 enrollment. Revocations and hardware bans are keyed separately and
-survive the delete. Body optional: ``actor`` and ``note`` as audit
-metadata. **200**::
+survive the delete. Body: ``reason`` and ``actor`` required, ``note``
+optional. **200**::
 
    {"status": "deleted", "client_id": "host-0001"}
 
-**400** invalid client ID, **404** unknown client. Writes an audit
-entry with action ``delete_client``.
+**400** invalid client ID or missing actor or reason, **404** unknown
+client. Writes an audit entry with action ``delete_client``.
 
 GET /api/v1/reanchor/review
 ---------------------------
