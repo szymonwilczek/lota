@@ -20,6 +20,7 @@
 #include <sys/types.h>
 
 #include "agent.h"
+#include "aik_cert.h"
 #include "enroll.h"
 #include "net.h"
 #include "profile.h"
@@ -925,7 +926,57 @@ int do_add_publisher(const char *config_path, const char *name,
 	}
 }
 
-static void print_publisher(const struct publisher_entry *e)
+/*
+ * Whether the key at a publisher's handle is still the key its certificate
+ * names, for the one surface an operator checks first.
+ *
+ * Everything else this listing prints -- the consent, the enrollment, the handle,
+ * the certificate's validity -- survives the key at that handle being replaced,
+ * so a publisher whose evidence the TPM will refuse to sign reads exactly like
+ * a healthy one. The answer costs a TPM_ReadPublic, which needs no authorization
+ * and spends no dictionary-attack attempt.
+ *
+ * UNKNOWN is the honest answer whenever the question could not be put:
+ * no certificate, no key, or a TPM that would not open. It prints nothing,
+ * since the listing already says which of those it is.
+ */
+enum publisher_key_status {
+	PUBLISHER_KEY_UNKNOWN = 0,
+	PUBLISHER_KEY_MATCHES,
+	PUBLISHER_KEY_MISMATCH,
+};
+
+static enum publisher_key_status publisher_key_status(const char *id)
+{
+	struct profile_paths paths;
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+
+	if (paths_from_id(id, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_bind_profile(&g_agent.tpm_ctx, &paths) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	if (tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+			       &spki_len) < 0)
+		return PUBLISHER_KEY_UNKNOWN;
+
+	switch (aik_cert_matches_key(paths.aik_cert, spki, spki_len)) {
+	case 0:
+		return PUBLISHER_KEY_MATCHES;
+	case -EKEYREJECTED:
+		return PUBLISHER_KEY_MISMATCH;
+	default:
+		return PUBLISHER_KEY_UNKNOWN;
+	}
+}
+
+static void print_publisher(const struct publisher_entry *e,
+			    enum publisher_key_status key_status)
 {
 	printf("%s\n", e->id);
 
@@ -956,6 +1007,13 @@ static void print_publisher(const struct publisher_entry *e)
 		       (long long)e->cert_remaining_sec);
 	else
 		printf("  certificate    none stored\n");
+
+	if (key_status == PUBLISHER_KEY_MISMATCH)
+		printf("  BROKEN         the key at that handle is not the "
+		       "key this certificate\n                 was issued "
+		       "over, so every quote is refused. Re-enroll this\n"
+		       "                 publisher: lota-agent --reenroll "
+		       "--ca-cert <their anchor>\n");
 }
 
 /*
@@ -1018,11 +1076,27 @@ int do_list_publishers(void)
 		return 0;
 	}
 
+	/*
+	 * One TPM open for the whole listing, and only to read public areas.
+	 * A host whose TPM will not open still gets the listing: every line
+	 * above comes off the disk, and the key check is the one that would
+	 * have been missing anyway.
+	 */
+	bool tpm_open = tpm_init(&g_agent.tpm_ctx) == 0;
+
 	printf("Publishers this machine answers to:\n\n");
 	for (size_t i = 0; i < count; i++) {
-		print_publisher(&entries[i]);
+		enum publisher_key_status ks = PUBLISHER_KEY_UNKNOWN;
+
+		if (tpm_open && entries[i].has_aik_handle &&
+		    entries[i].has_cert)
+			ks = publisher_key_status(entries[i].id);
+
+		print_publisher(&entries[i], ks);
 		printf("\n");
 	}
+	if (tpm_open)
+		tpm_cleanup(&g_agent.tpm_ctx);
 
 	print_key_capacity(entries, count);
 
