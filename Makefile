@@ -1208,6 +1208,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_dos \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
+	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_service \
 	$(TEST_BIN_DIR)/test_selftest_plan \
@@ -1583,6 +1584,11 @@ $(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c
 		-Wl,--wrap=bpf_object__open_file \
 		-Wl,--wrap=bpf_object__open_mem
 
+$(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=policy_verify_buffer
+
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
 test-bins: $(TEST_BINS)
@@ -1667,6 +1673,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_seal_aik
 	@$(BUILD_DIR)/test_loader_symbols
 	@$(BUILD_DIR)/test_bpf_loader_load_source
+	@$(BUILD_DIR)/test_bpf_object_preflight
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \

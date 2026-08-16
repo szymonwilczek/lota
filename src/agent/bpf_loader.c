@@ -834,6 +834,31 @@ out:
 	return ret;
 }
 
+int bpf_loader_verify_object(const char *bpf_obj_path,
+			     const char *bpf_pubkey_pem_path)
+{
+	uint8_t *obj_data = NULL;
+	size_t obj_len = 0;
+	int ret;
+
+	if (!bpf_obj_path)
+		return -EINVAL;
+
+	if (!bpf_pubkey_pem_path || bpf_pubkey_pem_path[0] == '\0')
+		return -EINVAL;
+
+	ret = verify_bpf_object_signature(bpf_obj_path, bpf_pubkey_pem_path,
+					  &obj_data, &obj_len);
+
+	/*
+	 * The bytes are of no use here: the load reads and verifies them again
+	 * against the kernel it hands them to, so holding this copy across
+	 * everything between here and there would buy nothing.
+	 */
+	free(obj_data);
+	return ret;
+}
+
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		    const char *bpf_pubkey_pem_path)
 {

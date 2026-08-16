@@ -91,6 +91,27 @@ typedef int (*bpf_event_handler_t)(void *ctx, void *data, size_t len);
 int bpf_loader_init(struct bpf_loader_ctx *ctx);
 
 /*
+ * bpf_loader_verify_object - Answer whether the object would be refused
+ * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
+ * @bpf_pubkey_pem_path: Path to PEM-encoded Ed25519 public key used to verify
+ *      the detached signature at <bpf_obj_path>.sig.
+ *
+ * The same check bpf_loader_load() makes, asked early and without the kernel:
+ * it reads the object, the signature beside it and the public key, and reports
+ * whether the three agree. Nothing is loaded and no context is needed.
+ *
+ * Exists so a refusal decided entirely by files on disk is discovered before
+ * the boot commitment is spent. A caller that reaches bpf_loader_load() is
+ * still authoritative -- this does not stand in for it, and the load verifies
+ * the bytes it hands the kernel.
+ *
+ * Returns: 0 when the object would be accepted, negative errno otherwise;
+ * -EINVAL when no object path or public key is configured.
+ */
+int bpf_loader_verify_object(const char *bpf_obj_path,
+			     const char *bpf_pubkey_pem_path);
+
+/*
  * bpf_loader_load - Load BPF object into the kernel and resolve maps
  * @ctx: Initialized context
  * @bpf_obj_path: Path to compiled BPF object file (.bpf.o)
