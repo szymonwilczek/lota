@@ -281,10 +281,19 @@ Active threats
        | An object the kernel holds no fs-verity digest for is absent from the
          measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation
-     - BPF LSM hooks protect the agent and protected PIDs, including
-       ``__ptrace_may_access`` where available.
-     - Hook availability and verifier behavior must be validated on the target
-       kernel.
+     - | BPF LSM hooks protect the agent and protected PIDs, including
+         ``__ptrace_may_access`` where available. Both refuse a read and an
+         attach alike, so nothing reads a protected process's ``/proc`` or
+         attaches a debugger to it.
+       | ``block_ptrace``, on by default, extends the refusal to an attach on
+         any other task.
+     - | Reading another process's ``/proc`` is left to the kernel outside the
+         protected set. Same-uid access to it is ordinary, ``yama``'s
+         ``ptrace_scope`` covers the attach case, and refusing it for every
+         task denies ``lsof``, ``ps``, profilers and crash handlers without
+         protecting anything this project owns.
+       | Hook availability and verifier behavior must be validated on the
+         target kernel.
    * - Ending a protected process
      - | ``lota-agent --terminate-protected`` is the only route: the LSM passes
          no signal to a protected task from anything but itself, the agent or

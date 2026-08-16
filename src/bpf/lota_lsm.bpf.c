@@ -1640,9 +1640,11 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 /* ======================================================================
  * LSM hook: security_ptrace_access_check
  *
- * Called when one process attempts to trace/debug another via ptrace.
+ * Called when one process attempts to trace/debug another via ptrace,
+ * and by procfs for a read of another process's /proc.
  *
- * In ENFORCE mode, ptrace on protected PIDs is blocked entirely.
+ * In ENFORCE mode, ptrace on protected PIDs is blocked entirely,
+ * and an attach on any other task is blocked while block_ptrace is set.
  * In MONITOR mode, all ptrace attempts are logged for forensic review.
  *
  * @child: The process being traced (target)

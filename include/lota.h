@@ -93,7 +93,7 @@ enum lota_mode {
 /* Config map keys */
 #define LOTA_CFG_MODE 0 /* enum lota_mode */
 #define LOTA_CFG_STRICT_MMAP 1 /* 1 = block mmap from untrusted paths */
-#define LOTA_CFG_BLOCK_PTRACE 2 /* 1 = block ptrace on protected pids */
+#define LOTA_CFG_BLOCK_PTRACE 2 /* 1 = block ptrace attach */
 #define LOTA_CFG_BLOCK_ANON_EXEC 3 /* 1 = block anonymous mmap(PROT_EXEC) */
 #define LOTA_CFG_STRICT_EXEC 4 /* 1 = block exec from untrusted paths */
 #define LOTA_CFG_STRICT_MODULES 5 /* 1 = enforce verified modules/firmware */
@@ -145,22 +145,32 @@ static inline int lota_ptrace_agent_read_exempt(unsigned int ptrace_mode,
  *   - the agent itself is never a ptrace target, in any mode;
  *   - a process that asked for protection refuses both modes, except in
  *     maintenance, which is the mode that exists to lift the gates;
- *   - block_ptrace covers every other task, and only in enforce.
+ *   - block_ptrace covers every other task, in enforce, and for an attach
+ *     only.
+ *
+ * The third rule is a global over every task on the machine, so the access modes
+ * part company there. An attach is what the key is named for and what it refuses.
+ * A read is left to the kernel's own permission model, which already answers it:
+ * reading another process's /proc is what lsof, ps, a profiler and a crash
+ * handler do, same-uid access to it is ordinary, and yama's ptrace_scope covers
+ * the attach case without reaching this far.
+ * Refusing it for everyone breaks the desktop the agent runs on and protects
+ * nothing -- the target the operator meant to protect is the second rule,
+ * which is a set they opt into and which still refuses both.
  */
 static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 				     unsigned int lota_mode, int block_ptrace,
 				     int target_is_agent,
 				     int target_is_protected)
 {
-	(void)ptrace_mode;
-
 	if (target_is_agent)
 		return 1;
 
 	if (lota_mode != LOTA_MODE_MAINTENANCE && target_is_protected)
 		return 1;
 
-	if (lota_mode == LOTA_MODE_ENFORCE && block_ptrace)
+	if (lota_mode == LOTA_MODE_ENFORCE && block_ptrace &&
+	    lota_ptrace_is_attach(ptrace_mode))
 		return 1;
 
 	return 0;
