@@ -267,6 +267,48 @@ Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
 that re-enrolls is still revoked.
 
+When a publisher's key stops matching its certificate
+=====================================================
+
+A publisher profile holds three things that have to agree: the persistent
+handle its attestation key occupies, the authorization stored beside it, and
+the certificate the CA issued over that key. A TPM clear replaces the key, and
+so does any verb pointed at a handle a profile already owns.
+
+When they disagree, the TPM refuses to sign and **each refusal spends a
+dictionary-attack attempt**. The counter drains slowly -- one attempt every two
+hours on a typical firmware TPM, against a ceiling of 32 -- so a host that
+retried a wrong credential could walk itself into a lockout that needs a
+``lockoutAuth`` the machine does not hold.
+
+The agent therefore compares the key at the handle against the certificate
+before it quotes, which costs no authorization and no attempt, and refuses the
+round when they differ:
+
+.. code-block:: text
+
+    ERR: The attestation key at this publisher's handle is not the key their
+         certificate was issued over, so every quote would be refused by the
+         TPM and each refusal spends a dictionary-attack attempt. No round is
+         attempted until they issue a certificate for the key that is here
+         now: lota-agent --reenroll --ca-cert <their anchor>. Publisher: ...
+
+``--list-publishers`` reports the same state, since it is the surface to check
+first -- everything else it prints survives the key being replaced:
+
+.. code-block:: text
+
+    1feba674...
+      attestation key at TPM handle 0x81010010
+      certificate    39566 s of validity left
+      BROKEN         the key at that handle is not the key this certificate
+                     was issued over, so every quote is refused. Re-enroll
+                     this publisher: lota-agent --reenroll --ca-cert <anchor>
+
+The remedy is the one both messages name: re-enroll that publisher, which
+issues a certificate for the key the TPM holds now. The agent picks the change
+up on its next round, with no restart.
+
 AIK rotation status over D-Bus
 ==============================
 

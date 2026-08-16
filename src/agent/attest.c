@@ -1004,12 +1004,10 @@ void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 }
 
 /*
- * The loop's attestation tallies.
+ * The loop's attestation tallies, sent to the socket owner with each sync.
  *
- * They used to live on the IPC context this process served;
- * it serves none now, so they live here and travel to the socket owner with each sync.
- * File scope for the same reason g_agent is: one loop per process, and every writer
- * below is on its single thread.
+ * File scope for the same reason g_agent is: one loop per process,
+ * and every writer below runs on its single thread.
  */
 static struct attest_peer_counters g_attest_counters;
 
@@ -1019,6 +1017,56 @@ static uint64_t monotonic_ms(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/*
+ * Is the key now at this profile's handle the key its certificate names?
+ *
+ * The handle, the auth beside it and the certificate are stored separately.
+ * If the key at the handle is replaced -- a TPM clear, or a default-path verb
+ * pointed at a handle a profile already owns -- the auth no longer opens it
+ * and the TPM refuses to sign.
+ * Each refusal spends a dictionary-attack attempt, every retry spends another,
+ * and the agent holds no lockoutAuth to clear the lockout they lead to.
+ *
+ * Reading the public area needs no authorization and spends no attempt,
+ * so the check runs before every quote.
+ */
+static int target_key_matches_cert(struct attest_target *t)
+{
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+	int ret;
+
+	if (!profile_aik_cert_stored(&t->paths))
+		return 0;
+
+	ret = tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+				 &spki_len);
+	if (ret < 0) {
+		/*
+		 * The key could not be read at all.
+		 * Later steps report that themselves; refusing here would blame
+		 * the certificate.
+		 */
+		return 0;
+	}
+
+	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
+	if (ret == -EKEYREJECTED) {
+		lota_err("The attestation key at this publisher's handle is "
+			 "not the key their certificate was issued over, so "
+			 "every quote would be refused by the TPM and each "
+			 "refusal spends a dictionary-attack attempt. No "
+			 "round is attempted until they issue a certificate "
+			 "for the key that is here now: lota-agent --reenroll "
+			 "--ca-cert <their anchor>. Publisher: %s",
+			 t->label);
+		return ret;
+	}
+
+	/* any other error is an unreadable certificate; renewal reports it */
+	return 0;
 }
 
 /*
@@ -1055,6 +1103,11 @@ static int bind_target(struct attest_target *t)
 			 tpm_strerror(ret));
 		return ret;
 	}
+
+	ret = target_key_matches_cert(t);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
