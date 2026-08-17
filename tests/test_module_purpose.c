@@ -89,6 +89,39 @@ static void test_other_purposes_are_not_modules(void)
 	      "a certificate read is not a module load");
 }
 
+/*
+ * The purposes the kernel under validation can send are all recognised,
+ * so a host running it is never refused a load the gate has a rule for.
+ */
+static void test_every_purpose_this_kernel_sends_is_known(void)
+{
+	CHECK(lota_kread_is_known(KERNEL_PURPOSE_UNKNOWN) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_FIRMWARE) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_MODULE) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_KEXEC_IMAGE) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_KEXEC_INITRAMFS) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_POLICY) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_X509_CERTIFICATE) &&
+		      lota_kread_is_known(KERNEL_PURPOSE_MODULE_COMPRESSED),
+	      "every purpose this kernel sends is one the gate recognises");
+}
+
+/*
+ * A purpose above the list is what a later kernel adds, and it is the shape
+ * this arrived in.
+ * The gate has to be able to tell that it does not know one, so that it can
+ * refuse.
+ */
+static void test_a_later_purpose_is_not_known(void)
+{
+	CHECK(!lota_kread_is_known(KERNEL_PURPOSE_MODULE_COMPRESSED + 1),
+	      "the next purpose a kernel adds is not recognised");
+	CHECK(!lota_kread_is_known(KERNEL_PURPOSE_MODULE_COMPRESSED + 9),
+	      "a purpose well above the list is not recognised");
+	CHECK(!lota_kread_is_module(KERNEL_PURPOSE_MODULE_COMPRESSED + 1),
+	      "an unrecognised purpose is not claimed as a module load");
+}
+
 int main(void)
 {
 	printf("=== module purpose coverage ===\n");
@@ -96,6 +129,8 @@ int main(void)
 	test_plain_module_is_a_module();
 	test_compressed_module_is_a_module();
 	test_other_purposes_are_not_modules();
+	test_every_purpose_this_kernel_sends_is_known();
+	test_a_later_purpose_is_not_known();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d check(s) failed\n", g_failures);

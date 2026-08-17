@@ -1088,19 +1088,34 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	struct lota_exec_event *event = NULL;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 	uint32_t key = 0;
 	uint32_t mode = get_mode();
 
 	lota_bpf_debug("LOTA: kernel_read_file id=%d mode=%d", id, mode);
 
-	/* check if LOTA should ignore this read purpose early */
-	if (!lota_kread_is_module(id) && id != LOTA_KREAD_FIRMWARE &&
-	    id != LOTA_KREAD_KEXEC_IMAGE && id != LOTA_KREAD_KEXEC_INITRAMFS &&
-	    id != LOTA_KREAD_POLICY) {
+	/*
+	 * A purpose this object has no rule for is refused while strict module
+	 * loading is armed, and ignored otherwise.
+	 * Everything else is filtered out here.
+	 */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
+
+	if (!strict_unknown && !lota_kread_is_module(id) &&
+	    id != LOTA_KREAD_FIRMWARE && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY) {
 		return 0;
 	}
 
 	if (mode == LOTA_MODE_ENFORCE) {
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel file read: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
 		if (id == LOTA_KREAD_KEXEC_IMAGE ||
 		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
@@ -1217,17 +1232,31 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 	u32 mode;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 
 	lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
 
-	if (id != LOTA_KREAD_FIRMWARE && !lota_kread_is_module(id) &&
-	    id != LOTA_KREAD_KEXEC_IMAGE && id != LOTA_KREAD_KEXEC_INITRAMFS &&
-	    id != LOTA_KREAD_POLICY && id != LOTA_KREAD_X509_CERTIFICATE)
-		return 0;
-
 	mode = get_mode();
 
+	/* the same rule as kernel_read_file: an unrecognised purpose is refused
+	 * while strict module loading is armed */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
+
+	if (!strict_unknown && id != LOTA_KREAD_FIRMWARE &&
+	    !lota_kread_is_module(id) && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY &&
+	    id != LOTA_KREAD_X509_CERTIFICATE)
+		return 0;
+
 	if (mode == LOTA_MODE_ENFORCE) {
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel data load: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
 		if (id == LOTA_KREAD_KEXEC_IMAGE ||
 		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
