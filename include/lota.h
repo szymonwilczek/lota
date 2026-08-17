@@ -101,6 +101,29 @@ enum lota_mode {
 #define LOTA_CFG_MAX_ENTRIES 9
 
 /*
+ * The purpose the kernel gives when it reads a file or a buffer on its own
+ * behalf: enum kernel_read_file_id and enum kernel_load_data_id.
+ * The two enums are generated from one list in include/linux/kernel_read_file.h
+ * and share their numbering, so one set of values answers for both hooks.
+ *
+ * Mirrored, so that what the gate asks about a purpose can be stated and tested
+ * here instead of only in the hook.
+ */
+#define LOTA_KREAD_UNKNOWN 0
+#define LOTA_KREAD_FIRMWARE 1
+#define LOTA_KREAD_MODULE 2
+#define LOTA_KREAD_KEXEC_IMAGE 3
+#define LOTA_KREAD_KEXEC_INITRAMFS 4
+#define LOTA_KREAD_POLICY 5
+#define LOTA_KREAD_X509_CERTIFICATE 6
+
+/* Whether a purpose names a kernel module */
+static inline int lota_kread_is_module(unsigned int id)
+{
+	return id == LOTA_KREAD_MODULE;
+}
+
+/*
  * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types
