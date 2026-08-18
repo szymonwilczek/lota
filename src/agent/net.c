@@ -46,8 +46,8 @@
  */
 _Static_assert(sizeof(struct verifier_challenge) == 48,
 	       "verifier_challenge must be 48 bytes on wire");
-_Static_assert(sizeof(struct verifier_result) == 56,
-	       "verifier_result must be 56 bytes on wire");
+_Static_assert(sizeof(struct verifier_result) == 24,
+	       "verifier_result must be 24 bytes on wire");
 
 static int ssl_initialized = 0;
 
@@ -626,7 +626,6 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 	memcpy(&result->result, buf + 8, 4);
 	memcpy(&result->flags, buf + 12, 4);
 	memcpy(&result->valid_until, buf + 16, 8);
-	memcpy(result->session_token, buf + 24, 32);
 
 	result->magic = le32toh(result->magic);
 	result->version = le32toh(result->version);

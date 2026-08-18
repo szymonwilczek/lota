@@ -167,16 +167,16 @@ func TestStormAgainstLiveServer(t *testing.T) {
 	fleet := testFleet(t, 4)
 	addr, tlsCfg := startTestServer(t, fleet)
 
-	var sessions bytes.Buffer
+	var attestations bytes.Buffer
 	cfg := &runConfig{
-		Server:    addr,
-		TLS:       tlsCfg,
-		Fleet:     fleet,
-		Agents:    4,
-		Mode:      modeStorm,
-		InFlight:  2,
-		Timeout:   10 * time.Second,
-		SessionsW: &sessions,
+		Server:   addr,
+		TLS:      tlsCfg,
+		Fleet:    fleet,
+		Agents:   4,
+		Mode:     modeStorm,
+		InFlight: 2,
+		Timeout:  10 * time.Second,
+		AttestW:  &attestations,
 	}
 	sum, err := run(context.Background(), cfg)
 	if err != nil {
@@ -193,17 +193,17 @@ func TestStormAgainstLiveServer(t *testing.T) {
 		t.Errorf("implausible latency stats: %+v", sum.Latency)
 	}
 
-	// session log: one valid line per OK with a live token
-	lines := bytes.Split(bytes.TrimSpace(sessions.Bytes()), []byte("\n"))
+	// attestation log: one valid line per OK, carrying its validity deadline
+	lines := bytes.Split(bytes.TrimSpace(attestations.Bytes()), []byte("\n"))
 	if len(lines) != 4 {
-		t.Fatalf("session log has %d lines, want 4", len(lines))
+		t.Fatalf("attestation log has %d lines, want 4", len(lines))
 	}
-	var rec sessionRecord
+	var rec attestRecord
 	if err := json.Unmarshal(lines[0], &rec); err != nil {
-		t.Fatalf("session log line: %v", err)
+		t.Fatalf("attestation log line: %v", err)
 	}
-	if rec.Token == "" || rec.ValidUntil == 0 || rec.Agent == "" {
-		t.Errorf("incomplete session record: %+v", rec)
+	if rec.ValidUntil == 0 || rec.Agent == "" {
+		t.Errorf("incomplete attestation record: %+v", rec)
 	}
 }
 

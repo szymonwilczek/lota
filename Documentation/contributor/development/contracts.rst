@@ -25,11 +25,21 @@ descriptor carries ``present = 0`` where the firmware exposes no System
 Firmware entry.
 
 A breaking layout change -- adding, removing or reordering a field, or adding a
-section -- bumps ``LOTA_VERSION_MAJOR`` in ``include/lota.h`` and
-``ReportVersion`` in ``types/report.go`` together. That is a flag-day: roll the
-verifier tier first, then the agents. Version 2 dropped the always-empty
-``ek_certificate`` field (the Privacy CA model means the verifier never sees an
-EK) and made the ESRT section mandatory.
+section -- bumps the version in ``include/lota.h`` and ``ReportVersion`` in
+``types/report.go`` together, the major for the report and the minor for the
+verifier's result. That is a flag-day either way: roll the verifier tier first,
+then the agents. Version 2 dropped the always-empty ``ek_certificate`` field
+(the Privacy CA model means the verifier never sees an EK) and made the ESRT
+section mandatory; 2.1 shortened the result from 56 bytes to 24 by removing the
+session token, which was issued to every attested host and could be presented
+by none.
+
+The result travels the same way as the report and under the same version. It is
+``struct verifier_result`` in ``src/agent/net.h``, serialized by
+``VerifyResult.Serialize``, and its length is pinned on the C side by the same
+``_Static_assert`` discipline -- the agent reads exactly that many bytes before
+it parses, so a length change on one side is a hang on the other rather than a
+parse error.
 
 Nothing links the C serializer and the Go parser at build time: the serializer
 ``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Three
