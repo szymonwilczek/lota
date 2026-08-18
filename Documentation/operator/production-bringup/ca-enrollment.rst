@@ -84,8 +84,16 @@ environment, never a flag, so it stays out of the process argument list:
 Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
 (CKA_ID, hex). The CA checks the token key's public key against ``ca.crt`` at
 startup and refuses to run on a mismatch, the same check applied to an on-disk
-key, so a wrong token or label cannot sign under the CA identity. ``-ca-key``
-and the ``-ca-key-pkcs11-*`` flags are mutually exclusive.
+key, so a wrong token or label cannot sign under the CA identity.
+
+``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
+is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
+id is refused just as it is beside the module, and the error names the flags it
+found. A selector given without ``-ca-key-pkcs11-module`` is refused by name as
+well, because nothing has been told which module to open -- the CA never falls
+back to an on-disk key when a token was asked for, since that failure would
+hand the fleet's trust root to a file the operator believed they had
+overridden.
 
 The CA key ceremony, rotation, and the offline-root / online-intermediate
 topology are covered in :doc:`../../security/ca-key <../../security/ca-key>`.

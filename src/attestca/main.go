@@ -127,7 +127,15 @@ func run(listen string, cfg *runConfig, log *slog.Logger) error {
 	// -ca-key is required only when no token is configured
 	if cfg.pkcs11.requested() {
 		if cfg.caKeyPath != "" {
-			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both")
+			return fmt.Errorf("specify either -ca-key or -ca-key-pkcs11-*, not both (given: -ca-key, %s)",
+				cfg.pkcs11.flagsGiven())
+		}
+
+		// A selector names a key on a token nothing has been told to open,
+		// so it is a typo or a forgotten flag. Say which.
+		if cfg.pkcs11.module == "" {
+			return fmt.Errorf("-ca-key-pkcs11-module is required with %s",
+				cfg.pkcs11.flagsGiven())
 		}
 	} else {
 		required["ca-key"] = cfg.caKeyPath
