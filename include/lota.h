@@ -236,6 +236,52 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 }
 
 /*
+ * SIGHUP from the signal numbers every Linux architecture LOTA builds for shares.
+ *
+ * Mirrored for the same reason as the ptrace flag above:
+ * the enforcement object builds against vmlinux.h, which carries types
+ * and not the uapi signal numbers.
+ */
+#define LOTA_SIG_HUP 1
+
+/*
+ * The signal-delivery verdict, stated here so the enforcement object
+ * and the tests answer it the same way.
+ * Returns 1 to refuse the signal, 0 to deliver it.
+ *
+ * The caller has already settled who the sender is: a task signalling itself,
+ * the agent, a task holding CAP_SYS_ADMIN over BPF, and a kernel-generated
+ * signal all reach delivery without asking this.
+ *
+ * Three rules, in the order they are asked:
+ *
+ *   - a target nobody protects is nobody's business here;
+ *   - maintenance lifts the protected set, which is the mode's whole purpose;
+ *   - a probe (sig 0) and the agent's own reload signal are delivered,
+ *     since neither can end the target.
+ *
+ * Everything else reaching a protected target or the agent itself is refused.
+ */
+static inline int lota_signal_denied(int sig, unsigned int lota_mode,
+				     int target_is_agent,
+				     int target_is_protected)
+{
+	if (lota_mode == LOTA_MODE_MAINTENANCE)
+		target_is_protected = 0;
+
+	if (!target_is_agent && !target_is_protected)
+		return 0;
+
+	if (sig == 0)
+		return 0;
+
+	if (target_is_agent && sig == LOTA_SIG_HUP)
+		return 0;
+
+	return 1;
+}
+
+/*
  * fs-verity digest sizes LOTA policy enforcement accepts.
  *
  * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce
