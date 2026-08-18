@@ -412,3 +412,22 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 	out->device_id[dev_len] = '\0';
 	return 0;
 }
+
+/*
+ * The sentence an operator is shown for a refusal the CA sent.
+ *
+ * Enrollment is the first thing a machine does, so a refusal here arrives
+ * with no other context: the message has to name what was refused and what
+ * to do about it.
+ * Returns NULL for a status this build has no sentence for.
+ */
+const char *lota_enroll_status_text(unsigned int status)
+{
+	switch (status) {
+	case LOTA_ENROLL_STATUS_TOKEN_REJECTED:
+		return "the enrollment token was not accepted. Check the token "
+		       "file against the CA's configured token set";
+	default:
+		return NULL;
+	}
+}
