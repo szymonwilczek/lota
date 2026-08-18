@@ -301,6 +301,15 @@ rather than its label: adding the same anchor again is a no-op whichever name
 it carries, and a label already spoken for by a different anchor is refused
 with a note to pass another ``--publisher-name``.
 
+**The writer holds itself to the parser's rules.** A label is 1 to 63
+characters with no control characters and no quote -- the quote is what ends
+the section header -- and the hosts and the trust anchor may carry no control
+character, no leading or trailing space and no line longer than the parser
+reads. A value that breaks one of those is refused by name, with the character
+at fault, and nothing is written: the alternative is a command that reports
+success and leaves a file the next start cannot load. The trust anchor must be
+an absolute path for the same reason, since that is what the parser accepts.
+
 **It records no consent.** Nothing enrols with the publisher until somebody at
 the machine runs the ``--allow-publisher`` command it prints. That separation
 is deliberate: an installer must not be able to agree, on the player's behalf,

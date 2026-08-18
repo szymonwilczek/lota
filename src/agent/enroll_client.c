@@ -850,9 +850,24 @@ int do_add_publisher(const char *config_path, const char *name,
 	/* Identity is 64 hex characters and the label field is shorter,
 	 * so unnamed publisher is labelled by a readable prefix of it rather
 	 * than a silently cut one */
-	if (name && name[0])
+	if (name && name[0]) {
+		/*
+		 * checked before the copy, because the copy is what would hide it:
+		 * a label longer than the field is a label the operator would
+		 * never see again, silently shortened into one that may already
+		 * belong to another publisher
+		 */
+		char why[160];
+
+		if (config_profile_name_defect(name, why, sizeof(why))) {
+			fprintf(stderr,
+				"ERROR: the label given to --publisher-name "
+				"%s.\nNothing was written.\n",
+				why);
+			return 1;
+		}
 		snprintf(p.name, sizeof(p.name), "%s", name);
-	else
+	} else
 		snprintf(p.name, sizeof(p.name), "publisher-%.16s", paths.id);
 	snprintf(p.ca, sizeof(p.ca), "%s", ca_server);
 	p.ca_port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
@@ -910,6 +925,12 @@ int do_add_publisher(const char *config_path, const char *name,
 			"as \"%s\". Pass --publisher-name to choose another "
 			"label.\n",
 			p.name);
+		return 1;
+	case -EILSEQ:
+		fprintf(stderr,
+			"ERROR: nothing was written. Pass --publisher-name "
+			"with a label the configuration can hold, or correct "
+			"the value the writer named above.\n");
 		return 1;
 	case -E2BIG:
 		fprintf(stderr,
