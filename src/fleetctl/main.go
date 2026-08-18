@@ -6,8 +6,7 @@
 //
 // One binary covers the fleet lifecycle operator otherwise drives with
 // curl: device inventory, revocations, hardware bans, forced re-anchor,
-// client removal, LFA re-anchor review, audit and attestation logs,
-// and session-token validation.
+// client removal, LFA re-anchor review, and the audit and attestation logs.
 //
 // Connection:
 //
@@ -72,7 +71,6 @@ Commands:
   reanchor-review ack <client-id>         acknowledge an LFA re-anchor
   audit [-limit N] [-tenant T]            operator audit log
   attests [-limit N] [-tenant T]          attestation decision log
-  session validate <token> [-consume]     validate a session token
 
 Revocation and ban reasons: cheating, compromised, hardware_change, admin.
 
@@ -207,8 +205,6 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 		err = cmdAudit(ctx, stderr, args)
 	case "attests":
 		err = cmdAttests(ctx, stderr, args)
-	case "session":
-		return cmdSession(ctx, stderr, args)
 	default:
 		return exitUsage, fmt.Errorf("unknown command %q (see lota-fleet -h)", cmd)
 	}
@@ -690,47 +686,4 @@ func cmdAttests(ctx *cmdContext, stderr io.Writer, args []string) error {
 			e.Timestamp, e.Tenant, e.ClientID, e.Result, e.DurationMs, e.Details)
 	}
 	return tw.Flush()
-}
-
-func cmdSession(ctx *cmdContext, stderr io.Writer, args []string) (int, error) {
-	if len(args) == 0 || args[0] != "validate" {
-		return exitUsage, fmt.Errorf("%w: session needs the validate subcommand", errUsage)
-	}
-
-	fs := flag.NewFlagSet("session validate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	consume := fs.Bool("consume", false, "mark the token used so it cannot validate again")
-	if len(args) < 2 {
-		return exitUsage, fmt.Errorf("%w: session validate needs a token argument", errUsage)
-	}
-	if err := fs.Parse(args[2:]); err != nil {
-		return exitUsage, errUsage
-	}
-	if fs.NArg() != 0 {
-		return exitUsage, fmt.Errorf(
-			"%w: session validate takes one token argument (flags go after it)", errUsage)
-	}
-
-	status, err := ctx.api.ValidateSessionToken(args[1], *consume)
-	if err != nil {
-		return exitError, err
-	}
-
-	if ctx.asJSON {
-		if err := printJSON(ctx.stdout, status); err != nil {
-			return exitError, err
-		}
-	} else {
-		kv(ctx.stdout, "valid", status.Valid)
-		kv(ctx.stdout, "consumed", status.Consumed)
-		kv(ctx.stdout, "client", status.ClientID)
-		kv(ctx.stdout, "tenant", status.Tenant)
-		kv(ctx.stdout, "hardware id", status.HardwareID)
-	}
-
-	// invalid token is failed check for scripts
-	if !status.Valid {
-		return exitError, nil
-	}
-	return exitOK, nil
 }

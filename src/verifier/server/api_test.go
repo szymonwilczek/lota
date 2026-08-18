@@ -45,66 +45,16 @@ func init() {
 	}
 }
 
-func TestSessionValidateEndpoint_SuccessAndConsume(t *testing.T) {
-	mux, v := setupTestAPI(t)
-
-	challengeID := "api-session-validate"
-	challenge, err := v.GenerateChallenge(challengeID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := serverFixturePCR14()
-
-	clientID := persistentClientID(challengeID)
-	key := getClientTestAIK(clientID)
-	report := buildSignedReport(t, challengeID, challenge.Nonce, pcr14, key)
-	result, err := v.VerifyReport(challengeID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-
-	body := fmt.Sprintf(`{"session_token":"%x","consume":true}`, result.SessionToken)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
-	}
-
-	var resp map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON response: %v", err)
-	}
-	if valid, _ := resp["valid"].(bool); !valid {
-		t.Fatalf("expected valid=true, got %v", resp["valid"])
-	}
-	if consumed, _ := resp["consumed"].(bool); !consumed {
-		t.Fatalf("expected consumed=true, got %v", resp["consumed"])
-	}
-
-	// token remains known but marked as consumed
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
-		strings.NewReader(fmt.Sprintf(`{"session_token":"%x"}`, result.SessionToken)))
-	req2.Header.Set("Content-Type", "application/json")
-	rr2 := httptest.NewRecorder()
-	mux.ServeHTTP(rr2, req2)
-	if rr2.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rr2.Code, rr2.Body.String())
-	}
-
-	resp = map[string]any{}
-	if err := json.Unmarshal(rr2.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON response: %v", err)
-	}
-	if consumed, _ := resp["consumed"].(bool); !consumed {
-		t.Fatalf("expected consumed=true on second check, got %v", resp["consumed"])
-	}
-}
-
-func TestSessionValidateEndpoint_BadToken(t *testing.T) {
+/*
+ * The verifier used to mint a session token on every successful attestation
+ * and answer for it here.
+ * Nothing could ever present one: the agent parsed the field off the wire
+ * and dropped it, so no title, SDK or verb ever held a token, and the endpoint's
+ * only reachable answer was that the token did not exist.
+ * The credential was withdrawn rather than half-wired, and this asserts
+ * the route is gone.
+ */
+func TestSessionValidateEndpointIsWithdrawn(t *testing.T) {
 	mux, _ := setupTestAPI(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate",
@@ -113,8 +63,9 @@ func TestSessionValidateEndpoint_BadToken(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a withdrawn endpoint, got %d body=%s",
+			rr.Code, rr.Body.String())
 	}
 }
 
@@ -178,12 +129,17 @@ func TestAttestationLogEndpoint_SanitizesDetails(t *testing.T) {
 	}
 }
 
-func TestSessionValidateEndpoint_RejectsDeepJSONNesting(t *testing.T) {
-	mux, _ := setupTestAPI(t)
+/*
+ * The nesting guard is a property of every POST body the API decodes,
+ * so it moved here when the session-validate endpoint was withdrawn.
+ */
+func TestPostBodyRejectsDeepJSONNesting(t *testing.T) {
+	mux, _ := setupTestAPIWithKey(t, "admin-key")
 
 	deep := strings.Repeat("[", 80) + strings.Repeat("]", 80)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/session/validate", strings.NewReader(deep))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bans", strings.NewReader(deep))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer admin-key")
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)

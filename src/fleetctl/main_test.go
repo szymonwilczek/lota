@@ -305,37 +305,25 @@ func TestDeleteRequiresAttribution(t *testing.T) {
 	}
 }
 
-func TestSessionValidateInvalidExitsNonzero(t *testing.T) {
-	f := newFakeAPI(t, map[string]string{
-		"POST /api/v1/session/validate": `{"valid":false}`,
-	})
-
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", strings.Repeat("00", 32))
-	if code != exitError {
-		t.Fatalf("exit = %d, want 1 for an invalid token", code)
-	}
-	if !strings.Contains(out, "valid: false") {
-		t.Fatalf("output = %q", out)
-	}
-}
-
-func TestSessionValidateRejectsMisplacedFlags(t *testing.T) {
+/*
+ * The session-validate verb was withdrawn with the credential it presented:
+ * nothing could ever hold a token to pass it. An unknown subcommand is a usage
+ * error, and asserting that keeps a caller's script from failing silently if
+ * it still carries the old invocation.
+ */
+func TestSessionSubcommandIsWithdrawn(t *testing.T) {
 	f := newFakeAPI(t, nil)
 
-	// -consume before the token would silently validate the literal string
-	// "-consume" as the token
-	// reject it before any request
 	code, _, errOut := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", "-consume", strings.Repeat("00", 32))
+		"session", "validate", strings.Repeat("00", 32))
 	if code != exitUsage {
-		t.Fatalf("exit = %d, want 2 for flags before the token", code)
+		t.Fatalf("exit = %d, want 2 for a withdrawn subcommand", code)
 	}
-	if !strings.Contains(errOut, "token argument") {
+	if !strings.Contains(errOut, "unknown command") {
 		t.Fatalf("stderr = %q", errOut)
 	}
 	if f.requests != 0 {
-		t.Fatalf("request sent despite the usage error")
+		t.Fatalf("request sent for a withdrawn subcommand")
 	}
 }
 
@@ -536,22 +524,6 @@ func TestAttestsTable(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	if !strings.Contains(out, "RESULT") || !strings.Contains(out, "success") {
-		t.Fatalf("output = %q", out)
-	}
-}
-
-func TestSessionValidateValidToken(t *testing.T) {
-	f := newFakeAPI(t, map[string]string{
-		"POST /api/v1/session/validate": `{"valid":true,"consumed":true,
-			"client_id":"host1","hardware_id":"ab"}`,
-	})
-
-	code, out, _ := runCLI(t, noEnv, "-server", f.srv.URL,
-		"session", "validate", strings.Repeat("00", 32), "-consume")
-	if code != exitOK {
-		t.Fatalf("exit = %d, want 0 for a valid token", code)
-	}
-	if !strings.Contains(out, "valid: true") || !strings.Contains(out, "client: host1") {
 		t.Fatalf("output = %q", out)
 	}
 }

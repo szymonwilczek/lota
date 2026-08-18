@@ -133,6 +133,13 @@ The game, anti-cheat service, or relying server consumes LOTA status and token
 verification results. It remains responsible for gameplay policy and behavioral
 detection.
 
+The relying party's evidence is that token and nothing else. The verifier
+answers an attesting host with a verdict and a deadline, and issues no bearer
+credential a backend could check in place of the signature: a service asking
+whether a client is trustworthy verifies the TPM-signed token the client
+presents, so what it accepts is bound to the hardware rather than to a string
+that can be copied.
+
 Server SDK's ``VerifyToken`` enforces token freshness: a token whose ``validUntil``
 is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rejected,
 so a misconfigured or compromised agent cannot mint an effectively immortal token.
