@@ -1551,6 +1551,38 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	free(updated);
 
 	/*
+	 * Parse the replacement before renaming it into place.
+	 * The field rules cover only what this writer added; the rest of
+	 * the file is copied through as is, and if that no longer parses
+	 * -- a hand edit, a package that half-replaced it -- the host would
+	 * start with no configuration.
+	 * On refusal the live file stays untouched.
+	 */
+	{
+		struct lota_config *readback = config_new();
+		int lret;
+
+		if (!readback) {
+			unlink(tmp_path);
+			return -ENOMEM;
+		}
+
+		lret = config_load(readback, tmp_path);
+		config_free(readback);
+		if (lret < 0) {
+			fprintf(stderr,
+				"Refusing to replace %s: the result does not "
+				"parse, so the host would start with no "
+				"configuration.\n"
+				"%s is unchanged; the errors above are from "
+				"reading the replacement back.\n",
+				path, path);
+			unlink(tmp_path);
+			return -EBADMSG;
+		}
+	}
+
+	/*
 	 * Temporary file took its SELinux type from this directory,
 	 * not from the file it is about to replace.
 	 * Where the two differ -- a packaged lota.conf under an unlabelled

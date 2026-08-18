@@ -358,7 +358,12 @@ int config_profile_append_text(const char *existing,
  *
  * Writes through a temporary file in the same directory and renames it into place,
  * so crash mid-write leaves the old config rather than half of one.
- * Same return values.
+ *
+ * The replacement is read back with config_load() before the rename,
+ * since the text already in the file is copied through unexamined: a config that
+ * had stopped parsing before this call would otherwise be renamed into place
+ * and reported as a publisher added. Same return values, plus -EBADMSG when
+ * the result does not parse, in which case @path is left exactly as it was.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 

@@ -926,6 +926,14 @@ int do_add_publisher(const char *config_path, const char *name,
 			"label.\n",
 			p.name);
 		return 1;
+	case -EBADMSG:
+		fprintf(stderr,
+			"ERROR: nothing was written. %s does not parse as it "
+			"stands, so adding to it would leave a host with no "
+			"configuration. Repair the file -- 'lota-agent "
+			"--dump-config' names the line -- and run this again.\n",
+			config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH);
+		return 1;
 	case -EILSEQ:
 		fprintf(stderr,
 			"ERROR: nothing was written. Pass --publisher-name "
