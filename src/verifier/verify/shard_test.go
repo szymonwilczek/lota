@@ -42,11 +42,6 @@ func TestShardIndexNeverNegative(t *testing.T) {
 			if idx := shardIndex(key, n); idx < 0 || idx >= n {
 				t.Fatalf("shardIndex(%q,%d) = %d out of [0,%d)", key, n, idx, n)
 			}
-			var tok [32]byte
-			tok[0], tok[1], tok[2] = byte(i), byte(i>>8), byte(i>>16)
-			if idx := shardIndexBytes(tok[:], n); idx < 0 || idx >= n {
-				t.Fatalf("shardIndexBytes(%d,%d) = %d out of [0,%d)", i, n, idx, n)
-			}
 		}
 	}
 }

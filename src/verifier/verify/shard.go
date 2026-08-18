@@ -5,14 +5,14 @@
 // Postgres backend is bounded by per-database WAL fsync throughput, shared by every
 // verifier instance on that database. To scale the database tier past one host the fleet
 // is partitioned across N independent databases: each store operation is routed to shard
-// by stable hash of its own key, so given client's baseline, given nonce, and given
-// session token always land on the same shard on every instance.
+// by stable hash of its own key, so given client's baseline and given nonce
+// always land on the same shard on every instance.
 // Independent databases commit in parallel, so aggregate durable write throughput scales
 // with the number of shards (on independent storage).
 //
 // Hash is FNV-1a, which is deterministic and process-independent:
-// Two verifier instances pointed at the same shard set route identically,
-// so session token issued by one instance validates on another.
+// two verifier instances pointed at the same shard set route identically,
+// so a nonce one instance recorded is found by the other.
 // Routing adds only a hash to each call - it introduces no cross-shard transaction
 // and no new failure mode beyond single backend's.
 
@@ -38,17 +38,6 @@ func shardIndex(key string, n int) int {
 	h := fnv.New32a()
 	// write on hash.Hash never returns error
 	_, _ = h.Write([]byte(key))
-	return int(h.Sum32()&maxPositiveInt32) % n
-}
-
-// shardIndexBytes is shardIndex for fixed-size binary key (session token),
-// avoiding string allocation on the hot path
-func shardIndexBytes(key []byte, n int) int {
-	if n <= 1 {
-		return 0
-	}
-	h := fnv.New32a()
-	_, _ = h.Write(key)
 	return int(h.Sum32()&maxPositiveInt32) % n
 }
 
