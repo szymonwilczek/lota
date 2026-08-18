@@ -22,6 +22,7 @@ import (
 	"github.com/szymonwilczek/lota/attestca/credential"
 	"github.com/szymonwilczek/lota/attestca/enroll"
 	"github.com/szymonwilczek/lota/attestca/wire"
+	"github.com/szymonwilczek/lota/crl"
 )
 
 const (
@@ -328,12 +329,22 @@ func (s *Server) writeFrame(conn net.Conn, body []byte) error {
 	return wire.WriteFrame(conn, body)
 }
 
+// beginStatus maps an enrollment refusal to the status the device sees,
+// which decides whether it retries. Every deliberate refusal has a case;
+// the default arm is left to CA faults, which a retry may clear.
+//
+// Besides the chain checks, the EK arm holds verdicts on the key itself:
+// not listed by a strict tenant manifest, revoked by its manufacturer's CRL,
+// or carrying the ROCA fingerprint. A stale or unverifiable CRL is CA
+// configuration, not a verdict, and stays in the default arm.
 func beginStatus(err error) uint16 {
 	switch {
 	case errors.Is(err, ca.ErrEKChain), errors.Is(err, ca.ErrEKExpired),
 		errors.Is(err, ca.ErrEKNotYet), errors.Is(err, ca.ErrEKMissingOID),
 		errors.Is(err, ca.ErrEKParse), errors.Is(err, ca.ErrEKKeyType),
-		errors.Is(err, ca.ErrEKKeySize), errors.Is(err, enroll.ErrEKKeyType):
+		errors.Is(err, ca.ErrEKKeySize), errors.Is(err, enroll.ErrEKKeyType),
+		errors.Is(err, ca.ErrEKWeakKey), errors.Is(err, crl.ErrCertificateRevoked),
+		errors.Is(err, enroll.ErrEKNotListed):
 		return wire.StatusEKRejected
 	case errors.Is(err, credential.ErrAIKDecode), errors.Is(err, credential.ErrAIKTemplate),
 		errors.Is(err, credential.ErrAIKName), errors.Is(err, enroll.ErrAIKKeyType):
