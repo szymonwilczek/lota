@@ -217,6 +217,95 @@ int main(void)
 		      "a buffer too small is refused rather than truncated");
 	}
 
+	/*
+	 * The label is text somebody else chose -- an installer's argument,
+	 * a store page's studio name -- and the header the writer builds around
+	 * it is terminated by a quote. A label carrying one closes the section
+	 * the writer meant and opens another, so the file the parser reads back
+	 * is not the file the writer described: the settings land on a forged
+	 * profile and the whole configuration stops loading.
+	 */
+	{
+		const char *base = "attest_interval = 60\n";
+		struct lota_profile forged;
+
+		forged = mkprofile("evil\"]\n[profile \"injected",
+				   "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a label carrying a quote and a newline is refused");
+
+		forged = mkprofile("say \"cheese\"", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ, "a label carrying a quote is refused");
+
+		forged = mkprofile("two\nlines", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a label carrying a control character is refused");
+
+		forged = mkprofile("", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EINVAL, "a profile with no label is refused");
+	}
+
+	/*
+	 * The same hole in every other field the writer interpolates: a newline
+	 * in a host forges a key inside the section rather than a section,
+	 * which the parser then accepts -- a publisher pointed at another verifier,
+	 * written by a label nobody read.
+	 */
+	{
+		const char *base = "attest_interval = 60\n";
+		struct lota_profile forged;
+
+		forged = mkprofile("studio-c",
+				   "ca.studio-c.example\nverifier = "
+				   "attacker.example",
+				   "/etc/lota/studio-c.pem",
+				   "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ, "a CA host carrying a newline is refused");
+
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "/etc/lota/studio-c.pem",
+				   "v.example\nreporting = continuous");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a verifier host carrying a newline is refused");
+
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "/etc/lota/c.pem\nmode = permissive",
+				   "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a trust anchor carrying a newline is refused");
+
+		/* the parser refuses a relative ca_cert, so the writer cannot
+		 * emit one either */
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "studio-c.pem", "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a trust anchor that is not an absolute path is refused");
+	}
+
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;
 }
