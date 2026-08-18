@@ -1202,6 +1202,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_rt_verity_cache \
 	$(TEST_BIN_DIR)/test_verity_digest_key \
 	$(TEST_BIN_DIR)/test_ptrace_policy \
+	$(TEST_BIN_DIR)/test_signal_policy \
 	$(TEST_BIN_DIR)/test_module_purpose \
 	$(TEST_BIN_DIR)/test_runtime_protect_digest \
 	$(TEST_BIN_DIR)/test_protect_pids \
@@ -1479,6 +1480,11 @@ $(TEST_BIN_DIR)/test_ptrace_policy: tests/test_ptrace_policy.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
+$(TEST_BIN_DIR)/test_signal_policy: tests/test_signal_policy.c \
+		$(INC_DIR)/lota.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_module_purpose: tests/test_module_purpose.c \
 		$(INC_DIR)/lota.h | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1681,6 +1687,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_rt_verity_cache
 	@$(BUILD_DIR)/test_verity_digest_key
 	@$(BUILD_DIR)/test_ptrace_policy
+	@$(BUILD_DIR)/test_signal_policy
 	@$(BUILD_DIR)/test_module_purpose
 	@$(BUILD_DIR)/test_runtime_protect_digest
 	@$(BUILD_DIR)/test_protect_pids
@@ -1785,7 +1792,7 @@ VALGRIND_UNIT_BINS := \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_sb_dev test_kernel_measure test_event_budget \
-	test_ptrace_policy test_module_purpose \
+	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
