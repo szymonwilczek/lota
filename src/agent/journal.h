@@ -60,6 +60,17 @@ int journal_get_level(void);
  */
 _Bool journal_use_journal(void);
 
+/*
+ * journal_detached_from_terminal - Send to the journal from here on.
+ *
+ * The backend is chosen at journal_init() from the environment, which answers
+ * "is systemd running this". A process that daemonises itself answers no
+ * and then closes the stderr the fallback writes to, so every later diagnostic
+ * is written to /dev/null.
+ * Calling this once stderr is gone keeps them readable.
+ */
+void journal_detached_from_terminal(void);
+
 #define lota_err(fmt, ...) \
 	journal_print(__FILE__, __LINE__, __func__, LOG_ERR, fmt, ##__VA_ARGS__)
 

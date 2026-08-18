@@ -55,19 +55,101 @@ static void sighup_handler(int sig)
 		*g_daemon_reload = 1;
 }
 
+/*
+ * Write end of the pipe the daemon reports its startup verdict on,
+ * held by the daemon process for as long as it has not reported.
+ * -1 when the process was not daemonised, which is what makes
+ * daemon_notify_started() a no-op in the foreground.
+ */
+static int g_startup_pipe = -1;
+
+void daemon_notify_started(int status)
+{
+	ssize_t written;
+
+	if (g_startup_pipe < 0)
+		return;
+
+	do {
+		written = write(g_startup_pipe, &status, sizeof(status));
+	} while (written < 0 && errno == EINTR);
+
+	close(g_startup_pipe);
+	g_startup_pipe = -1;
+}
+
+/*
+ * The launching process, once it has forked: wait for the daemon to say how
+ * its startup ended and exit with that.
+ *
+ * This is the half of daemonising that has to stay: a caller that gets its
+ * shell back has been told the agent is up, and only the daemon knows whether
+ * it is.
+ * Reading blocks for as long as startup takes, which is the same wait
+ * a foreground start asks for.
+ */
+static void daemon_await_child(int read_fd) __attribute__((noreturn));
+
+static void daemon_await_child(int read_fd)
+{
+	int status = 0;
+	ssize_t got;
+
+	do {
+		got = read(read_fd, &status, sizeof(status));
+	} while (got < 0 && errno == EINTR);
+
+	if (got == (ssize_t)sizeof(status)) {
+		if (status != 0)
+			/*
+			 * Reported as the caller will see it:
+			 * an exit status is the low byte, and the daemon reports
+			 * negative errnos among its own.
+			 */
+			fprintf(stderr,
+				"lota-agent: startup refused (exit %d). "
+				"The reason is in the journal: "
+				"journalctl -t lota-agent\n",
+				status & 0xff);
+		_exit(status);
+	}
+
+	/*
+	 * The pipe closed with nothing on it, so the daemon died before it
+	 * reached either verdict.
+	 * This is a failed start too, and the caller is told so.
+	 */
+	fprintf(stderr,
+		"lota-agent: the agent exited before startup completed. "
+		"The reason is in the journal: journalctl -t lota-agent\n");
+	_exit(1);
+}
+
 int daemonize(void)
 {
 	pid_t pid;
 	int fd;
+	int startup_pipe[2];
+
+	if (pipe(startup_pipe) < 0)
+		return -errno;
 
 	/*
 	 * first fork: detach from parent process
 	 */
 	pid = fork();
-	if (pid < 0)
-		return -errno;
-	if (pid > 0)
-		_exit(0); /* parent exits */
+	if (pid < 0) {
+		int err = errno;
+		close(startup_pipe[0]);
+		close(startup_pipe[1]);
+		return -err;
+	}
+	if (pid > 0) {
+		close(startup_pipe[1]);
+		daemon_await_child(startup_pipe[0]); /* does not return */
+	}
+
+	close(startup_pipe[0]);
 
 	/*
 	 * create new session and process group
@@ -85,6 +167,14 @@ int daemonize(void)
 		return -errno;
 	if (pid > 0)
 		_exit(0); /* session leader exits */
+
+	/*
+	 * The daemon proper.
+	 * It owns the verdict from here, and holding the write end is what
+	 * makes the launching process wait.
+	 */
+	g_startup_pipe = startup_pipe[1];
+	(void)fcntl(g_startup_pipe, F_SETFD, FD_CLOEXEC);
 
 	if (chdir("/") < 0)
 		return -errno;
