@@ -1167,6 +1167,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_reload_enforcement_state \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
+	$(TEST_BIN_DIR)/test_enroll_status \
 	$(TEST_BIN_DIR)/test_enroll_state \
 	$(TEST_BIN_DIR)/test_profile_id \
 	$(TEST_BIN_DIR)/test_attest_targets \
@@ -1352,6 +1353,10 @@ $(TEST_BIN_DIR)/test_credential_activation: tests/test_credential_activation.c $
 $(TEST_BIN_DIR)/test_pcr14_verdict: tests/test_pcr14_verdict.c $(AGENT_DIR)/tpm.c $(AGENT_DIR)/tpm_errno.c $(AGENT_DIR)/seal_envelope.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DLOTA_INTERNAL_TESTS -o $@ $^ -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl
+
+$(TEST_BIN_DIR)/test_enroll_status: tests/test_enroll_status.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_enroll_wire: tests/test_enroll_wire.c $(AGENT_DIR)/enroll.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1651,6 +1656,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_reload_enforcement_state
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
+	@$(BUILD_DIR)/test_enroll_status
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_profile_id
 	@$(BUILD_DIR)/test_attest_targets
