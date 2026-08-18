@@ -4,11 +4,11 @@
 Multi-instance verifier on a shared Postgres backend
 ====================================================
 
-Single verifier process keeps its enforcement and session-token state to
-itself, so it cannot sit behind a load balancer. Pointing several verifier
-instances at one Postgres database with ``--pg-dsn`` makes them share that
-state: a token issued by one instance validates on another, and a revocation or
-ban on one is enforced by all. This example stands two instances up against one
+Single verifier process keeps its enforcement state to itself, so it cannot sit
+behind a load balancer. Pointing several verifier instances at one Postgres
+database with ``--pg-dsn`` makes them share that state: a client enrolled and
+baselined on one instance is known to another, and a revocation or ban on one
+is enforced by all. This example stands two instances up against one
 Postgres so the shared-state behaviour can be observed without a full fleet.
 
 See `Documentation/operator/ha-deployment.rst <../../Documentation/operator/ha-deployment.rst>`_ for the
@@ -79,8 +79,8 @@ already present.
 
 Drive one full attestation through **instance A** (port 8443) using the
 enrollment example, then read the result back through **instance B** (port
-8081). Because the client registration, baseline and session token live in
-Postgres, instance B reports the client it never spoke to:
+8081). Because the client registration and baseline live in Postgres, instance
+B reports the client it never spoke to:
 
 .. code:: sh
 
@@ -88,14 +88,13 @@ Postgres, instance B reports the client it never spoke to:
    curl -s -H "X-API-Key: $LOTA_READER_API_KEY" \
      http://127.0.0.1:8081/api/v1/clients
 
-   # a session token issued by instance A validates on instance B
-   curl -s -H "X-API-Key: $LOTA_READER_API_KEY" \
-     -X POST http://127.0.0.1:8081/api/v1/session/validate \
-     -d '{"session_token":"<token-from-instance-A>","consume":true}'
+   # the revocation taken on instance B is enforced by instance A
+   curl -s -H "X-API-Key: $LOTA_ADMIN_API_KEY" \
+     -X POST http://127.0.0.1:8081/api/v1/clients/<client-id>/revoke \
+     -d '{"reason":"compromised","actor":"ops"}'
 
-``consume:true`` call marks the token used in Postgres, so a second validation
-of the same token on **either** instance reports ``consumed:true`` --
-single-use is enforced across the fleet, not per process.
+The revocation is committed to Postgres, so the client's next attestation is
+refused by **either** instance -- enforcement is fleet-wide, not per process.
 
 Production deltas
 -----------------

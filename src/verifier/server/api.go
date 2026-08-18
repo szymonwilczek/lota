@@ -669,7 +669,6 @@ func (h *APIHandler) handleClientInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-
 // GET /metrics - Prometheus text exposition format
 func (h *APIHandler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// exposition is fleet-wide and carries no tenant dimension,

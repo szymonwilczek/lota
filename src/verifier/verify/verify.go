@@ -13,10 +13,6 @@ package verify
 
 import (
 	"crypto/ed25519"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,8 +26,6 @@ import (
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/types"
 )
-
-const sessionTokenDomain = "lota-session-token:v1"
 
 func wipeBytes(b []byte) {
 	if len(b) == 0 {
@@ -76,7 +70,7 @@ func unixTimestamp(t time.Time) uint64 {
 // decodeDevicePseudonym parses the CA-assigned device identifier from an
 // AIK certificate subject. The CA encodes it as the hex of a 32-byte
 // keyed hash of the EK, so it decodes to a fixed-width identity that the
-// ban store and session token reuse in place of the former hardware_id.
+// ban store reuses in place of the former hardware_id.
 func decodeDevicePseudonym(cn string) ([types.HardwareIDSize]byte, error) {
 	var out [types.HardwareIDSize]byte
 	if len(cn) != hex.EncodedLen(types.HardwareIDSize) {
@@ -108,16 +102,8 @@ type Verifier struct {
 	attestationLog store.AttestationLog
 
 	// configuration
-	nonceLifetime    time.Duration
-	sessionTokenLife time.Duration
-
-	// stateless session-token signer key (process-local secret)
-	sessionTokenKey      [32]byte
-	sessionTokenKeyReady bool
-
-	// store for issued session tokens; in-memory by default (single node),
-	// Postgres for multi-instance validation behind a load balancer
-	sessionTokenStore SessionTokenStore
+	nonceLifetime  time.Duration
+	resultValidity time.Duration
 
 	// monitoring
 	startTime      time.Time
@@ -131,30 +117,6 @@ type Verifier struct {
 	requireEventLog       bool
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
-}
-
-type sessionTokenRecord struct {
-	ClientID   string
-	Tenant     string
-	HardwareID [types.HardwareIDSize]byte
-	ValidUntil uint64
-	ResultCode uint32
-	Flags      uint32
-	PCRMask    uint32
-	Consumed   bool
-}
-
-type SessionTokenStatus struct {
-	ClientID   string
-	Tenant     string
-	HardwareID [types.HardwareIDSize]byte
-	ValidUntil uint64
-	ResultCode uint32
-	Flags      uint32
-	PCRMask    uint32
-	Consumed   bool
-	Exists     bool
-	Expired    bool
 }
 
 func validateTPMFieldSizes(report *types.AttestationReport) error {
@@ -181,19 +143,15 @@ type VerifierConfig struct {
 	// how long a challenge nonce is valid
 	NonceLifetime time.Duration
 
-	// how long issued tokens are valid
-	SessionTokenLife time.Duration
+	// how long a successful verdict holds, reported to the host
+	// as ValidUntil
+	ResultValidity time.Duration
 
 	// optional: persistent baseline store (nil = in-memory)
 	BaselineStore BaselineStorer
 
 	// optional: persistent used nonce backend (nil = in-memory)
 	UsedNonceBackend UsedNonceBackend
-
-	// optional: shared session-token store (nil = in-memory, single node).
-	// Postgres-backed store lets several instances behind a load balancer
-	// validate each other's tokens.
-	SessionTokenStore SessionTokenStore
 
 	// optional: revocation enforcement (nil = no revocation checks)
 	RevocationStore store.RevocationStore
@@ -261,7 +219,7 @@ type VerifierConfig struct {
 func DefaultConfig() VerifierConfig {
 	return VerifierConfig{
 		NonceLifetime:         5 * time.Minute,
-		SessionTokenLife:      1 * time.Hour,
+		ResultValidity:        1 * time.Hour,
 		RequireEventLog:       true,
 		RequireBootEnrollment: true,
 		AllowPermissivePolicy: false,
@@ -304,106 +262,16 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		metrics:               m,
 		attestationLog:        cfg.AttestationLog,
 		nonceLifetime:         cfg.NonceLifetime,
-		sessionTokenLife:      cfg.SessionTokenLife,
+		resultValidity:        cfg.ResultValidity,
 		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
 		startTime:             time.Now(),
-		sessionTokenStore:     cfg.SessionTokenStore,
-	}
-
-	// default to the in-memory store (single node) when none is configured
-	if v.sessionTokenStore == nil {
-		v.sessionTokenStore = newMemorySessionTokenStore()
-	}
-
-	if _, err := rand.Read(v.sessionTokenKey[:]); err != nil {
-		logger.Error("failed to initialize session token signing key", "error", err)
-		v.sessionTokenKeyReady = false
-	} else {
-		v.sessionTokenKeyReady = true
 	}
 
 	return v
 }
 
-func (v *Verifier) rememberSessionToken(token [32]byte, report *types.AttestationReport, clientID, tenant string,
-	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
-) {
-	if v == nil || report == nil {
-		return
-	}
-
-	v.sessionTokenStore.Remember(token, sessionTokenRecord{
-		ClientID:   clientID,
-		Tenant:     tenant,
-		HardwareID: identity,
-		ValidUntil: validUntil,
-		ResultCode: resultCode,
-		Flags:      report.Header.Flags,
-		PCRMask:    report.TPM.PCRMask,
-		Consumed:   false,
-	})
-}
-
-func (v *Verifier) ValidateSessionToken(token [32]byte, consume bool) SessionTokenStatus {
-	if v == nil {
-		return SessionTokenStatus{}
-	}
-	return v.sessionTokenStore.Validate(token, consume, unixTimestamp(time.Now()))
-}
-
-func (v *Verifier) deriveSessionToken(report *types.AttestationReport, clientID string,
-	identity [types.HardwareIDSize]byte, validUntil uint64, resultCode uint32,
-) ([32]byte, error) {
-	var out [32]byte
-	if v == nil || report == nil {
-		return out, errors.New("nil verifier/report")
-	}
-	if !v.sessionTokenKeyReady {
-		return out, errors.New("session token signing key unavailable")
-	}
-
-	mac := hmac.New(sha256.New, v.sessionTokenKey[:])
-	writeU32 := func(x uint32) {
-		var b [4]byte
-		binary.LittleEndian.PutUint32(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-	writeU64 := func(x uint64) {
-		var b [8]byte
-		binary.LittleEndian.PutUint64(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-
-	_, _ = mac.Write([]byte(sessionTokenDomain))
-	_, _ = mac.Write(identity[:])
-	_, _ = mac.Write(report.TPM.Nonce[:])
-	_, _ = mac.Write([]byte(clientID))
-
-	writeU64(validUntil)
-	writeU32(resultCode)
-	writeU32(report.Header.Flags)
-	writeU32(report.TPM.PCRMask)
-	writeU16 := func(x uint16) {
-		var b [2]byte
-		binary.LittleEndian.PutUint16(b[:], x)
-		_, _ = mac.Write(b[:])
-	}
-	writeU16(report.TPM.AttestSize)
-
-	if report.TPM.AttestSize > 0 {
-		att := report.TPM.AttestData[:report.TPM.AttestSize]
-		sum := sha256.Sum256(att)
-		_, _ = mac.Write(sum[:])
-	}
-
-	copy(out[:], mac.Sum(nil))
-	return out, nil
-}
-
-// releases resources held by the Verifier, including the
-// background cleanup goroutine in the nonce store
 func (v *Verifier) Close() {
 	v.nonceStore.Close()
 }
@@ -1027,14 +895,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	result.Result = types.VerifyOK
-	result.ValidUntil = unixTimestamp(time.Now().Add(v.sessionTokenLife))
-	sessionToken, err := v.deriveSessionToken(report, clientID, identity, result.ValidUntil, result.Result)
-	if err != nil {
-		result.Result = types.VerifyInternalError
-		return result, fmt.Errorf("failed to derive session token: %w", err)
-	}
-	result.SessionToken = sessionToken
-	v.rememberSessionToken(sessionToken, report, clientID, tenant, identity, result.ValidUntil, result.Result)
+	result.ValidUntil = unixTimestamp(time.Now().Add(v.resultValidity))
 
 	return result, nil
 }

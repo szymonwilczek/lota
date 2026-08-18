@@ -42,10 +42,11 @@ A verifier deployment saturates at one of three points, in this order:
    * - Postgres durable writes
      - ~1 100 verified reports/s or better
      - Each verified report commits several WAL-flushed writes (used
-       nonce, baseline counters, session token). A property of the
-       Postgres host's fsync rate, shared by every verifier instance on
-       that database. Measured before the attestation-log write moved
-       off the hot path, so treat it as a conservative floor.
+       nonce, baseline counters). A property of the Postgres host's fsync
+       rate, shared by every verifier instance on that database. Measured
+       before the attestation-log write moved off the hot path and before
+       the session-token write was removed, so treat it as a conservative
+       floor.
    * - Registration (first attest)
      - ~350/s per instance
      - A client's first attestation additionally inserts its AIK
@@ -224,9 +225,7 @@ one shared Postgres), with the fleet holding rate throughout:
 * **Verifier instance killed (kill -9):** only that instance's agents
   are affected; they see connection errors until the instance returns
   and recover on their next interval unaided. The surviving instance
-  served its fleet with zero errors. Session tokens issued by the dead
-  instance kept validating on the survivor (20/20 replayed) -- the
-  session store is shared.
+  served its fleet with zero errors.
 * **Postgres restart (~2 s):** both instances reject the handful of
   attestations in flight during the outage window (fail-closed, no
   unverifiable report is accepted) and recover immediately with it;

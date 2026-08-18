@@ -120,9 +120,9 @@ ban state.
 
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,
-audit, attestation and session-token state in a shared database, so several
-verifier instances behind a load balancer share enforcement state and any
-instance validates a session token issued by any peer. See
+audit and attestation state in a shared database, so several verifier
+instances behind a load balancer share enforcement state and any instance
+answers for a client enrolled by any peer. See
 :doc:`../operator/ha-deployment <../operator/ha-deployment>` for the
 supported topologies.
 

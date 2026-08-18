@@ -90,26 +90,3 @@ func (s *ShardedUsedNonceBackend) Cleanup(olderThan time.Time) {
 		sh.Cleanup(olderThan)
 	}
 }
-
-// ShardedSessionTokenStore routes each token to a shard by the token bytes.
-// Because the routing is deterministic and process-independent, token remembered
-// on one verifier instance validates on any instance pointed at the same shard set.
-type ShardedSessionTokenStore struct {
-	shards []SessionTokenStore
-}
-
-// NewShardedSessionTokenStore partitions session-token state across shards.
-func NewShardedSessionTokenStore(shards []SessionTokenStore) *ShardedSessionTokenStore {
-	if len(shards) == 0 {
-		panic("verify: ShardedSessionTokenStore requires at least one shard")
-	}
-	return &ShardedSessionTokenStore{shards: shards}
-}
-
-func (s *ShardedSessionTokenStore) Remember(token [32]byte, rec sessionTokenRecord) {
-	s.shards[shardIndexBytes(token[:], len(s.shards))].Remember(token, rec)
-}
-
-func (s *ShardedSessionTokenStore) Validate(token [32]byte, consume bool, now uint64) SessionTokenStatus {
-	return s.shards[shardIndexBytes(token[:], len(s.shards))].Validate(token, consume, now)
-}

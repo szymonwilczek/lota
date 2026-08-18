@@ -31,7 +31,7 @@ import (
 var pgMigrations = []migration{
 	{
 		version:     1,
-		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sessions, sharding",
+		description: "consolidated schema: clients, baselines, nonces, revocations, bans, audit, attestation log, sharding",
 		sql: `
 			CREATE TABLE clients (
 				id          TEXT PRIMARY KEY,
@@ -130,20 +130,6 @@ var pgMigrations = []migration{
 			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
 			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
-
-			CREATE TABLE session_tokens (
-				token_hash  BYTEA PRIMARY KEY CHECK(octet_length(token_hash) = 32),
-				client_id   TEXT NOT NULL,
-				hardware_id BYTEA NOT NULL,
-				valid_until BIGINT NOT NULL,
-				result_code BIGINT NOT NULL,
-				flags       BIGINT NOT NULL,
-				pcr_mask    BIGINT NOT NULL,
-				consumed    BOOLEAN NOT NULL DEFAULT FALSE,
-				tenant      TEXT NOT NULL DEFAULT 'default'
-			);
-
-			CREATE INDEX idx_session_tokens_valid_until ON session_tokens(valid_until);
 
 			CREATE TABLE baseline_archive (
 				id           BIGSERIAL PRIMARY KEY,

@@ -184,9 +184,9 @@ When a deployment runs with ``--pg-shard-dsn`` the per-client write stores
 are partitioned across N databases (``verify/shard.go``,
 ``verify/shard_baseline.go``). The contract every shard router upholds:
 
-- **Shard by the operation's own key.** The baseline routes by client ID,
-  a nonce by its key, a session token by its bytes. No operation needs
-  data from two shards, so there is never a cross-shard transaction.
+- **Shard by the operation's own key.** The baseline routes by client ID
+  and a nonce by its key. No operation needs data from two shards, so there
+  is never a cross-shard transaction.
 - **Deterministic, process-independent routing.** The index is
   ``FNV-1a(key) mod N``. Two verifier instances given the same shard list
   in the same order route every key identically -- this is what preserves

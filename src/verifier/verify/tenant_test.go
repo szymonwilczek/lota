@@ -341,7 +341,7 @@ func TestIntegration_DefaultTenantClientHitsDefaultBans(t *testing.T) {
 	}
 }
 
-func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
+func TestIntegration_TenantOnAttestationLog(t *testing.T) {
 	const clientID = "tenant-log-client"
 
 	attestLog := store.NewMemoryAttestationLog()
@@ -381,13 +381,6 @@ func TestIntegration_TenantOnAttestationLogAndSessionToken(t *testing.T) {
 		t.Fatalf("attestation record = %+v, want tenant acme-corp", records)
 	}
 
-	st := verifier.ValidateSessionToken(result.SessionToken, false)
-	if !st.Exists {
-		t.Fatal("session token not found after attestation")
-	}
-	if st.Tenant != "acme-corp" {
-		t.Fatalf("session token tenant = %q, want acme-corp", st.Tenant)
-	}
 }
 
 func TestTenantPolicyBinding(t *testing.T) {

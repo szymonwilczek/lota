@@ -73,9 +73,9 @@ unsigned side file.
 Scoped state
 ------------
 
-Revocations, PCR14/boot baselines, the audit log, the attestation log, and
-session tokens all carry the tenant, so every operator listing and every
-mutation can be scoped to the caller's tenant set.
+Revocations, PCR14/boot baselines, the audit log and the attestation log all
+carry the tenant, so every operator listing and every mutation can be scoped to
+the caller's tenant set.
 
 Scoped monitoring-API keys
 ==========================
