@@ -240,7 +240,14 @@ func EncodeBegin(r *BeginRequest) ([]byte, error) {
 		e.bytes16(r.Token)
 	}
 	if version >= Version3 {
-		e.u16(uint16(len(r.EKChainDER)))
+		n := len(r.EKChainDER)
+		// bounded by MaxEKChainCerts above; guarded here the way bytes16
+		// guards its own length prefix, so the conversion cannot overflow
+		// whatever a future caller does
+		if n < 0 || n > math.MaxUint16 {
+			return nil, ErrTooLarge
+		}
+		e.u16(uint16(n))
 		for _, c := range r.EKChainDER {
 			e.bytes16(c)
 		}
