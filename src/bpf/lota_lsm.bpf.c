@@ -1748,7 +1748,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	u32 lota_mode;
 	int target_is_agent;
 	int target_is_protected = 0;
-	struct lota_exec_event *event;
+	int blocked;
+	int emit_event;
+	struct lota_exec_event *event = NULL;
 
 	(void)cred;
 
@@ -1789,19 +1791,27 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	/*
 	 * Which signals a protected target takes from a foreign task is stated
 	 * in include/lota.h, so this hook and the tests answer it with one
-	 * function: a probe and the agent's own reload signal are delivered,
-	 * and everything that could end the target is refused.
+	 * function: only enforce refuses, a probe and the agent's own reload
+	 * signal are delivered, and everything that could end the target is
+	 * refused for the agent and the protected set.
 	 */
-	if (!lota_signal_denied(sig, lota_mode, target_is_agent,
-				target_is_protected))
-		return 0;
+	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
+				     target_is_protected);
 
-	/* audit trail for blocked kill attempts */
-	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	/*
+	 * The signal is reported whether or not it was refused.
+	 * Outside enforce that report is the whole of the hook's job,
+	 * and a refusal that names the sender is what makes a supervisor
+	 * that cannot stop the agent diagnosable.
+	 */
+	emit_event = should_emit_event(lota_mode, blocked);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {
 		__builtin_memset(event, 0, sizeof(*event));
 		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = LOTA_EVENT_KILL_BLOCKED;
+		event->event_type = blocked ? LOTA_EVENT_KILL_BLOCKED :
+					      LOTA_EVENT_KILL;
 		event->tgid = sender_tgid;
 		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -1812,11 +1822,14 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 
 		bpf_ringbuf_submit(event, 0);
 		inc_stat(STAT_EVENTS_SENT);
-	} else {
+	} else if (emit_event) {
 		inc_stat(STAT_RINGBUF_DROPS);
 	}
 
-	return -EPERM;
+	if (blocked)
+		return -EPERM;
+
+	return 0;
 }
 
 /* ======================================================================

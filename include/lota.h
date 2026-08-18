@@ -75,6 +75,7 @@ enum lota_event_type {
 	LOTA_EVENT_SETUID, /* Privilege escalation (setuid) */
 	LOTA_EVENT_ANON_EXEC, /* Anonymous executable mmap (JIT, shellcode) */
 	LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
+	LOTA_EVENT_KILL, /* signal delivery to protected task observed */
 };
 
 /*
@@ -255,19 +256,23 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
  *
  * Three rules, in the order they are asked:
  *
+ *   - only enforce refuses anything; monitor and maintenance deliver every
+ *     signal, so an operator evaluating LOTA can stop the agent without
+ *     spending the boot commitment;
  *   - a target nobody protects is nobody's business here;
- *   - maintenance lifts the protected set, which is the mode's whole purpose;
  *   - a probe (sig 0) and the agent's own reload signal are delivered,
  *     since neither can end the target.
  *
- * Everything else reaching a protected target or the agent itself is refused.
+ * Everything else reaching a protected target or the agent itself is refused,
+ * so in enforce a local root cannot kill the agent and swap a tampered binary
+ * in before the next attestation.
  */
 static inline int lota_signal_denied(int sig, unsigned int lota_mode,
 				     int target_is_agent,
 				     int target_is_protected)
 {
-	if (lota_mode == LOTA_MODE_MAINTENANCE)
-		target_is_protected = 0;
+	if (lota_mode != LOTA_MODE_ENFORCE)
+		return 0;
 
 	if (!target_is_agent && !target_is_protected)
 		return 0;
@@ -392,7 +397,7 @@ lota_verity_key_from_digest_buf(const void *buf,
  *   MODULE_LOAD:    pid, comm, filename
  *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
  *   PTRACE:         pid, uid, comm, target_pid
- *   KILL_BLOCKED:   pid, uid, comm, target_pid
+ *   KILL:           pid, uid, comm, target_pid
  *   SETUID:         pid, uid, comm, target_uid (new uid)
  *   *_BLOCKED:      same as base type
  */
