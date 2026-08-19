@@ -1384,6 +1384,163 @@ static void test_config_load_rejects_symlink(void)
 	PASS();
 }
 
+/*
+ * Certificate pinning belongs to the publisher, not to the host: each publisher
+ * runs its own verifier with its own certificate, so one fingerprint can match
+ * at most one of them.
+ *
+ * The pin is checked through the file rather than the struct, because what
+ * an operator writes and what a writer emits are the two ways it gets in.
+ */
+static void test_config_profile_pin_sha256(void)
+{
+	static const char pin_a[] = "4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f"
+				    "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d";
+	static const char pin_b[] = "0123456789abcdef0123456789abcdef"
+				    "fedcba9876543210fedcba9876543210";
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char dump_path[PATH_MAX];
+	char body[1024];
+	char dumped[8192];
+	FILE *f;
+	int fd;
+	int ret;
+
+	TEST("a profile pins its own verifier certificate");
+	snprintf(body, sizeof(body),
+		 "[profile \"alpha\"]\n"
+		 "ca = ca.alpha.example\n"
+		 "ca_cert = /etc/lota/alpha.pem\n"
+		 "verifier = v.alpha.example\n"
+		 "pin_sha256 = %s\n"
+		 "\n"
+		 "[profile \"beta\"]\n"
+		 "ca = ca.beta.example\n"
+		 "ca_cert = /etc/lota/beta.pem\n"
+		 "verifier = v.beta.example\n"
+		 "pin-sha256 = %s\n",
+		 pin_a, pin_b);
+	write_config("profile-pin.conf", body);
+	config_path("profile-pin.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	/* a writer that cannot say the pin writes a host that stops pinning */
+	TEST("config_dump writes each profile's own pin");
+	snprintf(dump_path, sizeof(dump_path), "%s/profile-pin-dump.conf",
+		 tmpdir);
+	fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg, f);
+	fclose(f);
+
+	fd = open(dump_path, O_RDONLY);
+	if (fd < 0) {
+		FAIL("reopen dump");
+		return;
+	}
+	{
+		ssize_t n = read(fd, dumped, sizeof(dumped) - 1);
+
+		close(fd);
+		if (n < 0) {
+			FAIL("read dump");
+			return;
+		}
+		dumped[n] = '\0';
+	}
+	if (!strstr(dumped, pin_a) || !strstr(dumped, pin_b)) {
+		FAIL("the dump dropped the profile pins");
+		return;
+	}
+	PASS();
+
+	TEST("the dumped profile pins parse back");
+	config_init(&cfg);
+	if (config_load(&cfg, dump_path) != 0) {
+		FAIL("the dump does not parse back");
+		return;
+	}
+	PASS();
+
+	/* a pin that is not 32 bytes of hex would pin nothing at all */
+	TEST("a malformed profile pin is refused");
+	write_config("profile-pin-bad.conf", "[profile \"alpha\"]\n"
+					     "ca = ca.alpha.example\n"
+					     "ca_cert = /etc/lota/alpha.pem\n"
+					     "verifier = v.alpha.example\n"
+					     "pin_sha256 = not-a-digest\n");
+	config_path("profile-pin-bad.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("a malformed pin was accepted");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The host-level key stays the single-verifier deployment's, because one
+ * fingerprint applied to several publishers matches at most one of them
+ * and fails the rest at TLS time, before any verdict.
+ */
+static void test_config_host_pin_beside_profiles(void)
+{
+	static const char pin_a[] = "4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f"
+				    "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d";
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char body[1024];
+
+	TEST("a host-level pin beside publisher profiles is refused");
+	snprintf(body, sizeof(body),
+		 "pin_sha256 = %s\n"
+		 "\n"
+		 "[profile \"alpha\"]\n"
+		 "ca = ca.alpha.example\n"
+		 "ca_cert = /etc/lota/alpha.pem\n"
+		 "verifier = v.alpha.example\n",
+		 pin_a);
+	write_config("profile-pin-toplevel.conf", body);
+	config_path("profile-pin-toplevel.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) == 0) {
+		FAIL("a host-level pin was accepted beside profiles");
+		return;
+	}
+	PASS();
+
+	/* the single-verifier deployment keeps the key it always had */
+	TEST("a host-level pin without profiles still loads");
+	snprintf(body, sizeof(body),
+		 "server = v.example\n"
+		 "pin_sha256 = %s\n",
+		 pin_a);
+	write_config("pin-toplevel-only.conf", body);
+	config_path("pin-toplevel-only.conf", path, sizeof(path));
+	config_init(&cfg);
+	if (config_load(&cfg, path) != 0 ||
+	    strcmp(cfg.pin_sha256, pin_a) != 0) {
+		FAIL("the single-verifier pin stopped working");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_dump_roundtrip(void)
 {
 	struct lota_config cfg1, cfg2;
@@ -1860,6 +2017,8 @@ int main(void)
 		test_config_load_profile_incomplete,
 		test_config_load_profile_malformed,
 		test_config_load_profile_overflow,
+		test_config_profile_pin_sha256,
+		test_config_host_pin_beside_profiles,
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,
