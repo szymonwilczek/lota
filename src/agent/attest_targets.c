@@ -155,6 +155,10 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 			out[n].ca_port = p->ca_port;
 			out[n].token_only = p->token_only;
 			out[n].session_gated = p->session_gated;
+			out[n].has_pin =
+				p->pin_sha256[0] &&
+				lota_pin_sha256_parse(p->pin_sha256,
+						      out[n].pin_sha256) == 0;
 			/* profile without its own cadence keeps the host's */
 			out[n].interval = p->attest_interval ?
 						  p->attest_interval :

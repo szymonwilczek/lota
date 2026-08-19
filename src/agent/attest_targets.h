@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "config.h"
+#include "pin.h"
 #include "profile.h"
 
 struct attest_target {
@@ -89,6 +90,13 @@ struct attest_target {
 	 * succeeds puts it back.
 	 */
 	bool auth_fail_announced;
+
+	/*
+	 * SHA-256 of the certificate this target's verifier must present,
+	 * taken from the publisher profile that names it.
+	 */
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
+	bool has_pin;
 
 	struct profile_paths paths;
 	bool has_profile;

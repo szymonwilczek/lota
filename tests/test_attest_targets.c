@@ -372,6 +372,97 @@ static void test_wait_for_a_first_session_is_announced(void)
 	      "no target is waiting");
 }
 
+/*
+ * Pinning is per publisher because the certificate is: each publisher runs its
+ * own verifier, so a fingerprint measured against one is refused by every other.
+ * What is pinned here is that each target carries the pin of the profile that
+ * named it, and that a profile which names none is unpinned whatever the
+ * host-level key says.
+ */
+static void test_each_profile_pins_its_own_verifier(void)
+{
+	static const char pin_a[] = "4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f"
+				    "4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d";
+	static const char pin_b[] = "0123456789abcdef0123456789abcdef"
+				    "fedcba9876543210fedcba9876543210";
+	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	uint8_t want_a[LOTA_PIN_SHA256_LEN];
+	uint8_t want_b[LOTA_PIN_SHA256_LEN];
+	char anchor[256];
+	struct lota_config cfg;
+	size_t count = 0;
+
+	snprintf(anchor, sizeof(anchor), "/tmp/lota-targets-pin.%d.der",
+		 getpid());
+	if (write_anchor(anchor) != 0) {
+		CHECK(0, "write an anchor");
+		return;
+	}
+	if (lota_pin_sha256_parse(pin_a, want_a) != 0 ||
+	    lota_pin_sha256_parse(pin_b, want_b) != 0) {
+		CHECK(0, "parse the expected pins");
+		return;
+	}
+
+	memset(&cfg, 0, sizeof(cfg));
+	/* the host-level pin belongs to the single-verifier deployment;
+	 * configuration carrying both is refused before it reaches here */
+	snprintf(cfg.pin_sha256, sizeof(cfg.pin_sha256), "%s", pin_a);
+	cfg.profile_count = 3;
+
+	snprintf(cfg.profiles[0].name, sizeof(cfg.profiles[0].name), "pinned");
+	snprintf(cfg.profiles[0].verifier, sizeof(cfg.profiles[0].verifier),
+		 "a.example");
+	cfg.profiles[0].verifier_port = 8443;
+	snprintf(cfg.profiles[0].ca_cert, sizeof(cfg.profiles[0].ca_cert), "%s",
+		 anchor);
+	snprintf(cfg.profiles[0].ca, sizeof(cfg.profiles[0].ca),
+		 "ca.a.example");
+	snprintf(cfg.profiles[0].pin_sha256, sizeof(cfg.profiles[0].pin_sha256),
+		 "%s", pin_a);
+
+	snprintf(cfg.profiles[1].name, sizeof(cfg.profiles[1].name), "other");
+	snprintf(cfg.profiles[1].verifier, sizeof(cfg.profiles[1].verifier),
+		 "b.example");
+	cfg.profiles[1].verifier_port = 9443;
+	snprintf(cfg.profiles[1].ca_cert, sizeof(cfg.profiles[1].ca_cert), "%s",
+		 anchor);
+	snprintf(cfg.profiles[1].ca, sizeof(cfg.profiles[1].ca),
+		 "ca.b.example");
+	snprintf(cfg.profiles[1].pin_sha256, sizeof(cfg.profiles[1].pin_sha256),
+		 "%s", pin_b);
+
+	snprintf(cfg.profiles[2].name, sizeof(cfg.profiles[2].name),
+		 "unpinned");
+	snprintf(cfg.profiles[2].verifier, sizeof(cfg.profiles[2].verifier),
+		 "c.example");
+	cfg.profiles[2].verifier_port = 7443;
+	snprintf(cfg.profiles[2].ca_cert, sizeof(cfg.profiles[2].ca_cert), "%s",
+		 anchor);
+	snprintf(cfg.profiles[2].ca, sizeof(cfg.profiles[2].ca),
+		 "ca.c.example");
+
+	CHECK(attest_targets_build(&cfg, NULL, 0, NULL, 300, targets,
+				   LOTA_CONFIG_MAX_PROFILES, &count) == 0 &&
+		      count == 3,
+	      "a pinned profile list builds");
+
+	CHECK(targets[0].has_pin && memcmp(targets[0].pin_sha256, want_a,
+					   LOTA_PIN_SHA256_LEN) == 0,
+	      "a profile's pin reaches its own target");
+	CHECK(targets[1].has_pin && memcmp(targets[1].pin_sha256, want_b,
+					   LOTA_PIN_SHA256_LEN) == 0,
+	      "the second publisher carries its own pin, not the first's");
+	CHECK(memcmp(targets[0].pin_sha256, targets[1].pin_sha256,
+		     LOTA_PIN_SHA256_LEN) != 0,
+	      "two publishers do not share one certificate");
+	CHECK(!targets[2].has_pin,
+	      "a profile that names no pin is unpinned, whatever the "
+	      "host-level key says");
+
+	unlink(anchor);
+}
+
 int main(void)
 {
 	printf("=== Attestation target list tests ===\n\n");
@@ -383,6 +474,7 @@ int main(void)
 	test_effective_interval();
 	test_target_reports();
 	test_wait_for_a_first_session_is_announced();
+	test_each_profile_pins_its_own_verifier();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");
 	return g_failures ? 1 : 0;

@@ -379,8 +379,15 @@ its own report on that profile's cadence, signed with that publisher's own AIK,
 and each profile carries its own failure state -- one unreachable verifier
 backs off its own reporting and leaves the others on schedule. Since the list
 replaces the single verifier rather than adding to it, ``--server`` and
-``--pin-sha256`` are refused while profiles are configured; each profile is
-anchored by its own ``ca_cert``.
+``--pin-sha256`` are refused while profiles are configured, as is a top-level
+``pin_sha256``; each profile is anchored by its own ``ca_cert``.
+
+A profile pins its verifier's certificate with its own ``pin_sha256`` key, the
+64-character SHA-256 fingerprint that verifier presents. Pinning is per
+publisher because the certificate is: one fingerprint matches at most one
+verifier, so a host-level pin would authenticate the publisher it was measured
+against and fail every other at TLS time, before any verdict. A profile that
+states no pin trusts its ``ca_cert`` alone, which is the default.
 
 A title says which publisher it plays for, and gets that publisher's answers.
 It names the profile by the lowercase hex SHA-256 of that publisher's CA trust

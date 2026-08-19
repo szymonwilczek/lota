@@ -415,8 +415,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 					"ERROR: --pin-sha256 pins one "
 					"verifier's certificate, but %d "
 					"publisher profile(s) are "
-					"configured.\nEach profile is anchored "
-					"by its own ca_cert instead.\n",
+					"configured.\nEach publisher runs its "
+					"own verifier: write pin_sha256 inside "
+					"the profile whose verifier presents "
+					"that certificate.\n",
 					cfg->profile_count);
 				return 1;
 			}

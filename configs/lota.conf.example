@@ -26,7 +26,9 @@ port = 8443
 # ca_cert = /etc/lota/ca.pem
 
 # Pin verifier certificate by SHA-256 fingerprint (64 hex chars)
-# pin_sha256 = aabbccdd...
+# This key is for the single-verifier deployment above; a host with publisher
+# profiles pins inside each profile instead, and setting both is refused.
+# pin_sha256 = 4fd24ead1c6c1c0d2e5f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d
 
 # ---- BPF / enforcement --------------------------------------------------
 
@@ -203,7 +205,9 @@ log_level = info
 # signing each report with that publisher's own AIK, and one unreachable verifier
 # backs off only its own reporting.
 # Because the list replaces the single verifier above, --server and --pin-sha256
-# are refused while profiles are configured.
+# are refused while profiles are configured, as is the top-level pin_sha256:
+# every publisher's verifier presents its own certificate, so a pin belongs to
+# the profile whose verifier it was measured against.
 #
 # verifier = none is for a publisher who runs no verifier and checks the tokens
 # their titles fetch in their own backend instead. Nothing is reported to them:
@@ -227,6 +231,7 @@ log_level = info
 # ca_cert = /etc/lota/publisher-b.pem
 # verifier = verifier.publisher-b.example
 # verifier_port = 9443
+# pin_sha256 = 0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210
 # interval = 120
 #
 # [profile "publisher-c"]
