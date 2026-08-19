@@ -154,9 +154,13 @@ product's primary tamper signal and the alert the forced drill below
 exercises.
 
 1. Identify the device: ``GET /api/v1/attestations?limit=50`` and filter
-   the failed records; each carries the client ID and failure detail.
+   the failed records; each carries the client ID and failure detail. A PCR
+   failure names every register that mismatched, in index order, so one
+   record holds the whole delta and repeated rounds read identically.
 2. Read that client's state: ``GET /api/v1/clients/{id}``.
-3. Decide benign versus hostile. Benign causes leave a paper trail: a
+3. Decide benign versus hostile. How many registers moved is the first
+   clue: several at once is a reboot into a different boot chain, one alone
+   is a narrower change. Benign causes leave a paper trail: a
    kernel or bootloader update changes PCRs after a reboot (the re-anchor
    flow handles it), an agent binary update changes the agent hash pin, an
    operator changed the kernel command line. No matching change record =

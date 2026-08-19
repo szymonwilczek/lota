@@ -101,6 +101,28 @@ PCR   Measured By Description
 16-23 Apps        Application use
 ===== =========== =========================================
 
+What a pinned register reports when it goes stale
+-------------------------------------------------
+
+The verifier compares every register in the ``pcrs:`` map and reports all of
+the mismatches in one failure, ordered by index and separated by ``; `` (one
+line; the digests are full 64-character hex, abbreviated here)::
+
+    PCR 8 mismatch: got 91bfde0f..., expected cf26d0a2...;
+    PCR 9 mismatch: got 4bb322db..., expected 7e010772...
+
+The text is the same on every round for the same host state, so a fleet
+dedupes one stale policy as one incident and an operator sees the whole delta
+without re-attesting. A register that matches is not named. How many moved is
+the first clue about what happened: several at once is a reboot into a
+different boot chain, one alone is a narrower change such as a cmdline edit.
+
+Three failures in the same comparison are faults in the policy file rather
+than in the host, keep their own wording, and stop the comparison because no
+report can answer them: an index outside 0-23, a register the client's quote
+did not carry (``PCR 8 not included in quote``), and an expected value that is
+not hex.
+
 Security Requirements
 ---------------------
 
