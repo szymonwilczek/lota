@@ -12,8 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* SHA-256 digest size for certificate fingerprint pinning */
-#define NET_PIN_SHA256_LEN 32
+#include "pin.h"
 
 typedef struct ssl_st SSL;
 typedef struct ssl_ctx_st SSL_CTX;
@@ -29,7 +28,7 @@ struct net_context {
 	char server_addr[256];
 	int server_port;
 	int skip_verify;
-	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	int has_pin; /* nonzero if pin_sha256 is set */
 };
 
@@ -126,16 +125,6 @@ void net_cleanup(void);
 int net_context_init(struct net_context *ctx, const char *server, int port,
 		     const char *ca_cert_path, int skip_verify,
 		     const uint8_t *pin_sha256);
-
-/*
- * Parse hex-encoded SHA-256 fingerprint into binary.
- *
- * @hex: 64-character hex string. colons (':') and spaces are silently skipped.
- * @out: Output buffer, must be at least NET_PIN_SHA256_LEN bytes
- *
- * Returns: 0 on success, -EINVAL on bad input
- */
-int net_parse_pin_sha256(const char *hex, uint8_t *out);
 
 void net_context_cleanup(struct net_context *ctx);
 

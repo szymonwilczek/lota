@@ -20,9 +20,9 @@
 #include "attest.h"
 #include "config.h"
 #include "main_utils.h"
-#include "net.h"
 #include "parse_utils.h"
 #include "path_validate.h"
+#include "pin.h"
 #include "tpm.h"
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
@@ -668,7 +668,7 @@ int cli_finalize_pin(struct cli_options *opts)
 {
 	if (!opts->pin_sha256_hex)
 		return 0;
-	if (net_parse_pin_sha256(opts->pin_sha256_hex, opts->pin_sha256_bin) <
+	if (lota_pin_sha256_parse(opts->pin_sha256_hex, opts->pin_sha256_bin) <
 	    0) {
 		fprintf(stderr,
 			"Invalid --pin-sha256 value: '%s'\n"

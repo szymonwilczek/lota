@@ -146,7 +146,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 	ctx->skip_verify = skip_verify;
 
 	if (pin_sha256) {
-		memcpy(ctx->pin_sha256, pin_sha256, NET_PIN_SHA256_LEN);
+		memcpy(ctx->pin_sha256, pin_sha256, LOTA_PIN_SHA256_LEN);
 		ctx->has_pin = 1;
 	}
 
@@ -449,12 +449,12 @@ int net_connect(struct net_context *ctx)
 			return -EACCES;
 		}
 
-		unsigned char digest[NET_PIN_SHA256_LEN];
+		unsigned char digest[LOTA_PIN_SHA256_LEN];
 		unsigned int digest_len = 0;
 
 		if (X509_digest(peer_cert, EVP_sha256(), digest, &digest_len) !=
 			    1 ||
-		    digest_len != NET_PIN_SHA256_LEN) {
+		    digest_len != LOTA_PIN_SHA256_LEN) {
 			lota_err("Certificate pinning failed: unable to "
 				 "compute SHA-256 fingerprint");
 			X509_free(peer_cert);
@@ -471,11 +471,11 @@ int net_connect(struct net_context *ctx)
 		 * CRYPTO_memcmp returns 0 on match.
 		 */
 		if (CRYPTO_memcmp(digest, ctx->pin_sha256,
-				  NET_PIN_SHA256_LEN) != 0) {
+				  LOTA_PIN_SHA256_LEN) != 0) {
 			{
-				char expected_hex[NET_PIN_SHA256_LEN * 2 + 1];
-				char got_hex[NET_PIN_SHA256_LEN * 2 + 1];
-				for (int i = 0; i < NET_PIN_SHA256_LEN; i++) {
+				char expected_hex[LOTA_PIN_SHA256_LEN * 2 + 1];
+				char got_hex[LOTA_PIN_SHA256_LEN * 2 + 1];
+				for (int i = 0; i < LOTA_PIN_SHA256_LEN; i++) {
 					snprintf(expected_hex + i * 2, 3,
 						 "%02x", ctx->pin_sha256[i]);
 					snprintf(got_hex + i * 2, 3, "%02x",
@@ -731,62 +731,6 @@ out:
 	free(report);
 	net_disconnect(ctx);
 	return ret;
-}
-
-int net_parse_pin_sha256(const char *hex, uint8_t *out)
-{
-	size_t i = 0;
-	size_t out_idx = 0;
-	uint8_t byte;
-	int high;
-
-	if (!hex || !out)
-		return -EINVAL;
-
-	while (hex[i] != '\0' && out_idx < NET_PIN_SHA256_LEN) {
-		/* skip colons and spaces */
-		if (hex[i] == ':' || hex[i] == ' ') {
-			i++;
-			continue;
-		}
-
-		/* need two hex nibbles */
-		if (hex[i + 1] == '\0')
-			return -EINVAL;
-
-		high = 0;
-		byte = 0;
-
-		for (int n = 0; n < 2; n++) {
-			char c = hex[i + n];
-			uint8_t nibble;
-
-			if (c >= '0' && c <= '9')
-				nibble = (uint8_t)(c - '0');
-			else if (c >= 'a' && c <= 'f')
-				nibble = (uint8_t)(c - 'a' + 10);
-			else if (c >= 'A' && c <= 'F')
-				nibble = (uint8_t)(c - 'A' + 10);
-			else
-				return -EINVAL;
-
-			if (n == 0)
-				high = nibble;
-			else
-				byte = (uint8_t)((high << 4) | nibble);
-		}
-
-		out[out_idx++] = byte;
-		i += 2;
-	}
-
-	while (hex[i] == ':' || hex[i] == ' ')
-		i++;
-
-	if (out_idx != NET_PIN_SHA256_LEN || hex[i] != '\0')
-		return -EINVAL;
-
-	return 0;
 }
 
 const char *net_connect_refusal_hint(int err, int port,

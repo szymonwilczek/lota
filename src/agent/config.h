@@ -128,6 +128,17 @@ struct lota_profile {
 	int verifier_port;
 	bool token_only;
 
+	/*
+	 * SHA-256 of the certificate this publisher's verifier is allowed to
+	 * present, hex, empty when the profile pins nothing.
+	 *
+	 * Per profile because the pin is per certificate: every publisher runs
+	 * its own verifier, so one fingerprint can match at most one of them.
+	 * The top-level `pin_sha256` belongs to the single-verifier deployment
+	 * and is refused beside profiles.
+	 */
+	char pin_sha256[128];
+
 	/* 0 = inherit the top-level attest_interval */
 	int attest_interval;
 

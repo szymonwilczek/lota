@@ -354,12 +354,14 @@ static void test_config_load_string_fields(void)
 	int ret;
 
 	TEST("config_load parses string fields correctly");
-	write_config("strings.conf", "ca_cert = /etc/lota/ca.pem\n"
-				     "pin_sha256 = aabb1122\n"
-				     "bpf_path = /opt/lota/custom.bpf.o\n"
-				     "pid_file = /var/run/lota.pid\n"
-				     "signing_key = /etc/lota/sign.key\n"
-				     "policy_pubkey = /etc/lota/sign.pub\n");
+	write_config(
+		"strings.conf",
+		"ca_cert = /etc/lota/ca.pem\n"
+		"pin_sha256 = aabb112200000000000000000000000000000000000000000000000000000000\n"
+		"bpf_path = /opt/lota/custom.bpf.o\n"
+		"pid_file = /var/run/lota.pid\n"
+		"signing_key = /etc/lota/sign.key\n"
+		"policy_pubkey = /etc/lota/sign.pub\n");
 	config_path("strings.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -371,7 +373,9 @@ static void test_config_load_string_fields(void)
 		FAIL("ca_cert mismatch");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "aabb1122") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "aabb112200000000000000000000000000000000000000000000000000000000") !=
+	    0) {
 		FAIL("pin_sha256 mismatch");
 		return;
 	}
@@ -401,20 +405,22 @@ static void test_config_load_hyphen_keys(void)
 	int ret;
 
 	TEST("config_load accepts hyphen-form keys");
-	write_config("hyphen.conf", "ca-cert = /etc/ca.pem\n"
-				    "pin-sha256 = deadbeef\n"
-				    "bpf-path = /opt/bpf.o\n"
-				    "strict-mmap = true\n"
-				    "block-ptrace = true\n"
-				    "attest-interval = 120\n"
-				    "aik-ttl = 3600\n"
-				    "aik-handle = 0x81020001\n"
-				    "pid-file = /tmp/test.pid\n"
-				    "signing-key = /tmp/sign.key\n"
-				    "policy-pubkey = /tmp/sign.pub\n"
-				    "trust-lib = /usr/lib/libfoo.so\n"
-				    "protect-pid = 42\n"
-				    "log-level = warn\n");
+	write_config(
+		"hyphen.conf",
+		"ca-cert = /etc/ca.pem\n"
+		"pin-sha256 = deadbeef11111111111111111111111111111111111111111111111111111111\n"
+		"bpf-path = /opt/bpf.o\n"
+		"strict-mmap = true\n"
+		"block-ptrace = true\n"
+		"attest-interval = 120\n"
+		"aik-ttl = 3600\n"
+		"aik-handle = 0x81020001\n"
+		"pid-file = /tmp/test.pid\n"
+		"signing-key = /tmp/sign.key\n"
+		"policy-pubkey = /tmp/sign.pub\n"
+		"trust-lib = /usr/lib/libfoo.so\n"
+		"protect-pid = 42\n"
+		"log-level = warn\n");
 	config_path("hyphen.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -426,7 +432,9 @@ static void test_config_load_hyphen_keys(void)
 		FAIL("ca-cert");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "deadbeef") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "deadbeef11111111111111111111111111111111111111111111111111111111") !=
+	    0) {
 		FAIL("pin-sha256");
 		return;
 	}
@@ -1699,28 +1707,30 @@ static void test_config_load_all_known_keys(void)
 	int ret;
 
 	TEST("config_load with every known key returns 0");
-	write_config("all.conf", "server = allhost\n"
-				 "port = 5555\n"
-				 "ca_cert = /all/ca.pem\n"
-				 "pin_sha256 = abcdef0123456789\n"
-				 "bpf_path = /all/lota.bpf.o\n"
-				 "mode = maintenance\n"
-				 "strict_mmap = true\n"
-				 "block_ptrace = true\n"
-				 "attest_interval = 240\n"
-				 "aik_ttl = 86400\n"
-				 "aik_handle = 0x81010005\n"
-				 "daemon = true\n"
-				 "pid_file = /all/pid\n"
-				 "signing_key = /all/sign.key\n"
-				 "policy_pubkey = /all/sign.pub\n"
-				 "trust_lib = /all/lib1.so\n"
-				 "trust_lib = /all/lib2.so\n"
-				 "protect_pid = 1\n"
-				 "protect_pid = 2\n"
-				 "container_listener_uid = 1000\n"
-				 "container_listener_uid = 1001\n"
-				 "log_level = error\n");
+	write_config(
+		"all.conf",
+		"server = allhost\n"
+		"port = 5555\n"
+		"ca_cert = /all/ca.pem\n"
+		"pin_sha256 = abcdef0123456789222222222222222222222222222222222222222222222222\n"
+		"bpf_path = /all/lota.bpf.o\n"
+		"mode = maintenance\n"
+		"strict_mmap = true\n"
+		"block_ptrace = true\n"
+		"attest_interval = 240\n"
+		"aik_ttl = 86400\n"
+		"aik_handle = 0x81010005\n"
+		"daemon = true\n"
+		"pid_file = /all/pid\n"
+		"signing_key = /all/sign.key\n"
+		"policy_pubkey = /all/sign.pub\n"
+		"trust_lib = /all/lib1.so\n"
+		"trust_lib = /all/lib2.so\n"
+		"protect_pid = 1\n"
+		"protect_pid = 2\n"
+		"container_listener_uid = 1000\n"
+		"container_listener_uid = 1001\n"
+		"log_level = error\n");
 	config_path("all.conf", path, sizeof(path));
 	config_init(&cfg);
 	ret = config_load(&cfg, path);
@@ -1742,7 +1752,9 @@ static void test_config_load_all_known_keys(void)
 		FAIL("ca_cert");
 		return;
 	}
-	if (strcmp(cfg.pin_sha256, "abcdef0123456789") != 0) {
+	if (strcmp(cfg.pin_sha256,
+		   "abcdef0123456789222222222222222222222222222222222222222222222222") !=
+	    0) {
 		FAIL("pin_sha256");
 		return;
 	}
