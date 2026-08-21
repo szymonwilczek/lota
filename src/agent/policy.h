@@ -62,8 +62,18 @@ struct policy_snapshot {
 	} pcrs[POLICY_MAX_PCRS];
 	int pcr_count;
 
-	/* Boot-chain measurement digest (kernel-relevant measured-boot PCR) */
+	/*
+	 * Boot-chain measurement digest.
+	 *
+	 * The digest is the value of a measured-boot PCR as this host booted,
+	 * so its provenance is that register and the kernel the host is running.
+	 * kernel_hash_pcr names the register the value was read from
+	 * and kernel_release the running kernel, both for the operator who
+	 * reviews the exported document.
+	 */
 	char kernel_path[LOTA_MAX_PATH_LEN];
+	int kernel_hash_pcr;
+	char kernel_release[65]; /* sizeof(struct utsname.release) */
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
 	bool kernel_hash_valid;
 

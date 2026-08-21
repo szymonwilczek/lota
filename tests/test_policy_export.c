@@ -68,9 +68,15 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	memset(snap->pcrs[3].value, 0x0E, LOTA_HASH_SIZE);
 	snap->pcrs[3].valid = true;
 
-	/* Kernel hash: all 0xAA */
+	/* Kernel hash: all 0xAA, read from PCR 9 on a 6.12.0-test kernel.
+	 * kernel_path is set to a different kernel on purpose: it names
+	 * no part of where the digest came from, so it must not reach
+	 * the document. */
 	snprintf(snap->kernel_path, sizeof(snap->kernel_path),
 		 "/boot/vmlinuz-6.12.0-test");
+	snap->kernel_hash_pcr = 9;
+	snprintf(snap->kernel_release, sizeof(snap->kernel_release),
+		 "6.14.0-other");
 	memset(snap->kernel_hash, 0xAA, LOTA_HASH_SIZE);
 	snap->kernel_hash_valid = true;
 
@@ -253,8 +259,20 @@ static void test_emit_kernel_hash(void)
 		return;
 	}
 
-	if (!contains(yaml, "# Source: /boot/vmlinuz-6.12.0-test")) {
-		FAIL("missing kernel path comment");
+	/* The digest is a register's value, so the document has to say which
+	 * register and on which kernel -- not name a file that produced nothing */
+	if (!contains(yaml, "# Source: PCR 9")) {
+		FAIL("measured-boot digest does not name its PCR");
+		return;
+	}
+
+	if (!contains(yaml, "6.14.0-other")) {
+		FAIL("measured-boot digest does not name the booted kernel");
+		return;
+	}
+
+	if (contains(yaml, "/boot/vmlinuz-6.12.0-test")) {
+		FAIL("a file path is still attributed the PCR's digest");
 		return;
 	}
 
