@@ -284,6 +284,23 @@ void config_free(struct lota_config *cfg);
 int config_load(struct lota_config *cfg, const char *path);
 
 /*
+ * config_clamp_aik_ttl - Lift an AIK rotation TTL that is below the floor.
+ *
+ * @ttl:      The value as it was read. 0 selects the built-in default and is
+ *            left alone; it is not a cadence.
+ * @filepath: File the value came from, or NULL when it did not come from one.
+ * @lineno:   Line it was read at, ignored when @filepath is NULL.
+ *
+ * Both roads a TTL arrives by call this: the parser as it reads the key,
+ * and the CLI once the flag and the file have been merged into one value.
+ * A floor applied on one road and not the other is one file edit away from
+ * being gone, so the settled value is what meets it.
+ *
+ * Returns the TTL to use, and warns on stderr when it is not the one given.
+ */
+uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno);
+
+/*
  * config_load_from_fd - Parse configuration from an already-open fd.
  *
  * @cfg:      Pointer to an already-initialized config struct.

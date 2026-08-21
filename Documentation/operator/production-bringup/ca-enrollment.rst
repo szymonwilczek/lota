@@ -368,6 +368,15 @@ certificate is stale; clear it with the guided ``sudo lota-agent --reenroll``
 above. The same properties emit ``PropertiesChanged``, so a subscriber is
 notified the moment a rotation happens rather than having to poll.
 
+The schedule has a floor of 3600 seconds, and it applies wherever the value is
+set: ``--aik-ttl`` and the ``aik_ttl`` key in ``lota.conf`` both meet it. Below
+an hour a host rotates its attestation key faster than an enrolment completes,
+so every rotation invalidates the certificate that names the old key and the
+host spends its time on TPM key creation and CA round trips -- on a firmware
+TPM, the slow operations. A smaller value is lifted to the floor, and the agent
+says so on stderr; when it came from the file, the warning names the file and
+the line. ``aik_ttl = 0`` is not a cadence -- it selects the built-in default.
+
 Assigning tenants at enrollment
 ===============================
 

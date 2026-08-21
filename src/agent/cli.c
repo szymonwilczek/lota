@@ -623,15 +623,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 				return 1;
 			}
 			opts->aik_ttl = v;
-		}
-			if (opts->aik_ttl > 0 && opts->aik_ttl < 3600) {
-				fprintf(stderr,
-					"Warning: AIK TTL %u too low, using "
-					"3600s (1 hour)\n",
-					opts->aik_ttl);
-				opts->aik_ttl = 3600;
-			}
-			break;
+		} break;
 		case 'G':
 			opts->gen_signing_key_prefix = optarg;
 			break;
@@ -660,6 +652,14 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 			return (opt == 'h') ? -1 : 1;
 		}
 	}
+
+	/*
+	 * The flag has overwritten the file by now, so this is where the TTL
+	 * is settled and the only place the floor covers both roads.
+	 * The parser has already lifted a value that came from the file,
+	 * naming it, so a file-only TTL reaches this clamped and passes through.
+	 */
+	opts->aik_ttl = config_clamp_aik_ttl(opts->aik_ttl, NULL, 0);
 
 	return 0;
 }
