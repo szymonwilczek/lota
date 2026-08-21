@@ -71,7 +71,6 @@ struct policy_snapshot {
 	 * and kernel_release the running kernel, both for the operator who
 	 * reviews the exported document.
 	 */
-	char kernel_path[LOTA_MAX_PATH_LEN];
 	int kernel_hash_pcr;
 	char kernel_release[65]; /* sizeof(struct utsname.release) */
 	uint8_t kernel_hash[LOTA_HASH_SIZE];

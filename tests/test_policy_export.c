@@ -68,12 +68,7 @@ static void build_full_snapshot(struct policy_snapshot *snap)
 	memset(snap->pcrs[3].value, 0x0E, LOTA_HASH_SIZE);
 	snap->pcrs[3].valid = true;
 
-	/* Kernel hash: all 0xAA, read from PCR 9 on a 6.12.0-test kernel.
-	 * kernel_path is set to a different kernel on purpose: it names
-	 * no part of where the digest came from, so it must not reach
-	 * the document. */
-	snprintf(snap->kernel_path, sizeof(snap->kernel_path),
-		 "/boot/vmlinuz-6.12.0-test");
+	/* Kernel hash: all 0xAA, read from PCR 9 on a 6.14.0-other kernel */
 	snap->kernel_hash_pcr = 9;
 	snprintf(snap->kernel_release, sizeof(snap->kernel_release),
 		 "6.14.0-other");
@@ -271,7 +266,7 @@ static void test_emit_kernel_hash(void)
 		return;
 	}
 
-	if (contains(yaml, "/boot/vmlinuz-6.12.0-test")) {
+	if (contains(yaml, "/boot/vmlinuz")) {
 		FAIL("a file path is still attributed the PCR's digest");
 		return;
 	}

@@ -2003,6 +2003,11 @@ int tpm_set_kernel_path(struct tpm_context *ctx, const char *path)
 	return 0;
 }
 
+bool tpm_kernel_path_is_overridden(const struct tpm_context *ctx)
+{
+	return ctx && ctx->kernel_path_override[0] != '\0';
+}
+
 int tpm_get_current_kernel_path(struct tpm_context *ctx, char *buf,
 				size_t buf_len)
 {

@@ -329,10 +329,21 @@ the agent reports about itself:
   ``module.sig_enforce=0``). The cmdline rarely changes, so this stays
   low-maintenance. On systemd-boot/UKI the cmdline is measured into PCR 12 -
   pin 12 there instead of 8.
-- **kernel_hashes is advisory only, not a trust control.** The value is the
-  agent's userspace ``sha256(/boot/vmlinuz)``, self-reported by code running on
-  the kernel, so a compromised kernel can spoof it. Leave it empty and rely on
-  PCR 7 + PCR 8. A mismatch is at most a weak cross-check, never the boundary.
+- **kernel_hashes is advisory only, not a trust control.** The value an
+  ``--export-policy`` run writes there is a measured-boot register read at
+  export time -- the exported document names which one, and the kernel the
+  exporting host had booted -- and it is reported by code running on that
+  kernel, so a compromised kernel can misreport it. On a GRUB host the
+  register it comes from also moves when nothing about the kernel has, because
+  ``grubenv`` is measured into it and GRUB rewrites that file every boot.
+  Leave the list empty and rely on PCR 7 + PCR 8. A mismatch is at most a weak
+  cross-check, never the boundary.
+
+  No configuration key selects which kernel that digest describes.
+  ``kernel_path`` tells the agent where the kernel image lives on a
+  distribution that ships no ``/boot/vmlinuz-<release>``, which is what
+  ``--test-tpm`` hashes; it has no effect on an export. A policy for a kernel
+  is exported from a host booted into it.
 - **Exact-image (PCR 4/9) and a kernel-version floor are optional and not in
   the default templates.** Pinning the exact kernel image or initrd (PCR 4/9)
   adds anti-rollback at the cost of a per-kernel hash treadmill; a sound
