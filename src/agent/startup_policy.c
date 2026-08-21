@@ -483,6 +483,28 @@ int agent_validate_startup_policy(const struct agent_startup_policy *policy)
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * Probe each pid here, before self_measure().
+	 * The apply path runs after it, so a pid that names no process would
+	 * fail there with PCR 14 already spent, and the host could not attest
+	 * until reboot.
+	 * Same probe the protected-set update makes.
+	 */
+	for (int i = 0; i < policy->protect_pid_count; i++) {
+		ret = bpf_loader_probe_protect_pid(policy->protect_pids[i]);
+		if (ret == -ENOENT) {
+			lota_err(
+				"No process is running under PID %u, so there is nothing to protect. The protected set is seeded at startup from processes that are already up, and a process that starts later protects itself through the SDK, with lota_protect_self()",
+				policy->protect_pids[i]);
+			return ret;
+		}
+		if (ret < 0) {
+			lota_err("Cannot protect PID %u: %s",
+				 policy->protect_pids[i], strerror(-ret));
+			return ret;
+		}
+	}
+
 	ret = bpf_loader_verify_kernel_runtime_hardening(
 		policy->allow_mutable_rootfs);
 	if (ret < 0) {
@@ -742,8 +764,15 @@ allowlist_done:
 		ret = bpf_loader_protect_pid(&g_agent.bpf_ctx,
 					     policy->protect_pids[i]);
 		if (ret < 0) {
-			lota_err("Failed to protect PID %u at startup: %s",
-				 policy->protect_pids[i], strerror(-ret));
+			if (ret == -ENOENT)
+				lota_err(
+					"PID %u was running when the policy was checked and has ended since, so the protected set cannot be seeded with it. Reboot and start again with the process up.",
+					policy->protect_pids[i]);
+			else
+				lota_err(
+					"Failed to protect PID %u at startup: %s",
+					policy->protect_pids[i],
+					strerror(-ret));
 			goto out_fail;
 		}
 		applied_pids++;

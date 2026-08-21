@@ -1624,6 +1624,21 @@ int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
+int bpf_loader_probe_protect_pid(uint32_t pid)
+{
+	uint64_t start_time_ticks = 0;
+	int ret;
+
+	ret = read_pid_start_time_ticks(pid, &start_time_ticks);
+	if (ret < 0)
+		return ret;
+
+	if (start_time_ticks == 0)
+		return -EINVAL;
+
+	return 0;
+}
+
 int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 {
 	if (!ctx || !ctx->loaded)

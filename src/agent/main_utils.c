@@ -267,9 +267,15 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "to a\n");
 	printf("                    daemon that is already running: on a host "
 	       "with\n");
-	printf("                    one up it does nothing. A process protects "
-	       "itself\n");
-	printf("                    through the SDK, with lota_protect_self()\n");
+	printf("                    one up it does nothing. The process has to "
+	       "be\n");
+	printf("                    running when the agent starts, and a pid "
+	       "that\n");
+	printf("                    names none is refused before the boot "
+	       "commitment\n");
+	printf("                    is spent. A process protects itself "
+	       "through the\n");
+	printf("                    SDK, with lota_protect_self()\n");
 	printf("  --trust-lib PATH  Add library path to trusted whitelist\n");
 	printf("  --allow-verity PATH\n");
 	printf("                    Allow a fs-verity protected file by digest\n");

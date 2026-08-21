@@ -311,6 +311,23 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs);
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid);
 
 /*
+ * bpf_loader_probe_protect_pid - Ask whether a PID could be protected
+ * @pid: Process ID a startup policy names
+ *
+ * Makes exactly the read bpf_loader_protect_pid() makes -- the same
+ * /proc/<pid>/stat, the same start time, the same PID-namespace
+ * requirement -- and stops before touching a map, so it needs no loaded
+ * context. A caller that must know whether a startup policy will be
+ * accepted asks here first; anything this refuses, protect_pid refuses
+ * for the same reason.
+ *
+ * -ENOENT means no process is running under that pid.
+ *
+ * Returns: 0 if the PID can be protected, negative errno otherwise
+ */
+int bpf_loader_probe_protect_pid(uint32_t pid);
+
+/*
  * bpf_loader_unprotect_pid - Remove a PID from the protected set
  * @ctx: Loaded context
  * @pid: Process ID to unprotect

@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include "../src/agent/agent.h"
+#include "../src/agent/bpf_loader.h"
 #include "../src/agent/main_utils.h"
 #include "../src/agent/startup_policy.h"
 
@@ -92,6 +93,43 @@ static uint32_t reaped_pid(void)
 
 	waitpid(pid, &status, 0);
 	return (uint32_t)pid;
+}
+
+static void test_probe_accepts_a_live_pid(void)
+{
+	TEST("a running process passes the protected-pid probe");
+
+	if (bpf_loader_probe_protect_pid((uint32_t)getpid()) != 0) {
+		FAIL("the probe refuses a process that is running");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_probe_refuses_a_pid_that_is_gone(void)
+{
+	uint32_t gone = reaped_pid();
+	int ret;
+
+	TEST("a pid nothing holds is refused, and named as missing");
+
+	if (gone == 0) {
+		FAIL("cannot fork a victim");
+		return;
+	}
+
+	ret = bpf_loader_probe_protect_pid(gone);
+	if (ret == 0) {
+		FAIL("the probe accepts a pid that names no process");
+		return;
+	}
+	if (ret != -ENOENT) {
+		FAIL("the refusal does not say the process is not there");
+		return;
+	}
+
+	PASS();
 }
 
 /* refusal has to land before anything is spent */
@@ -161,6 +199,8 @@ int main(void)
 {
 	printf("=== --protect-pid before the boot commitment ===\n\n");
 
+	test_probe_accepts_a_live_pid();
+	test_probe_refuses_a_pid_that_is_gone();
 	test_validator_refuses_before_the_commitment();
 	test_validator_accepts_a_live_pid();
 
