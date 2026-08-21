@@ -57,6 +57,11 @@ struct install_opts {
 	const char *verifier_port; /* Verifier port */
 	const char *policy_pubkey; /* Key named with --policy-pubkey, or NULL */
 	const char *selinux_module; /* Compiled lota.pp policy package */
+	/*
+	 * Whether selinux_module above is the operator's word
+	 * or the built-in default.
+	 */
+	int selinux_module_named;
 	int yes; /* Skip confirmations */
 	int plain; /* Force non-TUI output */
 	int status_only; /* Probe + report, change nothing */

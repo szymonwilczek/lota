@@ -1156,3 +1156,32 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 		return STAGE_REBOOT;
 	}
 }
+
+int probe_named_files(const struct probe_named_file *files, size_t count,
+		      char *note, size_t cap)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++) {
+		int err;
+
+		if (!files[i].path)
+			continue;
+		if (access(files[i].path, R_OK) == 0)
+			continue;
+
+		err = errno;
+		if (err == EACCES && geteuid() != 0)
+			snprintf(note, cap,
+				 "Cannot read %s %s (%s). Run as root, or "
+				 "name a file this user can read.",
+				 files[i].flag, files[i].path, strerror(err));
+		else
+			snprintf(note, cap, "Cannot read %s %s (%s)",
+				 files[i].flag, files[i].path, strerror(err));
+
+		return -err;
+	}
+
+	return 0;
+}

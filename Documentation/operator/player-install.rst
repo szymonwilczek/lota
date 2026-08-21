@@ -213,6 +213,22 @@ A player install needs these inputs, all fail-closed:
   ``/usr/share/lota/selinux/lota.pp``, override with ``--selinux-module``) on
   SELinux-enforcing distributions.
 
+Every one of those options names a file, and a path reaches the installer only
+by being typed. One that cannot be read is refused before any stage runs,
+naming the option, the path and the reason::
+
+    lota-install: Cannot read --policy-pubkey /etc/lota/ploicy.pub (No such file or directory)
+
+The refusal is the same for ``--ca-cert``, ``--policy-pubkey``,
+``--selinux-module`` and ``--verity-manifest``, in ``--status`` as well as in a
+real run, so a typo never turns into a report about the host. It applies to
+what the operator typed and not to the built-in defaults: a packaged SELinux
+module that is not installed is a fact about the machine, and the stage that
+wants it says so.
+
+A run that finds the SELinux labels already in place says that the module named
+on the command line was not loaded.
+
 The RPM and DEB post-install hook drives this same stage engine
 (``lota-install --unattended``), so installing the package leaves the
 host-local half of bring-up already done and this command finishes the boot

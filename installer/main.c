@@ -129,6 +129,7 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 			break;
 		case 7:
 			opts->selinux_module = optarg;
+			opts->selinux_module_named = 1;
 			break;
 		case 8:
 			opts->status_only = 1;
@@ -193,6 +194,34 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 		usage(stderr);
 		exit(EXIT_INSTALL_USAGE);
 	}
+
+	/*
+	 * Every file the operator named, before any stage runs.
+	 *
+	 * A path arrives here only by being typed, so one that does not resolve
+	 * is a mistake in the command line and belongs beside the other
+	 * command-line refusals.
+	 * Reported the same way for all four.
+	 * The SELinux module is passed only when it was named.
+	 */
+	{
+		const struct probe_named_file named[] = {
+			{ "--ca-cert", opts->ca_cert },
+			{ "--policy-pubkey", opts->policy_pubkey },
+			{ "--selinux-module", opts->selinux_module_named ?
+						      opts->selinux_module :
+						      NULL },
+			{ "--verity-manifest", opts->verity_manifest },
+		};
+		char note[STAGE_NOTE_CAP];
+
+		if (probe_named_files(named, sizeof(named) / sizeof(named[0]),
+				      note, sizeof(note)) < 0) {
+			fprintf(stderr, "lota-install: %s\n", note);
+			exit(EXIT_INSTALL_USAGE);
+		}
+	}
+
 	return 0;
 }
 

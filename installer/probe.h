@@ -352,4 +352,36 @@ enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, char *note,
 					   size_t cap);
 
+/*
+ * One file the operator named on the command line.
+ *
+ * The flag travels with the path because the refusal has to name it: an operator
+ * who typed one of several file-taking options needs to know which of them did
+ * not resolve, and the path alone does not say.
+ */
+struct probe_named_file {
+	const char *flag; /* the option as it is spelled, e.g. "--ca-cert" */
+	const char *path; /* what the operator typed, or NULL if they did not */
+};
+
+/*
+ * probe_named_files - the first named file that cannot be read
+ * @files: what the operator named
+ * @count: how many entries @files holds
+ * @note: sentence for the operator
+ * @cap: size of @note
+ *
+ * Returns 0 when every named file is readable, or -errno for the first that is not,
+ * with @note naming the flag, the path and the reason.
+ * A NULL path is skipped: an option the operator did not use has nothing to check,
+ * and only a path somebody typed can be a typo. An option with a built-in default
+ * is passed as NULL unless it was named, since a default that is absent is a fact
+ * about the host and not a mistake.
+ *
+ * Pure in the sense the other probes are: it asks the filesystem and decides,
+ * so the caller does nothing but print.
+ */
+int probe_named_files(const struct probe_named_file *files, size_t count,
+		      char *note, size_t cap);
+
 #endif /* LOTA_INSTALL_PROBE_H */
