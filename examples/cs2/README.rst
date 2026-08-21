@@ -129,10 +129,14 @@ One-time host setup
       sudo env XDG_RUNTIME_DIR=/run/user/"$(id -u)" \
           /usr/bin/lota-agent --test-signed
 
-   ``--test-signed`` provisions the TPM AIK at startup, runs the IPC +
-   container listener under the operator's ``XDG_RUNTIME_DIR``, and signs
-   ``GET_TOKEN`` responses with a real TPM Quote. The fixture policy digest
-   (0xA5 x 32) is applied automatically; the banner prints
+   ``--test-signed`` claims the socket first, then opens the TPM and readies
+   the AIK, runs the IPC + container listener under the operator's
+   ``XDG_RUNTIME_DIR``, and signs ``GET_TOKEN`` responses with a real TPM
+   Quote. A run whose socket is already held by the daemon exits there and
+   changes nothing. The banner names the attestation key it is about to use,
+   and says so plainly when there is none at the handle and it is about to
+   create one that outlives the command. The fixture policy digest (0xA5 x 32)
+   is applied automatically; the banner prints
    ``Tokens are signed by the TPM AIK.`` plus the digest line. ``--test-ipc``
    exists for the IPC bridge alone (status only: an agent with no TPM refuses
    ``GET_TOKEN``); the Wine hook needs the signed-token path to produce
