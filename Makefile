@@ -1222,6 +1222,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
+	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
 	$(TEST_BIN_DIR)/test_installer_service \
@@ -1633,6 +1634,14 @@ $(TEST_BIN_DIR)/test_bpf_loader_load_source: tests/test_bpf_loader_load_source.c
 		-Wl,--wrap=policy_verify_buffer \
 		-Wl,--wrap=bpf_object__open_file \
 		-Wl,--wrap=bpf_object__open_mem
+
+$(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
+		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
+		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
+		$(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
+		-Wl,--wrap=bpf_loader_verify_kernel_runtime_hardening
 
 $(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
 	$(QUIET_CC)
