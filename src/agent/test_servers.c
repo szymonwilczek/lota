@@ -24,7 +24,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 {
 	int ret;
 	uint64_t valid_until;
-	printf("=== IPC Test Server (Unsigned) ===\n\n");
+	printf("=== IPC Test Server (No TPM) ===\n\n");
 	printf("Starting IPC server for testing...\n");
 	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
 	if (ret < 0) {
@@ -61,7 +61,7 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	agent_globals_unlock(&g_agent);
 
 	printf("IPC server running (simulated ATTESTED state, no TPM).\n");
-	printf("Tokens will be UNSIGNED.\n");
+	printf("%s\n", ipc_token_capability_str(&g_agent.ipc_ctx));
 	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 
@@ -142,7 +142,7 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	agent_globals_unlock(&g_agent);
 
 	printf("IPC server running (simulated ATTESTED state).\n");
-	printf("Tokens will be SIGNED by TPM AIK!\n");
+	printf("%s\n", ipc_token_capability_str(&g_agent.ipc_ctx));
 	printf("Policy digest: synthetic test fixture (0xA5 x 32).\n");
 	printf("Press Ctrl+C to stop.\n\n");
 

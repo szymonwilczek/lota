@@ -97,6 +97,10 @@ enum lota_ipc_result {
 	 * another protected process being unmeasurable never produces this:
 	 * that is reported through LOTA_STATUS_IMAGE_FULLY_MEASURED instead */
 	LOTA_IPC_ERR_UNMEASURABLE_SELF = 0x0F,
+
+	/* this agent holds no TPM, so it has nothing to sign a token with
+	   and will not issue an unsigned one */
+	LOTA_IPC_ERR_NO_TPM = 0x10,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 

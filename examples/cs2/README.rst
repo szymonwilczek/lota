@@ -133,9 +133,10 @@ One-time host setup
    container listener under the operator's ``XDG_RUNTIME_DIR``, and signs
    ``GET_TOKEN`` responses with a real TPM Quote. The fixture policy digest
    (0xA5 x 32) is applied automatically; the banner prints
-   ``Tokens will be SIGNED by TPM AIK!`` plus the digest line. ``--test-ipc``
-   exists for the IPC bridge alone (status only, no token); the Wine hook needs
-   the signed-token path to produce ``lota-token.bin``.
+   ``Tokens are signed by the TPM AIK.`` plus the digest line. ``--test-ipc``
+   exists for the IPC bridge alone (status only: an agent with no TPM refuses
+   ``GET_TOKEN``); the Wine hook needs the signed-token path to produce
+   ``lota-token.bin``.
 
    The full systemd daemon path (``systemctl start lota-agent.service`` against
    the live ``lota-agent.service`` unit) is the eventual production target. It
@@ -425,9 +426,9 @@ attempt and match against this table:
 |                                              | does not include the LOTA socket directory.                     |
 +----------------------------------------------+-----------------------------------------------------------------+
 | ``connected to agent`` followed by           | Agent reachable but refusing token issuance. Under              |
-| ``get_token: Agent returned error``          | ``--test-ipc`` this is expected: the policy digest is unset and |
-|                                              | there is no TPM context, and the agent will not sign a token    |
-|                                              | it cannot back.                                                 |
+| ``get_token: The agent on this machine has`` | ``--test-ipc`` this is expected: there is no TPM context, and   |
+| ``no TPM and will not issue an unsigned``    | the agent will not sign a token it cannot back.                 |
+| ``token``                                    |                                                                 |
 |                                              | Switch to ``--test-signed`` to provision a real TPM Quote; the  |
 |                                              | in-tree fixture policy digest is applied automatically on the   |
 |                                              | test paths.                                                     |

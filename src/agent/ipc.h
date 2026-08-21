@@ -321,11 +321,31 @@ void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
  * @pcr_mask: PCRs to include in token quotes
  *
  * When TPM context is set, GET_TOKEN will generate fresh
- * TPM quotes signed by the AIK. Without TPM context,
- * GET_TOKEN returns unsigned tokens for development/testing.
+ * TPM quotes signed by the AIK. Without TPM context, GET_TOKEN is refused:
+ * a token nobody signed is not evidence, so it is never issued.
  */
 void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 		 uint32_t pcr_mask);
+
+/*
+ * ipc_can_issue_tokens - whether this server can answer GET_TOKEN at all
+ * @ctx: Server context, or NULL
+ *
+ * Signing is the whole of a token, so a server with no TPM bound has no
+ * token to give and refuses every request. Callers that announce what
+ * a server does ask here, so a banner cannot promise what GET_TOKEN goes
+ * on to refuse.
+ */
+bool ipc_can_issue_tokens(const struct ipc_context *ctx);
+
+/*
+ * ipc_token_capability_str - one line saying what GET_TOKEN will answer
+ * @ctx: Server context, or NULL
+ *
+ * Derived from ipc_can_issue_tokens(), for the diagnostic servers to print.
+ * Never NULL.
+ */
+const char *ipc_token_capability_str(const struct ipc_context *ctx);
 
 /*
  * ipc_add_listener - Add an extra listener socket.

@@ -58,6 +58,13 @@ The most common failures, with the gate that produced them:
   message names the path. Nothing has been spent: PCR 14 still holds the
   initramfs lock value, so correcting the policy and starting the unit again
   brings the host up in the same boot, with no reboot needed.
+* ``Refusing GET_TOKEN for pid=<pid>: no TPM on this agent``. The agent holds
+  no TPM context, so it has nothing to sign a token with, and it never issues
+  an unsigned one -- a token nobody signed is not evidence. The SDK is
+  answered ``LOTA_ERR_NO_TPM``, and no retry changes it.
+  ``--test-ipc`` runs in exactly this state on purpose: it serves
+  status, D-Bus and profile binding on a machine with no TPM, and a title that
+  needs a token there uses ``--test-signed`` instead.
 * ``This is not the lota-agent build PCR 14 committed to when the host
   booted``. The binary being run is not the one the register commits to, which
   is the expected answer after replacing the binary without rebooting, or when

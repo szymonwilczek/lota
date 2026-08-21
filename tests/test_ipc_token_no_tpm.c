@@ -434,6 +434,42 @@ static void test_refusal_is_logged(void)
 	PASS();
 }
 
+/*
+ * What the server says it does has to be what it does.
+ *
+ * The diagnostic servers print this line, so a banner promising unsigned
+ * tokens on a path that refuses them cannot be written without failing here.
+ */
+static void test_capability_line_promises_no_tokens(struct ipc_context *ctx)
+{
+	const char *line;
+
+	TEST("a server with no TPM announces that it issues no tokens");
+
+	if (ipc_can_issue_tokens(ctx)) {
+		FAIL("a context with no TPM claims it can issue tokens");
+		return;
+	}
+
+	line = ipc_token_capability_str(ctx);
+	if (!line || line[0] == '\0') {
+		FAIL("no capability line");
+		return;
+	}
+
+	if (!strstr(line, "refused")) {
+		FAIL("the server does not say the request is refused");
+		return;
+	}
+
+	if (!strstr(line, "--test-signed")) {
+		FAIL("the line does not name the verb that does issue tokens");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -485,6 +521,7 @@ int main(void)
 	test_no_tpm_is_refused();
 	test_absent_tpm_is_not_a_tpm_failure();
 	test_refusal_is_logged();
+	test_capability_line_promises_no_tokens(&ctx);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

@@ -1091,6 +1091,25 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		goto out;
 	}
 
+	/*
+	 * Signing is the whole of a token, so a server with no TPM has nothing
+	 * to give: an unsigned token is not evidence and is never issued.
+	 * Said here, before the protected set is reaped and every protected
+	 * process measured, because none of that work can change the answer.
+	 * It is reported as its own code and not as a TPM failure: nothing
+	 * failed, and no retry will help.
+	 *
+	 * After the rate limiters, so a caller that asks in a loop is throttled.
+	 */
+	if (!ipc_can_issue_tokens(ctx)) {
+		lota_err(
+			"Refusing GET_TOKEN for pid=%d: no TPM on this agent, and an unsigned token is not evidence",
+			client->peer_pid);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_NO_TPM;
+		goto out;
+	}
+
 	if (payload_len >= sizeof(req_local)) {
 		memcpy(&req_local, payload, sizeof(req_local));
 		has_req = true;
@@ -1309,13 +1328,6 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 		memcpy(token->client_nonce, req_local.nonce, 32);
 	else
 		memset(token->client_nonce, 0, 32);
-
-	/* TPM context is required - refuse to issue unsigned tokens */
-	if (!ctx->tpm) {
-		fail = true;
-		fail_code = LOTA_IPC_ERR_TPM_FAILURE;
-		goto out;
-	}
 
 	ret = lota_compute_token_quote_nonce(
 		token->valid_until, token->flags, token->pcr_mask,
@@ -3158,6 +3170,19 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 {
 	ctx->tpm = tpm;
 	ctx->quote_pcr_mask = pcr_mask;
+}
+
+bool ipc_can_issue_tokens(const struct ipc_context *ctx)
+{
+	return ctx && ctx->tpm;
+}
+
+const char *ipc_token_capability_str(const struct ipc_context *ctx)
+{
+	if (ipc_can_issue_tokens(ctx))
+		return "Tokens are signed by the TPM AIK.";
+
+	return "GET_TOKEN is refused: signing needs a TPM, and an unsigned token is never issued. Use --test-signed for tokens.";
 }
 
 void ipc_set_attest_sync_hook(struct ipc_context *ctx, void (*fn)(void *),
