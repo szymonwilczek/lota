@@ -106,6 +106,12 @@ type Issuer struct {
 	// complete a route that still terminates in ekRoots.
 	ekIntermediates *x509.CertPool
 
+	// ekPathCerts mirrors ekIntermediates and ekRoots
+	// as a map keyed by raw Subject.
+	// A CertPool cannot be walked, and naming the link a failed chain
+	// needed next means following the path by hand.
+	ekPathCerts map[string]*x509.Certificate
+
 	// ekRootCerts mirrors ekRoots as a slice:
 	// CRL engine verifies each manufacturer CRL signature against the
 	// certificate whose Subject matches the CRL Issuer, which a CertPool
@@ -206,6 +212,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	}
 	ekRoots := x509.NewCertPool()
 	ekIntermediates := x509.NewCertPool()
+	ekPathCerts := map[string]*x509.Certificate{}
 	var ekRootCerts []*x509.Certificate
 	for i, rootPEM := range cfg.EKRootPEMs {
 		root, err := parseCertPEM(rootPEM)
@@ -214,6 +221,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		}
 		ekRoots.AddCert(root)
 		ekRootCerts = append(ekRootCerts, root)
+		ekPathCerts[string(root.RawSubject)] = root
 		// an anchor that is not self-signed only anchors anything if
 		// a chain can also be built through it
 		if !bytes.Equal(root.RawSubject, root.RawIssuer) {
@@ -226,6 +234,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 			return nil, fmt.Errorf("EK intermediate %d: %w", i, err)
 		}
 		ekIntermediates.AddCert(inter)
+		ekPathCerts[string(inter.RawSubject)] = inter
 		// path material, never an anchor -- but the CRL engine still has
 		// to find it by Subject to verify a CRL it signed
 		ekRootCerts = append(ekRootCerts, inter)
@@ -241,6 +250,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		caKey:           caKey,
 		ekRoots:         ekRoots,
 		ekIntermediates: ekIntermediates,
+		ekPathCerts:     ekPathCerts,
 		certTTL:         ttl,
 		ekRootCerts:     ekRootCerts,
 		ekCRLPaths:      append([]string(nil), cfg.EKCRLPaths...),
@@ -273,6 +283,11 @@ func (is *Issuer) ReloadEKCRLs() error {
 // Startup logging only.
 func (is *Issuer) EKCRLCount() int { return is.ekCRLs.Load().Size() }
 
+// maxEKPathHops bounds the diagnostic walk.
+// Real manufacturer PKIs are six levels deep at the most; the bound is there
+// because the supplied chain is unauthenticated and could describe a cycle.
+const maxEKPathHops = 16
+
 // pathMaterial returns the intermediate pool one verification runs against:
 // the operator's bundled intermediates plus whatever the device supplied.
 //
@@ -294,6 +309,48 @@ func (is *Issuer) pathMaterial(chainDER [][]byte) *x509.CertPool {
 		pool.AddCert(cert)
 	}
 	return pool
+}
+
+// missingLink walks the path upwards from the leaf through everything the CA
+// pinned and the device supplied, and returns the Subject the walk needed next
+// and could not find.
+// It answers "" when the walk reaches a self-signed certificate, because then
+// the path is complete and the refusal came from something else -- an untrusted
+// anchor, an expiry, a bad signature.
+//
+// Diagnostics only: it decides nothing, and it runs only after a verification
+// has already failed.
+// Naming the link is what separates "your endorsement key is not accepted" from
+// "this bundle is missing a certificate".
+func (is *Issuer) missingLink(leaf *x509.Certificate, chainDER [][]byte) string {
+	bySubject := make(map[string]*x509.Certificate, len(is.ekPathCerts)+len(chainDER))
+	for k, v := range is.ekPathCerts {
+		bySubject[k] = v
+	}
+	for _, der := range chainDER {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			continue
+		}
+
+		// a certificate the device supplied never displaces a pinned one
+		if _, pinned := bySubject[string(c.RawSubject)]; !pinned {
+			bySubject[string(c.RawSubject)] = c
+		}
+	}
+
+	cur := leaf
+	for hop := 0; hop < maxEKPathHops; hop++ {
+		if bytes.Equal(cur.RawSubject, cur.RawIssuer) {
+			return ""
+		}
+		next, ok := bySubject[string(cur.RawIssuer)]
+		if !ok {
+			return cur.Issuer.String()
+		}
+		cur = next
+	}
+	return ""
 }
 
 // VerifyEKCertificate confirms an EK certificate chains to a trusted
@@ -341,6 +398,10 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
+		if missing := is.missingLink(cert, chainDER); missing != "" {
+			return nil, fmt.Errorf("%w: %v: nothing pinned or supplied issues %q, "+
+				"so the path stops there", ErrEKChain, err, missing)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrEKChain, err)
 	}
 

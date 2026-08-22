@@ -431,7 +431,9 @@ barred device never consumes an enrollment session.
 A barred device is told its endorsement key was rejected, as is a key that
 does not chain to a pinned root, one its manufacturer's CRL revokes and one
 whose modulus carries the ROCA fingerprint. Each is a verdict on the key that
-a retry does not change; the CA log names which one applied. An internal-error
+a retry does not change; the CA log names which one applied, and for a chain
+that could not be built, the certificate the path needed next -- on a firmware
+TPM usually a vendor intermediate the bundle does not pin. An internal-error
 status means the CA could not serve the request and a later attempt may
 succeed, as with an unverifiable or expired CRL feed.
 
