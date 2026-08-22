@@ -57,7 +57,10 @@ Options:
                               container-aware secondary listener
                               (\$XDG_RUNTIME_DIR/lota/lota.sock)
                               comes up under the operator's
-                              runtime dir on boot. Requires root.
+                              runtime dir on boot. The agent reads it
+                              at startup, so it takes effect at the
+                              next boot; nothing here stops the
+                              running agent. Requires root.
                               Single-operator hosts only; for
                               multiple operators use --register-uid.
   --register-uid              Write container_listener_uid = \$SUDO_UID
@@ -73,6 +76,11 @@ Options:
 
 Environment:
   XDG_RUNTIME_DIR   Base directory for user runtime files (required)
+  LOTA_SETUP_DROPIN_DIR
+                    Write the --install-systemd-dropin file under this
+                    directory instead of /etc/systemd/system. For
+                    package staging and tests: no systemd on this host
+                    is configured, so root is not required either.
 EOF
 }
 
@@ -132,9 +140,9 @@ check_hook_library() {
 
     for candidate in \
         /usr/lib64/${HOOK_LIB} \
-        /usr/lib/${HOOK_LIB} \
-        /usr/local/lib64/${HOOK_LIB} \
-        /usr/local/lib/${HOOK_LIB}; do
+                  /usr/lib/${HOOK_LIB} \
+                  /usr/local/lib64/${HOOK_LIB} \
+                  /usr/local/lib/${HOOK_LIB}; do
         if [[ -f "$candidate" ]]; then
             found="$candidate"
             break
@@ -235,13 +243,23 @@ done
 # Single-valued by design; multi-user hosts have to pick the user
 # that drives Steam.
 install_systemd_dropin() {
-    local uid dropin_dir dropin
+    local uid dropin_dir dropin redirected=false
+
+    # LOTA_SETUP_DROPIN_DIR moves the drop-in somewhere the caller already
+    # owns: a package staging root, or a test.
+    # Nothing on this host's systemd is being configured then, so the verb
+    # neither asks for root nor reloads anything.
+    dropin_dir="/etc/systemd/system/lota-agent.service.d"
+    if [[ -n "${LOTA_SETUP_DROPIN_DIR:-}" ]]; then
+        dropin_dir="$LOTA_SETUP_DROPIN_DIR"
+        redirected=true
+    fi
 
     # Need root to write under /etc/systemd/system. The operator UID
     # is recovered from $SUDO_UID (sudo sets it) so the drop-in
     # cannot accidentally pin XDG_RUNTIME_DIR to /run/user/0 when
     # the caller forgot to wrap with sudo from their own session.
-    if [[ $EUID -ne 0 ]]; then
+    if ! $redirected && [[ $EUID -ne 0 ]]; then
         fail "--install-systemd-dropin must run as root (try: sudo $(basename "$0") --install-systemd-dropin)"
         return 1
     fi
@@ -264,8 +282,18 @@ install_systemd_dropin() {
         return 1
     fi
 
-    dropin_dir="/etc/systemd/system/lota-agent.service.d"
     dropin="${dropin_dir}/10-xdg-runtime.conf"
+
+    # The listener is built once, when the agent starts, so this drop-in
+    # reaches a running host at its next boot. Say so before writing it:
+    # the alternative is restarting the agent, and lota-agent.socket
+    # Triggers= the service while the service Requires= the socket,
+    # so a socket restart runs ExecStop=lota-agent --shutdown and spends
+    # the boot's PCR 14 commitment -- which stops the host attesting until
+    # it reboots anyway.
+    # --verify tells operators not to do it; this verb is not the exception.
+    info "This takes effect at the next boot. The running agent keeps"
+    info "serving titles unchanged until then, and nothing here stops it."
 
     info "Installing drop-in: ${dropin}"
     mkdir -p "$dropin_dir"
@@ -280,18 +308,16 @@ Environment=XDG_RUNTIME_DIR=/run/user/${uid}
 EOF
     chmod 0644 "$dropin"
 
-    systemctl daemon-reload
-    if systemctl is-active --quiet lota-agent.socket; then
-        info "Restarting lota-agent.socket to pick up the drop-in"
-        systemctl restart lota-agent.socket
-    fi
-    ok "drop-in installed for uid=${uid}"
+    # Keeps systemd's view of the unit current for its next start.
+    # It does not touch the running service, which is the point.
+    $redirected || systemctl daemon-reload
+    ok "drop-in installed for uid=${uid}; reboot to create the listener"
 }
 
 if $install_dropin; then
     install_systemd_dropin || exit 1
     echo ""
-    echo "Drop-in active. From the operator account run:"
+    echo "Reboot, then from the operator account run:"
     echo "  lota-steam-setup --verify"
     echo "to confirm the new /run/user/${SUDO_UID}/lota/lota.sock listener,"
     echo "then paste the printed Steam launch options into the game's"
@@ -370,7 +396,7 @@ register_container_listener_uid() {
         ' "$backup" >"$LOTA_CONF"
     else
         printf '\n# Added by lota-steam-setup --register-uid\n%s\n' \
-            "$line" >>"$LOTA_CONF"
+               "$line" >>"$LOTA_CONF"
     fi
 
     # Read back what was written.

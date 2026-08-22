@@ -82,10 +82,14 @@ One-time host setup
       sudo lota-steam-setup --install-systemd-dropin
 
    The helper reads ``$SUDO_UID`` to recover the operator UID, refuses to run
-   when ``$SUDO_UID`` is missing (direct root login or ``su -``), writes the
-   drop-in at ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``
-   with ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``, and restarts
-   ``lota-agent.socket`` so the listener is live. The same file can be
+   when ``$SUDO_UID`` is missing (direct root login or ``su -``), and writes
+   the drop-in at
+   ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf`` with
+   ``Environment=XDG_RUNTIME_DIR=/run/user/<uid>``. The agent reads it when it
+   starts, so **reboot to get the listener**: the helper restarts nothing,
+   because ``lota-agent.socket`` triggers the service and stopping either
+   spends the boot's PCR 14 commitment, which takes the host out of
+   attestation until it reboots anyway. The same file can be
    installed manually from the in-tree template at
    ```systemd/lota-agent.service.d/10-xdg-runtime.conf.example`` <../../systemd/lota-agent.service.d/10-xdg-runtime.conf.example>`__
    (``make install`` deploys it to ``/usr/share/lota/systemd/`` as a
@@ -102,9 +106,10 @@ One-time host setup
 
       sudo lota-steam-setup --register-uid
 
-   from each operator's login shell to append their ``$SUDO_UID`` to the config
-   and restart ``lota-agent.service``. The drop-in is then redundant on the
-   multi-user path and can be left out.
+   from each operator's login shell to append their ``$SUDO_UID`` to the
+   config. That setting is read at startup too, so it lands at the next boot
+   and nothing is restarted. The drop-in is then redundant on the multi-user
+   path and can be left out.
 
    With the drop-in in place start the agent via systemd:
 
