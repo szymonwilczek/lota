@@ -5,6 +5,7 @@ package ca
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -183,5 +184,55 @@ func TestPinnedIntermediateIsNotAnAnchor(t *testing.T) {
 	is = pki.issuer(t, []certAndKey{pki.root}, pki.published)
 	if _, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now()); err != nil {
 		t.Fatalf("pinned path material plus the anchor: %v", err)
+	}
+}
+
+// The refusal an operator gets has to point at the gap.
+// "certificate signed by unknown authority" over a six-level firmware chain
+// says the endorsement key was not accepted, which reads as a verdict on
+// the machine; the real cause is a bundle missing one link, and only the CA
+// knows which.
+func TestEKChainRefusalNamesTheMissingLink(t *testing.T) {
+	pki := newFirmwarePKI(t)
+	is := pki.issuer(t, []certAndKey{pki.root}, nil)
+
+	// the device supplies its on-chip certificates;
+	// the walk climbs them and stops needing the first one only the vendor
+	// publishes
+	_, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "vendor-ondie-issuing") {
+		t.Fatalf("refusal does not name the link the path needs next: %v", err)
+	}
+
+	// with nothing supplied the gap is at the leaf's own issuer,
+	// and the message has to move with it
+	_, err = is.VerifyEKCertificate(pki.ekDER, nil, time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "vendor-ptt-svn") {
+		t.Fatalf("refusal does not name the leaf's missing issuer: %v", err)
+	}
+}
+
+// A chain the device tries to anchor itself is refused, and the refusal must
+// not name the rogue root as if pinning it were the remedy.
+func TestEKChainRefusalDoesNotSuggestTheDeviceRoot(t *testing.T) {
+	pki := newFirmwarePKI(t)
+	is := pki.issuer(t, []certAndKey{pki.root}, pki.published)
+
+	rogueRoot := makeRoot(t, "rogue-vendor-root")
+	rogueIssuing := makeIntermediate(t, rogueRoot, "rogue-issuing")
+	rogueEK, _ := makeEKCert(t, rogueIssuing, nil)
+
+	_, err := is.VerifyEKCertificate(rogueEK, [][]byte{rogueIssuing.der, rogueRoot.der}, time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if strings.Contains(err.Error(), "rogue-vendor-root") {
+		t.Fatalf("refusal points the operator at the device's own root: %v", err)
 	}
 }
