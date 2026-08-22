@@ -1081,10 +1081,10 @@ static void test_hook_status_path_when_set(void)
 	TEST("lota_hook_status_path() returns path when set");
 
 	snprintf(g_hook.status_path, sizeof(g_hook.status_path),
-		 "/run/user/1000/lota/lota-status");
+		 "/run/user/1000/lota-hook/lota-status");
 
 	const char *p = lota_hook_status_path();
-	if (!p || strcmp(p, "/run/user/1000/lota/lota-status") != 0) {
+	if (!p || strcmp(p, "/run/user/1000/lota-hook/lota-status") != 0) {
 		FAIL("wrong path");
 		return;
 	}
@@ -1109,10 +1109,10 @@ static void test_hook_token_path_when_set(void)
 	TEST("lota_hook_token_path() returns path when set");
 
 	snprintf(g_hook.token_path, sizeof(g_hook.token_path),
-		 "/run/user/1000/lota/lota-token.bin");
+		 "/run/user/1000/lota-hook/lota-token.bin");
 
 	const char *p = lota_hook_token_path();
-	if (!p || strcmp(p, "/run/user/1000/lota/lota-token.bin") != 0) {
+	if (!p || strcmp(p, "/run/user/1000/lota-hook/lota-token.bin") != 0) {
 		FAIL("wrong path");
 		return;
 	}

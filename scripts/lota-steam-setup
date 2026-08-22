@@ -25,6 +25,8 @@ LOTA_GROUP="lota"
 SOCKET_NAME="lota.sock"
 PRIMARY_SOCKET="/run/lota/${SOCKET_NAME}"
 HOOK_LIB="liblota_wine_hook.so"
+# Mirrors LOTA_HOOK_TOKEN_DIR_NAME in include/lota_wine_hook.h
+HOOK_TOKEN_DIR_NAME="lota-hook"
 LOTA_CONF="/etc/lota/lota.conf"
 
 if [[ -t 1 ]]; then
@@ -205,6 +207,41 @@ check_container_socket() {
     echo "  the agent to get one: stopping it spends this boot's PCR 14"
     echo "  commitment and the host cannot attest again until it reboots."
     return 1
+}
+
+# check_hook_token_dir: the hook writes its status and token into a directory
+# of the player's own -- $XDG_RUNTIME_DIR/lota-hook -- and refuses one owned by
+# anybody else, because those files carry a signed token.
+# It creates the directory itself at first launch; what this check catches is
+# a leftover the player cannot use, which is the case that reads as
+# "the hook does nothing".
+check_hook_token_dir() {
+    local dir="${XDG_RUNTIME_DIR}/${HOOK_TOKEN_DIR_NAME}"
+
+    if [[ ! -e "$dir" ]]; then
+        ok "Hook token directory will be created at first launch: $dir"
+        return 0
+    fi
+
+    if [[ ! -d "$dir" ]]; then
+        warn "Hook token directory path is not a directory: $dir"
+        echo "  The hook falls back to /tmp/lota-$(id -u), so attestation"
+        echo "  still works, but remove this to keep the artifacts in the"
+        echo "  runtime directory."
+        return 1
+    fi
+
+    if [[ ! -O "$dir" ]]; then
+        warn "Hook token directory is not owned by this user: $dir"
+        ls -ld "$dir" 2>/dev/null | sed 's/^/    /'
+        echo "  The hook refuses a directory somebody else owns and falls"
+        echo "  back to /tmp/lota-$(id -u). Remove it to use the runtime"
+        echo "  directory again."
+        return 1
+    fi
+
+    ok "Hook token directory: $dir"
+    return 0
 }
 
 verify_only=false
@@ -447,6 +484,7 @@ if ! $verify_only; then
 fi
 
 check_container_socket || errors=$((errors + 1))
+check_hook_token_dir   || errors=$((errors + 1))
 
 echo ""
 echo "=== Steam Launch Options ==="
@@ -455,11 +493,14 @@ echo "  For games launched through Steam's pressure-vessel container"
 echo "  (any Proton title and most native Linux titles on Steam),"
 echo "  the LOTA socket must be bind-mounted into the container and"
 echo "  the hook must be pointed at the operator's user-runtime"
-echo "  listener.  Paste this string into the game's Properties ->"
+echo "  listener.  The directory the hook writes its status and token"
+echo "  into is bound too, or the title cannot read back what it was"
+echo "  given.  Paste this string into the game's Properties ->"
 echo "  General -> Launch options:"
 echo ""
-echo "    PRESSURE_VESSEL_FILESYSTEMS_RW=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lota \\"
-echo "    LOTA_HOOK_SOCKET=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lota/lota.sock \\"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+echo "    PRESSURE_VESSEL_FILESYSTEMS_RW=${runtime_dir}/lota:${runtime_dir}/${HOOK_TOKEN_DIR_NAME} \\"
+echo "    LOTA_HOOK_SOCKET=${runtime_dir}/lota/lota.sock \\"
 echo "    LOTA_HOOK_LOG_LEVEL=info \\"
 echo "    lota-proton-hook %command%"
 echo ""
@@ -470,6 +511,10 @@ echo "  For a host-side launch outside the pressure-vessel"
 echo "  container (a native binary you run directly):"
 echo ""
 echo "    LOTA_HOOK_LOG_LEVEL=info LD_PRELOAD=${HOOK_LIB} %command%"
+echo ""
+echo "  Either way the hook writes lota-status, lota-token.bin and"
+echo "  lota-attestation.bin into ${runtime_dir}/${HOOK_TOKEN_DIR_NAME}/,"
+echo "  which is where a launcher or an anti-cheat SDK reads them from."
 echo ""
 
 if [[ $errors -gt 0 ]]; then

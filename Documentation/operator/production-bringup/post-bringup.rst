@@ -193,6 +193,17 @@ did. When the socket is absent it names the two things that produce one --
 a registered UID and a boot since it was registered -- and does not suggest
 restarting the agent.
 
+The socket is the agent's half of the container path; the hook's half is a
+directory of the player's own. It writes ``lota-status``,
+``lota-token.bin`` and ``lota-attestation.bin`` into
+``$XDG_RUNTIME_DIR/lota-hook`` -- not into ``$XDG_RUNTIME_DIR/lota``, which
+the agent owns as ``root:lota`` and which a process running as the player
+cannot write. A title launched through pressure-vessel therefore needs both
+directories bound into the container, which is what the launch string
+``lota-steam-setup --verify`` prints does; ``--verify`` also reports the
+token directory, and names the ``/tmp/lota-<uid>`` fallback the hook takes
+when a leftover in the runtime directory belongs to somebody else.
+
 Single-operator hosts can reach the same listener by the other road:
 ``lota-steam-setup --install-systemd-dropin`` writes
 ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``, which pins
