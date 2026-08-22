@@ -112,10 +112,20 @@ void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 	(void)flags;
 }
 
+/*
+ * What the daemon asked D-Bus to emit.
+ *
+ * The bus itself is out of scope here -- test_dbus.c drives a real one.
+ * What these tests are about is whether the daemon ever asks.
+ */
+static int dbus_attest_emitted;
+static bool dbus_attest_last_success;
+
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
 {
 	(void)ctx;
-	(void)success;
+	dbus_attest_emitted++;
+	dbus_attest_last_success = success;
 }
 
 void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
@@ -317,15 +327,23 @@ static int read_frame(struct ipc_context *ctx, int fd,
 }
 
 /* The loop's half of a round: hand over the verdicts, read back the sessions */
-static int send_sync(int fd)
+static int send_sync_counted(int fd, uint32_t attest_count, uint32_t fail_count)
 {
 	uint8_t buf[sizeof(struct lota_ipc_attest_sync)];
 	struct lota_ipc_attest_sync sync;
 
 	memset(&sync, 0, sizeof(sync));
+	sync.attest_count = attest_count;
+	sync.fail_count = fail_count;
+	sync.last_attest_time = (uint64_t)time(NULL);
 	memcpy(buf, &sync, sizeof(sync));
 
 	return send_request(fd, LOTA_IPC_CMD_SYNC_ATTEST, buf, sizeof(buf));
+}
+
+static int send_sync(int fd)
+{
+	return send_sync_counted(fd, 0, 0);
 }
 
 /*
@@ -594,7 +612,7 @@ static int client_read_frame(int fd, struct lota_ipc_response *resp,
  * Forked because the guard is about the peer's identity, and a connection opened
  * here carries the daemon's own pid, which no title ever does.
  */
-static void subscriber_child(uint32_t mask, int ready_fd, bool await_notify)
+static void subscriber_child(uint32_t mask, int ready_fd, uint32_t await_event)
 {
 	struct lota_ipc_subscribe_request sub = { .event_mask = mask };
 	struct lota_ipc_response resp;
@@ -612,7 +630,7 @@ static void subscriber_child(uint32_t mask, int ready_fd, bool await_notify)
 	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
 		_exit(CHILD_ERR_NO_ANSWER);
 
-	if (resp.result != LOTA_IPC_OK || !await_notify)
+	if (resp.result != LOTA_IPC_OK || !await_event)
 		_exit((int)resp.result);
 
 	if (write(ready_fd, "s", 1) != 1)
@@ -625,8 +643,7 @@ static void subscriber_child(uint32_t mask, int ready_fd, bool await_notify)
 		_exit(CHILD_ERR_NOT_NOTIFY);
 
 	memcpy(&notify, payload, sizeof(notify));
-	_exit((notify.events & LOTA_IPC_EVENT_STATUS) ? 0 :
-							CHILD_ERR_NOT_NOTIFY);
+	_exit((notify.events & await_event) ? 0 : CHILD_ERR_NOT_NOTIFY);
 }
 
 /* Drive the daemon until the forked client is done, and report what it said */
@@ -666,7 +683,7 @@ static void test_outside_client_may_subscribe(struct ipc_context *ctx)
 	if (pid == 0)
 		subscriber_child(LOTA_IPC_EVENT_STATUS | LOTA_IPC_EVENT_ATTEST |
 					 LOTA_IPC_EVENT_MODE,
-				 -1, false);
+				 -1, 0);
 
 	rc = pump_until_exit(ctx, pid, 256);
 	if (rc == LOTA_IPC_ERR_ACCESS_DENIED) {
@@ -704,7 +721,8 @@ static void test_outside_client_is_notified(struct ipc_context *ctx)
 	}
 	if (pid == 0) {
 		close(ready[0]);
-		subscriber_child(LOTA_IPC_EVENT_STATUS, ready[1], true);
+		subscriber_child(LOTA_IPC_EVENT_STATUS, ready[1],
+				 LOTA_IPC_EVENT_STATUS);
 	}
 	close(ready[1]);
 
@@ -752,11 +770,177 @@ static void test_publisher_event_stays_reserved(struct ipc_context *ctx)
 		return;
 	}
 	if (pid == 0)
-		subscriber_child(LOTA_IPC_EVENT_PROFILE, -1, false);
+		subscriber_child(LOTA_IPC_EVENT_PROFILE, -1, 0);
 
 	rc = pump_until_exit(ctx, pid, 256);
 	if (rc != LOTA_IPC_ERR_BAD_REQUEST) {
 		FAIL("a reserved-only mask is not refused as a bad request");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * A round the loop completed has to leave the daemon, on both roads.
+ *
+ * The loop hands its tallies over in the sync; the daemon assigned them
+ * and told nobody, so a subscribed title heard nothing and the bus carried
+ * no AttestationResult even though AttestCount had visibly moved.
+ */
+static void test_attest_round_is_reported(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int ready[2];
+	pid_t pid;
+	int loop_fd;
+	int rc;
+
+	TEST("a completed round is pushed and put on the bus");
+
+	dbus_attest_emitted = 0;
+	dbus_attest_last_success = false;
+
+	if (pipe(ready) < 0) {
+		FAIL("pipe");
+		return;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		close(ready[0]);
+		close(ready[1]);
+		return;
+	}
+	if (pid == 0) {
+		close(ready[0]);
+		subscriber_child(LOTA_IPC_EVENT_ATTEST, ready[1],
+				 LOTA_IPC_EVENT_ATTEST);
+	}
+	close(ready[1]);
+
+	for (int i = 0; i < 256; i++) {
+		struct pollfd pfd = { .fd = ready[0], .events = POLLIN };
+
+		if (poll(&pfd, 1, 0) > 0)
+			break;
+		ipc_process(ctx, 10);
+	}
+	close(ready[0]);
+
+	loop_fd = client_open();
+	if (loop_fd < 0) {
+		FAIL("loop connect");
+		goto reap;
+	}
+
+	if (send_sync_counted(loop_fd, ctx->attest_count + 1, ctx->fail_count) <
+		    0 ||
+	    read_frame(ctx, loop_fd, &resp, payload, sizeof(payload), 64) < 0 ||
+	    resp.result != LOTA_IPC_OK) {
+		FAIL("sync");
+		close(loop_fd);
+		goto reap;
+	}
+
+	rc = pump_until_exit(ctx, pid, 256);
+	close(loop_fd);
+
+	if (rc == CHILD_ERR_NO_NOTIFY) {
+		FAIL("no push: a subscribed title sleeps through the round");
+		return;
+	}
+	if (rc != 0) {
+		FAIL("the pushed frame is not the attestation event");
+		return;
+	}
+	if (dbus_attest_emitted != 1) {
+		FAIL("the daemon never asks D-Bus to emit the result");
+		return;
+	}
+	if (!dbus_attest_last_success) {
+		FAIL("the emitted result is not the success that happened");
+		return;
+	}
+
+	PASS();
+	return;
+reap:
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+}
+
+/* A round that failed is reported as one, not merely counted */
+static void test_failed_round_is_reported(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int loop_fd;
+
+	TEST("a failed round reaches the bus as a failure");
+
+	dbus_attest_emitted = 0;
+	dbus_attest_last_success = true;
+
+	loop_fd = client_open();
+	if (loop_fd < 0) {
+		FAIL("loop connect");
+		return;
+	}
+
+	if (send_sync_counted(loop_fd, ctx->attest_count, ctx->fail_count + 1) <
+		    0 ||
+	    read_frame(ctx, loop_fd, &resp, payload, sizeof(payload), 64) < 0 ||
+	    resp.result != LOTA_IPC_OK) {
+		FAIL("sync");
+		close(loop_fd);
+		return;
+	}
+	close(loop_fd);
+
+	if (dbus_attest_emitted != 1) {
+		FAIL("the daemon never asks D-Bus to emit the result");
+		return;
+	}
+	if (dbus_attest_last_success) {
+		FAIL("a failed round is emitted as a success");
+		return;
+	}
+
+	PASS();
+}
+
+/* Nothing happened, so nothing is announced */
+static void test_repeated_sync_announces_nothing(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int loop_fd;
+
+	TEST("a sync that completed no round announces nothing");
+
+	dbus_attest_emitted = 0;
+
+	loop_fd = client_open();
+	if (loop_fd < 0) {
+		FAIL("loop connect");
+		return;
+	}
+
+	if (send_sync_counted(loop_fd, ctx->attest_count, ctx->fail_count) <
+		    0 ||
+	    read_frame(ctx, loop_fd, &resp, payload, sizeof(payload), 64) < 0 ||
+	    resp.result != LOTA_IPC_OK) {
+		FAIL("sync");
+		close(loop_fd);
+		return;
+	}
+	close(loop_fd);
+
+	if (dbus_attest_emitted != 0) {
+		FAIL("an idle sync is announced as a round");
 		return;
 	}
 
@@ -804,6 +988,9 @@ int main(void)
 	test_outside_client_may_subscribe(&ctx);
 	test_outside_client_is_notified(&ctx);
 	test_publisher_event_stays_reserved(&ctx);
+	test_attest_round_is_reported(&ctx);
+	test_failed_round_is_reported(&ctx);
+	test_repeated_sync_announces_nothing(&ctx);
 	test_session_notification_is_delivered(&ctx);
 	test_sync_after_notification_is_answered(&ctx);
 
