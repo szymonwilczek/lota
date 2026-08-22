@@ -1223,6 +1223,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_loader_symbols \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
+	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
@@ -1655,6 +1656,10 @@ $(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(A
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
 		-Wl,--wrap=policy_verify_buffer
 
+$(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
+
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
 test-bins: $(TEST_BINS)
@@ -1748,6 +1753,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_loader_symbols
 	@$(BUILD_DIR)/test_bpf_loader_load_source
 	@$(BUILD_DIR)/test_bpf_object_preflight
+	@$(BUILD_DIR)/test_ima_policy_scope
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
@@ -1854,7 +1860,7 @@ VALGRIND_UNIT_BINS := \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
-	test_xattr_carry
+	test_xattr_carry test_ima_policy_scope
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
