@@ -55,6 +55,17 @@
 #define SOCKET_DIR "/run/lota"
 #define LOTA_GROUP_NAME "lota"
 
+/*
+ * Events any connected client may subscribe to.
+ *
+ * STATUS, ATTEST and MODE carry only what GET_STATUS returns to any caller,
+ * so pushing them exposes nothing new.
+ * PROFILE is left out: it says which titles hold a session with which publisher.
+ * Only the attestation loop needs it, and SYNC_ATTEST subscribes it implicitly.
+ */
+#define IPC_EVENT_PUBLIC \
+	(LOTA_IPC_EVENT_STATUS | LOTA_IPC_EVENT_ATTEST | LOTA_IPC_EVENT_MODE)
+
 /* Rate limiting: cap privileged PROTECT_PID updates per UID per window */
 #define PROTECT_PID_RATE_LIMIT 60 /* requests */
 #define PROTECT_PID_RATE_WINDOW_SEC 60 /* per minute */
@@ -761,9 +772,6 @@ static int ipc_client_is_privileged(struct ipc_context *ctx,
  * it asks whether the peer's executable is on the operator's verity allowlist,
  * which is empty on default install, so it would refuse the attestation loop
  * on every stock host.
- *
- * ipc_client_is_agent_self() asks for one process, which the two units are not
- * by design.
  */
 static int ipc_client_is_agent_peer(const struct ipc_client *client)
 {
@@ -782,23 +790,6 @@ static int ipc_client_is_agent_peer(const struct ipc_client *client)
 		return 0;
 
 	return current_ticks == client->peer_start_time_ticks;
-}
-
-/*
- * SUBSCRIBE is restricted to the exact agent process identity.
- *
- * Same-UID authorization is too broad when the agent runs as root because it
- * allows any root peer to passively monitor enforcement transitions.
- */
-static int ipc_client_is_agent_self(const struct ipc_client *client)
-{
-	if (!client)
-		return 0;
-
-	if (client->peer_uid != geteuid())
-		return 0;
-
-	return client->peer_pid == getpid();
 }
 
 /*
@@ -1775,6 +1766,10 @@ static void handle_sync_attest(struct ipc_context *ctx,
  *
  * Registers or cancels per-connection push notifications.
  * event_mask = 0 cancels any existing subscription.
+ *
+ * Any connected client may subscribe. Bits the caller may not have are dropped,
+ * so a title asking for everything gets what is meant for it;
+ * the request fails only if nothing is left.
  */
 static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 			     const uint8_t *payload, uint32_t payload_len)
@@ -1782,13 +1777,6 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 	struct lota_ipc_response *resp = (void *)client->send_buf;
 	struct lota_ipc_subscribe_request sub;
 	(void)ctx;
-
-	if (!ipc_client_is_agent_self(client)) {
-		lota_warn("SUBSCRIBE denied for uid=%d pid=%d",
-			  client->peer_uid, client->peer_pid);
-		build_error_response(client, LOTA_IPC_ERR_ACCESS_DENIED);
-		return;
-	}
 
 	if (payload_len < sizeof(sub)) {
 		build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
@@ -1803,8 +1791,18 @@ static void handle_subscribe(struct ipc_context *ctx, struct ipc_client *client,
 		client->notify_pending = false;
 		client->pending_events = 0;
 	} else {
+		uint32_t mask = sub.event_mask;
+
+		if (!client->attest_peer)
+			mask &= IPC_EVENT_PUBLIC;
+
+		if (mask == 0) {
+			build_error_response(client, LOTA_IPC_ERR_BAD_REQUEST);
+			return;
+		}
+
 		client->subscribed = true;
-		client->event_mask = sub.event_mask;
+		client->event_mask = mask;
 	}
 
 	resp->magic = LOTA_IPC_MAGIC;

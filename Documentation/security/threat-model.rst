@@ -144,6 +144,19 @@ Server SDK's ``VerifyToken`` enforces token freshness: a token whose ``validUnti
 is more than ``DefaultMaxTokenAge`` (plus ``MaxClockSkew``) in the future is rejected,
 so a misconfigured or compromised agent cannot mint an effectively immortal token.
 
+A client on the local socket may subscribe to status, attestation and mode
+events. The subscription widens no boundary: those events carry the fields
+``GET_STATUS`` already answers to whoever the socket lets connect, so a subscriber
+learns nothing it could not have learned by asking again -- it saves the asking.
+Publisher events are the exception and stay with the agent's own attestation loop,
+which the daemon knows by the state exchange only that loop performs; they name
+which titles hold a session with which publisher, and a mask that asks for them
+alone is refused as a bad request. A subscription lives on its connection and ends
+with it.
+
+The desktop sees the same changes over ``org.lota.Agent1``, whose signals and
+``emits-change`` properties are the bus-side view of what the socket pushes.
+
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
 window. The agent enforces this where the interval is read: an ``attest_interval``
 past ``DefaultMaxTokenAge`` is refused by the config parser and by
