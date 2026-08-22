@@ -1756,6 +1756,64 @@ static void test_integration_wine_artifacts_consumed_by_eac(void)
 	PASS();
 }
 
+/*
+ * With no token_dir configured the SDK has to look where the hook actually
+ * writes -- $XDG_RUNTIME_DIR/lota-hook -- and not in $XDG_RUNTIME_DIR/lota,
+ * which belongs to the daemon and holds the container socket.
+ */
+static void test_auto_token_dir_is_the_hooks_dir(void)
+{
+	TEST("auto-detected token dir is the hook's, not the daemon's");
+	char xdg[512];
+	char hookdir[600];
+	char daemondir[600];
+	const char *saved_xdg = getenv("XDG_RUNTIME_DIR");
+	char saved[512] = { 0 };
+
+	if (saved_xdg)
+		snprintf(saved, sizeof(saved), "%s", saved_xdg);
+
+	snprintf(xdg, sizeof(xdg), "%s/auto_xdg", test_dir);
+	mkdir(xdg, 0700);
+	snprintf(hookdir, sizeof(hookdir), "%s/lota-hook", xdg);
+	mkdir(hookdir, 0700);
+	snprintf(daemondir, sizeof(daemondir), "%s/lota", xdg);
+	mkdir(daemondir, 0700);
+
+	const uint32_t attested_flags = 0x07;
+	write_wine_status_file(hookdir, attested_flags,
+			       (uint64_t)time(NULL) + 3600);
+	write_mock_snapshot(hookdir, attested_flags);
+
+	setenv("XDG_RUNTIME_DIR", xdg, 1);
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "auto-token-dir",
+		.token_dir = NULL,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+
+	if (saved[0])
+		setenv("XDG_RUNTIME_DIR", saved, 1);
+	else
+		unsetenv("XDG_RUNTIME_DIR");
+
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("did not read the hook's directory");
+		lota_ac_shutdown(s);
+		return;
+	}
+	lota_ac_shutdown(s);
+	PASS();
+}
+
 static void test_integration_eac_detects_agent_death(void)
 {
 	TEST("integration: snapshot disappears mid-session -> ERROR");
@@ -1957,6 +2015,7 @@ int main(void)
 
 	printf("\nIntegration:\n");
 	test_integration_wine_artifacts_consumed_by_eac();
+	test_auto_token_dir_is_the_hooks_dir();
 	test_integration_eac_detects_agent_death();
 	test_integration_eac_detects_attestation_loss();
 

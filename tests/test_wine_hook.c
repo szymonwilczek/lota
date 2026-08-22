@@ -202,9 +202,14 @@ static void test_resolve_token_dir_explicit(void)
 	PASS();
 }
 
+/*
+ * The daemon owns $XDG_RUNTIME_DIR/lota: it creates it root:lota 0750 to hold
+ * the container socket. A hook that writes its secrets there cannot work,
+ * so the default candidate is a directory of the player's own.
+ */
 static void test_resolve_token_dir_xdg(void)
 {
-	TEST("resolve_token_dir: XDG_RUNTIME_DIR + /lota");
+	TEST("resolve_token_dir: XDG_RUNTIME_DIR + /lota-hook");
 
 	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
@@ -214,8 +219,27 @@ static void test_resolve_token_dir_xdg(void)
 
 	unsetenv("XDG_RUNTIME_DIR");
 
-	if (strcmp(g_hook.token_dir, "/run/user/1234/lota") != 0) {
+	if (strcmp(g_hook.token_dir, "/run/user/1234/lota-hook") != 0) {
 		FAIL("wrong dir");
+		return;
+	}
+	PASS();
+}
+
+static void test_resolve_token_dir_never_the_socket_dir(void)
+{
+	TEST("resolve_token_dir: never the directory the daemon owns");
+
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
+
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	resolve_token_dir();
+
+	unsetenv("XDG_RUNTIME_DIR");
+
+	if (strcmp(g_hook.token_dir, "/run/user/1234/lota") == 0) {
+		FAIL("settled on the daemon's socket directory");
 		return;
 	}
 	PASS();
@@ -1035,6 +1059,7 @@ int main(void)
 	/* resolve_token_dir */
 	test_resolve_token_dir_explicit();
 	test_resolve_token_dir_xdg();
+	test_resolve_token_dir_never_the_socket_dir();
 	test_resolve_token_dir_fallback();
 
 	/* ensure_token_dir */
