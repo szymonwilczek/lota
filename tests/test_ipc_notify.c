@@ -1,27 +1,25 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for the push notification the attestation loop sleeps on.
+ * Unit tests for the push notifications the daemon writes out.
  *
- * The loop subscribes by syncing and then waits on the connection instead of
- * the clock, so a session opening reaches it at once.
- * That only holds if the daemon actually writes the notification out,
- * and if the request the loop sends next is still answered afterwards.
- *
- * Driven against the real ipc_process() event loop:
- * what was wrong lived in the epoll arming, which no hand-written server
- * reproduces.
+ * Two callers wait on them. The attestation loop subscribes by syncing
+ * and then waits on the connection instead of the clock, so a session opening
+ * reaches it at once. A title subscribes through the SDK, which the header
+ * offers to every integrator in place of polling the status word.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -556,6 +554,215 @@ out:
 	close(loop_fd);
 }
 
+/*
+ * The client outside the agent cannot report through shared memory,
+ * so its exit code carries the wire result. These sit above every result
+ * code so a failure to get that far is never read as an answer from the daemon.
+ */
+#define CHILD_ERR_CONNECT 0x41
+#define CHILD_ERR_SEND 0x42
+#define CHILD_ERR_NO_ANSWER 0x43
+#define CHILD_ERR_NO_NOTIFY 0x44
+#define CHILD_ERR_NOT_NOTIFY 0x45
+
+/* Read one frame on the client side, which has no event loop to drive */
+static int client_read_frame(int fd, struct lota_ipc_response *resp,
+			     uint8_t *payload, size_t payload_max,
+			     int timeout_ms)
+{
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+
+	if (poll(&pfd, 1, timeout_ms) <= 0)
+		return -ETIMEDOUT;
+
+	if (read(fd, resp, sizeof(*resp)) != (ssize_t)sizeof(*resp))
+		return -EIO;
+	if (resp->magic != LOTA_IPC_MAGIC)
+		return -EBADMSG;
+	if (resp->payload_len > payload_max)
+		return -EMSGSIZE;
+	if (resp->payload_len &&
+	    read(fd, payload, resp->payload_len) != (ssize_t)resp->payload_len)
+		return -EIO;
+
+	return 0;
+}
+
+/*
+ * The client a title runs: subscribe, say so on the pipe, wait for one push.
+ *
+ * Forked because the guard is about the peer's identity, and a connection opened
+ * here carries the daemon's own pid, which no title ever does.
+ */
+static void subscriber_child(uint32_t mask, int ready_fd, bool await_notify)
+{
+	struct lota_ipc_subscribe_request sub = { .event_mask = mask };
+	struct lota_ipc_response resp;
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	struct lota_ipc_notify notify;
+	int fd;
+
+	fd = client_open();
+	if (fd < 0)
+		_exit(CHILD_ERR_CONNECT);
+
+	if (send_request(fd, LOTA_IPC_CMD_SUBSCRIBE, &sub, sizeof(sub)) < 0)
+		_exit(CHILD_ERR_SEND);
+
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_ANSWER);
+
+	if (resp.result != LOTA_IPC_OK || !await_notify)
+		_exit((int)resp.result);
+
+	if (write(ready_fd, "s", 1) != 1)
+		_exit(CHILD_ERR_SEND);
+
+	if (client_read_frame(fd, &resp, payload, sizeof(payload), 2000) < 0)
+		_exit(CHILD_ERR_NO_NOTIFY);
+
+	if (resp.result != LOTA_IPC_NOTIFY || resp.payload_len < sizeof(notify))
+		_exit(CHILD_ERR_NOT_NOTIFY);
+
+	memcpy(&notify, payload, sizeof(notify));
+	_exit((notify.events & LOTA_IPC_EVENT_STATUS) ? 0 :
+							CHILD_ERR_NOT_NOTIFY);
+}
+
+/* Drive the daemon until the forked client is done, and report what it said */
+static int pump_until_exit(struct ipc_context *ctx, pid_t pid, int passes)
+{
+	for (int i = 0; i < passes; i++) {
+		int status;
+
+		if (waitpid(pid, &status, WNOHANG) == pid)
+			return WIFEXITED(status) ? WEXITSTATUS(status) : -EINTR;
+
+		ipc_process(ctx, 10);
+	}
+
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+	return -ETIMEDOUT;
+}
+
+/*
+ * The subscription the SDK header sells has to work for the caller it is sold
+ * to. A title reads the same status word through GET_STATUS whenever it asks,
+ * so refusing to push it changes nothing but the cost of learning it.
+ */
+static void test_outside_client_may_subscribe(struct ipc_context *ctx)
+{
+	pid_t pid;
+	int rc;
+
+	TEST("a client outside the agent may subscribe");
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		return;
+	}
+	if (pid == 0)
+		subscriber_child(LOTA_IPC_EVENT_STATUS | LOTA_IPC_EVENT_ATTEST |
+					 LOTA_IPC_EVENT_MODE,
+				 -1, false);
+
+	rc = pump_until_exit(ctx, pid, 256);
+	if (rc == LOTA_IPC_ERR_ACCESS_DENIED) {
+		FAIL("refused: only the daemon's own pid may subscribe");
+		return;
+	}
+	if (rc != LOTA_IPC_OK) {
+		FAIL("subscribe was not answered with OK");
+		return;
+	}
+
+	PASS();
+}
+
+/* Subscribing is worth nothing unless the event then arrives unasked */
+static void test_outside_client_is_notified(struct ipc_context *ctx)
+{
+	int ready[2];
+	pid_t pid;
+	int rc;
+
+	TEST("a status change is pushed to that client");
+
+	if (pipe(ready) < 0) {
+		FAIL("pipe");
+		return;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		close(ready[0]);
+		close(ready[1]);
+		return;
+	}
+	if (pid == 0) {
+		close(ready[0]);
+		subscriber_child(LOTA_IPC_EVENT_STATUS, ready[1], true);
+	}
+	close(ready[1]);
+
+	/* nothing may change before the client is on the list */
+	for (int i = 0; i < 256; i++) {
+		struct pollfd pfd = { .fd = ready[0], .events = POLLIN };
+
+		if (poll(&pfd, 1, 0) > 0)
+			break;
+		ipc_process(ctx, 10);
+	}
+	close(ready[0]);
+
+	ipc_update_status(ctx, ctx->status_flags ^ LOTA_STATUS_TPM_OK, 0);
+
+	rc = pump_until_exit(ctx, pid, 256);
+	if (rc == CHILD_ERR_NO_NOTIFY) {
+		FAIL("no push: the client has to poll after all");
+		return;
+	}
+	if (rc != 0) {
+		FAIL("the pushed frame is not the status event");
+		return;
+	}
+
+	PASS();
+}
+
+/*
+ * The publisher event is the loop's own business: it carries which titles hold
+ * a session and which publisher this host has never enrolled with, and the loop
+ * is subscribed to it by the act of syncing. A title asking for it alone
+ * is asking for something it can never be given, and hears so.
+ */
+static void test_publisher_event_stays_reserved(struct ipc_context *ctx)
+{
+	pid_t pid;
+	int rc;
+
+	TEST("the publisher event stays reserved to the loop");
+
+	pid = fork();
+	if (pid < 0) {
+		FAIL("fork");
+		return;
+	}
+	if (pid == 0)
+		subscriber_child(LOTA_IPC_EVENT_PROFILE, -1, false);
+
+	rc = pump_until_exit(ctx, pid, 256);
+	if (rc != LOTA_IPC_ERR_BAD_REQUEST) {
+		FAIL("a reserved-only mask is not refused as a bad request");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -594,6 +801,9 @@ int main(void)
 	}
 	ipc_set_profiles(&ctx, profiles, 1);
 
+	test_outside_client_may_subscribe(&ctx);
+	test_outside_client_is_notified(&ctx);
+	test_publisher_event_stays_reserved(&ctx);
 	test_session_notification_is_delivered(&ctx);
 	test_sync_after_notification_is_answered(&ctx);
 
