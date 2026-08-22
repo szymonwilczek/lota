@@ -1770,6 +1770,11 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_ek_root_pin_bundle_lines.sh (no openssl or python3)"; \
 	fi
+	@if command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_ek_roots_update_bundle.sh; \
+	else \
+		echo "SKIP: test_ek_roots_update_bundle.sh (no openssl)"; \
+	fi
 	@tests/integration/test_steam_setup_dropin.sh
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
