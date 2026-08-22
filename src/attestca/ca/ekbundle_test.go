@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -167,5 +168,88 @@ func TestLoadEKRootBundleRejectsMultiCertFile(t *testing.T) {
 	}
 	if _, err := LoadEKRootBundle(dir); err == nil {
 		t.Fatal("accepted a pinned file carrying more than one certificate")
+	}
+}
+
+// writeClassed materializes a bundle directory from explicit manifest lines:
+// one PEM per named certificate and whatever manifest body the caller asks
+// for, so a class can be stated, mis-stated, or left out entirely.
+func writeClassed(t *testing.T, certs map[string]certAndKey, lines ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, ck := range certs {
+		if err := os.WriteFile(filepath.Join(dir, name), pemBlock("CERTIFICATE", ck.der), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	body := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, EKBundleManifestName), []byte(body), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return dir
+}
+
+func certPin(t *testing.T, ck certAndKey) string {
+	t.Helper()
+	sum := sha256.Sum256(ck.der)
+	return hex.EncodeToString(sum[:])
+}
+
+// A bundle entry is either an anchor a chain may terminate at or path
+// material the CA builds through -- the difference decides how much a pin
+// is trusted, so the manifest has to state it. A line that does not is
+// a line written against a format that no longer exists.
+func TestLoadEKRootBundleRejectsUnclassedEntry(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	dir := writeClassed(t,
+		map[string]certAndKey{"vendor-root.pem": root},
+		certPin(t, root)+"  vendor-root.pem  Vendor Root CA")
+
+	if _, err := LoadEKRootBundle(dir); err == nil {
+		t.Fatal("accepted a manifest entry carrying no class")
+	}
+}
+
+func TestLoadEKRootBundleRejectsUnknownClass(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	dir := writeClassed(t,
+		map[string]certAndKey{"vendor-root.pem": root},
+		certPin(t, root)+"  vendor-root.pem  anchor  Vendor Root CA")
+
+	if _, err := LoadEKRootBundle(dir); err == nil {
+		t.Fatal("accepted a manifest entry with a class the CA does not define")
+	}
+}
+
+// Classing a self-signed root as path material asks the CA to build through
+// an anchor it will not anchor at, which loads a bundle that cannot verify
+// anything. The manifest has to be refused.
+func TestLoadEKRootBundleRejectsSelfSignedPathMaterial(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	dir := writeClassed(t,
+		map[string]certAndKey{"vendor-root.pem": root},
+		certPin(t, root)+"  vendor-root.pem  intermediate  Vendor Root CA")
+
+	if _, err := LoadEKRootBundle(dir); err == nil {
+		t.Fatal("accepted a self-signed certificate classed as path material")
+	}
+}
+
+// An intermediate promoted to an anchor trusts one manufacturer branch as if
+// it were the root, which is a weaker pin than the operator wrote down
+// and not what the class says.
+func TestLoadEKRootBundleRejectsNonSelfSignedAnchor(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	issuing := makeIntermediate(t, root, "vendor-issuing")
+	dir := writeClassed(t,
+		map[string]certAndKey{
+			"vendor-root.pem":    root,
+			"vendor-issuing.pem": issuing,
+		},
+		certPin(t, root)+"  vendor-root.pem  root  Vendor Root CA",
+		certPin(t, issuing)+"  vendor-issuing.pem  root  Vendor Issuing CA")
+
+	if _, err := LoadEKRootBundle(dir); err == nil {
+		t.Fatal("accepted an intermediate classed as a trust anchor")
 	}
 }
