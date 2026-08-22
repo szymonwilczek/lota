@@ -182,15 +182,18 @@ static void test_parse_log_level_invalid(void)
 	PASS();
 }
 
-static void test_resolve_token_dir_explicit(void)
+static void test_token_dir_candidate_explicit(void)
 {
-	TEST("resolve_token_dir: LOTA_HOOK_TOKEN_DIR takes priority");
+	TEST("token dir candidate 0: LOTA_HOOK_TOKEN_DIR takes priority");
 
 	setenv("LOTA_HOOK_TOKEN_DIR", "/custom/token/path", 1);
 	setenv("XDG_RUNTIME_DIR", "/run/user/9999", 1);
 
 	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-	resolve_token_dir();
+	if (token_dir_candidate(0) != 0) {
+		FAIL("the override was not offered first");
+		return;
+	}
 
 	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	unsetenv("XDG_RUNTIME_DIR");
@@ -207,15 +210,18 @@ static void test_resolve_token_dir_explicit(void)
  * the container socket. A hook that writes its secrets there cannot work,
  * so the default candidate is a directory of the player's own.
  */
-static void test_resolve_token_dir_xdg(void)
+static void test_token_dir_candidate_xdg(void)
 {
-	TEST("resolve_token_dir: XDG_RUNTIME_DIR + /lota-hook");
+	TEST("token dir candidate 1: XDG_RUNTIME_DIR + /lota-hook");
 
 	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
 
 	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-	resolve_token_dir();
+	if (token_dir_candidate(1) != 0) {
+		FAIL("no candidate for a set XDG_RUNTIME_DIR");
+		return;
+	}
 
 	unsetenv("XDG_RUNTIME_DIR");
 
@@ -226,36 +232,42 @@ static void test_resolve_token_dir_xdg(void)
 	PASS();
 }
 
-static void test_resolve_token_dir_never_the_socket_dir(void)
+static void test_token_dir_candidates_never_the_socket_dir(void)
 {
-	TEST("resolve_token_dir: never the directory the daemon owns");
+	TEST("token dir candidates: never the directory the daemon owns");
 
 	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	setenv("XDG_RUNTIME_DIR", "/run/user/1234", 1);
 
-	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-	resolve_token_dir();
+	for (int n = 0; n < 3; n++) {
+		memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+		if (token_dir_candidate(n) != 0)
+			continue;
+		if (strcmp(g_hook.token_dir, "/run/user/1234/lota") == 0) {
+			unsetenv("XDG_RUNTIME_DIR");
+			FAIL("a candidate is the daemon's socket directory");
+			return;
+		}
+	}
 
 	unsetenv("XDG_RUNTIME_DIR");
-
-	if (strcmp(g_hook.token_dir, "/run/user/1234/lota") == 0) {
-		FAIL("settled on the daemon's socket directory");
-		return;
-	}
 	PASS();
 }
 
-static void test_resolve_token_dir_fallback(void)
+static void test_token_dir_candidate_fallback(void)
 {
 	char expected[PATH_MAX];
 
-	TEST("resolve_token_dir: fallback to /tmp/lota-<uid>");
+	TEST("token dir candidate 2: /tmp/lota-<uid>");
 
 	unsetenv("LOTA_HOOK_TOKEN_DIR");
 	unsetenv("XDG_RUNTIME_DIR");
 
 	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
-	resolve_token_dir();
+	if (token_dir_candidate(2) != 0) {
+		FAIL("no last-resort candidate");
+		return;
+	}
 
 	snprintf(expected, sizeof(expected), "/tmp/lota-%u",
 		 (unsigned)getuid());
@@ -264,6 +276,88 @@ static void test_resolve_token_dir_fallback(void)
 		FAIL("wrong fallback dir");
 		return;
 	}
+	PASS();
+}
+
+/*
+ * A candidate that cannot be used is not the end of the hook.
+ * The player gets attestation from whichever directory works, and the log says
+ * which one that was.
+ */
+static void test_setup_token_dir_falls_through(void)
+{
+	char expected[PATH_MAX];
+	char blocker[PATH_MAX];
+	int fd;
+
+	TEST("setup_token_dir: an unusable candidate is skipped, not fatal");
+
+	snprintf(blocker, sizeof(blocker), "%s/lota-hook", tmpdir);
+	fd = open(blocker, O_CREAT | O_WRONLY, 0644);
+	if (fd >= 0)
+		close(fd);
+
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	setenv("XDG_RUNTIME_DIR", tmpdir, 1);
+
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	g_hook.log_level = HOOK_LOG_SILENT;
+	int ret = setup_token_dir();
+	g_hook.log_level = HOOK_LOG_WARN;
+
+	unsetenv("XDG_RUNTIME_DIR");
+	unlink(blocker);
+
+	snprintf(expected, sizeof(expected), "/tmp/lota-%u",
+		 (unsigned)getuid());
+
+	if (ret != 0) {
+		FAIL("gave up instead of falling through");
+		return;
+	}
+	if (strcmp(g_hook.token_dir, expected) != 0) {
+		FAIL("did not settle on the fallback");
+		return;
+	}
+	PASS();
+}
+
+static void test_setup_token_dir_explicit_refused_falls_through(void)
+{
+	char blocker[PATH_MAX];
+	char expected[PATH_MAX];
+	int fd;
+
+	TEST("setup_token_dir: a refused override falls through too");
+
+	snprintf(blocker, sizeof(blocker), "%s/override_is_a_file", tmpdir);
+	fd = open(blocker, O_CREAT | O_WRONLY, 0644);
+	if (fd >= 0)
+		close(fd);
+
+	setenv("LOTA_HOOK_TOKEN_DIR", blocker, 1);
+	setenv("XDG_RUNTIME_DIR", tmpdir, 1);
+
+	memset(g_hook.token_dir, 0, sizeof(g_hook.token_dir));
+	g_hook.log_level = HOOK_LOG_SILENT;
+	int ret = setup_token_dir();
+	g_hook.log_level = HOOK_LOG_WARN;
+
+	unsetenv("LOTA_HOOK_TOKEN_DIR");
+	unsetenv("XDG_RUNTIME_DIR");
+	unlink(blocker);
+
+	snprintf(expected, sizeof(expected), "%s/lota-hook", tmpdir);
+
+	if (ret != 0) {
+		FAIL("gave up instead of falling through");
+		return;
+	}
+	if (strcmp(g_hook.token_dir, expected) != 0) {
+		FAIL("did not settle on the next candidate");
+		return;
+	}
+	rmdir(expected);
 	PASS();
 }
 
@@ -1057,10 +1151,12 @@ int main(void)
 	test_parse_log_level_invalid();
 
 	/* resolve_token_dir */
-	test_resolve_token_dir_explicit();
-	test_resolve_token_dir_xdg();
-	test_resolve_token_dir_never_the_socket_dir();
-	test_resolve_token_dir_fallback();
+	test_token_dir_candidate_explicit();
+	test_token_dir_candidate_xdg();
+	test_token_dir_candidates_never_the_socket_dir();
+	test_token_dir_candidate_fallback();
+	test_setup_token_dir_falls_through();
+	test_setup_token_dir_explicit_refused_falls_through();
 
 	/* ensure_token_dir */
 	test_ensure_token_dir_creates();

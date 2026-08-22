@@ -263,34 +263,45 @@ static int parse_log_level(const char *s)
 }
 
 /*
- * Determine the token output directory.
+ * Write the @n'th token-directory candidate into g_hook.token_dir.
  *
- * Priority:
- *   1. LOTA_HOOK_TOKEN_DIR   (explicit override)
- *   2. $XDG_RUNTIME_DIR/lota (standard runtime directory)
- *   3. /tmp/lota-<uid>       (fallback)
+ * Candidates, in order:
+ *   0. LOTA_HOOK_TOKEN_DIR        (explicit override, absent -> skipped)
+ *   1. $XDG_RUNTIME_DIR/lota-hook (the player's own runtime directory)
+ *   2. /tmp/lota-<uid>            (no runtime directory at all)
  *
- * Writes result into g_hook.token_dir
+ * $XDG_RUNTIME_DIR/lota is deliberately not among them: the agent creates
+ * that one root:lota 0750 for the container socket
+ * (src/agent/steam_runtime.c::steam_runtime_ensure_socket_dir),
+ * and this directory holds files the player must own and nobody else may read.
+ *
+ * Returns 0 when a candidate was written, -ENOENT when @n names none.
  */
-static void resolve_token_dir(void)
+static int token_dir_candidate(int n)
 {
 	const char *env;
 
-	env = getenv(LOTA_HOOK_ENV_TOKEN_DIR);
-	if (env && env[0]) {
+	switch (n) {
+	case 0:
+		env = getenv(LOTA_HOOK_ENV_TOKEN_DIR);
+		if (!env || !env[0])
+			return -ENOENT;
 		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", env);
-		return;
+		return 0;
+	case 1:
+		env = getenv("XDG_RUNTIME_DIR");
+		if (!env || !env[0])
+			return -ENOENT;
+		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir),
+			 "%s/" LOTA_HOOK_TOKEN_DIR_NAME, env);
+		return 0;
+	case 2:
+		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir),
+			 "/tmp/lota-%u", (unsigned)getuid());
+		return 0;
+	default:
+		return -ENOENT;
 	}
-
-	env = getenv("XDG_RUNTIME_DIR");
-	if (env && env[0]) {
-		snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/lota",
-			 env);
-		return;
-	}
-
-	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "/tmp/lota-%u",
-		 (unsigned)getuid());
 }
 
 /*
@@ -357,6 +368,43 @@ static int ensure_token_dir(void)
 	close(dirfd);
 
 	return 0;
+}
+
+/*
+ * Settle on a token directory: the first candidate that can be made
+ * a private directory of the player's own.
+ *
+ * A candidate that cannot be used is not the end of the hook -- a player
+ * whose runtime directory is unusable still gets attestation out of /tmp
+ * -- so each refusal is reported and the next candidate is tried.
+ * The directory that was settled on is named by the caller's own log line,
+ * because a hook writing somewhere other than the documented default is
+ * the first thing an integrator needs to know.
+ *
+ * Returns 0 with g_hook.token_dir set, or the last error when every
+ * candidate was refused.
+ */
+static int setup_token_dir(void)
+{
+	int last = -ENOENT;
+
+	for (int n = 0; n < 3; n++) {
+		int ret;
+
+		if (token_dir_candidate(n) != 0)
+			continue;
+
+		ret = ensure_token_dir();
+		if (ret == 0)
+			return 0;
+
+		last = ret;
+		LOG_WRN("token dir unusable (%s); trying the next one",
+			strerror(-ret));
+	}
+
+	g_hook.token_dir[0] = '\0';
+	return last;
 }
 
 /*
@@ -779,10 +827,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 				     atoi(env) :
 				     LOTA_HOOK_DEFAULT_REFRESH_SEC;
 
-	/* resolve and create token directory */
-	resolve_token_dir();
-
-	if (ensure_token_dir() < 0)
+	/* settle on a token directory the player owns */
+	if (setup_token_dir() < 0)
 		return;
 
 	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/%s",
@@ -847,7 +893,7 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 	 * Do NOT unlink the status / token / snapshot files here. The
 	 * Steam launch chain inherits LD_PRELOAD into every fork+exec;
 	 * each one runs its own constructor and destructor, all sharing
-	 * the same $XDG_RUNTIME_DIR/lota/ token sink. A helper that
+	 * the same $XDG_RUNTIME_DIR/lota-hook/ token sink. A helper that
 	 * exits before the game binary would otherwise unlink the
 	 * artefacts the still-running cs2 hook just wrote, leaving the
 	 * consumer (verify-attested.sh, server-side bridge) with a

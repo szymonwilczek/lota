@@ -135,6 +135,17 @@ an integration:
        every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
        your CA anchor's SubjectPublicKeyInfo, which your installer
        already knows because ``--add-publisher`` prints it.
+   * - Token directory
+     - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
+       auto-detect. Auto-detection follows the producer exactly:
+       ``$LOTA_HOOK_TOKEN_DIR``, then ``$XDG_RUNTIME_DIR/lota-hook``,
+       then ``/tmp/lota-<uid>``. It is never ``$XDG_RUNTIME_DIR/lota``,
+       which the agent owns as ``root:lota`` for the container socket --
+       a directory the player cannot write, so no producer puts a token
+       there. If your launcher sets the directory itself, set it on both
+       sides or export ``LOTA_HOOK_TOKEN_DIR`` before the title starts,
+       and remember a pressure-vessel container has to have that
+       directory bind-mounted into it.
    * - Verdict handling
      - The demo prints. Yours is your anti-cheat policy.
    * - Heartbeat interval

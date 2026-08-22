@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <openssl/crypto.h>
@@ -26,6 +27,7 @@
 #include "lota_endian.h"
 #include "lota_gaming.h"
 #include "lota_server.h"
+#include "lota_wine_hook.h"
 #include "lota_snapshot.h"
 
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
@@ -922,30 +924,66 @@ out:
 
 /*
  * Resolve token directory for file mode.
- * Priority: cfg->token_dir > $LOTA_HOOK_TOKEN_DIR > $XDG_RUNTIME_DIR/lota
+ *
+ * Priority: cfg->token_dir > $LOTA_HOOK_TOKEN_DIR >
+ *           $XDG_RUNTIME_DIR/lota-hook > /tmp/lota-<uid>
+ *
+ * This mirrors the producer (src/sdk/lota_wine_hook.c), and has to:
+ * a consumer that looks anywhere else reads a directory the hook never
+ * writes.
+ * $XDG_RUNTIME_DIR/lota is the agent's -- it holds the container socket
+ * at root:lota 0750 -- so neither side may resolve it.
+ *
+ * The hook exports LOTA_HOOK_TOKEN_DIR for whatever it settled on,
+ * so an in-process consumer follows a fallback automatically; a consumer in
+ * a separate process walks the same list and takes the first directory that
+ * exists.
  */
 static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 			     size_t outlen)
 {
 	const char *dir = cfg->token_dir;
+	const char *xdg;
+	struct stat st;
+	int ret;
+
 	if (!dir)
 		dir = getenv("LOTA_HOOK_TOKEN_DIR");
 
-	if (!dir) {
-		const char *xdg = getenv("XDG_RUNTIME_DIR");
-		if (xdg) {
-			int ret = snprintf(out, outlen, "%s/lota", xdg);
-			if (ret < 0 || (size_t)ret >= outlen)
-				return -ENAMETOOLONG;
-			return 0;
-		}
-		return -ENOENT;
+	if (dir) {
+		if (strlen(dir) >= outlen)
+			return -ENAMETOOLONG;
+		strncpy(out, dir, outlen - 1);
+		out[outlen - 1] = '\0';
+		return 0;
 	}
 
-	if (strlen(dir) >= outlen)
+	xdg = getenv("XDG_RUNTIME_DIR");
+	if (xdg && xdg[0]) {
+		ret = snprintf(out, outlen, "%s/%s", xdg,
+			       LOTA_HOOK_TOKEN_DIR_NAME);
+		if (ret < 0 || (size_t)ret >= outlen)
+			return -ENAMETOOLONG;
+		if (stat(out, &st) == 0 && S_ISDIR(st.st_mode))
+			return 0;
+	}
+
+	ret = snprintf(out, outlen, "/tmp/lota-%u", (unsigned)getuid());
+	if (ret < 0 || (size_t)ret >= outlen)
 		return -ENAMETOOLONG;
-	strncpy(out, dir, outlen - 1);
-	out[outlen - 1] = '\0';
+	if (stat(out, &st) == 0 && S_ISDIR(st.st_mode))
+		return 0;
+
+	/*
+	 * Neither exists.
+	 * Report the documented default, so the error names the directory
+	 * an integrator is expecting the hook to have made.
+	 */
+	if (!xdg || !xdg[0])
+		return -ENOENT;
+	ret = snprintf(out, outlen, "%s/%s", xdg, LOTA_HOOK_TOKEN_DIR_NAME);
+	if (ret < 0 || (size_t)ret >= outlen)
+		return -ENAMETOOLONG;
 	return 0;
 }
 
