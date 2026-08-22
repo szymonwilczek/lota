@@ -1765,6 +1765,7 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_ek_root_pin_nv_chain.sh (no openssl)"; \
 	fi
+	@tests/integration/test_steam_setup_dropin.sh
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
