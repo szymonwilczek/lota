@@ -68,7 +68,7 @@ enum lota_ac_provider {
 enum lota_ac_state {
 	LOTA_AC_STATE_IDLE = 0, /* not initialised */
 	LOTA_AC_STATE_RUNNING = 1, /* active, agent reachable */
-	LOTA_AC_STATE_TRUSTED = 2, /* attested: all required flags set */
+	LOTA_AC_STATE_TRUSTED = 2, /* attested, and every required flag set */
 	LOTA_AC_STATE_UNTRUSTED = 3, /* agent reachable but not attested */
 	LOTA_AC_STATE_ERROR = 4, /* cannot reach agent / internal fault */
 };
@@ -139,9 +139,15 @@ struct lota_ac_config {
 	uint32_t heartbeat_interval_sec; /* 0 -> default (30 s) */
 
 	/*
-	 * Required attestation flags. Heartbeat state is TRUSTED only if
-	 * (lota_flags & required_flags) == required_flags.
-	 * Use 0 to accept any non-zero flags.
+	 * Extra attestation flags this title insists on.
+	 *
+	 * Heartbeat state is TRUSTED only if every one of them is set,
+	 * and only if LOTA_FLAG_ATTESTED is set: this field raises the bar
+	 * and cannot lower it.
+	 * Leaving it 0 asks for attestation alone, which is what TRUSTED means
+	 * -- it does not accept any status word that happens to be non-zero,
+	 * because a word is non-zero as soon as the agent holds a TPM handle
+	 * and nobody has attested anything.
 	 */
 	uint32_t required_flags;
 
@@ -234,8 +240,7 @@ struct lota_ac_heartbeat_wire {
 
 struct lota_ac_info {
 	enum lota_ac_provider provider;
-	enum lota_ac_state
-		state; /* authoritative only for verify_heartbeat output */
+	enum lota_ac_state state;
 	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
 	uint64_t session_start; /* epoch */
 	uint64_t last_heartbeat; /* epoch */
@@ -253,8 +258,8 @@ struct lota_ac_info {
 	uint32_t lota_flags;
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
-	int trusted; /* set only by lota_ac_verify_heartbeat(); always 0 from
-		      * get_info
+	int trusted; /* state == LOTA_AC_STATE_TRUSTED, in the same terms the
+		      * state field is in
 		      */
 };
 
@@ -304,6 +309,11 @@ void lota_ac_shutdown(struct lota_ac_session *session);
 
 /*
  * Get current session state.
+ *
+ * Local telemetry, not an authority: client-side memory can be hooked,
+ * and a server's trust must come from lota_ac_verify_heartbeat() over the packets
+ * it received. Useful for what a launcher shows a player before a round starts.
+ *
  * Returns LOTA_AC_STATE_IDLE if session is NULL.
  */
 enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
@@ -315,6 +325,10 @@ enum lota_ac_state lota_ac_get_state(const struct lota_ac_session *session);
  * Treat it as local diagnostics only. Client-side memory can be hooked; server
  * trust must come from lota_ac_verify_heartbeat() over received heartbeat
  * packets.
+ *
+ * The state and trusted fields carry what lota_ac_get_state() carries.
+ * Both roads out of a session are local telemetry, so they answer the same thing;
+ * neither becomes an authority by agreeing with the other.
  *
  * Returns 0 on success, -EINVAL if session or info is NULL.
  */

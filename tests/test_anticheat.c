@@ -581,7 +581,7 @@ static void test_get_info_null_info(void)
 
 static void test_get_info_fields(void)
 {
-	TEST("get_info returns local telemetry only");
+	TEST("get_info returns the session's own telemetry");
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
@@ -607,7 +607,8 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(provider) ");
 	}
-	if (info.state != LOTA_AC_STATE_RUNNING) {
+	/* 0x07 carries ATTESTED, so the session is trusted and says so */
+	if (info.state != LOTA_AC_STATE_TRUSTED) {
 		ok = 0;
 		printf("(state) ");
 	}
@@ -619,7 +620,7 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(flags) ");
 	}
-	if (info.trusted != 0) {
+	if (info.trusted != 1) {
 		ok = 0;
 		printf("(trusted) ");
 	}
