@@ -451,31 +451,66 @@ int dbus_process(struct dbus_context *ctx, uint64_t timeout_us)
 	return 0;
 }
 
+/*
+ * Put what was emitted on the wire, and say so when it did not go.
+ *
+ * sd_bus_emit_signal() hands the message to the connection, which writes it
+ * only as far as the socket takes without blocking, and queues the rest.
+ * The daemon drives this connection from epoll, which reports the fd readable.
+ * Flushing here is what makes an emit an emit.
+ */
+static void emit_flush(struct dbus_context *ctx, const char *what, int ret)
+{
+	if (ret < 0) {
+		lota_warn("D-Bus: %s not emitted: %s", what, strerror(-ret));
+		return;
+	}
+
+	ret = sd_bus_flush(ctx->bus);
+	if (ret < 0)
+		lota_warn("D-Bus: %s emitted but not flushed: %s", what,
+			  strerror(-ret));
+}
+
 void dbus_emit_status_changed(struct dbus_context *ctx, uint32_t flags)
 {
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "StatusChanged", "u", flags);
+	emit_flush(ctx, "StatusChanged",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "StatusChanged", "u",
+				      flags));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "StatusFlags",
-				       "LastAttestTime", "ValidUntil",
-				       "AttestCount", "FailCount", NULL);
+	emit_flush(ctx, "StatusFlags properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "StatusFlags", "LastAttestTime", "ValidUntil",
+			   "AttestCount", "FailCount", NULL));
 }
 
+/*
+ * A round is when the tallies move, and it is also when the host last attested
+ * and how long that answer holds, so all four properties are announced with
+ * the signal.
+ * Nothing else moves LastAttestTime or ValidUntil on a host whose status word
+ * is steady, and both are declared emits-change.
+ */
 void dbus_emit_attestation_result(struct dbus_context *ctx, bool success)
 {
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "AttestationResult", "b", (int)success);
+	emit_flush(ctx, "AttestationResult",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "AttestationResult",
+				      "b", (int)success));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "AttestCount",
-				       "FailCount", NULL);
+	emit_flush(ctx, "AttestCount properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "AttestCount", "FailCount", "LastAttestTime",
+			   "ValidUntil", NULL));
 }
 
 void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
@@ -483,11 +518,15 @@ void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode)
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
-			   "ModeChanged", "s", mode_string(mode));
+	emit_flush(ctx, "ModeChanged",
+		   sd_bus_emit_signal(ctx->bus, LOTA_DBUS_OBJECT_PATH,
+				      LOTA_DBUS_INTERFACE, "ModeChanged", "s",
+				      mode_string(mode)));
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "Mode", NULL);
+	emit_flush(ctx, "Mode property",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "Mode", NULL));
 }
 
 void dbus_emit_rotation_changed(struct dbus_context *ctx)
@@ -495,12 +534,12 @@ void dbus_emit_rotation_changed(struct dbus_context *ctx)
 	if (!ctx || !ctx->bus)
 		return;
 
-	sd_bus_emit_properties_changed(ctx->bus, LOTA_DBUS_OBJECT_PATH,
-				       LOTA_DBUS_INTERFACE, "AikGeneration",
-				       "AikProvisionedAt", "AikLastRotatedAt",
-				       "AikRotationDeadline",
-				       "AikGraceDeadline", "ReenrollRequired",
-				       NULL);
+	emit_flush(ctx, "AIK rotation properties",
+		   sd_bus_emit_properties_changed(
+			   ctx->bus, LOTA_DBUS_OBJECT_PATH, LOTA_DBUS_INTERFACE,
+			   "AikGeneration", "AikProvisionedAt",
+			   "AikLastRotatedAt", "AikRotationDeadline",
+			   "AikGraceDeadline", "ReenrollRequired", NULL));
 }
 
 void dbus_cleanup(struct dbus_context *ctx)
