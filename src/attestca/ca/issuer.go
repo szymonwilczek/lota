@@ -97,20 +97,21 @@ type Issuer struct {
 	ekRoots *x509.CertPool
 	certTTL time.Duration
 
-	// ekIntermediates holds the non-self-signed certificates from the
-	// operator bundle.
-	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert),
-	// so chain material for a leaf -> intermediate -> root manufacturer PKI
-	// has to come from the bundle.
-	// Every cert still stays an anchor in ekRoots.
-	// Intermediates are additionally offered here so cert.Verify can build
-	// through them.
+	// ekIntermediates holds the path material the operator pinned.
+	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert)
+	// plus whatever the chip stores, so the rest of a
+	// leaf -> intermediate -> root manufacturer PKI has to come from the
+	// bundle.
+	// Nothing here is an anchor: a certificate in this pool can only
+	// complete a route that still terminates in ekRoots.
 	ekIntermediates *x509.CertPool
 
 	// ekRootCerts mirrors ekRoots as a slice:
 	// CRL engine verifies each manufacturer CRL signature against the
 	// certificate whose Subject matches the CRL Issuer, which a CertPool
 	// cannot answer.
+	// Pinned intermediates are in it too: manufacturers that issue EK
+	// certificates through an intermediate sign the covering CRL with it.
 	ekRootCerts []*x509.Certificate
 
 	// ekCRLPaths holds the operator-configured manufacturer CRL file
@@ -142,13 +143,24 @@ type IssuerConfig struct {
 	CASigner crypto.Signer
 
 	// EKRootPEMs are the PEM-encoded TPM manufacturer root certificates.
+	// They are trust anchors: a chain terminates here or it is refused.
 	EKRootPEMs [][]byte
+
+	// EKIntermediatePEMs are PEM-encoded manufacturer CA certificates
+	// the operator pins as path material.
+	// A firmware TPM sends the certificates it keeps on the chip with its
+	// enrollment request; the ones above those are published only by the vendor,
+	// so the operator supplies them here.
+	// They complete a route to an anchor and never become one, so pinning
+	// an intermediate does not quietly narrow the trusted set to one
+	// manufacturer branch.
+	EKIntermediatePEMs [][]byte
 
 	// EKCRLPaths are files holding TPM manufacturer CRLs (PEM or DER;
 	// a file may bundle several PEM blocks).
-	// Each CRL must be signed by a certificate in EKRootPEMs - for a
-	// manufacturer whose CRL is issued by an intermediate CA, that
-	// intermediate must be part of the bundle.
+	// Each CRL must be signed by a certificate in EKRootPEMs
+	// or EKIntermediatePEMs - a manufacturer whose CRL is issued by
+	// an intermediate CA needs that intermediate pinned for the feed to load.
 	// Enrollment rejects an EK certificate listed in a matching CRL;
 	// Issuer whose every CRL is stale fails closed.
 	// Empty means no revocation feed (issuers without a configured CRL
@@ -202,12 +214,21 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		}
 		ekRoots.AddCert(root)
 		ekRootCerts = append(ekRootCerts, root)
-		// non-self-signed bundle entry is a manufacturer intermediate:
-		// also offer it as chain material so a leaf issued under it can
-		// build up to a bundled root
+		// an anchor that is not self-signed only anchors anything if
+		// a chain can also be built through it
 		if !bytes.Equal(root.RawSubject, root.RawIssuer) {
 			ekIntermediates.AddCert(root)
 		}
+	}
+	for i, interPEM := range cfg.EKIntermediatePEMs {
+		inter, err := parseCertPEM(interPEM)
+		if err != nil {
+			return nil, fmt.Errorf("EK intermediate %d: %w", i, err)
+		}
+		ekIntermediates.AddCert(inter)
+		// path material, never an anchor -- but the CRL engine still has
+		// to find it by Subject to verify a CRL it signed
+		ekRootCerts = append(ekRootCerts, inter)
 	}
 
 	ttl := cfg.AIKCertTTL

@@ -14,8 +14,8 @@ import (
 )
 
 // writeBundle materializes a bundle directory: one PEM file per root and a
-// manifest pinning each by its true SHA-256. The caller mutates the result
-// to exercise the fail-closed paths.
+// manifest pinning each by its true SHA-256, classed as the trust anchor it
+// is. The caller mutates the result to exercise the fail-closed paths.
 func writeBundle(t *testing.T, roots map[string]certAndKey) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -26,7 +26,8 @@ func writeBundle(t *testing.T, roots map[string]certAndKey) string {
 			t.Fatalf("write %s: %v", name, err)
 		}
 		sum := sha256.Sum256(rk.der)
-		line := hex.EncodeToString(sum[:]) + "  " + name + "  vendor " + name + "\n"
+		line := hex.EncodeToString(sum[:]) + "  " + name + "  " + EKClassRoot +
+			"  vendor " + name + "\n"
 		manifest = append(manifest, line...)
 	}
 	if err := os.WriteFile(filepath.Join(dir, EKBundleManifestName), manifest, 0o644); err != nil {
@@ -43,18 +44,21 @@ func TestLoadEKRootBundleAcceptsPinnedRoots(t *testing.T) {
 	}
 	dir := writeBundle(t, roots)
 
-	pems, err := LoadEKRootBundle(dir)
+	bundle, err := LoadEKRootBundle(dir)
 	if err != nil {
 		t.Fatalf("LoadEKRootBundle: %v", err)
 	}
-	if len(pems) != len(roots) {
-		t.Fatalf("loaded %d roots, want %d", len(pems), len(roots))
+	if len(bundle.Roots) != len(roots) {
+		t.Fatalf("loaded %d roots, want %d", len(bundle.Roots), len(roots))
+	}
+	if len(bundle.Intermediates) != 0 {
+		t.Fatalf("loaded %d intermediates, want none", len(bundle.Intermediates))
 	}
 
 	// loaded bundle must wire straight into an Issuer and verify an EK
 	// minted under one of the bundled roots
 	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
-	is, err := NewIssuer(IssuerConfig{CACertPEM: caCertPEM, CAKeyPEM: caKeyPEM, EKRootPEMs: pems})
+	is, err := NewIssuer(IssuerConfig{CACertPEM: caCertPEM, CAKeyPEM: caKeyPEM, EKRootPEMs: bundle.Roots})
 	if err != nil {
 		t.Fatalf("NewIssuer with bundle: %v", err)
 	}
@@ -124,7 +128,7 @@ func TestLoadEKRootBundleRejectsEmptyManifest(t *testing.T) {
 func TestLoadEKRootBundleRejectsMalformedPin(t *testing.T) {
 	roots := map[string]certAndKey{"infineon.pem": makeRoot(t, "infineon-root")}
 	dir := writeBundle(t, roots)
-	body := "nothex  infineon.pem  vendor\n"
+	body := "nothex  infineon.pem  root  vendor\n"
 	if err := os.WriteFile(filepath.Join(dir, EKBundleManifestName), []byte(body), 0o644); err != nil {
 		t.Fatalf("rewrite manifest: %v", err)
 	}
@@ -144,7 +148,7 @@ func TestLoadEKRootBundleRejectsDuplicatePin(t *testing.T) {
 	}
 	sum := sha256.Sum256(root.der)
 	pin := hex.EncodeToString(sum[:])
-	body := pin + "  a.pem  vendor\n" + pin + "  b.pem  vendor\n"
+	body := pin + "  a.pem  root  vendor\n" + pin + "  b.pem  root  vendor\n"
 	if err := os.WriteFile(filepath.Join(dir, EKBundleManifestName), []byte(body), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -162,7 +166,7 @@ func TestLoadEKRootBundleRejectsMultiCertFile(t *testing.T) {
 		t.Fatalf("write pair: %v", err)
 	}
 	sum := sha256.Sum256(r1.der)
-	body := hex.EncodeToString(sum[:]) + "  pair.pem  vendor\n"
+	body := hex.EncodeToString(sum[:]) + "  pair.pem  root  vendor\n"
 	if err := os.WriteFile(filepath.Join(dir, EKBundleManifestName), []byte(body), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -251,5 +255,64 @@ func TestLoadEKRootBundleRejectsNonSelfSignedAnchor(t *testing.T) {
 
 	if _, err := LoadEKRootBundle(dir); err == nil {
 		t.Fatal("accepted an intermediate classed as a trust anchor")
+	}
+}
+
+// A bundle drafted for a firmware TPM carries both halves the CA needs:
+// the vendor root it anchors at, and the certificates between that root
+// and the ones the chip carries.
+// The loader has to keep them apart -- everything in one pile is how
+// an intermediate becomes an anchor.
+func TestLoadEKRootBundleSplitsAnchorsFromPathMaterial(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	issuing := makeIntermediate(t, root, "vendor-issuing")
+	dir := writeClassed(t,
+		map[string]certAndKey{
+			"vendor-root.pem":    root,
+			"vendor-issuing.pem": issuing,
+		},
+		certPin(t, root)+"  vendor-root.pem  "+EKClassRoot+"  Vendor Root CA",
+		certPin(t, issuing)+"  vendor-issuing.pem  "+EKClassIntermediate+"  Vendor Issuing CA")
+
+	bundle, err := LoadEKRootBundle(dir)
+	if err != nil {
+		t.Fatalf("LoadEKRootBundle: %v", err)
+	}
+	if len(bundle.Roots) != 1 {
+		t.Fatalf("loaded %d anchors, want 1", len(bundle.Roots))
+	}
+	if len(bundle.Intermediates) != 1 {
+		t.Fatalf("loaded %d intermediates, want 1", len(bundle.Intermediates))
+	}
+
+	// and the two halves together verify a leaf issued under the pinned
+	// intermediate, which is what the bundle exists for
+	caCertPEM, caKeyPEM := makeLOTACAPEM(t)
+	is, err := NewIssuer(IssuerConfig{
+		CACertPEM:          caCertPEM,
+		CAKeyPEM:           caKeyPEM,
+		EKRootPEMs:         bundle.Roots,
+		EKIntermediatePEMs: bundle.Intermediates,
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer with bundle: %v", err)
+	}
+	ekDER, _ := makeEKCert(t, issuing, nil)
+	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
+		t.Fatalf("bundled path material did not complete the chain: %v", err)
+	}
+}
+
+// A bundle of nothing but path material anchors no chain, so it is refused
+// where the operator can still see why.
+func TestLoadEKRootBundleRejectsPathMaterialOnly(t *testing.T) {
+	root := makeRoot(t, "vendor-root")
+	issuing := makeIntermediate(t, root, "vendor-issuing")
+	dir := writeClassed(t,
+		map[string]certAndKey{"vendor-issuing.pem": issuing},
+		certPin(t, issuing)+"  vendor-issuing.pem  "+EKClassIntermediate+"  Vendor Issuing CA")
+
+	if _, err := LoadEKRootBundle(dir); err == nil {
+		t.Fatal("accepted a bundle that pins no anchor")
 	}
 }

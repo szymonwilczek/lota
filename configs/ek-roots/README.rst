@@ -177,22 +177,26 @@ root the operator pinned, and they can never become an anchor, so a host that
 presents its own self-signed root is refused exactly as one presenting nothing.
 Everything else has to come from the bundle: **the bundle must include every
 intermediate on the path that the device does not carry**, pinned in the
-manifest exactly like a root. Both halves are load-bearing -- a platform whose
-on-chip certificates cover only part of the gap still needs the rest pinned.
+manifest with class ``intermediate``. Both halves are load-bearing -- a
+platform whose on-chip certificates cover only part of the gap still needs the
+rest pinned.
 
-Bundled intermediates serve both as path material (a leaf issued by a bundled
-intermediate verifies up to the bundled root) and as trust anchors in their own
-right -- pinning only the intermediate is a deliberate narrowing that trusts one
-manufacturer branch instead of everything under the root. Pinning an
-intermediate the device also presents is harmless and costs one fetch less at
-enrollment time.
+A bundled intermediate is path material and nothing more. It completes a route
+that still has to terminate at a certificate classed ``root``, so pinning one
+does not quietly narrow the trusted set to a single manufacturer branch, and it
+cannot stand in for the root it hangs from: a bundle that pins only
+intermediates is refused at load, because it anchors no chain. Deliberately
+trusting one branch instead of everything under a root is a different decision,
+made by pinning that branch's certificate as a ``root`` -- which the loader
+refuses unless the certificate really is self-signed. Pinning an intermediate
+the device also presents is harmless and costs one fetch less at enrollment
+time.
 
-Because a bundled intermediate is itself an anchor, its own revocation by the
-parent root is not evaluated during EK verification: the CA checks EK leaves
-against the manufacturer CRL feed, never the bundled anchors against one
-another. Treat a bundled intermediate with the same care as a root -- pin it
-from an out-of-band source, and drop its manifest line if the manufacturer
-revokes that intermediate, exactly as you would retire a compromised root.
+Revocation of a bundled intermediate by its parent root is not evaluated during
+EK verification: the CA checks EK leaves against the manufacturer CRL feed,
+never the bundle against itself. Treat a bundled intermediate with the same
+care as a root -- pin it from an out-of-band source, and drop its manifest line
+if the manufacturer revokes it.
 
 The AIA walk that finds the root passes through each intermediate on the way,
 and ``lota-ek-root-pin.sh`` drafts a line for every one of them it had to
@@ -232,10 +236,10 @@ several PEM blocks):
    lota-attest-ca -ek-root-bundle /var/lib/lota/ek-roots \
        -ek-crl /var/lib/lota/ek-crls/infineon.crl ...
 
-Each CRL must be signed by a certificate present in the loaded EK trust set;
-manufacturers that issue EK certificates through an intermediate CA sign their
-CRLs with that intermediate, so the intermediate must be part of the bundle for
-the feed to load.
+Each CRL must be signed by a certificate present in the loaded EK trust set --
+anchors and pinned path material alike; manufacturers that issue EK
+certificates through an intermediate CA sign their CRLs with that intermediate,
+so the intermediate must be part of the bundle for the feed to load.
 
 The CA fails closed at startup on a CRL that does not verify, omits
 ``NextUpdate``, or uses a weak signature algorithm, and an issuer whose every

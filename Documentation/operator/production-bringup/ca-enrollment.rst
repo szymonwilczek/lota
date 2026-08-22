@@ -17,8 +17,8 @@ Stand up the CA with your CA key, the trusted manufacturer EK roots and a server
 TLS keypair (:ghsrc:`examples/enrollment/gen-ca.sh` generates the CA material).
 Production fleets span several TPM manufacturers, so trust a pin-enforced
 multi-vendor bundle with ``-ek-root-bundle``; the CA fails closed if any pinned
-root is missing, mismatched, or unpinned (see :ghsrc:`configs/ek-roots/README.rst`
-for how to materialize one):
+certificate is missing, mismatched, unpinned, or classed as something it is not
+(see :ghsrc:`configs/ek-roots/README.rst` for how to materialize one):
 
 .. code-block:: sh
 
@@ -28,9 +28,17 @@ for how to materialize one):
         -pseudonym-key pseudonym.key \
         -ek-root-bundle /var/lib/lota/ek-roots
 
-``-ek-root <file>`` is still accepted and adds operator-supplied roots (for
-example a swtpm CA in the enrollment demo) on top of the bundle; pass either or
-both.
+``-ek-root <file>`` adds operator-supplied anchors (for example a swtpm CA in
+the enrollment demo) on top of the bundle; pass either or both.
+
+A bundle entry is either a trust anchor or path material, and the manifest says
+which. A firmware TPM sends the certificates its chip carries with the
+enrollment request, but the ones above those are published only by the vendor,
+so the operator pins them as intermediates: they complete the route to an
+anchored root without becoming anchors themselves. The startup line reports
+both counts (``ek_roots``, ``ek_intermediates``); a platform that enrols with
+``ek_intermediates=0`` and fails once its bundle is drafted properly is
+generally missing exactly those links.
 
 Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 (repeatable) loads a manufacturer CRL, enrollment rejects a revoked EK, and
