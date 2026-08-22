@@ -36,6 +36,10 @@
 
 #ifndef EAUTH
 #define EAUTH 80
+
+/* Where the kernel publishes the boot parameters and the loaded IMA policy */
+#define IMA_CMDLINE_PATH "/proc/cmdline"
+#define IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
 #endif
 
 /* Stats map indices - must match BPF program */
@@ -343,17 +347,20 @@ int bpf_loader_kernel_lockdown_restrictive(void)
 }
 
 /*
- * /sys/kernel/security/ima/policy is write-only on stock kernels
- * built without CONFIG_IMA_READ_POLICY (Fedora 44's default), so a
- * runtime read of the policy file is not a portable signal that
- * appraisal is enforcing. The authoritative knob is the kernel
- * boot parameter ima_appraise= on /proc/cmdline: only "enforce"
- * (block on integrity failure) and "fix" (write missing xattrs,
- * still blocks on signature failure) constitute the kernel-floor
- * the agent demands. "log" and the default "off" measure or do
- * nothing and therefore leave the integrity gate unenforced.
+ * The appraisal mode the kernel was booted in, read from ima_appraise=
+ * on the cmdline: only "enforce" (block on integrity failure) and "fix"
+ * (write missing xattrs, still blocks on signature failure) constitute
+ * the kernel-floor the agent demands. "log" and the default "off" measure
+ * or do nothing and therefore leave the integrity gate unenforced.
+ *
+ * Both files the question has behind it are parameters, so the answer can be
+ * checked against something other than the machine the check runs on: the mode
+ * lives on the kernel cmdline, and the scope -- which func= rules the loaded
+ * policy actually appraises -- lives in the policy file.
+ * The policy is not consulted here.
  */
-static int kernel_ima_appraise_enforcing(void)
+int bpf_loader_ima_appraisal_active(const char *cmdline_path,
+				    const char *policy_path)
 {
 	char buf[4096];
 	size_t len = 0;
@@ -361,7 +368,9 @@ static int kernel_ima_appraise_enforcing(void)
 	char *save = NULL;
 	int ret;
 
-	ret = read_text_file("/proc/cmdline", buf, sizeof(buf), &len);
+	(void)policy_path;
+
+	ret = read_text_file(cmdline_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 	if (len == 0)
@@ -629,7 +638,8 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = kernel_ima_appraise_enforcing();
+	ret = bpf_loader_ima_appraisal_active(IMA_CMDLINE_PATH,
+					      IMA_POLICY_PATH);
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
 			 "(ima_appraise=enforce or fix required on the kernel "
