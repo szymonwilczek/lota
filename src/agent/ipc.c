@@ -1642,6 +1642,37 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 }
 
 /*
+ * Adopt the attestation loop's counters and announce any round they show.
+ *
+ * The loop sends running totals, not events, so a round is seen as a counter
+ * going up. That raises the ATTEST event for subscribers and the AttestationResult
+ * D-Bus signal. Both counters can rise in one sync when the loop reports several
+ * publishers, so pass and fail are signalled separately.
+ * A counter that drops, as after a loop restart, is adopted silently.
+ */
+static void adopt_attest_counters(struct ipc_context *ctx,
+				  const struct lota_ipc_attest_sync *hdr)
+{
+	bool passed = hdr->attest_count > ctx->attest_count;
+	bool failed = hdr->fail_count > ctx->fail_count;
+
+	ctx->attest_count = hdr->attest_count;
+	ctx->fail_count = hdr->fail_count;
+	if (hdr->last_attest_time)
+		ctx->last_attest_time = hdr->last_attest_time;
+
+	if (!passed && !failed)
+		return;
+
+	notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
+
+	if (passed)
+		dbus_emit_attestation_result(ctx->dbus, true);
+	if (failed)
+		dbus_emit_attestation_result(ctx->dbus, false);
+}
+
+/*
  * Handle SYNC_ATTEST -- the state exchange with the agent's attestation loop.
  *
  * One round trip, both directions:
@@ -1751,11 +1782,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	client->event_mask = LOTA_IPC_EVENT_PROFILE;
 
 	recompute_host_attestation(ctx);
-
-	ctx->attest_count = hdr.attest_count;
-	ctx->fail_count = hdr.fail_count;
-	if (hdr.last_attest_time)
-		ctx->last_attest_time = hdr.last_attest_time;
+	adopt_attest_counters(ctx, &hdr);
 
 	if (ctx->on_attest_sync)
 		ctx->on_attest_sync(ctx->on_attest_sync_user);
