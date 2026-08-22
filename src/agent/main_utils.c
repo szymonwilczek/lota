@@ -451,6 +451,16 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 	}
 
 	ret = ipc_add_listener(ctx, path);
+	if (ret == -EADDRINUSE) {
+		/*
+		 * Another agent is serving uid's titles there.
+		 * Say which process kept the socket.
+		 */
+		fprintf(stderr,
+			"Warning: %s is already served by another agent, so uid %u keeps that listener and this server has none\n",
+			path, uid);
+		return ret;
+	}
 	if (ret < 0) {
 		fprintf(stderr, "Warning: container listener %s: %s\n", path,
 			strerror(-ret));
