@@ -104,9 +104,16 @@ The agent parses ``/proc/cmdline`` and refuses to start unless
 ``ima_appraise=enforce`` (block on integrity failure) or ``ima_appraise=fix``
 (block on signature failure, write missing xattrs) is present.
 ``ima_appraise=log`` and the default ``off`` are non-blocking and do not satisfy
-the kernel-floor. The check does not read
-``/sys/kernel/security/ima/policy`` because that file is write-only on kernels
-built without ``CONFIG_IMA_READ_POLICY`` (Fedora 44's default).
+the kernel-floor.
+
+Appraisal applies only to the ``func=`` rules the loaded policy contains, so a host
+booted ``ima_appraise=enforce`` whose policy carries no ``appraise func=BPRM_CHECK``
+rule appraises no executable at all.
+The agent reads ``/sys/kernel/security/ima/policy`` as well and refuses to
+start when the scope is empty, naming the rule it did not find. Where the
+kernel was built without ``CONFIG_IMA_READ_POLICY`` that file cannot be read;
+there the mode decides on its own and the agent logs, at startup, that the
+scope went unverified.
 
 .. code-block:: sh
 
@@ -117,7 +124,8 @@ The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
 operator-supplied. LOTA ships neither an xattr-signing pipeline nor a production
-appraisal policy**, and the kernel-floor check in the agent pins only the mode.
+appraisal policy**; what the agent checks is that the rule set in force reaches
+executables at all, not where the signatures behind it came from.
 On a verity-capable rootfs LOTA's own binary is integrity-bound through
 fs-verity and the PCR14 boot commitment independently of IMA appraisal; on a
 filesystem without verity (XFS, ZFS) the signed ``security.ima`` route from

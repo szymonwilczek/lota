@@ -290,7 +290,8 @@ int bpf_loader_secure_boot_enabled(void);
  *
  * Ensures runtime prerequisites expected by LOTA self-protection are active:
  *   - Linux lockdown mode is restrictive (integrity or confidentiality)
- *   - IMA policy is present and contains appraisal rules
+ *   - kernel module signatures are enforced
+ *   - IMA appraisal blocks on failure and its policy reaches executables
  *
  * Returns: 0 on success, negative errno on failure
  */

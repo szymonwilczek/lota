@@ -2,13 +2,17 @@
 #
 # LOTA IMA appraisal policy.
 #
-# The agent's startup check (kernel_ima_appraise_enforcing) gates
-# only on the ima_appraise= kernel boot parameter, not on the
-# contents of /sys/kernel/security/ima/policy (write-only on
-# kernels without CONFIG_IMA_READ_POLICY). This file is the
-# developer-host baseline written by scripts/lota-dev-bringup.sh
-# and supplies the rules the kernel evaluates once
-# ima_appraise=enforce|fix is on the cmdline.
+# The agent's startup check reads both halves of the question:
+# the ima_appraise= kernel boot parameter for the mode,
+# and /sys/kernel/security/ima/policy for the scope, because a blocking
+# mode over a policy with no appraise rule for func=BPRM_CHECK
+# appraises no executable at all. Where the kernel was built without
+# CONFIG_IMA_READ_POLICY the policy cannot be read, and the agent
+# says so.
+#
+# This file is the developer-host baseline written by
+# scripts/lota-dev-bringup.sh and supplies the rules the kernel
+# evaluates once ima_appraise=enforce|fix is on the cmdline.
 #
 # Rule semantics:
 #   - dont_appraise covers ephemeral / non-security-relevant paths
