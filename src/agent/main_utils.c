@@ -499,7 +499,20 @@ void setup_container_listener(struct ipc_context *ctx,
 	char path[PATH_MAX];
 	int ret;
 
-	if (cfg && cfg->container_listener_uid_count > 0) {
+	uint32_t watch_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	char runtime_dir[PATH_MAX];
+	int watch_count;
+
+	if (steam_runtime_runtime_dir(runtime_dir, sizeof(runtime_dir)) < 0)
+		runtime_dir[0] = '\0';
+
+	watch_count = container_watch_plan(
+		cfg ? cfg->container_listener_uids : NULL,
+		cfg ? cfg->container_listener_uid_count : 0,
+		runtime_dir[0] ? runtime_dir : NULL, watch_uids,
+		LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+
+	if (watch_count > 0) {
 		struct container_watch_ops ops = {
 			.bind = add_listener_for_uid,
 			.unbind = drop_listener_for_uid,
@@ -513,9 +526,7 @@ void setup_container_listener(struct ipc_context *ctx,
 		 * the runtime directory appears.
 		 */
 		ret = container_watch_init(&g_agent.container_watch, NULL,
-					   cfg->container_listener_uids,
-					   cfg->container_listener_uid_count,
-					   &ops);
+					   watch_uids, watch_count, &ops);
 		if (ret < 0)
 			lota_warn(
 				"Cannot watch %s for logins (%s): a container socket "
