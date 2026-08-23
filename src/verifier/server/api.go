@@ -55,6 +55,7 @@ type APIHandler struct {
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
+	routes         []string // patterns handed to the mux, in order
 }
 
 // creates a new API handler and registers routes on the given mux
@@ -95,44 +96,85 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	}
 
 	// public monitoring endpoints (no auth required)
-	mux.HandleFunc("GET /health", h.handleHealth)
+	h.handle(mux, "GET /health", h.handleHealth)
 
 	// operational intelligence endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/stats", h.requireReader(h.handleStats))
-	mux.HandleFunc("GET /metrics", h.requireReader(h.handleMetrics))
+	h.handle(mux, "GET /api/v1/stats", h.requireReader(h.handleStats))
+	h.handle(mux, "GET /metrics", h.requireReader(h.handleMetrics))
 
 	// sensitive read-only endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
-	mux.HandleFunc("GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
-	mux.HandleFunc("GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
-	mux.HandleFunc("GET /api/v1/bans", h.requireReader(h.handleListBans))
-	mux.HandleFunc("GET /api/v1/audit", h.requireReader(h.handleAuditLog))
-	mux.HandleFunc("GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
+	h.handle(mux, "GET /api/v1/clients", h.requireReader(h.handleListClients))
+	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
+	h.handle(mux, "GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
+	h.handle(mux, "GET /api/v1/bans", h.requireReader(h.handleListBans))
+	h.handle(mux, "GET /api/v1/audit", h.requireReader(h.handleAuditLog))
+	h.handle(mux, "GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
 	// revocation management (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
-	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
 
 	// post-fact review of Low-Firmware-Assurance re-anchors.
 	// LFA re-anchors apply automatically; these endpoints let an operator see
 	// which clients took that path and acknowledge having reviewed them.
 	// Acknowledge route is more specific than the POST /clients/ pattern
 	// above, so Go's mux routes it here.
-	mux.HandleFunc("GET /api/v1/reanchor/review",
+	h.handle(mux, "GET /api/v1/reanchor/review",
 		h.requireReader(h.handleReanchorReviewList))
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor-review-ack",
 		h.requireAdmin(h.handleReanchorReviewAck))
 
 	// operator-forced re-baseline;
 	// deliberate counterpart of the self-service re-anchor above (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor",
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor",
 		h.requireAdmin(h.handleForceReanchor))
 
 	// hardware ban management (admin auth required)
-	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
-	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
+	h.handle(mux, "POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
+	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
 
 	return h
+}
+
+// handle registers a route and records its pattern, so what the instance
+// serves can be compared with what it says it serves.
+func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
+	handler http.HandlerFunc,
+) {
+	h.routes = append(h.routes, pattern)
+	mux.HandleFunc(pattern, handler)
+}
+
+// RegisteredRoutes is every pattern handed to the mux, in registration order.
+// Its counterpart is AdvertisedRoutes(), which is what an operator is told.
+func (h *APIHandler) RegisteredRoutes() []string {
+	return h.routes
+}
+
+// AdvertisedRoutes is what the instance tells an operator it exposes.
+// The startup banner is the inventory a firewall or a client is written against,
+// so it has to agree with the mux above.
+func (h *APIHandler) AdvertisedRoutes() []string {
+	return []string{
+		"GET /health",
+		"GET /api/v1/stats",
+		"GET /api/v1/clients",
+		"GET /api/v1/clients/{id}",
+		"POST /api/v1/clients/{id}/revoke",
+		"DELETE /api/v1/clients/{id}/revoke",
+		"DELETE /api/v1/clients/{id}",
+		"POST /api/v1/clients/{id}/reanchor",
+		"GET /api/v1/reanchor/review",
+		"POST /api/v1/clients/{id}/reanchor-review-ack",
+		"GET /api/v1/revocations",
+		"POST /api/v1/bans",
+		"DELETE /api/v1/bans/{id}",
+		"GET /api/v1/bans",
+		"GET /api/v1/audit",
+		"GET /api/v1/attestations",
+		"POST /api/v1/session/validate",
+		"GET /metrics",
+	}
 }
 
 // principalCtxKey carries the authenticated Principal through the
