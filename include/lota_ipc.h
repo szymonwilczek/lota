@@ -101,6 +101,9 @@ enum lota_ipc_result {
 	/* this agent holds no TPM, so it has nothing to sign a token with
 	   and will not issue an unsigned one */
 	LOTA_IPC_ERR_NO_TPM = 0x10,
+
+	/* this agent enforces nothing */
+	LOTA_IPC_ERR_NO_ENFORCEMENT = 0x11,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
