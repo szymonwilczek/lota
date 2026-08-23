@@ -495,13 +495,12 @@ void setup_container_listener(struct ipc_context *ctx,
 			      const struct lota_config *cfg)
 {
 	struct steam_runtime_info rt_info;
-	char dir[PATH_MAX];
-	char path[PATH_MAX];
-	int ret;
-
 	uint32_t watch_uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
 	char runtime_dir[PATH_MAX];
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
 	int watch_count;
+	int ret;
 
 	if (steam_runtime_runtime_dir(runtime_dir, sizeof(runtime_dir)) < 0)
 		runtime_dir[0] = '\0';
@@ -511,6 +510,13 @@ void setup_container_listener(struct ipc_context *ctx,
 		cfg ? cfg->container_listener_uid_count : 0,
 		runtime_dir[0] ? runtime_dir : NULL, watch_uids,
 		LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+
+	if (watch_count < 0) {
+		lota_err(
+			"Cannot decide which logins get a container listener (%s); no container socket will be served",
+			strerror(-watch_count));
+		return;
+	}
 
 	if (watch_count > 0) {
 		struct container_watch_ops ops = {
@@ -539,6 +545,12 @@ void setup_container_listener(struct ipc_context *ctx,
 		return;
 	}
 
+	/*
+	 * Reached only for a runtime directory that names no login:
+	 * a container's own, or a path an operator chose.
+	 * There is nothing to watch for, so this binds once
+	 * and says so if it cannot.
+	 */
 	ret = steam_runtime_container_socket_dir(dir, sizeof(dir));
 	if (ret < 0)
 		return; /* XDG_RUNTIME_DIR not set, nothing to do */
@@ -552,9 +564,9 @@ void setup_container_listener(struct ipc_context *ctx,
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Warning: cannot create container socket dir %s: %s\n",
-			dir, strerror(-ret));
+		lota_err(
+			"Cannot create the container socket dir %s (%s), and this runtime directory names no login to wait for, so no container socket will appear until the agent is started again with the directory in place. A host whose runtime directory is %s/<uid> gets one when its user logs in; name the uid with container_listener_uid to have that watched explicitly",
+			dir, strerror(-ret), CONTAINER_WATCH_RUNTIME_ROOT);
 		return;
 	}
 

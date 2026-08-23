@@ -197,7 +197,21 @@ int container_watch_plan(const uint32_t *cfg_uids, int cfg_uid_count,
 		return cfg_uid_count;
 	}
 
-	(void)runtime_dir;
+	/*
+	 * Single-operator host names no UID.
+	 * Its listener still belongs to a login that does not exist when
+	 * the daemon starts, so it is watched like any other.
+	 */
+	if (runtime_dir) {
+		uint32_t uid;
+
+		if (container_watch_uid_of_runtime_dir(runtime_dir, &uid) ==
+		    0) {
+			out[0] = uid;
+			return 1;
+		}
+	}
+
 	return 0;
 }
 
