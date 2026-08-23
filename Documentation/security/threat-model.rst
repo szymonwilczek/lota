@@ -156,6 +156,11 @@ with it.
 
 The desktop sees the same changes over ``org.lota.Agent1``, whose signals and
 ``emits-change`` properties are the bus-side view of what the socket pushes.
+Its status word is the daemon's own: a bus connection names no publisher, so
+it carries the host-wide view, including whether the runtime measurement
+covers every object of every protected process -- that is a fact about the
+host, and both roads have to report it the same way or a launcher reading
+coverage from the bus contradicts the socket.
 
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
 window. The agent enforces this where the interval is read: an ``attest_interval``

@@ -46,7 +46,12 @@ uint32_t dbus_status_word(const struct ipc_context *ipc)
 	if (!ipc)
 		return 0;
 
-	return ipc->status_flags;
+	/*
+	 * A bus connection names no publisher, so the host-wide view is the only
+	 * one there is -- but it is the daemon's to produce, not this file's to
+	 * assemble out of stored fields.
+	 */
+	return ipc_host_status_flags(ipc);
 }
 
 static int prop_get_status_flags(sd_bus *bus, const char *path,
