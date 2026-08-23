@@ -1227,6 +1227,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
+	$(TEST_BIN_DIR)/test_daemon_exit_status \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
@@ -1667,6 +1668,10 @@ $(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
+$(TEST_BIN_DIR)/test_daemon_exit_status: tests/test_daemon_exit_status.c $(AGENT_DIR)/exit_status.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
 test-bins: $(TEST_BINS)
@@ -1762,6 +1767,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
 	@$(BUILD_DIR)/test_integrity_baseline
+	@$(BUILD_DIR)/test_daemon_exit_status
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
@@ -1868,7 +1874,8 @@ VALGRIND_UNIT_BINS := \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
-	test_xattr_carry test_ima_policy_scope test_integrity_baseline
+	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
+	test_daemon_exit_status
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
