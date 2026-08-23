@@ -94,6 +94,37 @@ static void setup_ipc(void)
 	test_ipc.mode = 0; /* monitor */
 }
 
+/*
+ * A bus client and a socket client ask the same daemon the same question.
+ * The socket reply folds runtime-measurement coverage into the word it hands
+ * over; the bus returned the stored word, which never carries that bit,
+ * so a fully measured host and a partially measured one looked identical
+ * on the bus and a launcher reporting coverage from there told the player
+ * the wrong thing.
+ */
+static void test_bus_answers_the_daemons_word(void)
+{
+	struct dbus_context *ctx;
+	uint32_t word;
+
+	TEST("status word: the bus answers what the daemon publishes");
+
+	setup_ipc();
+	ctx = dbus_init(&test_ipc);
+
+	host_status_calls = 0;
+	word = dbus_status_word(&test_ipc);
+
+	if (word != TEST_HOST_STATUS_FLAGS)
+		FAIL("the bus answered a word the daemon did not produce");
+	else if (host_status_calls == 0)
+		FAIL("the bus never asked the daemon for the word");
+	else
+		PASS();
+
+	dbus_cleanup(ctx);
+}
+
 static void test_init_null_ipc(void)
 {
 	TEST("init: NULL ipc -> NULL");
@@ -430,6 +461,7 @@ int main(void)
 	test_ipc_set_dbus_null();
 	test_ipc_set_dbus_attach();
 	test_dbus_constants();
+	test_bus_answers_the_daemons_word();
 
 	/* may skip if unavailable */
 	test_init_system_bus();
