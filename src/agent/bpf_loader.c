@@ -237,18 +237,20 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
 }
 
 /*
- * Resolve kernel symbol address from /proc/kallsyms.
+ * Resolve kernel symbol address from the kernel symbol table.
  * Returns 0 on failure.
  */
-unsigned long resolve_kernel_symbol(const char *name)
+unsigned long resolve_kernel_symbol(const char *kallsyms_path,
+				    const char *name)
 {
 	FILE *f;
 	char line[512];
 	unsigned long addr = 0;
 
-	f = fopen("/proc/kallsyms", "r");
+	f = fopen(kallsyms_path, "r");
 	if (!f) {
-		lota_warn("Failed to open /proc/kallsyms: %s", strerror(errno));
+		lota_warn("Failed to open %s: %s", kallsyms_path,
+			  strerror(errno));
 		return 0;
 	}
 
@@ -269,29 +271,51 @@ unsigned long resolve_kernel_symbol(const char *name)
 	return addr;
 }
 
-static unsigned long resolve_lockdown_symbol(void)
+static unsigned long resolve_lockdown_symbol(const char *kallsyms_path)
 {
-	unsigned long lockdown = resolve_kernel_symbol("lockdown_state");
+	unsigned long lockdown =
+		resolve_kernel_symbol(kallsyms_path, "lockdown_state");
 
 	if (!lockdown) {
-		lockdown = resolve_kernel_symbol("kernel_locked_down");
+		lockdown = resolve_kernel_symbol(kallsyms_path,
+						 "kernel_locked_down");
 	}
 
 	if (!lockdown) {
-		lockdown = resolve_kernel_symbol("security_lockdown_enabled");
+		lockdown = resolve_kernel_symbol(kallsyms_path,
+						 "security_lockdown_enabled");
 	}
 
 	return lockdown;
 }
 
-static void build_expected_integrity_config(struct integrity_data *cfg)
+int bpf_loader_build_integrity_config(struct integrity_data *cfg,
+				      const char *kallsyms_path,
+				      const char *sig_enforce_path,
+				      const char *lockdown_path)
 {
 	if (!cfg)
-		return;
+		return -EINVAL;
 
 	memset(cfg, 0, sizeof(*cfg));
-	cfg->sig_enforce_addr = resolve_kernel_symbol("sig_enforce");
-	cfg->lockdown_addr = resolve_lockdown_symbol();
+	cfg->sig_enforce_addr = resolve_kernel_symbol(kallsyms_path,
+						      "sig_enforce");
+	cfg->lockdown_addr = resolve_lockdown_symbol(kallsyms_path);
+	cfg->sig_enforce =
+		bpf_loader_kernel_module_sig_enforced(sig_enforce_path) == 0;
+	cfg->lockdown =
+		bpf_loader_kernel_lockdown_restrictive(lockdown_path) == 0;
+
+	return 0;
+}
+
+bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg)
+{
+	if (!cfg)
+		return false;
+
+	return cfg->sig_enforce_addr && cfg->lockdown_addr &&
+	       cfg->sig_enforce && cfg->lockdown;
 }
 
 static int read_text_file(const char *path, char *buf, size_t buf_size,
@@ -321,15 +345,14 @@ static int read_text_file(const char *path, char *buf, size_t buf_size,
 	return 0;
 }
 
-int bpf_loader_kernel_lockdown_restrictive(void)
+int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 {
 	char buf[256];
 	size_t len = 0;
 	char *lb;
 	char *rb;
 
-	int ret = read_text_file("/sys/kernel/security/lockdown", buf,
-				 sizeof(buf), &len);
+	int ret = read_text_file(lockdown_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 
@@ -475,12 +498,11 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
  * during the boot -> agent window and survive every later
  * enforcement gate the agent installs.
  */
-int bpf_loader_kernel_module_sig_enforced(void)
+int bpf_loader_kernel_module_sig_enforced(const char *sig_enforce_path)
 {
 	char buf[16];
 	size_t len = 0;
-	int ret = read_text_file("/sys/module/module/parameters/sig_enforce",
-				 buf, sizeof(buf), &len);
+	int ret = read_text_file(sig_enforce_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 	if (len == 0)
@@ -695,14 +717,15 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	int ret;
 
-	ret = bpf_loader_kernel_lockdown_restrictive();
+	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
 	if (ret < 0) {
 		lota_err("Kernel lockdown is not in restrictive mode "
 			 "(integrity/confidentiality required)");
 		return ret;
 	}
 
-	ret = bpf_loader_kernel_module_sig_enforced();
+	ret = bpf_loader_kernel_module_sig_enforced(
+		LOTA_MODULE_SIG_ENFORCE_PATH);
 	if (ret < 0) {
 		lota_err(
 			"Kernel module signature enforcement is not active "
@@ -1122,7 +1145,9 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 
 		struct integrity_data cfg = { 0 };
 
-		build_expected_integrity_config(&cfg);
+		bpf_loader_build_integrity_config(&cfg, LOTA_KALLSYMS_PATH,
+						  LOTA_MODULE_SIG_ENFORCE_PATH,
+						  LOTA_KERNEL_LOCKDOWN_PATH);
 
 		lota_info("Resolved kernel symbols: sig_enforce=0x%lx, "
 			  "lockdown=0x%lx",
@@ -1674,7 +1699,9 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 	if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
 		return -errno;
 
-	build_expected_integrity_config(&expected);
+	bpf_loader_build_integrity_config(&expected, LOTA_KALLSYMS_PATH,
+					  LOTA_MODULE_SIG_ENFORCE_PATH,
+					  LOTA_KERNEL_LOCKDOWN_PATH);
 
 	if (current.sig_enforce_addr != expected.sig_enforce_addr ||
 	    current.lockdown_addr != expected.lockdown_addr) {

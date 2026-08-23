@@ -442,11 +442,16 @@ struct lota_exec_event {
 
 /*
  * Kernel integrity configuration.
- * Stores addresses of kernel symbols for direct memory verification.
+ *
+ * Carries the addresses the BPF side dereferences and the verdict the agent's
+ * startup hardening gate reached over the same two properties, so both roads
+ * are visible in one value.
  */
 struct integrity_data {
 	__u64 sig_enforce_addr;
 	__u64 lockdown_addr;
+	__u32 sig_enforce; /* 1 when module signatures are enforced */
+	__u32 lockdown; /* 1 when lockdown is integrity or above */
 };
 
 #endif /* LOTA_H */

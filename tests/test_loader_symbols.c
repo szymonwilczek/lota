@@ -17,16 +17,17 @@
 static void test_resolve_existing_symbol(void)
 {
 	printf("Testing resolve_kernel_symbol...\n");
-	unsigned long addr = resolve_kernel_symbol("_text");
+	unsigned long addr =
+		resolve_kernel_symbol(LOTA_KALLSYMS_PATH, "_text");
 	if (addr == 0) {
-		if (access("/proc/kallsyms", R_OK) != 0) {
-			printf("SKIP: /proc/kallsyms not readable\n");
+		if (access(LOTA_KALLSYMS_PATH, R_OK) != 0) {
+			printf("SKIP: %s not readable\n", LOTA_KALLSYMS_PATH);
 			return;
 		}
 	}
 
-	unsigned long bad =
-		resolve_kernel_symbol("this_symbol_does_not_exist_12345");
+	unsigned long bad = resolve_kernel_symbol(
+		LOTA_KALLSYMS_PATH, "this_symbol_does_not_exist_12345");
 	if (bad != 0) {
 		FAIL("Resolved non-existent symbol to %lx", bad);
 	}
