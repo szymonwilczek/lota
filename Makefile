@@ -71,6 +71,7 @@ ATTESTCA_BIN := $(BUILD_DIR)/lota-attest-ca
 FLEETCTL_BIN := $(BUILD_DIR)/lota-fleet
 LOADGEN_BIN := $(BUILD_DIR)/lota-loadgen
 BPF_OBJ := $(BUILD_DIR)/lota_lsm.bpf.o
+LEGACY_BPF_OBJ := $(BUILD_DIR)/legacy_integrity_map.bpf.o
 SDK_LIB := $(BUILD_DIR)/liblotagaming.so
 SDK_STATIC := $(BUILD_DIR)/liblotagaming.a
 SERVER_SDK_LIB := $(BUILD_DIR)/liblotaserver.so
@@ -439,6 +440,13 @@ $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
 
 # build bpf program
 $(BPF_OBJ): $(BPF_DIR)/lota_lsm.bpf.c $(INC_DIR)/vmlinux.h $(INC_DIR)/lota.h $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+	$(QUIET_CLANG)
+	$(Q)$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
+
+# Fixture object for the integrity map layout test: the wider map value
+# an enforcement object built before the agent read verdicts still carries.
+# Nothing loads it, so it needs no programs and no license section.
+$(LEGACY_BPF_OBJ): tests/fixtures/legacy_integrity_map.bpf.c $(INC_DIR)/vmlinux.h | $(BUILD_DIR)
 	$(QUIET_CLANG)
 	$(Q)$(CLANG) $(BPF_CFLAGS) -c -o $@ $<
 
@@ -1228,6 +1236,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
 	$(TEST_BIN_DIR)/test_daemon_exit_status \
+	$(TEST_BIN_DIR)/test_integrity_map_layout \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
@@ -1672,6 +1681,12 @@ $(TEST_BIN_DIR)/test_daemon_exit_status: tests/test_daemon_exit_status.c $(AGENT
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
+$(TEST_BIN_DIR)/test_integrity_map_layout: tests/test_integrity_map_layout.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c $(BPF_OBJ) $(LEGACY_BPF_OBJ) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DTREE_BPF_OBJ='"$(BPF_OBJ)"' \
+		-DLEGACY_BPF_OBJ='"$(LEGACY_BPF_OBJ)"' \
+		-o $@ $(filter %.c,$^) -lbpf -lsystemd -lcrypto
+
 # Build the unit/integration test binaries without running them. Used by
 # the include-hygiene gate so test sources are analyzed too.
 test-bins: $(TEST_BINS)
@@ -1768,6 +1783,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_ima_policy_scope
 	@$(BUILD_DIR)/test_integrity_baseline
 	@$(BUILD_DIR)/test_daemon_exit_status
+	@$(BUILD_DIR)/test_integrity_map_layout
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
@@ -1875,7 +1891,7 @@ VALGRIND_UNIT_BINS := \
 	test_status_flags test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
-	test_daemon_exit_status
+	test_daemon_exit_status test_integrity_map_layout
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="
