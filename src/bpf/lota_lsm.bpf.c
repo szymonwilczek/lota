@@ -121,7 +121,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 16);
+	__uint(max_entries, 17);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -160,6 +160,7 @@ struct {
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_ALLOW_EVENTS_SUPPRESSED 14
 #define STAT_BLOCKED_EVENTS_SUPPRESSED 15
+#define STAT_MOUNTS_BLOCKED 16
 
 /*
  * One rate-limit window per event class (see lota_event_budget.h).
@@ -772,6 +773,45 @@ static __always_inline int is_inaccessible_exec_path(struct linux_binprm *bprm)
 }
 
 /*
+ * A mount refusal, reported.
+ *
+ * The refusal is the point of these hooks and the caller only learns
+ * "permission denied", so the record an operator reads afterwards is
+ * the event.
+ * @what names which mount API asked, since the two take the same privilege
+ * and have the same effect.
+ */
+static __always_inline void report_blocked_mount(const char *what, u32 len)
+{
+	struct lota_exec_event *event;
+
+	inc_stat(STAT_MOUNTS_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_MOUNT_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+	if (len > 0 && len < sizeof(event->filename))
+		bpf_probe_read_kernel(event->filename, len, what);
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
+/*
  * Block bind mounts over trusted-library inodes and parent mountpoints.
  */
 SEC("lsm/sb_mount")
@@ -813,6 +853,7 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 	if (!is_trusted_inode(inode))
 		return 0;
 
+	report_blocked_mount("bind mount over a trusted file", 31);
 	return -EPERM;
 }
 
@@ -858,6 +899,7 @@ int BPF_PROG(lota_move_mount, const struct path *from_path,
 	if (!is_trusted_inode(inode))
 		return 0;
 
+	report_blocked_mount("move_mount over a trusted file", 31);
 	return -EPERM;
 }
 
