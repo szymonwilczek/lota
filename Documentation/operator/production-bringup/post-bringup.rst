@@ -73,7 +73,11 @@ The most common failures, with the gate that produced them:
   status, D-Bus and profile binding on a machine with no TPM -- both servers
   resolve ``SET_PROFILE`` against the publishers the configuration they were
   started with names, and say how many they bound -- and a title that needs a
-  token there uses ``--test-signed`` instead.
+  token there uses ``--test-signed`` instead. Neither server enforces anything,
+  so ``PROTECT_PID`` and ``UNPROTECT_PID`` are refused there with
+  ``LOTA_IPC_ERR_NO_ENFORCEMENT`` (``LOTA_ERR_NO_ENFORCEMENT`` in the SDK):
+  runtime PID policy is a change to what the enforcement object holds, and only
+  a daemon that applied a startup policy has one.
 * ``This is not the lota-agent build PCR 14 committed to when the host
   booted``. The binary being run is not the one the register commits to, which
   is the expected answer after replacing the binary without rebooting, or when

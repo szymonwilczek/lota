@@ -2168,7 +2168,24 @@ static void handle_protect_pid_update(struct ipc_context *ctx,
 		return;
 	}
 
-	if (!g_agent.policy_snapshot_set || !g_agent.policy_digest_set) {
+	/*
+	 * Runtime PID policy is a change to what the enforcement object holds,
+	 * and it is judged against the snapshot the startup policy left behind.
+	 * An agent that applied none has nothing to change and nothing to judge
+	 * against, which is its ordinary state and not a broken daemon.
+	 */
+	if (!g_agent.policy_snapshot_set) {
+		lota_warn(
+			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: this agent applied no startup policy, so it enforces nothing and has no runtime PID policy to change",
+			client->peer_uid, client->peer_pid, pid);
+		build_error_response(client, LOTA_IPC_ERR_NO_ENFORCEMENT);
+		return;
+	}
+
+	if (!g_agent.policy_digest_set) {
+		lota_err(
+			"Refusing PROTECT_PID for uid=%d pid=%d target=%u: the startup policy is applied but its digest is unset, which nothing should be able to produce",
+			client->peer_uid, client->peer_pid, pid);
 		build_error_response(client, LOTA_IPC_ERR_INTERNAL);
 		return;
 	}
