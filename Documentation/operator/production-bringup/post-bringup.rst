@@ -91,10 +91,13 @@ The most common failures, with the gate that produced them:
   Nothing has been spent: the refusal happens before the boot commitment, so
   the host comes up in the same boot once the enrollment is done.
 
-The unit does not restart into either of the last two: the agent exits 78
-(``EX_CONFIG``) for a state only an operator can clear, and
-``RestartPreventExitStatus=78`` leaves the unit failed with the reason in the
-journal.
+The unit does not restart into any refusal above that stops the agent from
+starting: the agent exits 78 (``EX_CONFIG``) for a state only an operator can
+clear, and ``RestartPreventExitStatus=78`` leaves the unit failed with the
+reason in the journal. Every PCR 14 refusal is such a state -- the register
+is not rewritable while the host is up, so the answer is the same on every
+attempt -- and each attempt that was made anyway opened the TPM, provisioned
+the AIK and bound the container socket before reaching it.
 
 Counters printed by these messages come from ``TPM2_ReadClock`` and are the
 values ``tpm2_readclock`` reports, so they can be checked against the machine.
