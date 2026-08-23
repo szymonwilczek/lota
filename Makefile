@@ -964,7 +964,7 @@ sparse:
 		printf "(^|/)%s:[0-9]+:[0-9]+: (warning|error): %s\n", $$1, $$2; \
 	}' $(SPARSE_EXEMPTIONS) > $(CHECKER_INC_DIR)/exempt.ere
 	@echo "sparse: checking C sources"; \
-	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/' | grep -v '\.bpf\.c$$'); \
 	raw=$$(mktemp); \
 	n=0; \
 	for f in $$srcs; do \
@@ -1019,7 +1019,7 @@ smatch:
 	$(Q)mkdir -p $(CHECKER_INC_DIR)
 	$(Q)ln -sfn $(abspath $(INC_DIR)) $(CHECKER_INC_DIR)/lota
 	@echo "smatch: checking C sources"; \
-	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/' | grep -v '\.bpf\.c$$'); \
 	raw=$$(mktemp); \
 	n=0; \
 	for f in $$srcs; do \
@@ -1056,7 +1056,7 @@ coccicheck:
 		echo "coccicheck: $(SPATCH) not found (install 'coccinelle'); skipping" >&2; \
 		exit 0; }
 	@echo "coccicheck: running Coccinelle semantic patches"; \
-	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/' | grep -v '\.bpf\.c$$'); \
 	rc=0; \
 	for cocci in scripts/coccinelle/*.cocci; do \
 		[ -e "$$cocci" ] || continue; \

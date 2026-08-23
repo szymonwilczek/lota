@@ -301,6 +301,15 @@ int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path)
 		return ret;
 	}
 
+	if (key_size != sizeof(uint32_t) ||
+	    value_size != sizeof(struct integrity_data)) {
+		lota_err(
+			"Enforcement object %s carries an integrity map this agent cannot read: key %u bytes, value %u bytes, where this build reads key %zu, value %zu. The kernel copies the map's own value size on every lookup, so the object and the agent have to come from the same release",
+			bpf_obj_path, key_size, value_size, sizeof(uint32_t),
+			sizeof(struct integrity_data));
+		return -ENOTSUP;
+	}
+
 	lota_info(
 		"Enforcement object integrity map: key %u bytes, value %u bytes",
 		key_size, value_size);
@@ -971,6 +980,32 @@ int bpf_loader_verify_object(const char *bpf_obj_path,
 	return ret;
 }
 
+/*
+ * The kernel copies the map's own value_size into the caller's buffer,
+ * so a map wider than the struct it is read into writes past that struct.
+ * The object is checked before it is loaded; this is the same question asked
+ * of the map the kernel actually holds, because the buffer is on this stack.
+ */
+static int integrity_map_fits(int map_fd)
+{
+	struct bpf_map_info info = { 0 };
+	uint32_t len = sizeof(info);
+
+	if (bpf_map_get_info_by_fd(map_fd, &info, &len) < 0)
+		return -errno;
+
+	if (info.key_size != sizeof(uint32_t) ||
+	    info.value_size != sizeof(struct integrity_data)) {
+		lota_err(
+			"Loaded integrity map is key %u bytes, value %u bytes, where this build reads key %zu, value %zu",
+			info.key_size, info.value_size, sizeof(uint32_t),
+			sizeof(struct integrity_data));
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
 int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		    const char *bpf_pubkey_pem_path)
 {
@@ -1162,6 +1197,21 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 
 		uint32_t key = 0;
+
+		/*
+		 * The kernel reads the map's own value_size out of the buffer
+		 * handed to it, so a wider map reads past cfg.
+		 * The pre-flight refuses such an object before the daemon gets
+		 * here; the map the kernel holds is asked again because the buffer
+		 * is on this stack.
+		 */
+		err = integrity_map_fits(ctx->integrity_fd);
+		if (err < 0) {
+			lota_err("Refusing to write the integrity map of %s",
+				 bpf_obj_path);
+			goto err_close;
+		}
+
 		if (bpf_map_update_elem(ctx->integrity_fd, &key, &cfg,
 					BPF_ANY) < 0) {
 			lota_err("Failed to update integrity_config map: %s",
@@ -1696,12 +1746,17 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 	uint32_t key = 0;
 	struct integrity_data current = { 0 };
 	struct integrity_data expected = { 0 };
+	int ret;
 
 	if (!ctx || !ctx->loaded)
 		return -EINVAL;
 
 	if (ctx->integrity_fd < 0)
 		return -ENOTSUP;
+
+	ret = integrity_map_fits(ctx->integrity_fd);
+	if (ret < 0)
+		return ret;
 
 	if (bpf_map_lookup_elem(ctx->integrity_fd, &key, &current) < 0)
 		return -errno;
