@@ -340,6 +340,8 @@ $(BUILD_DIR)/sdk/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -c -o $@ $<
 
 # build identity (both SDKs report it; see lota_sdk_version)
+$(BUILD_DIR)/agent/dbus.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/agent/dbus.o: $(VERSION_FILE)
 $(BUILD_DIR)/sdk/lota_server.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_server.o: $(VERSION_FILE)
 $(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)

@@ -160,7 +160,9 @@ Its status word is the daemon's own: a bus connection names no publisher, so
 it carries the host-wide view, including whether the runtime measurement
 covers every object of every protected process -- that is a fact about the
 host, and both roads have to report it the same way or a launcher reading
-coverage from the bus contradicts the socket.
+coverage from the bus contradicts the socket. Its ``Version`` property names
+the build the agent came from -- the same identity the SDKs report -- so a client
+can check it against the package the host has installed.
 
 The token carries no issued-at field, so issuers must size ``validUntil`` within that
 window. The agent enforces this where the interval is read: an ``attest_interval``
