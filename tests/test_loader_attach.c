@@ -3,7 +3,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "../src/agent/bpf_loader.h"
 
@@ -13,27 +12,6 @@
 		printf("FAIL: " fmt "\n", ##__VA_ARGS__); \
 		exit(1);                                  \
 	} while (0)
-
-static void test_resolve_existing_symbol(void)
-{
-	printf("Testing resolve_kernel_symbol...\n");
-	unsigned long addr =
-		resolve_kernel_symbol(LOTA_KALLSYMS_PATH, "_text");
-	if (addr == 0) {
-		if (access(LOTA_KALLSYMS_PATH, R_OK) != 0) {
-			printf("SKIP: %s not readable\n", LOTA_KALLSYMS_PATH);
-			return;
-		}
-	}
-
-	unsigned long bad = resolve_kernel_symbol(
-		LOTA_KALLSYMS_PATH, "this_symbol_does_not_exist_12345");
-	if (bad != 0) {
-		FAIL("Resolved non-existent symbol to %lx", bad);
-	}
-
-	PASS();
-}
 
 /*
  * Pin the load/attach split contract. bpf_loader_attach() must refuse
@@ -74,7 +52,6 @@ static void test_attach_refuses_before_load(void)
 
 int main(void)
 {
-	test_resolve_existing_symbol();
 	test_attach_refuses_before_load();
 	return 0;
 }

@@ -243,8 +243,8 @@ int bpf_loader_set_config(struct bpf_loader_ctx *ctx, uint32_t key,
  * bpf_loader_verify_integrity_config - Verify integrity_config map contents
  * @ctx: Loaded context
  *
- * Re-resolves kernel symbol addresses and checks they match current
- * integrity_config map values.
+ * Re-reads the kernel integrity baseline and checks it matches the current
+ * integrity_config map value.
  *
  * Returns: 0 on success, negative errno on mismatch/failure
  */
@@ -253,9 +253,6 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx);
 /* Where the kernel publishes the two properties the module gate stands on */
 #define LOTA_MODULE_SIG_ENFORCE_PATH "/sys/module/module/parameters/sig_enforce"
 #define LOTA_KERNEL_LOCKDOWN_PATH "/sys/kernel/security/lockdown"
-
-/* Where the kernel publishes its symbol table */
-#define LOTA_KALLSYMS_PATH "/proc/kallsyms"
 
 /*
  * bpf_loader_kernel_module_sig_enforced - Check module signature enforcement
@@ -278,14 +275,15 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path);
 /*
  * bpf_loader_build_integrity_config - Fill the value the module gate reads
  * @cfg: value written into the integrity_cfg map
- * @kallsyms_path: kernel symbol table the addresses are resolved from
  * @sig_enforce_path: sysfs file carrying the module.sig_enforce parameter
  * @lockdown_path: securityfs file carrying the lockdown state
+ *
+ * The same two readers the hardening gate runs, so the gate and the module
+ * branch of the BPF program cannot answer the question differently.
  *
  * Returns: 0 on success, negative errno when @cfg is missing.
  */
 int bpf_loader_build_integrity_config(struct integrity_data *cfg,
-				      const char *kallsyms_path,
 				      const char *sig_enforce_path,
 				      const char *lockdown_path);
 
@@ -293,9 +291,7 @@ int bpf_loader_build_integrity_config(struct integrity_data *cfg,
  * bpf_loader_integrity_config_satisfied - Would this value let a module load?
  * @cfg: value written into the integrity_cfg map
  *
- * The userspace mirror of integrity_baseline_ok() in the BPF program:
- * the addresses have to be there for the hook to dereference, and the state
- * they hold has to be the state the hardening gate reads out of sysfs.
+ * The userspace mirror of integrity_baseline_ok() in the BPF program.
  *
  * Returns: true when the module and firmware branches of
  * lota_kernel_read_file() accept @cfg.
@@ -419,9 +415,6 @@ int bpf_loader_probe_trusted_lib(const char *path);
  * Returns: 0 on success, negative errno on failure
  */
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path);
-
-unsigned long resolve_kernel_symbol(const char *kallsyms_path,
-				    const char *name);
 
 struct bpf_extended_stats {
 	uint64_t total_execs;

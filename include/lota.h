@@ -441,15 +441,15 @@ struct lota_exec_event {
  */
 
 /*
- * Kernel integrity configuration.
+ * Kernel integrity baseline, as the agent's startup hardening gate read it.
  *
- * Carries the addresses the BPF side dereferences and the verdict the agent's
- * startup hardening gate reached over the same two properties, so both roads
- * are visible in one value.
+ * The gate refuses to start the agent unless the kernel enforces module
+ * signatures and sits at lockdown integrity or above. Both properties are
+ * raise-only in the kernel -- module.sig_enforce is an enable-only parameter
+ * and the lockdown level never falls -- so the verdict cannot go stale while
+ * the agent runs, and the hook reads it here.
  */
 struct integrity_data {
-	__u64 sig_enforce_addr;
-	__u64 lockdown_addr;
 	__u32 sig_enforce; /* 1 when module signatures are enforced */
 	__u32 lockdown; /* 1 when lockdown is integrity or above */
 };
