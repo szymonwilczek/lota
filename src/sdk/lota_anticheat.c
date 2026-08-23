@@ -1621,7 +1621,7 @@ int lota_ac_verify_heartbeat(
 	info->heartbeat_seq = sequence;
 	info->lota_flags = claims.flags;
 	memcpy(info->game_id_hash, data + 40, LOTA_AC_GAME_HASH_SIZE);
-	info->trusted = (claims.flags != 0);
+	info->trusted = is_trusted(claims.flags, 0);
 	info->state = info->trusted ? LOTA_AC_STATE_TRUSTED :
 				      LOTA_AC_STATE_UNTRUSTED;
 

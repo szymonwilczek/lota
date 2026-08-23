@@ -279,8 +279,7 @@ struct lota_ac_info {
 	uint8_t game_id_hash[LOTA_AC_GAME_HASH_SIZE]; /* verified game identity
 							 binding */
 	int trusted; /* state == LOTA_AC_STATE_TRUSTED, in the same terms the
-		      * state field is in
-		      */
+		      * state field is in: attested, whatever else was asked for */
 };
 
 struct lota_ac_session;
@@ -522,7 +521,14 @@ int lota_ac_compute_expected_runtime_measure(
  *
  * max_age_sec: maximum acceptable token age (0 -> 300 s default).
  *
- * Returns 0 on success, negative error code on failure.
+ * A packet that verifies is reported LOTA_AC_STATE_TRUSTED only if the status
+ * word the signature covers carries LOTA_FLAG_ATTESTED. Everything else about
+ * the packet can be perfect on a host no verifier has ever answered,
+ * and this is the verdict a backend acts on.
+ * A server wanting more than attestation reads info->lota_flags, which carries
+ * that same signed word.
+ *
+ * Returns 0 on success, a LOTA_AC_ERR_* code on failure.
  */
 int lota_ac_verify_heartbeat(
 	const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
