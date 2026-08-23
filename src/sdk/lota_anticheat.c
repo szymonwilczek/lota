@@ -33,6 +33,15 @@
 _Static_assert(sizeof(struct lota_ac_heartbeat_wire) == LOTA_AC_HEADER_SIZE,
 	       "heartbeat wire header size must match LOTA_AC_HEADER_SIZE");
 
+/*
+ * The two error spaces this library hands out must not overlap:
+ * a caller reads a number and has to know which of them it came from.
+ * Linux errno values stay well inside a few hundred; the guard is here
+ * so a base moved closer fails to build.
+ */
+_Static_assert(LOTA_AC_ERR_BASE < -255,
+	       "LOTA_AC_ERR_BASE must sit past any errno value");
+
 #define LOTA_AC_MAX_HEARTBEAT_AGE_SEC 120ULL
 
 /*
@@ -1053,6 +1062,22 @@ const char *lota_ac_strerror(int err)
 		return "this process could not be measured";
 	case LOTA_AC_ERR_SERIALIZE:
 		return "the token could not be serialised";
+	case LOTA_AC_ERR_RUNTIME_IMAGE:
+		return "the runtime measurement is not the expected one";
+	}
+
+	/*
+	 * Not one of ours, so it is the other space: the measure helpers return
+	 * negative errno, and an integrator printing this function's output for
+	 * whatever a call returned is entitled to the right sentence.
+	 * The two spaces cannot collide -- LOTA_AC_ERR_BASE sits past any errno
+	 * -- so the test below is the whole of the disambiguation.
+	 */
+	if (err < 0 && err > LOTA_AC_ERR_BASE) {
+		const char *desc = strerrordesc_np(-err);
+
+		if (desc)
+			return desc;
 	}
 
 	return "unknown error";
@@ -1459,6 +1484,42 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	return 0;
 }
 
+/*
+ * The server SDK's verdict in this library's terms.
+ *
+ * lota_ac_verify_heartbeat() returns only LOTA_AC_ERR_*, so every
+ * LOTA_SERVER_ERR_* from lota_server_verify_token() is mapped here
+ * and never passed through.
+ * Anything without its own code is MALFORMED.
+ */
+static int ac_error_from_server(int server_err)
+{
+	switch (server_err) {
+	case LOTA_SERVER_OK:
+		return LOTA_AC_ERR_OK;
+	case LOTA_SERVER_ERR_INVALID_ARG:
+		return LOTA_AC_ERR_INVALID_ARG;
+	case LOTA_SERVER_ERR_BAD_VERSION:
+		return LOTA_AC_ERR_VERSION;
+	case LOTA_SERVER_ERR_SIG_FAIL:
+		return LOTA_AC_ERR_SIG_FAIL;
+	case LOTA_SERVER_ERR_NONCE_FAIL:
+		return LOTA_AC_ERR_NONCE_FAIL;
+	case LOTA_SERVER_ERR_EXPIRED:
+	case LOTA_SERVER_ERR_FUTURE:
+		return LOTA_AC_ERR_EXPIRED;
+	case LOTA_SERVER_ERR_CRYPTO:
+		return LOTA_AC_ERR_CRYPTO;
+	case LOTA_SERVER_ERR_RUNTIME_IMAGE:
+		return LOTA_AC_ERR_RUNTIME_IMAGE;
+	case LOTA_SERVER_ERR_BAD_TOKEN:
+	case LOTA_SERVER_ERR_ATTEST_PARSE:
+	case LOTA_SERVER_ERR_BUFFER:
+	default:
+		return LOTA_AC_ERR_MALFORMED;
+	}
+}
+
 int lota_ac_verify_heartbeat(
 	const uint8_t *data, size_t len, const uint8_t *aik_pub_der,
 	size_t aik_pub_len,
@@ -1468,10 +1529,10 @@ int lota_ac_verify_heartbeat(
 {
 	if (!data || !expected_game_id_hash || !expected_runtime_measure ||
 	    !info)
-		return LOTA_SERVER_ERR_INVALID_ARG;
+		return LOTA_AC_ERR_INVALID_ARG;
 
 	if (len < LOTA_AC_HEADER_SIZE)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 
 	uint32_t magic = read_le32_u(data + 0);
 	uint8_t version = data[4];
@@ -1487,25 +1548,25 @@ int lota_ac_verify_heartbeat(
 	int ret = LOTA_SERVER_OK;
 
 	if (magic != LOTA_AC_MAGIC)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 	if (version != LOTA_AC_VERSION)
-		return LOTA_SERVER_ERR_BAD_VERSION;
+		return LOTA_AC_ERR_VERSION;
 	if ((size_t)total_size > len)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 	if ((size_t)total_size != LOTA_AC_HEADER_SIZE + (size_t)token_size)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 	if (token_size == 0 || token_size > LOTA_AC_MAX_TOKEN)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 	if (provider != LOTA_AC_PROVIDER_EAC &&
 	    provider != LOTA_AC_PROVIDER_BATTLEYE)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 
 	if (!lota_ac_domain_lookup(domain_version))
-		return LOTA_SERVER_ERR_BAD_VERSION;
+		return LOTA_AC_ERR_VERSION;
 
 	if (CRYPTO_memcmp(data + 40, expected_game_id_hash,
 			  LOTA_AC_GAME_HASH_SIZE) != 0)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 
 	/*
 	 * Runtime measurement must match the value an honest producer of this
@@ -1516,34 +1577,34 @@ int lota_ac_verify_heartbeat(
 	 */
 	if (CRYPTO_memcmp(data + 78, expected_runtime_measure,
 			  LOTA_AC_RUNTIME_MEASURE_SIZE) != 0)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_RUNTIME_IMAGE;
 
 	if (timestamp > now + LOTA_AC_MAX_HEARTBEAT_AGE_SEC)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 	if (timestamp + LOTA_AC_MAX_HEARTBEAT_AGE_SEC < now)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 
 	ret = compute_heartbeat_nonce(expected_nonce, data + 8, provider,
 				      sequence, heartbeat_lota_flags, timestamp,
 				      data + 40, data + 78, domain_version);
 	if (ret < 0)
-		return LOTA_SERVER_ERR_CRYPTO;
+		return LOTA_AC_ERR_CRYPTO;
 
 	const uint8_t *token = data + LOTA_AC_HEADER_SIZE;
 
 	struct lota_server_claims claims;
 
 	if (!aik_pub_der || aik_pub_len == 0)
-		return LOTA_SERVER_ERR_INVALID_ARG;
+		return LOTA_AC_ERR_INVALID_ARG;
 
 	ret = lota_server_verify_token(token, token_size, aik_pub_der,
 				       aik_pub_len, expected_nonce, &claims);
 
 	if (ret != LOTA_SERVER_OK)
-		return ret;
+		return ac_error_from_server(ret);
 
 	if (CRYPTO_memcmp(claims.nonce, expected_nonce, LOTA_NONCE_SIZE) != 0)
-		return LOTA_SERVER_ERR_NONCE_FAIL;
+		return LOTA_AC_ERR_NONCE_FAIL;
 
 	/*
 	 * lota_flags in heartbeat header are plaintext transport metadata only.
@@ -1551,7 +1612,7 @@ int lota_ac_verify_heartbeat(
 	 * set) and fail closed if header/token disagree
 	 */
 	if (heartbeat_lota_flags != claims.flags)
-		return LOTA_SERVER_ERR_BAD_TOKEN;
+		return LOTA_AC_ERR_MALFORMED;
 
 	info->provider = (enum lota_ac_provider)provider;
 	memcpy(info->session_id, data + 8, LOTA_AC_SESSION_ID_SIZE);

@@ -76,52 +76,72 @@ enum lota_ac_state {
 /*
  * Error codes.
  *
- * -1..-7 are the verification vocabulary: why a heartbeat packet a server
- * received was refused.
+ * Every code sits below LOTA_AC_ERR_BASE, so none collides with the negative
+ * errno the measure helpers return; lota_ac_strerror() renders both.
  *
- * -8 and below say why a call on the producing side could not be made,
- * and are read through lota_ac_last_error().
- * The split that matters to an integrator runs through the middle of them:
- * a configuration this library refused is their bug, while an agent that
- * is not there, a publisher nobody has agreed to, or a host that is not
- * attested is a state the player acts on.
+ * The verification group says why a server refused a heartbeat.
+ * The rest say why a producer-side call failed and are read with
+ * lota_ac_last_error(): a refused configuration is the integrator's bug,
+ * while a missing agent, a publisher nobody agreed to or an unattested host
+ * is a state the player acts on.
  */
+#define LOTA_AC_ERR_BASE (-1000)
+
 enum {
 	LOTA_AC_ERR_OK = 0,
-	LOTA_AC_ERR_INVALID_ARG = -1,
-	LOTA_AC_ERR_MALFORMED = -2,
-	LOTA_AC_ERR_VERSION = -3,
-	LOTA_AC_ERR_SIG_FAIL = -4,
-	LOTA_AC_ERR_NONCE_FAIL = -5,
-	LOTA_AC_ERR_EXPIRED = -6,
-	LOTA_AC_ERR_CRYPTO = -7,
+
+	/* the verification vocabulary */
+	LOTA_AC_ERR_INVALID_ARG = LOTA_AC_ERR_BASE - 1,
+	LOTA_AC_ERR_MALFORMED = LOTA_AC_ERR_BASE - 2,
+	LOTA_AC_ERR_VERSION = LOTA_AC_ERR_BASE - 3,
+	LOTA_AC_ERR_SIG_FAIL = LOTA_AC_ERR_BASE - 4,
+	LOTA_AC_ERR_NONCE_FAIL = LOTA_AC_ERR_BASE - 5,
+	LOTA_AC_ERR_EXPIRED = LOTA_AC_ERR_BASE - 6,
+	LOTA_AC_ERR_CRYPTO = LOTA_AC_ERR_BASE - 7,
+	LOTA_AC_ERR_RUNTIME_IMAGE = LOTA_AC_ERR_BASE - 24, /* the runtime
+							    * measurement is
+							    * not the one
+							    * expected */
 
 	/* the caller's own configuration */
-	LOTA_AC_ERR_CONFIG_SIZE = -8, /* struct_size unset or too small */
-	LOTA_AC_ERR_GAME_ID = -9, /* game_id missing, empty or too long */
-	LOTA_AC_ERR_PROVIDER = -10, /* provider is neither EAC nor BattlEye */
+	LOTA_AC_ERR_CONFIG_SIZE = LOTA_AC_ERR_BASE - 8, /* struct_size unset
+							 * or too small */
+	LOTA_AC_ERR_GAME_ID = LOTA_AC_ERR_BASE - 9, /* game_id missing, empty
+						     * or too long */
+	LOTA_AC_ERR_PROVIDER = LOTA_AC_ERR_BASE - 10, /* provider is neither
+						       * EAC nor BattlEye */
 
 	/* this library */
-	LOTA_AC_ERR_NO_MEMORY = -11,
-	LOTA_AC_ERR_INTERNAL = -12, /* session id or game-id hash failed */
+	LOTA_AC_ERR_NO_MEMORY = LOTA_AC_ERR_BASE - 11,
+	LOTA_AC_ERR_INTERNAL = LOTA_AC_ERR_BASE - 12, /* session id or game-id
+						       * hash failed */
 
 	/* the host, which is what a player acts on */
-	LOTA_AC_ERR_NO_AGENT = -13, /* no agent answering the socket */
-	LOTA_AC_ERR_CONSENT_REQUIRED = -14, /* nobody has agreed to this
-					     * publisher on this machine */
-	LOTA_AC_ERR_UNKNOWN_PROFILE = -15, /* the host is not enrolled with the
-					    * publisher that was named */
-	LOTA_AC_ERR_ACCESS_DENIED = -16,
-	LOTA_AC_ERR_TOKEN_DIR = -17, /* file mode: no hook output directory */
-	LOTA_AC_ERR_NOT_ATTESTED = -18, /* the host holds no verdict yet */
-	LOTA_AC_ERR_RATE_LIMITED = -19, /* beating faster than the agent
-					 * issues tokens */
+	LOTA_AC_ERR_NO_AGENT = LOTA_AC_ERR_BASE - 13, /* no agent answering the
+						       * socket */
+	LOTA_AC_ERR_CONSENT_REQUIRED = LOTA_AC_ERR_BASE - 14, /* nobody has
+							       * agreed to this
+							       * publisher */
+	LOTA_AC_ERR_UNKNOWN_PROFILE = LOTA_AC_ERR_BASE - 15, /* not enrolled
+							      * with that
+							      * publisher */
+	LOTA_AC_ERR_ACCESS_DENIED = LOTA_AC_ERR_BASE - 16,
+	LOTA_AC_ERR_TOKEN_DIR = LOTA_AC_ERR_BASE - 17, /* file mode: no hook
+							* output directory */
+	LOTA_AC_ERR_NOT_ATTESTED = LOTA_AC_ERR_BASE - 18, /* no verdict yet */
+	LOTA_AC_ERR_RATE_LIMITED = LOTA_AC_ERR_BASE - 19, /* beating faster
+							   * than the agent
+							   * issues tokens */
 
 	/* the beat itself */
-	LOTA_AC_ERR_STATUS = -20, /* the agent would not report its state */
-	LOTA_AC_ERR_TOKEN = -21, /* the agent would not issue a token */
-	LOTA_AC_ERR_MEASURE = -22, /* this process could not be measured */
-	LOTA_AC_ERR_SERIALIZE = -23, /* the token would not serialise */
+	LOTA_AC_ERR_STATUS = LOTA_AC_ERR_BASE - 20, /* the agent would not
+						     * report its state */
+	LOTA_AC_ERR_TOKEN = LOTA_AC_ERR_BASE - 21, /* the agent would not issue
+						    * a token */
+	LOTA_AC_ERR_MEASURE = LOTA_AC_ERR_BASE - 22, /* this process could not
+						      * be measured */
+	LOTA_AC_ERR_SERIALIZE = LOTA_AC_ERR_BASE - 23, /* the token would not
+							* serialise */
 };
 
 struct lota_ac_config {
@@ -296,8 +316,10 @@ int lota_ac_last_error(void);
 /*
  * lota_ac_strerror - The error code as a sentence
  *
- * Stable, English, no trailing punctuation, never NULL:
- * a code from a newer library than the caller was built against still renders.
+ * Accepts any value a call returned: a LOTA_AC_ERR_* code or a negative
+ * errno from the measure helpers, which gets the system's description.
+ * Stable English, no trailing punctuation, never NULL, even for a code
+ * from a newer library.
  */
 const char *lota_ac_strerror(int err);
 

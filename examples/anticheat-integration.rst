@@ -187,6 +187,12 @@ separate them: ten distinct refusals in the heartbeat path share
 ``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
 calling thread, and ``lota_ac_strerror()`` renders it.
 
+``lota_ac_strerror()`` renders either space. ``LOTA_AC_ERR_*`` codes sit past
+any errno value, so the function can tell one of its own verdicts from a
+``-EIO`` a file read produced and describes each in its own terms -- printing
+its output for whatever a call returned is always right, including for the
+measure helpers, which answer in errno.
+
 .. code:: c
 
    struct lota_ac_session *s = lota_ac_init(&cfg);

@@ -20,8 +20,8 @@
 
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
-#include "lota_server.h"
 #include "lota_snapshot.h"
+#include "lota_token.h"
 
 static int tests_run;
 static int tests_passed;
@@ -1034,8 +1034,8 @@ static void test_verify_roundtrip(void)
 	ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
 				       expected_game_hash, expected_rm,
 				       &verified);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1068,8 +1068,8 @@ static void test_verify_battleye_roundtrip(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(
 		buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 	PASS();
@@ -1077,7 +1077,7 @@ static void test_verify_battleye_roundtrip(void)
 
 static void test_verify_rejects_game_hash_mismatch(void)
 {
-	TEST("verify: wrong expected game hash -> BAD_TOKEN");
+	TEST("verify: wrong expected game hash -> MALFORMED");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t wrong_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	size_t written = 0;
@@ -1093,8 +1093,8 @@ static void test_verify_rejects_game_hash_mismatch(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash,
 					   any_rm, &info);
-	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+	if (ret != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 
@@ -1133,15 +1133,15 @@ static void test_verify_null_info(void)
 
 static void test_verify_truncated(void)
 {
-	TEST("verify: truncated data -> BAD_TOKEN");
+	TEST("verify: truncated data -> MALFORMED");
 	uint8_t data[32] = { 0 };
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1149,7 +1149,7 @@ static void test_verify_truncated(void)
 
 static void test_verify_bad_magic(void)
 {
-	TEST("verify: bad magic -> BAD_TOKEN");
+	TEST("verify: bad magic -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1166,8 +1166,8 @@ static void test_verify_bad_magic(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1175,7 +1175,7 @@ static void test_verify_bad_magic(void)
 
 static void test_verify_bad_version(void)
 {
-	TEST("verify: bad version -> BAD_VERSION");
+	TEST("verify: bad version -> VERSION");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1201,7 +1201,7 @@ static void test_verify_bad_version(void)
 
 static void test_verify_bad_provider(void)
 {
-	TEST("verify: bad provider -> BAD_TOKEN");
+	TEST("verify: bad provider -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1218,8 +1218,8 @@ static void test_verify_bad_provider(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1227,7 +1227,7 @@ static void test_verify_bad_provider(void)
 
 static void test_verify_size_mismatch(void)
 {
-	TEST("verify: total_size > actual len -> BAD_TOKEN");
+	TEST("verify: total_size > actual len -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1244,8 +1244,8 @@ static void test_verify_size_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1281,8 +1281,8 @@ static void test_verify_header_flags_tamper_rejected(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+				     &info) != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1291,7 +1291,7 @@ static void test_verify_header_flags_tamper_rejected(void)
 
 static void test_verify_rejects_unknown_domain_version(void)
 {
-	TEST("verify: unknown domain_version -> BAD_VERSION");
+	TEST("verify: unknown domain_version -> VERSION");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	size_t written = 0;
@@ -1314,9 +1314,8 @@ static void test_verify_rejects_unknown_domain_version(void)
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
-				     any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_VERSION) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+				     any_rm, &info) != LOTA_AC_ERR_VERSION) {
+		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
 	}
 	PASS();
@@ -1324,7 +1323,7 @@ static void test_verify_rejects_unknown_domain_version(void)
 
 static void test_verify_rejects_runtime_measure_mismatch(void)
 {
-	TEST("verify: wrong expected runtime measure -> BAD_TOKEN");
+	TEST("verify: wrong expected runtime measure -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t wrong_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1351,8 +1350,8 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     wrong_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
@@ -1360,7 +1359,7 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 
 static void test_verify_rejects_runtime_field_tamper(void)
 {
-	TEST("verify: tampered runtime_measure field -> BAD_TOKEN");
+	TEST("verify: tampered runtime_measure field -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1388,8 +1387,8 @@ static void test_verify_rejects_runtime_field_tamper(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
