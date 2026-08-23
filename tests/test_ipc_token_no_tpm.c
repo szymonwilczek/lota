@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Unit tests for what GET_TOKEN answers on a host the agent has no TPM on.
+ * Unit tests for what the IPC bridge answers when the agent holds nothing.
+ *
+ * Two refusals share that shape. GET_TOKEN on a host with no TPM is the first.
  *
  * A token nobody signed is not evidence, so the refusal itself is right and stays.
  * What a refusal owes the caller is a reason: every other branch of GET_TOKEN
@@ -9,8 +11,11 @@
  * failed. An SDK developer bringing the bridge up without one is left with
  * "Agent returned error" and an empty log.
  *
- * These tests drive the real ipc_process() loop over a real socket with no
- * TPM bound, which is the state --test-ipc runs in.
+ * PROTECT_PID is the second: runtime PID policy stands on the startup snapshot,
+ * which only the startup policy raises, and a diagnostic server applies none.
+ *
+ * These tests drive the real ipc_process() loop over a real socket with no TPM
+ * and no enforcement, which is the state --test-ipc runs in.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -379,6 +384,87 @@ static int probe_refusal(struct ipc_context *ctx)
 	return 0;
 }
 
+/*
+ * PROTECT_PID against a server that enforces nothing.
+ *
+ * The runtime PID policy stands on the startup snapshot, which only the startup
+ * policy raises -- and a diagnostic server never applies one. The refusal is
+ * right; what it must not be is INTERNAL, the status that means the daemon broke,
+ * delivered in silence. Every neighbouring refusal in the same handler names
+ * itself and logs the uid, the pid and the target.
+ */
+static uint32_t protect_result = 0xFFFFFFFF;
+static char protect_log[8192];
+
+static int probe_protect_pid(struct ipc_context *ctx)
+{
+	struct lota_ipc_response resp;
+	struct lota_ipc_pid_request req = { .pid = (uint32_t)getpid() };
+	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
+	int fd, ret;
+
+	fd = client_open();
+	if (fd < 0)
+		return fd;
+
+	log_capture_begin();
+	ret = send_request(fd, LOTA_IPC_CMD_PROTECT_PID, &req, sizeof(req));
+	if (ret == 0)
+		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
+	log_capture_end(protect_log, sizeof(protect_log));
+	close(fd);
+
+	if (ret < 0)
+		return ret;
+
+	protect_result = resp.result;
+	return 0;
+}
+
+static void test_protect_pid_is_not_an_internal_error(void)
+{
+	TEST("a server that enforces nothing does not call it an internal error");
+
+	if (protect_result == LOTA_IPC_ERR_INTERNAL) {
+		FAIL("a structural refusal is reported as a broken daemon");
+		return;
+	}
+
+	if (protect_result == LOTA_IPC_OK) {
+		FAIL("a server with no enforcement accepted a policy change");
+		return;
+	}
+
+	PASS();
+}
+
+static void test_protect_pid_refusal_names_itself(void)
+{
+	TEST("the refusal names the agent as enforcing nothing");
+
+	if (protect_result != LOTA_IPC_ERR_NO_ENFORCEMENT)
+		FAIL("the refusal does not name what is missing");
+	else
+		PASS();
+}
+
+static void test_protect_pid_refusal_is_logged(void)
+{
+	TEST("the refusal says why in the log");
+
+	if (protect_log[0] == '\0') {
+		FAIL("the agent refused silently");
+		return;
+	}
+
+	if (!strstr(protect_log, "PROTECT_PID")) {
+		FAIL("the log does not name the refused command");
+		return;
+	}
+
+	PASS();
+}
+
 /* The refusal itself: a host with no TPM must never hand out a token */
 static void test_no_tpm_is_refused(void)
 {
@@ -475,7 +561,7 @@ int main(void)
 	struct ipc_context ctx;
 	int listen_fd, ret;
 
-	printf("=== GET_TOKEN without a TPM ===\n\n");
+	printf("=== what the bridge answers holding nothing ===\n\n");
 
 	/* agent logs to stderr when it is not run under systemd */
 	unsetenv("JOURNAL_STREAM");
@@ -522,6 +608,15 @@ int main(void)
 	test_absent_tpm_is_not_a_tpm_failure();
 	test_refusal_is_logged();
 	test_capability_line_promises_no_tokens(&ctx);
+
+	ret = probe_protect_pid(&ctx);
+	if (ret < 0) {
+		printf("SKIP: no answer to PROTECT_PID (%s)\n", strerror(-ret));
+	} else {
+		test_protect_pid_is_not_an_internal_error();
+		test_protect_pid_refusal_names_itself();
+		test_protect_pid_refusal_is_logged();
+	}
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);
