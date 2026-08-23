@@ -81,6 +81,14 @@ void dbus_emit_mode_changed(struct dbus_context *ctx, uint8_t mode);
 void dbus_emit_rotation_changed(struct dbus_context *ctx);
 
 /*
+ * dbus_status_word - the status word this interface answers with
+ *
+ * Both GetStatus() and the StatusFlags property answer it,
+ * so the bus has one word.
+ */
+uint32_t dbus_status_word(const struct ipc_context *ipc);
+
+/*
  * dbus_cleanup - Release bus name and free context.
  * @ctx: Context from dbus_init (NULL-safe).
  */

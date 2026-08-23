@@ -41,6 +41,14 @@ static const char *mode_string(uint8_t mode)
 	}
 }
 
+uint32_t dbus_status_word(const struct ipc_context *ipc)
+{
+	if (!ipc)
+		return 0;
+
+	return ipc->status_flags;
+}
+
 static int prop_get_status_flags(sd_bus *bus, const char *path,
 				 const char *interface, const char *property,
 				 sd_bus_message *reply, void *userdata,
@@ -52,7 +60,7 @@ static int prop_get_status_flags(sd_bus *bus, const char *path,
 	(void)interface;
 	(void)property;
 	(void)error;
-	return sd_bus_message_append(reply, "u", ctx->ipc->status_flags);
+	return sd_bus_message_append(reply, "u", dbus_status_word(ctx->ipc));
 }
 
 static int prop_get_mode(sd_bus *bus, const char *path, const char *interface,
@@ -258,12 +266,11 @@ static int method_get_status(sd_bus_message *msg, void *userdata,
 	struct dbus_context *ctx = userdata;
 	(void)error;
 
-	return sd_bus_reply_method_return(msg, "usttuu", ctx->ipc->status_flags,
-					  mode_string(ctx->ipc->mode),
-					  ctx->ipc->last_attest_time,
-					  ctx->ipc->valid_until,
-					  ctx->ipc->attest_count,
-					  ctx->ipc->fail_count);
+	return sd_bus_reply_method_return(
+		msg, "usttuu", dbus_status_word(ctx->ipc),
+		mode_string(ctx->ipc->mode), ctx->ipc->last_attest_time,
+		ctx->ipc->valid_until, ctx->ipc->attest_count,
+		ctx->ipc->fail_count);
 }
 
 /*

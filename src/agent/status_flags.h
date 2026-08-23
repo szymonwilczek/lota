@@ -55,4 +55,24 @@ static inline uint32_t agent_status_flags(const struct agent_boot_state *st)
 	return flags;
 }
 
+/*
+ * Fold the runtime-measurement coverage into a status word.
+ *
+ * Coverage is a fact about the host, not about the caller asking, so every road
+ * that hands a status word outside has to fold it the same way. It is answered
+ * at the moment of the answer, because a protected process that gains
+ * an unmeasurable object changes it without anything else changing.
+ *
+ * The token binds the flags the caller read into the nonce it is quoted over,
+ * so a bit set on one road and not on another breaks that binding.
+ */
+static inline uint32_t lota_status_fold_coverage(uint32_t flags,
+						 bool fully_measured)
+{
+	if (fully_measured)
+		return flags | LOTA_STATUS_IMAGE_FULLY_MEASURED;
+
+	return flags & ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
+}
+
 #endif /* LOTA_AGENT_STATUS_FLAGS_H */

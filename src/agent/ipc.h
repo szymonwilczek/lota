@@ -289,6 +289,16 @@ void ipc_update_rotation(struct ipc_context *ctx, uint64_t generation,
 void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
 
 /*
+ * ipc_host_status_flags - the status word a caller that names no publisher sees
+ *
+ * The stored word plus the facts that are answered at the moment of the answer.
+ * A bus connection names no publisher, so the host-wide view is the only one
+ * there is -- but runtime-measurement coverage is a fact about the host,
+ * and every road out has to carry it.
+ */
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
+
+/*
  * ipc_set_profiles - Hand the IPC layer the publisher profiles
  * @ctx: Server context
  * @profiles: Targets owned by the attestation loop, borrowed for the run

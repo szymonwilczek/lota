@@ -38,6 +38,22 @@ void ipc_set_dbus(struct ipc_context *ctx, struct dbus_context *dbus)
 		ctx->dbus = dbus;
 }
 
+/*
+ * Stub for ipc_host_status_flags(); ipc.c is not linked into this test.
+ * Returns a value that differs from the status_flags set in setup_ipc(),
+ * so a test can tell whether D-Bus answered with the host-wide word
+ * or with the stored one, and counts how often it was asked.
+ */
+#define TEST_HOST_STATUS_FLAGS 0x21Au
+static int host_status_calls;
+
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
+{
+	(void)ctx;
+	host_status_calls++;
+	return TEST_HOST_STATUS_FLAGS;
+}
+
 #define TEST(name)                                        \
 	do {                                              \
 		tests_run++;                              \

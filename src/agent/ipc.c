@@ -11,6 +11,7 @@
 #include "ipc_privilege.h"
 #include "ipc_payload.h"
 #include "protect_pids.h"
+#include "status_flags.h"
 #include "terminate_policy.h"
 
 #include <errno.h>
@@ -967,6 +968,15 @@ static bool runtime_coverage_is_full(void)
 	return true;
 }
 
+uint32_t ipc_host_status_flags(const struct ipc_context *ctx)
+{
+	if (!ctx)
+		return 0;
+
+	return lota_status_fold_coverage(ctx->status_flags,
+					 runtime_coverage_is_full());
+}
+
 static void handle_get_status(struct ipc_context *ctx,
 			      struct ipc_client *client)
 {
@@ -981,10 +991,7 @@ static void handle_get_status(struct ipc_context *ctx,
 	resp->payload_len = sizeof(*status);
 
 	client_attestation_view(ctx, client, &flags, &valid_until);
-	if (runtime_coverage_is_full())
-		flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
-	else
-		flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	flags = lota_status_fold_coverage(flags, runtime_coverage_is_full());
 
 	status = (void *)(client->send_buf + LOTA_IPC_RESPONSE_SIZE);
 	status->flags = flags;
@@ -1303,10 +1310,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * Host with no protected process has nothing left unmeasured,
 	 * which is the empty case of the same statement.
 	 */
-	if (image_fully_measured)
-		token->flags |= LOTA_STATUS_IMAGE_FULLY_MEASURED;
-	else
-		token->flags &= ~(uint32_t)LOTA_STATUS_IMAGE_FULLY_MEASURED;
+	token->flags =
+		lota_status_fold_coverage(token->flags, image_fully_measured);
 
 	memcpy(token->runtime_protect_digest, runtime_protect_digest,
 	       sizeof(token->runtime_protect_digest));
