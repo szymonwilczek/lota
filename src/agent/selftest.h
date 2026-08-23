@@ -73,8 +73,7 @@ static inline void selftest_skip(struct selftest_tally *t)
  */
 static inline int selftest_verdict(const struct selftest_tally *t)
 {
-	(void)t;
-	return 0;
+	return t->failed > 0 ? -EIO : 0;
 }
 
 /*
