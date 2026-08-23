@@ -197,6 +197,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/daemon_loop_telemetry.c \
 			  $(AGENT_DIR)/main_utils.c \
 			  $(AGENT_DIR)/io_utils.c \
+			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \

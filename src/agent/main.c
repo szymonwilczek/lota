@@ -36,6 +36,7 @@
 #include "dbus.h"
 #include "diagnostics.h"
 #include "event.h"
+#include "exit_status.h"
 #include "hardening.h"
 #include "hash_verify.h"
 #include "ipc.h"
@@ -58,16 +59,6 @@ struct agent_globals g_agent = {
 };
 
 static volatile sig_atomic_t g_reload = 0;
-
-/*
- * Exit status for a state only an operator can clear: the host is configured
- * in a way the agent refuses, and starting it again changes nothing.
- * The packaged unit lists it in RestartPreventExitStatus, so systemd leaves
- * the unit failed with the reason in the journal.
- *
- * 78 is sysexits.h EX_CONFIG, which is what this is.
- */
-#define LOTA_EXIT_OPERATOR_ACTION 78
 
 struct run_daemon_params {
 	const char *bpf_path;
@@ -832,13 +823,10 @@ int main(int argc, char *argv[])
 	};
 	rc = run_daemon(&run_params);
 	/*
-	 * -ENOTSUP is the daemon's "this host is configured in a way I refuse":
-	 * a legacy firmware interface, or a publisher key that predates
-	 * per-publisher derivation.
-	 * Both need someone to act; neither is fixed by trying again.
+	 * supervisor learns from the status alone whether starting again can
+	 * succeed, so the whole answer is produced in one place
 	 */
-	if (rc == -ENOTSUP)
-		rc = LOTA_EXIT_OPERATOR_ACTION;
+	rc = lota_daemon_exit_status(rc, g_agent.tpm_ctx.boot_commitment_state);
 
 out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);
