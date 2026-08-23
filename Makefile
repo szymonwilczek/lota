@@ -1279,9 +1279,9 @@ $(TEST_BIN_DIR)/test_constant_time: tests/test_constant_time.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_dbus: tests/test_dbus.c $(AGENT_DIR)/dbus.c $(AGENT_DIR)/journal.c VERSION | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lsystemd
+	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -o $@ $(filter %.c,$^) -lsystemd
 
 $(TEST_BIN_DIR)/test_systemd: tests/test_systemd.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(QUIET_CC)
