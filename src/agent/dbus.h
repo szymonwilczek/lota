@@ -89,6 +89,14 @@ void dbus_emit_rotation_changed(struct dbus_context *ctx);
 uint32_t dbus_status_word(const struct ipc_context *ipc);
 
 /*
+ * dbus_version_string - what org.lota.Agent1.Version answers
+ *
+ * A client that version-gates on the bus reads this and nothing else,
+ * so it has to name a build a host can check against what it has installed.
+ */
+const char *dbus_version_string(void);
+
+/*
  * dbus_cleanup - Release bus name and free context.
  * @ctx: Context from dbus_init (NULL-safe).
  */

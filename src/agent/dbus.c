@@ -229,6 +229,11 @@ static int prop_get_reenroll_required(sd_bus *bus, const char *path,
 				     (int)ctx->ipc->aik_reenroll_required);
 }
 
+const char *dbus_version_string(void)
+{
+	return "1.0.0";
+}
+
 static int prop_get_version(sd_bus *bus, const char *path,
 			    const char *interface, const char *property,
 			    sd_bus_message *reply, void *userdata,
@@ -240,7 +245,7 @@ static int prop_get_version(sd_bus *bus, const char *path,
 	(void)property;
 	(void)userdata;
 	(void)error;
-	return sd_bus_message_append(reply, "s", "1.0.0");
+	return sd_bus_message_append(reply, "s", dbus_version_string());
 }
 
 static int method_ping(sd_bus_message *msg, void *userdata, sd_bus_error *error)
