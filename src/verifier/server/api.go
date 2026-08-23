@@ -56,6 +56,7 @@ type APIHandler struct {
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
 	routes         []string // patterns handed to the mux, in order
+	endpoints      []string // what those patterns serve, as an operator calls it
 }
 
 // creates a new API handler and registers routes on the given mux
@@ -104,15 +105,18 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 
 	// sensitive read-only endpoints (reader or admin auth required)
 	h.handle(mux, "GET /api/v1/clients", h.requireReader(h.handleListClients))
-	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
+	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo),
+		"GET /api/v1/clients/{id}")
 	h.handle(mux, "GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
 	h.handle(mux, "GET /api/v1/bans", h.requireReader(h.handleListBans))
 	h.handle(mux, "GET /api/v1/audit", h.requireReader(h.handleAuditLog))
 	h.handle(mux, "GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
 	// revocation management (admin auth required)
-	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
-	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"POST /api/v1/clients/{id}/revoke")
+	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"DELETE /api/v1/clients/{id}/revoke", "DELETE /api/v1/clients/{id}")
 
 	// post-fact review of Low-Firmware-Assurance re-anchors.
 	// LFA re-anchors apply automatically; these endpoints let an operator see
@@ -122,26 +126,36 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h.handle(mux, "GET /api/v1/reanchor/review",
 		h.requireReader(h.handleReanchorReviewList))
 	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor-review-ack",
-		h.requireAdmin(h.handleReanchorReviewAck))
+		h.requireAdmin(h.handleReanchorReviewAck),
+		"POST /api/v1/clients/{id}/reanchor-review-ack")
 
 	// operator-forced re-baseline;
 	// deliberate counterpart of the self-service re-anchor above (admin auth required)
 	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor",
-		h.requireAdmin(h.handleForceReanchor))
+		h.requireAdmin(h.handleForceReanchor),
+		"POST /api/v1/clients/{id}/reanchor")
 
 	// hardware ban management (admin auth required)
 	h.handle(mux, "POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
-	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
+	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
+		"DELETE /api/v1/bans/{id}")
 
 	return h
 }
 
-// handle registers a route and records its pattern, so what the instance
-// serves can be compared with what it says it serves.
+// handle registers a route and records both the pattern the mux matches on
+// and the endpoints an operator can call. They differ where one pattern
+// dispatches several actions by path: the pattern is what routing needs,
+// the endpoints are what an inventory has to name.
+// Given no endpoints, a route advertises itself.
 func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
-	handler http.HandlerFunc,
+	handler http.HandlerFunc, endpoints ...string,
 ) {
 	h.routes = append(h.routes, pattern)
+	if len(endpoints) == 0 {
+		endpoints = []string{pattern}
+	}
+	h.endpoints = append(h.endpoints, endpoints...)
 	mux.HandleFunc(pattern, handler)
 }
 
@@ -152,29 +166,10 @@ func (h *APIHandler) RegisteredRoutes() []string {
 }
 
 // AdvertisedRoutes is what the instance tells an operator it exposes.
-// The startup banner is the inventory a firewall or a client is written against,
-// so it has to agree with the mux above.
+// It is what the routes above registered, so the banner cannot name an endpoint
+// nothing serves or omit one that is served.
 func (h *APIHandler) AdvertisedRoutes() []string {
-	return []string{
-		"GET /health",
-		"GET /api/v1/stats",
-		"GET /api/v1/clients",
-		"GET /api/v1/clients/{id}",
-		"POST /api/v1/clients/{id}/revoke",
-		"DELETE /api/v1/clients/{id}/revoke",
-		"DELETE /api/v1/clients/{id}",
-		"POST /api/v1/clients/{id}/reanchor",
-		"GET /api/v1/reanchor/review",
-		"POST /api/v1/clients/{id}/reanchor-review-ack",
-		"GET /api/v1/revocations",
-		"POST /api/v1/bans",
-		"DELETE /api/v1/bans/{id}",
-		"GET /api/v1/bans",
-		"GET /api/v1/audit",
-		"GET /api/v1/attestations",
-		"POST /api/v1/session/validate",
-		"GET /metrics",
-	}
+	return h.endpoints
 }
 
 // principalCtxKey carries the authenticated Principal through the

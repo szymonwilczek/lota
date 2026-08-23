@@ -621,7 +621,9 @@ is refused. Environment keys (``LOTA_ADMIN_API_KEY`` /
 ``LOTA_READER_API_KEY``) are global-scope by construction: the variable carries
 a key and nothing else, so there is nowhere to express a tenant list and the
 principal it authenticates is unscoped. Delegating a tenant therefore means
-issuing a key in the key file, not narrowing an environment key. See
+issuing a key in the key file, not narrowing an environment key. The endpoint
+list the instance logs at startup is built from the routes it registers, so it
+can be read as the API surface that instance exposes. See
 :doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
 
 Operational requirements
