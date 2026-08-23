@@ -256,6 +256,57 @@ int bpf_loader_build_integrity_config(struct integrity_data *cfg,
 	return 0;
 }
 
+int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
+				       uint32_t *key_size, uint32_t *value_size)
+{
+	struct bpf_object *obj;
+	struct bpf_map *map;
+
+	if (!bpf_obj_path || !key_size || !value_size)
+		return -EINVAL;
+
+	/*
+	 * Opening parses the ELF and its BTF without asking the kernel for
+	 * anything, so this costs no privilege and can be answered before
+	 * the agent has committed to anything.
+	 */
+	obj = bpf_object__open_file(bpf_obj_path, NULL);
+	if (!obj)
+		return -EIO;
+
+	map = bpf_object__find_map_by_name(obj, "integrity_cfg");
+	if (!map) {
+		bpf_object__close(obj);
+		return -ENOENT;
+	}
+
+	*key_size = bpf_map__key_size(map);
+	*value_size = bpf_map__value_size(map);
+	bpf_object__close(obj);
+	return 0;
+}
+
+int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path)
+{
+	uint32_t key_size = 0;
+	uint32_t value_size = 0;
+	int ret;
+
+	ret = bpf_loader_object_integrity_layout(bpf_obj_path, &key_size,
+						 &value_size);
+	if (ret < 0) {
+		lota_err("Cannot read the integrity map of %s: %s",
+			 bpf_obj_path ? bpf_obj_path : "(none)",
+			 strerror(-ret));
+		return ret;
+	}
+
+	lota_info(
+		"Enforcement object integrity map: key %u bytes, value %u bytes",
+		key_size, value_size);
+	return 0;
+}
+
 bool bpf_loader_integrity_config_satisfied(const struct integrity_data *cfg)
 {
 	if (!cfg)
