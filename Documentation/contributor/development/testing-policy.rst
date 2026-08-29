@@ -42,6 +42,9 @@ Testing policy
    * - Includes
      - every header used directly, no transitive deps
      - ``make check-includes``
+   * - Declarations
+     - every symbol declared by a header the unit includes, on el9 too
+     - ``make check-el9-decls``
    * - Packaging
      - the nfpm configs and the RPM spec ship the same files
      - ``make check-package-manifests``
@@ -109,6 +112,24 @@ A few exemptions live in both ``scripts/check-includes.sh`` and the local
 
 Requires ``clang-include-cleaner`` (clang-tools-extra), ``bear``, and -- for
 the fixer -- ``include-what-you-use``.
+
+Declarations on a second toolchain
+==================================
+
+The include gate reports a header that is included and not used. It does not
+report a symbol used without the header that declares it when another header
+on the build host provides that declaration. Fedora's ``<seccomp.h>`` includes
+``<stdlib.h>`` and el9's does not, so a file that calls ``malloc`` without
+including ``<stdlib.h>`` compiles on Fedora and fails on el9.
+``make check-el9-decls`` compiles every C translation unit ``-fsyntax-only``
+against el9 headers with the flags the build uses, and reports every unit that
+fails.
+
+The gate needs ``podman`` and a network, spawns the container itself, and
+mounts the checkout read-only -- a syntax-only sweep writes nothing. CI runs
+it in the ``el9-decls`` job, inside the same image. The BPF program is skipped:
+it is built ``-target bpf`` against a generated ``vmlinux.h``, not against el9
+headers.
 
 Postgres-backed tests and the coverage ratchet
 ==============================================
