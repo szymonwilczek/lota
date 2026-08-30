@@ -44,7 +44,10 @@ CA/verifier endpoints and the trust material paths come from the operator's
 install instructions (see "What the operator must ship" below).
 
 ``lota-install --status`` prints a read-only report of every stage without
-changing anything.
+changing anything. A stage the installer can satisfy reads ``pending``; one
+that needs an action the installer must not take -- Secure Boot enabled in
+firmware, an operator's SELinux module, IMA signatures -- reads ``BLOCKED``,
+because a report that calls both "pending" reads as work about to happen.
 
 * ``--yes`` skips the per-stage prompts,
 * ``--plain`` disables the TUI for logs and scripting,
