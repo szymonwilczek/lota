@@ -627,7 +627,25 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 7: SELinux TPM device fence */
+/* stage 7: IMA appraisal scope */
+
+static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
+					   size_t cap)
+{
+	struct probe_ima_scope scope = { 0 };
+
+	(void)ctx;
+
+	scope.is_root = geteuid() == 0;
+	scope.scope = probe_ima_policy_scope(PROBE_IMA_POLICY_PATH,
+					     &scope.policy_signed);
+	scope.secureboot = probe_secureboot() == 1;
+	scope.agent_signed = probe_file_ima_signed(PATH_AGENT_BIN) == 1;
+
+	return probe_ima_scope_stage(&scope, note, cap);
+}
+
+/* stage 8: SELinux TPM device fence */
 
 /* Label check for the agent binary.
  * Mirrors the device-label pattern. */
@@ -806,7 +824,7 @@ static int st_selinux_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 8: reboot checkpoint */
+/* stage 9: reboot checkpoint */
 
 static int agent_service_active(void)
 {
@@ -857,7 +875,7 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 					 agent_service_active(), note, cap);
 }
 
-/* stage 9: agent service */
+/* stage 10: agent service */
 
 static enum stage_state st_agent_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
@@ -922,7 +940,7 @@ static int st_agent_apply(struct install_ctx *ctx)
 	return 0;
 }
 
-/* stage 10: enrollment */
+/* stage 11: enrollment */
 
 /*
  * Locate the publisher profile this host enrolls into.
@@ -1320,6 +1338,27 @@ const struct stage install_stages[] = {
 		.probe = st_cmdline_probe,
 		.apply = st_cmdline_apply,
 		.boot_path = 1,
+	},
+	{
+		.title = "IMA appraisal scope",
+		.explain =
+			"The previous step set the appraisal *mode*; the "
+			"kernel applies that mode only to the rules its "
+			"loaded IMA policy carries. A policy with no appraise "
+			"rule reaching an executable appraises nothing, and "
+			"the agent refuses to start on such a host.\n"
+			"This step reads the loaded policy and reports "
+			"whether the scope the agent's gate demands is "
+			"there. It loads no rules: an IMA rule cannot name a "
+			"path, so the rule that appraises the agent appraises "
+			"every executable it matches, and on a Secure Boot "
+			"host that happens in enforce whatever the cmdline "
+			"asked for -- a host whose files carry no signature "
+			"would refuse them all at the next boot. The scope "
+			"arrives with the signatures, from IMA-signed "
+			"distribution packages or an operator image "
+			"pipeline.",
+		.probe = st_ima_scope_probe,
 	},
 	{
 		.title = "SELinux fence on the TPM device",

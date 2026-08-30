@@ -151,6 +151,19 @@ rootfs without signatures that bricks the host at the next boot. Stage with
 ``ima_appraise=fix`` for one boot (the kernel writes missing xattrs as it walks
 matched files) before switching to ``enforce``.
 
+A host whose loaded policy carries ``appraise func=POLICY_CHECK
+appraise_type=imasig`` -- the arch policy a Secure Boot machine boots with --
+appraises the policy buffer itself, so writing any unsigned rule set to
+``/sys/kernel/security/ima/policy`` fails with ``Permission denied``: on such a
+host the rule set has to be signed by a key on the ``.ima`` keyring. The
+kernel's built-in ``ima_policy=appraise_tcb`` needs no policy write, but it is
+not a way around the missing signatures either -- it appraises every root-owned
+file, and on a Secure Boot host that runs in ``enforce`` (see below), so a
+machine whose executables carry none stops booting.
+
+``lota-install`` therefore reports the missing scope and stops; it never widens
+one. A rule set is loaded here by whoever owns the signatures.
+
 The shipped :ghsrc:`configs/ima/lota-ima-policy` is the **developer baseline** that
 ``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:
 it measures every exec/mmap for the IMA log and its ``appraise_type=imasig``
