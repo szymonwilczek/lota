@@ -160,6 +160,18 @@ static bool tss2_rc_is_lockout(TSS2_RC rc)
 	return tpm_rc_decode(rc) == TPM2_RC_LOCKOUT;
 }
 
+/*
+ * Return true if @rc may mean a stale ESYS object record for the handle.
+ *
+ * ESYS reports a Name mismatch only as TSS2_ESYS_RC_GENERAL_FAILURE.
+ * The code is broad, so the caller only reconnects once: a process-local reset,
+ * no TPM command.
+ */
+static bool tss2_rc_is_stale_object_record(TSS2_RC rc)
+{
+	return rc == TSS2_ESYS_RC_GENERAL_FAILURE;
+}
+
 static bool tss2_rc_is_transient(TSS2_RC rc)
 {
 	if (rc == (TSS2_RC)TSS2_TCTI_RC_TRY_AGAIN)
@@ -1223,6 +1235,35 @@ static void aik_note_object(struct tpm_context *ctx, ESYS_TR object)
 	Esys_Free(name);
 }
 
+/*
+ * Open the ESYS session again over the same device connection.
+ *
+ * Only the ESYS object cache goes stale, so keep the TCTI and replace the session.
+ * The rest of the context (self-measurement, PCR 14 verdict, profile binding)
+ * survives; a restart would lose it, and PCR 14 cannot be committed twice in
+ * one boot.
+ */
+static int tpm_esys_reconnect(struct tpm_context *ctx)
+{
+	TSS2_RC rc;
+
+	if (!ctx || !ctx->initialized || !ctx->esys_ctx || !ctx->tcti_ctx)
+		return -EINVAL;
+
+	Esys_Finalize(&ctx->esys_ctx);
+	rc = Esys_Initialize(&ctx->esys_ctx, ctx->tcti_ctx, NULL);
+	if (rc != TSS2_RC_SUCCESS) {
+		/* The context has no session left. Say so */
+		ctx->esys_ctx = NULL;
+		ctx->initialized = false;
+		return tss2_rc_to_errno(rc);
+	}
+
+	/* The session that held what was cached for the key is gone */
+	tpm_forget_bound_aik(ctx);
+	return 0;
+}
+
 bool tpm_aik_object_replaced(struct tpm_context *ctx)
 {
 	bool replaced;
@@ -1475,6 +1516,29 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 	/* TPM2_RC_HANDLE indicates the persistent object is absent */
 	if (tpm_rc_layer_is_tpm(rc) && tpm_rc_decode(rc) == TPM2_RC_HANDLE)
 		return 0;
+
+	/*
+	 * A session that still holds a record of an object this handle no longer
+	 * carries refuses every open of it, for the life of the process.
+	 * The TPM is not refusing anything -- another process opens the same
+	 * handle at the same moment -- so reopen the session once and ask again.
+	 */
+	if (tss2_rc_is_stale_object_record(rc)) {
+		ret = tpm_esys_reconnect(ctx);
+		if (ret < 0)
+			return ret;
+
+		TPM_CALL_RETRY(
+			ctx, rc,
+			Esys_TR_FromTPMPublic(ctx->esys_ctx, ctx->aik_handle,
+					      ESYS_TR_NONE, ESYS_TR_NONE,
+					      ESYS_TR_NONE, &key_handle));
+		if (rc == TSS2_RC_SUCCESS) {
+			aik_note_object(ctx, key_handle);
+			*handle_out = key_handle;
+			return 1;
+		}
+	}
 
 	return tss2_rc_to_errno(rc);
 }
@@ -5488,6 +5552,11 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 }
 
 #ifdef LOTA_TPM_TESTING
+int tpm_test_rc_is_stale_object_record(uint32_t rc)
+{
+	return tss2_rc_is_stale_object_record((TSS2_RC)rc) ? 1 : 0;
+}
+
 int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
 				const uint8_t *live, uint16_t live_len)
 {

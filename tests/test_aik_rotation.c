@@ -1731,6 +1731,29 @@ static void test_aik_unique_separates_publishers(void)
 	PASS();
 }
 
+static void test_stale_object_record_is_told_from_a_tpm_refusal(void)
+{
+	TEST("a poisoned session is told from a TPM refusal");
+
+	if (!tpm_test_rc_is_stale_object_record(TSS2_ESYS_RC_GENERAL_FAILURE)) {
+		FAIL("the session ESYS refuses to reuse was not recognised");
+		return;
+	}
+
+	if (tpm_test_rc_is_stale_object_record(TPM2_RC_HANDLE)) {
+		FAIL("an empty handle would have reopened the session");
+		return;
+	}
+
+	if (tpm_test_rc_is_stale_object_record(TSS2_RC_SUCCESS) ||
+	    tpm_test_rc_is_stale_object_record(TPM2_RC_LOCKOUT) ||
+	    tpm_test_rc_is_stale_object_record(TSS2_TCTI_RC_TRY_AGAIN)) {
+		FAIL("success, lockout or a retry would have reopened it");
+		return;
+	}
+	PASS();
+}
+
 static void test_binding_does_not_survive_a_reused_handle(void)
 {
 	const char *forgotten =
@@ -1862,6 +1885,7 @@ int main(void)
 	test_call_with_backoff_gives_up_without_leak();
 	test_call_with_backoff_respects_wallclock_budget();
 	test_binding_does_not_survive_a_reused_handle();
+	test_stale_object_record_is_told_from_a_tpm_refusal();
 	test_object_change_is_read_from_the_name();
 
 	cleanup_tmp_dir();

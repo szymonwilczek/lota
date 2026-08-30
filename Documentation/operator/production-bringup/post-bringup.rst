@@ -554,7 +554,11 @@ journal. Re-enrolling the same publisher is silent, and that is right: their
 key is derived, so it comes back identical. No restart is needed for any of
 it, and none should be spent: the agent's PCR 14 commitment is made once per
 boot, so restarting the daemon puts the host out of attestation until it
-reboots.
+reboots. Should the agent's own TPM session refuse the handle after such a
+change -- the session caches what stood there, and the cache is process
+state -- the agent opens a new session over the same device and asks again,
+which is why a key swapped underneath a running agent shows up as one journal
+line.
 
 **Enrollment with a profile's publisher is a runtime action.** A profile that
 names a CA (``ca``, ``ca_port``, ``ca_cert``) and has never enrolled is

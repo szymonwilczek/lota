@@ -1394,6 +1394,7 @@ typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
  * the AIK handle is still the one the context bound, and the profile-identity
  * comparison that decides whether a bind carries a cached key across.
  */
+int tpm_test_rc_is_stale_object_record(uint32_t rc);
 int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
 				const uint8_t *live, uint16_t live_len);
 int tpm_test_aik_binding_survives(const char *bound_id, uint32_t bound_handle,
