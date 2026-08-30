@@ -58,6 +58,7 @@ func TestStrictPolicy(t *testing.T) {
 		{"RequireModuleSig", policy.RequireModuleSig},
 		{"RequireSecureBoot", policy.RequireSecureBoot},
 		{"RequireLockdown", policy.RequireLockdown},
+		{"RequireIMAAppraisal", policy.RequireIMAAppraisal},
 	}
 
 	for _, check := range checks {
@@ -67,6 +68,37 @@ func TestStrictPolicy(t *testing.T) {
 	}
 
 	t.Log("StrictPolicy enables all security requirements")
+}
+
+// The appraisal knob is off in the baseline on purpose: a stock distribution
+// host carries no IMA signatures, so requiring it there refuses every machine
+// the consumer road is written for. The agent reports the state instead,
+// and a fleet that signs its executables is the one that turns this into a gate.
+func TestDefaultPolicyLeavesAppraisalToTheFleet(t *testing.T) {
+	if DefaultPolicy().RequireIMAAppraisal {
+		t.Error("the baseline policy demands appraisal content a stock host cannot have")
+	}
+}
+
+func TestRequireIMAAppraisalRefusesAnUnappraisedHost(t *testing.T) {
+	policy := &PCRPolicy{Name: "appraised", RequireIMAAppraisal: true}
+	report := &types.AttestationReport{}
+
+	v := &PCRVerifier{}
+
+	report.Header.Flags = types.FlagIMAAppraisal
+	if err := v.verifyAgainstPolicy(report, policy, nil); err != nil {
+		t.Errorf("an appraising host was refused: %v", err)
+	}
+
+	report.Header.Flags = 0
+	err := v.verifyAgainstPolicy(report, policy, nil)
+	if err == nil {
+		t.Fatal("a host that appraises nothing satisfied the requirement")
+	}
+	if !strings.Contains(err.Error(), "appraises no executable") {
+		t.Errorf("the refusal does not name what is missing: %v", err)
+	}
 }
 
 func TestPCRVerifier_LoadPolicy(t *testing.T) {

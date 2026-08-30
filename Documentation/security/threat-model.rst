@@ -137,6 +137,16 @@ The verifier validates AIK certificates, TPM quotes, PCR policy, event logs,
 boot commitments, runtime protection digests, token nonces, revocations, and
 ban state.
 
+Kernel security state the agent observes -- module signature enforcement,
+lockdown, Secure Boot and whether the kernel appraises the host's executables
+-- travels in the report's flags, which the TPM quote signs, and each has a
+policy knob. ``require_ima_appraisal`` is the appraisal one, off in every
+template but ``strict``: the signatures it demands come from a distribution or
+an image pipeline, so a fleet of stock hosts turning it on refuses every
+client. Secure Boot is the exception to reading these flags as evidence -- it
+is checked against the firmware-measured event log, because a compromised
+kernel sets its own flag freely.
+
 The default store is SQLite for single-node deployments. A Postgres backend
 (selected with ``--pg-dsn``) holds the baseline, used-nonce, revocation, ban,
 audit and attestation state in a shared database, so several verifier

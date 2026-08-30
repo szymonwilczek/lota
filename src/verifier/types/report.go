@@ -74,6 +74,15 @@ const (
 	// report without this bit alongside FlagBootCommitmentV1 carries
 	// a PCR14 the verifier cannot interpret and is rejected.
 	FlagInitramfsLockV1 uint32 = 1 << 9
+
+	// FlagIMAAppraisal is set when the kernel appraises the executables
+	// on the host: IMA in a blocking mode over a loaded policy carrying
+	// an appraise rule that reaches an exec. Clear is the ordinary state
+	// of a stock distribution host, whose packages carry no IMA signatures,
+	// and it says nothing about the agent's own binding -- fs-verity and the
+	// PCR 14 commitment in this report cover that.
+	// Telemetry with a policy knob (RequireIMAAppraisal), not a verdict.
+	FlagIMAAppraisal uint32 = 1 << 10
 )
 
 // challenge capability flags (see: include/attestation.h)

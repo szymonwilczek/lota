@@ -108,8 +108,10 @@ static uint32_t rand_u32_best_effort(void)
 }
 
 static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
-					     bool *lockdown)
+					     bool *lockdown, bool *appraisal)
 {
+	if (appraisal)
+		*appraisal = bpf_loader_kernel_appraises_exec() == 0;
 	if (module_sig)
 		*module_sig = bpf_loader_kernel_module_sig_enforced(
 				      LOTA_MODULE_SIG_ENFORCE_PATH) == 0;
@@ -281,8 +283,10 @@ int export_policy(int mode)
 
 		snap.iommu_enabled = iommu_verify_full(&iommu_status);
 		snap.enforce_mode = (mode == LOTA_MODE_ENFORCE);
-		collect_kernel_security_features(
-			&snap.module_sig, &snap.secureboot, &snap.lockdown);
+		collect_kernel_security_features(&snap.module_sig,
+						 &snap.secureboot,
+						 &snap.lockdown,
+						 &snap.ima_appraisal);
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
@@ -345,15 +349,18 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		bool module_sig = false;
 		bool secureboot = false;
 		bool lockdown = false;
+		bool appraisal = false;
 
 		collect_kernel_security_features(&module_sig, &secureboot,
-						 &lockdown);
+						 &lockdown, &appraisal);
 		if (module_sig)
 			report->header.flags |= LOTA_REPORT_FLAG_MODULE_SIG;
 		if (secureboot)
 			report->header.flags |= LOTA_REPORT_FLAG_SECUREBOOT;
 		if (lockdown)
 			report->header.flags |= LOTA_REPORT_FLAG_LOCKDOWN;
+		if (appraisal)
+			report->header.flags |= LOTA_REPORT_FLAG_IMA_APPRAISAL;
 	}
 
 	/*

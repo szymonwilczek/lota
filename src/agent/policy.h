@@ -87,6 +87,7 @@ struct policy_snapshot {
 	bool module_sig;
 	bool secureboot;
 	bool lockdown;
+	bool ima_appraisal; /* IMA appraises every exec */
 };
 
 /*
