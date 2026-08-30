@@ -137,13 +137,15 @@ What the stages do
    kernel so the PCR14 lock helper runs before any regular userspace, whichever
    kernel is selected at boot. It reports work to do while any installed kernel
    is missing the helper. Requires a reboot.
-#. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
-   ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
-   lacks them) to the boot entries via grubby. It reports those three
-   parameters and nothing more: the appraisal *mode* is not the floor on its
-   own, and the rules it applies to are the next stage. Signature content stays
-   distribution or operator-supplied (see the production bring-up guide).
-   Requires a reboot.
+#. **Kernel integrity floor** -- appends the missing ones of
+   ``ima_appraise=fix``, ``module.sig_enforce=1`` and ``lockdown=integrity`` to
+   the boot entries via grubby. It reports those parameters and nothing more:
+   the appraisal *mode* is not the floor on its own, and the rules it applies
+   to are the next stage. On a Secure Boot host the appraisal parameter is left
+   out, because the kernel discards ``ima_appraise=`` there and appraises in
+   its own built-in blocking mode -- writing it would describe a mode that is
+   not the machine's. Signature content stays distribution or
+   operator-supplied (see the production bring-up guide). Requires a reboot.
 #. **IMA appraisal scope** -- the previous stage sets the appraisal *mode*, and
    the kernel applies that mode only to the rules its loaded policy carries. A
    policy whose ``appraise`` rules reach no executable appraises nothing, and

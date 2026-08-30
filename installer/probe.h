@@ -270,6 +270,17 @@ int probe_cmdline_has_token(const char *cmdline, const char *token);
 /* 0 when the BOOTED kernel satisfies the agent's IMA floor */
 int probe_booted_ima_ok(void);
 
+/*
+ * Pure: 1 when IMA appraisal blocks on an integrity failure, 0 when it does
+ * not, mirroring the agent's bpf_loader_ima_appraisal_active() mode half.
+ *
+ * A Secure Boot kernel discards ima_appraise= and keeps its own blocking default,
+ * so on such a host the parameter says nothing about the mode and appending it
+ * changes nothing. Only where the kernel honours the parameter does the cmdline
+ * decide.
+ */
+int probe_ima_mode_blocking(int secureboot, const char *cmdline);
+
 /* 0 when the running kernel enforces module signatures */
 int probe_module_sig_enforced(void);
 

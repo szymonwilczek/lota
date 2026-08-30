@@ -539,10 +539,11 @@ static int grubby_default_args(char *buf, size_t cap)
 
 /* the floor the agent's startup gates demand from the booted kernel */
 struct floor_state {
-	int ima_ok; /* ima_appraise=enforce|fix */
+	int ima_ok; /* appraisal blocks on an integrity failure */
 	int sig_ok; /* module signature enforcement */
 	int lockdown_ok; /* lockdown integrity/confidentiality */
 	int scope_ok; /* the loaded policy appraises an executable */
+	int secureboot; /* the kernel decides the appraisal mode itself */
 };
 
 /*
@@ -558,7 +559,12 @@ static int booted_ima_scope_ok(void)
 
 static void booted_floor(struct floor_state *st)
 {
-	st->ima_ok = probe_booted_ima_ok() == 0;
+	char cmdline[4096];
+
+	st->secureboot = probe_secureboot() == 1;
+	if (probe_read_text("/proc/cmdline", cmdline, sizeof(cmdline)) < 0)
+		cmdline[0] = '\0';
+	st->ima_ok = probe_ima_mode_blocking(st->secureboot, cmdline);
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
 	st->scope_ok = booted_ima_scope_ok();
@@ -575,9 +581,13 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 	booted_floor(&st);
 	if (st.ima_ok && st.sig_ok && st.lockdown_ok) {
 		snprintf(note, cap,
-			 "Booted kernel carries the appraisal mode, signed "
-			 "modules and lockdown. The rules that mode applies "
-			 "to are the next stage.");
+			 "Booted kernel appraises in a blocking mode%s, and "
+			 "carries signed modules and lockdown. The rules that "
+			 "mode applies to are the next stage.",
+			 st.secureboot ? " (its own built-in one: Secure Boot "
+					 "makes the kernel ignore "
+					 "ima_appraise=)" :
+					 "");
 		return STAGE_DONE;
 	}
 
@@ -615,8 +625,9 @@ static int st_cmdline_apply(struct install_ctx *ctx)
 	int rc;
 
 	booted_floor(&st);
+
 	if (!st.ima_ok)
-		strcat(args, "ima=on ima_appraise=fix ");
+		strcat(args, "ima_appraise=fix ");
 	if (!st.sig_ok)
 		strcat(args, "module.sig_enforce=1 ");
 	if (!st.lockdown_ok)

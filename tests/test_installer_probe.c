@@ -1098,6 +1098,34 @@ static void test_named_files(void)
 }
 
 /*
+ * The mode half of the floor. A Secure Boot kernel refuses to be told the mode,
+ * so on the hosts LOTA supports the parameter describes nothing and the installer
+ * has no business writing it.
+ */
+static void test_ima_mode_blocking(void)
+{
+	TEST("a Secure Boot host appraises whatever the cmdline says");
+	if (!probe_ima_mode_blocking(1, "ro quiet ima_appraise=off"))
+		FAIL("the discarded parameter decided the mode");
+	else
+		PASS();
+
+	TEST("a Secure Boot host with no parameter still appraises");
+	if (!probe_ima_mode_blocking(1, "ro quiet"))
+		FAIL("the kernel's own default was read as absent");
+	else
+		PASS();
+
+	TEST("without Secure Boot the parameter is the answer");
+	if (!probe_ima_mode_blocking(0, "ro quiet ima_appraise=fix"))
+		FAIL("a honoured fix mode was refused");
+	else if (probe_ima_mode_blocking(0, "ro quiet ima_appraise=log"))
+		FAIL("a non-blocking mode passed");
+	else
+		PASS();
+}
+
+/*
  * The scope stage, which exists because the agent's startup gate reads the loaded
  * policy and the installer used to read only the cmdline. The unknown case
  * matters as much as the missing one: a kernel that publishes no policy is a host
@@ -1280,6 +1308,7 @@ int main(void)
 	test_manifest_line();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
+	test_ima_mode_blocking();
 	test_ima_scope_stage_verdicts();
 	test_ima_policy_scope_reader();
 	test_named_files();
