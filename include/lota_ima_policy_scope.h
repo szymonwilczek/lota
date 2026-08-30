@@ -7,8 +7,9 @@
  * the func= rules in the loaded policy, so a measure-only policy under
  * ima_appraise=enforce blocks nothing.
  *
- * The agent refuses to start if no rule appraises executables. The installer
- * uses the same rule from here, so it cannot pass a host the agent refuses.
+ * Without fs-verity on the agent binary, the agent refuses to start if no
+ * rule appraises executables. The installer uses the same rules from here,
+ * so it cannot pass a host the agent refuses.
  */
 #ifndef LOTA_IMA_POLICY_SCOPE_H
 #define LOTA_IMA_POLICY_SCOPE_H
@@ -49,6 +50,18 @@ static inline int lota_ima_policy_rule_appraises_exec(const char *rule)
 		return strcmp(tok + 5, "BPRM_CHECK") == 0;
 	}
 	return 1;
+}
+
+/*
+ * Return 1 if a kernel that appraises no executable is advisory.
+ *
+ * With fs-verity and PCR 14 binding the agent binary, appraisal only adds
+ * coverage of the rest of the host. Without verity, a signed security.ima
+ * xattr is the only binding and means nothing unless appraised.
+ */
+static inline int lota_ima_scope_is_advisory(int agent_verity_bound)
+{
+	return agent_verity_bound ? 1 : 0;
 }
 
 #endif /* LOTA_IMA_POLICY_SCOPE_H */

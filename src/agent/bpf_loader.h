@@ -353,6 +353,17 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 int bpf_loader_secure_boot_enabled(void);
 
 /*
+ * bpf_loader_kernel_appraises_exec - Does the kernel appraise executables here?
+ *
+ * The live-path form of bpf_loader_ima_appraisal_active(): the booted mode,
+ * the loaded policy and this host's Secure Boot state.
+ *
+ * Returns: 0 when an executable on this host is appraised, negative errno
+ * otherwise (-ENOENT when the policy reaches no exec).
+ */
+int bpf_loader_kernel_appraises_exec(void);
+
+/*
  * bpf_loader_verify_kernel_runtime_hardening - Verify kernel anti-tamper base
  *
  * Ensures runtime prerequisites expected by LOTA self-protection are active:

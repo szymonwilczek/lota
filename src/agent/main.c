@@ -391,6 +391,11 @@ static int run_daemon(const struct run_daemon_params *params)
 	 * with the machine.
 	 */
 	boot_state.secure_boot = bpf_loader_secure_boot_enabled() == 0;
+	boot_state.kernel_appraisal = bpf_loader_kernel_appraises_exec() == 0;
+	lota_info("Kernel appraisal: %s",
+		  boot_state.kernel_appraisal ?
+			  "executables are appraised" :
+			  "nothing is appraised (advisory; tokens say so)");
 	lota_info("Secure Boot: %s", boot_state.secure_boot ?
 					     "enabled" :
 					     "disabled or unreadable");

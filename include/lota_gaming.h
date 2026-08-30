@@ -178,6 +178,15 @@ enum lota_error {
 #define LOTA_FLAG_PROTECTED_TERMINATED (1 << 10)
 
 /*
+ * The kernel appraises the executables on this host: IMA is in a blocking
+ * mode and the loaded policy has an appraise rule that reaches exec.
+ *
+ * Clear on a stock host. The agent binary is still bound by fs-verity
+ * and PCR 14; this bit extends that to everything the host executes.
+ */
+#define LOTA_FLAG_KERNEL_APPRAISAL (1 << 11)
+
+/*
  * Subscription event types
  *
  * Bitmask selecting which status changes trigger push notifications.

@@ -171,8 +171,19 @@ not a way around the missing signatures either -- it appraises every root-owned
 file, and on a Secure Boot host that runs in ``enforce`` (see below), so a
 machine whose executables carry none stops booting.
 
-``lota-install`` therefore reports the missing scope and stops; it never widens
-one. A rule set is loaded here by whoever owns the signatures.
+``lota-install`` therefore reports the missing scope; it never widens one. A
+rule set is loaded here by whoever owns the signatures.
+
+**A host that appraises nothing still runs the agent**, as long as the agent
+binary carries fs-verity: the kernel refuses a modified read of it and PCR 14
+commits the running build, so the agent's own footing does not rest on IMA.
+What is missing is coverage of everything else the machine executes, and that
+travels rather than blocking -- ``LOTA_FLAG_KERNEL_APPRAISAL`` is clear in the
+status word, the TPM-signed token and the attestation report, and a verifier
+policy asks for it with ``require_ima_appraisal: true``. On a filesystem
+without verity, where the binary's only claim is a signed ``security.ima``
+xattr, appraisal is what makes that claim real and the agent refuses to start
+without it.
 
 The shipped :ghsrc:`configs/ima/lota-ima-policy` is the **developer baseline** that
 ``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:
