@@ -949,6 +949,13 @@ static bool runtime_coverage_is_full(void)
 {
 	int count;
 
+	/*
+	 * Reap here, not in each caller. An exited PID is unmeasurable,
+	 * so a stale entry would report partial coverage.
+	 * Reaping in one place keeps the status word and the token in agreement.
+	 */
+	runtime_protect_reap_exited();
+
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
 	agent_globals_unlock(&g_agent);
@@ -1889,7 +1896,8 @@ static bool protect_pid_is_alive(uint32_t pid, void *ctx)
  * Run before every read of the set rather than on timer, because the read is
  * the only place stale entry does harm -- and it does it to every title at once,
  * since PID that no longer resolves cannot be measured and the measurement fails
- * closed.
+ * closed. The coverage answer runs it itself, which is what keeps a read path
+ * that folds coverage from forgetting.
  *
  * The mutation epoch moves whenever the set does, so relying party comparing epochs
  * never sees the same one with different set.
