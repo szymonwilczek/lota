@@ -275,14 +275,20 @@ type AgentHashStorer interface {
 }
 
 // AttestationOutcome is the result of a single AtomicBaselineStorer
-// transaction. The two TOFU results report the per-component decision;
+// transaction. The three TOFU results report the per-component decision;
 // the snapshots carry whichever baseline values the caller needs to
 // surface in security logs or pass back to the agent. BootProvided
 // mirrors the caller's intent so consumers can distinguish "boot
 // pin not supplied this round" from "boot pin succeeded silently".
+//
+// PCR14Result is the decision for the register itself. A component that
+// carries no decision because the transaction ended before it
+// -- an agent_hash mismatch writes nothing -- reads TOFUError,
+// so a caller that forgets a branch fails closed.
 type AttestationOutcome struct {
 	AgentHashResult   TOFUResult
 	AgentHashBaseline *ClientBaseline
+	PCR14Result       TOFUResult
 	BootProvided      bool
 	BootResult        TOFUResult
 	BootBaseline      *BootBaseline
@@ -833,7 +839,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	outcome := AttestationOutcome{BootProvided: boot != nil}
+	outcome := AttestationOutcome{BootProvided: boot != nil, PCR14Result: TOFUError}
 
 	// --- agent_hash branch ---
 	existing, exists := s.baselines[clientID]
@@ -849,6 +855,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		snap := *b
 		outcome.AgentHashResult = TOFUFirstUse
 		outcome.AgentHashBaseline = &snap
+		outcome.PCR14Result = TOFUFirstUse
 
 		// boot branch on a fresh row mirrors the agent_hash decision:
 		// any incoming boot baseline becomes the canonical pin.
@@ -881,6 +888,22 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		outcome.AgentHashResult = TOFUMatch
 	}
 
+	// --- PCR14 branch ---
+	//
+	// Every road that creates a row writes the register with it,
+	// so an existing row always has one to compare against.
+	// A mismatch terminates the transaction without writes.
+	if existing.PCR14 != pcr14 {
+		snap := *existing
+		outcome.PCR14Result = TOFUMismatch
+		outcome.AgentHashBaseline = &snap
+		if boot != nil {
+			outcome.BootResult = TOFUError
+		}
+		return outcome
+	}
+	outcome.PCR14Result = TOFUMatch
+
 	// --- boot branch ---
 	if boot != nil {
 		existingBoot, hasBoot := s.bootBaselines[clientID]
@@ -901,7 +924,7 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 		}
 	}
 
-	// --- commit phase: both components passed ---
+	// --- commit phase: every component passed ---
 	existing.LastSeen = now
 	existing.AttestCount++
 	snap := *existing

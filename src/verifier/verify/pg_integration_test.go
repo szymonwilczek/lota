@@ -66,6 +66,12 @@ func TestPostgresBaselineAtomic(t *testing.T) {
 	if o = s.CheckAndUpdateAttestation("c1", pcr14, fill(0xBB), boot); o.AgentHashResult != TOFUMismatch {
 		t.Fatalf("agent_hash drift: got %v", o.AgentHashResult)
 	}
+
+	// a moved register leaves state unchanged: the pre-lock baseline changed
+	// under the same agent binary, which is what a MOK enrollment does
+	if o = s.CheckAndUpdateAttestation("c1", fill(0x15), ah, boot); o.PCR14Result != TOFUMismatch {
+		t.Fatalf("pcr14 drift: got %v", o.PCR14Result)
+	}
 	// boot drift leaves state unchanged
 	if o = s.CheckAndUpdateAttestation("c1", pcr14, ah,
 		&BootBaseline{PCR0: fill(9), PCR1: fill(1), PCR7: fill(7)}); o.BootResult != TOFUMismatch {
