@@ -564,8 +564,9 @@ int main(int argc, char **argv)
 			ui_text(&ctx.ui,
 				"Host-local setup is done. What is left "
 				"changes how this machine boots -- the "
-				"initramfs PCR 14 lock and the kernel "
-				"integrity floor -- so it waits for a person: "
+				"initramfs PCR 14 lock, the kernel integrity "
+				"floor and the IMA appraisal scope -- so it "
+				"waits for a person: "
 				"run 'sudo lota-install'. To have a package "
 				"install do it too, create %s (or set "
 				"LOTA_AUTO_BRINGUP=1) before installing.",
@@ -599,6 +600,7 @@ int main(int argc, char **argv)
 						"output above");
 				return EXIT_INSTALL_FAIL;
 			}
+			ctx.applied = 1;
 			st = s->probe(&ctx, note, sizeof(note));
 			/* boot-chain stages stay un-probeable until the reboot
 			 * reboot_needed records their success */

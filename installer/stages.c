@@ -905,9 +905,15 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 		return STAGE_ERROR;
 	}
 
+	/*
+	 * A start that failed before this run says nothing about a host this
+	 * run has since changed. Only an unchanged host is held on the strength
+	 * of that failure.
+	 */
 	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
 					 agent_service_active(),
-					 agent_start_failed(), note, cap);
+					 !ctx->applied && agent_start_failed(),
+					 note, cap);
 }
 
 /* stage 10: agent service */
