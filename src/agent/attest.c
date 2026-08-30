@@ -1152,6 +1152,17 @@ static int bind_target(struct attest_target *t)
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * Only known after the key read above. Stale cache is already dropped;
+	 * the warning is for an operator who re-provisioned the handle
+	 */
+	if (tpm_aik_object_replaced(&g_agent.tpm_ctx))
+		lota_warn("The attestation key for %s is not the one bound "
+			  "earlier: another object stands at its persistent "
+			  "handle now. Nothing cached for the old key is kept, "
+			  "and this agent needs no restart to use the new one.",
+			  t->label);
+
 	return 0;
 }
 

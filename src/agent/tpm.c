@@ -714,6 +714,9 @@ int tpm_init(struct tpm_context *ctx)
 	ctx->aik_meta_loaded = false;
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+	ctx->aik_object_replaced = false;
 	memset(ctx->prev_aik_public, 0, sizeof(ctx->prev_aik_public));
 	ctx->prev_aik_public_size = 0;
 	ctx->grace_deadline = 0;
@@ -839,6 +842,9 @@ void tpm_cleanup(struct tpm_context *ctx)
 
 	memset(ctx->aik_auth, 0, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+	ctx->aik_object_replaced = false;
 
 	memset(ctx->self_hash, 0, sizeof(ctx->self_hash));
 	ctx->self_hash_ready = false;
@@ -1149,6 +1155,84 @@ static void tpm_forget_bound_aik(struct tpm_context *ctx)
 	ctx->aik_meta_loaded = false;
 	secure_bzero(ctx->aik_auth, sizeof(ctx->aik_auth));
 	ctx->aik_auth_loaded = false;
+	memset(ctx->aik_object_name, 0, sizeof(ctx->aik_object_name));
+	ctx->aik_object_name_size = 0;
+}
+
+/*
+ * Has the object behind the AIK handle changed since this context last looked?
+ * Nothing seen yet is not a change: the first look is what records the Name
+ * everything after it is compared against.
+ */
+static bool aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+			       const uint8_t *live, uint16_t live_len)
+{
+	if (seen_len == 0 || live_len == 0)
+		return false;
+
+	if (seen_len != live_len)
+		return true;
+
+	return memcmp(seen, live, seen_len) != 0;
+}
+
+/*
+ * Keep the cached key only for the same publisher at the same handle.
+ * The handle alone is not an identity: --forget-publisher frees a number
+ * and the next publisher provisioned reuses it.
+ */
+static bool aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				 const char *new_id, uint32_t new_handle)
+{
+	if (!bound_id || !new_id)
+		return false;
+
+	if (bound_handle != new_handle)
+		return false;
+
+	return strcmp(bound_id, new_id) == 0;
+}
+
+/*
+ * Record the object standing at the AIK handle, and drop everything cached
+ * for the key when it is not the one this context last saw.
+ * The rotation record and the userAuth belong to one key; a replaced object
+ * leaves them describing a key the TPM no longer holds.
+ */
+static void aik_note_object(struct tpm_context *ctx, ESYS_TR object)
+{
+	TPM2B_NAME *name = NULL;
+
+	if (Esys_TR_GetName(ctx->esys_ctx, object, &name) != TSS2_RC_SUCCESS)
+		return;
+	if (!name)
+		return;
+	if (name->size > sizeof(ctx->aik_object_name)) {
+		Esys_Free(name);
+		return;
+	}
+
+	if (aik_object_changed(ctx->aik_object_name, ctx->aik_object_name_size,
+			       name->name, name->size)) {
+		tpm_forget_bound_aik(ctx);
+		ctx->aik_object_replaced = true;
+	}
+
+	memcpy(ctx->aik_object_name, name->name, name->size);
+	ctx->aik_object_name_size = name->size;
+	Esys_Free(name);
+}
+
+bool tpm_aik_object_replaced(struct tpm_context *ctx)
+{
+	bool replaced;
+
+	if (!ctx)
+		return false;
+
+	replaced = ctx->aik_object_replaced;
+	ctx->aik_object_replaced = false;
+	return replaced;
 }
 
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx)
@@ -1244,6 +1328,7 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 {
 	uint32_t candidates[TPM_AIK_PROFILE_HANDLE_COUNT];
 	char previous_meta_path[sizeof(ctx->aik_meta_path)];
+	char previous_profile_id[sizeof(ctx->aik_profile_id)];
 	uint32_t previous_handle;
 	size_t candidate_count = 0;
 	uint32_t handle = 0;
@@ -1253,6 +1338,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		return -EINVAL;
 
 	previous_handle = ctx->aik_handle;
+	snprintf(previous_profile_id, sizeof(previous_profile_id), "%s",
+		 ctx->aik_profile_id);
 	snprintf(previous_meta_path, sizeof(previous_meta_path), "%s",
 		 ctx->aik_meta_path);
 	snprintf(ctx->aik_profile_id, sizeof(ctx->aik_profile_id), "%s",
@@ -1271,7 +1358,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 
 	ret = profile_aik_handle_load(paths, &handle);
 	if (ret == 0) {
-		if (handle != previous_handle)
+		if (!aik_binding_survives(previous_profile_id, previous_handle,
+					  paths->id, handle))
 			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = handle;
 		return 0;
@@ -1303,7 +1391,8 @@ int tpm_bind_profile(struct tpm_context *ctx, const struct profile_paths *paths)
 		ret = profile_aik_handle_save(paths, candidates[i]);
 		if (ret < 0)
 			goto restore;
-		if (candidates[i] != previous_handle)
+		if (!aik_binding_survives(previous_profile_id, previous_handle,
+					  paths->id, candidates[i]))
 			tpm_forget_bound_aik(ctx);
 		ctx->aik_handle = candidates[i];
 		return 0;
@@ -1377,6 +1466,7 @@ static int aik_exists(struct tpm_context *ctx, ESYS_TR *handle_out)
 					     ESYS_TR_NONE, ESYS_TR_NONE,
 					     ESYS_TR_NONE, &key_handle));
 	if (rc == TSS2_RC_SUCCESS) {
+		aik_note_object(ctx, key_handle);
 		if (handle_out)
 			*handle_out = key_handle;
 		return 1;
@@ -5398,6 +5488,21 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 }
 
 #ifdef LOTA_TPM_TESTING
+int tpm_test_aik_object_changed(const uint8_t *seen, uint16_t seen_len,
+				const uint8_t *live, uint16_t live_len)
+{
+	return aik_object_changed(seen, seen_len, live, live_len) ? 1 : 0;
+}
+
+int tpm_test_aik_binding_survives(const char *bound_id, uint32_t bound_handle,
+				  const char *new_id, uint32_t new_handle)
+{
+	return aik_binding_survives(bound_id, bound_handle, new_id,
+				    new_handle) ?
+		       1 :
+		       0;
+}
+
 int tpm_test_pcr_mask_to_selection(uint32_t pcr_mask, uint8_t out_select[3],
 				   uint32_t *out_count)
 {
