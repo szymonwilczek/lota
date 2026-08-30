@@ -1144,15 +1144,26 @@ static void test_ima_scope_stage_verdicts(void)
 	else
 		PASS();
 
-	TEST("a policy appraising no executable stops the install");
+	TEST("an unappraised host whose agent verity holds is reported, not stopped");
+	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
+					  .agent_verity = 1,
+					  .is_root = 1 };
+	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_DONE)
+		FAIL("an install the agent would complete was stopped");
+	else if (!strstr(note, "KERNEL_APPRAISAL"))
+		FAIL("the note does not name the bit that carries the state");
+	else if (!strstr(note, "signatures"))
+		FAIL("the note does not name what the host is missing");
+	else
+		PASS();
+
+	TEST("without verity an unappraised host stops the install");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
 					  .is_root = 1 };
 	if (probe_ima_scope_stage(&scope, note, sizeof(note)) != STAGE_BLOCKED)
 		FAIL("the host the agent refuses was walked past");
 	else if (!strstr(note, "refuses to start"))
 		FAIL("the note does not say what the host cannot do");
-	else if (!strstr(note, "signatures"))
-		FAIL("the note does not name what the host is missing");
 	else
 		PASS();
 
@@ -1181,10 +1192,12 @@ static void test_ima_scope_stage_verdicts(void)
 	else
 		PASS();
 
-	TEST("the longest refusal still fits the note");
+	TEST("the longest report still fits the note");
 	scope = (struct probe_ima_scope){ .scope = PROBE_IMA_SCOPE_NONE,
 					  .policy_signed = 1,
 					  .secureboot = 1,
+					  .agent_signed = 1,
+					  .agent_verity = 1,
 					  .is_root = 1 };
 	probe_ima_scope_stage(&scope, note, sizeof(note));
 	if (strlen(note) >= sizeof(note) - 1)
