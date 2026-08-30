@@ -129,9 +129,10 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // MatchLockedBootCommitmentPCR14 rederives PCR14 for the agent_hash the report
 // carries and compares it against the register the quote signed.
 //
-// There is nothing to scan.  The derivation binds the platform baseline
-// and the agent binary, so the value a host presents is the same before
-// and after a suspend, and the same for every publisher that verifies it.
+// There is nothing to scan and nothing to tolerate. The derivation binds the
+// platform baseline and the agent binary, so the value a host presents is the
+// same before and after a suspend, and the same for every publisher that
+// verifies it.
 //
 // The signature parameters are kept as named returns so callers keep reading
 // one shape: restartDrift is always zero and exists so a caller that logs it
@@ -142,9 +143,9 @@ func PCR14BaselineFromEventLog(parsed *ParsedEventLog) [types.HashSize]byte {
 // cannot be reset from userspace within a boot.
 func MatchLockedBootCommitmentPCR14(baseline, agentHash [types.HashSize]byte,
 	target [types.HashSize]byte,
-) (expected [types.HashSize]byte, restartDrift uint32, matched bool) {
+) (expected [types.HashSize]byte, matched bool) {
 	expected = DeriveLockedBootCommitmentPCR14(baseline, agentHash)
-	return expected, 0, expected == target
+	return expected, expected == target
 }
 
 // ErrBaselineNotFound is returned by baseline-mutating helpers when the

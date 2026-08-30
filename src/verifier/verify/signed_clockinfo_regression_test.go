@@ -87,7 +87,7 @@ func TestRegression_LockedDerivation_IgnoresEveryCounterSource(t *testing.T) {
 			t.Fatalf("parse failed: %v", err)
 		}
 		_ = attest
-		if _, _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, pcr14); !ok {
+		if _, ok := MatchLockedBootCommitmentPCR14(zeroBaseline, ah, pcr14); !ok {
 			t.Fatalf("matcher refused a host whose quote reported counters %v",
 				counters)
 		}

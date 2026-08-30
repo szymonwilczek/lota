@@ -662,7 +662,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
 	}
-	expected, _, matched := MatchLockedBootCommitmentPCR14(
+	expected, matched := MatchLockedBootCommitmentPCR14(
 		pcr14Baseline, report.System.AgentHash, pcr14)
 	if !matched {
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
