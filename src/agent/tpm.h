@@ -820,6 +820,34 @@ struct tpm_pcr14_observation {
 };
 
 /*
+ * What a boot-commitment call left behind. PCR 14 receives the commitment once
+ * per boot: the first agent start of a boot extends it, and every later start
+ * in the same boot finds it already there. Both are success, and worth telling
+ * apart -- a restart that finds the commitment has not spent the boot,
+ * so it costs no reboot.
+ */
+enum tpm_boot_commitment_outcome {
+	/* This call extended PCR14 with the commitment */
+	TPM_BOOT_COMMITMENT_EXTENDED = 0,
+	/* The register already carried it when this process started */
+	TPM_BOOT_COMMITMENT_ALREADY_HELD,
+};
+
+/*
+ * tpm_boot_commitment_outcome - what a successful extend call did
+ * @state: verdict tpm_extend_boot_commitment() left on the context
+ *
+ * Pure function. Only the two accepting verdicts reach it; every other
+ * state fails the call, so a caller asking about one it never got reads
+ * the answer that claims the least.
+ *
+ * Returns: TPM_BOOT_COMMITMENT_ALREADY_HELD for a warm restart on a locked
+ * host, TPM_BOOT_COMMITMENT_EXTENDED otherwise.
+ */
+enum tpm_boot_commitment_outcome
+tpm_boot_commitment_outcome(enum tpm_pcr14_state state);
+
+/*
  * tpm_classify_pcr14 - decide what the observed PCR14 value means
  * @obs: fully populated observation
  *

@@ -400,6 +400,29 @@ static void test_commitment_present_after_a_cold_boot_is_refused(void)
 	PASS();
 }
 
+/*
+ * The two accepting verdicts are not the same event. An operator reading
+ * "PCR 14 extended" after a restart budgets a reboot to get the register back;
+ * a restart that finds the commitment spent nothing.
+ */
+static void test_the_two_accepting_verdicts_are_told_apart(void)
+{
+	TEST("an extend and a commitment already held are named apart");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_AWAITING_EXTEND) !=
+	    TPM_BOOT_COMMITMENT_EXTENDED)
+		FAIL("the state that extends must report an extend");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_ALREADY_COMMITTED) !=
+	    TPM_BOOT_COMMITMENT_ALREADY_HELD)
+		FAIL("a warm restart must not report an extend");
+
+	if (tpm_boot_commitment_outcome(TPM_PCR14_UNATTRIBUTABLE) !=
+	    TPM_BOOT_COMMITMENT_EXTENDED)
+		FAIL("a refused state must not claim a commitment it never saw");
+	PASS();
+}
+
 int main(void)
 {
 	test_lock_missing_on_a_shim_host();
@@ -411,6 +434,7 @@ int main(void)
 	test_foreign_extend_is_still_refused();
 	test_resume_does_not_license_a_new_binary();
 	test_reset_count_advance_is_not_a_resume();
+	test_the_two_accepting_verdicts_are_told_apart();
 
 	if (g_failures == 0) {
 		printf("\nAll tests passed.\n");
