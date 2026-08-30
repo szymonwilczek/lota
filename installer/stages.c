@@ -542,13 +542,26 @@ struct floor_state {
 	int ima_ok; /* ima_appraise=enforce|fix */
 	int sig_ok; /* module signature enforcement */
 	int lockdown_ok; /* lockdown integrity/confidentiality */
+	int scope_ok; /* the loaded policy appraises an executable */
 };
+
+/*
+ * The scope half, decided the way the agent's gate decides it: a policy that
+ * cannot be read leaves the mode deciding on both sides, and only a policy
+ * that is readable and reaches no executable is a host the agent refuses.
+ */
+static int booted_ima_scope_ok(void)
+{
+	return probe_ima_policy_scope(PROBE_IMA_POLICY_PATH, NULL) !=
+	       PROBE_IMA_SCOPE_NONE;
+}
 
 static void booted_floor(struct floor_state *st)
 {
 	st->ima_ok = probe_booted_ima_ok() == 0;
 	st->sig_ok = probe_module_sig_enforced() == 0;
 	st->lockdown_ok = probe_lockdown_restrictive() == 0;
+	st->scope_ok = booted_ima_scope_ok();
 }
 
 static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
@@ -562,9 +575,9 @@ static enum stage_state st_cmdline_probe(struct install_ctx *ctx, char *note,
 	booted_floor(&st);
 	if (st.ima_ok && st.sig_ok && st.lockdown_ok) {
 		snprintf(note, cap,
-			 "Booted kernel satisfies the integrity "
-			 "floor (IMA appraisal, signed modules, "
-			 "lockdown).");
+			 "Booted kernel carries the appraisal mode, signed "
+			 "modules and lockdown. The rules that mode applies "
+			 "to are the next stage.");
 		return STAGE_DONE;
 	}
 
@@ -1108,11 +1121,19 @@ int install_self_check(struct install_ctx *ctx)
 		       install_stage_count + 1, "Self-check");
 
 	booted_floor(&st);
-	ui_kv(&ctx->ui, "Kernel integrity floor",
-	      st.ima_ok && st.sig_ok && st.lockdown_ok ? "Satisfied" :
-							 "NOT satisfied");
-	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok))
-		ok = 0;
+	{
+		/* the whole floor, scope included: this line stands for what
+		 * the agent's startup gates read, not for one stage's args */
+		int floor_ok = st.ima_ok && st.sig_ok && st.lockdown_ok &&
+			       st.scope_ok;
+
+		ui_kv(&ctx->ui, "Kernel integrity floor",
+		      floor_ok	   ? "Satisfied" :
+		      !st.scope_ok ? "NOT satisfied (nothing appraised)" :
+				     "NOT satisfied");
+		if (!floor_ok)
+			ok = 0;
+	}
 
 	ui_kv(&ctx->ui, "agent binary immutability",
 	      probe_fsverity_state(PATH_AGENT_BIN) == PROBE_VERITY_ENABLED ?
