@@ -176,10 +176,10 @@ type ClientBaseline struct {
 	// agent self-measurement hash
 	PCR14 [types.HashSize]byte
 
-	// SHA-256 of the agent binary; pinned independently of PCR14 so the
-	// expected PCR14 can be derived from (agent_hash, resetCount,
-	// restartCount) and replayed-but-stale PCR14 values are rejected
-	// after a dirty reboot.
+	// SHA-256 of the agent binary; pinned independently of PCR14
+	// so a report that carries a register the pinned hash cannot produce is
+	// rejected, and so an allow-listed agent update can move both pins in
+	// one statement.
 	//
 	// Zero array means the baseline was created by an older verifier
 	// that did not pin agent_hash; subsequent attestations from the
@@ -260,11 +260,11 @@ type TenantStorer interface {
 	ClientTenant(clientID string) (string, error)
 }
 
-// AgentHashStorer is optionally implemented by baseline stores that can
-// pin the agent self-hash alongside (or instead of) PCR14. The hash is
-// the SHA-256 of the agent binary as captured by the agent at startup;
-// the verifier uses it to derive the expected PCR14 from TPM ClockInfo,
-// defeating dirty-shutdown replay against the static PCR14 baseline.
+// AgentHashStorer is optionally implemented by baseline stores that can pin
+// the agent self-hash alongside PCR14. The hash is the SHA-256 of the agent
+// binary as captured by the agent at startup; the verifier rederives the
+// expected PCR14 from it and the event log's pre-lock baseline,
+// so a register that matches no build the client is pinned to is refused.
 type AgentHashStorer interface {
 	// CheckAndUpdateAgentHash pins the agent self-hash with TOFU
 	// semantics that mirror CheckAndUpdate(). currentPCR14 is recorded

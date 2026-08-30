@@ -625,11 +625,12 @@ int self_measure(struct tpm_context *ctx)
 		return ret;
 
 	/*
-	 * Bind PCR14 to (self_hash, resetCount, restartCount). A dirty
-	 * shutdown that lets the platform reboot into a tampered userspace
-	 * cannot replay the previous baseline value because resetCount has
-	 * advanced; the verifier rederives the expected PCR14 from the
-	 * pinned agent hash plus the ClockInfo carried by the next quote.
+	 * Bind PCR14 to self_hash, chained onto the value the initramfs lock
+	 * helper left. The digest folds in no clock counter: a TPM obfuscates
+	 * resetCount and restartCount per signing key.
+	 * The verifier rederives the chain from the pinned agent hash and the
+	 * baseline the signed event log replays to, and compares the register
+	 * against the one the client pinned.
 	 */
 	ret = tpm_extend_boot_commitment(ctx, self_hash);
 	if (ret < 0) {

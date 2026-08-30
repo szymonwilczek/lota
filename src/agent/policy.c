@@ -48,9 +48,11 @@
  * the kernel image by PCR 4 and kernel_hash, and the initramfs by the PCR 14
  * boot-commitment chain.
  *
- * PCR 14 (LOTA boot-commitment) is excluded for the same drift reason but stronger one:
- * its value changes on every boot (the commitment folds the TPM resetCount) and the
- * verifier validates it through the boot-commitment derivation, not a static pin.
+ * PCR 14 (LOTA boot-commitment) is excluded: an exported policy is fleet-wide
+ * and the register is per-host -- it chains onto whatever the platform measured
+ * into PCR 14 before the initramfs lock -- and the verifier validates it per
+ * client, through the boot-commitment derivation and the pinned baseline,
+ * not a static policy pin.
  * policy_emit() also drops it defensively at the emit stage so no snapshot can freeze
  * one boot's value into the policy.
  */
@@ -181,9 +183,9 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out)
 
 	/*
 	 * PCR14 is the LOTA boot-commitment register.
-	 * Its value changes every boot (the commitment folds the TPM resetCount),
-	 * and the verifier validates it through the boot-commitment derivation,
-	 * not a static pin
+	 * It is per-host, and the verifier validates it per client through
+	 * the boot-commitment derivation and the pinned baseline,
+	 * not a static policy pin
 	 * Skip it defensively here so even snapshot that carries it cannot freeze
 	 * one boot's value into the policy and reject the host on its next reboot
 	 */

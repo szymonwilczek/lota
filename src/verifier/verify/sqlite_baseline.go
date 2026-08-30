@@ -114,10 +114,9 @@ func (s *SQLiteBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.HashS
 }
 
 // CheckAndUpdateAgentHash pins agent_hash with TOFU semantics. The
-// pcr14 column is filled on first use from currentPCR14 so the schema
-// NOT NULL constraint is satisfied; the column carries no security
-// meaning for boot-commitment clients - the verifier derives the
-// expected PCR14 dynamically from agent_hash + ClockInfo.
+// pcr14 column is filled on first use from currentPCR14 and compared on every
+// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
+// baseline visible.
 func (s *SQLiteBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {

@@ -156,10 +156,9 @@ func (s *PostgresBaselineStore) CheckAndUpdate(clientID string, pcr14 [types.Has
 }
 
 // CheckAndUpdateAgentHash pins agent_hash with TOFU semantics.
-// pcr14 column is filled on first use from currentPCR14 so the schema
-// NOT NULL constraint is satisfied; it carries no security meaning for
-// boot-commitment clients (the verifier derives the expected PCR14
-// dynamically from agent_hash + ClockInfo)
+// pcr14 column is filled on first use from currentPCR14 and compared on every
+// later round by CheckAndUpdateAttestation, which is what makes a moved pre-lock
+// baseline visible.
 func (s *PostgresBaselineStore) CheckAndUpdateAgentHash(clientID string,
 	currentPCR14, agentHash [types.HashSize]byte,
 ) (TOFUResult, *ClientBaseline) {
