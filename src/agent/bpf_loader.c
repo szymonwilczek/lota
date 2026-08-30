@@ -37,6 +37,7 @@
 
 #ifndef EAUTH
 #define EAUTH 80
+#endif
 
 /* Where the kernel publishes the boot parameters and the loaded IMA policy */
 #define IMA_CMDLINE_PATH "/proc/cmdline"
@@ -44,7 +45,6 @@
 
 /* The rule set this package ships, named in the refusal that needs it */
 #define LOTA_IMA_POLICY_ASSET "/usr/share/lota/ima/lota-ima-policy"
-#endif
 
 /* Stats map indices - must match BPF program */
 #define STAT_TOTAL_EXECS 0
