@@ -729,10 +729,19 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 					      IMA_POLICY_PATH);
 	if (ret == -ENOENT) {
 		lota_err("IMA appraisal is in a blocking mode but %s carries "
-			 "no appraise rule for func=BPRM_CHECK, so no "
-			 "executable on this host is appraised; the rules are "
-			 "in %s and the routes that supply the signatures they "
-			 "verify are in the production bringup guide",
+			 "no appraise rule that reaches an executable, so no "
+			 "executable on this host is appraised. The scope "
+			 "comes with the signatures the rules verify: "
+			 "IMA-signed distribution packages with the "
+			 "distribution's certificate on the .ima keyring, or "
+			 "an image pipeline that signs the executables and "
+			 "enrols its certificate -- both are in the production "
+			 "bringup guide. Loading rules over unsigned "
+			 "executables refuses them instead, and the developer "
+			 "baseline at %s is not exempt from that; a host whose "
+			 "policy carries 'appraise func=POLICY_CHECK "
+			 "appraise_type=imasig' refuses to load it unsigned in "
+			 "the first place",
 			 IMA_POLICY_PATH, LOTA_IMA_POLICY_ASSET);
 		return ret;
 	}
