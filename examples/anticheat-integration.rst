@@ -229,12 +229,13 @@ Worth being precise about, because it decides what you can build on it:
 * The producer process was in the protected set at the time, and the
   runtime measurement covers its loaded objects -- every one of them when
   the token carries ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, and otherwise the
-  subset the kernel holds an fs-verity digest for. A stock distribution
-  ships its libraries without one, so partial coverage is the normal case
-  and full coverage is something a platform provides. Whether you require
-  it is your policy; what the agent guarantees either way is that the
-  producer's own executable was measured, and that nothing unmeasured was
-  folded in as if it had been.
+  subset the kernel holds an fs-verity digest for. The flag is never set by
+  a round with nothing to measure, so requiring it refuses a host with an
+  empty protected set. A stock distribution ships its libraries without one,
+  so partial coverage is the normal case and full coverage is something a
+  platform provides. Whether you require it is your policy; what the agent
+  guarantees either way is that the producer's own executable was measured,
+  and that nothing unmeasured was folded in as if it had been.
 
 * Whether a protected process was ended on that host since it booted. A
   protected process takes no signal except through the agent, and the agent
