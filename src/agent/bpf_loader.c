@@ -28,6 +28,7 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
+#include "../../include/lota_ima_policy_scope.h"
 #include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
 #include "journal.h"
@@ -382,11 +383,8 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
 /*
  * Does the loaded IMA policy appraise an executable?
  *
- * Appraisal applies only to the func= rules the policy contains, so the mode
- * on the cmdline is half the answer: a policy of measure rules under
- * ima_appraise=enforce blocks on nothing. A rule that names no func= applies
- * to every hook, exec included; dont_appraise is an exclusion list and is not
- * appraisal however it reads to a substring match.
+ * Which rule counts is lota_ima_policy_rule_appraises_exec(),
+ * shared with the installer stage whose job is to satisfy this gate.
  *
  * Returns 0 when an executable is appraised, -ENOENT when the policy is readable
  * and appraises none, and -EACCES when it could not be read at all,
@@ -397,7 +395,7 @@ int bpf_loader_kernel_lockdown_restrictive(const char *lockdown_path)
  */
 static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 {
-	char line[512];
+	char line[LOTA_IMA_POLICY_RULE_MAX];
 	FILE *fp;
 	int found = 0;
 
@@ -410,21 +408,7 @@ static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
 	}
 
 	while (fgets(line, sizeof(line), fp)) {
-		char *save = NULL;
-		char *tok = strtok_r(line, " \t\n", &save);
-		bool covers_exec = true;
-
-		if (!tok || strcmp(tok, "appraise") != 0)
-			continue;
-
-		while ((tok = strtok_r(NULL, " \t\n", &save))) {
-			if (strncmp(tok, "func=", 5) != 0)
-				continue;
-			covers_exec = strcmp(tok + 5, "BPRM_CHECK") == 0;
-			break;
-		}
-
-		if (covers_exec) {
+		if (lota_ima_policy_rule_appraises_exec(line)) {
 			found = 1;
 			break;
 		}

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../include/lota_ima_policy_scope.h"
 #include "../src/agent/bpf_loader.h"
 
 static int tests_run;
@@ -177,6 +178,45 @@ static void test_unreadable_policy_falls_back_to_the_mode(void)
 		PASS();
 }
 
+/*
+ * The rule itself, without a file around it.
+ * The installer stage that has to satisfy this gate decides on the same predicate,
+ * so the shapes a loaded policy prints are asserted where both callers can see
+ * them: the built-in appraise_tcb rule names no hook, the arch policy's rule
+ * names one that is not exec, and the kernel pads what it prints with trailing
+ * blanks.
+ */
+static void test_rule_shapes(void)
+{
+	static const struct {
+		const char *rule;
+		int appraises_exec;
+		const char *what;
+	} cases[] = {
+		{ "appraise fowner=0\n", 1,
+		  "the built-in appraise_tcb rule covers exec" },
+		{ "appraise func=POLICY_CHECK appraise_type=imasig \n", 0,
+		  "a rule naming another hook does not cover exec" },
+		{ "appraise func=BPRM_CHECK appraise_type=imasig\n", 1,
+		  "the rule the gate asks for covers exec" },
+		{ "measure func=BPRM_CHECK\n", 0,
+		  "measurement is not appraisal" },
+		{ "dont_appraise func=BPRM_CHECK\n", 0,
+		  "an exclusion is not appraisal" },
+		{ "", 0, "an empty line appraises nothing" },
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		TEST(cases[i].what);
+		if (lota_ima_policy_rule_appraises_exec(cases[i].rule) !=
+		    cases[i].appraises_exec)
+			FAIL("the rule was read the other way round");
+		else
+			PASS();
+	}
+}
+
 int main(void)
 {
 	printf("=== IMA appraisal scope tests ===\n\n");
@@ -193,6 +233,7 @@ int main(void)
 	test_appraise_without_func_covers_exec();
 	test_dont_appraise_is_not_appraise();
 	test_unreadable_policy_falls_back_to_the_mode();
+	test_rule_shapes();
 
 	unlink(cmdline_path);
 	unlink(policy_path);
