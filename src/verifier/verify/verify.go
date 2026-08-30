@@ -668,8 +668,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 			"actual_pcr14", pcr14Hex,
 			"expected_pcr14", FormatPCR14(expected),
-			"reset_count", parsedAttest.ClockInfo.ResetCount,
-			"restart_count", parsedAttest.ClockInfo.RestartCount,
+			"eventlog_baseline", FormatPCR14(pcr14Baseline),
+			"agent_hash", hex.EncodeToString(report.System.AgentHash[:]),
 			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
