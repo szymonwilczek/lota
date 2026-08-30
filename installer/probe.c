@@ -1263,17 +1263,35 @@ int probe_pcr14_lock_ran(void)
 /*
  * Verdict for the reboot barrier.
  *
- * A register the installer cannot derive means one of two things, and they need
- * the same reboot but not the same sentence: either an agent ran earlier this
- * boot and left its commitment, or the platform extended PCR 14 before LOTA
- * was ever installed -- which every Secure Boot host does, because shim measures
- * the MOK variables there.
- * Whether the lock ran this boot is what tells them apart.
+ * A register the installer cannot derive means one of three things, and they
+ * do not need the same sentence -- or, in one case, the same reboot: an agent
+ * ran earlier this boot and left its commitment, an agent ran this boot
+ * and refused to start, or the platform extended PCR 14 before LOTA was ever
+ * installed, which every Secure Boot host does because shim measures the MOK
+ * variables there.
+ * Whether the lock ran this boot separates the last from the others,
+ * and whether the unit has failed separates the first two.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
-					   int agent_active, char *note,
-					   size_t cap)
+					   int agent_active, int agent_failed,
+					   char *note, size_t cap)
 {
+	/*
+	 * A reboot is what this stage asks for, and it is the one thing that
+	 * cannot help here: the agent refused a gate that will refuse it again
+	 * on the next boot, and the register carries the extend of the attempt.
+	 * Say that instead, whatever the register holds.
+	 */
+	if (agent_failed && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent has already run and refused to start this "
+			 "boot, so rebooting does not clear the refusal. What "
+			 "it refused is in its own log "
+			 "('journalctl -u lota-agent -b'); fix that and run "
+			 "the installer again.");
+		return STAGE_BLOCKED;
+	}
+
 	switch (pcr_state) {
 	case PROBE_PCR14_LOCK_ONLY:
 		snprintf(note, cap,

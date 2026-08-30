@@ -406,8 +406,8 @@ int probe_pcr14_lock_ran_at(const char *baseline_path);
  * operator is told.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
-					   int agent_active, char *note,
-					   size_t cap);
+					   int agent_active, int agent_failed,
+					   char *note, size_t cap);
 
 /*
  * One file the operator named on the command line.

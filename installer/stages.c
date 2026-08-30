@@ -856,6 +856,27 @@ static int unit_enabled(const char *unit)
 	return run_capture(argv, out, sizeof(out)) == 0;
 }
 
+/*
+ * Has the agent already run and refused this boot?
+ * A crash loop shows up as restarts, a unit that gave up shows up as failed,
+ * and either answers the question the barrier needs: this host is not waiting
+ * for a reboot.
+ */
+static int agent_start_failed(void)
+{
+	char out[64];
+	const char *const restarts[] = { "systemctl", "show",
+					 "--value",   "-p",
+					 "NRestarts", "lota-agent.service",
+					 NULL };
+	const char *const failed[] = { "systemctl", "is-failed",
+				       "lota-agent.service", NULL };
+
+	if (run_capture(restarts, out, sizeof(out)) == 0 && atoi(out) > 0)
+		return 1;
+	return run_capture(failed, out, sizeof(out)) == 0;
+}
+
 /* what the stage decides on: running now, and running again after a reboot */
 static void read_service_state(struct probe_service_state *s)
 {
@@ -885,7 +906,8 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	}
 
 	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
-					 agent_service_active(), note, cap);
+					 agent_service_active(),
+					 agent_start_failed(), note, cap);
 }
 
 /* stage 10: agent service */

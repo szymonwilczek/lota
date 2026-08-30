@@ -882,7 +882,7 @@ static void test_barrier_stage_verdicts(void)
 	char note[256];
 
 	TEST("a platform-extended PCR14 before any lock is not stale state");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("a first install still needs a reboot");
 		return;
@@ -894,7 +894,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a genuinely stale commitment keeps its wording");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("stale state still needs a reboot");
 		return;
@@ -906,7 +906,7 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("a running agent's own commitment is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("this boot's commitment is the satisfied state");
 		return;
@@ -914,15 +914,35 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 
 	TEST("the lock value alone is satisfied");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_LOCK_ONLY, 1, 0, 0, note,
 				      sizeof(note)) != STAGE_DONE) {
 		FAIL("a locked register is what this stage waits for");
 		return;
 	}
 	PASS();
 
+	TEST("an agent that already refused is not sent to another reboot");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 0, 1, note,
+				      sizeof(note)) != STAGE_BLOCKED) {
+		FAIL("a reboot cannot satisfy a refused startup gate");
+		return;
+	}
+	if (!strstr(note, "journalctl")) {
+		FAIL("the note does not say where the refusal is written");
+		return;
+	}
+	PASS();
+
+	TEST("a running agent is not read as a failed one");
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_OTHER, 1, 1, 1, note,
+				      sizeof(note)) != STAGE_DONE) {
+		FAIL("an earlier failed start outweighed the running agent");
+		return;
+	}
+	PASS();
+
 	TEST("a pristine register still says the lock has not run");
-	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, note,
+	if (probe_pcr14_barrier_stage(PROBE_PCR14_ZERO, 0, 0, 0, note,
 				      sizeof(note)) != STAGE_REBOOT) {
 		FAIL("no lock this boot needs a reboot");
 		return;
