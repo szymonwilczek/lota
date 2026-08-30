@@ -432,7 +432,7 @@ static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
  * Neither half is the answer on its own.
  */
 int bpf_loader_ima_appraisal_active(const char *cmdline_path,
-				    const char *policy_path)
+				    const char *policy_path, int secureboot)
 {
 	char buf[4096];
 	size_t len = 0;
@@ -440,6 +440,19 @@ int bpf_loader_ima_appraisal_active(const char *cmdline_path,
 	char *save = NULL;
 	int read_err = 0;
 	int ret;
+
+	if (secureboot) {
+		ret = ima_policy_appraises_exec(policy_path, &read_err);
+		if (ret == -EACCES) {
+			lota_warn("IMA appraisal blocks (Secure Boot leaves "
+				  "the kernel's built-in mode in force) but %s "
+				  "could not be read (%s): whether any "
+				  "executable is appraised is unverified",
+				  policy_path, strerror(-read_err));
+			return 0;
+		}
+		return ret;
+	}
 
 	ret = read_text_file(cmdline_path, buf, sizeof(buf), &len);
 	if (ret < 0)
@@ -725,8 +738,9 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = bpf_loader_ima_appraisal_active(IMA_CMDLINE_PATH,
-					      IMA_POLICY_PATH);
+	ret = bpf_loader_ima_appraisal_active(
+		IMA_CMDLINE_PATH, IMA_POLICY_PATH,
+		bpf_loader_secure_boot_enabled() == 0);
 	if (ret == -ENOENT) {
 		lota_err("IMA appraisal is in a blocking mode but %s carries "
 			 "no appraise rule that reaches an executable, so no "
@@ -748,9 +762,9 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
 			 "(ima_appraise=enforce or fix required on the kernel "
-			 "cmdline; "
-			 "log and the default off do not block on integrity "
-			 "failures)");
+			 "cmdline; log and the default off do not block on "
+			 "integrity failures). This host booted without Secure "
+			 "Boot, where the parameter is the whole answer");
 		return ret;
 	}
 

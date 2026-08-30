@@ -120,6 +120,16 @@ scope went unverified.
     sudo grubby --update-kernel=ALL --args="ima=on ima_appraise=enforce"
     sudo reboot
 
+**On a Secure Boot host the kernel discards that parameter.**
+``default_appraise_setup()`` refuses to be told the mode where
+``arch_ima_get_secureboot()`` is true, logging ``ima: Secure boot enabled:
+ignoring ima_appraise=... option``, and leaves its built-in default, which
+blocks. Since LOTA requires Secure Boot, that is the mode every supported host
+appraises in: setting ``ima_appraise=fix`` there stages nothing, and the agent's
+startup gate reads the loaded policy rather than the parameter for exactly that
+reason. The staging advice below applies to a host booted without Secure Boot,
+where the parameter is honoured.
+
 The cmdline only sets the appraisal mode; the kernel still needs a loaded IMA
 policy with ``appraise`` rules for anything to be checked. **The appraisal
 content -- the signatures on disk and the rule set -- is distribution or
