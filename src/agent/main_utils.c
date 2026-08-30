@@ -683,5 +683,11 @@ int self_measure(struct tpm_context *ctx)
 	 */
 	memcpy(ctx->self_hash, self_hash, LOTA_HASH_SIZE);
 	ctx->self_hash_ready = true;
-	return 0;
+
+	/*
+	 * Extend succeeded either way; say which way, because a warm restart
+	 * that found the commitment already in the register has spent no boot
+	 * and the caller's log line is the only place that shows.
+	 */
+	return (int)tpm_boot_commitment_outcome(ctx->boot_commitment_state);
 }
