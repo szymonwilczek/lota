@@ -708,6 +708,19 @@ func (v *PCRVerifier) ListPolicies() []string {
 	return names
 }
 
+// TenantBindings reports which policy each tenant is verified against.
+// A tenant absent from the map falls back to the active policy.
+func (v *PCRVerifier) TenantBindings() map[string]string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	bindings := make(map[string]string, len(v.tenantPolicy))
+	for tenant, name := range v.tenantPolicy {
+		bindings[tenant] = name
+	}
+	return bindings
+}
+
 // creates the built-in permissive policy used only for explicit insecure fallback.
 // IMPORTANT: this policy has no measurement allowlists and MUST NOT be used by default
 // in production deployments. Provide a custom YAML policy with explicit PCR values
