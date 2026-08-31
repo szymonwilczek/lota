@@ -227,22 +227,31 @@ POST /api/v1/bans
 -----------------
 
 Admin. Body: ``hardware_id`` (64 hex characters, the 32-byte hardware
-identity), ``reason`` and ``actor`` required, ``note`` optional.
-**201**::
+identity), ``reason`` and ``actor`` required, ``tenant`` and ``note``
+optional. ``tenant`` is the scope the ban is imposed in and defaults to
+``default``; it must be within the calling key's tenant set. **201**::
 
-   {"status": "banned", "hardware_id": "ab12...", "reason": "cheating"}
+   {"status": "banned", "hardware_id": "ab12...", "tenant": "default",
+    "reason": "cheating"}
 
-**400** malformed hardware ID, invalid reason or missing actor,
-**409** already banned, **503** bans not configured. The returned
-``hardware_id`` is the canonical lower-case form.
+**400** malformed hardware ID, invalid reason, invalid tenant or missing
+actor, **403** tenant outside the key's set, **409** already banned,
+**503** bans not configured. The returned ``hardware_id`` is the
+canonical lower-case form.
 
 DELETE /api/v1/bans/{hwid}
 --------------------------
 
-Admin. Body: ``reason`` and ``actor`` required, ``note`` optional --
-lifting a ban is attributed on the same terms as imposing one. **200**
-``{"status": "unbanned", "hardware_id": ...}``; **400** malformed
-hardware ID or missing actor or reason, **404** not banned.
+Admin. Body: ``reason`` and ``actor`` required, ``tenant`` and ``note``
+optional -- lifting a ban is attributed on the same terms as imposing
+one, and names the tenant the same way, because a ban is identified by
+``(tenant, hardware_id)``. **200**::
+
+   {"status": "unbanned", "hardware_id": "ab12...", "tenant": "default"}
+
+**400** malformed hardware ID, missing actor or reason, invalid tenant,
+or ``tenant`` passed as a query parameter instead of a body field;
+**403** tenant outside the key's set, **404** not banned in that tenant.
 
 GET /api/v1/bans
 ----------------

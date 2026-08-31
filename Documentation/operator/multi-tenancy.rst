@@ -49,6 +49,11 @@ ban. A ban issued through the API names its tenant explicitly (defaulting to
 ``default``), and attestation rejects a client only for a ban recorded in that
 client's own tenant.
 
+Both verbs name the tenant the same way, in the request body: a ban is
+identified by ``(tenant, hardware_id)``, so an administrator scoped to one
+tenant lifts what it imposed by sending the same field back. ``tenant`` is not
+a query parameter on either verb, and passing it as one is refused.
+
 Per-tenant PCR policy
 ---------------------
 

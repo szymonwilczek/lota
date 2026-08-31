@@ -1063,7 +1063,7 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 
 	// Letting a banned machine back in is the act a fleet most wants signed;
 	// the lift carries the same attribution the ban does.
-	var req lifecycleRequest
+	var req unbanRequest
 	if r.ContentLength != 0 {
 		if err := decodeJSONRequest(w, r, &req); err != nil {
 			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
@@ -1094,10 +1094,19 @@ func (h *APIHandler) handleUnbanHardware(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalHWID := store.FormatHardwareID(hwid)
 
+	// The tenant used to be read off the URL while the ban read it from the body,
+	// so a request naming it there would otherwise go on lifting in the default
+	// tenant without saying so.
+	if r.URL.Query().Has("tenant") {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{
+			Error: "tenant is a body field on this endpoint, not a query parameter"})
+		return
+	}
+
 	// ban to lift is identified by (tenant, hardware_id);
-	// tenant comes from the ?tenant= query parameter,
+	// tenant comes from the body field the ban was imposed through,
 	// default when omitted, and must be within the key's tenant set
-	tenant := r.URL.Query().Get("tenant")
+	tenant := req.Tenant
 	if tenant == "" {
 		tenant = verify.DefaultTenant
 	} else if !verify.ValidTenantName(tenant) {
@@ -1591,6 +1600,19 @@ type lifecycleRequest struct {
 	Actor  string `json:"actor"`  // administrator identifier
 	Reason string `json:"reason"` // why this was done
 	Note   string `json:"note"`   // free-form justification
+}
+
+// JSON request for lifting a ban.
+//
+// It carries the tenant the ban lives in, in the field the ban was imposed
+// through: a ban is identified by (tenant, hardware_id), so the two verbs have
+// to name the tenant the same way or an administrator can impose one it cannot
+// lift.
+type unbanRequest struct {
+	Tenant string `json:"tenant,omitempty"` // ban scope; default tenant when empty
+	Actor  string `json:"actor"`            // administrator identifier
+	Reason string `json:"reason"`           // why this was done
+	Note   string `json:"note"`             // free-form justification
 }
 
 // POST /api/v1/clients/{clientID}/reanchor

@@ -293,6 +293,15 @@ type actionRequest struct {
 	Note   string `json:"note,omitempty"`
 }
 
+// unbanRequest adds the ban's tenant to the mutation payload;
+// a ban is identified by (tenant, hardware_id) on both verbs.
+type unbanRequest struct {
+	Tenant string `json:"tenant,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Actor  string `json:"actor,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
 // banRequest adds the hardware identity to the mutation payload.
 type banRequest struct {
 	HardwareID string `json:"hardware_id"`
@@ -350,14 +359,11 @@ func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 
 // Unban lifts a hardware ban within a tenant.
 // Empty tenant defaults to the server's default tenant;
-// Tenant selects which (tenant, hardware) ban row is lifted.
+// Tenant selects which (tenant, hardware) ban row is lifted, and travels in
+// the body, where the ban put it.
 func (c *Client) Unban(hardwareID, tenant, reason, actor, note string) error {
-	q := url.Values{}
-	if tenant != "" {
-		q.Set("tenant", tenant)
-	}
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
-		q, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		nil, unbanRequest{Tenant: tenant, Reason: reason, Actor: actor, Note: note}, nil,
 		http.StatusOK)
 }
 

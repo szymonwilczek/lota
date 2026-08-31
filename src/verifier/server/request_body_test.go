@@ -72,3 +72,69 @@ func TestRequestBodyAcceptsTheDocumentedFields(t *testing.T) {
 		t.Fatalf("documented ban body: %d, want 201", code)
 	}
 }
+
+// The defect this pair exists for: a tenant-scoped administrator could impose
+// a ban through the body's `tenant` and could not lift it, because the lift
+// read the tenant off the URL and resolved `default`.
+func TestScopedAdminCanLiftTheBanItImposed(t *testing.T) {
+	set, err := LoadAPIKeysFile(writeKeysFile(t, fmt.Sprintf(`keys:
+  - key_sha256: %s
+    role: admin
+    tenants: ["acme"]
+`, keyHashHex("body-admin"))))
+	if err != nil {
+		t.Fatalf("LoadAPIKeysFile: %v", err)
+	}
+	mux := newScopedKeyAPI(t, set)
+	hwid := strings.Repeat("1a", 32)
+
+	code, _ := postJSON(t, mux, "POST", "/api/v1/bans",
+		`{"hardware_id":"`+hwid+`","tenant":"acme","reason":"cheating","actor":"acmeops"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("ban in the key's own tenant: %d, want 201", code)
+	}
+
+	code, body := postJSON(t, mux, "DELETE", "/api/v1/bans/"+hwid,
+		`{"tenant":"acme","reason":"appeal upheld","actor":"acmeops"}`)
+	if code != http.StatusOK {
+		t.Fatalf("unban in the key's own tenant: %d (%v), want 200", code, body)
+	}
+	if body["tenant"] != "acme" {
+		t.Fatalf("unban tenant = %v, want acme", body["tenant"])
+	}
+}
+
+// The scope check still holds: naming a foreign tenant in the body is refused.
+func TestUnbanRefusesAForeignTenant(t *testing.T) {
+	set, err := LoadAPIKeysFile(writeKeysFile(t, fmt.Sprintf(`keys:
+  - key_sha256: %s
+    role: admin
+    tenants: ["acme"]
+`, keyHashHex("body-admin"))))
+	if err != nil {
+		t.Fatalf("LoadAPIKeysFile: %v", err)
+	}
+	mux := newScopedKeyAPI(t, set)
+
+	code, _ := postJSON(t, mux, "DELETE", "/api/v1/bans/"+strings.Repeat("2b", 32),
+		`{"tenant":"beta","reason":"x","actor":"acmeops"}`)
+	if code != http.StatusForbidden {
+		t.Fatalf("unban into a foreign tenant: %d, want 403", code)
+	}
+}
+
+// The tenant moved out of the query string, so a caller still sending it there
+// hears about it instead of lifting a ban in the default tenant.
+func TestUnbanRefusesTheTenantAsAQueryParameter(t *testing.T) {
+	mux := bodyTestAPI(t)
+
+	code, body := postJSON(t, mux, "DELETE",
+		"/api/v1/bans/"+strings.Repeat("3c", 32)+"?tenant=acme",
+		`{"reason":"x","actor":"ops"}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("unban with ?tenant=: %d, want 400", code)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "body field") {
+		t.Fatalf("refusal %q must say where the tenant belongs", msg)
+	}
+}
