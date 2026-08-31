@@ -305,6 +305,8 @@ func TestBanDefaultTenantOmitsField(t *testing.T) {
 	}
 }
 
+// The tenant travels in the body on both verbs, so an administrator scoped to
+// one tenant can lift what it imposed.
 func TestUnbanWithTenant(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK,
@@ -316,12 +318,19 @@ func TestUnbanWithTenant(t *testing.T) {
 	if rec.method != http.MethodDelete || rec.path != "/api/v1/bans/"+hwid {
 		t.Fatalf("request = %s %s", rec.method, rec.path)
 	}
-	if rec.query != "tenant=acme" {
-		t.Fatalf("query = %q, want tenant=acme", rec.query)
+	if rec.query != "" {
+		t.Fatalf("query = %q, want the tenant in the body instead", rec.query)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if got["tenant"] != "acme" {
+		t.Fatalf("body tenant = %v, want acme", got["tenant"])
 	}
 }
 
-func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
+func TestUnbanDefaultTenantOmitsTheField(t *testing.T) {
 	hwid := strings.Repeat("cd", 32)
 	c, rec := fakeVerifier(t, http.StatusOK, `{"status":"unbanned"}`)
 
@@ -329,7 +338,14 @@ func TestUnbanDefaultTenantOmitsQuery(t *testing.T) {
 		t.Fatalf("Unban: %v", err)
 	}
 	if rec.query != "" {
-		t.Fatalf("query = %q, want empty for the default tenant", rec.query)
+		t.Fatalf("query = %q, want empty", rec.query)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if _, present := got["tenant"]; present {
+		t.Fatalf("empty tenant should be omitted from the body: %v", got)
 	}
 }
 
