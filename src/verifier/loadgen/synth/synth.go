@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/types"
+	"github.com/szymonwilczek/lota/verifier/verify"
 )
 
 // aikKeyBits matches the RSA-2048 AIK the real agent certifies
@@ -120,15 +121,23 @@ func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
 }
 
 // IssueAIKCert mints DER AIK certificate whose subject carries the device
-// pseudonym, mirroring what the attestation CA issues
-func (ca *CA) IssueAIKCert(pseudonym string, pub *rsa.PublicKey) ([]byte, error) {
+// pseudonym, mirroring what the attestation CA issues.
+//
+// A non-empty tenant goes into the subject's OrganizationalUnit, which is where
+// the verifier reads a device's tenant from; empty leaves the certificate in
+// the default tenant, the shape a deployment that assigns none produces.
+func (ca *CA) IssueAIKCert(pseudonym, tenant string, pub *rsa.PublicKey) ([]byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
 		return nil, fmt.Errorf("certificate serial: %w", err)
 	}
+	subject := pkix.Name{CommonName: pseudonym}
+	if tenant != "" {
+		subject.OrganizationalUnit = []string{tenant}
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: pseudonym},
+		Subject:               subject,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -157,6 +166,7 @@ type Agent struct {
 // Fleet is set of agents sharing one measurement profile,
 // plus the CA that vouches for them
 type Fleet struct {
+	Tenant string
 	CA     *CA
 	Agents []*Agent
 
@@ -201,7 +211,7 @@ const DefaultKeyPool = 256
 // NewFleet builds n agents backed by freshly generated pool of keyPool RSA keys
 // (keyPool <= 0 collapses to DefaultKeyPool, and the pool never exceeds the fleet size)
 // Key generation and certificate issuance run across all CPUs
-func NewFleet(ca *CA, n, keyPool int) (*Fleet, error) {
+func NewFleet(ca *CA, n, keyPool int, tenant string) (*Fleet, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
 	}
@@ -213,20 +223,24 @@ func NewFleet(ca *CA, n, keyPool int) (*Fleet, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewFleetWithKeys(ca, n, keys)
+	return NewFleetWithKeys(ca, n, keys, tenant)
 }
 
 // NewFleetWithKeys builds n agents over an existing key pool,
 // e.g. one reloaded from rig directory
-func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey) (*Fleet, error) {
+func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey, tenant string) (*Fleet, error) {
 	if n <= 0 {
 		return nil, fmt.Errorf("fleet size must be positive, got %d", n)
 	}
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("empty AIK key pool")
 	}
+	if tenant != "" && !verify.ValidTenantName(tenant) {
+		return nil, fmt.Errorf("invalid tenant name %q", tenant)
+	}
 
 	f := &Fleet{
+		Tenant:     tenant,
 		CA:         ca,
 		Agents:     make([]*Agent, n),
 		AgentHash:  profileDigest("agent-hash"),
@@ -245,7 +259,7 @@ func NewFleetWithKeys(ca *CA, n int, keys []*rsa.PrivateKey) (*Fleet, error) {
 			Pseudonym:  Pseudonym(rigID, name),
 			Key:        keys[i%len(keys)],
 		}
-		der, err := ca.IssueAIKCert(a.Pseudonym, &a.Key.PublicKey)
+		der, err := ca.IssueAIKCert(a.Pseudonym, tenant, &a.Key.PublicKey)
 		if err != nil {
 			return fmt.Errorf("agent %s: %w", name, err)
 		}
