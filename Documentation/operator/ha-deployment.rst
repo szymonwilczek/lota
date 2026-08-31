@@ -140,11 +140,14 @@ Rules for a sharded deployment:
 * **Give every instance the same shard list in the same order.** The shard
   index is positional; a divergent list would route the same client to
   different databases on different instances and break replay protection. The verifier enforces this: each shard
-  database carries its own identity and the control database pins the
+  database carries its own identity and **every shard** pins the
   fingerprint of the ordered list, so an instance whose list does not
   reproduce it refuses to start instead of serving a routing its peers
-  disagree with. Listing the same database twice is refused for the same
-  reason.
+  disagree with. The pin is read from every shard and all of them must
+  agree, which is what makes a reordering visible: the pin cannot live only
+  in whichever database is listed first, because that is the database a
+  reordering moves. A shard already pinned to another set stops the run.
+  Listing the same database twice is refused for the same reason.
 * **The first shard is the control database.** Fleet-global, read-mostly
   state -- revocations, hardware bans, the audit trail and the attestation
   decision log -- lives on shard 0, not on the per-report path.
@@ -168,7 +171,7 @@ Rules for a sharded deployment:
   the fleet -- not as a rolling capacity step. Size the shard count for the
   fleet you expect, not the one you have. The pinned shard set makes this
   explicit: a changed list is refused at startup until you clear the pin
-  with ``DELETE FROM shard_set;`` on the control database, which is the
+  with ``DELETE FROM shard_set;`` on **every** shard, which is the
   point at which you confirm the migration is done. The same pin is
   recorded for a single ``--pg-dsn`` database, so switching an existing
   deployment to a sharded list is caught rather than silently re-routing
