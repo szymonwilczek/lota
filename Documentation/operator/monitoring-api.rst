@@ -43,11 +43,13 @@ envelope on every endpoint::
 
 Request bodies are limited to 1 MiB, 64 levels of nesting and 32768 JSON
 tokens; a violated limit, an empty body where one is required, or
-trailing data after the JSON value is a **400**. Timestamps are RFC 3339
-UTC. Endpoints backed by an optional subsystem (revocations, bans, the
-audit and attestation logs) answer **503** when that store is not
-configured. Unexpected server failures are **500** with a generic
-message; details go to the verifier log, not the client.
+trailing data after the JSON value is a **400**. A field the endpoint
+does not read is a **400** naming it: a request that carries a field the
+handler ignores did not do what its author wrote, and a caller has to hear
+that. Timestamps are RFC 3339 UTC. Endpoints backed by an optional subsystem
+(revocations, bans, the audit and attestation logs) answer **503** when
+that store is not configured. Unexpected server failures are **500** with
+a generic message; details go to the verifier log, not the client.
 
 Mutation payloads share three fields: ``reason`` (one of ``cheating``,
 ``compromised``, ``hardware_change``, ``admin``), ``actor`` (the
