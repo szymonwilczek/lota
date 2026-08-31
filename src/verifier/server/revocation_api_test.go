@@ -551,8 +551,8 @@ func TestIntegrationAPI_RevokedClientBlockedFromAttestation(t *testing.T) {
 
 	// verify rejection is counted
 	assertStats(t, mux, func(s statsResponse) {
-		if s.RevokedAttests != 1 {
-			t.Errorf("revoked_attestations: got %d, want 1", s.RevokedAttests)
+		if deref(s.RevokedAttests) != 1 {
+			t.Errorf("revoked_attestations: got %d, want 1", deref(s.RevokedAttests))
 		}
 	})
 
@@ -656,8 +656,8 @@ func TestIntegrationAPI_BannedHardwareBlocksAttestation(t *testing.T) {
 
 	// verify counted in stats
 	assertStats(t, mux, func(s statsResponse) {
-		if s.BannedAttests != 1 {
-			t.Errorf("banned_attestations: got %d, want 1", s.BannedAttests)
+		if deref(s.BannedAttests) != 1 {
+			t.Errorf("banned_attestations: got %d, want 1", deref(s.BannedAttests))
 		}
 		if s.ActiveBans != 1 {
 			t.Errorf("active_bans: got %d, want 1", s.ActiveBans)

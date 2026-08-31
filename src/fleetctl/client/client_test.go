@@ -122,7 +122,7 @@ func TestHealthDegradedIsData(t *testing.T) {
 
 func TestStats(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"registered_clients":3,"total_attestations":42,"active_policy":"prod",
+		`{"registered_clients":3,"active_policy":"prod",
 		  "loaded_policies":["prod"],"uptime":"1m0s","uptime_sec":60,
 		  "tenant_scoped":true,"tenants":["acme","beta"]}`)
 
@@ -133,8 +133,11 @@ func TestStats(t *testing.T) {
 	if rec.method != http.MethodGet || rec.path != "/api/v1/stats" {
 		t.Fatalf("request = %s %s, want GET /api/v1/stats", rec.method, rec.path)
 	}
-	if s.RegisteredClients != 3 || s.TotalAttestations != 42 || s.ActivePolicy != "prod" {
+	if s.RegisteredClients != 3 || s.ActivePolicy != "prod" {
 		t.Fatalf("Stats = %+v", s)
+	}
+	if s.TotalAttestations != nil || s.UsedNonces != nil {
+		t.Fatalf("omitted counters decoded into values: %+v", s)
 	}
 	if !s.TenantScoped || len(s.Tenants) != 2 || s.Tenants[0] != "acme" {
 		t.Fatalf("tenant scoping = %+v", s)
