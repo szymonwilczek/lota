@@ -70,6 +70,20 @@ binding lives inside the signed policy document, a signed policy authenticates
 its own scope: an operator cannot silently re-point a tenant by editing an
 unsigned side file.
 
+One verifier process carries as many policies as ``--policy`` is given, and the
+flag may be repeated:
+
+.. code-block:: bash
+
+   lota-verifier --policy fleet-base.yaml \
+                 --policy acme-strict.yaml \
+                 --policy beta-relaxed.yaml
+
+The first document is the active policy and therefore the fallback; the rest
+are reachable only through the tenant they bind, so the verifier warns at
+startup about one that binds none. Every document is validated the same way
+whichever position it holds, and two of them may not share a ``name:``.
+
 Scoped state
 ------------
 

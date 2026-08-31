@@ -965,6 +965,17 @@ func (v *Verifier) ActivePolicyConfig() (*PCRPolicy, bool) {
 	return v.pcrVerifier.GetActivePolicyConfig()
 }
 
+// returns the names of every loaded policy
+func (v *Verifier) ListPolicies() []string {
+	return v.pcrVerifier.ListPolicies()
+}
+
+// reports which policy each tenant is verified against; a tenant that binds
+// none falls back to the active policy
+func (v *Verifier) TenantBindings() map[string]string {
+	return v.pcrVerifier.TenantBindings()
+}
+
 // returns verifier statistics
 type Stats struct {
 	PendingChallenges int

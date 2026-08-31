@@ -78,6 +78,14 @@ The exported policy is ready to use as-is. Optionally edit to:
    # Start verifier with custom policy
    lota-verifier --policy /path/to/my-policy.yaml
 
+``--policy`` may be repeated. The first document given is the active policy,
+the one every client whose tenant binds no policy of its own is verified
+against; each further document must bind a tenant with a ``tenant:`` key, and
+the verifier warns at startup about a policy that is neither active nor bound,
+because no client can reach it. Two documents may not share a ``name:``: the
+second would replace the first, silently changing what the fleet verifies
+against when the name is the active one.
+
 PCR Meanings (SHA-256 Bank)
 ---------------------------
 
