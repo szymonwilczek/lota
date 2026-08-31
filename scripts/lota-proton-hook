@@ -17,7 +17,8 @@
 #
 # Environment:
 #   LOTA_HOOK_LIB_PATH   Override path to liblota_wine_hook.so
-#   LOTA_HOOK_DISABLE    Set to 1 to disable (pass-through)
+#   LOTA_HOOK_DISABLE    Set to 1 (or true) to disable: the wrapper warns
+#                        and execs the command with LD_PRELOAD untouched
 #   LOTA_HOOK_LOG_LEVEL  debug | info | warn | error | silent
 #   LOTA_HOOK_TOKEN_DIR  Custom output directory for status files
 #   LOTA_HOOK_REFRESH_SEC  Token refresh interval (default: 60)
@@ -26,14 +27,23 @@
 
 set -euo pipefail
 
+# Escape hatch when the preload itself breaks the launch. Checked here,
+# not only in the library: by then it is already mapped into the game.
+case "${LOTA_HOOK_DISABLE:-}" in
+    1 | true)
+	echo "lota-proton-hook: LOTA_HOOK_DISABLE set, skipping LOTA integration" >&2
+	exec "$@"
+	;;
+esac
+
 LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
 if [[ -z "$LOTA_HOOK_LIB" ]]; then
     for candidate in \
         /usr/lib64/liblota_wine_hook.so \
-        /usr/lib/liblota_wine_hook.so \
-        /usr/local/lib64/liblota_wine_hook.so \
-        /usr/local/lib/liblota_wine_hook.so; do
+            /usr/lib/liblota_wine_hook.so \
+            /usr/local/lib64/liblota_wine_hook.so \
+            /usr/local/lib/liblota_wine_hook.so; do
         if [[ -f "$candidate" ]]; then
             LOTA_HOOK_LIB="$candidate"
             break
