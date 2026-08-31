@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/szymonwilczek/lota/verifier/store"
@@ -236,6 +238,30 @@ func TestAPIStatsCarriesEveryCounterWhenUnscoped(t *testing.T) {
 		}
 		if n, _ := v.(float64); n != 0 {
 			t.Errorf("%s = %v, want 0 on an idle fixture", field, v)
+		}
+	}
+}
+
+// The reference prints the response shape of each endpoint, and the tenant is
+// part of every record that belongs to a device. This pins the field name the
+// page documents to the struct that produces it.
+func TestTenantFieldIsPartOfEveryDeviceRecord(t *testing.T) {
+	for _, shape := range []any{
+		clientInfoResponse{},
+		revocationResponse{},
+		banResponse{},
+		auditResponse{},
+		attestationResponse{},
+	} {
+		typ := reflect.TypeOf(shape)
+		field, ok := typ.FieldByName("Tenant")
+		if !ok {
+			t.Errorf("%s has no Tenant field", typ.Name())
+			continue
+		}
+		tag := field.Tag.Get("json")
+		if name, _, _ := strings.Cut(tag, ","); name != "tenant" {
+			t.Errorf("%s.Tenant is serialised as %q, want tenant", typ.Name(), tag)
 		}
 	}
 }
