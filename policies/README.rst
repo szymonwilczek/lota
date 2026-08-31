@@ -306,7 +306,9 @@ remains as an override in both directions for an operator who has to
 contradict a policy they cannot immediately re-sign; left unset, each policy
 decides for itself. An unknown value is refused at load rather than read as
 "not consumer", so a typo cannot silently leave a diverse fleet on the
-enterprise handling.
+enterprise handling. The refusal names the value and the two the verifier
+accepts, and it applies to a policy file and a programmatically added policy
+alike: both register through one validation set.
 
 Whatever turns it on, the discriminator still requires ``require_secureboot``
 and a quote-authenticated Secure Boot anchor before anything moves.
