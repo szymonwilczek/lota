@@ -67,6 +67,7 @@ static struct {
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	pid_t init_pid;
 	atomic_int self_protected;
+	atomic_int offline_published;
 } g_hook;
 
 #define HOOK_PREFIX "lota-hook"
@@ -495,6 +496,43 @@ static int write_status(const struct lota_status *status)
 	return write_status_payload(status, 0);
 }
 
+/*
+ * Publish an explicit "offline" status so consumers of lota-status
+ * (verify-attested.sh, server-side bridges) observe the transition to OFFLINE.
+ * The token / snapshot files are also unlinked because they cannot be trusted
+ * past the disconnect.
+ */
+static void publish_offline_status(void)
+{
+	struct lota_status offline = { 0 };
+	int ret;
+
+	ret = write_status_payload(&offline, 1);
+	if (ret < 0)
+		LOG_WRN("write_status (offline): %s", strerror(-ret));
+	unlink(g_hook.token_path);
+	unlink(g_hook.snapshot_path);
+}
+
+/*
+ * One OFFLINE per disconnect. Every road that loses the agent ends here
+ * -- the polling refresh, a failed status query, and the reconnect the
+ * event-driven thread retries every refresh_sec -- so the sink states
+ * the transition once and is not rewritten while the agent stays away.
+ * hook_offline_clear() re-arms it on the next connect.
+ */
+static void hook_offline_publish(void)
+{
+	if (atomic_exchange(&g_hook.offline_published, 1))
+		return;
+	publish_offline_status();
+}
+
+static void hook_offline_clear(void)
+{
+	atomic_store(&g_hook.offline_published, 0);
+}
+
 #ifdef LOTA_HOOK_TESTING
 #define LOTA_UNUSED __attribute__((unused))
 #else
@@ -603,24 +641,6 @@ static struct lota_client *hook_connect(void)
  * All failures are handled gracefully -- the hook never aborts
  * the host process.
  */
-/*
- * Publish an explicit "offline" status so consumers of lota-status
- * (verify-attested.sh, server-side bridges) observe the transition
- * to OFFLINE. The token / snapshot files are also unlinked because
- * they cannot be trusted past the disconnect.
- */
-static void publish_offline_status(void)
-{
-	struct lota_status offline = { 0 };
-	int ret;
-
-	ret = write_status_payload(&offline, 1);
-	if (ret < 0)
-		LOG_WRN("write_status (offline): %s", strerror(-ret));
-	unlink(g_hook.token_path);
-	unlink(g_hook.snapshot_path);
-}
-
 static void refresh_once(void)
 {
 	struct lota_status status;
@@ -630,9 +650,10 @@ static void refresh_once(void)
 		g_hook.client = hook_connect();
 		if (!g_hook.client) {
 			LOG_DBG("agent not available");
-			publish_offline_status();
+			hook_offline_publish();
 			return;
 		}
+		hook_offline_clear();
 		LOG_DBG("connected to agent");
 
 		/*
@@ -664,7 +685,7 @@ static void refresh_once(void)
 		LOG_DBG("get_status: %s -> reconnecting", lota_strerror(ret));
 		lota_disconnect(g_hook.client);
 		g_hook.client = NULL;
-		publish_offline_status();
+		hook_offline_publish();
 		return;
 	}
 
@@ -729,9 +750,11 @@ static void *refresh_thread_fn(void *arg)
 			if (!g_hook.client) {
 				LOG_DBG("agent not available, retrying in %ds",
 					g_hook.refresh_sec);
+				hook_offline_publish();
 				sleep(g_hook.refresh_sec);
 				continue;
 			}
+			hook_offline_clear();
 			LOG_INF("connected to agent");
 			refresh_once();
 
@@ -784,6 +807,7 @@ static void hook_child_after_fork(void)
 	 * lota_protect_self() against the child PID.
 	 */
 	atomic_store(&g_hook.self_protected, 0);
+	hook_offline_clear();
 }
 
 __attribute__((constructor)) static void lota_wine_hook_init(void)

@@ -77,16 +77,38 @@ Terminal 3: drive the scenario
 
       sudo pkill -INT lota-agent
 
-   Within ``LOTA_HOOK_REFRESH_SEC`` (default 60) the hook detects the
-   disconnect on its next poll, loses the subscribe channel, and the watcher
-   flips:
+   The hook loses the subscribe channel at once, and the first reconnect it
+   cannot complete publishes the transition -- one refresh interval after the
+   kill on the event-driven path, ``LOTA_HOOK_REFRESH_SEC`` (default 60) on the
+   polling fallback. The watcher flips:
 
    ::
 
       21:56:34 OFFLINE
 
    The hook log (Terminal 2) prints the matching ``connection lost (...)`` line
-   before going quiet.
+   followed by ``agent not available, retrying in Ns``, which repeats for as
+   long as the agent stays down. The sink is written once per disconnect, not
+   once per retry.
+
+   Assert it on the sink itself rather than on the watcher's verdict, so a
+   regression in either one is visible:
+
+   .. code:: sh
+
+      SINK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lota-hook"
+      grep -E '^LOTA_(OFFLINE|ATTESTED)=' "$SINK/lota-status"
+      ls "$SINK/lota-token.bin" 2>&1
+
+   ::
+
+      LOTA_ATTESTED=0
+      LOTA_OFFLINE=1
+      ls: cannot access '.../lota-token.bin': No such file or directory
+
+   The token and the attestation snapshot are unlinked because neither can be
+   trusted past the disconnect; ``LOTA_ATTESTED=1`` surviving the kill, or a
+   token still on disk, is the defect this step exists to catch.
 
 3. Restart the agent in the same shape:
 
@@ -120,7 +142,9 @@ What this proves
   on disconnect so the watcher can distinguish OFFLINE (no agent) from
   UNTRUSTED (agent says no); the watcher in ``verify-attested.sh`` is the
   minimal possible consumer of both signals and ships with the demo so an
-  integrator does not have to invent it.
+  integrator does not have to invent it. A consumer that reads
+  ``LOTA_ATTESTED`` alone is told the machine is attested for as long as the
+  game runs, which is why the marker is read first.
 - Per-state log lines in ``console-linux.txt`` are stable enough to drive a
   runtime monitor (``grep -E 'connection lost|connected to agent'``); the
   contract is documented in

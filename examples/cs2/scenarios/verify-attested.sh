@@ -7,8 +7,8 @@
 # Polls $XDG_RUNTIME_DIR/lota-hook/lota-status at a fixed cadence and
 # prints one timestamped line per state transition: TRUSTED <->
 # UNTRUSTED <-> OFFLINE. The watcher does not interpret the rest of
-# the status payload; it only translates LOTA_ATTESTED and the
-# file's existence into a verdict the operator can read.
+# the status payload; it only translates LOTA_OFFLINE, LOTA_ATTESTED
+# and the file's existence into a verdict the operator can read.
 #
 # The companion walk-throughs in this directory drive the
 # transitions intentionally (kill the agent, load an unauthorised
@@ -31,12 +31,18 @@ Polls the LOTA hook status file and prints state transitions.
                      settles its token directory in.
   --once             print the current verdict once and exit (CI mode)
 
-Verdict mapping:
+Verdict mapping, in the order the fields are read:
 
-  TRUSTED   lota-status exists and LOTA_ATTESTED=1
-  UNTRUSTED lota-status exists and LOTA_ATTESTED=0
-  OFFLINE   lota-status missing (hook detached, agent not running,
-            or container view does not include the token sink)
+  OFFLINE   lota-status missing (hook detached, or the container view
+            does not include the token sink), or lota-status exists
+            and LOTA_OFFLINE=1 (the hook lost the agent and said so)
+  TRUSTED   LOTA_OFFLINE=0 and LOTA_ATTESTED=1
+  UNTRUSTED LOTA_OFFLINE=0 and LOTA_ATTESTED=0
+
+LOTA_OFFLINE is read before LOTA_ATTESTED because an agent that went
+away is not a verdict the agent gave: the hook zeroes the payload it
+publishes on a disconnect, and without the marker that zeroed file
+would read as UNTRUSTED.
 
 Exit code in --once mode mirrors the verdict:
 
