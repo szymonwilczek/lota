@@ -85,6 +85,7 @@ func cmdSetup(args []string) int {
 	dir := fs.String("dir", "", "rig directory to create (required)")
 	agents := fs.Int("agents", 1000, "fleet size the rig supports")
 	keyPool := fs.Int("key-pool", 0, "AIK RSA key pool size (default min(agents, 256))")
+	tenant := fs.String("tenant", "", "tenant the rig's AIK certificates are issued into (empty = the default tenant); the generated policy binds itself to it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -94,7 +95,7 @@ func cmdSetup(args []string) int {
 		return 2
 	}
 	start := time.Now()
-	if err := writeRig(*dir, *agents, *keyPool); err != nil {
+	if err := writeRig(*dir, *agents, *keyPool, *tenant); err != nil {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		return 1
 	}

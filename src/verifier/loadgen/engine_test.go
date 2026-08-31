@@ -154,7 +154,7 @@ func testFleet(t *testing.T, n int) *synth.Fleet {
 	if err != nil {
 		t.Fatalf("NewCA: %v", err)
 	}
-	fleet, err := synth.NewFleet(ca, n, 2)
+	fleet, err := synth.NewFleet(ca, n, 2, "")
 	if err != nil {
 		t.Fatalf("NewFleet: %v", err)
 	}
