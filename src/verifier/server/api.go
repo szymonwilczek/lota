@@ -1445,7 +1445,9 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 		return err
 	}
 
+	// refuse unknown fields
 	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
