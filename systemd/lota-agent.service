@@ -67,7 +67,11 @@ RestartSec=5s
 # and starting me again changes nothing": a legacy firmware interface,
 # or a publisher whose attestation key predates per-publisher derivation and has
 # to be re-enrolled. The unit stops and stays failed with that line in the journal.
-RestartPreventExitStatus=78
+#
+# Exit 3 is "another instance already holds the PID file",
+# e.g. after a lota-agent.socket restart; the running agent keeps serving,
+# so retrying changes nothing.
+RestartPreventExitStatus=78 3
 
 # as root (for TPM and BPF)
 User=root

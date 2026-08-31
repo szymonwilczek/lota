@@ -822,7 +822,7 @@ int main(int argc, char *argv[])
 		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
 				     sizeof(busy));
 		lota_err("%s", busy);
-		rc = 1;
+		rc = LOTA_EXIT_ALREADY_RUNNING;
 		goto out;
 	}
 	if (pid_fd < 0) {
