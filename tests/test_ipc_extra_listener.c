@@ -14,6 +14,11 @@
  * answering on is not ours to take. These tests hold the extra listeners to
  * the same rule, driven against the real ipc_add_listener() over real sockets.
  *
+ * The other half is the daemon's own socket being taken from underneath it
+ * -- a socket unit restart unlinks the path and binds a new inode at the same
+ * name, and the listening fd survives that without a hint. Those tests drive
+ * ipc_socket_was_replaced(), which is what the daemon asks before it rebinds.
+ *
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <errno.h>
@@ -22,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -346,6 +352,115 @@ test_stale_socket_file_is_not_mistaken_for_a_listener(struct ipc_context *ctx)
 	unlink(victim_socket);
 }
 
+/*
+ * A socket unit restart unlinks the path the daemon is bound to and binds a new
+ * inode at the same name. The listening fd survives it, so the daemon goes on
+ * accepting on a socket no title can name -- and nothing fails, which is why
+ * the identity of the file has to be checked rather than the descriptor.
+ */
+static void test_untouched_socket_is_not_replaced(void)
+{
+	struct stat st;
+	int fd;
+
+	TEST("an untouched socket is not reported replaced");
+
+	fd = listener_at(victim_socket);
+	if (fd < 0 || stat(victim_socket, &st) < 0) {
+		FAIL("cannot lay down a socket to watch");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+
+	if (ipc_socket_was_replaced(victim_socket, st.st_dev, st.st_ino))
+		FAIL("a socket nobody touched was reported replaced");
+	else
+		PASS();
+
+	close(fd);
+	unlink(victim_socket);
+}
+
+static void test_unlinked_socket_is_replaced(void)
+{
+	struct stat st;
+	int fd;
+
+	TEST("an unlinked socket is reported replaced");
+
+	fd = listener_at(victim_socket);
+	if (fd < 0 || stat(victim_socket, &st) < 0) {
+		FAIL("cannot lay down a socket to watch");
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+
+	unlink(victim_socket);
+
+	if (ipc_socket_was_replaced(victim_socket, st.st_dev, st.st_ino))
+		PASS();
+	else
+		FAIL("an unlinked socket was reported as still ours");
+
+	close(fd);
+}
+
+/*
+ * The case that costs a host: the name is there, the mode is right,
+ * and it is a different socket. Only the inode says so.
+ */
+static void test_rebound_socket_is_replaced(void)
+{
+	struct stat before;
+	int old_fd, new_fd;
+
+	TEST("a socket replaced at the same path is reported replaced");
+
+	old_fd = listener_at(victim_socket);
+	if (old_fd < 0 || stat(victim_socket, &before) < 0) {
+		FAIL("cannot lay down a socket to watch");
+		if (old_fd >= 0)
+			close(old_fd);
+		return;
+	}
+
+	/* what the socket unit does: unlink, then bind a fresh one */
+	new_fd = listener_at(victim_socket);
+	if (new_fd < 0) {
+		FAIL("cannot rebind the path");
+		close(old_fd);
+		return;
+	}
+
+	if (ipc_socket_was_replaced(victim_socket, before.st_dev,
+				    before.st_ino))
+		PASS();
+	else
+		FAIL("a socket bound over ours was reported as still ours");
+
+	close(old_fd);
+	close(new_fd);
+	unlink(victim_socket);
+}
+
+/*
+ * A socket-activated start can find the path already gone, and then there is
+ * no identity to compare against. Recovering from that would mean binding over
+ * whatever is there on the first event, which is the takeover the primary
+ * socket refuses.
+ */
+static void test_unrecorded_identity_is_not_a_replacement(void)
+{
+	TEST("no recorded identity is not a replacement");
+
+	if (ipc_socket_was_replaced(victim_socket, 0, 0))
+		FAIL("an unrecorded listener was reported replaced");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -380,6 +495,10 @@ int main(void)
 	test_live_listener_is_not_taken(&ctx);
 	test_refusal_leaves_the_socket_connectable(&ctx);
 	test_stale_socket_file_is_not_mistaken_for_a_listener(&ctx);
+	test_untouched_socket_is_not_replaced();
+	test_unlinked_socket_is_replaced();
+	test_rebound_socket_is_replaced();
+	test_unrecorded_identity_is_not_a_replacement();
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

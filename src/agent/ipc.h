@@ -108,6 +108,15 @@ struct ipc_listener {
 struct ipc_context {
 	int listen_fd; /* Primary listening socket */
 	int epoll_fd; /* epoll instance */
+
+	/*
+	 * (device, inode) the primary listener is bound to, and an inotify
+	 * watch on its directory; sock_watch_fd -1 means not watching,
+	 * so a replaced socket stays replaced.
+	 */
+	dev_t listen_dev;
+	ino_t listen_ino;
+	int sock_watch_fd;
 	bool running;
 	uint64_t start_time_sec; /* CLOCK_MONOTONIC seconds for uptime */
 
@@ -408,6 +417,52 @@ int ipc_is_listener(struct ipc_context *ctx, int fd);
  * Returns: 0 on success, negative errno on failure.
  */
 int ipc_init_activated(struct ipc_context *ctx, int fd);
+
+/*
+ * ipc_watch_socket_path - Watch the directory holding the primary socket
+ * @ctx: Server context
+ *
+ * A socket unit restart unlinks the path this daemon is bound to and binds
+ * a new inode at the same name, which severs every title's IPC while nothing
+ * reports a failure. The watch is what lets ipc_recheck_socket() notice.
+ *
+ * Returns: the inotify fd to add to the caller's poll set, negative errno on
+ * failure. A failure is not fatal -- the daemon runs unchanged, it just cannot
+ * recover its socket on its own.
+ */
+int ipc_watch_socket_path(struct ipc_context *ctx);
+
+/*
+ * ipc_socket_watch_fd - The watch descriptor, or -1 when not watching
+ * @ctx: Server context
+ */
+int ipc_socket_watch_fd(const struct ipc_context *ctx);
+
+/*
+ * ipc_socket_was_replaced - Does @path still name the socket we bound?
+ * @path: socket path the listener was bound at
+ * @dev:  device of the inode it was bound to
+ * @ino:  inode it was bound to
+ *
+ * A listening fd outlives its path, so the file descriptor cannot answer this;
+ * only the identity of the file at the name can.
+ * An @ino of 0 means no identity was ever recorded, which is not a replacement.
+ *
+ * Returns: 1 when the path is gone or names another inode, 0 otherwise.
+ */
+int ipc_socket_was_replaced(const char *path, dev_t dev, ino_t ino);
+
+/*
+ * ipc_recheck_socket - Rebind if the socket path no longer names our socket
+ * @ctx: Server context
+ *
+ * Drains the watch and compares the path against the listener's recorded
+ * identity. Call it whenever the watch fd reports readable.
+ *
+ * Returns: 1 when the listener was rebound, 0 when nothing changed,
+ * negative errno on failure.
+ */
+int ipc_recheck_socket(struct ipc_context *ctx);
 
 /*
  * ipc_set_dbus - Attach D-Bus context for signal emission.

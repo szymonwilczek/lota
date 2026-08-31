@@ -196,6 +196,10 @@ int agent_run_event_loop(struct agent_loop_ctx *ctx)
 			} else if (events[i].data.fd ==
 				   bpf_loader_get_event_fd(ctx->bpf_ctx)) {
 				bpf_loader_consume(ctx->bpf_ctx);
+			} else if (ipc_socket_watch_fd(ctx->ipc_ctx) >= 0 &&
+				   events[i].data.fd ==
+					   ipc_socket_watch_fd(ctx->ipc_ctx)) {
+				(void)ipc_recheck_socket(ctx->ipc_ctx);
 			} else if (ctx->container_watch &&
 				   (events[i].data.fd ==
 					    container_watch_fd(
