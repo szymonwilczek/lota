@@ -13,6 +13,7 @@ package verify
 
 import (
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -37,13 +38,22 @@ func (s *PostgresUsedNonceBackend) Record(nonceKey string, usedAt time.Time) err
 	return err
 }
 
-func (s *PostgresUsedNonceBackend) Contains(nonceKey string) bool {
+// Contains tells a nonce that was never used from one the database could not
+// be asked about. Folding both into false answered "fresh" during an outage,
+// which silently suspends the cross-instance replay guarantee.
+func (s *PostgresUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	hash := hexEncode(nonceKey)
 	var exists int
 	err := s.db.QueryRow(
 		"SELECT 1 FROM used_nonces WHERE nonce_hash = $1", hash,
 	).Scan(&exists)
-	return err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *PostgresUsedNonceBackend) Count() int {

@@ -43,8 +43,8 @@ type UsedNonceBackend interface {
 	// stores a nonce key as used at the given time
 	Record(nonceKey string, usedAt time.Time) error
 
-	// returns true if the nonce key has been recorded as used
-	Contains(nonceKey string) bool
+	// reports whether the nonce key has been recorded as used.
+	Contains(nonceKey string) (bool, error)
 
 	// returns the number of stored used nonces
 	Count() int
@@ -66,7 +66,7 @@ type RoutedUsedNonceBackend interface {
 	RecordFor(routeKey, nonceKey string, usedAt time.Time) error
 
 	// reports whether the route key's partition holds the nonce key
-	ContainsFor(routeKey, nonceKey string) bool
+	ContainsFor(routeKey, nonceKey string) (bool, error)
 }
 
 // implements UsedNonceBackend using an in-memory map
@@ -120,11 +120,11 @@ func (m *memoryUsedNonceBackend) Record(nonceKey string, usedAt time.Time) error
 	return nil
 }
 
-func (m *memoryUsedNonceBackend) Contains(nonceKey string) bool {
+func (m *memoryUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, exists := m.index[nonceKey]
-	return exists
+	return exists, nil
 }
 
 func (m *memoryUsedNonceBackend) Count() int {
@@ -290,8 +290,14 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		// Partitioned backend is not probed: its partition is the client,
 		// which has not named itself yet.
 		// VerifyNonce still rejects a spent nonce.
-		if ns.routedBackend == nil && ns.usedBackend.Contains(key) {
-			continue
+		if ns.routedBackend == nil {
+			used, err := ns.usedBackend.Contains(key)
+			if err != nil {
+				return nil, fmt.Errorf("used-nonce history unavailable: %w", err)
+			}
+			if used {
+				continue
+			}
 		}
 
 		ns.mu.Lock()
@@ -347,7 +353,7 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 // usedContains and usedRecord reach the used-nonce history through the client's
 // partition where the backend has one. Both roads see the same nonce for the
 // same client, which is all replay protection needs.
-func (ns *NonceStore) usedContains(identityID, key string) bool {
+func (ns *NonceStore) usedContains(identityID, key string) (bool, error) {
 	if ns.routedBackend != nil {
 		return ns.routedBackend.ContainsFor(identityID, key)
 	}
@@ -372,7 +378,11 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	// check used nonce history first (detects replays after restart)
 	// unlocked: history only grows, and nonce enters it solely through
 	// the single consumer that won the pending-map delete
-	if ns.usedContains(identityID, key) {
+	used, err := ns.usedContains(identityID, key)
+	if err != nil {
+		return fmt.Errorf("used-nonce history unavailable, refusing the round: %w", err)
+	}
+	if used {
 		return errors.New("nonce already used - replay attack detected")
 	}
 

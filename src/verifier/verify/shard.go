@@ -66,7 +66,7 @@ func (s *ShardedUsedNonceBackend) Record(nonceKey string, usedAt time.Time) erro
 	return s.shards[shardIndex(nonceKey, len(s.shards))].Record(nonceKey, usedAt)
 }
 
-func (s *ShardedUsedNonceBackend) Contains(nonceKey string) bool {
+func (s *ShardedUsedNonceBackend) Contains(nonceKey string) (bool, error) {
 	return s.shards[shardIndex(nonceKey, len(s.shards))].Contains(nonceKey)
 }
 
@@ -76,7 +76,7 @@ func (s *ShardedUsedNonceBackend) RecordFor(routeKey, nonceKey string, usedAt ti
 }
 
 // ContainsFor looks the nonce up in the shard the client belongs to
-func (s *ShardedUsedNonceBackend) ContainsFor(routeKey, nonceKey string) bool {
+func (s *ShardedUsedNonceBackend) ContainsFor(routeKey, nonceKey string) (bool, error) {
 	return s.shards[shardIndex(routeKey, len(s.shards))].Contains(nonceKey)
 }
 
