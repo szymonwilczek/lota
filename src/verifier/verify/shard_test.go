@@ -79,9 +79,9 @@ func (c *countingNonce) Record(k string, t time.Time) error {
 	c.recorded++
 	return c.inner.Record(k, t)
 }
-func (c *countingNonce) Contains(k string) bool { return c.inner.Contains(k) }
-func (c *countingNonce) Count() int             { return c.inner.Count() }
-func (c *countingNonce) Cleanup(o time.Time)    { c.inner.Cleanup(o) }
+func (c *countingNonce) Contains(k string) (bool, error) { return c.inner.Contains(k) }
+func (c *countingNonce) Count() int                      { return c.inner.Count() }
+func (c *countingNonce) Cleanup(o time.Time)             { c.inner.Cleanup(o) }
 
 // nonce recorded on its shard must be seen only there,
 // and replay detection (Contains) must route to the same shard.
@@ -98,7 +98,7 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 	const keys = 4000
 	for i := range keys {
 		key := fmt.Sprintf("nonce-%d", i)
-		if s.Contains(key) {
+		if usedNonce(t, s, key) {
 			t.Fatalf("fresh nonce %q reported as used", key)
 		}
 		if err := s.Record(key, time.Now()); err != nil {
@@ -106,7 +106,7 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 		}
 		// replay: the same key must now be seen used,
 		// proving Contains routed to the shard that Record wrote
-		if !s.Contains(key) {
+		if !usedNonce(t, s, key) {
 			t.Fatalf("recorded nonce %q not seen as used (routing mismatch)", key)
 		}
 	}
@@ -155,7 +155,7 @@ func TestShardedNonceRoutesByClientNotNonce(t *testing.T) {
 
 		for r := range rounds {
 			nonce := fmt.Sprintf("nonce-%d-%d", c, r)
-			if s.ContainsFor(client, nonce) {
+			if routedUsedNonce(t, s, client, nonce) {
 				t.Fatalf("fresh nonce %q reported as used", nonce)
 			}
 			if err := s.RecordFor(client, nonce, time.Now()); err != nil {
@@ -163,7 +163,7 @@ func TestShardedNonceRoutesByClientNotNonce(t *testing.T) {
 			}
 			// a replay is the same client presenting the same nonce,
 			// so it must be found again on that client's shard
-			if !s.ContainsFor(client, nonce) {
+			if !routedUsedNonce(t, s, client, nonce) {
 				t.Fatalf("recorded nonce %q not seen as used", nonce)
 			}
 		}
@@ -229,6 +229,28 @@ type failingNonceBackend struct{}
 func (failingNonceBackend) Record(string, time.Time) error {
 	return errors.New("shard unreachable")
 }
-func (failingNonceBackend) Contains(string) bool { return false }
-func (failingNonceBackend) Count() int           { return 0 }
-func (failingNonceBackend) Cleanup(time.Time)    {}
+func (failingNonceBackend) Contains(string) (bool, error) {
+	return false, errors.New("shard unreachable")
+}
+func (failingNonceBackend) Count() int        { return 0 }
+func (failingNonceBackend) Cleanup(time.Time) {}
+
+// usedNonce and routedUsedNonce read a backend's answer in tests,
+// where a backend error is a test failure.
+func usedNonce(t *testing.T, b UsedNonceBackend, key string) bool {
+	t.Helper()
+	used, err := b.Contains(key)
+	if err != nil {
+		t.Fatalf("Contains(%q): %v", key, err)
+	}
+	return used
+}
+
+func routedUsedNonce(t *testing.T, b RoutedUsedNonceBackend, routeKey, key string) bool {
+	t.Helper()
+	used, err := b.ContainsFor(routeKey, key)
+	if err != nil {
+		t.Fatalf("ContainsFor(%q,%q): %v", routeKey, key, err)
+	}
+	return used
+}

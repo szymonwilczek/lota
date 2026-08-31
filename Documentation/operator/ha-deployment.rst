@@ -163,7 +163,10 @@ Rules for a sharded deployment:
   you would the single database. A challenge can still be issued while a
   shard is down -- the used-nonce history is consulted when the client
   presents itself, which is the first moment its shard is known -- so the
-  refusal an affected client sees names the round, not the challenge.
+  refusal an affected client sees names the round, not the challenge. The
+  round is refused: a replay history that cannot be read is not the same
+  as one that holds nothing, and attesting on the local pending map alone
+  would drop the cross-instance guarantee for as long as the shard is away.
 * **Fix the shard count before you enrol the fleet.** The index is
   ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
   After adding or removing a shard, a client's baseline and its used-nonce
