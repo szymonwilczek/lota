@@ -203,17 +203,20 @@ func (c *Client) Health() (*Health, error) {
 }
 
 // Stats is the GET /api/v1/stats response.
+//
+// Fleet-wide counters are pointers: a tenant-scoped response omits them,
+// and nil keeps "withheld" from decoding as zero.
 type Stats struct {
-	PendingChallenges int      `json:"pending_challenges"`
-	UsedNonces        int      `json:"used_nonces"`
+	PendingChallenges *int     `json:"pending_challenges,omitempty"`
+	UsedNonces        *int     `json:"used_nonces,omitempty"`
 	RegisteredClients int      `json:"registered_clients"`
 	ActivePolicy      string   `json:"active_policy"`
 	LoadedPolicies    []string `json:"loaded_policies"`
-	TotalAttestations int64    `json:"total_attestations"`
-	SuccessfulAttests int64    `json:"successful_attestations"`
-	FailedAttests     int64    `json:"failed_attestations"`
-	RevokedAttests    int64    `json:"revoked_attestations"`
-	BannedAttests     int64    `json:"banned_attestations"`
+	TotalAttestations *int64   `json:"total_attestations,omitempty"`
+	SuccessfulAttests *int64   `json:"successful_attestations,omitempty"`
+	FailedAttests     *int64   `json:"failed_attestations,omitempty"`
+	RevokedAttests    *int64   `json:"revoked_attestations,omitempty"`
+	BannedAttests     *int64   `json:"banned_attestations,omitempty"`
 	ActiveRevocations int      `json:"active_revocations"`
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`

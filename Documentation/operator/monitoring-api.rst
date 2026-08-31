@@ -130,6 +130,14 @@ Reader. **200**::
      "uptime_sec": 7200
    }
 
+A tenant-scoped key gets a narrower body: ``registered_clients``,
+``active_revocations`` and ``active_bans`` count the key's tenants only,
+``tenant_scoped`` is ``true`` beside a ``tenants`` list, and the counters
+that cannot be attributed to a tenant -- ``total_attestations``,
+``successful_attestations``, ``failed_attestations``,
+``revoked_attestations``, ``banned_attestations``, ``used_nonces`` and
+``pending_challenges`` -- are absent from the object.
+
 GET /metrics
 ------------
 

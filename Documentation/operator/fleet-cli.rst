@@ -202,7 +202,8 @@ not found.
 ``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
 tenant list, and narrows the client, revocation, and ban counts to those
 tenants; the fleet-wide attestation counters, which are not attributable per
-tenant, are omitted.
+tenant, are omitted -- the verifier leaves them out of the response, so
+``--json`` prints an object without those keys.
 
 Tenants are assigned by the attestation CA at enrollment and written into the
 device certificate; see :doc:`production-bringup/ca-enrollment` for the

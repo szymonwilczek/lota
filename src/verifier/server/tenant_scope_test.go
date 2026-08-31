@@ -181,3 +181,61 @@ func TestAPITenantScoping_MetricsRefusedForScopedKey(t *testing.T) {
 		t.Fatalf("scoped key on /metrics: %d, want 403", code)
 	}
 }
+
+// The multi-tenancy page promises the fleet-wide counters are omitted from
+// a scoped response. Zeroing them is a different answer: a delegated operator
+// reads "this installation served no attestations", which is a statement about
+// the fleet.
+func TestAPITenantScoping_StatsOmitsWhatItCannotAttribute(t *testing.T) {
+	f := newScopedAPIFixture(t, keyHashHex("acme-key"))
+
+	code, scoped := f.do(t, "GET", "/api/v1/stats", "acme-key")
+	if code != http.StatusOK {
+		t.Fatalf("scoped stats: %d", code)
+	}
+	if s, _ := scoped["tenant_scoped"].(bool); !s {
+		t.Fatal("stats not flagged tenant_scoped")
+	}
+
+	for _, field := range []string{
+		"total_attestations", "successful_attestations", "failed_attestations",
+		"revoked_attestations", "banned_attestations",
+		"used_nonces", "pending_challenges",
+	} {
+		if _, present := scoped[field]; present {
+			t.Errorf("scoped response carries %q, which is not attributable per tenant", field)
+		}
+	}
+
+	// what the scoped caller does get is narrowed, not withheld
+	for _, field := range []string{"registered_clients", "active_bans", "active_revocations"} {
+		if _, present := scoped[field]; !present {
+			t.Errorf("scoped response dropped %q, which is narrowed per tenant", field)
+		}
+	}
+}
+
+// An unscoped caller still gets every counter, including one that is legitimately
+// zero -- the fields are omitted by scope, not by value.
+func TestAPIStatsCarriesEveryCounterWhenUnscoped(t *testing.T) {
+	f := newScopedAPIFixture(t, "")
+
+	code, all := f.do(t, "GET", "/api/v1/stats", "")
+	if code != http.StatusOK {
+		t.Fatalf("unscoped stats: %d", code)
+	}
+	for _, field := range []string{
+		"total_attestations", "successful_attestations", "failed_attestations",
+		"revoked_attestations", "banned_attestations",
+		"used_nonces", "pending_challenges",
+	} {
+		v, present := all[field]
+		if !present {
+			t.Errorf("unscoped response is missing %q", field)
+			continue
+		}
+		if n, _ := v.(float64); n != 0 {
+			t.Errorf("%s = %v, want 0 on an idle fixture", field, v)
+		}
+	}
+}

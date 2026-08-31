@@ -234,6 +234,16 @@ func kv(w io.Writer, key string, value any) {
 	fmt.Fprintf(w, "%s: %v\n", key, value)
 }
 
+// kvCounter prints a counter the verifier may decline to report.
+// A tenant-scoped stats response omits the fleet-wide counters instead of
+// zeroing them, and the table says nothing.
+func kvCounter[T int | int64](w io.Writer, key string, value *T) {
+	if value == nil {
+		return
+	}
+	kv(w, key, *value)
+}
+
 func cmdHealth(ctx *cmdContext, args []string) (int, error) {
 	if len(args) != 0 {
 		return exitUsage, fmt.Errorf("%w: health takes no arguments", errUsage)
@@ -281,19 +291,15 @@ func cmdStats(ctx *cmdContext, args []string) error {
 	kv(ctx.stdout, "registered clients", s.RegisteredClients)
 	kv(ctx.stdout, "active policy", s.ActivePolicy)
 	kv(ctx.stdout, "loaded policies", strings.Join(s.LoadedPolicies, ", "))
-	if !s.TenantScoped {
-		kv(ctx.stdout, "total attestations", s.TotalAttestations)
-		kv(ctx.stdout, "successful", s.SuccessfulAttests)
-		kv(ctx.stdout, "failed", s.FailedAttests)
-		kv(ctx.stdout, "revoked", s.RevokedAttests)
-		kv(ctx.stdout, "banned", s.BannedAttests)
-	}
+	kvCounter(ctx.stdout, "total attestations", s.TotalAttestations)
+	kvCounter(ctx.stdout, "successful", s.SuccessfulAttests)
+	kvCounter(ctx.stdout, "failed", s.FailedAttests)
+	kvCounter(ctx.stdout, "revoked", s.RevokedAttests)
+	kvCounter(ctx.stdout, "banned", s.BannedAttests)
 	kv(ctx.stdout, "active revocations", s.ActiveRevocations)
 	kv(ctx.stdout, "active bans", s.ActiveBans)
-	if !s.TenantScoped {
-		kv(ctx.stdout, "pending challenges", s.PendingChallenges)
-		kv(ctx.stdout, "used nonces", s.UsedNonces)
-	}
+	kvCounter(ctx.stdout, "pending challenges", s.PendingChallenges)
+	kvCounter(ctx.stdout, "used nonces", s.UsedNonces)
 	kv(ctx.stdout, "uptime", s.Uptime)
 	return nil
 }

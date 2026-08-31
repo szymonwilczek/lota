@@ -346,17 +346,21 @@ type healthResponse struct {
 	} `json:"tls"`
 }
 
+// statsResponse is the /api/v1/stats body.
+//
+// Fleet-wide counters are pointers so a tenant-scoped response omits them
+// instead of reporting zero.
 type statsResponse struct {
-	PendingChallenges int      `json:"pending_challenges"`
-	UsedNonces        int      `json:"used_nonces"`
+	PendingChallenges *int     `json:"pending_challenges,omitempty"`
+	UsedNonces        *int     `json:"used_nonces,omitempty"`
 	RegisteredClients int      `json:"registered_clients"`
 	ActivePolicy      string   `json:"active_policy"`
 	LoadedPolicies    []string `json:"loaded_policies"`
-	TotalAttestations int64    `json:"total_attestations"`
-	SuccessfulAttests int64    `json:"successful_attestations"`
-	FailedAttests     int64    `json:"failed_attestations"`
-	RevokedAttests    int64    `json:"revoked_attestations"`
-	BannedAttests     int64    `json:"banned_attestations"`
+	TotalAttestations *int64   `json:"total_attestations,omitempty"`
+	SuccessfulAttests *int64   `json:"successful_attestations,omitempty"`
+	FailedAttests     *int64   `json:"failed_attestations,omitempty"`
+	RevokedAttests    *int64   `json:"revoked_attestations,omitempty"`
+	BannedAttests     *int64   `json:"banned_attestations,omitempty"`
 	ActiveRevocations int      `json:"active_revocations"`
 	ActiveBans        int      `json:"active_bans"`
 	Uptime            string   `json:"uptime"`
@@ -424,16 +428,16 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := h.verifier.Stats()
 
 	resp := statsResponse{
-		PendingChallenges: stats.PendingChallenges,
-		UsedNonces:        stats.UsedNonces,
+		PendingChallenges: &stats.PendingChallenges,
+		UsedNonces:        &stats.UsedNonces,
 		RegisteredClients: stats.RegisteredClients,
 		ActivePolicy:      stats.ActivePolicy,
 		LoadedPolicies:    stats.LoadedPolicies,
-		TotalAttestations: stats.TotalAttestations,
-		SuccessfulAttests: stats.SuccessAttests,
-		FailedAttests:     stats.FailedAttests,
-		RevokedAttests:    stats.RevokedAttests,
-		BannedAttests:     stats.BannedAttests,
+		TotalAttestations: &stats.TotalAttestations,
+		SuccessfulAttests: &stats.SuccessAttests,
+		FailedAttests:     &stats.FailedAttests,
+		RevokedAttests:    &stats.RevokedAttests,
+		BannedAttests:     &stats.BannedAttests,
 		ActiveRevocations: stats.ActiveRevocations,
 		ActiveBans:        stats.ActiveBans,
 		Uptime:            stats.Uptime.Truncate(time.Second).String(),
@@ -477,13 +481,13 @@ func (h *APIHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp.PendingChallenges = 0
-		resp.UsedNonces = 0
-		resp.TotalAttestations = 0
-		resp.SuccessfulAttests = 0
-		resp.FailedAttests = 0
-		resp.RevokedAttests = 0
-		resp.BannedAttests = 0
+		resp.PendingChallenges = nil
+		resp.UsedNonces = nil
+		resp.TotalAttestations = nil
+		resp.SuccessfulAttests = nil
+		resp.FailedAttests = nil
+		resp.RevokedAttests = nil
+		resp.BannedAttests = nil
 	}
 
 	writeJSON(w, resp)
