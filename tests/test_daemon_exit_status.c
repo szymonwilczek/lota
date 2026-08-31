@@ -191,6 +191,61 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
 		PASS();
 }
 
+/*
+ * The second status the unit has to know about.
+ *
+ * A start under a running agent -- which is what systemd attempts every time
+ * something restarts lota-agent.socket, since it cannot kill the daemon that
+ * is already serving -- refuses on the PID file. On the generic failure status
+ * the unit retried it every five seconds for the rest of the boot while the
+ * real agent went on enforcing, so the number and the unit are held together
+ * here the same way.
+ */
+static void test_the_unit_does_not_retry_a_running_instance(void)
+{
+	char line[512];
+	char wanted[64];
+	bool found = false;
+	FILE *fp = fopen("systemd/lota-agent.service", "re");
+
+	if (!fp)
+		fp = fopen("../systemd/lota-agent.service", "re");
+
+	TEST("the packaged unit does not retry under a running agent");
+	if (!fp) {
+		FAIL("could not open lota-agent.service");
+		return;
+	}
+
+	snprintf(wanted, sizeof(wanted), "%d", LOTA_EXIT_ALREADY_RUNNING);
+	while (fgets(line, sizeof(line), fp)) {
+		if (strncmp(line, "RestartPreventExitStatus=", 25) != 0)
+			continue;
+		if (strstr(line + 25, wanted))
+			found = true;
+	}
+	fclose(fp);
+
+	if (!found)
+		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
+
+/*
+ * The two statuses have to stay distinct: one says an operator has to change
+ * the host, the other says nothing is wrong with it.
+ */
+static void test_the_two_no_retry_statuses_differ(void)
+{
+	TEST("a busy start and a refused host are told apart");
+
+	if (LOTA_EXIT_ALREADY_RUNNING == LOTA_EXIT_OPERATOR_ACTION)
+		FAIL("the two no-retry statuses collapsed into one");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== Daemon exit status tests ===\n\n");
@@ -201,6 +256,8 @@ int main(void)
 	test_refused_host_configuration_needs_an_operator();
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
+	test_the_unit_does_not_retry_a_running_instance();
+	test_the_two_no_retry_statuses_differ();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
