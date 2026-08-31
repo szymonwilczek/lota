@@ -127,9 +127,12 @@ comma-separated list), mutually exclusive with ``--pg-dsn``::
      --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
      --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
 
-Each per-client baseline and nonce is routed to one shard by a stable,
-process-independent hash of its key, so a given client's writes
-always land on the same shard and every instance agrees on that mapping.
+Each per-client baseline and used-nonce record is routed to one shard by a
+stable, process-independent hash of **the client it belongs to**, so a given
+client's writes always land on the same shard and every instance agrees on
+that mapping. Routing on the client is what makes a shard a failure domain:
+a client's baseline and its replay history live together, so losing a shard
+costs that shard's clients and leaves the rest attesting.
 Because independent databases commit in parallel, aggregate durable-write
 throughput scales with the number of shards **when each shard has
 independent storage** (separate database hosts or volumes); shards packed
@@ -157,7 +160,10 @@ Rules for a sharded deployment:
 * **A shard is a failure domain.** Losing one shard fails closed only for the
   clients it owns (their next attestation errors and retries); the other
   shards keep serving. Run each shard with its own HA (primary/replica) as
-  you would the single database.
+  you would the single database. A challenge can still be issued while a
+  shard is down -- the used-nonce history is consulted when the client
+  presents itself, which is the first moment its shard is known -- so the
+  refusal an affected client sees names the round, not the challenge.
 * **Fix the shard count before you enrol the fleet.** The index is
   ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
   After adding or removing a shard, a client's baseline and its used-nonce
