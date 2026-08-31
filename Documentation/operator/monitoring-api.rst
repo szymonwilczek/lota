@@ -56,6 +56,13 @@ Mutation payloads share three fields: ``reason`` (one of ``cheating``,
 administrator identity recorded in the audit log; required where noted)
 and ``note`` (free-form justification, optional).
 
+Every record that belongs to a device -- client details, revocations,
+bans, audit entries, attestation records, and the results of the ban and
+unban verbs -- carries a ``tenant``. A deployment that assigns no tenants
+reads ``default`` there on every record, which is the tenant an
+unassigned device belongs to, not a missing value. See
+:doc:`multi-tenancy`.
+
 Pagination
 ----------
 
@@ -172,6 +179,7 @@ register anything with the verifier. ::
 
    {
      "client_id": "host-0001",
+     "tenant": "default",
      "hardware_id": "ab12...",
      "revoked": false,
      "revocation_reason": "",
@@ -219,6 +227,7 @@ Reader. **200**::
      "revocations": [
        {
          "client_id": "host-0001",
+         "tenant": "default",
          "reason": "cheating",
          "revoked_at": "2026-07-02T10:00:00Z",
          "revoked_by": "alice@ops",
@@ -270,6 +279,7 @@ Reader. Query: ``limit`` and ``next_id`` (see Pagination). **200**::
      "bans": [
        {
          "hardware_id": "ab12...",
+         "tenant": "default",
          "reason": "cheating",
          "banned_at": "2026-07-02T10:00:00Z",
          "banned_by": "alice@ops",
@@ -344,6 +354,7 @@ first. **200**::
        {
          "id": 17,
          "timestamp": "2026-07-02T10:00:00Z",
+         "tenant": "default",
          "action": "revoke",
          "target_id": "host-0001",
          "reason": "cheating",
@@ -368,6 +379,7 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
        {
          "id": 9,
          "timestamp": "2026-07-02T10:00:00Z",
+         "tenant": "default",
          "client_id": "host-0001",
          "hardware_id": "ab12...",
          "result": "success",
