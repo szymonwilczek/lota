@@ -5,8 +5,8 @@
 // Postgres backend is bounded by per-database WAL fsync throughput, shared by every
 // verifier instance on that database. To scale the database tier past one host the fleet
 // is partitioned across N independent databases: each store operation is routed to shard
-// by stable hash of its own key, so given client's baseline and given nonce
-// always land on the same shard on every instance.
+// by stable hash of the client it belongs to, so a given client's baseline and its used
+// nonces land on the same shard on every instance.
 // Independent databases commit in parallel, so aggregate durable write throughput scales
 // with the number of shards (on independent storage).
 //
@@ -41,12 +41,16 @@ func shardIndex(key string, n int) int {
 	return int(h.Sum32()&maxPositiveInt32) % n
 }
 
-// ShardedUsedNonceBackend routes each nonce to shard by the nonce key.
-// Replay protection is preserved because given nonce always maps to the same
-// shard, so its Record and Contains hit the same backend.
+// ShardedUsedNonceBackend routes RecordFor and ContainsFor by the client the
+// nonce was issued to, see RoutedUsedNonceBackend.
+//
+// Record and Contains route by the nonce, for callers with no client in hand.
+// The nonce store picks one pair at construction and never mixes them.
 type ShardedUsedNonceBackend struct {
 	shards []UsedNonceBackend
 }
+
+var _ RoutedUsedNonceBackend = (*ShardedUsedNonceBackend)(nil)
 
 // NewShardedUsedNonceBackend partitions used-nonce state across shards.
 // It panics on empty shard set: verifier with no nonce backend cannot enforce
@@ -64,6 +68,16 @@ func (s *ShardedUsedNonceBackend) Record(nonceKey string, usedAt time.Time) erro
 
 func (s *ShardedUsedNonceBackend) Contains(nonceKey string) bool {
 	return s.shards[shardIndex(nonceKey, len(s.shards))].Contains(nonceKey)
+}
+
+// RecordFor stores the nonce in the shard the client belongs to
+func (s *ShardedUsedNonceBackend) RecordFor(routeKey, nonceKey string, usedAt time.Time) error {
+	return s.shards[shardIndex(routeKey, len(s.shards))].Record(nonceKey, usedAt)
+}
+
+// ContainsFor looks the nonce up in the shard the client belongs to
+func (s *ShardedUsedNonceBackend) ContainsFor(routeKey, nonceKey string) bool {
+	return s.shards[shardIndex(routeKey, len(s.shards))].Contains(nonceKey)
 }
 
 func (s *ShardedUsedNonceBackend) Count() int {

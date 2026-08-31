@@ -53,6 +53,22 @@ type UsedNonceBackend interface {
 	Cleanup(olderThan time.Time)
 }
 
+// RoutedUsedNonceBackend partitions used nonces by client identity, the key
+// the baseline store partitions on, so a shard holds only its own clients'
+// state and losing one costs only those clients.
+//
+// A replay is the same client presenting the same nonce, so the record
+// and the lookup land on the same shard.
+type RoutedUsedNonceBackend interface {
+	UsedNonceBackend
+
+	// stores a nonce key as used, in the partition the route key names
+	RecordFor(routeKey, nonceKey string, usedAt time.Time) error
+
+	// reports whether the route key's partition holds the nonce key
+	ContainsFor(routeKey, nonceKey string) bool
+}
+
 // implements UsedNonceBackend using an in-memory map
 // bounded by maxSize - evicts oldest entries when capacity is reached
 // carries its own mutex: the nonce store calls backends unlocked
@@ -141,6 +157,10 @@ type NonceStore struct {
 	// anti-replay: pluggable backend for used nonce history
 	usedBackend UsedNonceBackend
 
+	// non-nil when the backend partitions its state and the client identity
+	// decides the partition
+	routedBackend RoutedUsedNonceBackend
+
 	// per-binding state for pending challenge tracking and binding checks.
 	// bindingID is transport-level (challengeID in TLS server).
 	bindingChallenges map[string]clientState
@@ -217,11 +237,14 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 		backend = newMemoryUsedNonceBackend(cfg.UsedNonceHistory)
 	}
 
+	routed, _ := backend.(RoutedUsedNonceBackend)
+
 	ns := &NonceStore{
 		pending:            make(map[string]nonceEntry),
 		lifetime:           cfg.Lifetime,
 		randReader:         cfg.RandReader,
 		usedBackend:        backend,
+		routedBackend:      routed,
 		bindingChallenges:  make(map[string]clientState),
 		identityChallenges: make(map[string]clientState),
 		maxPending:         cfg.MaxPendingPerClient,
@@ -264,7 +287,10 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 		}
 
 		key := hex.EncodeToString(nonce[:])
-		if ns.usedBackend.Contains(key) {
+		// Partitioned backend is not probed: its partition is the client,
+		// which has not named itself yet.
+		// VerifyNonce still rejects a spent nonce.
+		if ns.routedBackend == nil && ns.usedBackend.Contains(key) {
 			continue
 		}
 
@@ -318,6 +344,23 @@ func (ns *NonceStore) GenerateChallenge(bindingID string, pcrMask uint32) (*type
 // certificate has been verified, so the limit cannot be evaded by
 // rotating an agent-asserted hardware_id.
 //
+// usedContains and usedRecord reach the used-nonce history through the client's
+// partition where the backend has one. Both roads see the same nonce for the
+// same client, which is all replay protection needs.
+func (ns *NonceStore) usedContains(identityID, key string) bool {
+	if ns.routedBackend != nil {
+		return ns.routedBackend.ContainsFor(identityID, key)
+	}
+	return ns.usedBackend.Contains(key)
+}
+
+func (ns *NonceStore) usedRecord(identityID, key string, usedAt time.Time) error {
+	if ns.routedBackend != nil {
+		return ns.routedBackend.RecordFor(identityID, key, usedAt)
+	}
+	return ns.usedBackend.Record(key, usedAt)
+}
+
 // VerifyNonce holds the store mutex only around the in-memory maps.
 // Used-nonce backend calls (database round trip each on the Postgres backend)
 // and the binding-nonce cryptography run unlocked so independent clients verify concurrently;
@@ -329,7 +372,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	// check used nonce history first (detects replays after restart)
 	// unlocked: history only grows, and nonce enters it solely through
 	// the single consumer that won the pending-map delete
-	if ns.usedBackend.Contains(key) {
+	if ns.usedContains(identityID, key) {
 		return errors.New("nonce already used - replay attack detected")
 	}
 
@@ -362,7 +405,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 	if err := ns.checkIdentityRateLimit(identityID); err != nil {
 		ns.consumeLocked(key, entry.bindingID)
 		ns.mu.Unlock()
-		if recordErr := ns.usedBackend.Record(key, time.Now()); recordErr != nil {
+		if recordErr := ns.usedRecord(identityID, key, time.Now()); recordErr != nil {
 			return fmt.Errorf("%w; failed to record rejected nonce: %v", err, recordErr)
 		}
 		return err
@@ -409,7 +452,7 @@ func (ns *NonceStore) VerifyNonce(report *types.AttestationReport, bindingID, id
 
 	// record as used
 	// only the delete winner gets here for a given key
-	if err := ns.usedBackend.Record(key, time.Now()); err != nil {
+	if err := ns.usedRecord(identityID, key, time.Now()); err != nil {
 		return fmt.Errorf("failed to record used nonce: %w", err)
 	}
 
