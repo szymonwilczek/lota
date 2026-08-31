@@ -1822,6 +1822,7 @@ test-unit: all $(TEST_BINS)
 		echo "SKIP: test_ek_roots_update_bundle.sh (no openssl)"; \
 	fi
 	@tests/integration/test_steam_setup_dropin.sh
+	@tests/integration/test_proton_hook_disable.sh
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
