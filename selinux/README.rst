@@ -38,16 +38,24 @@ OS-Loader-writable range (PCR8–15, Locality 0, auth-free ``TPM2_PCR_Extend``).
 The TPM exposes **no on-chip mechanism** that could gate the extend, so a
 local-root attacker with ``/dev/tpmrm0`` access can extend PCR14 between cold
 boot and the agent's first ``tpm_extend_boot_commitment()`` call. The defence
-has to live outside the TPM. LOTA stacks four layers:
+has to live outside the TPM. LOTA stacks four layers -- three that narrow who
+can reach the device and one that attributes an extend after the fact -- and
+none of the three fences binds against local root:
 
 1. **udev** (``configs/udev/99-lota-tpm.rules``) sets ``0600 root:root`` on
    ``/dev/tpm*`` at device-add time and assigns the ``lota_tpm_device_t``
-   SELinux label.
-2. **SELinux** (this module) is the only policy that allows
-   ``rw_chr_file_perms`` on ``lota_tpm_device_t``, and only to
-   ``lota_agent_t``. Stock refpolicy interfaces (``dev_rw_tpm()``, ...) bind to
-   the generic ``tpm_device_t`` label and no longer apply once the udev rule
-   has run — including for ``unconfined_t``.
+   SELinux label. The mode stops every uid but 0.
+2. **SELinux** (this module) narrows which *confined* domains may reach the
+   device. Stock refpolicy interfaces (``dev_rw_tpm()``, ...) bind to the
+   generic ``tpm_device_t`` label and no longer apply once the udev rule has
+   run, which takes the set of sources holding ``rw_chr_file_perms`` from the
+   fifteen that stock label carries down to eight. It does **not** take it
+   down to ``lota_agent_t``: the base policy's ``devices_unconfined_type``
+   attribute is one of the eight and ``unconfined_t`` -- the domain a root
+   login runs in -- is one of its members, and the same attribute holds
+   ``relabelfrom``/``relabelto``, so root can also move the node back to
+   ``tpm_device_t``. A loadable module cannot revoke either: the grant is in
+   the policy this one is loaded beside.
 3. **systemd ordering** (``systemd/lota-agent.service``
    ``Before=multi-user.target getty.target``) narrows the window in which any
    login-capable target could spawn a tool that races the agent's first extend.
@@ -56,10 +64,13 @@ has to live outside the TPM. LOTA stacks four layers:
    attributes it to one of cold-boot tamper, mid-session tamper, or live binary
    upgrade so the operator receives an actionable journal entry.
 
-**Operators MUST run SELinux in enforcing mode for the MAC layer to bind.** A
-permissive system trusts every uid-0 process equally and LOTA cannot offer
-protection against that operator decision; the clock-state attribution layer
-still records the tamper but cannot prevent it.
+**Operators MUST run SELinux in enforcing mode for the MAC layer to bind**, and
+enforcing mode is necessary: it holds the confined domains off the device and
+leaves the unconfined ones, root among them, where they were. A local-root
+attacker with ``/dev/tpmrm0`` open is outside what any of these layers can
+prevent, which is why the fourth exists -- the clock-state attribution records
+the tamper the first three did not stop, and an operator reading the journal
+learns it happened.
 
 Capabilities Granted
 ~~~~~~~~~~~~~~~~~~~~
