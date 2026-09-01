@@ -586,6 +586,174 @@ static void test_selinux_gaming_client_reaches_container_socket(void)
 	PASS();
 }
 
+/* whole file into caller's buffer, NUL-terminated; 0 when it cannot be read */
+static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
+{
+	FILE *fp = open_shipped(rel);
+	size_t got;
+
+	if (!fp)
+		return 0;
+	got = fread(buf, 1, cap - 1, fp);
+	fclose(fp);
+	buf[got] = '\0';
+	return got;
+}
+
+/*
+ * One argv literal, from the command name to the closing brace.
+ * Every run_cmd() call in the installer builds one, so a claim about what
+ * a step runs is a claim about the tokens between those two points.
+ */
+static bool argv_window(const char *src, const char *cmd, size_t skip,
+			const char **win, size_t *len)
+{
+	char want[32];
+	const char *start, *end;
+
+	snprintf(want, sizeof(want), "\"%.24s\"", cmd);
+	for (start = src; skip > 0; skip--) {
+		start = strstr(start, want);
+		if (!start)
+			return false;
+		start += strlen(want);
+	}
+	start = strstr(start, want);
+	if (!start)
+		return false;
+	end = strstr(start, "};");
+	if (!end)
+		return false;
+	*win = start;
+	*len = (size_t)(end - start);
+	return true;
+}
+
+static bool win_has(const char *win, size_t len, const char *tok)
+{
+	const char *hit = strstr(win, tok);
+
+	return hit && (size_t)(hit - win) < len;
+}
+
+/*
+ * lota.fc gives /etc/lota lota_etc_t; unless the installer restorecons it,
+ * lota.conf, policy.key, the CA anchors and every later file keep etc_t.
+ */
+static void test_installer_labels_the_config_directory(void)
+{
+	static char src[262144];
+	bool labelled = false;
+
+	TEST("installer: restorecons the config directory");
+
+	if (!slurp_shipped("installer/stages.c", src, sizeof(src))) {
+		FAIL("could not open installer/stages.c");
+		return;
+	}
+
+	for (size_t i = 0; i < 8 && !labelled; i++) {
+		const char *win;
+		size_t len;
+
+		if (!argv_window(src, "restorecon", i, &win, &len))
+			break;
+		labelled = win_has(win, len, "PATH_LOTA_CONF_DIR");
+	}
+
+	if (!labelled) {
+		FAIL("no restorecon reaches the config directory");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * SECLABEL{selinux} is applied when udev adds the device, so a trigger that
+ * sends the default change event re-runs the rules and moves no label.
+ * The step reports success and leaves both nodes where they were.
+ */
+static void test_installer_relabel_reapplies_the_device_labels(void)
+{
+	static char src[262144];
+	const char *win;
+	size_t len;
+
+	TEST("installer: the TPM relabel re-applies SECLABEL");
+
+	if (!slurp_shipped("installer/stages.c", src, sizeof(src))) {
+		FAIL("could not open installer/stages.c");
+		return;
+	}
+	if (!argv_window(src, "trigger", 0, &win, &len)) {
+		FAIL("the installer triggers no udev relabel");
+		return;
+	}
+	if (!win_has(win, len, "--action=add")) {
+		FAIL("the udev trigger sends a change event, which re-applies no label");
+		return;
+	}
+	if (!win_has(win, len, "/dev/tpmrm0") ||
+	    !win_has(win, len, "/dev/tpm0")) {
+		FAIL("the udev trigger does not name both TPM nodes");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The resource manager is in subsystem tpmrm, not tpm, and it is the node the
+ * agent's gate reads first. A documented remedy matching on tpm alone brings
+ * /dev/tpm0 back, exits 0, and leaves the agent refusing for the same reason
+ * the operator was told to fix.
+ */
+static void test_documented_tpm_relabel_reaches_both_nodes(void)
+{
+	static const char *const pages[] = { "configs/udev/99-lota-tpm.rules",
+					     "selinux/README.rst" };
+
+	TEST("docs: the TPM relabel command reaches both nodes");
+
+	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+		FILE *fp = open_shipped(pages[i]);
+		char cmd[2048];
+		char line[1024];
+		bool saw = false;
+
+		if (!fp) {
+			FAIL("could not open a page that documents the relabel");
+			return;
+		}
+		while (fgets(cmd, sizeof(cmd), fp)) {
+			char *cont = strchr(cmd, '\\');
+
+			/* a wrapped command is still one command */
+			while (cont && cont[1] == '\n' &&
+			       fgets(line, sizeof(line), fp)) {
+				snprintf(cont,
+					 sizeof(cmd) - (size_t)(cont - cmd),
+					 " %s", line);
+				cont = strchr(cmd, '\\');
+			}
+			if (!strstr(cmd, "udevadm trigger"))
+				continue;
+			saw = true;
+			if (!strstr(cmd, "--action=add") ||
+			    !strstr(cmd, "tpmrm")) {
+				fclose(fp);
+				FAIL("a documented trigger leaves /dev/tpmrm0 where it was");
+				return;
+			}
+		}
+		fclose(fp);
+		if (!saw) {
+			FAIL("a page that documents the relabel names no trigger");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -600,6 +768,9 @@ int main(void)
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
 	test_selinux_gaming_client_reaches_container_socket();
+	test_installer_labels_the_config_directory();
+	test_installer_relabel_reapplies_the_device_labels();
+	test_documented_tpm_relabel_reaches_both_nodes();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
