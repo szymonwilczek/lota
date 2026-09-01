@@ -9,8 +9,9 @@
 #
 # It does NOT generate the TPM manufacturer EK roots -- those come from
 # your hardware vendor (Infineon/Intel/STM/...) or, for swTPM, from the
-# local swtpm CA. Point lota-attest-ca --ek-root at that file (see
-# run.sh / README.rst).
+# local swtpm CA. A single self-signed anchor is lota-attest-ca -ek-root;
+# a vendor chain needs the pinned bundle, -ek-root-bundle (see run.sh /
+# README.rst).
 
 set -euo pipefail
 
@@ -73,6 +74,8 @@ echo "                     the publisher; replacing it makes every enrolled"
 echo "                     host a new device."
 echo "  ca.key          -> lota-attest-ca --ca-key"
 echo "  pseudonym.key   -> lota-attest-ca --pseudonym-key"
-echo "  tls.crt/tls.key -> lota-attest-ca --tls-cert/--tls-key"
+echo "  tls.crt/tls.key -> lota-attest-ca --tls-cert/--tls-key, and any"
+echo "                     verifier that should present a listener the agent"
+echo "                     verifies against ca.crt (--cert/--key)"
 echo "                     Rotate these as often as you like: they chain to"
 echo "                     ca.crt, so no host's identity moves with them."
