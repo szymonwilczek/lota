@@ -841,7 +841,13 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_OLD_VERSION:
 		return "FAIL - Protocol version mismatch";
 	case VERIFY_INTEGRITY_MISMATCH:
-		return "FAIL - Integrity mismatch (agent binary changed!)";
+		return "FAIL - Integrity mismatch: a measurement this host is "
+		       "pinned to no longer matches. It is the agent binary, "
+		       "the PCR 14 boot commitment or the firmware/Secure Boot "
+		       "baseline, and the publisher's verifier log names "
+		       "which. An updated agent needs its build allowed there; "
+		       "a firmware or boot-chain change needs this host "
+		       "re-anchored";
 	case VERIFY_REVOKED:
 		return "FAIL - This host's attestation key was revoked by the "
 		       "publisher's administrator; re-enrollment is their "
