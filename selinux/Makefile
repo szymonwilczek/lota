@@ -196,10 +196,20 @@ reload: uninstall install
 .PHONY: check
 check: check-deps
 	@echo -e "$(BLUE)Checking policy syntax...$(NC)"
-	@for te in $(TE_FILES); do \
+	@# Build each .pp: asking for the .te is a no-op that always passes.
+	@# Output is captured first so the build's status, not tail's, decides.
+	@rc=0; \
+	for te in $(TE_FILES); do \
 		echo "  Checking $$te..."; \
-		$(MAKE) -f $(SELINUX_MAKEFILE) $$te 2>&1 | head -20 || exit 1; \
-	done
+		if ! out=$$($(MAKE) -f $(SELINUX_MAKEFILE) $${te%.te}.pp 2>&1); then \
+			printf '%s\n' "$$out" | tail -20; \
+			rc=1; \
+		fi; \
+	done; \
+	if [ $$rc -ne 0 ]; then \
+		echo -e "$(RED)Syntax check failed.$(NC)"; \
+		exit 1; \
+	fi
 	@echo -e "$(GREEN)Syntax check passed.$(NC)"
 
 #
