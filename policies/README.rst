@@ -131,6 +131,31 @@ report can answer them: an index outside 0-23, a register the client's quote
 did not carry (``PCR 8 not included in quote``), and an expected value that is
 not hex.
 
+What verdict a refusal carries
+------------------------------
+
+The host receives a verdict code and no detail: the verifier's log is on the
+publisher's server, and a player has no route to it at all. So a refusal says
+which kind of thing failed, because the kinds take different investigations.
+
+``pcr_fail``
+    a register in ``pcrs:`` holds another value, the quote did not carry it,
+    or the policy file is wrong about it.
+``integrity_mismatch``
+    the agent binary: a build outside ``agent_hashes``, or one that moved away
+    from the pinned baseline. Which gate saw it first is not something the
+    host can act on, so both read the same.
+``iommu_fail``
+    ``require_iommu`` on a host with no DMA remapping.
+``policy_requirement``
+    everything else the policy demands of the host: ``kernel_hashes``,
+    ``require_enforce``, ``require_module_sig``, ``require_secureboot``,
+    ``require_lockdown``, the cmdline denylist and ``require_ima_appraisal``.
+
+``pcr_fail`` sends an operator to the boot chain and the event log, which is
+where the fix is for exactly one of these. A refusal nobody classified stays
+``pcr_fail``, because it is the verdict that claims least about a cause.
+
 Security Requirements
 ---------------------
 

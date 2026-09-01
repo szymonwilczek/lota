@@ -542,6 +542,35 @@ func kernelPinValue(facts *BootFacts) ([types.HashSize]byte, error) {
 	return out, nil
 }
 
+// policyError is a refusal out of verifyAgainstPolicy together with the
+// verdict class it belongs to.
+// Register values, the agent measurement and host requirements each have
+// their own verdict; only the first is fixed in the boot chain.
+type policyError struct {
+	verdict uint32
+	err     error
+}
+
+func (e *policyError) Error() string { return e.err.Error() }
+
+func (e *policyError) Unwrap() error { return e.err }
+
+// refuse marks an error with the verdict class it belongs to
+func refuse(verdict uint32, err error) error {
+	return &policyError{verdict: verdict, err: err}
+}
+
+// policyVerdict is the class a verifyAgainstPolicy error belongs to;
+// an unmarked error stays VerifyPCRFail, the class that claims least.
+func policyVerdict(err error) uint32 {
+	var pe *policyError
+
+	if errors.As(err, &pe) {
+		return pe.verdict
+	}
+	return types.VerifyPCRFail
+}
+
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
 	//
@@ -582,7 +611,7 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	if len(policy.KernelHashes) > 0 {
 		pinned, err := kernelPinValue(facts)
 		if err != nil {
-			return err
+			return refuse(types.VerifyPolicyRequirement, err)
 		}
 		kernelHashHex := hex.EncodeToString(pinned[:])
 		found := false
@@ -593,36 +622,41 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 			}
 		}
 		if !found {
-			return fmt.Errorf("kernel hash not in allowed list: %s", kernelHashHex)
+			return refuse(types.VerifyPolicyRequirement,
+				fmt.Errorf("kernel hash not in allowed list: %s", kernelHashHex))
 		}
 	}
 
 	// verify agent binary hash if policy specifies allowed hashes
 	if len(policy.AgentHashes) > 0 {
 		if !agentHashAllowed(report.System.AgentHash, policy.AgentHashes) {
-			return fmt.Errorf("agent hash not in allowed list: %s",
-				hex.EncodeToString(report.System.AgentHash[:]))
+			return refuse(types.VerifyIntegrityMismatch,
+				fmt.Errorf("agent hash not in allowed list: %s",
+					hex.EncodeToString(report.System.AgentHash[:])))
 		}
 	}
 
 	// check iommu requirement
 	if policy.RequireIOMMU {
 		if report.System.IOMMU.Flags&0x04 == 0 {
-			return errors.New("IOMMU DMA remapping not enabled")
+			return refuse(types.VerifyIOMMUFail,
+				errors.New("IOMMU DMA remapping not enabled"))
 		}
 	}
 
 	// check LSM enforce mode
 	if policy.RequireEnforce {
 		if report.Header.Flags&types.FlagEnforce == 0 {
-			return errors.New("LSM enforce mode not active")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("LSM enforce mode not active"))
 		}
 	}
 
 	// check module signing enforcement
 	if policy.RequireModuleSig {
 		if report.Header.Flags&types.FlagModuleSig == 0 {
-			return errors.New("kernel module signature enforcement not enabled")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("kernel module signature enforcement not enabled"))
 		}
 	}
 
@@ -631,34 +665,39 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 	// compromised kernel sets it freely)
 	if policy.RequireSecureBoot {
 		if facts == nil || !facts.SecureBootTrusted {
-			return errors.New("Secure Boot state not authenticated by event log")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("Secure Boot state not authenticated by event log"))
 		}
 		if !facts.SecureBoot.Found {
-			return errors.New("event log carries no SecureBoot measurement")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("event log carries no SecureBoot measurement"))
 		}
 		if !facts.SecureBoot.Enabled {
-			return errors.New("Secure Boot disabled per firmware measurement")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("Secure Boot disabled per firmware measurement"))
 		}
 	}
 
 	// check the measured kernel cmdline against the parameter denylist
 	if policy.RequireCmdlinePolicy {
 		if err := verifyCmdlinePolicy(policy, facts); err != nil {
-			return err
+			return refuse(types.VerifyPolicyRequirement, err)
 		}
 	}
 
 	// check kernel lockdown
 	if policy.RequireLockdown {
 		if report.Header.Flags&types.FlagLockdown == 0 {
-			return errors.New("kernel lockdown not active")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("kernel lockdown not active"))
 		}
 	}
 
 	// check that the kernel appraises the host's executables
 	if policy.RequireIMAAppraisal {
 		if report.Header.Flags&types.FlagIMAAppraisal == 0 {
-			return errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)")
+			return refuse(types.VerifyPolicyRequirement,
+				errors.New("kernel appraises no executable on this host (IMA appraisal scope absent)"))
 		}
 	}
 

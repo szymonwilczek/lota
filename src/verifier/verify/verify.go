@@ -547,9 +547,12 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	}
 
 	if err := v.pcrVerifier.VerifyReportForTenant(report, tenant, bootFacts); err != nil {
-		clog.Error("PCR verification failed", "error", err)
-		v.metrics.Rejections.Inc("pcr_fail")
-		result.Result = types.VerifyPCRFail
+		// the host sees only the verdict, so send the refusal's own class
+		verdict := policyVerdict(err)
+		clog.Error("policy verification failed", "error", err,
+			"verdict", types.VerifyResultString(verdict))
+		v.metrics.Rejections.Inc(types.VerifyResultString(verdict))
+		result.Result = verdict
 		return result, err
 	}
 
