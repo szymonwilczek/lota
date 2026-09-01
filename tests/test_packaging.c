@@ -1035,6 +1035,52 @@ static void test_tpm_clear_section_says_what_nv_costs(void)
 	PASS();
 }
 
+/* Whether @sentence-shaped span appears in a normalised section */
+static bool section_claims(const char *section, const char *claim)
+{
+	return strstr(section, claim) != NULL;
+}
+
+/*
+ * After a clear the key at each publisher's handle no longer matches its
+ * certificate, so the agent refuses before quoting; a quote would fail in
+ * the TPM and spend a dictionary-attack attempt.
+ * No round opens, so the verifier sees nothing to alert on.
+ */
+static void test_tpm_clear_section_names_what_refuses(void)
+{
+	static const char *const page =
+		"Documentation/operator/platform-support.rst";
+	char section[8192];
+
+	TEST("docs: what a TPM clear costs names the side that refuses");
+
+	if (!read_rst_section(page, "What clearing a TPM costs", section,
+			      sizeof(section))) {
+		FAIL("could not read the section a clear is planned from");
+		return;
+	}
+	if (section_claims(section, "a verifier holding the old certificate")) {
+		FAIL("the section promises a verifier refusal that never happens");
+		return;
+	}
+	if (!section_claims(section, "--reenroll")) {
+		FAIL("the section does not name the remedy");
+		return;
+	}
+	if (!section_claims(section, "no round") &&
+	    !section_claims(section, "No round")) {
+		FAIL("the section does not say the round never opens");
+		return;
+	}
+	if (!section_claims(section, "verifier") ||
+	    !section_claims(section, "agent refuses")) {
+		FAIL("the section does not say which side refuses");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1056,6 +1102,7 @@ int main(void)
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();
+	test_tpm_clear_section_names_what_refuses();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
