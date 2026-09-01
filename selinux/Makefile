@@ -15,6 +15,10 @@ IF_FILES := $(addsuffix .if,$(filter lota,$(MODULES)))
 FC_FILES := $(addsuffix .fc,$(filter lota,$(MODULES)))
 PP_FILES := $(addsuffix .pp,$(MODULES))
 
+# Tunables read from the policy sources, so reports cannot fall behind.
+# '.' matches gen_tunable's '(': a bare one would close $(shell ...) early.
+TUNABLES := $(shell sed -n 's/^gen_tunable.\([a-z_]*\),.*/\1/p' $(TE_FILES))
+
 # SELinux development paths (Fedora/RHEL currently)
 SELINUX_DEVEL := /usr/share/selinux/devel
 SELINUX_MAKEFILE := $(SELINUX_DEVEL)/Makefile
@@ -171,12 +175,10 @@ install: all
 	@echo "  3. Create config in /etc/lota/"
 	@echo "  4. Run: restorecon -Rv /usr/bin/lota-agent /usr/lib/lota /etc/lota"
 	@echo ""
-	@echo "Tunables (adjust with setsebool):"
-	@echo "  lota_network_attest   - Network attestation (default: on)"
-	@echo "  lota_bpf_load         - BPF program loading (default: on)"
-	@echo "  lota_module_enforce   - Module enforcement (default: off)"
-	@echo "  lota_steam_attest     - Steam integration (default: on)"
-	@echo "  lota_wine_attest      - Wine/Proton integration (default: on)"
+	@echo "Tunables (adjust with setsebool, current defaults shown):"
+	@for bool in $(TUNABLES); do \
+		echo "  $$bool"; \
+	done
 
 #
 # Uninstall policy modules
@@ -247,11 +249,10 @@ verify:
 		echo -e "$(YELLOW)lota_port_t: not configured$(NC)"
 	@echo ""
 	@echo "Tunables status:"
-	@getsebool lota_network_attest 2>/dev/null || echo "  lota_network_attest: (not available)"
-	@getsebool lota_bpf_load 2>/dev/null || echo "  lota_bpf_load: (not available)"
-	@getsebool lota_module_enforce 2>/dev/null || echo "  lota_module_enforce: (not available)"
-	@getsebool lota_steam_attest 2>/dev/null || echo "  lota_steam_attest: (not available)"
-	@getsebool lota_wine_attest 2>/dev/null || echo "  lota_wine_attest: (not available)"
+	@for bool in $(TUNABLES); do \
+		getsebool $$bool 2>/dev/null || \
+			echo "  $$bool: (not available)"; \
+	done
 
 #
 # Show AVC denials related to LOTA
@@ -268,9 +269,14 @@ audit:
 .PHONY: suggest
 suggest:
 	@echo -e "$(BLUE)Generating policy suggestions from audit log...$(NC)"
-	@ausearch -m avc -ts today 2>/dev/null | grep -E 'lota|steam|wine|games' | \
-		audit2allow -m lota_local 2>/dev/null || \
-		echo "No suggestions (no denials found)."
+	@# Branch on the grep: audit2allow exits 0 even with nothing to suggest.
+	@denials=$$(ausearch -m avc -ts today 2>/dev/null | \
+		grep -E 'lota|steam|wine|games'); \
+	if [ -n "$$denials" ]; then \
+		printf '%s\n' "$$denials" | audit2allow -m lota_local; \
+	else \
+		echo "No suggestions (no denials found)."; \
+	fi
 
 #
 # Clean build artifacts

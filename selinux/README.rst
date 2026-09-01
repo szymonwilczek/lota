@@ -163,6 +163,10 @@ Boolean                     Default Description
 ``lota_anticheat_extended`` on      Extended anti-cheat access
 =========================== ======= ======================================
 
+``sudo make verify`` prints the live value of every one of them, and the list
+it walks is read out of the policy sources, so a boolean added to the policy
+is reported without this table and that target drifting apart.
+
 Modify Tunables
 ~~~~~~~~~~~~~~~
 
