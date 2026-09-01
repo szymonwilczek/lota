@@ -851,6 +851,12 @@ const char *net_result_str(uint32_t result)
 		       "administrator; nothing on it changes that answer";
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
+	case VERIFY_POLICY_REQUIREMENT:
+		return "FAIL - This host does not meet a requirement the "
+		       "publisher's policy states about it (the kernel image "
+		       "allow-list, Secure Boot, kernel lockdown, module "
+		       "signing or appraisal scope). The verifier's log names "
+		       "which one; the verdict alone does not";
 	case VERIFY_IDENTITY_FAIL:
 		return "FAIL - The certificate this host presented does not "
 		       "certify the key it signed with, so the publisher "
