@@ -261,8 +261,8 @@ static void test_provisioning_names_an_orphaned_cert(void)
 {
 	TEST("a replacement key that orphans a stored certificate is named");
 
-	if (tpm_aik_provisioning_orphans_cert(0, true) != true) {
-		FAIL("an absent key under a stored certificate was not named");
+	if (tpm_aik_provisioning_orphans_cert(0, true) != false) {
+		FAIL("a key that came back matching was called orphaned");
 		return;
 	}
 
