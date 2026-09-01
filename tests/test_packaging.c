@@ -237,6 +237,101 @@ static void test_installer_enables_the_units(void)
 	PASS();
 }
 
+/*
+ * Callers resolve these interfaces from the devel include directory: one
+ * missing from lota.if, or lota.if not installed, fails the caller's
+ * checkmodule with the name as an unknown token.
+ */
+static void test_documented_selinux_interfaces_exist(void)
+{
+	static const char *const documented[] = { "lota_query_status",
+						  "lota_gaming_client",
+						  "lota_anticheat_client",
+						  "lota_admin" };
+	enum {
+		DOCUMENTED_COUNT = 4
+	};
+	bool found[DOCUMENTED_COUNT] = { false, false, false, false };
+	char line[1024];
+	FILE *fp;
+
+	TEST("selinux: the documented interfaces are defined in lota.if");
+
+	fp = open_shipped("selinux/lota.if");
+	if (!fp) {
+		FAIL("could not open selinux/lota.if");
+		return;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		for (size_t i = 0; i < DOCUMENTED_COUNT; i++) {
+			char want[64];
+
+			snprintf(want, sizeof(want), "interface(`%s'",
+				 documented[i]);
+			if (strstr(line, want))
+				found[i] = true;
+		}
+	}
+	fclose(fp);
+
+	for (size_t i = 0; i < DOCUMENTED_COUNT; i++) {
+		if (!found[i]) {
+			char msg[128];
+
+			snprintf(msg, sizeof(msg),
+				 "%s is documented and not defined",
+				 documented[i]);
+			FAIL(msg);
+			return;
+		}
+	}
+	PASS();
+}
+
+static void test_selinux_interfaces_are_installed(void)
+{
+	char line[1024];
+	bool devel_include = false;
+	bool packaged = false;
+	FILE *fp;
+
+	TEST("selinux: lota.if reaches an interface path both ways");
+
+	fp = open_shipped("selinux/Makefile");
+	if (!fp) {
+		FAIL("could not open selinux/Makefile");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "$(IF_FILES)") &&
+		    strstr(line, "$(SELINUX_INTERFACE_DIR)"))
+			devel_include = true;
+	}
+	fclose(fp);
+
+	fp = open_shipped("packaging/nfpm/lota-agent.yaml");
+	if (!fp) {
+		FAIL("could not open packaging/nfpm/lota-agent.yaml");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "/usr/share/lota/selinux/lota.if"))
+			packaged = true;
+	}
+	fclose(fp);
+
+	if (!devel_include) {
+		FAIL("make install no longer installs lota.if for callers");
+		return;
+	}
+	if (!packaged) {
+		FAIL("the package ships no lota.if, so a packaged host cannot call the interfaces");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -246,6 +341,8 @@ int main(void)
 	test_attest_unit_isolated();
 	test_no_preset_is_shipped();
 	test_installer_enables_the_units();
+	test_documented_selinux_interfaces_exist();
+	test_selinux_interfaces_are_installed();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;

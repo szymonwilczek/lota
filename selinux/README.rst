@@ -428,7 +428,19 @@ for the ones it is given and the message above names for the ones added later.
 Interface Reference
 -------------------
 
-Other SELinux policies can use LOTA interfaces:
+Other SELinux policies can use LOTA interfaces. The interfaces live in
+``lota.if``, and a caller's ``checkmodule`` run resolves them only from
+``/usr/share/selinux/devel/include/contrib/``. Installing from this tree with
+``sudo make install`` puts the file there. A host that installed the packages
+has the source at ``/usr/share/lota/selinux/lota.if`` instead -- the include
+directory belongs to ``selinux-policy-devel``, which a fleet host has no reason
+to carry -- so a machine that builds policy copies it once::
+
+   sudo install -m 0644 /usr/share/lota/selinux/lota.if \
+       /usr/share/selinux/devel/include/contrib/lota.if
+
+Without that copy, a module calling any of the four fails at ``checkmodule``
+with the interface name as an unknown token.
 
 For Gaming Applications
 ~~~~~~~~~~~~~~~~~~~~~~~
