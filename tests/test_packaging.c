@@ -885,6 +885,72 @@ static void test_enrollment_example_runs_on_a_provisioned_host(void)
 	PASS();
 }
 
+/* Whether a shipped file names @needle anywhere */
+static bool shipped_file_names(const char *rel, const char *needle)
+{
+	FILE *fp = open_shipped(rel);
+	char line[2048];
+	bool found = false;
+
+	if (!fp)
+		return false;
+	while (!found && fgets(line, sizeof(line), fp))
+		found = strstr(line, needle) != NULL;
+	fclose(fp);
+	return found;
+}
+
+/*
+ * Both packages ship the enforcement object with its signature and key.
+ * A page saying the object ships unsigned has the operator mint a key on
+ * the host and leave it at /etc/lota/policy.pub, which the agent prefers
+ * over the packaged key; local malware with that key can re-sign a tampered
+ * object. The installer refuses to create that state.
+ */
+static void test_bringup_reference_matches_the_packaged_object(void)
+{
+	static const char *const manifests[] = {
+		"packaging/nfpm/lota-agent.yaml",
+		"packaging/rpm/lota.spec",
+	};
+	static const char *const page =
+		"Documentation/operator/production-bringup/manual-reference.rst";
+	FILE *fp;
+	char line[2048];
+	char lower[2048];
+
+	TEST("docs: the bring-up reference matches what the packages ship");
+
+	for (size_t i = 0; i < sizeof(manifests) / sizeof(manifests[0]); i++) {
+		if (!shipped_file_names(manifests[i], "lota_lsm.bpf.o.sig") ||
+		    !shipped_file_names(manifests[i], "enforcement.pub")) {
+			FAIL("a package no longer ships the signature or the key");
+			return;
+		}
+	}
+
+	fp = open_shipped(page);
+	if (!fp) {
+		FAIL("could not open the bring-up reference");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		lowercase(line, lower, sizeof(lower));
+		if (strstr(lower, "ship") && strstr(lower, "unsigned")) {
+			fclose(fp);
+			FAIL("the reference says the package ships the object unsigned");
+			return;
+		}
+	}
+	fclose(fp);
+
+	if (!shipped_file_names(page, "/usr/lib/lota/enforcement.pub")) {
+		FAIL("the reference never names the key the package brought");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -904,6 +970,7 @@ int main(void)
 	test_documented_tpm_relabel_reaches_both_nodes();
 	test_documented_api_calls_use_the_bearer_header();
 	test_enrollment_example_runs_on_a_provisioned_host();
+	test_bringup_reference_matches_the_packaged_object();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
