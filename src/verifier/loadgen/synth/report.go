@@ -50,9 +50,11 @@ func narrow8(n int) byte {
 	return byte(n)
 }
 
-// ReportPCRMask selects PCR 0, 1, 7 (boot pins) and 14 (boot commitment),
-// the minimum production verifier accepts with RequireBootPCRs and the boot-commitment path
-const ReportPCRMask uint32 = 1<<0 | 1<<1 | 1<<7 | 1<<14
+// ReportPCRMask selects PCR 0, 1, 7 (boot pins), 9 (the bootloader's files,
+// where the kernel image is measured) and 14 (boot commitment)
+// -- the minimum production verifier accepts with RequireBootPCRs and the
+// boot-commitment path, plus the register that makes a kernel pin evaluable.
+const ReportPCRMask uint32 = 1<<0 | 1<<1 | 1<<7 | 1<<9 | 1<<14
 
 // reportFlags mirrors a healthy enforcing agent
 // FlagBootCommitmentV1 + FlagInitramfsLockV1 select the locked two-hop PCR14 derivation
@@ -108,6 +110,26 @@ func (f *Fleet) PCR7() [types.HashSize]byte {
 	return pcr7
 }
 
+// KernelImagePath is the kernel the synthetic bootloader loaded,
+// written the way GRUB writes one.
+const KernelImagePath = "(hd0,gpt2)/vmlinuz-6.19.4-200.fc44.x86_64"
+
+// PCR9 returns the register the synthetic bootloader leaves behind:
+// the zero baseline extended with the kernel image's digest, which is what
+// a real bootloader extends when it measures the file it is about to load.
+//
+// The fleet's KernelHash is that digest. A rig whose reports carry a kernel
+// hash no event measures would satisfy a gate no real host satisfies.
+func (f *Fleet) PCR9() [types.HashSize]byte {
+	var pcr9 [types.HashSize]byte
+
+	h := sha256.New()
+	h.Write(pcr9[:])
+	h.Write(f.KernelHash[:])
+	copy(pcr9[:], h.Sum(nil))
+	return pcr9
+}
+
 // PCR14 returns the fleet's boot-commitment PCR14:
 // initramfs lock and agent boot commitment chained over zero baseline
 // (nothing measures PCR14 before userspace in the synthetic event log)
@@ -129,6 +151,7 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 
 	pcrs := f.PCRs
 	pcrs[7] = f.PCR7()
+	pcrs[9] = f.PCR9()
 	pcrs[14] = f.PCR14()
 
 	// binding nonce covers hardware_id, flags, kernel/agent hash
@@ -152,7 +175,7 @@ func (f *Fleet) BuildReport(a *Agent, challengeNonce [types.NonceSize]byte) ([]b
 		return nil, fmt.Errorf("sign quote: %w", err)
 	}
 
-	eventLog := uefiEventLog()
+	eventLog := f.uefiEventLog()
 
 	buf := make([]byte, types.FixedReportSize, types.MinReportSize+len(eventLog))
 	off := 0
@@ -301,25 +324,35 @@ var efiGlobalVariableGUID = [16]byte{
 	0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c,
 }
 
-// uefiEventLog is the synthetic firmware log:
-// the Spec ID header plus the PCR 7 EV_EFI_VARIABLE_DRIVER_CONFIG
-// measurement of SecureBoot.
+// uefiEventLog is the synthetic firmware log: the Spec ID header, the PCR 7
+// EV_EFI_VARIABLE_DRIVER_CONFIG measurement of SecureBoot, and the PCR 9
+// EV_IPL record naming the kernel image the bootloader loaded.
 // It carries no PCR 14 event, so the verifier reconstructs zero PCR 14 baseline
 // -- the shape of a UEFI host that boots without shim.
-func uefiEventLog() []byte {
+func (f *Fleet) uefiEventLog() []byte {
 	payload := secureBootVariableEvent()
 	digest := sha256.Sum256(payload)
 
+	log := minimalEventLog()
+	log = append(log, eventEntry(7, verify.EvEFIVariableDriverConfig,
+		digest[:], payload)...)
+	log = append(log, eventEntry(9, verify.EvIPL, f.KernelHash[:],
+		[]byte(KernelImagePath+"\x00"))...)
+	return log
+}
+
+// eventEntry encodes one crypto-agile TCG record carrying a single SHA-256
+// digest. The digest is what the replay extends the register with, which for
+// a measured file is the file's own digest.
+func eventEntry(pcr, eventType uint32, digest, payload []byte) []byte {
 	entry := make([]byte, 0, 64+len(payload))
-	entry = binary.LittleEndian.AppendUint32(entry, 7)
-	entry = binary.LittleEndian.AppendUint32(entry, verify.EvEFIVariableDriverConfig)
+	entry = binary.LittleEndian.AppendUint32(entry, pcr)
+	entry = binary.LittleEndian.AppendUint32(entry, eventType)
 	entry = binary.LittleEndian.AppendUint32(entry, 1) // digest count
 	entry = binary.LittleEndian.AppendUint16(entry, verify.AlgSHA256)
-	entry = append(entry, digest[:]...)
+	entry = append(entry, digest...)
 	entry = binary.LittleEndian.AppendUint32(entry, narrow32(len(payload)))
-	entry = append(entry, payload...)
-
-	return append(minimalEventLog(), entry...)
+	return append(entry, payload...)
 }
 
 // minimalEventLog is valid TCG log holding only the Spec ID header
