@@ -17,11 +17,13 @@
 #   - 0600 permission bits (no group/world access);
 #   - SELinux relabel to lota_tpm_device_t at device-add time. The
 #     LOTA SELinux module (selinux/lota.te) is the only module that
-#     grants rw on lota_tpm_device_t, and it grants it only to
+#     grants rw on lota_tpm_device_t by name, and it grants it only to
 #     lota_agent_t. Stock refpolicy interfaces such as dev_rw_tpm()
-#     bind to tpm_device_t and therefore no longer apply to /dev/tpm*
-#     while this rule is in force - even an unconfined root domain
-#     loses access under SELinux enforcing.
+#     bind to tpm_device_t and no longer apply to /dev/tpm* while this
+#     rule is in force, so every confined domain the base policy gave
+#     the raw TPM to loses it. Domains holding devices_unconfined_type
+#     - unconfined_t among them - keep the access through the
+#     device_node attribute, which a loadable module cannot revoke.
 #
 # Operators MUST run SELinux in enforcing mode for the MAC layer to
 # bind. A permissive system trusts every uid-0 process equally and
@@ -33,7 +35,10 @@
 # Installation:
 #   install -m 644 99-lota-tpm.rules /usr/lib/udev/rules.d/
 #   udevadm control --reload-rules
-#   udevadm trigger --subsystem-match=tpm
+#   udevadm trigger --action=add --subsystem-match=tpm --subsystem-match=tpmrm
+#
+# SECLABEL applies only on add, and /dev/tpmrm0 is in subsystem tpmrm,
+# hence --action=add and both subsystem matches.
 #
 
 KERNEL=="tpm[0-9]*",   MODE="0600", OWNER="root", GROUP="root", SECLABEL{selinux}="system_u:object_r:lota_tpm_device_t:s0"
