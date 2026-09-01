@@ -74,14 +74,12 @@ files_tmp_file(lota_tmp_t)
 # labels is a port the agent cannot use:
 # the connect fails with EACCES and the operator sees a connection error against
 # server that is running.
-# The two documented defaults are labelled here; any other endpoint has to be
-# added by the operator:
+# The type is declared here and nothing is labelled with it here: a loadable
+# module cannot carry port contexts, because portcon is base policy. Every
+# assignment happens at bring-up instead -- lota-install labels the endpoints it
+# was given, and any other endpoint is the operator's:
 #
 #   semanage port -a -t lota_port_t -p tcp <port>
-#
-# Loadable module cannot carry port contexts -- portcon is base policy --
-# so the assignment happens at bring-up:
-# lota-install labels the endpoints it was given.
 type lota_port_t;
 corenet_port(lota_port_t)
 

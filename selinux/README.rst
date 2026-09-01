@@ -407,8 +407,10 @@ Network attestation blocked
    # Verify port definition
    sudo semanage port -l | grep lota
 
-The policy allows ``lota_agent_t`` to reach ``lota_port_t``, and a loadable
-module cannot carry port contexts, so the type is assigned at bring-up:
+The policy declares ``lota_port_t`` and labels nothing with it: a loadable
+module cannot carry port contexts, because ``portcon`` is base policy. It
+allows ``lota_agent_t`` to reach the type, and every assignment happens at
+bring-up:
 ``lota-install`` labels the CA and verifier ports it was given. An endpoint
 added later has to be labelled too, or the agent is refused at connect and the
 operator sees a connection error against a server that is running:
