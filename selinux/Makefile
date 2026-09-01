@@ -19,8 +19,10 @@ PP_FILES := $(addsuffix .pp,$(MODULES))
 SELINUX_DEVEL := /usr/share/selinux/devel
 SELINUX_MAKEFILE := $(SELINUX_DEVEL)/Makefile
 
-# Installation paths
+# Installation paths; lota.if goes where the devel Makefile resolves
+# interfaces for other modules
 SELINUX_MODULE_DIR := /usr/share/selinux/packages
+SELINUX_INTERFACE_DIR := $(SELINUX_DEVEL)/include/contrib
 
 # Port to label lota_port_t. Empty by default: only the fleet knows which
 # port its CA or verifier answers on. lota-install labels the endpoints it
@@ -104,6 +106,18 @@ install: all
 	semodule -i lota.pp
 	semodule -i lota_gaming.pp
 
+	@echo "Installing policy packages and interfaces..."
+	install -d $(SELINUX_MODULE_DIR)
+	install -m 0644 $(PP_FILES) $(SELINUX_MODULE_DIR)/
+	@# The interfaces the reference documents are callable only from here.
+	@if [ -d $(SELINUX_DEVEL)/include ]; then \
+		install -d $(SELINUX_INTERFACE_DIR); \
+		install -m 0644 $(IF_FILES) $(SELINUX_INTERFACE_DIR)/; \
+		echo "  interfaces: $(SELINUX_INTERFACE_DIR)/$(IF_FILES)"; \
+	else \
+		echo -e "$(YELLOW)  interfaces: $(SELINUX_DEVEL)/include is absent, so lota.if was not installed. A module calling lota_query_status() and the other documented interfaces needs it: install selinux-policy-devel and re-run, or copy lota.if there by hand.$(NC)"; \
+	fi
+
 	@# semanage port -a accepts a port another type owns and shadows it for
 	@# every domain, so look up the owner first. A record naming this port
 	@# (8443 is http_port_t) is left alone; a span such as unreserved_port_t
@@ -176,6 +190,10 @@ uninstall:
 	@# modules
 	-semodule -r lota_gaming 2>/dev/null || true
 	-semodule -r lota 2>/dev/null || true
+
+	@# the copies install put on the filesystem
+	rm -f $(addprefix $(SELINUX_MODULE_DIR)/,$(PP_FILES))
+	rm -f $(addprefix $(SELINUX_INTERFACE_DIR)/,$(IF_FILES))
 
 	@# remove port definition
 	@if [ -n "$(LOTA_PORT)" ]; then \
