@@ -90,9 +90,12 @@ image-build and managed-fleet case, where whoever builds the image is the
 person making that decision.
 
 The BPF object ships **signed** by whoever built the package, with the public
-key at ``/etc/lota/policy.pub`` (a config file, so a fleet that re-signs with
-its own key keeps its copy across upgrades). The agent refuses to load an
-unsigned object, and nothing signs one on the player's machine.
+key beside it at ``/usr/lib/lota/enforcement.pub``; an upgrade replaces the
+object, the signature and the key together. A fleet that signs enforcement
+itself puts its own public key at ``/etc/lota/policy.pub``, which the agent
+prefers and which no package owns, so it survives every upgrade. The agent
+refuses to load an unsigned object, and nothing signs one on the player's
+machine.
 
 Package upgrades follow the same rule and do not rewrite the boot path. An
 agent upgrade still needs the initramfs and the PCR 14 commitment refreshed,
