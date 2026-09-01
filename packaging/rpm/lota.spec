@@ -129,6 +129,13 @@ install -Dpm 0644 selinux/lota.if %{buildroot}%{_datadir}/lota/selinux/lota.if
 # Package ships the fragment; applying it is what creates the group
 systemd-sysusers %{_sysusersdir}/lota-agent.conf >/dev/null 2>&1 || :
 systemctl daemon-reload >/dev/null 2>&1 || :
+
+# Relabel on every transaction, not only the first: restorecon is a no-op
+# until lota-install loads the module, and new files inherit the directory's
+# type.
+if [ -d %{_sysconfdir}/lota ]; then
+	restorecon -R %{_sysconfdir}/lota >/dev/null 2>&1 || :
+fi
 cat <<'EOF'
 lota-agent installed. The agent fails closed until host bring-up completes.
 Run `lota-install` to sign the BPF object, install the 90lota initramfs

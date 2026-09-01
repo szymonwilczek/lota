@@ -305,7 +305,7 @@ static int st_trust_apply(struct install_ctx *ctx)
 	if (!ctx->opts.policy_pubkey)
 		return 0;
 
-	if (mkdir("/etc/lota", 0755) != 0 && errno != EEXIST)
+	if (mkdir(PATH_LOTA_CONF_DIR, 0755) != 0 && errno != EEXIST)
 		return -errno;
 
 	fresh = stat(PATH_LOTA_CONF, &sb) != 0 || sb.st_size == 0;
@@ -687,16 +687,16 @@ static enum stage_state st_ima_scope_probe(struct install_ctx *ctx, char *note,
 
 /* Label check for the agent binary.
  * Mirrors the device-label pattern. */
-static int agent_label_ok(void)
+static int label_ok(const char *path, const char *want)
 {
 	char lctx[256];
-	ssize_t got = getxattr(PATH_AGENT_BIN, "security.selinux", lctx,
-			       sizeof(lctx) - 1);
+	ssize_t got =
+		getxattr(path, "security.selinux", lctx, sizeof(lctx) - 1);
 
 	if (got < 0)
 		return errno == ENOTSUP ? 1 : 0;
 	lctx[got] = '\0';
-	return strstr(lctx, "lota_agent_exec_t") != NULL;
+	return strstr(lctx, want) != NULL;
 }
 
 /* Confined lota_agent_t service reads its AIK witness from /var/lib/lota.
@@ -706,19 +706,11 @@ static int agent_label_ok(void)
  *
  * Treat missing dir or non-SELinux host as fine;
  * present dir must carry lota_var_t */
-static int lota_state_label_ok(void)
+static int label_ok_if_present(const char *path, const char *want)
 {
-	char lctx[256];
-	ssize_t got;
-
-	if (!file_exists(PATH_LOTA_STATE_DIR))
+	if (!file_exists(path))
 		return 1;
-	got = getxattr(PATH_LOTA_STATE_DIR, "security.selinux", lctx,
-		       sizeof(lctx) - 1);
-	if (got < 0)
-		return errno == ENOTSUP ? 1 : 0;
-	lctx[got] = '\0';
-	return strstr(lctx, "lota_var_t") != NULL;
+	return label_ok(path, want);
 }
 
 static int selinux_module_loaded(void)
@@ -748,10 +740,12 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 {
 	int dev = probe_selinux_tpm_label();
 
-	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
+	if (dev == 0 && label_ok(PATH_AGENT_BIN, "lota_agent_exec_t") &&
+	    label_ok_if_present(PATH_LOTA_STATE_DIR, "lota_var_t") &&
+	    label_ok_if_present(PATH_LOTA_CONF_DIR, "lota_etc_t")) {
 		snprintf(note, cap,
-			 "TPM device, agent binary and state directory carry "
-			 "the LOTA SELinux labels.%s",
+			 "TPM device, agent binary, state directory and config "
+			 "directory carry the LOTA SELinux labels.%s",
 			 ctx->opts.selinux_module_named ?
 				 " The policy was already in place, so the "
 				 "module named by --selinux-module was not "
@@ -807,9 +801,16 @@ static int st_selinux_apply(struct install_ctx *ctx)
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
+
+	/*
+	 * SECLABEL{selinux} is applied when udev adds the device. The default
+	 * change event re-runs the rules and moves no label, so a step that
+	 * sends one reports success over whatever the nodes already carried.
+	 */
 	{
-		const char *const argv[] = { "udevadm", "trigger",
-					     "/dev/tpmrm0", "/dev/tpm0", NULL };
+		const char *const argv[] = { "udevadm",	     "trigger",
+					     "--action=add", "/dev/tpmrm0",
+					     "/dev/tpm0",    NULL };
 
 		rc = run_cmd(&ctx->ui, "Re-labeling the TPM device nodes",
 			     argv);
@@ -856,6 +857,21 @@ static int st_selinux_apply(struct install_ctx *ctx)
 
 		rc = run_cmd(&ctx->ui,
 			     "Restoring the LOTA state directory labels", argv);
+		if (rc != 0)
+			return rc > 0 ? -EIO : rc;
+	}
+
+	/*
+	 * Nothing else relabels the config directory, and new files inherit
+	 * its type, so an etc_t directory makes every file written there etc_t.
+	 */
+	if (file_exists(PATH_LOTA_CONF_DIR)) {
+		const char *const argv[] = { "restorecon", "-R",
+					     PATH_LOTA_CONF_DIR, NULL };
+
+		rc = run_cmd(&ctx->ui,
+			     "Restoring the LOTA config directory labels",
+			     argv);
 		if (rc != 0)
 			return rc > 0 ? -EIO : rc;
 	}
@@ -1452,8 +1468,11 @@ const struct stage install_stages[] = {
 			"udev rule labels /dev/tpm* with a LOTA-specific SELinux "
 			"type so only the agent's domain (and root tooling) can "
 			"talk to the TPM directly."
-			"This step loads the LOTA SELinux policy module if needed "
-			"and re-triggers udev. It does not change the SELinux mode "
+			"This step loads the LOTA SELinux policy module if needed, "
+			"re-triggers udev with an add event -- a change event "
+			"re-applies no SECLABEL -- and restores the labels on the "
+			"agent binary, the state directory and the config "
+			"directory. It does not change the SELinux mode "
 			"of the system.",
 		.probe = st_selinux_probe,
 		.apply = st_selinux_apply,
