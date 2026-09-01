@@ -189,6 +189,24 @@ uninstall:
 	@test $$(id -u) -eq 0 || \
 		(echo -e "$(RED)Error: Must run as root.$(NC)"; exit 1)
 
+	@# Drop the local lota_port_t records while the type still exists:
+	@# left behind, they name a missing type and return on reinstall.
+	@if command -v semanage >/dev/null 2>&1; then \
+		semanage port -l -C 2>/dev/null | \
+		awk '$$1 == "lota_port_t" { \
+			proto = $$2; \
+			for (i = 3; i <= NF; i++) { \
+				gsub(/,/, "", $$i); \
+				if ($$i != "") print proto, $$i; \
+			} \
+		}' | \
+		while read -r proto port; do \
+			echo "  unlabelling $$port/$$proto"; \
+			semanage port -d -t lota_port_t -p "$$proto" "$$port" \
+				2>/dev/null || true; \
+		done; \
+	fi
+
 	@# modules
 	-semodule -r lota_gaming 2>/dev/null || true
 	-semodule -r lota 2>/dev/null || true
@@ -196,11 +214,6 @@ uninstall:
 	@# the copies install put on the filesystem
 	rm -f $(addprefix $(SELINUX_MODULE_DIR)/,$(PP_FILES))
 	rm -f $(addprefix $(SELINUX_INTERFACE_DIR)/,$(IF_FILES))
-
-	@# remove port definition
-	@if [ -n "$(LOTA_PORT)" ]; then \
-		semanage port -d -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || true; \
-	fi
 
 	@echo -e "$(GREEN)Uninstall complete.$(NC)"
 
