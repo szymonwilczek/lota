@@ -116,6 +116,20 @@ for labelling one by hand at install time. A port the base policy already
 defines is reported and left alone -- relabelling one takes it from every
 domain on the host, not only from LOTA.
 
+Removing the Policy
+~~~~~~~~~~~~~~~~~~~
+
+.. code:: bash
+
+   sudo make uninstall
+
+``uninstall`` deletes every local port record naming ``lota_port_t`` before it
+removes the module that defines the type -- ``lota-install`` writes one per
+endpoint and an operator adds the rest, and a record naming a type that no
+longer exists comes back into force if the module is ever reinstalled. The
+compiled modules and the interface file that ``install`` placed are removed
+too.
+
 Post-Installation
 ~~~~~~~~~~~~~~~~~
 
