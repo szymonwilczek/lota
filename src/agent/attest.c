@@ -202,13 +202,11 @@ int export_policy(int mode)
 	}
 
 	/*
-	 * Boot-chain measurement digest (kernel-relevant PCR selection).
+	 * Kernel digest: the bootloader's measurement of the image.
 	 *
-	 * No file is read for it, so the exported document is given the register
-	 * it came from and the kernel this host is running.
-	 * A configured kernel_path tells the agent where to find the kernel image
-	 * on a distribution that does not ship /boot/vmlinuz-<release>;
-	 * it selects nothing about this digest.
+	 * No file is read for it, so the document also carries the running
+	 * kernel's release. kernel_path only locates the image on a distribution
+	 * without /boot/vmlinuz-<release>; it selects nothing about this digest.
 	 */
 	{
 		struct utsname uts;
@@ -226,28 +224,58 @@ int export_policy(int mode)
 	if (tpm_kernel_path_is_overridden(&g_agent.tpm_ctx)) {
 		fprintf(stderr,
 			"Note: kernel_path does not affect this policy. The "
-			"measured-boot digest below is the value of a PCR as "
-			"this host booted, not a hash of any file.\n");
+			"kernel digest below is the bootloader's measurement "
+			"of the image it loaded, not a hash of any file this "
+			"agent read.\n");
 	}
 
 	{
-		int selected_pcr = -1;
-		ret = read_kernel_measurement_digest(
-			&g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
-		if (ret == 0) {
+		uint8_t *event_log = malloc(TPM_MAX_EVENT_LOG_SIZE);
+		size_t event_log_size = 0;
+		struct kernel_image image;
+
+		/*
+		 * The kernel_hashes gate compares the image digest, not PCR 9:
+		 * that register folds in every file the bootloader read,
+		 * so a pin on it refuses the host it was exported from.
+		 */
+		if (!event_log) {
+			snap.kernel_hash_error = -ENOMEM;
+		} else {
+			ret = tpm_read_event_log(event_log,
+						 TPM_MAX_EVENT_LOG_SIZE,
+						 &event_log_size);
+			if (ret < 0)
+				snap.kernel_hash_error = ret;
+			else
+				snap.kernel_hash_error =
+					kernel_image_from_event_log(
+						event_log, event_log_size,
+						&image);
+		}
+
+		if (snap.kernel_hash_error == 0) {
+			memcpy(snap.kernel_hash, image.digest, LOTA_HASH_SIZE);
+			snprintf(snap.kernel_image_path,
+				 sizeof(snap.kernel_image_path), "%s",
+				 image.path);
 			snap.kernel_hash_valid = true;
-			snap.kernel_hash_pcr = selected_pcr;
 			fprintf(stderr,
-				"Kernel measurement digest source: PCR %d "
-				"(measured boot)\n",
-				selected_pcr);
+				"Kernel measurement: the image the bootloader "
+				"loaded, %s\n",
+				snap.kernel_image_path);
 		} else {
 			fprintf(stderr,
-				"Warning: Failed to read kernel-relevant "
-				"measured boot PCR "
-				"(tried 11/9/8/4): %s\n",
-				tpm_strerror(ret));
+				"Warning: no kernel digest to export: %s\n",
+				policy_kernel_hash_reason(
+					snap.kernel_hash_error));
+			fprintf(stderr,
+				"The policy is written with an empty "
+				"kernel_hashes list; the other gates are "
+				"unaffected.\n");
 		}
+
+		free(event_log);
 	}
 
 	/* Agent binary hash */

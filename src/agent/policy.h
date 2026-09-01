@@ -17,6 +17,7 @@
 #include <stdio.h>
 
 #include "../../include/lota.h"
+#include "kernel_image.h"
 
 /*
  * PCR index definitions.
@@ -62,19 +63,12 @@ struct policy_snapshot {
 	} pcrs[POLICY_MAX_PCRS];
 	int pcr_count;
 
-	/*
-	 * Boot-chain measurement digest.
-	 *
-	 * The digest is the value of a measured-boot PCR as this host booted,
-	 * so its provenance is that register and the kernel the host is running.
-	 * kernel_hash_pcr names the register the value was read from
-	 * and kernel_release the running kernel, both for the operator who
-	 * reviews the exported document.
-	 */
-	int kernel_hash_pcr;
+	/* Kernel image the bootloader measured (event log, not PCR 9) */
 	char kernel_release[65]; /* sizeof(struct utsname.release) */
+	char kernel_image_path[KERNEL_IMAGE_PATH_MAX]; /* as logged */
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
 	bool kernel_hash_valid;
+	int kernel_hash_error; /* reader's -errno when there is no digest */
 
 	/* Agent binary hash */
 	char agent_path[LOTA_MAX_PATH_LEN];
@@ -117,6 +111,14 @@ int policy_emit(const struct policy_snapshot *snap, FILE *out);
  */
 int policy_emit_to_buf(const struct policy_snapshot *snap, char *buf,
 		       size_t buf_size, size_t *written);
+
+/*
+ * policy_kernel_hash_reason - why an exported policy carries no kernel digest
+ *
+ * Renders the reader's errno as the sentence the document and the terminal
+ * both say, so the two cannot drift apart.
+ */
+const char *policy_kernel_hash_reason(int err);
 
 /*
  * policy_export_pcrs - Canonical PCR indices read for --export-policy
