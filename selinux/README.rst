@@ -223,6 +223,15 @@ socket that never appears:
 A host that runs no titles does not need this module, and an agent without
 it keeps every other function.
 
+The client side of that socket is granted separately, because the two ends
+are refused for different reasons: ``lota_query_status`` covers the socket
+under ``/var/lib/lota`` and says nothing about ``user_tmp_t``, so a confined
+title granted only that reaches the system socket and is denied at the
+container one. ``lota_query_status_container`` grants the caller the runtime
+path -- search on ``/run``, search on the user temporary directories and
+write on the socket -- and ``lota_gaming_client`` calls both, so a title
+following the Interface Reference below reaches the agent from either side.
+
 Steam
 ~~~~~
 
@@ -459,7 +468,7 @@ to carry -- so a machine that builds policy copies it once::
    sudo install -m 0644 /usr/share/lota/selinux/lota.if \
        /usr/share/selinux/devel/include/contrib/lota.if
 
-Without that copy, a module calling any of the four fails at ``checkmodule``
+Without that copy, a module calling any of them fails at ``checkmodule``
 with the interface name as an unknown token.
 
 For Gaming Applications
@@ -467,10 +476,14 @@ For Gaming Applications
 
 .. code:: sh
 
-   # Allow querying attestation status
+   # Allow querying attestation status over /var/lib/lota/lota.sock
    lota_query_status(myapp_t)
 
-   # Full gaming client access
+   # Allow querying it over /run/user/<uid>/lota/lota.sock instead,
+   # which is the socket a title inside a Proton container reaches
+   lota_query_status_container(myapp_t)
+
+   # Full gaming client access, both sockets included
    lota_gaming_client(myapp_t)
 
 For Anti-Cheat
