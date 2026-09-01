@@ -22,8 +22,15 @@ SELINUX_MAKEFILE := $(SELINUX_DEVEL)/Makefile
 # Installation paths
 SELINUX_MODULE_DIR := /usr/share/selinux/packages
 
-# Port for attestation protocol
-LOTA_PORT := 8443
+# Port to label lota_port_t. Empty by default: only the fleet knows which
+# port its CA or verifier answers on. lota-install labels the endpoints it
+# is given, and the agent prints the semanage command for one added later.
+#
+#   sudo make install LOTA_PORT=8573
+#
+# A port the base policy names by number (8443 is http_port_t) is left
+# alone: a local record would take it from every confined service.
+LOTA_PORT :=
 LOTA_PORT_PROTO := tcp
 
 # File paths for restorecon
@@ -97,10 +104,34 @@ install: all
 	semodule -i lota.pp
 	semodule -i lota_gaming.pp
 
-	@echo "Configuring attestation port $(LOTA_PORT)/$(LOTA_PORT_PROTO)..."
-	-semanage port -a -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || \
-		semanage port -m -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || \
-		echo -e "$(YELLOW)Warning: Could not configure port (may already exist).$(NC)"
+	@# semanage port -a accepts a port another type owns and shadows it for
+	@# every domain, so look up the owner first. A record naming this port
+	@# (8443 is http_port_t) is left alone; a span such as unreserved_port_t
+	@# is labelled out of, and the message names the span.
+	@if [ -z "$(LOTA_PORT)" ]; then \
+		echo "No port to label (pass LOTA_PORT=<port> to label one)."; \
+	else \
+		owner=$$(semanage port -l | awk -v p='$(LOTA_PORT)' -v pr='$(LOTA_PORT_PROTO)' \
+			'$$2 == pr { \
+				for (i = 3; i <= NF; i++) { \
+					gsub(/,/, "", $$i); \
+					if ($$i == p) { print "named", $$1; exit } \
+					n = split($$i, r, "-"); \
+					if (n == 2 && p >= r[1] && p <= r[2]) { \
+						span = "range " $$1; \
+					} \
+				} \
+			} \
+			END { if (span != "") print span }'); \
+		kind=$${owner%% *}; type=$${owner##* }; \
+		if [ "$$type" = "lota_port_t" ] && [ "$$kind" = "named" ]; then \
+			echo "Port $(LOTA_PORT)/$(LOTA_PORT_PROTO) already carries lota_port_t."; \
+		elif [ "$$kind" = "named" ]; then \
+			echo -e "$(YELLOW)Port $(LOTA_PORT)/$(LOTA_PORT_PROTO) is defined as $$type. Leaving it alone: a local record would shadow that for every domain on this host, not only for LOTA. lota_agent_t may be allowed to reach $$type already; where it may not, choose a port no type names.$(NC)"; \
+		elif semanage port -a -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT); then \
+			echo "Labelled $(LOTA_PORT)/$(LOTA_PORT_PROTO) lota_port_t$${type:+ (out of the $$type range)}."; \
+		fi; \
+	fi
 
 	@echo "Creating directories..."
 	mkdir -p /etc/lota/policies
@@ -147,7 +178,9 @@ uninstall:
 	-semodule -r lota 2>/dev/null || true
 
 	@# remove port definition
-	-semanage port -d -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || true
+	@if [ -n "$(LOTA_PORT)" ]; then \
+		semanage port -d -t lota_port_t -p $(LOTA_PORT_PROTO) $(LOTA_PORT) 2>/dev/null || true; \
+	fi
 
 	@echo -e "$(GREEN)Uninstall complete.$(NC)"
 
@@ -239,6 +272,9 @@ help:
 	@echo "  audit      - Show recent AVC denials"
 	@echo "  suggest    - Generate policy suggestions from audit"
 	@echo "  clean      - Remove build artifacts"
+	@echo ""
+	@echo "Variables:"
+	@echo "  LOTA_PORT  - port for install to label lota_port_t (default: none)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                    # Build policy"

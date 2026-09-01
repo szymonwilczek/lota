@@ -103,8 +103,18 @@ Build and Install
    # Install (requires root)
    sudo make install
 
+   # Install and label one endpoint's port while at it
+   sudo make install LOTA_PORT=8573
+
    # Verify installation
    sudo make verify
+
+``make install`` labels no port of its own. A port worth labelling is one this
+fleet's CA or verifier answers on, and the Makefile cannot know which that is:
+``lota-install`` labels the endpoints it is given, and ``LOTA_PORT`` is there
+for labelling one by hand at install time. A port the base policy already
+defines is reported and left alone -- relabelling one takes it from every
+domain on the host, not only from LOTA.
 
 Post-Installation
 ~~~~~~~~~~~~~~~~~
