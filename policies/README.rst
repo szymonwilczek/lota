@@ -142,9 +142,10 @@ which kind of thing failed, because the kinds take different investigations.
     a register in ``pcrs:`` holds another value, the quote did not carry it,
     or the policy file is wrong about it.
 ``integrity_mismatch``
-    the agent binary: a build outside ``agent_hashes``, or one that moved away
-    from the pinned baseline. Which gate saw it first is not something the
-    host can act on, so both read the same.
+    a pinned measurement moved: the agent binary (outside ``agent_hashes`` or
+    off its baseline), the PCR 14 boot commitment, or the firmware/Secure Boot
+    baseline. The code does not say which, so the agent's message names all
+    three.
 ``iommu_fail``
     ``require_iommu`` on a host with no DMA remapping.
 ``policy_requirement``
@@ -155,6 +156,14 @@ which kind of thing failed, because the kinds take different investigations.
 ``pcr_fail`` sends an operator to the boot chain and the event log, which is
 where the fix is for exactly one of these. A refusal nobody classified stays
 ``pcr_fail``, because it is the verdict that claims least about a cause.
+
+Two refusals that are not the host's doing
+------------------------------------------
+
+A baseline store that cannot pin firmware PCRs is a verifier fault and
+carries ``internal_error``. A first-use host whose boot baseline nobody
+enrolled carries ``policy_requirement``. Neither is ``integrity_mismatch``,
+because the host did nothing wrong.
 
 Security Requirements
 ---------------------
