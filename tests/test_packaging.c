@@ -429,6 +429,43 @@ static void test_selinux_reports_every_tunable(void)
 	PASS();
 }
 
+/*
+ * A loadable module cannot carry port contexts, so a portcon in this tree
+ * would be a rule that silently does nothing.
+ */
+static void test_selinux_policy_carries_no_portcon(void)
+{
+	static const char *const sources[] = { "selinux/lota.te",
+					       "selinux/lota.fc",
+					       "selinux/lota_gaming.te",
+					       "selinux/lota_gaming.fc" };
+	char line[1024];
+
+	TEST("selinux: no source declares a port context");
+
+	for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+		FILE *fp = open_shipped(sources[i]);
+
+		if (!fp)
+			continue;
+		while (fgets(line, sizeof(line), fp)) {
+			const char *p = line;
+
+			/* the comments explain why there is none */
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '#')
+				continue;
+			if (strstr(line, "portcon")) {
+				fclose(fp);
+				FAIL("a portcon was added; a loadable module cannot carry one");
+				return;
+			}
+		}
+		fclose(fp);
+	}
+	PASS();
+}
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -441,6 +478,7 @@ int main(void)
 	test_documented_selinux_interfaces_exist();
 	test_selinux_interfaces_are_installed();
 	test_selinux_reports_every_tunable();
+	test_selinux_policy_carries_no_portcon();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
