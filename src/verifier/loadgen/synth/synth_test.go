@@ -10,6 +10,7 @@
 package synth
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
 	"os"
@@ -324,5 +325,47 @@ func TestFleetRefusesAnInvalidTenant(t *testing.T) {
 	}
 	if _, err := NewFleet(ca, 1, 1, "Not A Tenant!"); err == nil {
 		t.Fatal("expected an invalid tenant name to be refused")
+	}
+}
+
+// The rig's kernel pin has to be evaluable the way a booted host's is:
+// the kernel image measured under its own name on PCR 9, the register quoted,
+// and the replay reproducing it. A fleet reporting a kernel hash no event
+// measures would satisfy a gate no real host satisfies, and the rig would
+// stop testing the thing it exists to test.
+func TestFleetMeasuresTheKernelImageItPins(t *testing.T) {
+	fleet := newTestFleet(t, 1, 1)
+
+	if ReportPCRMask&(1<<9) == 0 {
+		t.Fatal("the quote does not cover PCR 9, so no kernel image can be authenticated")
+	}
+
+	var nonce [types.NonceSize]byte
+	wire, err := fleet.BuildReport(fleet.Agents[0], nonce)
+	if err != nil {
+		t.Fatalf("BuildReport: %v", err)
+	}
+	report, err := types.ParseReport(wire)
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+
+	facts, err := verify.VerifyEventLogWithPolicy(report, false)
+	if err != nil {
+		t.Fatalf("the synthetic event log does not replay: %v", err)
+	}
+
+	if !facts.KernelImage.Found {
+		t.Fatal("the synthetic log measures no kernel image")
+	}
+	if !facts.KernelImageTrusted {
+		t.Fatal("the measured kernel image is not quote-bound")
+	}
+	if facts.KernelImage.Path != KernelImagePath {
+		t.Errorf("kernel image path %q, want %q", facts.KernelImage.Path, KernelImagePath)
+	}
+	if !bytes.Equal(facts.KernelImage.Digest, fleet.KernelHash[:]) {
+		t.Errorf("the measured image is %x and the policy pins %x",
+			facts.KernelImage.Digest, fleet.KernelHash)
 	}
 }
