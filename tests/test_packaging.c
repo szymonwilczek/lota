@@ -815,6 +815,76 @@ static void test_documented_api_calls_use_the_bearer_header(void)
 	PASS();
 }
 
+/*
+ * Reads one shipped command per call, joining the backslash continuations a script
+ * or a code block wraps a long invocation over.
+ * Returns false at end of file.
+ */
+static bool next_command(FILE *fp, char *cmd, size_t cmd_size)
+{
+	char line[1024];
+	char *cont;
+
+	if (!fgets(cmd, (int)cmd_size, fp))
+		return false;
+
+	cont = strrchr(cmd, '\\');
+	while (cont && cont[1] == '\n' && fgets(line, sizeof(line), fp)) {
+		snprintf(cont, cmd_size - (size_t)(cont - cmd), " %s", line);
+		cont = strrchr(cmd, '\\');
+	}
+	return true;
+}
+
+/*
+ * The enrollment example runs on a host with a real TPM. A firmware TPM's EK
+ * chains through intermediates to the vendor root, so its trust material is a
+ * bundle directory; passed as a single anchor, the CA refuses the host's EK.
+ * The agent refuses --server while publisher profiles are configured, so the
+ * attest step brings its own config.
+ */
+static void test_enrollment_example_runs_on_a_provisioned_host(void)
+{
+	FILE *fp = open_shipped("examples/enrollment/run.sh");
+	char cmd[4096];
+	bool classes_ek_material = false;
+	bool bundle_flag = false;
+	bool saw_attest = false;
+
+	TEST("examples: the enrollment demo runs on a host with a TPM chain");
+
+	if (!fp) {
+		FAIL("could not open the enrollment example");
+		return;
+	}
+	while (next_command(fp, cmd, sizeof(cmd))) {
+		if (strstr(cmd, "-ek-root-bundle"))
+			bundle_flag = true;
+		/* whichever flag the material gets, the script picks it by asking */
+		if (strstr(cmd, "-d \"$EK_ROOT\""))
+			classes_ek_material = true;
+		if (!strstr(cmd, "--attest"))
+			continue;
+		saw_attest = true;
+		if (!strstr(cmd, "--config")) {
+			fclose(fp);
+			FAIL("the attest step is refused on any host that configured a publisher");
+			return;
+		}
+	}
+	fclose(fp);
+
+	if (!bundle_flag || !classes_ek_material) {
+		FAIL("a vendor EK chain has no way to reach the CA");
+		return;
+	}
+	if (!saw_attest) {
+		FAIL("the example no longer attests");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -833,6 +903,7 @@ int main(void)
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
 	test_documented_api_calls_use_the_bearer_header();
+	test_enrollment_example_runs_on_a_provisioned_host();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
