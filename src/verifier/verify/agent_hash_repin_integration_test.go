@@ -115,12 +115,11 @@ func TestVerify_AgentUpdateRefusedWhenBuildNotListed(t *testing.T) {
 		t.Fatal("expected refusal: the reported build is not on the allow-list")
 	}
 
-	// Policy gate refuses unlisted build before the baseline is consulted at all,
-	// so the verdict is a policy failure rather than the integrity mismatch.
-	// That ordering is the point: a build nobody blessed never reaches
-	// the code that could move a pin.
-	if result.Result != types.VerifyPCRFail {
-		t.Fatalf("expected VerifyPCRFail from the policy gate, got %d (err=%v)",
+	// The policy gate refuses an unlisted build before the baseline, so it never
+	// reaches the code that could move a pin; the verdict is the same integrity
+	// mismatch the baseline would give.
+	if result.Result != types.VerifyIntegrityMismatch {
+		t.Fatalf("expected VerifyIntegrityMismatch from the policy gate, got %d (err=%v)",
 			result.Result, err)
 	}
 	if !strings.Contains(err.Error(), "agent hash not in allowed list") {

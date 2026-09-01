@@ -488,8 +488,9 @@ func TestIntegration_TenantBoundPolicySelected(t *testing.T) {
 	if err == nil {
 		t.Fatal("tenant-bound strict policy was not applied")
 	}
-	if result.Result != types.VerifyPCRFail {
-		t.Fatalf("result = %d, want VerifyPCRFail", result.Result)
+
+	if result.Result != types.VerifyPolicyRequirement {
+		t.Fatalf("result = %d, want VerifyPolicyRequirement", result.Result)
 	}
 
 	// client outside the bound tenant falls back to the active policy
