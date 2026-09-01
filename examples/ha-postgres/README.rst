@@ -56,6 +56,11 @@ so they enforce the same rules over the same shared state.
 
 .. code:: sh
 
+   # the monitoring API's two key tiers; both instances take the same pair,
+   # so a read or a revocation is answered the same way whichever one is asked
+   export LOTA_READER_API_KEY="$(openssl rand -hex 32)"
+   export LOTA_ADMIN_API_KEY="$(openssl rand -hex 32)"
+
    # instance A
    build/lota-verifier --generate-cert \
      --addr :8443 --http-addr 127.0.0.1:8080 \
@@ -80,16 +85,17 @@ already present.
 Drive one full attestation through **instance A** (port 8443) using the
 enrollment example, then read the result back through **instance B** (port
 8081). Because the client registration and baseline live in Postgres, instance
-B reports the client it never spoke to:
+B reports the client it never spoke to. Both keys ride in
+``Authorization: Bearer``, which is the only credential header the API reads:
 
 .. code:: sh
 
    # the client enrolled + attested via instance A shows up on instance B
-   curl -s -H "X-API-Key: $LOTA_READER_API_KEY" \
+   curl -s -H "Authorization: Bearer $LOTA_READER_API_KEY" \
      http://127.0.0.1:8081/api/v1/clients
 
    # the revocation taken on instance B is enforced by instance A
-   curl -s -H "X-API-Key: $LOTA_ADMIN_API_KEY" \
+   curl -s -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
      -X POST http://127.0.0.1:8081/api/v1/clients/<client-id>/revoke \
      -d '{"reason":"compromised","actor":"ops"}'
 
