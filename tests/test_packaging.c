@@ -332,6 +332,103 @@ static void test_selinux_interfaces_are_installed(void)
 	PASS();
 }
 
+/*
+ * make verify and the install banner must walk TUNABLES, read out of the
+ * policy sources; a hand-kept second list drifts from what is declared.
+ */
+static void test_selinux_reports_every_tunable(void)
+{
+	char tunables[16][64];
+	int count = 0;
+	char line[1024];
+	bool derived = false;
+	int iterating_targets = 0;
+	static const char *const sources[] = { "selinux/lota.te",
+					       "selinux/lota_gaming.te" };
+	FILE *fp;
+
+	TEST("selinux: the reported tunables are read from the policy");
+
+	for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+		fp = open_shipped(sources[i]);
+		if (!fp) {
+			FAIL("could not open a policy source");
+			return;
+		}
+		while (fgets(line, sizeof(line), fp)) {
+			const char *p = strstr(line, "gen_tunable(");
+			const char *end;
+			size_t len;
+
+			if (!p || line[0] == '#')
+				continue;
+			p += strlen("gen_tunable(");
+			end = strchr(p, ',');
+			if (!end || count == 16)
+				continue;
+			len = (size_t)(end - p);
+			if (len >= sizeof(tunables[0]))
+				continue;
+			memcpy(tunables[count], p, len);
+			tunables[count][len] = '\0';
+			count++;
+		}
+		fclose(fp);
+	}
+
+	if (count == 0) {
+		FAIL("no gen_tunable found; the parser or the policy moved");
+		return;
+	}
+
+	fp = open_shipped("selinux/Makefile");
+	if (!fp) {
+		FAIL("could not open selinux/Makefile");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "TUNABLES") && strstr(line, "gen_tunable") &&
+		    strstr(line, "$(TE_FILES)"))
+			derived = true;
+		if (strstr(line, "for bool in $(TUNABLES)"))
+			iterating_targets++;
+
+		/* a hand-kept second list is what drifted */
+		for (int i = 0; i < count; i++) {
+			if (strstr(line, tunables[i]) &&
+			    !strstr(line, "TUNABLES")) {
+				char msg[160];
+
+				fclose(fp);
+				snprintf(
+					msg, sizeof(msg),
+					"%.40s is named in the Makefile, so a hand-kept list is back",
+					tunables[i]);
+				FAIL(msg);
+				return;
+			}
+		}
+	}
+	fclose(fp);
+
+	if (!derived) {
+		FAIL("TUNABLES is not read out of the policy sources");
+		return;
+	}
+	/* make verify, and the banner make install prints */
+	if (iterating_targets < 2) {
+		char msg[128];
+
+		snprintf(
+			msg, sizeof(msg),
+			"only %d target walks TUNABLES; verify and the install banner both must",
+			iterating_targets);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -343,6 +440,7 @@ int main(void)
 	test_installer_enables_the_units();
 	test_documented_selinux_interfaces_exist();
 	test_selinux_interfaces_are_installed();
+	test_selinux_reports_every_tunable();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
