@@ -245,14 +245,14 @@ static void test_installer_enables_the_units(void)
  */
 static void test_documented_selinux_interfaces_exist(void)
 {
-	static const char *const documented[] = { "lota_query_status",
-						  "lota_gaming_client",
-						  "lota_anticheat_client",
-						  "lota_admin" };
-	enum {
-		DOCUMENTED_COUNT = 4
+	static const char *const documented[] = {
+		"lota_query_status", "lota_query_status_container",
+		"lota_gaming_client", "lota_anticheat_client", "lota_admin"
 	};
-	bool found[DOCUMENTED_COUNT] = { false, false, false, false };
+	enum {
+		DOCUMENTED_COUNT = 5
+	};
+	bool found[DOCUMENTED_COUNT] = { false, false, false, false, false };
 	char line[1024];
 	FILE *fp;
 

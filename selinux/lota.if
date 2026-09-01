@@ -195,6 +195,31 @@ interface(`lota_verify_integrity',`
 
 ########################################
 ## <summary>
+##      Query LOTA attestation status through the per-user socket
+##      a container title connects to.
+## </summary>
+## <param name="domain">
+##      <summary>
+##      Domain allowed to query.
+##      </summary>
+## </param>
+#
+interface(`lota_query_status_container',`
+        gen_require(`
+                type lota_agent_t;
+        ')
+
+        #
+        # /run/user/<uid>/lota/lota.sock is user_tmp_t all the way down
+        #
+        files_search_pids($1)
+        userdom_search_user_tmp_dirs($1)
+        userdom_write_user_tmp_sockets($1)
+        allow $1 lota_agent_t:unix_stream_socket connectto;
+')
+
+########################################
+## <summary>
 ##      Gaming client interface.
 ## </summary>
 ## <param name="domain">
@@ -205,6 +230,7 @@ interface(`lota_verify_integrity',`
 #
 interface(`lota_gaming_client',`
         lota_query_status($1)
+        lota_query_status_container($1)
         lota_verify_integrity($1)
 ')
 
