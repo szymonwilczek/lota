@@ -75,17 +75,16 @@ struct verifier_result {
  * The likely cause of a connect(2) that was refused, as a sentence the operator
  * can act on, or NULL when there is nothing better to say than the errno.
  *
- * The confined agent may reach only ports labelled lota_port_t, and the policy
- * dontaudits the denial: an unlabelled port answers EACCES with no AVC anywhere,
- * against a server that is running.
- * That is worth naming, and only where SELinux is enforcing -- @enforce_path
- * is the state node the answer depends on, so a caller passes the real one
- * and a test passes its own.
+ * Both causes answer EACCES with no AVC (dontaudit): a port without lota_port_t,
+ * or lota_network_attest off. The hint names the one it reads, or both when it
+ * reads neither, and is given only while SELinux enforces.
  *
+ * @selinux_root: selinuxfs mount holding enforce and booleans/; NULL for the
+ * system one.
  * @buf holds the sentence; the returned pointer is @buf or NULL.
  */
 const char *net_connect_refusal_hint(int err, int port,
-				     const char *enforce_path, char *buf,
+				     const char *selinux_root, char *buf,
 				     size_t cap);
 
 /*
