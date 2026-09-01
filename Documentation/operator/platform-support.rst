@@ -358,9 +358,21 @@ host as a rolled-back one.
 
 For LOTA that means every publisher enrollment on the host is gone and each has
 to be re-established with ``lota-agent --reenroll --ca-cert <their anchor>``.
-The agent mints fresh keys on its next round, so a verifier holding the old
-certificate sees a host whose key no longer matches what it was issued and
-refuses it by name until the re-enrollment lands.
+The anchor is enough -- the profile is resolved from it -- and the next round
+after a re-enrollment verifies.
+
+**The agent refuses this state, and it does so before any quote.** The key at
+each publisher's handle is no longer the key their certificate was issued over,
+so the agent says once per publisher that ``No round is attempted until they
+issue a certificate for the key that is here now``, names that publisher, and
+sleeps. Quoting anyway would be refused by the TPM and would spend a
+dictionary-attack attempt on every interval, which is what the check exists to
+avoid.
+
+**Nothing reaches the verifier.** No round is opened, so there is no failed
+attestation, no connection and no metric to alert on: a cleared host is silent
+on the fleet side and loud in its own journal. A fleet-side signal for this
+state does not exist today; the place to watch is the agent's log on the host.
 
 Where the authorization to clear comes from is firmware-dependent. Both
 hierarchy-authorized routes need a value the fleet may not hold, and the
