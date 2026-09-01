@@ -754,6 +754,67 @@ static void test_documented_tpm_relabel_reaches_both_nodes(void)
 	PASS();
 }
 
+/*
+ * The monitoring API reads one credential header, Authorization: Bearer
+ * (src/verifier/server/api.go::extractBearerToken), so a page that hands
+ * a reader an API key in any other header hands them a request that authenticates
+ * nothing. On an instance with no key configured the reader endpoints are public,
+ * so the wrong header still answers 200 and hides that it was never read;
+ * the moment a key is configured every copy of it is a 401.
+ */
+static void lowercase(const char *src, char *dst, size_t dst_size)
+{
+	size_t i;
+
+	for (i = 0; src[i] && i < dst_size - 1; i++)
+		dst[i] = (char)tolower((unsigned char)src[i]);
+	dst[i] = '\0';
+}
+
+static void test_documented_api_calls_use_the_bearer_header(void)
+{
+	static const char *const pages[] = {
+		"examples/ha-postgres/README.rst",
+		"Documentation/operator/production-bringup/ca-enrollment.rst",
+		"Documentation/operator/observability.rst",
+	};
+
+	TEST("docs: every documented API call sends Authorization: Bearer");
+
+	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+		FILE *fp = open_shipped(pages[i]);
+		char line[1024];
+		char lower[1024];
+		bool saw = false;
+
+		if (!fp) {
+			FAIL("could not open a page that calls the API");
+			return;
+		}
+		while (fgets(line, sizeof(line), fp)) {
+			/* a header carrying a credential, whichever name it was given */
+			if (!strstr(line, "-H \""))
+				continue;
+			lowercase(line, lower, sizeof(lower));
+			if (!strstr(lower, "key") && !strstr(lower, "token") &&
+			    !strstr(lower, "bearer"))
+				continue;
+			saw = true;
+			if (!strstr(line, "Authorization: Bearer")) {
+				fclose(fp);
+				FAIL("a documented call authenticates with a header the API never reads");
+				return;
+			}
+		}
+		fclose(fp);
+		if (!saw) {
+			FAIL("a page that calls the API sends no credential at all");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -771,6 +832,7 @@ int main(void)
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
+	test_documented_api_calls_use_the_bearer_header();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
