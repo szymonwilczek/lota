@@ -370,6 +370,11 @@ the agent reports about itself:
   offers no kernel image, or cannot be parsed, the export writes
   ``kernel_hashes: []`` and a comment saying which of the two happened.
 
+  The gate reads the same one value. A host that records no kernel image, or
+  whose PCR 9 the quote does not cover, is refused with that as the reason --
+  the pin cannot be evaluated there, and the answer is to quote PCR 9 or to
+  stop pinning the kernel.
+
   No configuration key selects which kernel that digest describes.
   ``kernel_path`` tells the agent where the kernel image lives on a
   distribution that ships no ``/boot/vmlinuz-<release>``, which is what

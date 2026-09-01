@@ -497,8 +497,11 @@ booted into that kernel. A register is never written there: PCR 9 aggregates
 every file the bootloader read, ``grubenv`` among them, so it answers for a
 boot rather than for a kernel.
 
-The pin stays advisory: PCR 7 is the anchor for "a trusted kernel booted",
-and a kernel pin buys anti-rollback at the cost of an entry per kernel.
+The gate reads the same measurement, and only where the quote covers PCR 9 and
+the event log replays to it. Where it does not, a policy pinning
+``kernel_hashes`` is refused with that as the reason. The pin stays advisory:
+PCR 7 is the anchor for "a trusted kernel booted", and a kernel pin buys
+anti-rollback at the cost of an entry per kernel.
 
 Pinning these registers is not optional. A report whose ``pcr_mask`` omits
 PCR 0, 1 or 7 is refused before any baseline is consulted or written, and no
