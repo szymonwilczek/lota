@@ -79,6 +79,16 @@ int main(void)
 		}
 	}
 
+	/*
+	 * Verdict 6 covers the agent binary, the PCR 14 boot commitment
+	 * and the firmware/Secure Boot baseline, and the host cannot tell
+	 * which, so the sentence must name all three.
+	 */
+	CHECK(strstr(net_result_str(6), "agent") != NULL &&
+		      strstr(net_result_str(6), "PCR 14") != NULL &&
+		      strstr(net_result_str(6), "firmware") != NULL,
+	      "verdict 6 names every measurement it is sent for");
+
 	/* the two an administrator causes on purpose say so,
 	 * so the machine is not read as broken when it is obeying */
 	CHECK(strstr(net_result_str(7), "revoked") != NULL,
