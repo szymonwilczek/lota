@@ -629,22 +629,31 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 				  int key_present);
 
 /*
- * tpm_aik_provisioning_orphans_cert - will provisioning leave this
- * publisher's certificate naming a key the TPM no longer holds?
+ * tpm_aik_provisioning_orphans_cert - is this publisher's stored certificate
+ * issued over a key the TPM no longer holds
  *
- * @key_present: what tpm_aik_key_present() answered
+ * @key_present: what tpm_aik_key_present() answered before provisioning
  * @cert_stored: whether an enrollment certificate is on disk for this profile
+ * @cert_match: what aik_cert_matches_key() answered for the key that is at
+ *              the handle now: 0 when the certificate names it,
+ *              -EKEYREJECTED when it names another, another negative errno
+ *              when the question could not be asked
  *
  * TPM2_Clear removes the keys but not the profile directory, so the handle,
  * the consent and the certificate all survive it. Provisioning would mint
  * a new key at the recorded handle, and every verifier refuses a key
  * the certificate does not name.
  *
- * Returns true only when the key is absent and a certificate is stored.
- * A first enrollment has no certificate; a TPM that could not answer
- * (negative @key_present) is not taken as absent.
+ * The AIK is derived, so a handle whose object was evicted comes back holding
+ * the same key, and the certificate still names it. An absent key alone
+ * orphans nothing.
+ *
+ * Returns true only when the key was absent, a certificate is stored,
+ * and @cert_match is -EKEYREJECTED. A first enrollment has no certificate;
+ * a TPM that could not answer (negative @key_present) is not taken as absent.
  */
-bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored);
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored,
+				       int cert_match);
 
 /*
  * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
