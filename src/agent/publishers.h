@@ -44,18 +44,31 @@ struct publisher_entry {
 };
 
 /*
- * Read every profile under @base_dir into @out, in directory order.
+ * Read up to @max profiles under @base_dir into @out, in directory order.
  *
  * Directory that holds nothing readable is still listed: profile with consent
  * record and no enrollment is exactly the state between agreeing and title first
  * running, and hiding it would hide the answer to "why is this publisher not
  * working yet".
  *
- * Returns 0 (with *count set), or negative errno.
+ * *count is the total held, not the number stored.
+ *
+ * Returns 0 (with *count set), -ENOBUFS when more than @max exist
+ * (first @max filled), or negative errno.
  * Missing base directory is not an error: this host has answered to nobody.
  */
 int publishers_list(const char *base_dir, struct publisher_entry *out,
 		    size_t max, size_t *count);
+
+/*
+ * Read every profile under @base_dir into a buffer sized to hold them.
+ *
+ * *out is NULL when the host has answered to nobody; free() it otherwise.
+ *
+ * Returns 0 (with *out and *count set), or negative errno.
+ */
+int publishers_list_alloc(const char *base_dir, struct publisher_entry **out,
+			  size_t *count);
 
 /*
  * How many of the listed publishers hold an attestation key.

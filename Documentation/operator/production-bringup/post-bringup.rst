@@ -548,6 +548,13 @@ attestation key and how much validity that key's certificate has left. It ends
 with what the machine has room for -- the keys held, the TPM's own persistent
 capacity and this build's maximum -- so the ceiling is readable before it is
 met; :doc:`../platform-support` covers what sets it.
+
+"Every publisher" is not bounded by that maximum. A profile directory is
+created the moment somebody agrees to a publisher, before any enrollment, and
+nothing prunes it, so a host that has been used carries more directories than
+it holds keys -- and the listing walks all of them, including the ones that
+hold a consent record and nothing else. The counts under it are over the same
+full set, which is what makes them worth reading on a host near its capacity.
 ``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
 in that order -- a key with no directory left to name it would be worse than
 either state alone, so nothing is deleted if the eviction fails. An identity

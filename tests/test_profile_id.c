@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -953,6 +954,28 @@ static void test_a_listing_that_does_not_fit_is_refused(void)
 	      "a listing that cannot hold every profile is refused, not cut short");
 	CHECK(count == bound + extra,
 	      "and the refusal says how many profiles there are");
+
+	{
+		struct publisher_entry *all = NULL;
+		size_t seen = 0;
+
+		CHECK(publishers_list_alloc(base, &all, &seen) == 0 &&
+			      seen == bound + extra && all != NULL,
+		      "the allocating listing holds every profile there is");
+		free(all);
+	}
+
+	{
+		struct publisher_entry *none = (void *)-1;
+		size_t seen = 1;
+		char empty[256];
+
+		snprintf(empty, sizeof(empty), "/tmp/lota-profile-none.%d",
+			 getpid());
+		CHECK(publishers_list_alloc(empty, &none, &seen) == 0 &&
+			      none == NULL && seen == 0,
+		      "a host that answered to nobody allocates nothing");
+	}
 
 	for (size_t i = 0; i < bound + extra; i++) {
 		memset(id, (int)('0' + (i % 10)), sizeof(id) - 1);
