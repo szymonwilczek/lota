@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "lota_seal.h"
@@ -353,6 +354,70 @@ static void test_parse_rejects_zero_lengths(void)
 	PASS();
 }
 
+/*
+ * --seal-pcrs usage is the only on-host statement of the default set. It must
+ * name PCRs 0-7, keep PCR 14 out (an agent upgrade would destroy the secret),
+ * and name 0x40FF as the agent-bound set.
+ */
+static void test_usage_states_the_default_seal_set(void)
+{
+	char line[512];
+	char help[2048];
+	FILE *fp;
+	bool in_entry = false;
+	size_t used = 0;
+
+	TEST("--seal-pcrs usage matches the default mask");
+
+	fp = fopen("src/agent/main_utils.c", "re");
+	if (!fp)
+		fp = fopen("../src/agent/main_utils.c", "re");
+	if (!fp) {
+		FAIL("could not open main_utils.c");
+		return;
+	}
+	help[0] = '\0';
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "--seal-pcrs"))
+			in_entry = true;
+		else if (in_entry && strstr(line, "printf(\"  --"))
+			break;
+		if (!in_entry)
+			continue;
+		used += (size_t)snprintf(help + used, sizeof(help) - used, "%s",
+					 line);
+		if (used + 1 >= sizeof(help))
+			break;
+	}
+	fclose(fp);
+
+	if (!in_entry) {
+		FAIL("no --seal-pcrs entry in the usage text");
+		return;
+	}
+
+	if (LOTA_SEAL_DEFAULT_PCR_MASK &
+	    (1u << LOTA_SEAL_BOOT_COMMITMENT_PCR)) {
+		FAIL("the default mask now binds the boot commitment");
+		return;
+	}
+	if (strstr(help, "PCR14") || strstr(help, "PCR 14")) {
+		if (!strstr(help, "not")) {
+			FAIL("the line names PCR 14 without saying it is out of the default");
+			return;
+		}
+	}
+	if (!strstr(help, "0-7")) {
+		FAIL("the line does not name PCRs 0-7 as the default");
+		return;
+	}
+	if (!strstr(help, "0x40FF") && !strstr(help, "0x40ff")) {
+		FAIL("the line does not name the agent-bound set");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("Running LOTA sealed-blob format tests...\n\n");
@@ -361,6 +426,7 @@ int main(void)
 	test_default_mask_contents();
 	test_default_mask_excludes_the_boot_commitment();
 	test_agent_bound_mask_is_separate_and_named();
+	test_usage_states_the_default_seal_set();
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
 	test_parse_rejects_truncated();
