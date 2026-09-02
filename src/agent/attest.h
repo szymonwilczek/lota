@@ -147,24 +147,22 @@ const char *attest_stage_str(enum attest_stage stage);
 const char *attest_failure_reason(int ret);
 
 /*
- * attest_warn_cert_orphaned - say it when provisioning is about to replace
- * a key this publisher's stored certificate names
+ * attest_warn_cert_orphaned - say it when this publisher's stored certificate
+ * names a key the TPM does not hold
  *
  * @paths: the profile just bound, or NULL when the caller has none
  * @label: how this publisher is named in log lines
+ * @key_present: what tpm_aik_key_present() answered before provisioning
  *
- * Called immediately before provisioning, because provisioning is what makes
- * the answer stop being true. Every path that binds a profile and provisions
- * goes through this: the daemon's own, the continuous loop's per-target
- * binding, and the one-shot round. A cleared TPM strands all of them at once,
- * and one that stayed quiet would be a publisher whose refusals had no cause
- * on the host.
+ * Call right after provisioning: an absent key may come back derived to the
+ * value the certificate still names. Every path that binds a profile and
+ * provisions calls this, since a TPM clear strands all of them at once.
  *
- * Only logs. The verifier refuses those rounds on its own, and one
+ * Only logs. The round refuses the mismatched key itself, and one
  * publisher's enrollment never takes the host's enforcement down.
  */
 void attest_warn_cert_orphaned(const struct profile_paths *paths,
-			       const char *label);
+			       const char *label, int key_present);
 
 int export_policy(int mode);
 int do_attest(const char *server, int port, const char *ca_cert,

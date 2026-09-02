@@ -498,8 +498,7 @@ static int run_daemon(const struct run_daemon_params *params)
 			goto cleanup_tpm;
 		}
 
-		attest_warn_cert_orphaned(profile,
-					  profile ? profile->id : NULL);
+		int key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
 
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
@@ -508,6 +507,9 @@ static int run_daemon(const struct run_daemon_params *params)
 				 tpm_strerror(ret));
 			goto cleanup_tpm;
 		} else {
+			attest_warn_cert_orphaned(profile,
+						  profile ? profile->id : NULL,
+						  key_present);
 			ipc_set_tpm(&g_agent.ipc_ctx, &g_agent.tpm_ctx,
 				    LOTA_TOKEN_QUOTE_PCR_MASK);
 			lota_info("AIK ready, signed tokens enabled");
