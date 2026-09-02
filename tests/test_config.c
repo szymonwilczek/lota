@@ -1786,6 +1786,164 @@ static void test_config_dump_roundtrip(void)
 	PASS();
 }
 
+/*
+ * A key the dump omits reloads at its default. For the sealing keys that
+ * silently brings back the plaintext AIK auth seal_aik_auth_strict removes.
+ */
+static void test_config_dump_keeps_the_sealing_keys(void)
+{
+	struct lota_config cfg1, cfg2;
+	char dump_path[PATH_MAX];
+	FILE *f;
+	int fd;
+
+	TEST("config_dump -> config_load keeps at-rest sealing");
+	config_init(&cfg1);
+	cfg1.seal_persistent_primary = true;
+	cfg1.seal_aik_auth = true;
+	cfg1.seal_aik_auth_strict = true;
+
+	snprintf(dump_path, sizeof(dump_path), "%s/sealing.conf", tmpdir);
+	fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	f = fd >= 0 ? fdopen(fd, "w") : NULL;
+	if (fd >= 0 && !f)
+		close(fd);
+	if (!f) {
+		FAIL("fopen dump");
+		return;
+	}
+	config_dump(&cfg1, f);
+	fclose(f);
+
+	config_init(&cfg2);
+	if (config_load(&cfg2, dump_path) != 0) {
+		FAIL("reload failed");
+		return;
+	}
+
+	if (!cfg2.seal_persistent_primary) {
+		FAIL("seal_persistent_primary did not survive the dump");
+		return;
+	}
+	if (!cfg2.seal_aik_auth) {
+		FAIL("seal_aik_auth did not survive the dump");
+		return;
+	}
+	if (!cfg2.seal_aik_auth_strict) {
+		FAIL("seal_aik_auth_strict did not survive the dump");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Every key config_load() accepts must be printed by config_dump();
+ * deliberate exceptions go in exempt[] with the reason.
+ */
+static bool dump_prints_key(const char *body, const char *key)
+{
+	char needle[128];
+
+	snprintf(needle, sizeof(needle), "\"%s = ", key);
+	return strstr(body, needle) != NULL;
+}
+
+static void test_dump_prints_every_key_the_parser_takes(void)
+{
+	static const struct {
+		const char *key;
+		const char *why;
+	} exempt[] = {
+		{ "bpf", "an alias; the dump prints it as bpf_path" },
+		{ "no_verify_tls",
+		  "refused from a file on purpose, so a dump that emitted it "
+		  "would not parse back" },
+	};
+	char *source = NULL;
+	char *body;
+	char *end;
+	size_t len = 0;
+	FILE *fp;
+	const char *p;
+	unsigned missing = 0;
+
+	TEST("config_dump prints every key config_load accepts");
+
+	fp = fopen("src/agent/config.c", "re");
+	if (!fp)
+		fp = fopen("../src/agent/config.c", "re");
+	if (!fp) {
+		FAIL("could not open config.c");
+		return;
+	}
+	fseek(fp, 0, SEEK_END);
+	len = (size_t)ftell(fp);
+	rewind(fp);
+	source = malloc(len + 1);
+	if (!source || fread(source, 1, len, fp) != len) {
+		free(source);
+		fclose(fp);
+		FAIL("could not read config.c");
+		return;
+	}
+	source[len] = '\0';
+	fclose(fp);
+
+	body = strstr(source, "void config_dump(");
+	if (!body) {
+		free(source);
+		FAIL("could not find config_dump");
+		return;
+	}
+	end = strstr(body, "\n}\n");
+	if (end)
+		*end = '\0';
+
+	for (p = source; (p = strstr(p, "strcmp(key, \"")) != NULL;) {
+		char key[64];
+		char underscored[64];
+		char *dash;
+		const char *start;
+		const char *stop;
+		size_t n;
+		bool ok;
+
+		start = p + strlen("strcmp(key, \"");
+		stop = strchr(start, '"');
+		p = start;
+		if (!stop)
+			continue;
+		n = (size_t)(stop - start);
+		if (n == 0 || n >= sizeof(key))
+			continue;
+		memcpy(key, start, n);
+		key[n] = '\0';
+
+		/* hyphenated aliases are dumped with underscores */
+		snprintf(underscored, sizeof(underscored), "%s", key);
+		for (dash = underscored; *dash; dash++)
+			if (*dash == '-')
+				*dash = '_';
+
+		ok = dump_prints_key(body, key) ||
+		     dump_prints_key(body, underscored);
+		for (size_t i = 0;
+		     !ok && i < sizeof(exempt) / sizeof(exempt[0]); i++)
+			ok = strcmp(underscored, exempt[i].key) == 0;
+		if (!ok) {
+			printf("\n    the dump never prints %s ", key);
+			missing++;
+		}
+	}
+	free(source);
+
+	if (missing) {
+		FAIL("a key the parser accepts does not survive a dump");
+		return;
+	}
+	PASS();
+}
+
 static void test_config_dump_null(void)
 {
 	struct lota_config cfg;
@@ -2133,6 +2291,8 @@ int main(void)
 		test_config_load_rejects_group_writable,
 		test_config_load_rejects_symlink,
 		test_config_dump_roundtrip,
+		test_config_dump_keeps_the_sealing_keys,
+		test_dump_prints_every_key_the_parser_takes,
 		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
