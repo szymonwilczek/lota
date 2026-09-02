@@ -1320,6 +1320,55 @@ static void test_a_full_tpm_is_refused_the_same_way_twice(void)
 	PASS();
 }
 
+/*
+ * A key --seal-aik-auth cannot seal usually has no plaintext left,
+ * so the failure line must read each key's auth state, not assert plaintext.
+ */
+static void test_seal_report_reads_the_state_it_reports(void)
+{
+	FILE *fp;
+	char line[1024];
+	bool in_verb = false;
+	bool reads_state = false;
+	bool asserts_plaintext = false;
+
+	TEST("agent: the sealing report reads each key's state");
+
+	fp = open_shipped("src/agent/selftest.c");
+	if (!fp) {
+		FAIL("could not open the selftest sources");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (strstr(line, "int do_seal_aik_auth("))
+			in_verb = true;
+		else if (in_verb && line[0] == '}')
+			break;
+		if (!in_verb)
+			continue;
+		if (strstr(line, "profile_aik_auth_state") ||
+		    strstr(line, "profile_aik_auth_needs_sealing"))
+			reads_state = true;
+		if (strstr(line, "still hold their"))
+			asserts_plaintext = true;
+	}
+	fclose(fp);
+
+	if (!in_verb) {
+		FAIL("could not find do_seal_aik_auth");
+		return;
+	}
+	if (asserts_plaintext) {
+		FAIL("the failure line asserts a plaintext copy it never read");
+		return;
+	}
+	if (!reads_state) {
+		FAIL("the report never reads the state of a key it could not seal");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1346,6 +1395,7 @@ int main(void)
 	test_threat_model_names_what_separates_the_keys();
 	test_static_archive_paragraph_matches_the_archives();
 	test_a_full_tpm_is_refused_the_same_way_twice();
+	test_seal_report_reads_the_state_it_reports();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
