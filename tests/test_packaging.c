@@ -1081,6 +1081,61 @@ static void test_tpm_clear_section_names_what_refuses(void)
 	PASS();
 }
 
+/*
+ * The fleet CLI page calls the binary static. With a C toolchain present,
+ * go build picks the cgo resolvers for net and os/user and links libc,
+ * so the binary fails on an older glibc.
+ * A static claim needs CGO_ENABLED=0 in the recipe.
+ */
+static void test_static_cli_is_built_without_cgo(void)
+{
+	static const char *const page = "Documentation/operator/fleet-cli.rst";
+	FILE *fp;
+	char cmd[4096];
+	bool claims_static = false;
+	bool recipe_disables_cgo = false;
+	bool in_recipe = false;
+
+	TEST("build: a CLI documented as static is built with cgo off");
+
+	fp = open_shipped(page);
+	if (!fp) {
+		FAIL("could not open the fleet CLI reference");
+		return;
+	}
+	while (next_command(fp, cmd, sizeof(cmd)))
+		if (strstr(cmd, "static"))
+			claims_static = true;
+	fclose(fp);
+
+	if (!claims_static) {
+		/* the page no longer promises it; nothing to hold the recipe to */
+		PASS();
+		return;
+	}
+
+	fp = open_shipped("Makefile");
+	if (!fp) {
+		FAIL("could not open the Makefile");
+		return;
+	}
+	while (next_command(fp, cmd, sizeof(cmd))) {
+		if (strstr(cmd, "$(FLEETCTL_BIN):"))
+			in_recipe = true;
+		else if (in_recipe && cmd[0] != '\t' && cmd[0] != '\n')
+			in_recipe = false;
+		if (in_recipe && strstr(cmd, "CGO_ENABLED=0"))
+			recipe_disables_cgo = true;
+	}
+	fclose(fp);
+
+	if (!recipe_disables_cgo) {
+		FAIL("the recipe builds a dynamically linked binary");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1103,6 +1158,7 @@ int main(void)
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();
 	test_tpm_clear_section_names_what_refuses();
+	test_static_cli_is_built_without_cgo();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
