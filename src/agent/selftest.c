@@ -592,6 +592,7 @@ int do_seal_aik_auth(void)
 	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned sealed = 0;
+	unsigned strict = 0;
 	unsigned failed = 0;
 	int rc = 1;
 	int ret;
@@ -621,6 +622,7 @@ int do_seal_aik_auth(void)
 	 * in plaintext while reporting success.
 	 */
 	for (size_t i = 0; i < count; i++) {
+		enum profile_aik_auth_state before;
 		struct profile_paths paths;
 
 		if (!entries[i].has_aik_handle)
@@ -635,10 +637,25 @@ int do_seal_aik_auth(void)
 			continue;
 		}
 
+		/* read first: a successful seal changes it */
+		before = profile_aik_auth_state(&paths);
+
 		ret = tpm_aik_reseal_auth(&g_agent.tpm_ctx);
 		if (ret < 0) {
-			fprintf(stderr, "  %s: %s\n", entries[i].id,
-				tpm_strerror(ret));
+			/* already strict: nothing to seal, so not a failure */
+			if (!profile_aik_auth_needs_sealing(before) &&
+			    before != PROFILE_AIK_AUTH_NONE) {
+				fprintf(stderr,
+					"  %s: already %s, so there was "
+					"nothing to seal\n",
+					entries[i].id,
+					profile_aik_auth_state_str(before));
+				strict++;
+				continue;
+			}
+			fprintf(stderr, "  %s: %s (its authorization is %s)\n",
+				entries[i].id, tpm_strerror(ret),
+				profile_aik_auth_state_str(before));
 			failed++;
 			continue;
 		}
@@ -662,6 +679,15 @@ int do_seal_aik_auth(void)
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
+
+	if (sealed == 0 && strict > 0) {
+		fprintf(stderr,
+			"Nothing to seal: %u attestation key%s already hold "
+			"the authorization sealed with no plaintext copy.\n",
+			strict, strict == 1 ? "" : "s");
+		rc = failed ? 1 : 0;
+		goto out;
+	}
 
 	if (sealed == 0) {
 		fprintf(stderr,
@@ -690,10 +716,16 @@ int do_seal_aik_auth(void)
 			fprintf(stderr, "No plaintext copy remains on disk.\n");
 	}
 
+	if (strict)
+		fprintf(stderr,
+			"%u already held the authorization sealed with no "
+			"plaintext copy, so there was nothing to seal.\n",
+			strict);
+
 	if (failed) {
 		fprintf(stderr,
-			"%u could not be sealed and still hold their "
-			"authorization in plaintext.\n",
+			"%u could not be sealed; the line for each names the "
+			"state its authorization is in.\n",
 			failed);
 		goto out;
 	}

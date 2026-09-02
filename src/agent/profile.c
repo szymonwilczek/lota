@@ -516,6 +516,11 @@ bool profile_aik_auth_exposed(enum profile_aik_auth_state state)
 	       state == PROFILE_AIK_AUTH_BOTH;
 }
 
+bool profile_aik_auth_needs_sealing(enum profile_aik_auth_state state)
+{
+	return profile_aik_auth_exposed(state);
+}
+
 int profile_consent_record(const struct profile_paths *paths, uid_t by)
 {
 	char line[160];

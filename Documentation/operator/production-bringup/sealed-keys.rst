@@ -72,9 +72,14 @@ the fact, not stated from the configuration:
 
 A host with no publishers -- an operator-owned fleet reporting to a single
 verifier -- has one key, the pre-profile default, and seals that. On a host
-with publishers that key belongs to nobody and is left alone. Any key that
-could not be sealed is named, and the command exits non-zero, because the
-authorization of an unsealed key is still on disk in plaintext.
+with publishers that key belongs to nobody and is left alone.
+
+Any key that could not be sealed is named with the state its authorization is
+actually in, read off the disk before the attempt, and the command exits
+non-zero. A key that is already sealed with no plaintext copy is the exception:
+there was nothing left to seal, which is the hardened state, so it is reported
+as such and does not take the exit status with it. Re-running the verb on a fleet
+that is already strict therefore succeeds.
 
 ``--reprovision-aik`` walks the same set: it rotates every publisher's key,
 names the publishers whose certificates the rotation just invalidated -- each
