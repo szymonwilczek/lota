@@ -209,6 +209,12 @@ carries against ``LOTA_ABI_MAJOR``, and the installed header set as stated in
 three places that must agree -- ``packaging/abi/public-headers.list``, the
 ``make install`` rule, and ``packaging/nfpm/lota-sdk-devel.yaml``.
 
+It holds the two static archives to the same baseline, without the version
+nodes an archive cannot carry, and to one object each. The version script
+hides a helper that stops being ``static`` from the shared-library check and
+not from the archive, so this is where such a symbol surfaces -- and it is
+what keeps the account of the archives above true.
+
 It then stages a prefix holding exactly what the packages install and builds
 against it the way an integrator does: every public header on its own, and a
 compile-and-link through each pkg-config module that calls one function from
