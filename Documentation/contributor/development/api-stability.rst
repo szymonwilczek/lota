@@ -110,10 +110,17 @@ The Wine hook is worse, because it is ``LD_PRELOAD``\ ed and therefore resolves
 before the game's own libraries. An integrator that wants the gaming or the
 token-verification API links that library directly and gets it from there.
 
-The filter applies to the shared libraries only. ``liblotagaming.a`` and
-``liblotaserver.a`` are static archives, so a program that links one pulls in
-whichever objects it references, including symbols that are not API. Static
-linking opts out of the ABI guarantee along with it.
+The filter applies to the shared libraries only, and ``liblotagaming.a`` and
+``liblotaserver.a`` need none of it: every function in those sources that no
+header declares is ``static``, so ``nm`` on either archive reports exactly the
+symbols the matching header declares and there is nothing else to pull in. Each
+archive is also a single object file, so a program that calls one function
+links the whole API.
+
+What a static link opts out of is the version information. An archive carries
+no soname and no version node, so nothing in the resulting program records
+which surface it was built against and no later library can satisfy or refuse
+it. That is the ABI guarantee, and it is given up by the form of the link.
 
 Soname and ABI version
 ======================
