@@ -768,3 +768,44 @@ func TestListTenantFlagRejectsPositional(t *testing.T) {
 		}
 	}
 }
+
+// The verbs that change a client's or a machine's trust state. Four go through
+// parseActionArgs and two (ban, unban) check the same two flags themselves;
+// all six refuse without -reason and -actor.
+var trustChangingVerbs = []string{"revoke", "unrevoke", "ban", "unban", "reanchor", "delete"}
+
+// TestUsageShowsTheFlagsEveryTrustChangeRequires checks the built-in help against
+// the parser. Every verb that changes a client's trust state goes refuses without
+// both -reason and -actor, so an operator who types what -h prints gets a usage
+// error and exit 2 -- on unrevoke, in the middle of restoring a machine somebody
+// banned. On a host with no browser the help is the only interface documentation
+// there is.
+func TestUsageShowsTheFlagsEveryTrustChangeRequires(t *testing.T) {
+	for _, verb := range trustChangingVerbs {
+		var line string
+		for _, l := range strings.Split(usageText, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), verb+" ") {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("usage text documents no %s command", verb)
+		}
+		if !strings.Contains(line, "-reason R") || !strings.Contains(line, "-actor A") {
+			t.Errorf("usage for %s = %q, want both -reason R and -actor A", verb, strings.TrimSpace(line))
+		}
+	}
+}
+
+// TestEveryTrustChangeRefusesWithoutTheFlags is the other half: the parser
+// really does require them, so the help above is not documenting a rule the
+// tool stopped enforcing.
+func TestEveryTrustChangeRefusesWithoutTheFlags(t *testing.T) {
+	for _, verb := range trustChangingVerbs {
+		code, _, stderr := runCLI(t, noEnv, "-server", "http://127.0.0.1:0", verb, "client-1")
+		if code != exitUsage {
+			t.Errorf("%s with no flags: exit = %d, want usage error (stderr %q)", verb, code, stderr)
+		}
+	}
+}
