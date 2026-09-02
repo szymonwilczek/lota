@@ -1225,6 +1225,46 @@ static void test_threat_model_names_what_separates_the_keys(void)
 	PASS();
 }
 
+/*
+ * The static archives export nothing but API: every other function in those
+ * sources is static. What a static link gives up is the soname and version
+ * node, and each archive is a single object, so one call pulls in the whole
+ * API. The page must say that, not claim non-API symbols.
+ */
+static void test_static_archive_paragraph_matches_the_archives(void)
+{
+	static const char *const page =
+		"Documentation/contributor/development/api-stability.rst";
+	char section[16384];
+
+	TEST("docs: the static archives are described as they are built");
+
+	if (!read_rst_section(page, "Shared-library symbols", section,
+			      sizeof(section))) {
+		FAIL("could not read the shared-library symbols section");
+		return;
+	}
+	if (!section_claims(section, "liblotagaming.a") ||
+	    !section_claims(section, "liblotaserver.a")) {
+		FAIL("the section no longer describes the static archives");
+		return;
+	}
+	if (section_claims(section, "symbols that are not API")) {
+		FAIL("the section claims the archives carry symbols that are not API");
+		return;
+	}
+	if (!section_claims(section, "soname") ||
+	    !section_claims(section, "version node")) {
+		FAIL("the section does not say what a static link gives up");
+		return;
+	}
+	if (!section_claims(section, "single object")) {
+		FAIL("the section does not say a static link absorbs the whole archive");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1249,6 +1289,7 @@ int main(void)
 	test_tpm_clear_section_names_what_refuses();
 	test_static_cli_is_built_without_cgo();
 	test_threat_model_names_what_separates_the_keys();
+	test_static_archive_paragraph_matches_the_archives();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
