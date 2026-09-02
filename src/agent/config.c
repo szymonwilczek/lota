@@ -1294,6 +1294,14 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 	fprintf(fp, "daemon = %s\n", cfg->daemon ? "true" : "false");
 	fprintf(fp, "pid_file = %s\n", cfg->pid_file);
 
+	fprintf(fp, "\n# At-rest sealing\n");
+	fprintf(fp, "seal_persistent_primary = %s\n",
+		cfg->seal_persistent_primary ? "true" : "false");
+	fprintf(fp, "seal_aik_auth = %s\n",
+		cfg->seal_aik_auth ? "true" : "false");
+	fprintf(fp, "seal_aik_auth_strict = %s\n",
+		cfg->seal_aik_auth_strict ? "true" : "false");
+
 	fprintf(fp, "\n# Policy signing\n");
 	if (cfg->signing_key[0])
 		fprintf(fp, "signing_key = %s\n", cfg->signing_key);
