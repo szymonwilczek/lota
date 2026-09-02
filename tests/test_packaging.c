@@ -1265,6 +1265,61 @@ static void test_static_archive_paragraph_matches_the_archives(void)
 	PASS();
 }
 
+/*
+ * Enrollment refuses a full TPM at handle bind and at key provisioning.
+ * The operator page promises both name the count and the verbs that free a slot,
+ * so every -ENOSPC branch must call report_no_room_for_a_key().
+ */
+static void test_a_full_tpm_is_refused_the_same_way_twice(void)
+{
+	static const char *const page =
+		"Documentation/operator/platform-support.rst";
+	static const char *const src_file = "src/agent/enroll_client.c";
+	char section[16384];
+	FILE *fp;
+	char line[1024];
+	unsigned no_space_branches = 0;
+	unsigned reported = 0;
+
+	TEST("agent: a full TPM is refused with the count and the verbs");
+
+	if (!read_rst_section(page, "How many publishers a TPM has room for",
+			      section, sizeof(section))) {
+		FAIL("could not read the publisher capacity section");
+		return;
+	}
+	if (!section_claims(section, "--forget-publisher")) {
+		/* the page no longer promises it; nothing to hold the code to */
+		PASS();
+		return;
+	}
+
+	fp = open_shipped(src_file);
+	if (!fp) {
+		FAIL("could not open the enrollment client");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		/* the branch, not a mention of the errno in a comment */
+		if (strstr(line, "== -ENOSPC"))
+			no_space_branches++;
+		if (strstr(line, "report_no_room_for_a_key("))
+			reported++;
+	}
+	fclose(fp);
+
+	if (no_space_branches == 0) {
+		FAIL("no refusal for a full TPM is left to check");
+		return;
+	}
+	/* one definition plus one call per branch */
+	if (reported < no_space_branches + 1) {
+		FAIL("a refusal for a full TPM does not name the count and the verbs");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1290,6 +1345,7 @@ int main(void)
 	test_static_cli_is_built_without_cgo();
 	test_threat_model_names_what_separates_the_keys();
 	test_static_archive_paragraph_matches_the_archives();
+	test_a_full_tpm_is_refused_the_same_way_twice();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
