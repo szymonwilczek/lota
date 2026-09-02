@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int tests_run;
@@ -1136,6 +1137,94 @@ static void test_static_cli_is_built_without_cgo(void)
 	PASS();
 }
 
+/*
+ * Reads the integer a header #defines, so a page's claim about a record on disk
+ * can be held against the record the build writes.
+ */
+static bool header_define(const char *rel, const char *name, long *out)
+{
+	FILE *fp = open_shipped(rel);
+	char line[1024];
+	bool found = false;
+
+	if (!fp)
+		return false;
+	while (!found && fgets(line, sizeof(line), fp)) {
+		const char *p = strstr(line, "#define ");
+		char *end;
+		long value;
+
+		if (!p)
+			continue;
+		p += strlen("#define ");
+		if (strncmp(p, name, strlen(name)) != 0)
+			continue;
+		p += strlen(name);
+		if (*p != ' ' && *p != '\t')
+			continue;
+		value = strtol(p, &end, 0);
+		if (end == p)
+			continue;
+		*out = value;
+		found = true;
+	}
+	fclose(fp);
+	return found;
+}
+
+/*
+ * The threat model must name key_derivation as the AIK metadata byte that
+ * separates per-publisher keys from the shared key; the agent reads it to
+ * decide. The record version never changed, so any version the page names
+ * must be TPM_AIK_META_VERSION.
+ */
+static void test_threat_model_names_what_separates_the_keys(void)
+{
+	static const char *const page =
+		"Documentation/security/threat-model.rst";
+	char section[16384];
+	long record_version = 0;
+	unsigned n;
+
+	TEST("docs: the threat model names what separates the AIK keys");
+
+	if (!read_rst_section(page, "Attestation CA", section,
+			      sizeof(section))) {
+		FAIL("could not read the attestation CA section");
+		return;
+	}
+	if (!section_claims(section, "metadata record")) {
+		FAIL("the section no longer describes the AIK metadata record");
+		return;
+	}
+	if (!section_claims(section, "key_derivation")) {
+		FAIL("the field that carries the distinction is not named");
+		return;
+	}
+	if (!header_define("src/agent/tpm.h", "TPM_AIK_META_VERSION",
+			   &record_version)) {
+		FAIL("could not read TPM_AIK_META_VERSION from the header");
+		return;
+	}
+
+	/* a version the page attributes to the record is the one it carries */
+	for (n = 0; n < 10; n++) {
+		char spaced[32];
+		char hyphened[32];
+
+		snprintf(spaced, sizeof(spaced), "version %u", n);
+		snprintf(hyphened, sizeof(hyphened), "version-%u", n);
+		if (!section_claims(section, spaced) &&
+		    !section_claims(section, hyphened))
+			continue;
+		if ((long)n != record_version) {
+			FAIL("the section names a record version the agent never writes");
+			return;
+		}
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Packaging Tests ===\n\n");
@@ -1159,6 +1248,7 @@ int main(void)
 	test_tpm_clear_section_says_what_nv_costs();
 	test_tpm_clear_section_names_what_refuses();
 	test_static_cli_is_built_without_cgo();
+	test_threat_model_names_what_separates_the_keys();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
