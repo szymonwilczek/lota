@@ -589,16 +589,17 @@ static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
  */
 int do_seal_aik_auth(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned sealed = 0;
 	unsigned failed = 0;
+	int rc = 1;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/* Every profile: a key left out is neither sealed nor reported */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -609,7 +610,7 @@ int do_seal_aik_auth(void)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		return 1;
+		goto out;
 	}
 
 	/*
@@ -655,7 +656,7 @@ int do_seal_aik_auth(void)
 			fprintf(stderr, "Could not seal AIK auth: %s\n",
 				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
-			return 1;
+			goto out;
 		}
 		sealed++;
 	}
@@ -666,7 +667,8 @@ int do_seal_aik_auth(void)
 		fprintf(stderr,
 			"No attestation key to seal: this host holds none "
 			"yet. Enroll with a publisher first.\n");
-		return failed ? 1 : 0;
+		rc = failed ? 1 : 0;
+		goto out;
 	}
 
 	fprintf(stderr,
@@ -693,9 +695,12 @@ int do_seal_aik_auth(void)
 			"%u could not be sealed and still hold their "
 			"authorization in plaintext.\n",
 			failed);
-		return 1;
+		goto out;
 	}
-	return 0;
+	rc = 0;
+out:
+	free(entries);
+	return rc;
 }
 
 /*
@@ -705,16 +710,17 @@ int do_seal_aik_auth(void)
  */
 int do_reprovision_aik(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	unsigned rotated = 0;
 	unsigned failed = 0;
+	int rc = 1;
 	int ret;
 
 	setenv("TSS2_LOG", "all+none", 0);
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/* every profile: a key this walk never saw is a key that is not rotated */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -725,7 +731,7 @@ int do_reprovision_aik(void)
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
-		return 1;
+		goto out;
 	}
 
 	/*
@@ -765,7 +771,7 @@ int do_reprovision_aik(void)
 			fprintf(stderr, "AIK re-provisioning failed: %s\n",
 				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
-			return 1;
+			goto out;
 		}
 		rotated++;
 	}
@@ -776,7 +782,8 @@ int do_reprovision_aik(void)
 		fprintf(stderr,
 			"No attestation key to rotate: this host holds none "
 			"yet.\n");
-		return failed ? 1 : 0;
+		rc = failed ? 1 : 0;
+		goto out;
 	}
 
 	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
@@ -826,9 +833,12 @@ int do_reprovision_aik(void)
 
 	if (failed) {
 		fprintf(stderr, "%u could not be rotated.\n", failed);
-		return 1;
+		goto out;
 	}
-	return 0;
+	rc = 0;
+out:
+	free(entries);
+	return rc;
 }
 
 /*

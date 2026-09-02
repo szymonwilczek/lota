@@ -425,7 +425,7 @@ static void release_unfilled_handle(struct tpm_context *tpm,
  */
 static void report_no_room_for_a_key(struct tpm_context *tpm)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	uint32_t used = 0;
 	uint32_t total = 0;
 	size_t count = 0;
@@ -446,9 +446,9 @@ static void report_no_room_for_a_key(struct tpm_context *tpm)
 				used, used == 1 ? "" : "s", total);
 	}
 
-	if (publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			    sizeof(entries) / sizeof(entries[0]), &count) == 0)
+	if (publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count) == 0)
 		held = publishers_keys_held(entries, count);
+	free(entries);
 
 	if (held == 1)
 		fprintf(stderr,
@@ -1118,12 +1118,16 @@ static void print_key_capacity(const struct publisher_entry *entries,
 
 int do_list_publishers(void)
 {
-	struct publisher_entry entries[LOTA_PROFILE_MAX_AIK_HANDLES];
+	struct publisher_entry *entries = NULL;
 	size_t count = 0;
 	int ret;
 
-	ret = publishers_list(LOTA_PROFILE_BASE_DIR, entries,
-			      sizeof(entries) / sizeof(entries[0]), &count);
+	/*
+	 * Consent creates a profile before enrollment and nothing prunes,
+	 * so the directory can exceed LOTA_PROFILE_MAX_AIK_HANDLES;
+	 * list them all, or --forget-publisher has no id to take.
+	 */
+	ret = publishers_list_alloc(LOTA_PROFILE_BASE_DIR, &entries, &count);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read %s: %s\n",
 			LOTA_PROFILE_BASE_DIR, strerror(-ret));
@@ -1132,14 +1136,14 @@ int do_list_publishers(void)
 
 	if (count == 0) {
 		printf("This machine answers to no publisher.\n");
+		free(entries);
 		return 0;
 	}
 
 	/*
 	 * One TPM open for the whole listing, and only to read public areas.
-	 * A host whose TPM will not open still gets the listing: every line
-	 * above comes off the disk, and the key check is the one that would
-	 * have been missing anyway.
+	 * A host whose TPM will not open still gets the listing: only the
+	 * key check needs the TPM.
 	 */
 	bool tpm_open = tpm_init(&g_agent.tpm_ctx) == 0;
 
@@ -1171,6 +1175,7 @@ int do_list_publishers(void)
 	       "receives none of it. What a report contains is listed in the "
 	       "operator\ndocumentation.\n");
 	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
+	free(entries);
 	return 0;
 }
 
