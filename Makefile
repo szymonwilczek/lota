@@ -567,9 +567,13 @@ $(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
 # Go fleet CLI
+# CGO_ENABLED=0: the operator reference calls this binary static, and that is
+# what lets it run from a workstation with nothing on it but network access.
+# A plain go build takes the cgo net and os/user resolvers wherever a C
+# toolchain exists, and the result needs the build host's glibc.
 $(FLEETCTL_BIN): $(wildcard $(SRC_DIR)/fleetctl/*.go $(SRC_DIR)/fleetctl/**/*.go) | $(BUILD_DIR)
 	$(QUIET_GO)
-	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) go build -trimpath -o $(abspath $@) .
+	$(Q)cd $(SRC_DIR)/fleetctl && env GOCACHE=$(GOCACHE) CGO_ENABLED=0 go build -trimpath -o $(abspath $@) .
 
 # Go synthetic-fleet load generator (lives in the verifier module)
 $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/loadgen/**/*.go $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go) | $(BUILD_DIR)
