@@ -740,17 +740,43 @@ observability-lint:
 # Source RPM (COPR / rpmbuild from source)
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
 # COPR drives this through .copr/Makefile; locally run `make srpm`.
-# Spec Version uses ~ for the prerelease, so the project version is normalised the same way.
+# The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
+# (rpm spells the prerelease ~), so a version bump touches VERSION alone.
+# An entry is added unless the spec already holds one for this version.
 SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 SRPM_TREE := $(BUILD_DIR)/srpmtree
+SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
 
-srpm:
+srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
-	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(OUTDIR)
+	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
 	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
 		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
-	$(Q)rpmbuild -bs packaging/rpm/lota.spec \
+	$(Q)awk -v ver='$(SRPM_VERSION)' -v src='$(PROJECT_VERSION)' \
+		-v date="$$(LC_ALL=C git log -1 --format=%cd --date=format:'%a %b %d %Y')" ' \
+	NR == FNR { \
+		if ($$1 == "Release:") { rel = $$2; sub(/%.*/, "", rel) } \
+		if (inlog && /^\* / && !who) { \
+			who = $$0; \
+			sub(/^\* [^ ]+ [^ ]+ [^ ]+ [^ ]+ /, "", who); \
+			sub(/ - [^ ]+$$/, "", who); \
+		} \
+		if (inlog && /^\* / && $$NF == ver "-" rel) released = 1; \
+		if (/^%changelog/) inlog = 1; \
+		next; \
+	} \
+	{ gsub(/@VERSION@/, ver) } \
+	$$0 == "@CHANGELOG@" { \
+		if (!released) { \
+			print "* " date " " who " - " ver "-" rel; \
+			print "- Packaged from the tree at " src "."; \
+			print ""; \
+		} \
+		next; \
+	} \
+	{ print }' packaging/rpm/lota.spec packaging/rpm/lota.spec > $(SRPM_SPEC)
+	$(Q)rpmbuild -bs $(SRPM_SPEC) \
 		--define "_topdir $(abspath $(SRPM_TREE))" \
 		--define "_srcrpmdir $(abspath $(OUTDIR))" \
 		--define "_sourcedir $(abspath $(SRPM_TREE)/SOURCES)"
@@ -820,7 +846,7 @@ check-version-tag:
 # Package-manifest parity gate
 # nfpm configs and the RPM spec describe the same packages;
 # host gets whichever one built the package it installed,
-# so they must ship the same files and name the same version.
+# so they must ship the same files; the spec takes its version from VERSION.
 # See scripts/check-package-manifests.sh
 check-package-manifests:
 	@scripts/check-package-manifests.sh
