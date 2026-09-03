@@ -1917,6 +1917,12 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
 	fi
+	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
+		command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_hsm_ca_example.sh; \
+	else \
+		echo "SKIP: test_hsm_ca_example.sh (no softhsm2-util, pkcs11-tool or openssl)"; \
+	fi
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
