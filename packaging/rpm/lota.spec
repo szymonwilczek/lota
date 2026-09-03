@@ -2,7 +2,7 @@
 # RPM spec for the LOTA packages, built from source for COPR / rpmbuild.
 #
 # This spec builds in a clean chroot, so rpmbuild generates the soname
-# dependencies automatically and produces the four subpackages from one
+# dependencies automatically and produces the five subpackages from one
 # source RPM.
 #
 # Go services are not vendored, so the COPR project must have external
@@ -12,11 +12,13 @@
 # top-level VERSION file (0.9.0-rc1 -> 0.9.0~rc1), so a version bump touches
 # VERSION alone; build through `make srpm`, not rpmbuild on this file.
 
-# No debuginfo subpackage:
-# rpm's debuginfo extraction strips the binaries, but the agent binary is
-# fsverity-measured and its hash is pinned, so it must ship exactly as built.
-# Disabling debug_package also keeps the Go binaries intact.
+# Ship the built files byte for byte: the agent binary's fs-verity hash is
+# pinned and the BPF object is signed. Debuginfo extraction and the three strip
+# BRPs each rewrite ELF files, so all four are off; %check verifies both.
 %global debug_package %{nil}
+%global __brp_strip %{nil}
+%global __brp_strip_comment_note %{nil}
+%global __brp_strip_lto %{nil}
 
 Name:           lota
 Version:        @VERSION@
