@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -180,5 +182,52 @@ func TestSelectAIKStoreRefusals(t *testing.T) {
 	})
 	if err != nil || cs == nil {
 		t.Fatalf("--aik-ca-cert alone must select the certificate-backed store: cs=%v err=%v", cs, err)
+	}
+}
+
+// With a shared database, the certificate-backed store must list the clients
+// registered in it, not a per-instance registry that differs per
+// load-balancer hop and empties on restart.
+func TestSelectAIKStoreServesTheDeploymentsRegistry(t *testing.T) {
+	caPath := writeTestCARoot(t)
+
+	dir := t.TempDir()
+	db, err := store.OpenDB(filepath.Join(dir, "shared.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	// what another instance registered, in the database both share
+	shared := store.NewSQLiteAIKStore(db)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	const registered = "client-registered-through-instance-a"
+	if err := shared.RegisterAIK(registered, &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
+
+	aik, cs, err := selectAIKStore(aikStoreParams{
+		StorePath:   t.TempDir(),
+		CACerts:     []string{caPath},
+		RequireCert: true,
+	}, func() (store.AIKStore, error) { return shared, nil })
+	if err != nil {
+		t.Fatalf("selectAIKStore: %v", err)
+	}
+	if cs == nil {
+		t.Fatal("a trust anchor must still select the certificate-backed store")
+	}
+
+	clients := aik.ListClients()
+	if len(clients) != 1 || clients[0] != registered {
+		t.Fatalf("the certificate-backed store lists %v; the deployment's registry holds %q",
+			clients, registered)
+	}
+
+	if got, err := aik.GetAIK(registered); err != nil || got == nil {
+		t.Fatalf("the client another instance registered must be readable here: %v", err)
 	}
 }
