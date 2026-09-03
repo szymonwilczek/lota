@@ -573,8 +573,19 @@ $(VERIFIER_BIN): $(wildcard $(SRC_DIR)/verifier/*.go $(SRC_DIR)/verifier/**/*.go
 # Go attestation CA
 # GO_TAGS optionally selects build tags, e.g. GO_TAGS=pkcs11 to compile the
 # HSM-backed signing-key support (needs cgo and a PKCS#11 module at runtime).
+#
+# The stamp holds GO_TAGS and is rewritten only when it changes, so a new tag
+# set rebuilds the CA.
 GO_TAGS ?=
-$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) | $(BUILD_DIR)
+ATTESTCA_TAGS_STAMP := $(BUILD_DIR)/.attestca-tags
+$(ATTESTCA_TAGS_STAMP): FORCE | $(BUILD_DIR)
+	$(Q)printf '%s\n' '$(GO_TAGS)' | cmp -s - $@ 2>/dev/null || printf '%s\n' '$(GO_TAGS)' >$@
+
+# Always out of date: the stamp recipe runs every time and compares itself
+.PHONY: FORCE
+FORCE:
+
+$(ATTESTCA_BIN): $(wildcard $(SRC_DIR)/attestca/*.go $(SRC_DIR)/attestca/**/*.go $(SRC_DIR)/crl/*.go) $(ATTESTCA_TAGS_STAMP) | $(BUILD_DIR)
 	$(QUIET_GO)
 	$(Q)cd $(SRC_DIR)/attestca && env GOCACHE=$(GOCACHE) go build -trimpath $(if $(GO_TAGS),-tags $(GO_TAGS),) -o $(abspath $@) .
 
