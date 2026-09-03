@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -1110,26 +1111,58 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	return info, true
 }
 
-// returns all known client IDs as a union of AIK store and nonce store
+// ListClients returns every known client: the durable baseline record first,
+// then AIK registrations and this process's challenge history.
+// Under the Privacy CA flow nothing registers into the AIK store at runtime,
+// so only the baseline record is shared and survives a restart.
 func (v *Verifier) ListClients() []string {
 	seen := make(map[string]struct{})
 	var clients []string
 
-	for _, id := range v.aikStore.ListClients() {
-		if _, ok := seen[id]; !ok {
+	add := func(ids []string) {
+		for _, id := range ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
 			seen[id] = struct{}{}
 			clients = append(clients, id)
 		}
 	}
 
-	for _, id := range v.nonceStore.ListActiveClients() {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			clients = append(clients, id)
-		}
-	}
+	add(v.baselineStore.ListClients())
+	add(v.aikStore.ListClients())
+	add(v.nonceStore.ListActiveClients())
 
 	return clients
+}
+
+// DurableClientsPage returns one page of the durable client record,
+// ordered by client ID.
+func (v *Verifier) DurableClientsPage(limit, offset int) ([]string, error) {
+	if pager, ok := v.baselineStore.(PagedClientLister); ok {
+		return pager.ListClientsPage(limit, offset)
+	}
+
+	all := v.baselineStore.ListClients()
+	sort.Strings(all)
+	if offset >= len(all) {
+		return []string{}, nil
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], nil
+}
+
+// CountDurableClients returns the number of clients with a durable record.
+func (v *Verifier) CountDurableClients() int {
+	return v.baselineStore.Stats().TotalClients
+}
+
+// IsDurableClient reports whether the client has a durable record.
+func (v *Verifier) IsDurableClient(clientID string) bool {
+	return v.baselineStore.GetBaseline(clientID) != nil
 }
 
 // returns the configured revocation store

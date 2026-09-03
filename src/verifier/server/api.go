@@ -548,105 +548,39 @@ func (h *APIHandler) handleListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clients []string
-	total := 0
+	// durable baseline record first, then clients only this instance knows
+	// (out-of-band AIK registrations, sessions with no baseline yet)
+	total := h.verifier.CountDurableClients()
 
-	aikStore := h.verifier.AIKStore()
-	if lister, ok := aikStore.(store.PaginatedClientLister); ok {
-		if listerE, ok := aikStore.(store.PaginatedClientListerWithError); ok {
-			clients, err = listerE.ListClientsPageE(limit, offset)
-			if err != nil {
-				h.log.Error("failed to list clients page", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
-			}
-		} else {
-			clients = lister.ListClientsPage(limit, offset)
+	clients, err := h.verifier.DurableClientsPage(limit, offset)
+	if err != nil {
+		h.log.Error("failed to list clients page", "error", err)
+		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
+		return
+	}
+
+	instanceOnly := make([]string, 0)
+	for _, id := range h.verifier.ListClients() {
+		if !h.verifier.IsDurableClient(id) {
+			instanceOnly = append(instanceOnly, id)
+		}
+	}
+	sort.Strings(instanceOnly)
+	total += len(instanceOnly)
+
+	if len(clients) < limit {
+		instanceOffset := 0
+		if offset > total-len(instanceOnly) {
+			instanceOffset = offset - (total - len(instanceOnly))
 		}
 
-		dbTotal := 0
-		switch counter := aikStore.(type) {
-		case store.ClientCounterWithError:
-			var err error
-			dbTotal, err = counter.CountClientsE()
-			if err != nil {
-				h.log.Error("failed to count clients", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
+		if instanceOffset < len(instanceOnly) {
+			need := limit - len(clients)
+			end := instanceOffset + need
+			if end > len(instanceOnly) {
+				end = len(instanceOnly)
 			}
-		case store.ClientCounter:
-			dbTotal = counter.CountClients()
-		}
-
-		active := h.verifier.ListActiveClients()
-		activeOnly := make([]string, 0, len(active))
-
-		switch checker := aikStore.(type) {
-		case store.ClientExistenceBatchChecker:
-			existing, err := checker.ExistingClients(active)
-			if err != nil {
-				h.log.Error("failed to check active client existence in batch", "error", err)
-				writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-				return
-			}
-
-			for _, id := range active {
-				if _, exists := existing[id]; !exists {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		case store.ClientExistenceChecker:
-			for _, id := range active {
-				exists, err := checker.HasClient(id)
-				if err != nil {
-					h.log.Error("failed to check client existence", "client_id", id, "error", err)
-					writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "database unavailable"})
-					return
-				}
-				if !exists {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		default:
-			registered := make(map[string]struct{})
-			for _, id := range aikStore.ListClients() {
-				registered[id] = struct{}{}
-			}
-			for _, id := range active {
-				if _, ok := registered[id]; !ok {
-					activeOnly = append(activeOnly, id)
-				}
-			}
-		}
-
-		sort.Strings(activeOnly)
-
-		total = dbTotal + len(activeOnly)
-
-		if len(clients) < limit {
-			activeOffset := 0
-			if offset > dbTotal {
-				activeOffset = offset - dbTotal
-			}
-
-			if activeOffset < len(activeOnly) {
-				need := limit - len(clients)
-				end := activeOffset + need
-				if end > len(activeOnly) {
-					end = len(activeOnly)
-				}
-				clients = append(clients, activeOnly[activeOffset:end]...)
-			}
-		}
-	} else {
-		all := h.verifier.ListClients()
-		total = len(all)
-		if offset < len(all) {
-			end := offset + limit
-			if end > len(all) {
-				end = len(all)
-			}
-			clients = all[offset:end]
+			clients = append(clients, instanceOnly[instanceOffset:end]...)
 		}
 	}
 
