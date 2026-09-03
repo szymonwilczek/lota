@@ -102,7 +102,7 @@ spec_paths() {
 			in_section = ($0 == section)
 			next
 		}
-		/^%(package|description|prep|build|install|post|preun|postun|changelog)/ {
+		/^%(package|description|prep|build|install|check|post|preun|postun|changelog)/ {
 			in_section = 0
 			next
 		}
@@ -219,7 +219,7 @@ guarded_installs() {
 spec_build_targets() {
     awk '
 		/^%build/ { in_build = 1; next }
-		/^%(package|description|prep|install|files|post|preun|postun|changelog)/ {
+		/^%(package|description|prep|install|check|files|post|preun|postun|changelog)/ {
 			in_build = 0
 			next
 		}

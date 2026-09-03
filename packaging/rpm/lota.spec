@@ -142,6 +142,22 @@ install -Dpm 0644 selinux/lota.pp %{buildroot}%{_datadir}/lota/selinux/lota.pp
 # Makefile can see; ship the source so a caller has something to copy.
 install -Dpm 0644 selinux/lota.if %{buildroot}%{_datadir}/lota/selinux/lota.if
 
+%check
+# rpm's strip BRPs rewrite ELF files after %install. The packaged object must
+# still match its signature and the agent binary its pinned fs-verity hash.
+build/lota-agent --verify-policy \
+	%{buildroot}%{_prefix}/lib/lota/lota_lsm.bpf.o \
+	--policy-pubkey %{buildroot}%{_prefix}/lib/lota/enforcement.pub
+
+built=$(sha256sum <build/lota-agent)
+packaged=$(sha256sum <%{buildroot}%{_bindir}/lota-agent)
+if [ "$built" != "$packaged" ]; then
+	echo "the packaged lota-agent is not the binary that was built" >&2
+	echo "  built:    $built" >&2
+	echo "  packaged: $packaged" >&2
+	exit 1
+fi
+
 %post agent
 # lota-agent.socket sets SocketGroup=lota on the IPC socket, which resolves only
 # once that group exists.
