@@ -486,6 +486,21 @@ func (ns *NonceStore) consumeLocked(key, bindingID string) {
 	}
 }
 
+// DiscardChallenge releases an unanswered challenge and its per-binding slot
+// now rather than at sweep expiry. Only the issuing binding can discard it.
+func (ns *NonceStore) DiscardChallenge(nonce [types.NonceSize]byte, bindingID string) {
+	key := hex.EncodeToString(nonce[:])
+
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	entry, ok := ns.pending[key]
+	if !ok || entry.bindingID != bindingID {
+		return
+	}
+	ns.consumeLocked(key, bindingID)
+}
+
 // enforces per-binding pending challenge bound.
 func (ns *NonceStore) checkPendingLimit(bindingID string) error {
 	cs, exists := ns.bindingChallenges[bindingID]

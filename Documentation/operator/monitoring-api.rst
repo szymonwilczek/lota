@@ -150,6 +150,12 @@ GET /metrics
 
 Reader. Prometheus text exposition format (version 0.0.4), not JSON.
 
+``lota_connection_errors_total`` counts peers that spoke the attestation
+protocol and got it wrong. A peer that connects and leaves without speaking is
+a liveness question -- a load-balancer health check, or a port scan -- so it
+raises no error and the challenge it was issued is released, which is what lets
+``lota_pending_challenges`` read zero on an idle fleet.
+
 Device inventory
 ================
 
