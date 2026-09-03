@@ -172,8 +172,12 @@ Reader. Query: ``limit``, ``offset`` (see Pagination). **200**::
      "offset": 0
    }
 
-``total`` counts durable clients plus active in-memory sessions not yet
-persisted.
+The list is the durable per-client record -- the baseline every instance of a
+deployment shares -- so behind a load balancer every instance answers it the
+same way, and the answer survives a restart. ``total`` counts that record plus
+the sessions this instance is holding that have no baseline pinned yet; those
+are appended after the record, so a client mid-handshake is listed once and
+only until its first baseline is written.
 
 GET /api/v1/clients/{id}
 ------------------------
