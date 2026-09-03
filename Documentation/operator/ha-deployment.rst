@@ -127,9 +127,19 @@ Scaling the read path
 
 The monitoring API's listings and lookups are single indexed reads, and their
 volume is far below the attestation path, so a single Postgres node serves them
-comfortably. If a deployment ever needs more read throughput, route reads to
-Postgres read replicas; nothing on the attestation wire depends on which
-replica answered.
+comfortably.
+
+**A verifier process needs a writable database.** It applies its schema on
+every database it opens, so an instance pointed at a hot standby is refused at
+startup, by name: the refusal says the database is a read-only standby and that
+the instance belongs on the primary. Read replicas therefore serve *reporting
+tools* that read Postgres directly -- a dashboard query, an export, an audit
+report -- and not verifier instances. Point every instance at the primary,
+and take the read load that is not the verifier's off the replica.
+
+Nothing on the attestation wire depends on which node answered, so a replica is
+a faithful source for those reports; the constraint is the verifier process,
+not the protocol.
 
 Scaling the write path (database sharding)
 ------------------------------------------
