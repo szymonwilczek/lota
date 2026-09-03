@@ -1070,18 +1070,22 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 		}
 	}
 
-	// nonce store data
+	// per-instance nonce state, not comparable across instances
 	info.MonotonicCounter = v.nonceStore.ClientCounter(clientID)
 	info.PendingChallenges = v.nonceStore.ClientPendingCount(clientID)
-	info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 
-	// baseline store data
+	// baseline store data: shared durable record, including last attestation;
+	// without a record, fall back to this instance's nonce history
 	hasBaseline := false
 	if baseline := v.baselineStore.GetBaseline(clientID); baseline != nil {
 		hasBaseline = true
 		info.PCR14Baseline = hex.EncodeToString(baseline.PCR14[:])
 		info.AttestCount = baseline.AttestCount
 		info.FirstSeen = baseline.FirstSeen
+		info.LastAttestation = baseline.LastSeen
+	}
+	if info.LastAttestation.IsZero() {
+		info.LastAttestation = v.nonceStore.ClientLastAttestation(clientID)
 	}
 
 	// CA-assigned tenant from the baseline row;

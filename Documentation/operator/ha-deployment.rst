@@ -71,6 +71,10 @@ The consequences:
   ``GET /api/v1/clients`` is a fleet inventory, and it survives a restart.
   The certificate-backed store verifies the AIK certificate chain and it
   remembers the result.
+* ``GET /api/v1/clients/{id}`` answers from the same shared record, including
+  when the client last attested. Two fields stay this instance's --
+  ``monotonic_counter`` and ``pending_challenges`` -- and
+  :doc:`monitoring-api` says what each of them is worth.
 
 What Postgres adds over ``--db`` is the shared state above, not certificate
 verification: every backend selects the certificate-backed AIK store the same
