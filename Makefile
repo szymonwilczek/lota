@@ -1882,6 +1882,11 @@ test-unit: all $(TEST_BINS)
 	fi
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_proton_hook_disable.sh
+	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
+		tests/integration/test_attestca_build_tags.sh; \
+	else \
+		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
+	fi
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \
