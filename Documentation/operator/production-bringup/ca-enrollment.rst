@@ -74,6 +74,11 @@ build of the CA -- the default binary is pure-Go and has no PKCS#11 support:
 
     make BUILD_DIR=/var/tmp/lota-build attest-ca GO_TAGS=pkcs11   # cgo + PKCS#11
 
+A containerised CA takes the same road through the ``-hsm`` variant of the
+published image, which is that build on a base with a loader under it; the
+default image tag has no PKCS#11 support and refuses the flags below. See
+:doc:`../container-images`.
+
 Point the CA at the token instead of ``-ca-key``. The PIN is read from the
 environment, never a flag, so it stays out of the process argument list:
 
