@@ -284,6 +284,14 @@ func (v *Verifier) GenerateChallenge(clientID string) (*types.Challenge, error) 
 	return v.nonceStore.GenerateChallenge(clientID, pcrMask)
 }
 
+// DiscardChallenge releases a challenge whose peer left without answering.
+func (v *Verifier) DiscardChallenge(challenge *types.Challenge, clientID string) {
+	if challenge == nil {
+		return
+	}
+	v.nonceStore.DiscardChallenge(challenge.Nonce, clientID)
+}
+
 // certificateVerdict maps an AIK certificate failure to the verdict the agent
 // is told. A certificate naming a key other than the one that signed the quote
 // is VerifyIdentityFail, which re-enrolling fixes (a TPM clear leaves this).

@@ -70,8 +70,13 @@ Metric                                          Type      Meaning
                                                           acts), ``forced`` (operator-forced via the
                                                           monitoring API).
 ``lota_connection_errors_total``                counter   Protocol-level errors on the attestation port.
+                                                          A peer that connects and leaves without
+                                                          speaking -- a health check, a scanner -- is
+                                                          not one of them and is not counted.
 ``lota_verification_duration_seconds``          histogram Attestation verification latency.
-``lota_pending_challenges``                     gauge     Outstanding attestation challenges.
+``lota_pending_challenges``                     gauge     Outstanding attestation challenges. A peer
+                                                          that leaves without answering releases its
+                                                          challenge, so an idle fleet reads zero.
 ``lota_registered_clients``                     gauge     Registered attestation clients.
 ``lota_active_revocations``                     gauge     Currently revoked client AIKs.
 ``lota_active_bans``                            gauge     Currently banned hardware IDs.

@@ -17,6 +17,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/szymonwilczek/lota/verifier/logging"
@@ -371,6 +373,16 @@ func (s *Server) acceptLoop() {
 	}
 }
 
+// peerLeftBeforeProtocol reports whether err is the peer hanging up.
+// Before any data arrives that is a health check or scanner,
+// not a connection error.
+func peerLeftBeforeProtocol(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, net.ErrClosed)
+}
+
 func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -384,6 +396,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 	clientIP, _, err := net.SplitHostPort(clientAddr)
 	if err != nil {
 		clientIP = clientAddr // fallback if no port
+	}
+
+	// Handshake before issuing a challenge, so a silent peer leaves none pending
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout)
+		err := tlsConn.HandshakeContext(ctx)
+		cancel()
+		if err != nil {
+			if peerLeftBeforeProtocol(err) {
+				s.log.Debug("connection closed before the protocol started",
+					"remote_addr", clientAddr, "client_ip", clientIP)
+				return
+			}
+			s.log.Warn("TLS handshake failed",
+				"remote_addr", clientAddr, "client_ip", clientIP,
+				"error", err)
+			s.metrics.ConnectionErrors.Inc()
+			return
+		}
 	}
 
 	// IMPORTANT: challengeID must be unique per connection!
@@ -410,6 +441,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 	challengeData := challenge.Serialize()
 	if _, err := conn.Write(challengeData); err != nil {
+		if peerLeftBeforeProtocol(err) {
+			clog.Debug("peer left before the challenge was sent")
+			s.verifier.DiscardChallenge(challenge, challengeID)
+			return
+		}
 		clog.Error("failed to send challenge", "error", err)
 		s.metrics.ConnectionErrors.Inc()
 		return
@@ -426,7 +462,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// read header to get total size
 	headerBuf := make([]byte, 32)
-	if _, err := io.ReadFull(conn, headerBuf); err != nil {
+	if n, err := io.ReadFull(conn, headerBuf); err != nil {
+		// nothing sent is a probe; a partial header is a protocol failure
+		if n == 0 && peerLeftBeforeProtocol(err) {
+			clog.Debug("peer left without sending a report")
+			s.verifier.DiscardChallenge(challenge, challengeID)
+			return
+		}
 		clog.Error("failed to read report header", "error", err)
 		s.metrics.ConnectionErrors.Inc()
 		return
