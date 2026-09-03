@@ -542,15 +542,27 @@ examples-clean:
 # Usage:
 #   sudo make sign-bpf SIGNING_KEY=/etc/lota/policy.key
 #
+# Public half defaults to where --gen-signing-key writes it. It is copied into
+# the build directory for both packaging roads; no pubkey, no signature.
 SIGNING_KEY ?= /etc/lota/policy.key
+SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
+PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
+
 sign-bpf: $(BPF_OBJ) $(AGENT_BIN)
 	@test -r $(SIGNING_KEY) || { \
 		echo "sign-bpf: signing key not readable: $(SIGNING_KEY)" >&2; \
 		echo "Generate one with: sudo $(AGENT_BIN) --gen-signing-key /etc/lota/policy" >&2; \
 		exit 1; \
 	}
+	@test -r $(SIGNING_PUBKEY) || { \
+		echo "sign-bpf: public half not readable: $(SIGNING_PUBKEY)" >&2; \
+		echo "The host verifies the object against it, so it ships beside" >&2; \
+		echo "the signature; pass SIGNING_PUBKEY=<path>." >&2; \
+		exit 1; \
+	}
 	$(AGENT_BIN) --sign-policy $(BPF_OBJ) --signing-key $(SIGNING_KEY)
 	@test -r $(BPF_OBJ).sig
+	$(Q)cp $(SIGNING_PUBKEY) $(PKG_ENFORCEMENT_PUB)
 	@echo "Signed: $(BPF_OBJ).sig"
 
 # Go verifier
@@ -636,9 +648,6 @@ selinux-pp: $(SELINUX_PP)
 # the distribution, or this project for its own releases.
 # Package built without that step installs an object the agent refuses to load,
 # so the machine stops enforcing for reason nobody chose; refuse to build it instead.
-SIGNING_PUBKEY ?= $(SIGNING_KEY:.key=.pub)
-PKG_ENFORCEMENT_PUB := $(BUILD_DIR)/lota-enforcement.pub
-
 packages: all selinux-pp
 	$(Q)test -r $(BPF_OBJ).sig || { \
 		echo "packages: $(BPF_OBJ).sig is missing." >&2; \

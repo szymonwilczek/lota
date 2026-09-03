@@ -44,8 +44,23 @@ file and builds a source RPM; COPR then rebuilds it in the chroot. The same
 ``make srpm`` runs locally for a quick check. The spec in the tree carries
 placeholders and is not built with ``rpmbuild`` directly.
 
-Two properties of the spec matter:
+Three properties of the spec matter:
 
+* **The builder signs the enforcement object.** ``lota-agent`` ships a BPF LSM
+  object it refuses to load unsigned, and the public half of the key that
+  verifies it ships beside it, so whoever builds the package is who signs it.
+  The spec takes the key as a define and refuses before compiling anything
+  without one::
+
+     rpmbuild --rebuild --define "lota_signing_key /path/to/enforcement.key" \
+         lota-<version>.src.rpm
+
+  ``lota_signing_pubkey`` overrides where the public half is read from; by
+  default it is the key's own path with a ``.pub`` suffix, which is where
+  ``lota-agent --gen-signing-key`` writes it. Building the *source* RPM needs
+  no key -- ``make srpm`` compiles and signs nothing -- so the key is a property of
+  the rebuild, and a COPR project has to carry one before it can produce
+  packages.
 * **External network must be enabled** on the COPR project. The Go services
   (verifier, attest-CA) are not vendored, so the workspace build fetches their
   modules read-only from the proxy during ``%build``.

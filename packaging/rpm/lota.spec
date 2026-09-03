@@ -107,6 +107,22 @@ build a proprietary product on top.
 %autosetup -n %{name}-%{version}
 
 %build
+# Whoever builds the package signs the enforcement object; the agent will not
+# load it unsigned. Refuse before compiling, as `make packages` does.
+if [ -z "%{?lota_signing_key}" ]; then
+	cat >&2 <<'LOTA_EOF'
+The enforcement object must be signed by whoever builds this package.
+Rebuild with the release key:
+
+    rpmbuild --rebuild --define "lota_signing_key /path/to/enforcement.key"
+
+The public half is read from the same path with a .pub suffix, which is where
+`lota-agent --gen-signing-key` writes it; point at it directly with
+--define "lota_signing_pubkey /path/to/enforcement.pub".
+LOTA_EOF
+	exit 1
+fi
+
 # go.work puts the build in workspace mode, where modules resolve read-only
 # from the proxy; COPR project must have external network enabled.
 %make_build all
@@ -114,6 +130,8 @@ build a proprietary product on top.
 # lota-install's SELinux stage loads it from %{_datadir}/lota/selinux,
 # so the agent RPM ships it.
 %make_build selinux-pp
+# the .sig and enforcement.pub %files claims
+%make_build sign-bpf SIGNING_KEY=%{lota_signing_key} %{?lota_signing_pubkey:SIGNING_PUBKEY=%{lota_signing_pubkey}}
 
 %install
 %make_install
