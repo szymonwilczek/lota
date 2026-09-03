@@ -109,7 +109,11 @@ Shared-state requirements
   outright, since ``database/sql`` reads 0 as *unlimited*.
 * **Schema migrations are safe to race.** Every instance runs migrations at
   startup under a Postgres advisory lock, so the schema is created exactly once
-  regardless of start order.
+  regardless of start order. Under the same lock each instance checks that the
+  database is the schema its own build applies -- the version, the fingerprint
+  of the migration text, and the tables those migrations create -- and refuses
+  to serve one written by a different build. Run one build across the fleet;
+  :doc:`protocol-versions` says what each refusal means.
 * **AIK certificate roots and PCR policy are configuration, not shared state.**
   Distribute the same ``--aik-ca-cert``, ``--aik-crl``, ``--policy`` and
   ``--policy-pubkey`` material to every instance through the usual configuration
