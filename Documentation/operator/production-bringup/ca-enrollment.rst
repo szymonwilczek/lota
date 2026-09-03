@@ -99,6 +99,10 @@ Select the key by ``-ca-key-pkcs11-label`` (CKA_LABEL) or ``-ca-key-pkcs11-id``
 startup and refuses to run on a mismatch, the same check applied to an on-disk
 key, so a wrong token or label cannot sign under the CA identity.
 
+A CA without PKCS#11 compiled in refuses a token key at key setup, and names both
+roads to a build that has it: ``make attest-ca GO_TAGS=pkcs11`` on a host, and the
+``-hsm`` image tag in a container.
+
 ``-ca-key`` and the ``-ca-key-pkcs11-*`` flags are mutually exclusive, and that
 is answered on **any** of the four: passing ``-ca-key`` beside a token, label or
 id is refused just as it is beside the module, and the error names the flags it

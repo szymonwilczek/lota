@@ -134,6 +134,11 @@ passed too -- SoftHSM's ``SOFTHSM2_CONF`` is the example, and a networked HSM
 client usually needs its own configuration file mounted and its appliance
 reachable from the pod.
 
+The default image tag refuses every ``-ca-key-pkcs11-*`` flag at key setup and
+names both roads to a binary that carries the support -- the tagged host build
+and this image variant -- so a token configuration pointed at the wrong tag
+stops at startup.
+
 :doc:`production-bringup/ca-enrollment` covers the flags themselves and the
 key ceremony.
 
