@@ -85,7 +85,8 @@ var (
 	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
-	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks", "AIK key store directory")
+	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
+		"AIK key store directory; the client registry only when no database is configured")
 	dbPath       = flag.String("db", "", "SQLite database path for persistent storage (empty = file/memory stores)")
 	policyFiles  stringSliceFlag
 	policyPubKey = flag.String("policy-pubkey", "", "Ed25519 public key for policy signature verification (PEM)")
@@ -116,10 +117,7 @@ var (
 var errCRLWithoutCARoot = errors.New("--aik-crl requires at least one --aik-ca-cert to verify CRL signatures")
 
 // aikStoreParams is everything the AIK-store choice depends on.
-// It carries no storage backend on purpose: the certificate-verifying store is
-// file-backed under --aik-store and holds no baseline, nonce or enforcement state,
-// so which database holds those has no bearing on whether AIK certificate chains
-// can be verified.
+// StorePath is the registry only when no database is configured.
 type aikStoreParams struct {
 	StorePath   string
 	CACerts     []string
@@ -127,25 +125,18 @@ type aikStoreParams struct {
 	RequireCert bool
 }
 
-// selectAIKStore picks between the certificate-verifying AIK store and the backend's
-// own trust-on-first-use store, which tofu supplies.
-// TOFU is called only when no certificate verification was asked for, so backend
-// does not build a store it will not use.
+// selectAIKStore picks the AIK store.
+//
+// registry returns the backend's client store: the database when one is
+// configured, --aik-store otherwise. Without certificate verification it is
+// returned as is (TOFU); with it, the certificate store persists into it.
 //
 // Returned *store.CertificateStore is non-nil exactly when the certificate path
 // was taken; it is the same object on every backend, which is why the caller
 // logs it through one helper.
-func selectAIKStore(p aikStoreParams, tofu func() (store.AIKStore, error)) (store.AIKStore, *store.CertificateStore, error) {
+func selectAIKStore(p aikStoreParams, registry func() (store.AIKStore, error)) (store.AIKStore, *store.CertificateStore, error) {
 	if len(p.CRLs) > 0 && len(p.CACerts) == 0 {
 		return nil, nil, errCRLWithoutCARoot
-	}
-
-	if !p.RequireCert && len(p.CACerts) == 0 {
-		s, err := tofu()
-		if err != nil {
-			return nil, nil, err
-		}
-		return s, nil, nil
 	}
 
 	if p.RequireCert && len(p.CACerts) == 0 {
@@ -153,23 +144,32 @@ func selectAIKStore(p aikStoreParams, tofu func() (store.AIKStore, error)) (stor
 			store.ErrNoTrustedCAs)
 	}
 
-	cs, err := store.NewCertificateStoreWithCRL(p.StorePath, p.CACerts, p.CRLs, p.RequireCert)
+	backend, err := registry()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if !p.RequireCert && len(p.CACerts) == 0 {
+		return backend, nil, nil
+	}
+
+	cs, err := store.NewCertificateStoreWithBackend(backend, p.CACerts, p.CRLs, p.RequireCert)
 	if err != nil {
 		return nil, nil, err
 	}
 	return cs, cs, nil
 }
 
-// logAIKStore records the certificate-backed selection.
-// Each backend logs its own trust-on-first-use fallback from inside the callback,
-// where it knows what it built.
-func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStoreParams) {
+// logAIKStore logs the certificate-backed selection and its registry,
+// so "registered_clients" reads as per-instance or fleet-wide.
+// The TOFU fallback is logged by the caller.
+func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStoreParams, registry string) {
 	logger.Info("certificate-backed AIK store initialized",
-		"path", p.StorePath,
+		"registry", registry,
 		"trusted_cas", len(p.CACerts),
 		"loaded_crls", cs.CRLCount(),
 		"require_cert", p.RequireCert,
-		"registered_clients", len(cs.ListClients()))
+		"registered_clients", cs.CountClients())
 }
 
 // loadPolicies registers every --policy document in the order it was given.
@@ -447,18 +447,19 @@ func main() {
 		// AIK store: certificate-backed when the deployment verifies chains
 		// (the production default), otherwise a shared TOFU store in Postgres
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 			return store.NewPostgresAIKStore(db), nil
 		})
 		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
+			logger.Error("failed to initialize the AIK store", "error", aikErr)
 			//nolint:gocritic // startup abort before any DB write; the OS reclaims the handle
 			os.Exit(1)
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, "postgres")
+		} else {
+			logger.Warn("INSECURE: Postgres TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 		}
 
 		ver, err := store.SchemaVersion(db)
@@ -475,23 +476,22 @@ func main() {
 		}
 		defer db.Close()
 
-		// same choice as every other backend:
-		// SQLite holds the baselines, nonces and enforcement state,
-		// and the certificate-verifying AIK store sits beside it under
-		// --aik-store
+		// AIK store: certificate-backed when the deployment verifies chains,
+		// otherwise TOFU; the registry is in SQLite either way
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
-				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 			return store.NewSQLiteAIKStore(db), nil
 		})
 		if aikErr != nil {
-			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
+			logger.Error("failed to initialize the AIK store", "error", aikErr)
 			//nolint:gocritic // startup abort before any attestation is served; the OS reclaims the handle
 			os.Exit(1)
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, *dbPath)
+		} else {
+			logger.Warn("INSECURE: SQLite TOFU AIK store initialized without certificate verification",
+				"hint", "set --require-cert and --aik-ca-cert to verify AIK certificate chains")
 		}
 
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
@@ -541,13 +541,7 @@ func main() {
 
 		// file-based AIK store (optionally certificate-backed)
 		selected, aikCertStore, aikErr := selectAIKStore(aikParams, func() (store.AIKStore, error) {
-			fileStore, err := store.NewFileStore(*aikStorePath)
-			if err != nil {
-				return nil, err
-			}
-			logger.Info("file-based AIK store initialized",
-				"path", *aikStorePath, "registered_clients", len(fileStore.ListClients()))
-			return fileStore, nil
+			return store.NewFileStore(*aikStorePath)
 		})
 		if aikErr != nil {
 			logger.Error("failed to initialize the AIK store", "path", *aikStorePath, "error", aikErr)
@@ -556,7 +550,10 @@ func main() {
 		}
 		aikStore = selected
 		if aikCertStore != nil {
-			logAIKStore(logger, aikCertStore, aikParams)
+			logAIKStore(logger, aikCertStore, aikParams, *aikStorePath)
+		} else {
+			logger.Info("file-based AIK store initialized",
+				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
 		}
 
 		// in-memory enforcement stores

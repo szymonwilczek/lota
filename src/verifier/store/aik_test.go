@@ -1338,3 +1338,111 @@ func TestCertificateStore_DeleteClientDelegates(t *testing.T) {
 		t.Errorf("expected ErrAIKNotFound after delete, got %v", err)
 	}
 }
+
+// A client registered in a shared database is listed, counted and found
+// through any certificate store over that database.
+func TestCertificateStoreServesTheRegistryItWasGiven(t *testing.T) {
+	dir := t.TempDir()
+	db, err := OpenDB(filepath.Join(dir, "shared.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	shared := NewSQLiteAIKStore(db)
+	cs, err := NewCertificateStoreWithBackend(shared, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStoreWithBackend: %v", err)
+	}
+
+	// registered elsewhere, through the same database
+	key := generateTestKey(t)
+	if err := shared.RegisterAIK("client-a", &key.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK: %v", err)
+	}
+
+	if clients := cs.ListClients(); len(clients) != 1 || clients[0] != "client-a" {
+		t.Fatalf("ListClients = %v, want [client-a]", clients)
+	}
+	if n := cs.CountClients(); n != 1 {
+		t.Fatalf("CountClients = %d, want 1", n)
+	}
+	if _, err := cs.GetAIK("client-a"); err != nil {
+		t.Fatalf("GetAIK: %v", err)
+	}
+	exists, err := cs.HasClient("client-a")
+	if err != nil || !exists {
+		t.Fatalf("HasClient = %v, %v; want true, nil", exists, err)
+	}
+	existing, err := cs.ExistingClients([]string{"client-a", "client-b"})
+	if err != nil {
+		t.Fatalf("ExistingClients: %v", err)
+	}
+	if _, ok := existing["client-a"]; !ok || len(existing) != 1 {
+		t.Fatalf("ExistingClients = %v, want only client-a", existing)
+	}
+
+	// and what the store registers is in the shared registry, not beside it
+	certKey := generateTestKey(t)
+	if err := cs.RegisterAIKWithCert("client-b", &certKey.PublicKey, nil, nil); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("a store with no trust anchors must still refuse a certificate-less registration: %v", err)
+	}
+	if err := shared.RegisterAIK("client-b", &certKey.PublicKey); err != nil {
+		t.Fatalf("RegisterAIK(client-b): %v", err)
+	}
+	if n, err := cs.CountClientsE(); err != nil || n != 2 {
+		t.Fatalf("CountClientsE = %d, %v; want 2, nil", n, err)
+	}
+	page, err := cs.ListClientsPageE(1, 1)
+	if err != nil || len(page) != 1 {
+		t.Fatalf("ListClientsPageE(1,1) = %v, %v; want one client", page, err)
+	}
+}
+
+// A registry without its own queries is still paged, counted and searched.
+func TestCertificateStoreOverARegistryWithoutQueries(t *testing.T) {
+	backend := NewMemoryStore()
+	cs, err := NewCertificateStoreWithBackend(backend, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStoreWithBackend: %v", err)
+	}
+
+	for _, id := range []string{"c1", "c2", "c3"} {
+		key := generateTestKey(t)
+		if err := backend.RegisterAIK(id, &key.PublicKey); err != nil {
+			t.Fatalf("RegisterAIK(%s): %v", id, err)
+		}
+	}
+
+	if n, err := cs.CountClientsE(); err != nil || n != 3 {
+		t.Fatalf("CountClientsE = %d, %v; want 3, nil", n, err)
+	}
+	page, err := cs.ListClientsPageE(2, 0)
+	if err != nil || len(page) != 2 {
+		t.Fatalf("ListClientsPageE(2,0) = %v, %v; want two clients", page, err)
+	}
+	if page, err := cs.ListClientsPageE(2, 5); err != nil || len(page) != 0 {
+		t.Fatalf("an offset past the end must be an empty page, got %v, %v", page, err)
+	}
+	exists, err := cs.HasClient("c2")
+	if err != nil || !exists {
+		t.Fatalf("HasClient(c2) = %v, %v; want true, nil", exists, err)
+	}
+	if exists, err := cs.HasClient("absent"); err != nil || exists {
+		t.Fatalf("HasClient(absent) = %v, %v; want false, nil", exists, err)
+	}
+}
+
+// A registry that cannot delete returns ErrDeleteUnsupported.
+func TestCertificateStoreRefusesDeleteTheRegistryCannotDo(t *testing.T) {
+	cs, err := NewCertificateStoreWithBackend(readOnlyRegistry{NewMemoryStore()}, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewCertificateStoreWithBackend: %v", err)
+	}
+	if err := cs.DeleteClient("c1"); !errors.Is(err, ErrDeleteUnsupported) {
+		t.Fatalf("DeleteClient = %v, want ErrDeleteUnsupported", err)
+	}
+}
+
+// readOnlyRegistry hides the backing store's DeleteClient.
+type readOnlyRegistry struct{ AIKStore }
