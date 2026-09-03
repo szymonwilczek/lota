@@ -18,6 +18,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -269,11 +270,23 @@ func runPgMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to create schema_version table: %w", err)
 	}
 
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE schema_version ADD COLUMN IF NOT EXISTS fingerprint TEXT"); err != nil {
+		return fmt.Errorf("failed to add the schema fingerprint column: %w", err)
+	}
+
 	var current int
 	if err := conn.QueryRowContext(ctx,
 		"SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current); err != nil {
 		return fmt.Errorf("failed to query schema version: %w", err)
 	}
+
+	// refuse a version this build never applied: a newer build wrote it
+	if target := maxMigrationVersion(pgMigrations); current > target {
+		return schemaVersionError(current, target)
+	}
+
+	existing := current > 0
 
 	for _, m := range pgMigrations {
 		if m.version <= current {
@@ -309,5 +322,64 @@ func runPgMigrations(db *sql.DB) error {
 		slog.Info("applied postgres migration", "version", m.version, "description", m.description)
 	}
 
-	return nil
+	return verifyPgSchemaIdentity(ctx, conn, existing)
+}
+
+// verifyPgSchemaIdentity is verifySQLiteSchemaIdentity for Postgres.
+// Runs under the migration advisory lock, so concurrent starts agree.
+func verifyPgSchemaIdentity(ctx context.Context, conn *sql.Conn, existing bool) error {
+	expected := schemaFingerprint(pgMigrations)
+
+	var stored sql.NullString
+	err := conn.QueryRowContext(ctx,
+		"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to read the schema fingerprint: %w", err)
+	}
+
+	switch {
+	case !stored.Valid || stored.String == "":
+		if _, err := conn.ExecContext(ctx,
+			"UPDATE schema_version SET fingerprint = $1 WHERE version = (SELECT MAX(version) FROM schema_version)",
+			expected); err != nil {
+			return fmt.Errorf("failed to record the schema fingerprint: %w", err)
+		}
+		if existing {
+			slog.Warn("recorded a schema fingerprint for a database that carried none",
+				"fingerprint", shortFingerprint(expected),
+				"note", "the database predates fingerprinting; its shape is verified against this build's tables")
+		}
+	case stored.String != expected:
+		return schemaFingerprintError(stored.String, expected)
+	}
+
+	tables, err := pgTableNames(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return schemaShapeError(schemaTables(pgMigrations), tables)
+}
+
+// pgTableNames lists the tables in the connection's current schema,
+// excluding schema_version.
+func pgTableNames(ctx context.Context, conn *sql.Conn) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_type = 'BASE TABLE'
+		  AND table_name <> 'schema_version'`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to list the database's tables: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }

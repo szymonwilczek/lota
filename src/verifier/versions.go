@@ -30,13 +30,15 @@ func reportWireString() string {
 	return fmt.Sprintf("%d.%d.%d", (v>>16)&0xffff, (v>>8)&0xff, v&0xff)
 }
 
-// writeVersions prints the attestation report wire this binary parses,
-// the schema each backend is built to reach, and the TLS floor enforced
-// on every listener.
+// writeVersions prints the attestation report wire this binary parses, each
+// backend's schema target with its migration fingerprint, and the TLS floor
+// enforced on every listener.
 func writeVersions(w io.Writer) {
 	fmt.Fprintf(w, "attestation report wire:  %s\n", reportWireString())
-	fmt.Fprintf(w, "postgres schema target:   %d\n", store.PgTargetSchemaVersion())
-	fmt.Fprintf(w, "sqlite schema target:     %d\n", store.SQLiteTargetSchemaVersion())
+	fmt.Fprintf(w, "postgres schema target:   %d (%s)\n",
+		store.PgTargetSchemaVersion(), store.PgSchemaFingerprint())
+	fmt.Fprintf(w, "sqlite schema target:     %d (%s)\n",
+		store.SQLiteTargetSchemaVersion(), store.SQLiteSchemaFingerprint())
 	// every listener pins tls.VersionTLS13 (server.go)
 	// kept in sync by hand
 	fmt.Fprintf(w, "minimum TLS:              1.3\n")
