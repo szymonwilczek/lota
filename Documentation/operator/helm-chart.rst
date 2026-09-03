@@ -62,9 +62,16 @@ Provide this material before installing:
 Installing
 ==========
 
+The chart in the tree carries an ``@VERSION@`` placeholder for
+``appVersion`` and refuses to render as it is. ``make helm-package`` fills the
+chart version and ``appVersion`` from the ``VERSION`` file and writes
+``build/helm/lota-verifier-<version>.tgz``; a release publishes the same
+package to ``oci://ghcr.io/szymonwilczek/charts/lota-verifier``.
+
 ::
 
-   helm install lota-verifier deploy/helm/lota-verifier \
+   make helm-package
+   helm install lota-verifier build/helm/lota-verifier-<version>.tgz \
        --set postgres.existingSecret=lota-pg \
        --set tls.existingSecret=lota-verifier-tls \
        --set aikCA.existingSecret=lota-aik-ca \
@@ -85,7 +92,7 @@ The chart is validated offline, with no Kubernetes cluster, through two make
 targets:
 
 * ``make helm-lint`` -- ``helm lint`` over the chart structure.
-* ``make helm-template`` -- renders the manifests and pipes them through
+* ``make helm-template`` -- renders the packaged chart and pipes it through
   ``kubeconform`` for Kubernetes API schema validation.
 
 Both run against the local chart and fit CI without a cluster. A full

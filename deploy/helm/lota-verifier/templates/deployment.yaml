@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: MIT
+{{- if eq .Chart.AppVersion "@VERSION@" }}
+{{- fail "appVersion is the @VERSION@ placeholder: install the chart make helm-package writes, or a released one." }}
+{{- end }}
 {{- if and .Values.requireCert (not .Values.aikCA.existingSecret) }}
 {{- fail "requireCert is true but aikCA.existingSecret is unset: the verifier refuses to start without a trusted attestation-CA root. Set aikCA.existingSecret to a Secret holding the Privacy CA PEM root(s), or set requireCert=false (INSECURE)." }}
 {{- end }}
