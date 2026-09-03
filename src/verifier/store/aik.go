@@ -797,10 +797,11 @@ func (ms *MemoryStore) GetHardwareID(clientID string) ([32]byte, error) {
 	return hwid, nil
 }
 
-// wraps FileStore with X.509 certificate verification
+// wraps a persistent AIK store with X.509 certificate verification
 // validates AIK and EK certificate chains against trusted CA roots
+// backend is the registry: a FileStore, or the database shared by a fleet
 type CertificateStore struct {
-	fileStore    *FileStore
+	backend      AIKStore
 	trustedCAs   []*x509.Certificate
 	caPool       *x509.CertPool
 	requireCerts bool
@@ -875,6 +876,22 @@ var (
 // client ID validation error
 var ErrInvalidClientID = errors.New("invalid client ID")
 
+// ErrDeleteUnsupported is returned when the registry cannot remove a client.
+var ErrDeleteUnsupported = errors.New("this AIK registry cannot delete clients")
+
+// pageOf applies LIMIT/OFFSET to a sorted listing,
+// for registries without a paged query.
+func pageOf(all []string, limit, offset int) []string {
+	if offset >= len(all) {
+		return []string{}
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end]
+}
+
 // rejects IDs that could escape the store directory
 // disallows empty strings, path separators, dot-dot sequences, and NUL bytes
 func validateClientID(id string) error {
@@ -906,8 +923,22 @@ func NewCertificateStoreWithCRL(storePath string, caCertPaths, crlPaths []string
 		return nil, err
 	}
 
+	return NewCertificateStoreWithBackend(fs, caCertPaths, crlPaths, requireCerts)
+}
+
+// NewCertificateStoreWithBackend builds the certificate store over
+// a caller-supplied registry: the database's AIK store when state
+// is shared, a FileStore otherwise (as the path-taking constructors above do).
+func NewCertificateStoreWithBackend(backend AIKStore, caCertPaths, crlPaths []string, requireCerts bool) (*CertificateStore, error) {
+	if requireCerts && len(caCertPaths) == 0 {
+		return nil, ErrNoTrustedCAs
+	}
+	if backend == nil {
+		return nil, errors.New("certificate store needs a registry to persist into")
+	}
+
 	cs := &CertificateStore{
-		fileStore:    fs,
+		backend:      backend,
 		trustedCAs:   make([]*x509.Certificate, 0),
 		caPool:       x509.NewCertPool(),
 		requireCerts: requireCerts,
@@ -981,7 +1012,7 @@ func loadCertificate(path string) (*x509.Certificate, error) {
 }
 
 func (cs *CertificateStore) GetAIK(clientID string) (*rsa.PublicKey, error) {
-	return cs.fileStore.GetAIK(clientID)
+	return cs.backend.GetAIK(clientID)
 }
 
 // RegisterAIK on the cert-backed store has no certificate to verify, so it refuses.
@@ -1021,7 +1052,7 @@ func (cs *CertificateStore) RegisterAIKWithCert(clientID string, pubKey *rsa.Pub
 		}
 	}
 
-	return cs.fileStore.RegisterAIK(clientID, pubKey)
+	return cs.backend.RegisterAIK(clientID, pubKey)
 }
 
 // VerifyAIKCertificate verifies that aikCertDER chains to a trusted root,
@@ -1177,31 +1208,91 @@ func (cs *CertificateStore) verifyEKCertificate(certDER []byte) error {
 }
 
 func (cs *CertificateStore) ListClients() []string {
-	return cs.fileStore.ListClients()
+	return cs.backend.ListClients()
 }
 
+// paging, counting and existence use the backend's own queries
+// when it has them, otherwise fall back to the full listing
 func (cs *CertificateStore) ListClientsPage(limit, offset int) []string {
-	return cs.fileStore.ListClientsPage(limit, offset)
+	if pager, ok := cs.backend.(PaginatedClientLister); ok {
+		return pager.ListClientsPage(limit, offset)
+	}
+	return pageOf(cs.backend.ListClients(), limit, offset)
+}
+
+func (cs *CertificateStore) ListClientsPageE(limit, offset int) ([]string, error) {
+	if pager, ok := cs.backend.(PaginatedClientListerWithError); ok {
+		return pager.ListClientsPageE(limit, offset)
+	}
+	return cs.ListClientsPage(limit, offset), nil
 }
 
 func (cs *CertificateStore) CountClients() int {
-	return cs.fileStore.CountClients()
+	if counter, ok := cs.backend.(ClientCounter); ok {
+		return counter.CountClients()
+	}
+	return len(cs.backend.ListClients())
+}
+
+func (cs *CertificateStore) CountClientsE() (int, error) {
+	if counter, ok := cs.backend.(ClientCounterWithError); ok {
+		return counter.CountClientsE()
+	}
+	return cs.CountClients(), nil
+}
+
+func (cs *CertificateStore) HasClient(clientID string) (bool, error) {
+	if checker, ok := cs.backend.(ClientExistenceChecker); ok {
+		return checker.HasClient(clientID)
+	}
+	_, err := cs.backend.GetAIK(clientID)
+	if errors.Is(err, ErrAIKNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (cs *CertificateStore) ExistingClients(clientIDs []string) (map[string]struct{}, error) {
+	if checker, ok := cs.backend.(ClientExistenceBatchChecker); ok {
+		return checker.ExistingClients(clientIDs)
+	}
+	registered := make(map[string]struct{}, len(clientIDs))
+	for _, id := range clientIDs {
+		exists, err := cs.HasClient(id)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			registered[id] = struct{}{}
+		}
+	}
+	return registered, nil
 }
 
 func (cs *CertificateStore) RegisterHardwareID(clientID string, hardwareID [32]byte) error {
-	return cs.fileStore.RegisterHardwareID(clientID, hardwareID)
+	return cs.backend.RegisterHardwareID(clientID, hardwareID)
 }
 
 func (cs *CertificateStore) GetHardwareID(clientID string) ([32]byte, error) {
-	return cs.fileStore.GetHardwareID(clientID)
+	return cs.backend.GetHardwareID(clientID)
 }
 
 func (cs *CertificateStore) GetRegisteredAt(clientID string) (time.Time, error) {
-	return cs.fileStore.GetRegisteredAt(clientID)
+	return cs.backend.GetRegisteredAt(clientID)
 }
 
+// DeleteClient removes the client from the registry,
+// or returns ErrDeleteUnsupported when it cannot.
+// Used to force a re-enrollment.
 func (cs *CertificateStore) DeleteClient(clientID string) error {
-	return cs.fileStore.DeleteClient(clientID)
+	deleter, ok := cs.backend.(ClientDeleter)
+	if !ok {
+		return ErrDeleteUnsupported
+	}
+	return deleter.DeleteClient(clientID)
 }
 
 // RotateAIK refuses a keyed-only rotation.
