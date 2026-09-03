@@ -459,7 +459,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -738,10 +738,15 @@ HELM_CHECK_VALUES := \
 	--set policy.enabled=true \
 	--set policy.existingSecret=example-policy
 
-# Chart-behaviour gate: Chart.yaml carries the @VERSION@ placeholder,
-# so the chart deploys the version the tree builds
+# Chart-behaviour gate: Chart.yaml carries @VERSION@ and rendered pods can
+# start; neither is caught by helm-lint or kubeconform
 check-helm-chart:
 	@scripts/check-helm-chart.sh
+
+# Image-behaviour gate: pure-Go images hold the CA key on disk;
+# the HSM image (tag, cgo, loader) is the production key road
+check-container-images:
+	@scripts/check-container-images.sh
 
 # Chart version and appVersion come from VERSION
 HELM_PACKAGE_DIR ?= $(BUILD_DIR)/helm
@@ -2275,7 +2280,8 @@ help:
 	@echo "  sparse           sparse semantic check over C sources"
 	@echo "  smatch           smatch flow analysis over C sources"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
-	@echo "  check-helm-chart Hold the chart to the version the tree builds"
+	@echo "  check-helm-chart Hold the chart to the version and the pod it deploys"
+	@echo "  check-container-images Hold the images to the key roads they offer"
 	@echo "  helm-package     Package the verifier Helm chart at the tree's version"
 	@echo "  helm-lint        Lint the verifier Helm chart"
 	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"
