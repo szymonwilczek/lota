@@ -38,9 +38,11 @@ How it is built
 ===============
 
 COPR invokes ``make -f .copr/Makefile srpm``, which delegates to the top-level
-``make srpm`` target. That archives the current commit, drops it into
-``packaging/rpm/lota.spec`` and builds a source RPM; COPR then rebuilds it in
-the chroot. The same ``make srpm`` runs locally for a quick check.
+``make srpm`` target. That archives the current commit, fills the version and
+the newest changelog entry of ``packaging/rpm/lota.spec`` from the ``VERSION``
+file and builds a source RPM; COPR then rebuilds it in the chroot. The same
+``make srpm`` runs locally for a quick check. The spec in the tree carries
+placeholders and is not built with ``rpmbuild`` directly.
 
 Two properties of the spec matter:
 

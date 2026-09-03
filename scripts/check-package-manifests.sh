@@ -7,9 +7,8 @@
 # other, so installed paths must match per package. Modes and ownership are
 # not compared.
 #
-# The spec hardcodes the version nfpm reads from VERSION, so its Version
-# and newest %changelog entry must match; a stale one makes rpmbuild fail on
-# a missing source tarball.
+# The spec must not spell its version: Version and the newest %changelog
+# entry are @VERSION@ and @CHANGELOG@, which make srpm fills from VERSION.
 #
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
@@ -141,36 +140,22 @@ spec_paths() {
 	' "$SPEC" | sort -u | drop_parents | sort -u
 }
 
-# rpm spells the prerelease separator `~`
-# (sorts below the release; `-` is not allowed in a version)
-spec_field() {
-    awk -v field="$1" '
-		$1 == field":" { print $2; exit }
-	' "$SPEC"
-}
-
-tree_version=$(tr -d '[:space:]' <"$VERSION_FILE")
-spec_version=$(spec_field Version)
-want_version=${tree_version//-/\~}
-
-if [ "$spec_version" != "$want_version" ]; then
+# a literal version here is the drift the placeholders exist to prevent
+spec_version=$(awk '$1 == "Version:" { print $2; exit }' "$SPEC")
+if [ "$spec_version" != "@VERSION@" ]; then
     fail=1
-    echo "FAIL: ${SPEC} says Version: ${spec_version}, the tree is ${tree_version}"
-    echo "  rpmbuild would look for lota-${spec_version}.tar.gz and"
-    echo "  \`make srpm\` writes lota-${want_version}.tar.gz"
+    echo "FAIL: ${SPEC} says Version: ${spec_version}, not @VERSION@"
+    echo "  \`make srpm\` takes the version from ${VERSION_FILE}"
 fi
 
-# %changelog head, which is the version an operator reads off the built package
-spec_release=$(spec_field Release)
-want_entry="${want_version}-${spec_release%\%*}"
-changelog_entry=$(awk '
+changelog_head=$(awk '
 	/^%changelog/ { in_log = 1; next }
-	in_log && /^\* / { sub(/^.* - /, ""); print; exit }
+	in_log { print; exit }
 ' "$SPEC")
-
-if [ "$changelog_entry" != "$want_entry" ]; then
+if [ "$changelog_head" != "@CHANGELOG@" ]; then
     fail=1
-    echo "FAIL: the newest %changelog entry in ${SPEC} is ${changelog_entry:-none}, not ${want_entry}"
+    echo "FAIL: the %changelog in ${SPEC} does not open with @CHANGELOG@"
+    echo "  \`make srpm\` writes the entry for ${VERSION_FILE} there"
 fi
 
 for cfg in "$NFPM_DIR"/*.yaml; do
@@ -210,7 +195,7 @@ done < <(awk '/^%files[ \t]+/ { sub(/^%files[ \t]+/, ""); print }' "$SPEC")
 if [ "$fail" -ne 0 ]; then
     echo
     echo "The two manifests must list the same installed paths per package,"
-    echo "and the spec must name the version the tree builds."
+    echo "and the spec must take its version from ${VERSION_FILE}."
     exit 1
 fi
 
