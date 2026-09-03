@@ -10,6 +10,10 @@
 # The spec must not spell its version: Version and the newest %changelog
 # entry are @VERSION@ and @CHANGELOG@, which make srpm fills from VERSION.
 #
+# A %files path `make install` writes only when its source exists must be
+# produced by a target the spec's %build runs, or rpm fails with `File not
+# found` after the whole tree has compiled.
+#
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
 
@@ -20,6 +24,7 @@ cd "$(dirname "$0")/.."
 NFPM_DIR=packaging/nfpm
 SPEC=packaging/rpm/lota.spec
 VERSION_FILE=VERSION
+MAKEFILE=Makefile
 
 fail=0
 
@@ -140,6 +145,111 @@ spec_paths() {
 	' "$SPEC" | sort -u | drop_parents | sort -u
 }
 
+# Paths the install target writes only under an `-f` guard, one per line as
+# `<build artifact>\t<installed path>`, with Makefile variables expanded
+# (DESTDIR empty)
+guarded_installs() {
+    awk '
+		function expand(s,   rounds, name, val) {
+			for (rounds = 0; rounds < 8; rounds++) {
+				if (!match(s, /\$\([A-Za-z_][A-Za-z0-9_]*\)/))
+					break
+				name = substr(s, RSTART + 2, RLENGTH - 3)
+				val = (name in var) ? var[name] : ""
+				s = substr(s, 1, RSTART - 1) val \
+				    substr(s, RSTART + RLENGTH)
+			}
+			return s
+		}
+
+		# first pass: the variable assignments, recipe lines excluded
+		NR == FNR {
+			if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*[:?]?=/) {
+				name = $0
+				sub(/[ \t]*[:?]?=.*$/, "", name)
+				value = $0
+				sub(/^[^=]*=[ \t]*/, "", value)
+				if (!(name in var))
+					var[name] = value
+			}
+			next
+		}
+
+		# second pass: join the continuation lines the guard is written across
+		{
+			line = joined $0
+			if (line ~ /\\$/) {
+				sub(/[ \t]*\\$/, " ", line)
+				joined = line
+				next
+			}
+			joined = ""
+		}
+
+		line ~ /^install:/ { in_install = 1; next }
+		!in_install { next }
+		line !~ /^[ \t]/ { in_install = 0; next }
+
+		{
+			n = split(line, stmt, /;/)
+			for (i = 1; i <= n; i++) {
+				if (match(stmt[i], /-f[ \t]+[^ \t\]]+/)) {
+					guard = substr(stmt[i], RSTART + 2,
+						       RLENGTH - 2)
+					sub(/^[ \t]+/, "", guard)
+				}
+				if (guard != "" && stmt[i] ~ /install[ \t]+-m/) {
+					m = split(stmt[i], word, /[ \t]+/)
+					dest = expand(word[m])
+					if (dest ~ /\/$/) {
+						name = expand(guard)
+						sub(/.*\//, "", name)
+						dest = dest name
+					}
+					print guard "\t" dest
+				}
+				if (stmt[i] ~ /(^|[ \t])fi([ \t]|$)/)
+					guard = ""
+			}
+		}
+	' "$MAKEFILE" "$MAKEFILE" | sort -u
+}
+
+# Make targets the spec's %build runs, one per line (VAR=value excluded)
+spec_build_targets() {
+    awk '
+		/^%build/ { in_build = 1; next }
+		/^%(package|description|prep|install|files|post|preun|postun|changelog)/ {
+			in_build = 0
+			next
+		}
+		!in_build { next }
+		/^%make_build[ \t]/ || /^[ \t]*make[ \t]/ {
+			sub(/^%make_build[ \t]+/, "")
+			sub(/^[ \t]*make[ \t]+/, "")
+			for (i = 1; i <= NF; i++)
+				if ($i !~ /=/ && $i !~ /^-/)
+					print $i
+		}
+	' "$SPEC" | sort -u
+}
+
+# Whether a recipe of a target the spec builds names this artifact
+build_produces() {
+    local artifact=$1 target
+
+    while read -r target; do
+        [ -n "$target" ] || continue
+        awk -v t="$target" '
+			$0 ~ "^" t ":" { in_recipe = 1; next }
+			in_recipe && /^[ \t]/ { print; next }
+			in_recipe && !/^$/ { exit }
+		' "$MAKEFILE" | grep -qF -- "$artifact" && return 0
+    done < <(spec_build_targets)
+
+    return 1
+}
+
 # a literal version here is the drift the placeholders exist to prevent
 spec_version=$(awk '$1 == "Version:" { print $2; exit }' "$SPEC")
 if [ "$spec_version" != "@VERSION@" ]; then
@@ -183,6 +293,12 @@ for cfg in "$NFPM_DIR"/*.yaml; do
     fi
 done
 
+# Every path the spec ships, across its subpackages
+spec_installed=$(while read -r section; do
+    [ -n "$section" ] || continue
+    spec_paths "$section" "lota-${section}"
+done < <(awk '/^%files[ \t]+/ { sub(/^%files[ \t]+/, ""); print }' "$SPEC"))
+
 # the other direction: subpackage the spec builds and nfpm does not
 while read -r section; do
     [ -n "$section" ] || continue
@@ -192,10 +308,23 @@ while read -r section; do
     fi
 done < <(awk '/^%files[ \t]+/ { sub(/^%files[ \t]+/, ""); print }' "$SPEC")
 
+# a guarded install the spec claims must be produced by its %build
+while IFS=$'\t' read -r artifact path; do
+    [ -n "$path" ] || continue
+    grep -qxF "$path" <<<"$spec_installed" || continue
+    build_produces "$artifact" && continue
+
+    fail=1
+    echo "FAIL: ${SPEC} claims ${path}, which nothing in its %build produces"
+    echo "  \`make install\` writes it only when ${artifact} exists, so the"
+    echo "  build ends in 'File not found' after compiling the whole tree"
+done < <(guarded_installs)
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "The two manifests must list the same installed paths per package,"
-    echo "and the spec must take its version from ${VERSION_FILE}."
+    echo "the spec must take its version from ${VERSION_FILE}, and it must"
+    echo "produce every file it claims."
     exit 1
 fi
 
