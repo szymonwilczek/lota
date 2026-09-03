@@ -11,6 +11,10 @@
 {{- if and .Values.policy.enabled .Values.allowPermissivePolicy }}
 {{- fail "policy.enabled and allowPermissivePolicy are mutually exclusive: choose a real policy or the permissive built-in, not both." }}
 {{- end }}
+{{- $sharedBackend := or .Values.postgres.existingSecret .Values.postgres.dsn }}
+{{- if and (gt (int .Values.replicaCount) 1) (not $sharedBackend) }}
+{{- fail "replicaCount is greater than 1 with no shared backend: each replica would keep its own enforcement state, so a ban imposed on one is unknown to the others. Set postgres.existingSecret to a Secret holding the DSN (or postgres.dsn to have the chart create one), or set replicaCount=1 for a single instance." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -68,6 +72,7 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if $sharedBackend }}
           env:
             # DSN carries the Postgres password, so it comes from Secret
             # and never appears in the pod's argv
@@ -76,6 +81,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "lota-verifier.pgSecretName" . }}
                   key: {{ .Values.postgres.dsnKey }}
+          {{- end }}
           ports:
             - name: attest
               containerPort: {{ .Values.service.port }}

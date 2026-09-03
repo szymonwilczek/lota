@@ -32,17 +32,24 @@ What the chart deploys
 Required inputs
 ===============
 
-The chart does not mint secrets, and it fails closed at render time:
-the verifier refuses to start without a trusted AIK root or a PCR policy,
-so the chart rejects an install that would produce a crash-looping pod.
+The chart does not mint secrets, and it fails closed at render time: the
+verifier refuses to start without a trusted AIK root or a PCR policy, and
+replicas without a shared backend cannot enforce as one fleet, so the chart
+rejects an install that would produce a crash-looping pod or a split-brained
+one.
 
 Provide this material before installing:
 
-* **Postgres DSN.** Reference an existing Secret with
-  ``postgres.existingSecret`` (recommended), or set ``postgres.dsn`` to have
-  the chart create one. The DSN is passed to the verifier through the
-  ``LOTA_PG_DSN`` environment variable, never on the command line, so the
-  database password does not appear in the pod's argv.
+* **Postgres DSN (required for more than one replica).** Reference an existing
+  Secret with ``postgres.existingSecret`` (recommended), or set
+  ``postgres.dsn`` to have the chart create one. The DSN is passed to the
+  verifier through the ``LOTA_PG_DSN`` environment variable, never on the
+  command line, so the database password does not appear in the pod's argv.
+  Left unset, the release is a single instance keeping its enforcement state
+  in the pod's ``emptyDir``: a supported shape, and not HA -- bans and
+  baselines go with the pod. ``replicaCount`` above 1 without the backend is
+  refused at render time, because each replica would enforce state the others
+  cannot see.
 * **TLS keypair.** A ``kubernetes.io/tls`` Secret named by
   ``tls.existingSecret`` (keys ``tls.crt`` and ``tls.key``), mounted read-only
   for the attestation listener.
