@@ -99,3 +99,44 @@ func TestListClientsPagesTheDurableRecord(t *testing.T) {
 		t.Fatalf("page past the end = %+v; want no clients and the same total", past)
 	}
 }
+
+// ClientInfo reports the last attestation from the shared baseline record,
+// not from this instance's session history.
+func TestClientInfoReportsTheFleetsLastAttestation(t *testing.T) {
+	baseline := verify.NewBaselineStore()
+	auditLog := store.NewMemoryAuditLog()
+
+	cfg := verify.DefaultConfig()
+	cfg.RequireBootEnrollment = false
+	cfg.BaselineStore = baseline
+	cfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
+	cfg.BanStore = store.NewMemoryBanStore(auditLog)
+
+	v := verify.NewVerifier(cfg, store.NewMemoryStore())
+	if err := v.AddPolicy(verify.DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy): %v", err)
+	}
+
+	// two rounds through another instance, against the shared record
+	var pcr14 [types.HashSize]byte
+	pcr14[0] = 0x42
+	baseline.CheckAndUpdate("host-0001", pcr14)
+	baseline.CheckAndUpdate("host-0001", pcr14)
+
+	record := baseline.GetBaseline("host-0001")
+	if record == nil || record.LastSeen.IsZero() {
+		t.Fatal("the shared record must carry when the client last attested")
+	}
+
+	info, found := v.ClientInfo("host-0001")
+	if !found {
+		t.Fatal("a client with a baseline must be known to every instance")
+	}
+	if !info.LastAttestation.Equal(record.LastSeen) {
+		t.Fatalf("last attestation = %v; the record this deployment shares says %v",
+			info.LastAttestation, record.LastSeen)
+	}
+	if info.AttestCount != record.AttestCount {
+		t.Fatalf("attestation count = %d, record says %d", info.AttestCount, record.AttestCount)
+	}
+}
