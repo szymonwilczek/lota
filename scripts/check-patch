@@ -864,6 +864,32 @@ check_bpf_mirror() {
     fi
 }
 
+# Helm chart must take its version from VERSION.
+# Only run when the chart or the check changed.
+check_helm_chart() {
+    local path touched=1 output
+
+    for path in "$@"; do
+        case "$path" in
+        deploy/helm/* | scripts/check-helm-chart.sh)
+            touched=0
+            ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "helm-chart"
+        return
+    fi
+
+    if output="$(scripts/check-helm-chart.sh 2>&1)"; then
+        pass "helm-chart"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "helm-chart" \
+            "Chart.yaml must carry appVersion \"@VERSION@\"; make helm-package fills it."
+    fi
+}
+
 # Package-manifest parity:
 # nfpm configs and the RPM spec must ship the same files per package,
 # since a host gets whichever one built its package.
@@ -956,6 +982,7 @@ main() {
     check_coccinelle "${changed_files[@]}"
     check_bpf_mirror "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
+    check_helm_chart "${changed_files[@]}"
 
     if ((FAILURES != 0)); then
         printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"
