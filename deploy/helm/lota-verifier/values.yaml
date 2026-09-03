@@ -84,9 +84,16 @@ service:
 
 # HTTP monitoring API (verifier --http-addr).
 # Off by default.
+# A pod's bind is non-loopback, which the verifier refuses without a key,
+# so auth.existingSecret is required when enabled. Keys reach the verifier
+# through env, never argv.
 httpApi:
   enabled: false
   port: 8080
+  auth:
+    existingSecret: ""
+    readerKey: reader-api-key  # read-only endpoints, e.g. Prometheus scrape
+    adminKey: ""               # also revocations and bans
 
 extraArgs: []
 

@@ -60,6 +60,16 @@ Provide this material before installing:
   chain to, distinct from the listener TLS material. Setting
   ``requireCert=false`` drops the requirement but disables AIK chain
   verification (INSECURE).
+* **Monitoring-API key (required when** ``httpApi.enabled`` **is set).** Every
+  bind inside a pod is non-loopback, and the verifier refuses a non-loopback
+  monitoring API without a key. Reference a Secret with
+  ``httpApi.auth.existingSecret`` and name the entries to read:
+  ``httpApi.auth.readerKey`` for the read-only endpoints Prometheus scrapes
+  (``reader-api-key`` by default) and ``httpApi.auth.adminKey`` for revocations
+  and bans (unset by default). Each named entry reaches the verifier as
+  ``LOTA_READER_API_KEY`` or ``LOTA_ADMIN_API_KEY``, so no key appears in the
+  pod's argv. Turning the API on without the Secret is refused at render time;
+  see :doc:`monitoring-api` for what each tier may call.
 * **PCR policy choice (required).** Either enable ``policy.enabled`` and point
   ``policy.existingConfigMap`` or ``policy.existingSecret`` at the policy file
   (set ``policy.pubKey`` when an Ed25519 ``policy.pub`` accompanies it), or set
@@ -91,6 +101,20 @@ package to ``oci://ghcr.io/szymonwilczek/charts/lota-verifier``.
 ``--require-cert`` stays on by default; keep it on for production so reports
 without a CA-issued AIK certificate are rejected, and supply the
 ``aikCA.existingSecret`` root it verifies against.
+
+With the monitoring API, the same install carries the key Secret::
+
+   kubectl create secret generic lota-api-keys \
+       --from-literal=reader-api-key="$(openssl rand -hex 32)"
+
+   helm install lota-verifier build/helm/lota-verifier-<version>.tgz \
+       ... \
+       --set httpApi.enabled=true \
+       --set httpApi.auth.existingSecret=lota-api-keys
+
+The Service then carries the ``http-api`` port beside ``attest``, and a
+Prometheus scrape config points at it with the same key as its bearer
+credential (:doc:`observability`).
 
 Validating without a cluster
 ============================
