@@ -23,3 +23,7 @@ Postgres store initialized schema_version=1
 # and the message table is built from this tree, so the gate cannot confirm
 # what another program says.
 FS_IOC_ENABLE_VERITY failed on '/usr/bin/lota-agent': File exists
+
+# OpenSSL's refusal of a PIN prompt with nothing on stdin,
+# quoted in the HSM example; output of a tool this project does not ship.
+Could not find private key from pkcs11:...
