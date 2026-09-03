@@ -74,9 +74,11 @@ Typical rig bring-up:
   lota-loadgen run -dir rig -server 127.0.0.1:8443 -tls-ca lota-verifier.crt \
     -mode steady -interval 60s -duration 10m -out summary.json
 
-The rig needs the file-backed certificate AIK store: -db selects the SQLite
-store, which cannot verify certificate chains, and the verifier refuses to
-start with it under the default --require-cert.
+The rig needs certificate verification, which -aik-ca-cert selects: a verifier
+given -db or -pg-dsn and no CA root falls back to the trust-on-first-use store,
+which cannot verify certificate chains, and refuses to start under the default
+--require-cert. With a CA root the state backend is free -- -aik-store for a
+single run, a database when the run is against more than one instance.
 `)
 }
 
