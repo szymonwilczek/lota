@@ -116,6 +116,16 @@ The Service then carries the ``http-api`` port beside ``attest``, and a
 Prometheus scrape config points at it with the same key as its bearer
 credential (:doc:`observability`).
 
+Health probes
+=============
+
+With ``httpApi.enabled``, the readiness and liveness probes ask the monitoring
+API for ``GET /health``, which needs no key and reports whether the attestation
+listener is up. Without the API there is only the attestation port to ask, so
+the probes open a connection there and close it; the verifier reads a peer that
+never speaks as the health check it is, so those probes cost no challenge and
+raise no error.
+
 Validating without a cluster
 ============================
 

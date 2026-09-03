@@ -97,6 +97,9 @@ httpApi:
 
 extraArgs: []
 
+# Readiness and liveness probes: /health on the monitoring API when
+# httpApi.enabled (reports the attestation listener),
+# else a TCP open of the attestation port.
 probes:
   enabled: true
   initialDelaySeconds: 5

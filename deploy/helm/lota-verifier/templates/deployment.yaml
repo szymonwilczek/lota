@@ -117,14 +117,29 @@ spec:
               protocol: TCP
             {{- end }}
           {{- if .Values.probes.enabled }}
+          {{- /* /health needs no key; without the API only a TCP open is left */}}
           readinessProbe:
+            {{- if .Values.httpApi.enabled }}
+            httpGet:
+              path: /health
+              port: http-api
+              scheme: HTTPS
+            {{- else }}
             tcpSocket:
               port: attest
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
           livenessProbe:
+            {{- if .Values.httpApi.enabled }}
+            httpGet:
+              path: /health
+              port: http-api
+              scheme: HTTPS
+            {{- else }}
             tcpSocket:
               port: attest
+            {{- end }}
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
           {{- end }}
