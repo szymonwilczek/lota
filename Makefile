@@ -820,7 +820,7 @@ check-version-tag:
 # Package-manifest parity gate
 # nfpm configs and the RPM spec describe the same packages;
 # host gets whichever one built the package it installed,
-# so they must ship the same files.
+# so they must ship the same files and name the same version.
 # See scripts/check-package-manifests.sh
 check-package-manifests:
 	@scripts/check-package-manifests.sh

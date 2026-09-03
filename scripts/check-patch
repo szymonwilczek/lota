@@ -873,7 +873,7 @@ check_package_manifests() {
     for path in "$@"; do
         case "$path" in
         packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
-            scripts/check-package-manifests.sh)
+            VERSION | scripts/check-package-manifests.sh)
             touched=0
             ;;
         esac
