@@ -5,8 +5,8 @@
 # Override with --set or -f.
 
 # Number of stateless verifier instances.
-# HA needs the shared Postgres backend below, so every replica sees
-# the same enforcement state.
+# More than one needs the shared Postgres backend below, so every replica sees
+# the same enforcement state; the chart refuses to render replicas without it.
 replicaCount: 3
 
 image:
@@ -43,6 +43,9 @@ dataDir: /var/lib/lota
 # Never pass it on the command line.
 # Either reference an existing Secret (recommended) or set `dsn`
 # to have the chart create one.
+# Left empty the deployment is a single instance holding its enforcement state
+# in the pod's own emptyDir, which is a supported shape and is not HA:
+# the state goes with the pod, and replicaCount above must be 1.
 postgres:
   existingSecret: ""
   dsnKey: dsn
