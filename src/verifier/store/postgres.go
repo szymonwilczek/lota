@@ -228,12 +228,37 @@ func OpenPostgresDBPool(dsn string, maxOpenConns int) (*sql.DB, error) {
 	db.SetConnMaxLifetime(30 * time.Minute)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
+	// name a standby before migrating it fails with a bare read-only error
+	if err := refuseStandby(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	if err := runPgMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("postgres migration failed: %w", err)
 	}
 
 	return db, nil
+}
+
+// ErrDatabaseInRecovery is returned when the DSN points at a hot standby,
+// which cannot take the startup migration.
+var ErrDatabaseInRecovery = errors.New("database is a read-only standby")
+
+// refuseStandby returns ErrDatabaseInRecovery on a standby.
+// If pg_is_in_recovery() fails, the check is skipped and the migration decides.
+func refuseStandby(db *sql.DB) error {
+	var inRecovery bool
+	if err := db.QueryRow("SELECT pg_is_in_recovery()").Scan(&inRecovery); err != nil {
+		return nil
+	}
+	if !inRecovery {
+		return nil
+	}
+	return fmt.Errorf("%w: a verifier applies its schema at startup and needs the primary; "+
+		"point this instance at the writable database and leave the replica to reporting tools that read it directly",
+		ErrDatabaseInRecovery)
 }
 
 // runPgMigrations applies pending Postgres schema migrations, each inside its
