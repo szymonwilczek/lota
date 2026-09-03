@@ -459,7 +459,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-doc-diagnostics check-stack-frames check-tpm-strerror check-package-manifests check-helm-chart check-container-images lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -717,13 +717,27 @@ KO_LABELS := \
 KO_BUILD = env KO_DOCKER_REPO=$(KO_DOCKER_REPO) SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
 	$(KO) build -B --sbom=spdx --platform=$(KO_PLATFORMS) --tags=$(KO_IMAGE_TAGS) $(KO_LABELS)
 
-container-images: container-image-verifier container-image-attest-ca
+# HSM-capable CA image: a variant tag of the attestca repository, built from
+# packaging/ko/attestca-hsm; amd64 only, as cgo does not cross-compile here
+KO_HSM_CONFIG := $(CURDIR)/packaging/ko/attestca-hsm
+KO_HSM_PLATFORMS ?= linux/amd64
+KO_HSM_TAG_SUFFIX ?= -hsm
+KO_COMMA := ,
+KO_HSM_IMAGE_TAGS ?= $(subst $(KO_COMMA),$(KO_HSM_TAG_SUFFIX)$(KO_COMMA),$(KO_IMAGE_TAGS))$(KO_HSM_TAG_SUFFIX)
+KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
+	SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH) \
+	$(KO) build -B --sbom=spdx --platform=$(KO_HSM_PLATFORMS) --tags=$(KO_HSM_IMAGE_TAGS) $(KO_LABELS)
+
+container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
 container-image-verifier:
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
 container-image-attest-ca:
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
+
+container-image-attest-ca-hsm:
+	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
 # Helm chart validation (no Kubernetes cluster required)
 # helm-lint checks chart structure; helm-template renders the manifests
@@ -2255,6 +2269,7 @@ help:
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
 	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
+	@echo "  container-image-attest-ca-hsm  Build the PKCS#11 (HSM) attest-CA image"
 	@echo "  srpm             Build a source RPM from HEAD (COPR / rpmbuild)"
 	@echo "  rpm-sign         GPG-sign the RPMs in PKG_DIR (LOTA_RPM_GPG_NAME)"
 	@echo "  dnf-repo         Build a signed createrepo_c dnf repository under REPO_DIR"
