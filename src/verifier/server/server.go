@@ -539,7 +539,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	clog.Debug("report received", "size", totalSize)
 
-	result, err := s.verifier.VerifyReport(challengeID, reportData)
+	result, err := s.verifier.VerifyReportFrom(challengeID, clientAddr, reportData)
 	if err != nil {
 		clog.Warn("verification failed", "error", err)
 	}

@@ -305,8 +305,31 @@ func certificateVerdict(err error) uint32 {
 	return types.VerifySigFail
 }
 
-// performs full verification of attestation report
-// returns verification result ready to send back to client
+// MaxRecordedDetail caps the refusal reason in an attestation record.
+// The reason quotes report data, so it is capped when written.
+const MaxRecordedDetail = 2048
+
+// recordedDetail returns err as one sanitized, bounded line for the decision
+// log. An accepted round (nil err) records an empty reason.
+func recordedDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := logging.SanitizeField(err.Error())
+	if len(detail) > MaxRecordedDetail {
+		detail = detail[:MaxRecordedDetail]
+	}
+	return detail
+}
+
+// VerifyReport verifies a report that arrived over an unnamed transport.
+func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (*types.VerifyResult, error) {
+	return v.VerifyReportFrom(challengeID, "", reportData)
+}
+
+// VerifyReportFrom verifies a report and records the address it came from.
+// remoteAddr is what the decision log answers "which host" with; a caller
+// that has no address for the report passes an empty one.
 //
 // challengeID identifies the transport-level endpoint used when the
 // challenge was generated. It is used exclusively for nonce binding
@@ -314,7 +337,7 @@ func certificateVerdict(err error) uint32 {
 // baseline, revocation, bans) require a non-zero hardware-derived
 // clientID (hex-encoded HardwareID from the TPM report) so that
 // transport identity (e.g. NATed IP) is never used as durable identity.
-func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types.VerifyResult, retErr error) {
+func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData []byte) (_ *types.VerifyResult, retErr error) {
 	reportBuf := cloneSensitive(reportData)
 	defer wipeBytes(reportBuf)
 
@@ -361,6 +384,8 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 				DurationMs: float64(duration.Milliseconds()),
 				PCR14:      pcr14Hex,
 				KernelHash: kernelHashHex,
+				Details:    recordedDetail(retErr),
+				RemoteAddr: logging.SanitizeField(remoteAddr),
 			}); err != nil {
 				clog.Warn("failed to record attestation decision", "error", err)
 			}

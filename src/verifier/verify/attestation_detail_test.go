@@ -106,3 +106,41 @@ func TestRecordedReasonIsBounded(t *testing.T) {
 		t.Error("recorded reason carries a line break, so one record can forge another")
 	}
 }
+
+// The other half of the same question. A record that names the client
+// identity and not the address answers "which key" but not "which host",
+// which is the one an operator acts on first.
+func TestRecordCarriesTheAddressTheReportCameFrom(t *testing.T) {
+	const clientID = "detail-addr-client"
+	const peer = "192.0.2.10:39412"
+
+	attestLog := store.NewMemoryAttestationLog()
+	cfg := DefaultConfig()
+	cfg.RequireBootEnrollment = false
+	cfg.NonceLifetime = 1 * time.Second
+	cfg.AttestationLog = attestLog
+	verifier := NewVerifier(cfg, newCertStore(t))
+	if err := verifier.AddPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("AddPolicy(DefaultPolicy) failed: %v", err)
+	}
+	if err := verifier.SetActivePolicy("default"); err != nil {
+		t.Fatalf("SetActivePolicy(default) failed: %v", err)
+	}
+
+	challenge, err := verifier.GenerateChallenge(clientID)
+	if err != nil {
+		t.Fatalf("GenerateChallenge: %v", err)
+	}
+	report := createValidReport(t, clientID, challenge.Nonce, fixturePCR14())
+	if _, err := verifier.VerifyReportFrom(clientID, peer, report); err != nil {
+		t.Fatalf("VerifyReportFrom: %v", err)
+	}
+
+	records := attestLog.QueryAttestations(1)
+	if len(records) != 1 {
+		t.Fatalf("attestation records = %d, want 1", len(records))
+	}
+	if records[0].RemoteAddr != peer {
+		t.Errorf("recorded remote_addr = %q, want %q", records[0].RemoteAddr, peer)
+	}
+}
