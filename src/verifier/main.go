@@ -185,7 +185,7 @@ type enforcementStores struct {
 }
 
 // sqliteEnforcementStores keeps the group in a SQLite database.
-func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics) enforcementStores {
 	audit := store.NewSQLiteAuditLog(db)
 	return enforcementStores{
 		audit:       audit,
@@ -193,13 +193,13 @@ func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores 
 		bans:        store.NewSQLiteBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
 			store.NewSQLiteAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger}),
+			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
 
 // postgresEnforcementStores keeps the group in Postgres, shared by every
 // instance; sharded deployments keep it on the control shard.
-func postgresEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics) enforcementStores {
 	audit := store.NewPostgresAuditLog(db)
 	return enforcementStores{
 		audit:       audit,
@@ -207,7 +207,7 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStore
 		bans:        store.NewPostgresBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
 			store.NewPostgresAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger}),
+			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
 
@@ -482,7 +482,7 @@ func main() {
 				"note", "per-client baseline/nonce partitioned; enforcement and audit on shard 0")
 		}
 
-		enforcement := postgresEnforcementStores(db, logger)
+		enforcement := postgresEnforcementStores(db, logger, m)
 		enforcement.install(&verifierCfg)
 		auditLog = enforcement.audit
 		attestLog = enforcement.attestations
@@ -540,7 +540,7 @@ func main() {
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
-		enforcement := sqliteEnforcementStores(db, logger)
+		enforcement := sqliteEnforcementStores(db, logger, m)
 		enforcement.install(&verifierCfg)
 		auditLog = enforcement.audit
 		attestLog = enforcement.attestations
@@ -571,7 +571,7 @@ func main() {
 			defer db.Close()
 			verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
-			enforcement := sqliteEnforcementStores(db, logger)
+			enforcement := sqliteEnforcementStores(db, logger, m)
 			enforcement.install(&verifierCfg)
 			auditLog = enforcement.audit
 			attestLog = enforcement.attestations
@@ -738,6 +738,19 @@ func main() {
 			if c, ok := attestLog.(interface{ Close() error }); ok {
 				if err := c.Close(); err != nil {
 					logger.Warn("attestation-log flush on shutdown failed", "error", err)
+				}
+			}
+
+			// what this run lost from the decision log, said once where an
+			// operator closing an incident will look: the counters are also
+			// on /metrics, which is gone with the process
+			if l, ok := attestLog.(interface {
+				DroppedCount() int64
+				FailedCount() int64
+			}); ok {
+				if dropped, failed := l.DroppedCount(), l.FailedCount(); dropped > 0 || failed > 0 {
+					logger.Warn("decision log incomplete for this run",
+						"dropped_buffer_full", dropped, "failed_writes", failed)
 				}
 			}
 			logger.Info("LOTA Verifier stopped")

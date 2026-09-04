@@ -26,6 +26,9 @@ type Metrics struct {
 	AttestationFail  Counter // all failed attestations (parse errors + rejections)
 	ConnectionErrors Counter // protocol-level errors
 
+	AttestationLogDropped Counter // decision records dropped on a full writer buffer
+	AttestationLogFailed  Counter // decision records whose write failed
+
 	// rejection reason
 	Rejections *LabeledCounter
 
@@ -210,6 +213,14 @@ func (m *Metrics) Export() string {
 		"Total protocol-level connection errors",
 		m.ConnectionErrors.Value())
 
+	writeCounter(&b, "lota_attestation_log_dropped_total",
+		"Decision records dropped because the log buffer was full",
+		m.AttestationLogDropped.Value())
+
+	writeCounter(&b, "lota_attestation_log_failed_total",
+		"Decision records lost to a failed log write",
+		m.AttestationLogFailed.Value())
+
 	// derived counter: total failed attestations across all reasons
 	writeCounter(&b, "lota_attestations_failed_total",
 		"Total failed attestations (parse errors + rejections)",
@@ -308,3 +319,7 @@ func formatFloat(f float64) string {
 	}
 	return fmt.Sprintf("%g", f)
 }
+
+// implement store.AttestationLogLoss
+func (m *Metrics) AttestationRecordsDropped(n int64) { m.AttestationLogDropped.Add(n) }
+func (m *Metrics) AttestationRecordsFailed(n int64)  { m.AttestationLogFailed.Add(n) }

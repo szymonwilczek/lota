@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/szymonwilczek/lota/verifier/metrics"
 	"github.com/szymonwilczek/lota/verifier/store"
 	"github.com/szymonwilczek/lota/verifier/verify"
 )
@@ -242,7 +243,7 @@ func TestEnforcementStoresOutliveTheProcessThatWroteThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
-	first := sqliteEnforcementStores(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	first := sqliteEnforcementStores(db, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
 	if err := first.bans.BanHardware("default", hwid, store.RevocationCheating, "ops", ""); err != nil {
 		t.Fatalf("BanHardware: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestEnforcementStoresOutliveTheProcessThatWroteThem(t *testing.T) {
 		t.Fatalf("OpenDB(reopen): %v", err)
 	}
 	defer reopened.Close()
-	second := sqliteEnforcementStores(reopened, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	second := sqliteEnforcementStores(reopened, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
 	if _, banned := second.bans.IsBanned("default", hwid); !banned {
 		t.Error("the ban did not survive a reopen of the state database")
 	}

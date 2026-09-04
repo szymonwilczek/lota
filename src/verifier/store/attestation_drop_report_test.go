@@ -6,9 +6,11 @@ package store
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -92,5 +94,59 @@ func TestOverflowReportIsRateLimited(t *testing.T) {
 	if lines > 4 {
 		t.Errorf("%d log lines for %d dropped records, want a rate-limited report:\n%s",
 			lines, bl.DroppedCount(), out.String())
+	}
+}
+
+// countingLoss stands for whatever a deployment reads its loss off.
+type countingLoss struct {
+	dropped atomic.Int64
+	failed  atomic.Int64
+}
+
+func (c *countingLoss) AttestationRecordsDropped(n int64) { c.dropped.Add(n) }
+func (c *countingLoss) AttestationRecordsFailed(n int64)  { c.failed.Add(n) }
+
+// The loss has to reach a counter a dashboard can plot,
+// not only a log line somebody has to be reading at the time.
+func TestBufferOverflowReachesTheLossCounter(t *testing.T) {
+	loss := &countingLoss{}
+	bl, _ := stallAndOverflow(t, BatchedAttestationLogConfig{
+		MaxBatch:      10,
+		MaxBuffer:     10,
+		FlushInterval: time.Hour,
+		Loss:          loss,
+	})
+
+	if got, want := loss.dropped.Load(), bl.DroppedCount(); got != want {
+		t.Errorf("loss counter read %d dropped records, the writer counted %d", got, want)
+	}
+	if loss.dropped.Load() == 0 {
+		t.Error("nothing reached the loss counter")
+	}
+}
+
+// A write that does not land is the other way the decision log goes
+// incomplete, and it is counted the same way.
+func TestFailedFlushReachesTheLossCounter(t *testing.T) {
+	loss := &countingLoss{}
+	spy := &spyLog{failBatch: true}
+	bl := NewBatchedAttestationLog(spy, BatchedAttestationLogConfig{
+		MaxBatch:      8,
+		FlushInterval: time.Hour,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Loss:          loss,
+	})
+
+	for range 8 {
+		if err := bl.Record(AttestationRecord{Result: "ok"}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	if err := bl.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got, want := loss.failed.Load(), bl.FailedCount(); got != want || got != 8 {
+		t.Errorf("loss counter read %d failed records, the writer counted %d, want 8", got, want)
 	}
 }
