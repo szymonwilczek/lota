@@ -182,10 +182,14 @@ int attest_targets_build(const struct lota_config *cfg, const char *server,
 	for (size_t i = 0; i < n; i++) {
 		int ret;
 
+		/*
+		 * Label from the configuration only; the enrolled endpoint
+		 * lives in the --enroll record, which this list never reads.
+		 */
 		if (out[i].token_only)
 			snprintf(out[i].label, sizeof(out[i].label),
-				 "token-only publisher enrolled at %s:%d",
-				 out[i].ca, out[i].ca_port);
+				 "token-only publisher at CA %s:%d", out[i].ca,
+				 out[i].ca_port);
 		else
 			snprintf(out[i].label, sizeof(out[i].label), "%s:%d",
 				 out[i].server, out[i].port);
