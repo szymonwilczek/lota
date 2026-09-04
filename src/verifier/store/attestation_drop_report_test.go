@@ -150,3 +150,55 @@ func TestFailedFlushReachesTheLossCounter(t *testing.T) {
 		t.Errorf("loss counter read %d failed records, the writer counted %d, want 8", got, want)
 	}
 }
+
+// Close on a stalled backend returns an error and counts the unwritten tail
+// as failed instead of blocking.
+func TestCloseDoesNotWaitForeverOnAStalledBackend(t *testing.T) {
+	backend := &blockingLog{entered: make(chan struct{}), release: make(chan struct{})}
+	out := &syncBuffer{}
+	loss := &countingLoss{}
+	bl := NewBatchedAttestationLog(backend, BatchedAttestationLogConfig{
+		MaxBatch:      10,
+		MaxBuffer:     100,
+		FlushInterval: time.Hour,
+		Logger:        slog.New(slog.NewTextHandler(out, nil)),
+		Loss:          loss,
+	})
+	t.Cleanup(func() { close(backend.release) })
+
+	// one batch takes the worker into the stalled backend
+	for range 10 {
+		if err := bl.Record(AttestationRecord{Result: "ok"}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	<-backend.entered
+
+	// and these stay buffered behind it
+	for range 5 {
+		_ = bl.Record(AttestationRecord{Result: "ok"})
+	}
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- bl.Close() }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Close reported success while the tail was never written")
+		}
+		if waited := time.Since(start); waited > 10*time.Second {
+			t.Errorf("Close waited %s on a stalled backend", waited)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Close is still waiting on a stalled backend")
+	}
+
+	if loss.failed.Load() == 0 {
+		t.Error("the records left buffered at shutdown were not counted as lost")
+	}
+	if !strings.Contains(out.String(), "shutdown") {
+		t.Errorf("the loss at shutdown was not reported:\n%s", out.String())
+	}
+}
