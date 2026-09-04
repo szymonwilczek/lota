@@ -160,6 +160,16 @@ Interpreting failures:
   default, so a storm run with ``-in-flight`` above that measures the
   cap rather than the verifier).
 
+A rate that does not move when ``-in-flight`` rises is a ceiling, but
+not necessarily the verifier's: building and signing synthetic reports
+costs the generator several times what verifying them costs the
+verifier, so one load host saturates first. Measure both processes'
+CPU across the run (``/proc/<pid>/stat``, or ``systemd-cgtop`` per
+unit) before recording a figure: if ``lota-loadgen`` is the one
+burning cores, the number describes the load host. Drive the fleet
+from more than one host, or from more rigs, until the verifier is the
+process at its limit.
+
 Repeatability
 =============
 
