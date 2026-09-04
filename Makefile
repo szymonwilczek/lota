@@ -1924,6 +1924,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_proton_hook_disable.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
+	@tests/integration/test_installer_status_stages.sh
 	@if command -v go >/dev/null 2>&1 && command -v cc >/dev/null 2>&1; then \
 		tests/integration/test_attestca_build_tags.sh; \
 	else \
