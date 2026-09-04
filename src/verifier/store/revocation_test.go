@@ -9,6 +9,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -387,6 +388,29 @@ func TestFormatParseHardwareID(t *testing.T) {
 
 	if parsed != original {
 		t.Error("Round-trip failed: parsed != original")
+	}
+}
+
+// Parsing lower-cases a hardware ID rather than refusing upper case.
+func TestParseHardwareID_CanonicalisesCase(t *testing.T) {
+	lower := "deadbeef0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c"
+
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{"upper", strings.ToUpper(lower)},
+		{"mixed", "DEADBEEF0102030405060708090a0b0c0d0e0f101112131415161718191A1B1C"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := ParseHardwareID(tc.input)
+			if err != nil {
+				t.Fatalf("ParseHardwareID(%s): %v", tc.name, err)
+			}
+			if got := FormatHardwareID(parsed); got != lower {
+				t.Errorf("FormatHardwareID = %q, want the canonical %q", got, lower)
+			}
+		})
 	}
 }
 
