@@ -33,34 +33,44 @@
 # integrity profile, /etc/lota/lota.conf managed by Ansible or
 # similar). This script is the developer-host equivalent and is
 # explicitly NOT meant for hardened production hosts.
+#
+# Environment:
+#   LOTA_BRINGUP_ROOT
+#     Prefix every path with this directory instead of /, for tests;
+#     root is then not required. TPM access is not redirected:
+#     tpm2_evictcontrol from PATH still runs.
 
 set -euo pipefail
 
-if [[ $EUID -ne 0 ]]; then
-	echo "lota-dev-bringup: must run as root (TPM + fs-verity + IMA)" >&2
-	exit 2
+BRINGUP_ROOT="${LOTA_BRINGUP_ROOT:-}"
+redirected=false
+[[ -n "$BRINGUP_ROOT" ]] && redirected=true
+
+if ! $redirected && [[ $EUID -ne 0 ]]; then
+    echo "lota-dev-bringup: must run as root (TPM + fs-verity + IMA)" >&2
+    exit 2
 fi
 
-POLICY_DIR="/etc/lota"
+POLICY_DIR="$BRINGUP_ROOT/etc/lota"
 POLICY_KEY="$POLICY_DIR/policy.key"
 POLICY_PUB="$POLICY_DIR/policy.pub"
 LOTA_CONF="$POLICY_DIR/lota.conf"
-AGENT_BIN="/usr/bin/lota-agent"
-BPF_OBJ="/usr/lib/lota/lota_lsm.bpf.o"
+AGENT_BIN="$BRINGUP_ROOT/usr/bin/lota-agent"
+BPF_OBJ="$BRINGUP_ROOT/usr/lib/lota/lota_lsm.bpf.o"
 BPF_SIG="$BPF_OBJ.sig"
-STATE_DIR="/var/lib/lota"
+STATE_DIR="$BRINGUP_ROOT/var/lib/lota"
 IMA_POLICY_SRC="$(dirname "$0")/../configs/ima/lota-ima-policy"
-IMA_POLICY_RUNTIME="/sys/kernel/security/ima/policy"
+IMA_POLICY_RUNTIME="$BRINGUP_ROOT/sys/kernel/security/ima/policy"
 
 info() { printf '[lota-dev-bringup] %s\n' "$*"; }
 warn() { printf '[lota-dev-bringup] WARN: %s\n' "$*" >&2; }
 fail() {
-	printf '[lota-dev-bringup] FAIL: %s\n' "$*" >&2
-	exit 1
+    printf '[lota-dev-bringup] FAIL: %s\n' "$*" >&2
+    exit 1
 }
 
 ensure_artifact() {
-	[[ -e "$1" ]] || fail "missing artifact: $1 (run 'sudo make install' first)"
+    [[ -e "$1" ]] || fail "missing artifact: $1 (run 'sudo make install' first)"
 }
 
 # 1. Verify the agent + BPF object are installed before doing anything else.
@@ -69,13 +79,13 @@ ensure_artifact "$BPF_OBJ"
 
 # 2. Sign-key + pubkey
 if [[ ! -f "$POLICY_KEY" || ! -f "$POLICY_PUB" ]]; then
-	info "generating Ed25519 keypair at $POLICY_DIR/policy.{key,pub}"
-	install -d -m 0700 "$POLICY_DIR"
-	"$AGENT_BIN" --gen-signing-key "$POLICY_DIR/policy"
-	chmod 0600 "$POLICY_KEY"
-	chmod 0644 "$POLICY_PUB"
+    info "generating Ed25519 keypair at $POLICY_DIR/policy.{key,pub}"
+    install -d -m 0700 "$POLICY_DIR"
+    "$AGENT_BIN" --gen-signing-key "$POLICY_DIR/policy"
+    chmod 0600 "$POLICY_KEY"
+    chmod 0644 "$POLICY_PUB"
 else
-	info "operator keypair already present, skipping --gen-signing-key"
+    info "operator keypair already present, skipping --gen-signing-key"
 fi
 
 # 3. Sign the in-tree BPF object so bpf_loader_verify_bpf_object_signature passes.
@@ -86,34 +96,39 @@ ensure_artifact "$BPF_SIG"
 # 4. /etc/lota/lota.conf must reference the pubkey so the daemon path knows
 #    where to read it. Append once; do not duplicate the line on re-run.
 if [[ ! -f "$LOTA_CONF" ]]; then
-	info "seeding $LOTA_CONF from configs/lota.conf.example"
-	src="$(dirname "$0")/../configs/lota.conf.example"
-	[[ -f "$src" ]] || fail "configs/lota.conf.example not found relative to $0"
-	install -m 0644 -o root -g root "$src" "$LOTA_CONF"
+    info "seeding $LOTA_CONF from configs/lota.conf.example"
+    src="$(dirname "$0")/../configs/lota.conf.example"
+    [[ -f "$src" ]] || fail "configs/lota.conf.example not found relative to $0"
+    # the agent refuses a config not owned by root; redirected runs are not root
+    if $redirected; then
+        install -m 0644 "$src" "$LOTA_CONF"
+    else
+        install -m 0644 -o root -g root "$src" "$LOTA_CONF"
+    fi
 fi
 if ! grep -Eq "^[[:space:]]*policy_pubkey[[:space:]]*=" "$LOTA_CONF"; then
-	info "wiring policy_pubkey = $POLICY_PUB into $LOTA_CONF"
-	printf '\n# Added by lota-dev-bringup\npolicy_pubkey = %s\n' \
-		"$POLICY_PUB" >>"$LOTA_CONF"
+    info "wiring policy_pubkey = $POLICY_PUB into $LOTA_CONF"
+    printf '\n# Added by lota-dev-bringup\npolicy_pubkey = %s\n' \
+        "$POLICY_PUB" >>"$LOTA_CONF"
 else
-	info "policy_pubkey already configured, leaving $LOTA_CONF alone"
+    info "policy_pubkey already configured, leaving $LOTA_CONF alone"
 fi
 
 # 5. fs-verity on the agent binary. Filesystem must already have the verity
 #    feature enabled (`tune2fs -O verity /dev/sdX` on ext4, mkfs-time for
 #    btrfs/f2fs). The fsverity tool reports a friendly error if not.
 if command -v fsverity >/dev/null 2>&1; then
-	if fsverity measure "$AGENT_BIN" >/dev/null 2>&1; then
-		info "fs-verity already enabled on $AGENT_BIN"
-	else
-		info "enabling fs-verity on $AGENT_BIN"
-		if ! fsverity enable "$AGENT_BIN"; then
-			warn "fsverity enable failed; filesystem may lack the verity feature"
-			warn "agent will refuse to start without --insecure-allow-mutable-rootfs"
-		fi
-	fi
+    if fsverity measure "$AGENT_BIN" >/dev/null 2>&1; then
+        info "fs-verity already enabled on $AGENT_BIN"
+    else
+        info "enabling fs-verity on $AGENT_BIN"
+        if ! fsverity enable "$AGENT_BIN"; then
+            warn "fsverity enable failed; filesystem may lack the verity feature"
+            warn "agent will refuse to start without --insecure-allow-mutable-rootfs"
+        fi
+    fi
 else
-	warn "fsverity utility not installed; install fsverity-utils and re-run"
+    warn "fsverity utility not installed; install fsverity-utils and re-run"
 fi
 
 # 6. IMA appraisal mode. The kernel-floor check inside the agent parses
@@ -128,23 +143,23 @@ fi
 #    as files are matched; production routes to enforce are the operator's
 #    call (see Documentation/operator/production-bringup/index.rst, "IMA appraisal policy")
 if grep -qE 'ima_appraise=(enforce|fix)' /proc/cmdline 2>/dev/null; then
-	info "IMA appraisal already in an enforcing mode"
+    info "IMA appraisal already in an enforcing mode"
 else
-	warn "kernel cmdline lacks ima_appraise=enforce|fix; the agent will"
-	warn "refuse to start. For a dev host run:"
-	warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=fix'"
-	warn "  sudo reboot"
-	warn "(enforce on a rootfs without IMA signatures blocks every exec;"
-	warn "see Documentation/operator/production-bringup/index.rst before using it)"
+    warn "kernel cmdline lacks ima_appraise=enforce|fix; the agent will"
+    warn "refuse to start. For a dev host run:"
+    warn "  sudo grubby --update-kernel=ALL --args='ima=on ima_appraise=fix'"
+    warn "  sudo reboot"
+    warn "(enforce on a rootfs without IMA signatures blocks every exec;"
+    warn "see Documentation/operator/production-bringup/index.rst before using it)"
 fi
 
 if [[ -f "$IMA_POLICY_SRC" ]] &&
-	! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
-	info "loading IMA appraisal policy from $IMA_POLICY_SRC"
-	if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
-		warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
-		warn "ima_policy=appraise_tcb on cmdline or a custom policy"
-	fi
+    ! grep -q "appraise" "$IMA_POLICY_RUNTIME" 2>/dev/null; then
+    info "loading IMA appraisal policy from $IMA_POLICY_SRC"
+    if ! cat "$IMA_POLICY_SRC" >"$IMA_POLICY_RUNTIME" 2>/dev/null; then
+        warn "writing to $IMA_POLICY_RUNTIME failed; kernel may need"
+        warn "ima_policy=appraise_tcb on cmdline or a custom policy"
+    fi
 fi
 
 # 7. Wipe stale agent state. The clock-state snapshot under
@@ -153,21 +168,21 @@ fi
 #    to refuse with EBADMSG. Evict the persistent AIK handle so the
 #    next provisioning is clean.
 if [[ -d "$STATE_DIR" ]]; then
-	info "clearing stale agent state under $STATE_DIR"
-	find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
-		\( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
-		-o -name 'snapshot*' \) -delete 2>/dev/null || true
+    info "clearing stale agent state under $STATE_DIR"
+    find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
+        \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
+        -o -name 'snapshot*' \) -delete 2>/dev/null || true
 fi
 
 if command -v tpm2_evictcontrol >/dev/null 2>&1; then
-	for handle in 0x81010002 0x81010003 0x81010004 0x81010005; do
-		if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
-			info "evicted stale persistent AIK at $handle"
-		fi
-	done
+    for handle in 0x81010002 0x81010003 0x81010004 0x81010005; do
+        if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
+            info "evicted stale persistent AIK at $handle"
+        fi
+    done
 else
-	warn "tpm2-tools not installed; persistent AIK handles cannot be evicted"
-	warn "install tpm2-tools and re-run if PCR14 errors persist"
+    warn "tpm2-tools not installed; persistent AIK handles cannot be evicted"
+    warn "install tpm2-tools and re-run if PCR14 errors persist"
 fi
 
 # 8. Cold reboot. PCR14 resetCount only advances on hardware reset, so the
