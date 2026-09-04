@@ -128,11 +128,19 @@ Reading the output
 The human summary prints attempts, ``VERIFY_OK`` count, rejections by
 verifier result code, transport errors by phase (``dial``, ``read
 challenge``, ``write report``, ``read result``, ``timeout``), the
-achieved rate and latency percentiles (p50/p90/p99/max/mean, measured
-from dial to result). The ``-out`` JSON adds a per-second timeline of
+rate and latency percentiles (p50/p90/p99/max/mean, measured from dial
+to result). The ``-out`` JSON adds a per-second timeline of
 ok/rejected/error counts -- failover drills read the outage dip and
 recovery window straight off that series -- plus ``agents_never_ok``,
 which must be zero in a healthy run.
+
+The rate line carries two figures. The headline one counts
+attestations the verifier accepted (``achieved_rate_per_sec``), and it
+is the only one that is throughput; ``attempted_rate_per_sec`` beside
+it counts everything the generator started. They diverge when
+attestations fail, and the failures that cost the least time are the
+ones the verifier refuses at the door, so a run whose fleet is being
+refused has the higher attempted rate of the two.
 
 Interpreting failures:
 

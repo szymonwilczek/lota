@@ -71,20 +71,21 @@ type latencyStats struct {
 
 // summary is the machine-readable result of run
 type summary struct {
-	Mode           string            `json:"mode"`
-	Server         string            `json:"server"`
-	Agents         int               `json:"agents"`
-	IntervalSec    float64           `json:"interval_sec,omitempty"`
-	Started        time.Time         `json:"started"`
-	Finished       time.Time         `json:"finished"`
-	Attempts       uint64            `json:"attempts"`
-	OK             uint64            `json:"ok"`
-	Rejected       map[string]uint64 `json:"rejected,omitempty"`
-	TransportError map[string]uint64 `json:"transport_errors,omitempty"`
-	Latency        latencyStats      `json:"latency"`
-	RatePerSec     float64           `json:"achieved_rate_per_sec"`
-	AgentsNeverOK  int               `json:"agents_never_ok"`
-	Timeline       []secondBucket    `json:"timeline,omitempty"`
+	Mode              string            `json:"mode"`
+	Server            string            `json:"server"`
+	Agents            int               `json:"agents"`
+	IntervalSec       float64           `json:"interval_sec,omitempty"`
+	Started           time.Time         `json:"started"`
+	Finished          time.Time         `json:"finished"`
+	Attempts          uint64            `json:"attempts"`
+	OK                uint64            `json:"ok"`
+	Rejected          map[string]uint64 `json:"rejected,omitempty"`
+	TransportError    map[string]uint64 `json:"transport_errors,omitempty"`
+	Latency           latencyStats      `json:"latency"`
+	RatePerSec        float64           `json:"achieved_rate_per_sec"`  // verified only
+	AttemptRatePerSec float64           `json:"attempted_rate_per_sec"` // refusals included
+	AgentsNeverOK     int               `json:"agents_never_ok"`
+	Timeline          []secondBucket    `json:"timeline,omitempty"`
 }
 
 // collector aggregates results from all agent workers
@@ -175,7 +176,8 @@ func (c *collector) summarize(cfg *runConfig, started, finished time.Time) *summ
 
 	elapsed := finished.Sub(started).Seconds()
 	if elapsed > 0 {
-		s.RatePerSec = float64(c.attempts) / elapsed
+		s.RatePerSec = float64(c.ok) / elapsed
+		s.AttemptRatePerSec = float64(c.attempts) / elapsed
 	}
 	for i := range c.agentOK {
 		if !c.agentOK[i].Load() {
