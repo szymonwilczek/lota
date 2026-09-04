@@ -205,6 +205,13 @@ register anything with the verifier. ::
 
 String fields are omitted when empty.
 
+``hardware_id`` is the 32-byte hardware identity as 64 hex characters -- the
+value ``POST /api/v1/bans`` takes, unedited. Under the Privacy CA flow it is
+the device pseudonym the attestation CA put in the certificate subject, so it
+reads the same as ``client_id``; a deployment that provisions its clients
+out of band carries the registered identity there instead, beside whatever
+client id it chose.
+
 Everything above is read from the state the deployment shares -- the durable
 per-client record -- except two fields, which are this instance's own:
 
@@ -423,6 +430,12 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
 
 ``details`` is HTML-escaped and truncated to 2048 characters. **503**
 when no attestation log is configured.
+
+``hardware_id`` is the same 64-hex hardware identity as on the client record,
+and it is the field this endpoint exists to hand an operator: the hardware
+behind a refused round is banned by pasting it into ``POST /api/v1/bans``. It
+is present once the round authenticated its AIK certificate, which is where
+the identity comes from; a report refused before that names no hardware.
 
 The decision log is written asynchronously in batches so a busy fleet does
 not pay one database commit per report. Records become durable within
