@@ -82,7 +82,9 @@ var (
 	addr           = flag.String("addr", ":8443", "Listen address for TLS attestation protocol")
 	maxConnections = flag.Int("max-connections", server.DefaultMaxConnections,
 		"Maximum concurrent attestation connections. Each one costs a TLS handshake and a full report verification, so this bounds what a client stampede can spend; connections past the cap are refused at accept. -1 disables the cap (load rigs only).")
-	httpAddr     = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	httpAddr      = flag.String("http-addr", "", "Listen address for HTTP monitoring API (e.g. :8080)")
+	shutdownDrain = flag.Duration("shutdown-drain", 0,
+		"How long the monitoring API keeps answering after the attestation listener has closed on shutdown. /health answers 503 degraded for that window, which is what a load balancer reads to stop routing here before the process goes; set it to at least one health-check interval behind one. Zero shuts the API down as soon as it is idle.")
 	certFile     = flag.String("cert", "", "TLS certificate file")
 	keyFile      = flag.String("key", "", "TLS private key file")
 	aikStorePath = flag.String("aik-store", "/var/lib/lota/aiks",
@@ -682,6 +684,7 @@ func main() {
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxConnections: *maxConnections,
+		ShutdownDrain:  *shutdownDrain,
 	}
 
 	if *httpAddr != "" && adminKey == "" && *scopedKeysFile == "" {

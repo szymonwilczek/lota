@@ -35,7 +35,7 @@ func freeLoopbackAddr(t *testing.T) string {
 
 // startHealthServer starts both listeners on loopback and returns the server
 // and the API base URL.
-func startHealthServer(t *testing.T) (*Server, string) {
+func startHealthServer(t *testing.T, drain time.Duration) (*Server, string) {
 	t.Helper()
 
 	httpAddr := freeLoopbackAddr(t)
@@ -44,6 +44,7 @@ func startHealthServer(t *testing.T) (*Server, string) {
 	cfg.HTTPAddress = httpAddr
 	cfg.Logger = logging.Nop()
 	cfg.Metrics = metrics.New()
+	cfg.ShutdownDrain = drain
 	cfg.CertFile, cfg.KeyFile = writeTestTLSPair(t)
 
 	vcfg := verify.DefaultConfig()
@@ -84,7 +85,7 @@ func health(t *testing.T, base string) (int, healthResponse) {
 
 // /health reports degraded once the attestation listener is gone.
 func TestHealthTurnsDegradedWhenTheAttestationListenerIsGone(t *testing.T) {
-	srv, base := startHealthServer(t)
+	srv, base := startHealthServer(t, 0)
 	t.Cleanup(srv.Stop)
 
 	if code, body := health(t, base); code != http.StatusOK || body.Status != "ok" {
@@ -114,5 +115,49 @@ func TestHealthTurnsDegradedWhenTheAttestationListenerIsGone(t *testing.T) {
 	}
 	if body.TLS.Listening {
 		t.Error("/health reports the attestation listener as up after it was closed")
+	}
+}
+
+// On shutdown the attestation listener closes first and /health answers
+// degraded through the drain.
+func TestShutdownDrainsWithTheAPIStillAnswering(t *testing.T) {
+	srv, base := startHealthServer(t, 750*time.Millisecond)
+	attestAddr := srv.listener.Addr().String()
+
+	stopped := make(chan struct{})
+	go func() {
+		srv.Stop()
+		close(stopped)
+	}()
+
+	// while draining: the attestation port is gone and /health says so
+	deadline := time.Now().Add(2 * time.Second)
+	sawDegraded := false
+	for time.Now().Before(deadline) {
+		code, body := health(t, base)
+		if code == http.StatusServiceUnavailable && body.Status == "degraded" {
+			sawDegraded = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawDegraded {
+		t.Error("/health never answered degraded while the verifier was draining")
+	}
+
+	if conn, err := net.DialTimeout("tcp", attestAddr, 500*time.Millisecond); err == nil {
+		conn.Close()
+		t.Error("the attestation listener still accepts during the drain")
+	}
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+
+	if resp, err := http.Get(base + "/health"); err == nil {
+		resp.Body.Close()
+		t.Error("the API still answers after the drain ended")
 	}
 }

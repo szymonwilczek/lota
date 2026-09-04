@@ -53,11 +53,17 @@ func unixTimeFromUint64(ts uint64) time.Time {
 }
 
 type Server struct {
-	verifier   *verify.Verifier
-	auditLog   store.AuditLog
-	listener   net.Listener
-	tlsConfig  *tls.Config
-	addr       string
+	verifier  *verify.Verifier
+	auditLog  store.AuditLog
+	listener  net.Listener
+	tlsConfig *tls.Config
+	addr      string
+
+	// attestation listener still accepting; read by /health,
+	// cleared on drain or when the accept loop loses the listener
+	serving       atomic.Bool
+	shutdownDrain time.Duration
+
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 	connSem    chan struct{} // limits concurrent connections
@@ -118,6 +124,11 @@ type ServerConfig struct {
 	// timeouts
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// how long the monitoring API keeps answering after the attestation
+	// listener closes, for a load balancer to read `degraded` off /health;
+	// zero stops the API once idle
+	ShutdownDrain time.Duration
 
 	// max concurrent attestation connections.
 	// 0 (the zero value) means DefaultMaxConnections, not "unlimited":
@@ -197,6 +208,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		metrics:        m,
 		attestationLog: cfg.AttestationLog,
 		shutdownCh:     make(chan struct{}),
+		shutdownDrain:  cfg.ShutdownDrain,
 		readTimeout:    cfg.ReadTimeout,
 		writeTimeout:   cfg.WriteTimeout,
 	}
@@ -227,6 +239,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = listener
+	s.serving.Store(true)
 	s.log.Info("LOTA Verifier listening", "addr", s.addr)
 
 	go s.acceptLoop()
@@ -318,12 +331,28 @@ func (s *Server) startHTTP() error {
 	return nil
 }
 
+// Stop closes the attestation listener first, so /health turns `degraded`
+// while the monitoring API still answers, then stops the API.
 func (s *Server) Stop() {
 	close(s.shutdownCh)
 
+	if s.listener != nil {
+		s.serving.Store(false)
+		if err := s.listener.Close(); err != nil {
+			s.log.Warn("listener close failed", "error", err)
+		}
+	}
+
+	// give a load balancer polling /health time to drop this instance
+	if s.shutdownDrain > 0 {
+		s.log.Info("draining", "for", s.shutdownDrain,
+			"health", "degraded while the API answers")
+		time.Sleep(s.shutdownDrain)
+	}
+
 	s.verifier.Close()
 
-	// graceful HTTP shutdown
+	// graceful HTTP shutdown, last
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -332,11 +361,6 @@ func (s *Server) Stop() {
 		}
 	}
 
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
-			s.log.Warn("listener close failed", "error", err)
-		}
-	}
 	s.wg.Wait()
 }
 
@@ -348,10 +372,19 @@ func (s *Server) acceptLoop() {
 			case <-s.shutdownCh:
 				return
 			default:
-				s.log.Error("accept error", "error", err)
-				s.metrics.ConnectionErrors.Inc()
-				continue
 			}
+			// a closed listener never accepts again;
+			// stop instead of spinning, and report degraded
+			if errors.Is(err, net.ErrClosed) {
+				s.serving.Store(false)
+				s.log.Error("attestation listener closed; this instance serves no attestations",
+					"addr", s.addr, "health", "degraded")
+				s.metrics.ConnectionErrors.Inc()
+				return
+			}
+			s.log.Error("accept error", "error", err)
+			s.metrics.ConnectionErrors.Inc()
+			continue
 		}
 
 		// enforce connection limit
@@ -549,7 +582,7 @@ type HealthStatus struct {
 
 func (s *Server) HealthCheck() HealthStatus {
 	return HealthStatus{
-		Listening: s.listener != nil,
+		Listening: s.serving.Load(),
 		Address:   s.addr,
 		Stats:     s.verifier.Stats(),
 	}
