@@ -598,10 +598,27 @@ it enrolled itself needs no reload to keep its short-lived certificate.
 
 Operator fleets that enroll at install time are unaffected: ``lota-agent
 --enroll`` writes the same record, and a profile that already has one is never
-re-enrolled. An enrollment token cannot be presented on the runtime path (a
-publisher admitting players has no way to hand each of them a secret in
-advance), so a CA that requires one has to be enrolled against with
-``--enroll --enroll-token-file``.
+re-enrolled. An enrollment token cannot be presented on the *first* enrollment
+the loop performs (a publisher admitting players has no way to hand each of
+them a secret in advance), so a CA that requires one has to be enrolled
+against with ``--enroll --enroll-token-file``. Afterwards the token is part of
+the record and every renewal replays it, which is what keeps a token-gated CA
+issuing to the host without an operator.
+
+**The record, not the configuration, says where a renewal goes.** ``ca`` and
+``ca_port`` are what the host enrolls against the first time; the endpoint the
+enrollment reached is written into the profile and is what the daemon's
+certificate renewal dials from then on, presenting the anchor the profile is
+configured with. Every renewal line therefore names the recorded address, and
+a profile whose keys have since been pointed somewhere else is reported once::
+
+   ...: the enrollment records old-ca.example:8444, which is where renewal
+   dials, not the CA this profile is configured with; run --enroll
+   --ca-server ca.example --ca-port 8444 --ca-cert /etc/lota/ca.crt to
+   move it
+
+``--reenroll`` reuses the recorded endpoint by design and will not move it;
+moving a publisher's CA is an ``--enroll`` naming the new address.
 
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until

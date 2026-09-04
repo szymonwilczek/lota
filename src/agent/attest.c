@@ -1340,6 +1340,7 @@ static void rotate_bound_aik_if_due(uint32_t aik_ttl)
  */
 static void resolve_target_renew(struct attest_target *t)
 {
+	char at[LOTA_RENEW_AT_LEN];
 	struct enroll_state est;
 	enum attest_renew_say say;
 	bool enrolled;
@@ -1354,8 +1355,8 @@ static void resolve_target_renew(struct attest_target *t)
 
 	switch (say) {
 	case ATTEST_RENEW_ENABLED:
-		lota_info("AIK certificate auto-renewal enabled for %s",
-			  t->label);
+		lota_info("AIK certificate auto-renewal enabled for %s%s",
+			  t->label, attest_target_renew_at(t, at, sizeof(at)));
 		break;
 	case ATTEST_RENEW_OFF:
 		lota_info("AIK certificate auto-renewal off for %s: no "
@@ -1365,11 +1366,21 @@ static void resolve_target_renew(struct attest_target *t)
 	case ATTEST_RENEW_SILENT:
 		break;
 	}
+
+	/* renewal dials the recorded endpoint, not the configured CA */
+	if (attest_target_should_announce_renew_move(t))
+		lota_warn("%s: the enrollment records %s:%d, which is where "
+			  "renewal dials, not the CA this profile is "
+			  "configured with; run --enroll --ca-server %s "
+			  "--ca-port %d --ca-cert %s to move it",
+			  t->label, t->renew_ca, t->renew_ca_port, t->ca,
+			  t->ca_port, t->ca_cert);
 }
 
 /* Renew this target's CA-issued AIK certificate before it lapses */
 static void renew_target_cert_if_due(struct attest_target *t)
 {
+	char at[LOTA_RENEW_AT_LEN];
 	int64_t remaining = 0, total = 0;
 	uint64_t mono_ms = monotonic_ms();
 	int ret;
@@ -1384,14 +1395,17 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	if (!aik_cert_renew_due(remaining, total))
 		return;
 
-	lota_info("AIK certificate renewal due for %s (%lld s left of %lld s)",
-		  t->label, (long long)remaining, (long long)total);
+	lota_info("AIK certificate renewal due for %s%s (%lld s left of "
+		  "%lld s)",
+		  t->label, attest_target_renew_at(t, at, sizeof(at)),
+		  (long long)remaining, (long long)total);
 
 	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths,
 				t->ca_cert[0] ? t->ca_cert : NULL);
 	if (ret == 0) {
 		t->renew_backoff = 0;
-		lota_info("AIK certificate renewed for %s", t->label);
+		lota_info("AIK certificate renewed for %s%s", t->label,
+			  attest_target_renew_at(t, at, sizeof(at)));
 		return;
 	}
 
@@ -1406,10 +1420,10 @@ static void renew_target_cert_if_due(struct attest_target *t)
 		if (delay > MAX_BACKOFF_SECONDS)
 			delay = MAX_BACKOFF_SECONDS;
 		t->next_renew_ms = mono_ms + (uint64_t)delay * 1000;
-		lota_warn("AIK certificate renewal failed for %s (%s); "
+		lota_warn("AIK certificate renewal failed for %s%s (%s); "
 			  "retry in %ds, cert expires in %lld s",
-			  t->label, strerror(-ret), delay,
-			  (long long)remaining);
+			  t->label, attest_target_renew_at(t, at, sizeof(at)),
+			  strerror(-ret), delay, (long long)remaining);
 		sdnotify_status("AIK cert renewal failing for %s, expires in "
 				"%lld s",
 				t->label, (long long)remaining);

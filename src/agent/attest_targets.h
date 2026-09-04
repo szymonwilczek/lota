@@ -123,6 +123,7 @@ struct attest_target {
 	int renew_ca_port;
 
 	bool renew_announced; /* current renewal decision logged */
+	bool renew_move_announced; /* configured vs recorded CA mismatch logged */
 
 	/*
 	 * First enrollment, which happens while the host runs rather than while
@@ -155,6 +156,23 @@ enum attest_renew_say {
 enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 						  const char *rec_server,
 						  int rec_port);
+
+/* ", renewing at " plus the recorded endpoint */
+#define LOTA_RENEW_AT_LEN 288
+
+/*
+ * Write ", renewing at <host>:<port>" for @t into @buf;
+ * empty when @t cannot renew or its label already names that endpoint.
+ * Returns @buf.
+ */
+const char *attest_target_renew_at(const struct attest_target *t, char *buf,
+				   size_t len);
+
+/*
+ * True once while @t's configured CA differs from the recorded renewal
+ * endpoint; re-armed when they agree again.
+ */
+bool attest_target_should_announce_renew_move(struct attest_target *t);
 
 /*
  * Whether this round sends report for @t.

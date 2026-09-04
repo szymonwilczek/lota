@@ -39,13 +39,20 @@ enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 	was = t->auto_renew;
 	t->auto_renew = t->has_profile && rec_server && rec_server[0];
 
-	/* no stale endpoint on a target that cannot renew */
+	/*
+	 * No stale endpoint on a target that cannot renew;
+	 * a changed endpoint is logged again.
+	 */
 	if (t->auto_renew) {
+		if (strcmp(t->renew_ca, rec_server) != 0 ||
+		    t->renew_ca_port != rec_port)
+			t->renew_move_announced = false;
 		snprintf(t->renew_ca, sizeof(t->renew_ca), "%s", rec_server);
 		t->renew_ca_port = rec_port;
 	} else {
 		t->renew_ca[0] = '\0';
 		t->renew_ca_port = 0;
+		t->renew_move_announced = false;
 	}
 
 	if (t->auto_renew == was && t->renew_announced)
@@ -53,6 +60,47 @@ enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
 
 	t->renew_announced = true;
 	return t->auto_renew ? ATTEST_RENEW_ENABLED : ATTEST_RENEW_OFF;
+}
+
+const char *attest_target_renew_at(const struct attest_target *t, char *buf,
+				   size_t len)
+{
+	if (!buf || len == 0)
+		return "";
+
+	buf[0] = '\0';
+	if (!t || !t->auto_renew)
+		return buf;
+
+	/* the label already names it */
+	if (t->token_only && strcmp(t->ca, t->renew_ca) == 0 &&
+	    t->ca_port == t->renew_ca_port)
+		return buf;
+
+	snprintf(buf, len, ", renewing at %s:%d", t->renew_ca,
+		 t->renew_ca_port);
+	return buf;
+}
+
+bool attest_target_should_announce_renew_move(struct attest_target *t)
+{
+	bool differs;
+
+	/* nothing to compare: no renewal, or no CA configured for one */
+	if (!t || !t->auto_renew || t->ca[0] == '\0')
+		return false;
+
+	differs = strcmp(t->ca, t->renew_ca) != 0 ||
+		  t->ca_port != t->renew_ca_port;
+	if (!differs) {
+		t->renew_move_announced = false;
+		return false;
+	}
+	if (t->renew_move_announced)
+		return false;
+
+	t->renew_move_announced = true;
+	return true;
 }
 
 /*
@@ -90,6 +138,7 @@ static void carry_live_state(struct attest_target *to,
 	to->valid_until = from->valid_until;
 	to->auto_renew = from->auto_renew;
 	to->renew_announced = from->renew_announced;
+	/* not renew_move_announced: a reload may change the configured CA */
 	to->renew_backoff = from->renew_backoff;
 	to->next_renew_ms = from->next_renew_ms;
 	to->enroll_pending = from->enroll_pending;
