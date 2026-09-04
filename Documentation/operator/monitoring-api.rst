@@ -422,15 +422,27 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
          "tenant": "default",
          "client_id": "host-0001",
          "hardware_id": "ab12...",
-         "result": "success",
+         "result": "ok",
          "duration_ms": 12.5,
          "pcr14": "cafe...",
+         "kernel_hash": "5b97...",
          "details": "",
          "remote_addr": "192.0.2.10:39412"
        }
      ],
      "count": 1
    }
+
+``result`` is the verdict the verifier reached, and an accepted round reads
+``ok``. The refusals are ``nonce_fail``, ``sig_fail``, ``identity_fail``,
+``pcr_fail``, ``iommu_fail``, ``policy_requirement``, ``integrity_mismatch``,
+``old_version``, ``revoked``, ``banned`` and ``internal_error`` -- the same
+vocabulary the agent is answered with, so a round an operator reads here and
+a round a host reports are named the same thing.
+
+``kernel_hash`` is the kernel image hash the agent reported. It is covered by
+the quote, so it is attested, and it is advisory: nothing is gated on it,
+and it is what an operator reads to answer whether a device's kernel changed.
 
 ``details`` is HTML-escaped and truncated to 2048 characters. **503**
 when no attestation log is configured.
