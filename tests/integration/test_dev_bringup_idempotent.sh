@@ -190,6 +190,37 @@ check "the refused reset keeps the state files" test -f "$STATE_DIR/aik_meta"
 check "the refused reset evicts nothing" test -z "$tpm_calls"
 unset LOTA_TEST_AGENT_ACTIVE
 
+# --reset must refuse while a daemon runs outside an active unit
+mkdir -p "$ROOT/run/lota"
+sleep 60 &
+live_pid=$!
+printf '%s\n' "$live_pid" >"$ROOT/run/lota/lota-agent.pid"
+if held=$(run_bringup --reset 2>&1); then
+    echo "FAIL: --reset ran while a daemon was holding the key"
+    failures=$((failures + 1))
+else
+    echo "PASS: --reset refuses while a daemon is running"
+fi
+tpm_calls=$(cat "$TPM_LOG")
+check "the refusal names the running daemon" says "$held" "pid $live_pid"
+check "the held reset keeps the state files" test -f "$STATE_DIR/aik_meta"
+check "the held reset evicts nothing" test -z "$tpm_calls"
+kill "$live_pid" 2>/dev/null || true
+wait "$live_pid" 2>/dev/null || true
+
+# a stale pid file does not block --reset
+printf '%s\n' "$live_pid" >"$ROOT/run/lota/lota-agent.pid"
+stale=$(run_bringup --reset 2>&1) || {
+    echo "FAIL: --reset refused on a stale pid file"
+    failures=$((failures + 1))
+}
+tpm_calls=$(cat "$TPM_LOG")
+check "a stale pid file does not block a reset" \
+    test ! -e "$STATE_DIR/aik_meta"
+check "the reset behind a stale pid file evicts the AIK" \
+    says "$tpm_calls" "$AIK_HANDLE"
+rm -f "$ROOT/run/lota/lota-agent.pid"
+
 header_drops_the_rollback_claim() { ! grep -q "rolls back" "$BRINGUP"; }
 check "the header does not promise a rollback the script does not do" \
     header_drops_the_rollback_claim
