@@ -65,7 +65,9 @@ func TestMethodRefusalNamesTheMethodsTheEndpointTakes(t *testing.T) {
 		t.Fatalf("PUT /api/v1/bans answered %d, want 405", rec.Code)
 	}
 	allow := rec.Header().Get("Allow")
-	if !strings.Contains(allow, "GET") || !strings.Contains(allow, "POST") {
-		t.Errorf("Allow = %q, want the GET and POST this path serves", allow)
+	for _, method := range []string{"GET", "HEAD", "POST"} {
+		if !strings.Contains(allow, method) {
+			t.Errorf("Allow = %q, missing the %s this path serves", allow, method)
+		}
 	}
 }
