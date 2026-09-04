@@ -289,8 +289,10 @@ optional. ``tenant`` is the scope the ban is imposed in and defaults to
 
 **400** malformed hardware ID, invalid reason, invalid tenant or missing
 actor, **403** tenant outside the key's set, **409** already banned,
-**503** bans not configured. The returned ``hardware_id`` is the
-canonical lower-case form.
+**503** bans not configured. The identity may be given in either case;
+the returned ``hardware_id`` is the canonical lower-case form, and it is
+the form a ban is recorded, listed and matched in -- so the same identity
+in upper case answers **409** against its own ban.
 
 DELETE /api/v1/bans/{hwid}
 --------------------------
@@ -302,9 +304,11 @@ one, and names the tenant the same way, because a ban is identified by
 
    {"status": "unbanned", "hardware_id": "ab12...", "tenant": "default"}
 
-**400** malformed hardware ID, missing actor or reason, invalid tenant,
-or ``tenant`` passed as a query parameter instead of a body field;
-**403** tenant outside the key's set, **404** not banned in that tenant.
+The identity in the path is canonicalised the same way, so a ban lifts
+in whichever case it is named. **400** malformed hardware ID, missing
+actor or reason, invalid tenant, or ``tenant`` passed as a query
+parameter instead of a body field; **403** tenant outside the key's set,
+**404** not banned in that tenant.
 
 GET /api/v1/bans
 ----------------
