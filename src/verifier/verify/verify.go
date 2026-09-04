@@ -448,10 +448,7 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 		return result, fmt.Errorf("invalid tenant in AIK certificate: %w", err)
 	}
 	clientID = aikLeaf.Subject.CommonName
-	hwID = clientID
-	if len(hwID) > 16 {
-		hwID = hwID[:16]
-	}
+	hwID = store.FormatHardwareID(identity)
 	clog = logging.WithClient(v.log, clientID).With("tenant", tenant)
 	clog.Debug("client identity derived from AIK certificate", "challenge_id", challengeID)
 
@@ -1057,9 +1054,12 @@ func (v *Verifier) ClientInfo(clientID string) (*ClientInfo, bool) {
 	_, err := v.aikStore.GetAIK(clientID)
 	hasAIK := err == nil
 
-	// hardware ID
+	// hardware ID: registered out of band, else the client ID itself
+	// (under the Privacy CA flow it is the hex device pseudonym)
 	if hwid, err := v.aikStore.GetHardwareID(clientID); err == nil {
 		info.HardwareID = hex.EncodeToString(hwid[:])
+	} else if hwid, err := store.ParseHardwareID(clientID); err == nil {
+		info.HardwareID = store.FormatHardwareID(hwid)
 	}
 
 	// revocation status
