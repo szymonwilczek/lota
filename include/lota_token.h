@@ -56,7 +56,7 @@ extern "C" {
  * recomputes runtime_protect_digest from the PID list and the carried image
  * digests and checks it against the quote-bound value.
  *
- * Maximum token size: 144 + (1024 * 4) + (1024 * 32) + 1024 + 512
+ * Maximum token size: LOTA_TOKEN_MAX_SIZE below.
  */
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0003
@@ -73,13 +73,18 @@ extern "C" {
 #define LOTA_RUNTIME_PROTECT_V1 1 /* PID set identity only */
 #define LOTA_RUNTIME_PROTECT_V2 2 /* PID set + per-PID kernel image digest */
 
+#define LOTA_TOKEN_MAX_IMAGE_LIST_SIZE \
+	(LOTA_TOKEN_MAX_PROTECT_PIDS * LOTA_TOKEN_IMAGE_DIGEST_SIZE)
+
 /*
- * The optional v2 image-digest block is bounded at runtime by the carried
- * pid count, not folded into this compile-time maximum; an oversized token
- * is rejected during parsing.
+ * Largest token that can reach a relying party: the header, a full protected
+ * PID list, the per-PID image digests a v2 token carries for that same list,
+ * and a maximum quote plus signature. A receive buffer sized from this holds
+ * any token an agent can produce.
  */
-#define LOTA_TOKEN_MAX_SIZE \
-	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + 1024 + 512)
+#define LOTA_TOKEN_MAX_SIZE                                      \
+	(LOTA_TOKEN_HEADER_SIZE + LOTA_TOKEN_MAX_PID_LIST_SIZE + \
+	 LOTA_TOKEN_MAX_IMAGE_LIST_SIZE + 1024 + 512)
 
 /*
  * Token wire format header (packed, little-endian)

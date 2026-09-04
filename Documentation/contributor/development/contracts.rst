@@ -443,6 +443,11 @@ to the header by a test in that package. Raising the payload budget therefore
 raises one cap in one place, and the build says which other spellings have to
 follow.
 
+The maximum a relying party sizes a receive buffer from --
+``LOTA_TOKEN_MAX_SIZE``, ``TokenMaxSize`` in Go -- covers a full token at that
+cap *including* the per-PID image digests a v2 token carries. A maximum that
+counts only the PID list describes a token nobody sends.
+
 Installer probes and agent gates
 ================================
 
