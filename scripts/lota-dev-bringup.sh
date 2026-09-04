@@ -89,9 +89,16 @@ else
 fi
 
 # 3. Sign the in-tree BPF object so bpf_loader_verify_bpf_object_signature passes.
-info "signing $BPF_OBJ"
-"$AGENT_BIN" --sign-policy "$BPF_OBJ" --signing-key "$POLICY_KEY"
-ensure_artifact "$BPF_SIG"
+#    Skip when the signature on disk already verifies against the pubkey.
+if [[ -f "$BPF_SIG" ]] && [[ -f "$POLICY_PUB" ]] &&
+    "$AGENT_BIN" --verify-policy "$BPF_OBJ" \
+        --policy-pubkey "$POLICY_PUB" >/dev/null 2>&1; then
+    info "BPF object signature already valid, skipping --sign-policy"
+else
+    info "signing $BPF_OBJ"
+    "$AGENT_BIN" --sign-policy "$BPF_OBJ" --signing-key "$POLICY_KEY"
+    ensure_artifact "$BPF_SIG"
+fi
 
 # 4. /etc/lota/lota.conf must reference the pubkey so the daemon path knows
 #    where to read it. Append once; do not duplicate the line on re-run.
