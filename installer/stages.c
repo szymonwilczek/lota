@@ -1652,6 +1652,11 @@ const struct stage install_stages[] = {
 const int install_stage_count =
 	(int)(sizeof(install_stages) / sizeof(install_stages[0]));
 
+/* the TUI must show every stage the other surfaces walk */
+_Static_assert(sizeof(install_stages) / sizeof(install_stages[0]) <=
+		       INSTALL_MAX_TUI_STAGES,
+	       "the stage table outgrew the interactive view's rows");
+
 const char install_selfcheck_title[] = "Self-check & summary";
 
 /* The table plus the self-check: what every surface counts up to. */

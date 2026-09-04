@@ -56,7 +56,6 @@ struct cell {
 	uint8_t attr;
 };
 
-#define TUI_MAX_STAGES 32
 #define OUT_LINES 512
 #define OUT_CAP 240
 
@@ -82,8 +81,8 @@ struct tui {
 	/* Probed stage states;
 	 * index install_stage_count = self-check */
 	int n;
-	enum stage_state st[TUI_MAX_STAGES];
-	char note[TUI_MAX_STAGES][STAGE_NOTE_CAP];
+	enum stage_state st[INSTALL_MAX_TUI_STAGES];
+	char note[INSTALL_MAX_TUI_STAGES][STAGE_NOTE_CAP];
 	int selfcheck_done;
 	int selfcheck_ok;
 
@@ -1256,9 +1255,8 @@ int tui_run(struct install_ctx *ctx)
 	}
 
 	t->ctx = ctx;
+	/* fits: stages.c asserts it at build time */
 	t->n = install_stage_count;
-	if (t->n > TUI_MAX_STAGES)
-		t->n = TUI_MAX_STAGES;
 
 	bound.ud = t;
 

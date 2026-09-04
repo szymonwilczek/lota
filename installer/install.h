@@ -167,6 +167,9 @@ const char *installer_trust_key_source_says(enum trust_key_source src);
 extern const struct stage install_stages[];
 extern const int install_stage_count;
 
+/* stage rows the TUI can show; stages.c asserts the table fits */
+#define INSTALL_MAX_TUI_STAGES 32
+
 /* Self-check: the last step of every run, outside the stage table;
  * install_step_count includes it */
 extern const char install_selfcheck_title[];
