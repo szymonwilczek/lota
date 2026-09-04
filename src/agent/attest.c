@@ -1333,12 +1333,49 @@ static void rotate_bound_aik_if_due(uint32_t aik_ttl)
 			  (unsigned long)g_agent.tpm_ctx.aik_meta.generation);
 }
 
+/*
+ * Enable unattended AIK certificate renewal for @t when its enrollment record
+ * holds a CA endpoint; otherwise --reenroll is the fallback.
+ * Re-reads the record on every call.
+ */
+static void resolve_target_renew(struct attest_target *t)
+{
+	struct enroll_state est;
+	enum attest_renew_say say;
+	bool enrolled;
+
+	memset(&est, 0, sizeof(est));
+	enrolled = t->has_profile &&
+		   enroll_state_load_path(t->paths.enroll_state, &est) == 0;
+
+	say = attest_target_resolve_renew(t, enrolled ? est.ca_server : NULL,
+					  enrolled ? est.ca_port : 0);
+	OPENSSL_cleanse(&est, sizeof(est));
+
+	switch (say) {
+	case ATTEST_RENEW_ENABLED:
+		lota_info("AIK certificate auto-renewal enabled for %s",
+			  t->label);
+		break;
+	case ATTEST_RENEW_OFF:
+		lota_info("AIK certificate auto-renewal off for %s: no "
+			  "recorded CA endpoint (run --enroll to record one)",
+			  t->label);
+		break;
+	case ATTEST_RENEW_SILENT:
+		break;
+	}
+}
+
 /* Renew this target's CA-issued AIK certificate before it lapses */
 static void renew_target_cert_if_due(struct attest_target *t)
 {
 	int64_t remaining = 0, total = 0;
 	uint64_t mono_ms = monotonic_ms();
 	int ret;
+
+	/* every pass: the loop may have just enrolled this publisher */
+	resolve_target_renew(t);
 
 	if (!t->auto_renew || mono_ms < t->next_renew_ms)
 		return;
@@ -1648,36 +1685,11 @@ static void announce_targets(const struct attest_target *targets, size_t count)
 			  targets[0].server, targets[0].port);
 }
 
-/*
- * Whether each publisher's AIK certificate can be renewed without an operator.
- *
- * It is short-lived and would otherwise lapse a day after install.
- * Enabled per publisher, whenever that profile recorded a CA endpoint at enroll
- * time; manual --reenroll stays the fallback when no endpoint is on disk.
- * Re-run after a reload, since a publisher added since has none of this resolved.
- */
+/* The same decision for the whole list, at startup and after a reload */
 static void resolve_auto_renew(struct attest_target *targets, size_t count)
 {
-	for (size_t i = 0; i < count; i++) {
-		struct enroll_state est;
-		bool was = targets[i].auto_renew;
-
-		targets[i].auto_renew =
-			targets[i].has_profile &&
-			enroll_state_load_path(targets[i].paths.enroll_state,
-					       &est) == 0;
-		if (targets[i].auto_renew == was && was)
-			continue;
-		if (targets[i].auto_renew)
-			lota_info("AIK certificate auto-renewal enabled for %s",
-				  targets[i].label);
-		else
-			lota_info(
-				"AIK certificate auto-renewal off for %s: no "
-				"recorded CA endpoint (run --enroll to record "
-				"one)",
-				targets[i].label);
-	}
+	for (size_t i = 0; i < count; i++)
+		resolve_target_renew(&targets[i]);
 }
 
 /*

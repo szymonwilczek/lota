@@ -591,7 +591,10 @@ immediately when a title selects it, which is the moment that matters on a
 player's machine. Until it completes, that publisher's status is not attested
 and the agent sends no report to their verifier -- evidence with no certificate
 to chain is refused anyway. A failing CA backs off rather than being retried
-every round, and the other publishers keep their cadence throughout.
+every round, and the other publishers keep their cadence throughout. Once it
+completes, that publisher is renewed like any other from the same round on: the
+loop resolves the renewal from the enrollment record each pass, so a publisher
+it enrolled itself needs no reload to keep its short-lived certificate.
 
 Operator fleets that enroll at install time are unaffected: ``lota-agent
 --enroll`` writes the same record, and a profile that already has one is never

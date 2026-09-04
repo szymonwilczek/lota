@@ -118,6 +118,12 @@ struct attest_target {
 	int renew_backoff;
 	uint64_t next_renew_ms;
 
+	/* renewal endpoint from the enrollment record, not the configuration */
+	char renew_ca[256];
+	int renew_ca_port;
+
+	bool renew_announced; /* current renewal decision logged */
+
 	/*
 	 * First enrollment, which happens while the host runs rather than while
 	 * it is installed: player has no CA endpoint to type in at install time,
@@ -133,6 +139,22 @@ struct attest_target {
 	 * the loop reacts on its next pass instead of sleeping through the change */
 	bool session_changed;
 };
+
+/* what to log about a target's certificate renewal */
+enum attest_renew_say {
+	ATTEST_RENEW_SILENT = 0, /* unchanged and already logged */
+	ATTEST_RENEW_ENABLED,
+	ATTEST_RENEW_OFF,
+};
+
+/*
+ * Set @t's unattended renewal from its enrollment record: @rec_server and
+ * @rec_port are the recorded endpoint, @rec_server NULL if never enrolled.
+ * Stores the endpoint on @t. Call on every pass.
+ */
+enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
+						  const char *rec_server,
+						  int rec_port);
 
 /*
  * Whether this round sends report for @t.

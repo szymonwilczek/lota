@@ -27,6 +27,34 @@ bool attest_target_should_announce_wait(struct attest_target *t)
 	return true;
 }
 
+enum attest_renew_say attest_target_resolve_renew(struct attest_target *t,
+						  const char *rec_server,
+						  int rec_port)
+{
+	bool was;
+
+	if (!t)
+		return ATTEST_RENEW_SILENT;
+
+	was = t->auto_renew;
+	t->auto_renew = t->has_profile && rec_server && rec_server[0];
+
+	/* no stale endpoint on a target that cannot renew */
+	if (t->auto_renew) {
+		snprintf(t->renew_ca, sizeof(t->renew_ca), "%s", rec_server);
+		t->renew_ca_port = rec_port;
+	} else {
+		t->renew_ca[0] = '\0';
+		t->renew_ca_port = 0;
+	}
+
+	if (t->auto_renew == was && t->renew_announced)
+		return ATTEST_RENEW_SILENT;
+
+	t->renew_announced = true;
+	return t->auto_renew ? ATTEST_RENEW_ENABLED : ATTEST_RENEW_OFF;
+}
+
 /*
  * Same publisher as before the reload.
  *
@@ -61,6 +89,7 @@ static void carry_live_state(struct attest_target *to,
 	to->attested = from->attested;
 	to->valid_until = from->valid_until;
 	to->auto_renew = from->auto_renew;
+	to->renew_announced = from->renew_announced;
 	to->renew_backoff = from->renew_backoff;
 	to->next_renew_ms = from->next_renew_ms;
 	to->enroll_pending = from->enroll_pending;
