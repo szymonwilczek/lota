@@ -20,10 +20,12 @@ Single node (default)
 One verifier process owns its state. Two equivalent storage layouts exist:
 
 * **File + SQLite.** The certificate-backed AIK store lives under
-  ``--aik-store``; used nonces persist to a SQLite database (``--nonce-db``);
-  the per-device boot baseline, revocation, ban, audit and attestation state
-  are in-memory. A restart therefore drops the baselines and the next report
-  from each device re-pins them.
+  ``--aik-store``; the used-nonce history and the enforcement state --
+  revocations, hardware bans, the audit log and the attestation decision log
+  -- persist to one SQLite database (``--state-db``, default
+  ``<aik-store>/verifier-state.sqlite``). The per-device boot baseline is
+  in-memory, so a restart drops the baselines and the next report from each
+  device re-pins them.
 * **SQLite (production default).** ``--db`` persists all of the above to one
   SQLite file, the client registry included, so ``--require-cert`` belongs
   here: this is the single-node layout that both verifies AIK certificate

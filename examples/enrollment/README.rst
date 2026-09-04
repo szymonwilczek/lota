@@ -105,9 +105,10 @@ full discovery and verification flow.
 
 The script starts ``lota-verifier`` from a writable runtime directory
 (``RUN_DIR``, default: a fresh ``/tmp/lota-enrollment.*``) and points
-``--aik-store`` / ``--nonce-db`` there. This keeps nonce replay state out of
-the repository and avoids the production ``/var/lib/lota/aiks`` default when
-the verifier is not running as root. The verifier presents the listener
+``--aik-store`` / ``--state-db`` there. This keeps the verifier's durable
+state -- nonce replay history and the enforcement decisions an operator makes
+-- out of the repository, and avoids the production ``/var/lib/lota/aiks``
+default when the verifier is not running as root. The verifier presents the listener
 certificate ``gen-ca.sh`` issued, so the agent verifies the handshake against
 ``ca.crt`` -- the same file that names the publisher it enrolled with, which is
 where the AIK certificate it presents is kept. The script does not use
