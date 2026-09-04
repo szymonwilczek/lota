@@ -130,7 +130,18 @@ No authentication. **200** when the attestation TLS listener is up,
      "tls": {"listening": true, "address": ":8443"}
    }
 
-``status`` is ``ok`` or ``degraded``.
+``status`` is ``ok`` or ``degraded``. ``degraded`` means this instance is
+not accepting attestations: it is shutting down, or its listener died under
+it. Both are answers to route away from, and neither is visible any other
+way -- a process that has already gone answers nothing at all, which a
+health check reads as a network fault.
+
+On shutdown the attestation listener closes first and the monitoring API
+answers through ``--shutdown-drain`` before going itself, so a load balancer
+polling ``/health`` sees ``degraded`` and takes the instance out of rotation
+while the process is still there. The window defaults to zero -- the API
+goes as soon as it is idle -- and behind a load balancer it belongs at one
+health-check interval or more.
 
 GET /api/v1/stats
 -----------------
