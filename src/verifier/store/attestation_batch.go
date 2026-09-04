@@ -12,6 +12,7 @@
 package store
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,10 @@ type BatchedAttestationLogConfig struct {
 
 	// Loss receives dropped and failed record counts. Optional.
 	Loss AttestationLogLoss
+
+	// CloseTimeout bounds the final flush in Close;
+	// past it the buffered records count as failed.
+	CloseTimeout time.Duration
 }
 
 // AttestationLogLoss counts decision records dropped on a full buffer
@@ -53,6 +58,9 @@ const (
 	// bounded enough to protect memory
 	defaultBatchMaxBufferMul = 16
 
+	// waiting longer only loses the tail to the supervisor's kill, unreported
+	defaultCloseTimeout = 5 * time.Second
+
 	// a stalled backend drops on nearly every record; warn at most this often
 	dropReportInterval = 30 * time.Second
 )
@@ -66,6 +74,7 @@ type BatchedAttestationLog struct {
 	maxBatch      int
 	maxBuffer     int
 	flushInterval time.Duration
+	closeTimeout  time.Duration
 
 	mu  sync.Mutex
 	buf []AttestationRecord
@@ -87,6 +96,9 @@ type BatchedAttestationLog struct {
 // and starts its background flush worker.
 // Close stops the worker and flushes what remains.
 func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogConfig) *BatchedAttestationLog {
+	if cfg.CloseTimeout <= 0 {
+		cfg.CloseTimeout = defaultCloseTimeout
+	}
 	if cfg.MaxBatch <= 0 {
 		cfg.MaxBatch = defaultBatchMaxBatch
 	}
@@ -112,6 +124,7 @@ func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogC
 		wake:          make(chan struct{}, 1),
 		closeCh:       make(chan struct{}),
 		done:          make(chan struct{}),
+		closeTimeout:  cfg.CloseTimeout,
 		loss:          cfg.Loss,
 		log:           cfg.Logger,
 	}
@@ -199,14 +212,41 @@ func (l *BatchedAttestationLog) Flush() {
 // Close stops the background worker and flushes remaining records.
 // It is idempotent; after Close the worker no longer drains,
 // so callers must stop issuing Record first.
+// Past closeTimeout it counts the unwritten records as failed,
+// logs them and returns ErrCloseTimedOut.
 func (l *BatchedAttestationLog) Close() error {
 	if l.closed.Swap(true) {
 		return nil
 	}
 	close(l.closeCh)
-	<-l.done
-	return nil
+
+	timer := time.NewTimer(l.closeTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-l.done:
+		return nil
+	case <-timer.C:
+	}
+
+	l.mu.Lock()
+	pending := len(l.buf)
+	l.mu.Unlock()
+
+	// plus the batch stuck in the worker, at most maxBatch
+	lost := int64(pending + l.maxBatch)
+	l.failed.Add(lost)
+	if l.loss != nil {
+		l.loss.AttestationRecordsFailed(lost)
+	}
+	l.log.Warn("attestation-log did not flush before shutdown deadline; buffered decision records lost",
+		"records", lost, "deadline", l.closeTimeout,
+		"hint", "the decision log backend stopped answering; enforcement state is unaffected")
+	return ErrCloseTimedOut
 }
+
+// ErrCloseTimedOut: Close gave up on the final flush; buffered records are lost.
+var ErrCloseTimedOut = errors.New("attestation log did not flush before the shutdown deadline")
 
 // DroppedCount returns the number of records dropped under buffer pressure.
 // FailedCount returns the number lost to flush errors.
