@@ -41,6 +41,11 @@ envelope on every endpoint::
 
    {"error": "<message>"}
 
+That includes the two refusals that belong to no endpoint: a path this
+listener does not serve is a **404**, and a method the path does not take is
+a **405** naming the ones it does in ``Allow``. Neither answer echoes the
+request back. A client can parse the envelope on every non-2xx.
+
 Request bodies are limited to 1 MiB, 64 levels of nesting and 32768 JSON
 tokens; a violated limit, an empty body where one is required, or
 trailing data after the JSON value is a **400**. A field the endpoint
