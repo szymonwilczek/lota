@@ -15,17 +15,21 @@
 #      anti-tamper self-check passes.
 #   5. IMA appraisal in an enforcing mode (ima_appraise=enforce|fix
 #      on the kernel cmdline) so the kernel-floor gate passes.
-#   6. Any stale persistent state under /var/lib/lota wiped, plus
-#      the persistent AIK handle evicted from the TPM, so PCR14
+#   6. With --reset only: persistent state under /var/lib/lota wiped
+#      and the persistent AIK handle evicted from the TPM, so PCR14
 #      starts from a known baseline after the next cold reboot.
 #   7. Final instruction to cold-reboot before starting the daemon
 #      via systemd, because PCR14 (and the TPM clock resetCount /
 #      restartCount the agent binds against) can only advance on
 #      hardware reset.
 #
-# The script is idempotent: every step checks for existing
-# artefacts and skips them, but rolls back on a partial state so a
-# retry after a transient failure is safe.
+# Each step skips an artefact that already exists, so a re-run is a no-op
+# on a gated host. There is no rollback: a failed run keeps its partial
+# work and the next run continues from it.
+#
+# --reset destroys the host's attestation identity (the agent provisions
+# a new AIK on next start), so it is opt-in and refused while the agent
+# runs.
 #
 # Production deployments run the same chain with operator policy
 # tooling (cosign-signed RPM / signed BPF object shipped by
@@ -41,6 +45,35 @@
 #     tpm2_evictcontrol from PATH still runs.
 
 set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: lota-dev-bringup.sh [--reset]
+
+  --reset   Clear the agent state under /var/lib/lota and evict the
+            persistent handles LOTA owns from the TPM. This destroys
+            the host's attestation identity; the next agent start
+            provisions a new one. Refused while lota-agent.service
+            is running.
+  --help    Show this help
+EOF
+}
+
+do_reset=false
+for arg in "$@"; do
+    case "$arg" in
+    --reset) do_reset=true ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "lota-dev-bringup: unknown option: $arg" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+done
 
 BRINGUP_ROOT="${LOTA_BRINGUP_ROOT:-}"
 redirected=false
@@ -169,27 +202,55 @@ if [[ -f "$IMA_POLICY_SRC" ]] &&
     fi
 fi
 
-# 7. Wipe stale agent state. The clock-state snapshot under
+# 7. Wipe stale agent state, on request. The clock-state snapshot under
 #    $STATE_DIR is the agent's witness for PCR14 history; mismatched
 #    snapshots after a partial install force tpm_extend_boot_commitment
-#    to refuse with EBADMSG. Evict the persistent AIK handle so the
-#    next provisioning is clean.
-if [[ -d "$STATE_DIR" ]]; then
-    info "clearing stale agent state under $STATE_DIR"
+#    to refuse with EBADMSG, and clearing them plus the persistent AIK
+#    is how a host gets back to a known baseline. It is also how a host
+#    loses the identity it attests with, so the caller asks for it.
+state_files() {
+    [[ -d "$STATE_DIR" ]] || return 0
     find "$STATE_DIR" -mindepth 1 -maxdepth 1 \
         \( -name 'aik*' -o -name 'clock*' -o -name 'boot_commit*' \
-        -o -name 'snapshot*' \) -delete 2>/dev/null || true
-fi
+        -o -name 'snapshot*' \) 2>/dev/null || true
+}
 
-if command -v tpm2_evictcontrol >/dev/null 2>&1; then
-    for handle in 0x81010002 0x81010003 0x81010004 0x81010005; do
-        if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
-            info "evicted stale persistent AIK at $handle"
-        fi
-    done
+agent_unit_is_active() {
+    command -v systemctl >/dev/null 2>&1 &&
+        systemctl is-active --quiet lota-agent.service
+}
+
+if ! $do_reset; then
+    stale=$(state_files | wc -l)
+    if [[ "$stale" -gt 0 ]]; then
+        info "leaving $stale agent state file(s) under $STATE_DIR alone"
+        info "  re-run with --reset to clear them and the persistent"
+        info "  handles; that destroys this host's attestation identity"
+    else
+        info "no agent state under $STATE_DIR to clear"
+    fi
 else
-    warn "tpm2-tools not installed; persistent AIK handles cannot be evicted"
-    warn "install tpm2-tools and re-run if PCR14 errors persist"
+    if agent_unit_is_active; then
+        warn "lota-agent.service is active and is using the attestation"
+        warn "key --reset destroys. Stop it first:"
+        warn "  systemctl stop lota-agent.service lota-agent.socket"
+        fail "refusing to reset the state of a running agent"
+    fi
+    info "clearing agent state under $STATE_DIR"
+    state_files | while read -r stale_file; do
+        rm -f "$stale_file"
+    done
+
+    if command -v tpm2_evictcontrol >/dev/null 2>&1; then
+        for handle in 0x81010002 0x81010003 0x81010004 0x81010005; do
+            if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
+                info "evicted stale persistent AIK at $handle"
+            fi
+        done
+    else
+        warn "tpm2-tools not installed; persistent handles cannot be evicted"
+        warn "install tpm2-tools and re-run if PCR14 errors persist"
+    fi
 fi
 
 # 8. Cold reboot. PCR14 resetCount only advances on hardware reset, so the
