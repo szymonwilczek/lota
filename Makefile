@@ -1335,6 +1335,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
+	$(TEST_BIN_DIR)/test_installer_trust_key \
 	$(TEST_BIN_DIR)/test_installer_service \
 	$(TEST_BIN_DIR)/test_selftest_plan \
 	$(TEST_BIN_DIR)/test_ima_xattr \
@@ -1348,6 +1349,12 @@ $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
+		installer/stages.c installer/probe.c installer/run.c \
+		installer/ui.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
 
 $(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/probe.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1848,6 +1855,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_installer_named_paths
+	@$(BUILD_DIR)/test_installer_trust_key
 	@$(BUILD_DIR)/test_installer_service
 	@$(BUILD_DIR)/test_selftest_plan
 	@$(BUILD_DIR)/test_ima_xattr
