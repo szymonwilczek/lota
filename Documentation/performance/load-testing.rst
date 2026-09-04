@@ -143,7 +143,9 @@ ones the verifier refuses at the door, so a run whose fleet is being
 refused has the higher attempted rate of the two. When a run leaves
 attempts unverified the line says how many verified and that the
 figure is not a ceiling; a figure worth quoting as capacity comes from
-a run that prints no such shortfall.
+a run that prints no such shortfall. The live progress line counts the
+same way, so a run that speeds up as it degrades shows up while it is
+still going.
 
 Interpreting failures:
 

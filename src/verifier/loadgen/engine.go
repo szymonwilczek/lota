@@ -430,9 +430,10 @@ func startProgress(cfg *runConfig, col *collector) (stop func()) {
 				return
 			case <-ticker.C:
 				attempts, ok, errs := col.snapshot()
-				cfg.Logf("t=%s attempts=%d ok=%d errors=%d rate=%.1f/s",
-					time.Since(start).Round(time.Second), attempts, ok, errs,
-					float64(attempts)/time.Since(start).Seconds())
+				elapsed := time.Since(start)
+				cfg.Logf("t=%s attempts=%d ok=%d errors=%d rate=%.1f/s verified",
+					elapsed.Round(time.Second), attempts, ok, errs,
+					float64(ok)/elapsed.Seconds())
 			}
 		}
 	}()
