@@ -46,9 +46,8 @@ tokens; a violated limit, an empty body where one is required, or
 trailing data after the JSON value is a **400**. A field the endpoint
 does not read is a **400** naming it: a request that carries a field the
 handler ignores did not do what its author wrote, and a caller has to hear
-that. Timestamps are RFC 3339 UTC. Endpoints backed by an optional subsystem
-(revocations, bans, the audit and attestation logs) answer **503** when
-that store is not configured. Unexpected server failures are **500** with
+that instead of reading a success for an action taken with something else.
+Timestamps are RFC 3339 UTC. Unexpected server failures are **500** with
 a generic message; details go to the verifier log, not the client.
 
 Mutation payloads share three fields: ``reason`` (one of ``cheating``,
@@ -62,6 +61,24 @@ unban verbs -- carries a ``tenant``. A deployment that assigns no tenants
 reads ``default`` there on every record, which is the tenant an
 unassigned device belongs to, not a missing value. See
 :doc:`multi-tenancy`.
+
+State an instance does not hold
+-------------------------------
+
+Revocations, hardware bans, the audit log and the attestation decision log
+are one group: they are what an operator decided, and they answer **503**
+with the store named when this instance holds none of them. That is the
+answer to act on -- it says the instance cannot keep the decision, before
+one is made against it.
+
+A verifier holds them whenever it has somewhere durable to keep them, which
+is every ordinary deployment: ``--pg-dsn`` puts them in the shared database
+the fleet serves from, ``--db`` in that SQLite file, and an instance given
+neither keeps them beside its AIK store in ``--state-db`` (default
+``<aik-store>/verifier-state.sqlite``), which is the same file its used-nonce
+history lives in. Only ``--allow-insecure-memory-state`` leaves the group
+absent, and that flag says what it does: the instance keeps nothing across a
+restart, so it refuses to take a decision it would forget.
 
 Pagination
 ----------

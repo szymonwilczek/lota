@@ -105,9 +105,9 @@ var (
 	pgShardDSNs         stringSliceFlag
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
-	nonceDBPath         = flag.String("nonce-db", "", "SQLite database path for used nonce history (defaults to <aik-store>/used_nonces.sqlite); set --allow-insecure-memory-nonces to disable persistence")
+	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
-	allowMemNonces      = flag.Bool("allow-insecure-memory-nonces", false, "INSECURE: allow memory-only used nonce history (replay window after verifier restart)")
+	allowMemState       = flag.Bool("allow-insecure-memory-state", false, "INSECURE: keep no durable state without a database. The used nonce history lives in memory, so a restart re-opens a replay window, and this instance holds no revocations, bans, audit log or decision log at all -- those endpoints answer 503.")
 	printVersions       = flag.Bool("print-versions", false, "Print the attestation report wire version this binary implements, the schema version it builds each backend up to, and its TLS floor, then exit. The report wire must match the agent fleet's exactly.")
 )
 
@@ -562,28 +562,37 @@ func main() {
 			logger.Info("SQLite store initialized", "path", *dbPath, "schema_version", ver)
 		}
 	} else {
-		// persist used nonce history even without --db
-		// otherwise, a verifier restart re-opens a replay window within nonce TTL
-		if !*allowMemNonces {
-			path := *nonceDBPath
+		// no database: used nonces and enforcement state still go to one
+		// SQLite file, so a restart neither re-opens a replay window nor
+		// forgets a ban
+		if !*allowMemState {
+			path := *stateDBPath
 			if path == "" {
-				path = filepath.Join(*aikStorePath, "used_nonces.sqlite")
+				path = filepath.Join(*aikStorePath, "verifier-state.sqlite")
 			}
 			db, err := store.OpenDB(path)
 			if err != nil {
-				logger.Error("failed to open nonce DB (required for anti-replay persistence)",
+				logger.Error("failed to open the state database (required for anti-replay and enforcement persistence)",
 					"path", path,
 					"error", err,
-					"hint", "use --nonce-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-nonces")
+					"hint", "use --state-db to set a writable path, or (INSECURE) pass --allow-insecure-memory-state")
 				os.Exit(1)
 			}
 			defer db.Close()
 			verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
-			logger.Info("persistent used nonce backend enabled",
-				"path", path)
+
+			enforcement := sqliteEnforcementStores(db, logger)
+			enforcement.install(&verifierCfg)
+			auditLog = enforcement.audit
+			attestLog = enforcement.attestations
+
+			logger.Info("state database opened", "path", path,
+				"holds", "used nonces, revocations, hardware bans, audit log, attestation log")
 		} else {
-			logger.Warn("INSECURE: using memory-only used nonce backend; verifier restart re-opens replay window",
-				"nonce_lifetime", verifierCfg.NonceLifetime)
+			// enforcement stores stay nil, so their endpoints answer 503
+			logger.Warn("INSECURE: no durable state; verifier restart re-opens a replay window and this instance holds no revocations, bans, audit log or decision log",
+				"nonce_lifetime", verifierCfg.NonceLifetime,
+				"api", "revocation, ban, audit and attestation endpoints answer 503")
 		}
 
 		// file-based AIK store (optionally certificate-backed)
@@ -602,12 +611,6 @@ func main() {
 			logger.Info("file-based AIK store initialized",
 				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
 		}
-
-		// enforcement state, this process only
-		enforcement := memoryEnforcementStores()
-		enforcement.install(&verifierCfg)
-		auditLog = enforcement.audit
-		attestLog = enforcement.attestations
 
 	}
 
