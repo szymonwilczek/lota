@@ -172,6 +172,63 @@ func logAIKStore(logger *slog.Logger, cs *store.CertificateStore, p aikStorePara
 		"registered_clients", cs.CountClients())
 }
 
+// enforcementStores holds operator decisions: revocations, bans, the audit
+// log they write, and the attestation decision log.
+// The API answers 503 for each one that is absent.
+type enforcementStores struct {
+	audit        store.AuditLog
+	revocations  store.RevocationStore
+	bans         store.BanStore
+	attestations store.AttestationLog
+}
+
+// sqliteEnforcementStores keeps the group in a SQLite database.
+func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+	audit := store.NewSQLiteAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewSQLiteRevocationStore(db, audit),
+		bans:        store.NewSQLiteBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewSQLiteAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger}),
+	}
+}
+
+// postgresEnforcementStores keeps the group in Postgres, shared by every
+// instance; sharded deployments keep it on the control shard.
+func postgresEnforcementStores(db *sql.DB, logger *slog.Logger) enforcementStores {
+	audit := store.NewPostgresAuditLog(db)
+	return enforcementStores{
+		audit:       audit,
+		revocations: store.NewPostgresRevocationStore(db, audit),
+		bans:        store.NewPostgresBanStore(db, audit),
+		attestations: store.NewBatchedAttestationLog(
+			store.NewPostgresAttestationLog(db),
+			store.BatchedAttestationLogConfig{Logger: logger}),
+	}
+}
+
+// memoryEnforcementStores keeps the group in process memory;
+// it is lost on exit.
+func memoryEnforcementStores() enforcementStores {
+	audit := store.NewMemoryAuditLog()
+	return enforcementStores{
+		audit:        audit,
+		revocations:  store.NewMemoryRevocationStore(audit),
+		bans:         store.NewMemoryBanStore(audit),
+		attestations: store.NewMemoryAttestationLog(),
+	}
+}
+
+// install sets the revocation, ban and attestation stores on cfg.
+// A nil store stays nil, which the API reports as absent.
+func (e enforcementStores) install(cfg *verify.VerifierConfig) {
+	cfg.RevocationStore = e.revocations
+	cfg.BanStore = e.bans
+	cfg.AttestationLog = e.attestations
+}
+
 // loadPolicies registers every --policy document in the order it was given.
 //
 // The first one becomes the active policy, used for clients whose tenant binds
@@ -435,14 +492,10 @@ func main() {
 				"note", "per-client baseline/nonce partitioned; enforcement and audit on shard 0")
 		}
 
-		auditLog = store.NewPostgresAuditLog(db)
-		verifierCfg.RevocationStore = store.NewPostgresRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewPostgresBanStore(db, auditLog)
-
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := postgresEnforcementStores(db, logger)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		// AIK store: certificate-backed when the deployment verifies chains
 		// (the production default), otherwise a shared TOFU store in Postgres
@@ -497,16 +550,10 @@ func main() {
 		verifierCfg.BaselineStore = verify.NewSQLiteBaselineStore(db)
 		verifierCfg.UsedNonceBackend = verify.NewSQLiteUsedNonceBackend(db)
 
-		// enforcement stores - revocation, bans, audit log
-		auditLog = store.NewSQLiteAuditLog(db)
-		verifierCfg.RevocationStore = store.NewSQLiteRevocationStore(db, auditLog)
-		verifierCfg.BanStore = store.NewSQLiteBanStore(db, auditLog)
-
-		// attestation decision log
-		attestLog = store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLog(db),
-			store.BatchedAttestationLogConfig{Logger: logger})
-		verifierCfg.AttestationLog = attestLog
+		enforcement := sqliteEnforcementStores(db, logger)
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 		ver, err := store.SchemaVersion(db)
 		if err != nil {
@@ -556,14 +603,11 @@ func main() {
 				"path", *aikStorePath, "registered_clients", len(selected.ListClients()))
 		}
 
-		// in-memory enforcement stores
-		auditLog = store.NewMemoryAuditLog()
-		verifierCfg.RevocationStore = store.NewMemoryRevocationStore(auditLog)
-		verifierCfg.BanStore = store.NewMemoryBanStore(auditLog)
-
-		// in-memory attestation decision log
-		attestLog = store.NewMemoryAttestationLog()
-		verifierCfg.AttestationLog = attestLog
+		// enforcement state, this process only
+		enforcement := memoryEnforcementStores()
+		enforcement.install(&verifierCfg)
+		auditLog = enforcement.audit
+		attestLog = enforcement.attestations
 
 	}
 
