@@ -241,6 +241,9 @@ static void test_token_only_publisher(void)
 	      "not stop");
 	CHECK(strstr(targets[0].label, "ca.light.example:8444") != NULL,
 	      "its log lines name the CA, there being no verifier to name");
+	CHECK(strstr(targets[0].label, "enrolled") == NULL,
+	      "the label names the configured CA without claiming the host "
+	      "enrolled there");
 }
 
 static void test_more_profiles_than_room(void)
