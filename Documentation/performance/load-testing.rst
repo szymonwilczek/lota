@@ -140,7 +140,10 @@ is the only one that is throughput; ``attempted_rate_per_sec`` beside
 it counts everything the generator started. They diverge when
 attestations fail, and the failures that cost the least time are the
 ones the verifier refuses at the door, so a run whose fleet is being
-refused has the higher attempted rate of the two.
+refused has the higher attempted rate of the two. When a run leaves
+attempts unverified the line says how many verified and that the
+figure is not a ceiling; a figure worth quoting as capacity comes from
+a run that prints no such shortfall.
 
 Interpreting failures:
 
