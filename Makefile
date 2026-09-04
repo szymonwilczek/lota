@@ -1570,7 +1570,7 @@ $(TEST_BIN_DIR)/test_tpm_nv_chunk: tests/test_tpm_nv_chunk.c $(INC_DIR)/lota_tpm
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
-$(TEST_BIN_DIR)/test_ipc_token_cap: tests/test_ipc_token_cap.c $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_ipc_token_cap: tests/test_ipc_token_cap.c $(INC_DIR)/lota_ipc.h $(INC_DIR)/lota_token.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
