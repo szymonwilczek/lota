@@ -53,8 +53,8 @@ Usage: lota-dev-bringup.sh [--reset]
   --reset   Clear the agent state under /var/lib/lota and evict the
             persistent handles LOTA owns from the TPM. This destroys
             the host's attestation identity; the next agent start
-            provisions a new one. Refused while lota-agent.service
-            is running.
+            provisions a new one. Refused while the agent is
+            running.
   --help    Show this help
 EOF
 }
@@ -92,6 +92,8 @@ AGENT_BIN="$BRINGUP_ROOT/usr/bin/lota-agent"
 BPF_OBJ="$BRINGUP_ROOT/usr/lib/lota/lota_lsm.bpf.o"
 BPF_SIG="$BPF_OBJ.sig"
 STATE_DIR="$BRINGUP_ROOT/var/lib/lota"
+PID_FILE="$BRINGUP_ROOT/run/lota/lota-agent.pid"
+AGENT_HELD_BY=""
 IMA_POLICY_SRC="$(dirname "$0")/../configs/ima/lota-ima-policy"
 IMA_POLICY_RUNTIME="$BRINGUP_ROOT/sys/kernel/security/ima/policy"
 
@@ -234,9 +236,24 @@ state_files() {
         -o -name 'snapshot*' \) 2>/dev/null || true
 }
 
-agent_unit_is_active() {
-    command -v systemctl >/dev/null 2>&1 &&
-        systemctl is-active --quiet lota-agent.service
+# Active unit, or a live pid in the daemon's pid file:
+# a refused stop leaves the unit inactive with the daemon still running.
+agent_is_running() {
+    local pid=""
+
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl is-active --quiet lota-agent.service; then
+        AGENT_HELD_BY="lota-agent.service is active"
+        return 0
+    fi
+    if [[ -r "$PID_FILE" ]]; then
+        read -r pid <"$PID_FILE" || true
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            AGENT_HELD_BY="a lota-agent daemon is running as pid $pid"
+            return 0
+        fi
+    fi
+    return 1
 }
 
 if ! $do_reset; then
@@ -249,9 +266,10 @@ if ! $do_reset; then
         info "no agent state under $STATE_DIR to clear"
     fi
 else
-    if agent_unit_is_active; then
-        warn "lota-agent.service is active and is using the attestation"
-        warn "key --reset destroys. Stop it first:"
+    if agent_is_running; then
+        warn "$AGENT_HELD_BY."
+        warn "--reset destroys the attestation key it is using."
+        warn "Stop it first:"
         warn "  systemctl stop lota-agent.service lota-agent.socket"
         fail "refusing to reset the state of a running agent"
     fi
