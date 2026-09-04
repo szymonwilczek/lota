@@ -14,6 +14,10 @@
 # produced by a target the spec's %build runs, or rpm fails with `File not
 # found` after the whole tree has compiled.
 #
+# A path shipped under /var/lib/lota, /etc/lota, /usr/lib/lota or
+# /usr/share/lota needs a package-owned parent: an unowned directory takes
+# the umask's mode and escapes rpm -V.
+#
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
 
@@ -292,6 +296,72 @@ for cfg in "$NFPM_DIR"/*.yaml; do
         [ -n "$only_spec" ] && report "  spec only: " "$only_spec"
     fi
 done
+
+# Directories the packages own: nfpm `type: dir` entries and spec %dir lines
+owned_dirs() {
+    local cfg section
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        awk '
+			/^[ \t]*-?[ \t]*dst:[ \t]*/ {
+				sub(/^[^:]*:[ \t]*/, "")
+				gsub(/^["'"'"']|["'"'"']$/, "")
+				dst = $0
+				next
+			}
+			/^[ \t]*type:[ \t]*dir[ \t]*$/ { if (dst != "") print dst }
+		' "$cfg"
+    done
+
+    while read -r section; do
+        [ -n "$section" ] || continue
+        awk '
+			/^%files/ { next }
+			/^[ \t]*%dir[ \t]/ {
+				line = $0
+				while (line ~ /^[ \t]*%(dir|attr|ghost|config|verify)(\([^)]*\))?[ \t]+/)
+					sub(/^[ \t]*%(dir|attr|ghost|config|verify)(\([^)]*\))?[ \t]+/, "", line)
+				gsub(/%\{_sharedstatedir\}/, "/var/lib", line)
+				gsub(/%\{_datadir\}/, "/usr/share", line)
+				gsub(/%\{_sysconfdir\}/, "/etc", line)
+				gsub(/%\{_prefix\}/, "/usr", line)
+				gsub(/%\{_libdir\}/, "/usr/lib64", line)
+				gsub(/%\{_includedir\}/, "/usr/include", line)
+				gsub(/%\{name\}/, "lota", line)
+				print line
+			}
+		' "$SPEC"
+        break
+    done < <(awk '/^%files[ \t]+/ { print }' "$SPEC")
+}
+
+check_declared_parents() {
+    local dirs path parent
+    dirs=$(owned_dirs | sort -u)
+
+    while read -r path; do
+        [ -n "$path" ] || continue
+        parent=${path%/*}
+
+        # /usr, /var/lib and the like belong to the distribution
+        case "$parent" in
+        /var/lib/lota* | /etc/lota* | /usr/lib/lota* | /usr/share/lota*) ;;
+        *) continue ;;
+        esac
+
+        grep -qxF "$parent" <<<"$dirs" && continue
+
+        fail=1
+        echo "FAIL: ${path} is shipped and its parent ${parent} is owned by no package"
+        echo "  an unowned directory is created at whatever mode the umask gives it,"
+        echo "  is not verified by rpm -V, and is neither restored nor removed"
+    done < <({
+        for cfg in "$NFPM_DIR"/*.yaml; do nfpm_paths "$cfg"; done
+        echo "$dirs"
+    } | sort -u)
+}
+
+check_declared_parents
 
 # Every path the spec ships, across its subpackages
 spec_installed=$(while read -r section; do
