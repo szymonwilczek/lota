@@ -25,6 +25,15 @@ contents:
     dst: /usr/bin/lota-verifier
     file_info:
       mode: 0755
+  # default --aik-store and its parent
+  - dst: /var/lib/lota
+    type: dir
+    file_info:
+      mode: 0700
+  - dst: /var/lib/lota/aiks
+    type: dir
+    file_info:
+      mode: 0700
   - src: ./LICENSE
     dst: /usr/share/licenses/lota-verifier/LICENSE
     type: license
