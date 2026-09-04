@@ -115,3 +115,7 @@ sealed form, the AIK metadata, the monotonic clock state and the publisher
 profiles. They are the machine's identity and survive removal and reinstall,
 as do ``/etc/lota`` and the TPM's persistent objects. To hand the machine
 on or re-enrol from scratch, remove them by hand.
+
+Removing ``lota-agent`` first stops the daemon, its socket and the
+attestation loop. Stopping the daemon extends PCR 14, so the host fails
+attestation until it reboots.
