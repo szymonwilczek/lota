@@ -23,6 +23,7 @@
 #include "parse_utils.h"
 #include "path_validate.h"
 #include "pin.h"
+#include "policy_pubkey.h"
 #include "tpm.h"
 
 /* Runtime config populated by --protect-pid / --trust-lib / --allow-verity. */
@@ -200,7 +201,7 @@ static int load_config_into_options(struct cli_options *opts,
 	opts->daemon_flag = cfg->daemon ? 1 : 0;
 	opts->pid_file_path = cfg->pid_file;
 	opts->signing_key_path = cfg->signing_key[0] ? cfg->signing_key : NULL;
-	opts->policy_pubkey_path = config_resolve_policy_pubkey(
+	opts->policy_pubkey_path = policy_pubkey_resolve(
 		cfg->policy_pubkey[0] ? cfg->policy_pubkey : NULL,
 		LOTA_POLICY_PUBKEY_OVERRIDE, LOTA_ENFORCEMENT_PUBKEY_PATH);
 

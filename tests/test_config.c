@@ -20,6 +20,7 @@
 
 #include "../src/agent/attest.h"
 #include "../src/agent/config.h"
+#include "../src/agent/policy_pubkey.h"
 
 static int tests_run;
 static int tests_passed;
@@ -2117,33 +2118,33 @@ static void test_config_load_override_order(void)
  * Both are silent failures if the order is wrong, so it is pinned here rather
  * than left to the two callers to agree on.
  */
-static void test_config_resolve_policy_pubkey(void)
+static void test_policy_pubkey_resolve(void)
 {
 	char override_path[PATH_MAX];
 	char packaged_path[PATH_MAX];
 	const char *got;
 
-	TEST("config_resolve_policy_pubkey follows configured, override, packaged");
+	TEST("policy_pubkey_resolve follows configured, override, packaged");
 
 	config_path("override.pub", override_path, sizeof(override_path));
 	config_path("packaged.pub", packaged_path, sizeof(packaged_path));
 	write_config("packaged.pub", "packaged\n");
 
-	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	got = policy_pubkey_resolve(NULL, override_path, packaged_path);
 	if (!got || strcmp(got, packaged_path) != 0) {
 		FAIL("with no operator key the packaged one is used");
 		return;
 	}
 
 	write_config("override.pub", "operator\n");
-	got = config_resolve_policy_pubkey(NULL, override_path, packaged_path);
+	got = policy_pubkey_resolve(NULL, override_path, packaged_path);
 	if (!got || strcmp(got, override_path) != 0) {
 		FAIL("an operator key present on disk wins over the packaged one");
 		return;
 	}
 
-	got = config_resolve_policy_pubkey(override_path, override_path,
-					   packaged_path);
+	got = policy_pubkey_resolve(override_path, override_path,
+				    packaged_path);
 	if (!got || strcmp(got, override_path) != 0) {
 		FAIL("policy_pubkey names the key outright");
 		return;
@@ -2156,17 +2157,16 @@ static void test_config_resolve_policy_pubkey(void)
 	 * Falling back keeps enforcement armed on host whose package brought
 	 * key of its own.
 	 */
-	got = config_resolve_policy_pubkey("/nonexistent/named.pub",
-					   "/nonexistent/override.pub",
-					   packaged_path);
+	got = policy_pubkey_resolve("/nonexistent/named.pub",
+				    "/nonexistent/override.pub", packaged_path);
 	if (!got || strcmp(got, packaged_path) != 0) {
 		FAIL("a named key that no longer exists falls back to the "
 		     "packaged one");
 		return;
 	}
 
-	got = config_resolve_policy_pubkey(NULL, "/nonexistent/override.pub",
-					   "/nonexistent/packaged.pub");
+	got = policy_pubkey_resolve(NULL, "/nonexistent/override.pub",
+				    "/nonexistent/packaged.pub");
 	if (got != NULL) {
 		FAIL("no readable key resolves to nothing, not to a guess");
 		return;
@@ -2296,7 +2296,7 @@ int main(void)
 		test_config_dump_null,
 		test_config_load_all_known_keys,
 		test_config_load_override_order,
-		test_config_resolve_policy_pubkey,
+		test_policy_pubkey_resolve,
 		test_config_load_mixed_comments,
 		test_config_load_from_fd,
 	};
