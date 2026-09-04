@@ -313,7 +313,7 @@ $(INITRAMFS_LOCK_BIN): src/initramfs/lota-pcr14-lock.c | $(BUILD_DIR)
 # into, and second copy of that rule would be second answer to it.
 INSTALLER_SRCS := installer/main.c installer/stages.c installer/tui.c \
 	installer/ui.c installer/run.c installer/probe.c \
-	$(AGENT_DIR)/profile.c
+	$(AGENT_DIR)/policy_pubkey.c $(AGENT_DIR)/profile.c
 $(INSTALLER_BIN): $(INSTALLER_SRCS) installer/install.h installer/probe.h \
 		installer/run.h installer/tui.h installer/ui.h \
 		$(AGENT_DIR)/profile.h | $(BUILD_DIR)
@@ -1353,7 +1353,8 @@ $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_ver
 
 $(TEST_BIN_DIR)/test_installer_trust_key: tests/test_installer_trust_key.c \
 		installer/stages.c installer/probe.c installer/run.c \
-		installer/ui.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
+		installer/ui.c $(AGENT_DIR)/policy_pubkey.c \
+		$(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^) -lcrypto
 

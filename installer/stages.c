@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,7 @@
 #include "probe.h"
 #include "run.h"
 #include "ui.h"
+#include "../src/agent/policy_pubkey.h"
 #include "../src/agent/profile.h"
 
 static int file_exists(const char *path)
@@ -203,20 +205,23 @@ const char *installer_trust_key(const char *named, const char *conf_pubkey,
 				enum trust_key_source *src)
 {
 	enum trust_key_source got = TRUST_KEY_NONE;
-	const char *key = NULL;
+	const char *key;
 
-	(void)conf_pubkey;
-
+	/* --policy-pubkey is returned even if unreadable; the agent gets it too */
 	if (named) {
-		key = named;
-		got = TRUST_KEY_NAMED;
-	} else if (override_path && file_exists(override_path)) {
-		key = override_path;
-		got = TRUST_KEY_OVERRIDE;
-	} else if (packaged_path) {
-		key = packaged_path;
-		got = TRUST_KEY_PACKAGED;
+		if (src)
+			*src = TRUST_KEY_NAMED;
+		return named;
 	}
+
+	/* the agent's own order */
+	key = policy_pubkey_resolve(conf_pubkey, override_path, packaged_path);
+	if (key == conf_pubkey)
+		got = TRUST_KEY_CONFIGURED;
+	else if (key == override_path)
+		got = TRUST_KEY_OVERRIDE;
+	else if (key == packaged_path)
+		got = TRUST_KEY_PACKAGED;
 
 	if (src)
 		*src = got;
@@ -240,24 +245,36 @@ const char *installer_trust_key_source_says(enum trust_key_source src)
 	return "nowhere -- no readable key was found";
 }
 
-static const char *trust_key_in_use(const struct install_ctx *ctx)
+/* policy_pubkey read fresh from lota.conf, not cached */
+static const char *trust_key_in_use(const struct install_ctx *ctx,
+				    char *conf_buf, size_t conf_cap,
+				    enum trust_key_source *src)
 {
-	return installer_trust_key(ctx->opts.policy_pubkey, NULL,
+	const char *configured = NULL;
+
+	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
+			     conf_cap) == 1)
+		configured = conf_buf;
+
+	return installer_trust_key(ctx->opts.policy_pubkey, configured,
 				   PATH_POLICY_PUB_OVERRIDE,
-				   PATH_ENFORCEMENT_PUB, NULL);
+				   PATH_ENFORCEMENT_PUB, src);
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 				       size_t cap)
 {
-	const char *key = trust_key_in_use(ctx);
+	enum trust_key_source src = TRUST_KEY_NONE;
+	char conf_key[PATH_MAX];
+	const char *key =
+		trust_key_in_use(ctx, conf_key, sizeof(conf_key), &src);
 	char sig[512];
 	char out[4096];
 	int rc;
 
 	snprintf(sig, sizeof(sig), "%s.sig", PATH_BPF_OBJ);
 
-	if (!file_exists(key)) {
+	if (!key || !file_exists(key)) {
 		snprintf(note, cap,
 			 "No key to verify the enforcement object against. "
 			 "One ships with the agent package at %s, beside the "
@@ -299,21 +316,24 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 	if (rc != 0) {
 		snprintf(note, cap,
 			 "The BPF object signature does not verify against "
-			 "%s. The package ships object, signature and key "
-			 "together and replaces all three on an upgrade, so "
-			 "this means they no longer belong to each other: "
-			 "either this host carries an operator key at %s that "
-			 "did not sign the shipped object - move it aside to "
-			 "fall back to the packaged one - or the fleet signs "
+			 "%s, which is %s and is the key the agent resolves "
+			 "for this host. The package ships object, signature "
+			 "and key together and replaces all three on an "
+			 "upgrade, so this means they no longer belong to each "
+			 "other: either the key above did not sign the shipped "
+			 "object - take it out of the way and the agent falls "
+			 "through to the packaged %s - or the fleet signs "
 			 "enforcement itself and has to re-sign this object "
 			 "(lota-agent --sign-policy %s --signing-key <key>). "
 			 "The installer never signs on this host by design.",
-			 key, PATH_POLICY_PUB_OVERRIDE, PATH_BPF_OBJ);
+			 key, installer_trust_key_source_says(src),
+			 PATH_ENFORCEMENT_PUB, PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
 	if (!ctx->opts.policy_pubkey) {
-		snprintf(note, cap, "Signature verifies against %s.", key);
+		snprintf(note, cap, "Signature verifies against %s (%s).", key,
+			 installer_trust_key_source_says(src));
 		return STAGE_DONE;
 	}
 	rc = probe_conf_has_key(PATH_LOTA_CONF, "policy_pubkey");

@@ -331,6 +331,15 @@ int probe_cert_days_left(const char *der_path, int *days_left);
  * (comments and leading whitespace skipped), 0 otherwise */
 int probe_conf_buf_has_key(const char *buf, const char *key);
 
+/* Pure parser: copy @key's value into @out and return 1;
+ * 0 with @out empty when absent, empty or too long */
+int probe_conf_buf_value(const char *buf, const char *key, char *out,
+			 size_t cap);
+
+/* File-backed wrapper for probe_conf_buf_value() */
+int probe_conf_value(const char *conf_path, const char *key, char *out,
+		     size_t cap);
+
 /* File-backed wrapper for probe_conf_buf_has_key().
  * 1/0 or -errno */
 int probe_conf_has_key(const char *conf_path, const char *key);

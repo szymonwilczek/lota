@@ -962,6 +962,68 @@ int probe_auto_bringup_at(const char *path)
 	return access(path, F_OK) == 0;
 }
 
+int probe_conf_buf_value(const char *buf, const char *key, char *out,
+			 size_t cap)
+{
+	size_t klen;
+	const char *line;
+
+	if (!out || cap == 0)
+		return 0;
+	out[0] = '\0';
+	if (!buf || !key)
+		return 0;
+	klen = strlen(key);
+
+	for (line = buf; line && *line;) {
+		const char *p = line;
+		const char *eol = strchr(line, '\n');
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p != '#' && strncmp(p, key, klen) == 0) {
+			const char *end;
+			size_t len;
+
+			p += klen;
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p != '=')
+				goto next;
+			p++;
+			while (*p == ' ' || *p == '\t')
+				p++;
+			end = eol ? eol : p + strlen(p);
+			/* a value is what is left after the trailing blanks;
+			 * a key with nothing after it is not a value */
+			while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
+					   end[-1] == '\r'))
+				end--;
+			len = (size_t)(end - p);
+			if (len == 0 || len >= cap)
+				return 0;
+			memcpy(out, p, len);
+			out[len] = '\0';
+			return 1;
+		}
+next:
+		line = eol ? eol + 1 : NULL;
+	}
+	return 0;
+}
+
+int probe_conf_value(const char *conf_path, const char *key, char *out,
+		     size_t cap)
+{
+	char buf[16384] = { 0 };
+
+	if (out && cap)
+		out[0] = '\0';
+	if (probe_read_text(conf_path, buf, sizeof(buf)) < 0)
+		return 0;
+	return probe_conf_buf_value(buf, key, out, cap);
+}
+
 int probe_conf_has_key(const char *conf_path, const char *key)
 {
 	char buf[16384] = { 0 };
