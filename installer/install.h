@@ -135,6 +135,34 @@ struct stage {
 	int boot_path;
 };
 
+/* where the enforcement object's verification key comes from */
+enum trust_key_source {
+	TRUST_KEY_NONE = 0, /* nothing readable anywhere */
+	TRUST_KEY_NAMED, /* --policy-pubkey */
+	TRUST_KEY_CONFIGURED, /* policy_pubkey in lota.conf */
+	TRUST_KEY_OVERRIDE, /* the operator's own key on disk */
+	TRUST_KEY_PACKAGED, /* the key the agent package shipped */
+};
+
+/*
+ * installer_trust_key - which key the enforcement check will name
+ *
+ * @named:         --policy-pubkey path, or NULL.
+ * @conf_pubkey:   policy_pubkey from the configuration, or NULL.
+ * @override_path: operator-owned key no package owns.
+ * @packaged_path: key shipped beside the object.
+ * @src:           set to the source of the returned path; may be NULL.
+ *
+ * Paths are parameters so tests need not touch /usr or /etc.
+ */
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src);
+
+/* human-readable @src */
+const char *installer_trust_key_source_says(enum trust_key_source src);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;

@@ -194,17 +194,57 @@ static enum stage_state st_artifacts_probe(struct install_ctx *ctx, char *note,
 
 /*
  * Which key the agent will verify the enforcement object against.
- *
- * Reported, not decided: the agent owns the order, and this only says which
- * file the operator should look at when the signature does not verify.
+ * Reported only: the agent owns the order; this names the file to check
+ * when the signature does not verify.
  */
+const char *installer_trust_key(const char *named, const char *conf_pubkey,
+				const char *override_path,
+				const char *packaged_path,
+				enum trust_key_source *src)
+{
+	enum trust_key_source got = TRUST_KEY_NONE;
+	const char *key = NULL;
+
+	(void)conf_pubkey;
+
+	if (named) {
+		key = named;
+		got = TRUST_KEY_NAMED;
+	} else if (override_path && file_exists(override_path)) {
+		key = override_path;
+		got = TRUST_KEY_OVERRIDE;
+	} else if (packaged_path) {
+		key = packaged_path;
+		got = TRUST_KEY_PACKAGED;
+	}
+
+	if (src)
+		*src = got;
+	return key;
+}
+
+const char *installer_trust_key_source_says(enum trust_key_source src)
+{
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		return "named with --policy-pubkey";
+	case TRUST_KEY_CONFIGURED:
+		return "named by policy_pubkey in " PATH_LOTA_CONF;
+	case TRUST_KEY_OVERRIDE:
+		return "this host's own operator key";
+	case TRUST_KEY_PACKAGED:
+		return "the key the agent package shipped";
+	case TRUST_KEY_NONE:
+		break;
+	}
+	return "nowhere -- no readable key was found";
+}
+
 static const char *trust_key_in_use(const struct install_ctx *ctx)
 {
-	if (ctx->opts.policy_pubkey)
-		return ctx->opts.policy_pubkey;
-	if (file_exists(PATH_POLICY_PUB_OVERRIDE))
-		return PATH_POLICY_PUB_OVERRIDE;
-	return PATH_ENFORCEMENT_PUB;
+	return installer_trust_key(ctx->opts.policy_pubkey, NULL,
+				   PATH_POLICY_PUB_OVERRIDE,
+				   PATH_ENFORCEMENT_PUB, NULL);
 }
 
 static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
