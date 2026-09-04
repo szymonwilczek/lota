@@ -1237,6 +1237,68 @@ static const char telemetry_summary[] =
 	"No file contents, no browsing or account data leave this "
 	"machine.";
 
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap)
+{
+	struct floor_state st;
+	struct profile_paths paths;
+	int days = 0;
+	int rc;
+
+	/* reads only; the attestation round-trip is left to the install */
+	booted_floor(&st);
+	if (!(st.ima_ok && st.sig_ok && st.lockdown_ok && st.scope_ok)) {
+		snprintf(note, cap,
+			 "Not ready: the kernel integrity floor is not "
+			 "satisfied, so the self-check would fail. The floor "
+			 "stages above say which part of it.");
+		return STAGE_PENDING;
+	}
+	if (probe_fsverity_state(PATH_AGENT_BIN) != PROBE_VERITY_ENABLED &&
+	    probe_file_ima_signed(PATH_AGENT_BIN) != 1) {
+		snprintf(note, cap,
+			 "Not ready: %s is neither under fs-verity nor "
+			 "carrying a signed IMA xattr, so a modified read of "
+			 "it would go unnoticed.",
+			 PATH_AGENT_BIN);
+		return STAGE_PENDING;
+	}
+	if (!agent_service_active()) {
+		snprintf(note, cap,
+			 "Not ready: lota-agent.service is not running, so "
+			 "this host is not attesting.");
+		return STAGE_PENDING;
+	}
+
+	rc = enroll_profile(ctx, &paths);
+	if (rc == -EINVAL) {
+		snprintf(note, cap,
+			 "Ready: floor satisfied, agent binary immutable, "
+			 "service running, and no publisher named yet - the "
+			 "certificate arrives when a title first asks. The "
+			 "attestation round-trip runs during an install; this "
+			 "report performs nothing.");
+		return STAGE_DONE;
+	}
+	if (rc == 0)
+		rc = probe_cert_days_left(paths.aik_cert, &days);
+	if (rc != 0) {
+		snprintf(note, cap,
+			 "Not ready: no valid AIK certificate for the CA "
+			 "anchor named here, so the round-trip the self-check "
+			 "runs would have nothing to present.");
+		return STAGE_PENDING;
+	}
+
+	snprintf(note, cap,
+		 "Ready: floor satisfied, agent binary immutable, service "
+		 "running, AIK certificate valid (%s). The attestation "
+		 "round-trip runs during an install; this report performs "
+		 "nothing.",
+		 days > 0 ? "a day or more left" : "less than a day left");
+	return STAGE_DONE;
+}
+
 int install_self_check(struct install_ctx *ctx)
 {
 	struct floor_state st;
@@ -1246,8 +1308,8 @@ int install_self_check(struct install_ctx *ctx)
 	int profiles;
 	int rc_cert;
 
-	ui_stage_begin(&ctx->ui, install_stage_count + 1,
-		       install_stage_count + 1, "Self-check");
+	ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
+		       install_selfcheck_title);
 
 	booted_floor(&st);
 	{
@@ -1589,3 +1651,9 @@ const struct stage install_stages[] = {
 
 const int install_stage_count =
 	(int)(sizeof(install_stages) / sizeof(install_stages[0]));
+
+const char install_selfcheck_title[] = "Self-check & summary";
+
+/* The table plus the self-check: what every surface counts up to. */
+const int install_step_count =
+	(int)(sizeof(install_stages) / sizeof(install_stages[0])) + 1;

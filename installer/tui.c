@@ -615,7 +615,8 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
 			gattr = t->selfcheck_done ?
 					C_GREEN :
 					(first_unmet(t) < 0 ? C_CYAN : A_DIM);
-			snprintf(label, sizeof(label), "Self-check & summary");
+			snprintf(label, sizeof(label), "%s",
+				 install_selfcheck_title);
 		} else {
 			glyph = state_glyph(t->st[i], &gattr);
 			snprintf(label, sizeof(label), "%s",
@@ -638,7 +639,7 @@ static void render_stage_list(struct tui *t, int x, int y, int w, int h)
  * border+pad (4) + glyph cell (2) + "NN " (3) + longest title + pad */
 static int stage_list_width(struct tui *t)
 {
-	int max = ui_disp_len("Self-check & summary");
+	int max = ui_disp_len(install_selfcheck_title);
 	int i;
 
 	for (i = 0; i < t->n; i++) {
@@ -677,7 +678,7 @@ static void render_details(struct tui *t, int x, int y, int w, int h)
 	}
 
 	if (t->sel == t->n) {
-		put_clip(t, x, y, w, A_BOLD, "Self-check & summary");
+		put_clip(t, x, y, w, A_BOLD, install_selfcheck_title);
 		used = 2;
 		if (t->selfcheck_done) {
 			draw_wrapped(t, x, y + used, w, h - used, 0,

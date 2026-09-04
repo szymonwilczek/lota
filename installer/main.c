@@ -272,7 +272,7 @@ static int run_status(struct install_ctx *ctx)
 		const struct stage *s = &install_stages[i];
 		enum stage_state st = s->probe(ctx, note, sizeof(note));
 
-		ui_stage_begin(&ctx->ui, i + 1, install_stage_count, s->title);
+		ui_stage_begin(&ctx->ui, i + 1, install_step_count, s->title);
 		ui_stage_result(&ctx->ui, state_result(st), s->title, note);
 		if (st != STAGE_DONE && st != STAGE_SKIP)
 			pending++;
@@ -283,8 +283,21 @@ static int run_status(struct install_ctx *ctx)
 			ctx->reboot_needed = 1;
 	}
 
+	/* self-check, probed only */
+	{
+		enum stage_state st =
+			install_selfcheck_probe(ctx, note, sizeof(note));
+
+		ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
+			       install_selfcheck_title);
+		ui_stage_result(&ctx->ui, state_result(st),
+				install_selfcheck_title, note);
+		if (st != STAGE_DONE && st != STAGE_SKIP)
+			pending++;
+	}
+
 	ui_text(&ctx->ui, "\n%d of %d stages need work%s.", pending,
-		install_stage_count,
+		install_step_count,
 		blocked ? ", and the ones marked BLOCKED need it from someone "
 			  "other than the installer" :
 			  "");
@@ -568,7 +581,7 @@ int main(int argc, char **argv)
 		const struct stage *s = &install_stages[i];
 		enum stage_state st = s->probe(&ctx, note, sizeof(note));
 
-		ui_stage_begin(&ctx.ui, i + 1, install_stage_count, s->title);
+		ui_stage_begin(&ctx.ui, i + 1, install_step_count, s->title);
 
 		/*
 		 * Everything a package may do on its own is behind us;

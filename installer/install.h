@@ -167,6 +167,16 @@ const char *installer_trust_key_source_says(enum trust_key_source src);
 extern const struct stage install_stages[];
 extern const int install_stage_count;
 
+/* Self-check: the last step of every run, outside the stage table;
+ * install_step_count includes it */
+extern const char install_selfcheck_title[];
+extern const int install_step_count;
+
+/* Read-only self-check for --status: floor, agent binary,
+ * service and certificate; no attestation round-trip */
+enum stage_state install_selfcheck_probe(struct install_ctx *ctx, char *note,
+					 size_t cap);
+
 /* Final acceptance run + "what leaves this machine" summary.
  * Returns 0 or -1. */
 int install_self_check(struct install_ctx *ctx);
