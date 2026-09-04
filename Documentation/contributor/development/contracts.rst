@@ -427,9 +427,21 @@ v2 token, so ``LOTA_IPC_TOKEN_MAX_PROTECT_PIDS`` is derived from the payload
 budget left after the header, a maximum quote and a maximum signature -- it is
 the real per-token limit, not a round number.
 
-Both sides take the cap from the shared header, so the agent and the SDK
-parser stay in lockstep; changing the payload size or the per-PID cost must
-keep the derived cap and that test in agreement.
+Both sides of the socket take the cap from that header, so the agent and the
+SDK parser stay in lockstep; changing the payload size or the per-PID cost
+must keep the derived cap and ``tests/test_ipc_token_cap`` in agreement.
+
+The same number bounds the token *wire* format, because an agent returning a
+token over the socket is the only thing that produces one.
+``include/lota_ipc.h`` is internal and is not installed, so the installed
+``include/lota_token.h`` writes the derived value out as
+``LOTA_TOKEN_MAX_PROTECT_PIDS`` for the side that has only the wire format,
+and ``src/sdk/lota_gaming.c`` -- the one translation unit that sees both
+headers -- fails the build when they disagree. ``MaxProtectPIDs`` in
+``sdk/server/verify.go`` is the Go SDK's copy of the same number and is held
+to the header by a test in that package. Raising the payload budget therefore
+raises one cap in one place, and the build says which other spellings have to
+follow.
 
 Installer probes and agent gates
 ================================

@@ -61,7 +61,11 @@ extern "C" {
 #define LOTA_TOKEN_MAGIC 0x4B544F4C /* "LOTK" in memory (little-endian) */
 #define LOTA_TOKEN_VERSION 0x0003
 #define LOTA_TOKEN_HEADER_SIZE 144
-#define LOTA_TOKEN_MAX_PROTECT_PIDS 1024
+/*
+ * Protected-PID cap: LOTA_IPC_TOKEN_MAX_PROTECT_PIDS from the uninstalled
+ * lota_ipc.h, copied here; src/sdk/lota_gaming.c asserts they match.
+ */
+#define LOTA_TOKEN_MAX_PROTECT_PIDS 181
 #define LOTA_TOKEN_MAX_PID_LIST_SIZE (LOTA_TOKEN_MAX_PROTECT_PIDS * 4)
 #define LOTA_TOKEN_IMAGE_DIGEST_SIZE 32
 

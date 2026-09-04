@@ -45,9 +45,11 @@ const (
 	TokenHeaderSize        = 144
 	TokenMaxSize           = TokenHeaderSize + (1024 * 4) + 1024 + 512 // 5776 bytes
 
-	MaxAttestSize  = 1024
-	MaxSigSize     = 512
-	MaxProtectPIDs = 1024
+	MaxAttestSize = 1024
+	MaxSigSize    = 512
+
+	// LOTA_TOKEN_MAX_PROTECT_PIDS in include/lota_token.h
+	MaxProtectPIDs = 181
 )
 
 // Token freshness policy defaults (see: include/lota_server.h)

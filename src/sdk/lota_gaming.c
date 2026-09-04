@@ -27,6 +27,12 @@
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_token.h"
 
+/* the only unit that sees both headers */
+_Static_assert(LOTA_TOKEN_MAX_PROTECT_PIDS == LOTA_IPC_TOKEN_MAX_PROTECT_PIDS,
+	       "wire protected-PID cap must be the IPC-derived cap");
+_Static_assert(LOTA_TOKEN_MAX_PID_LIST_SIZE == LOTA_IPC_TOKEN_MAX_PID_LIST_SIZE,
+	       "wire and IPC PID-list bounds must agree");
+
 #define DEFAULT_TIMEOUT_MS 5000
 
 /*
