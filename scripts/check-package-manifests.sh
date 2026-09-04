@@ -18,6 +18,9 @@
 # /usr/share/lota needs a package-owned parent: an unowned directory takes
 # the umask's mode and escapes rpm -V.
 #
+# Every shipped unit must be stopped by both %systemd_preun and the nfpm
+# preremove script, or it outlives its deleted binary.
+#
 # Parent directories of other listed paths are dropped (rpm needs %dir, nfpm
 # does not); a directory shipped empty stays compared.
 
@@ -362,6 +365,78 @@ check_declared_parents() {
 }
 
 check_declared_parents
+
+# Units under the systemd unit directory; the dracut module's unit is not one
+shipped_units() {
+    sed -n 's#^/usr/lib/systemd/system/##p' | grep -E '\.(service|socket|timer|path)$' || true
+}
+
+# Units stopped by the spec's %systemd_preun or named in the nfpm preremove
+spec_removal_units() {
+    local section=$1
+
+    awk -v section="$section" '
+		$0 ~ "^%preun[ \t]+" section "$" { in_preun = 1; next }
+		# ends at the next section, not at its %systemd_* macros
+		/^%[a-z]/ && !/^%systemd_/ { in_preun = 0 }
+		in_preun && /%systemd_preun/ {
+			sub(/.*%systemd_preun[ \t]*/, "")
+			for (i = 1; i <= NF; i++)
+				print $i
+		}
+	' "$SPEC" | sort -u
+}
+
+nfpm_removal_units() {
+    local cfg=$1 script
+
+    script=$(awk '
+		/^scripts:/ { in_scripts = 1; next }
+		/^[^ \t]/ { in_scripts = 0 }
+		in_scripts && /preremove:/ {
+			sub(/.*preremove:[ \t]*/, "")
+			print
+		}
+	' "$cfg")
+    [ -n "$script" ] || return 0
+    [ -f "$script" ] || return 0
+
+    grep -oE '[A-Za-z0-9@_.-]+\.(service|socket|timer|path)' "$script" | sort -u
+}
+
+check_removal_scriptlets() {
+    local cfg pkg section units unit spec_units nfpm_units
+
+    for cfg in "$NFPM_DIR"/*.yaml; do
+        pkg=$(awk '/^name:[ \t]*/ { sub(/^name:[ \t]*/, ""); print; exit }' "$cfg")
+        [ -n "$pkg" ] || continue
+        section=${pkg#lota-}
+
+        units=$(nfpm_paths "$cfg" | shipped_units | sort -u)
+        [ -n "$units" ] || continue
+
+        spec_units=$(spec_removal_units "$section")
+        nfpm_units=$(nfpm_removal_units "$cfg")
+
+        while read -r unit; do
+            [ -n "$unit" ] || continue
+
+            if ! grep -qxF "$unit" <<<"$spec_units"; then
+                fail=1
+                echo "FAIL: ${pkg} ships ${unit} and ${SPEC} does not stop it on removal"
+                echo "  add it to %systemd_preun/%systemd_postun in '%preun ${section}'"
+            fi
+            if ! grep -qxF "$unit" <<<"$nfpm_units"; then
+                fail=1
+                echo "FAIL: ${pkg} ships ${unit} and its nfpm preremove script does not stop it"
+                echo "  the unit file goes with the package while the process runs on,"
+                echo "  from a deleted binary, until a watchdog or a reboot reaps it"
+            fi
+        done <<<"$units"
+    done
+}
+
+check_removal_scriptlets
 
 # Every path the spec ships, across its subpackages
 spec_installed=$(while read -r section; do
