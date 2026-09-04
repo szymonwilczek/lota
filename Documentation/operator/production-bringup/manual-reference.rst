@@ -300,7 +300,8 @@ later.
     # host that enrolled with publisher keeps that publisher's AIK in its profile;
     # wiping the key means wiping the enrollment with it
     sudo rm -rf /var/lib/lota/profiles
-    for h in 0x81010002 0x81010003 0x81010004 0x81010005 \
+    # LOTA's handles only: AIK, seal primary, eight per-profile AIKs
+    for h in 0x81010002 0x81010003 \
              0x81010010 0x81010011 0x81010012 0x81010013 \
              0x81010014 0x81010015 0x81010016 0x81010017; do
         sudo tpm2_evictcontrol -C o -c "$h" 2>/dev/null || true

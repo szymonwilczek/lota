@@ -106,6 +106,25 @@ ensure_artifact() {
     [[ -e "$1" ]] || fail "missing artifact: $1 (run 'sudo make install' first)"
 }
 
+# LOTA's persistent handles, from the agent's headers
+TPM_HEADER="$(dirname "$0")/../src/agent/tpm.h"
+PROFILE_HEADER="$(dirname "$0")/../src/agent/profile.h"
+
+read_define() {
+    sed -n "s/^#define[[:space:]]\+$2[[:space:]]\+\([0-9a-fA-Fx]\+\).*/\1/p" \
+        "$1" 2>/dev/null | head -1
+}
+
+AIK_HANDLE=$(read_define "$TPM_HEADER" TPM_AIK_HANDLE)
+SEAL_HANDLE=$(read_define "$TPM_HEADER" TPM_SEAL_PRIMARY_HANDLE)
+PROFILE_BASE=$(read_define "$TPM_HEADER" TPM_AIK_PROFILE_HANDLE_BASE)
+PROFILE_COUNT=$(read_define "$PROFILE_HEADER" LOTA_PROFILE_MAX_AIK_HANDLES)
+PROFILE_RANGE=""
+if [[ -n "$PROFILE_BASE" && -n "$PROFILE_COUNT" ]]; then
+    PROFILE_RANGE=$(printf '%s-0x%08x' "$PROFILE_BASE" \
+        $((PROFILE_BASE + PROFILE_COUNT - 1)))
+fi
+
 # 1. Verify the agent + BPF object are installed before doing anything else.
 ensure_artifact "$AGENT_BIN"
 ensure_artifact "$BPF_OBJ"
@@ -241,12 +260,20 @@ else
         rm -f "$stale_file"
     done
 
+    if [[ -z "$AIK_HANDLE" || -z "$SEAL_HANDLE" ]]; then
+        fail "could not read the persistent handles from $TPM_HEADER"
+    fi
+
     if command -v tpm2_evictcontrol >/dev/null 2>&1; then
-        for handle in 0x81010002 0x81010003 0x81010004 0x81010005; do
+        for handle in "$AIK_HANDLE" "$SEAL_HANDLE"; do
             if tpm2_evictcontrol -C o -c "$handle" 2>/dev/null; then
-                info "evicted stale persistent AIK at $handle"
+                info "evicted persistent object at $handle"
             fi
         done
+        if [[ -n "$PROFILE_RANGE" ]]; then
+            info "leaving the per-profile AIKs at $PROFILE_RANGE in"
+            info "  place; a publisher's key goes when its profile does"
+        fi
     else
         warn "tpm2-tools not installed; persistent handles cannot be evicted"
         warn "install tpm2-tools and re-run if PCR14 errors persist"
