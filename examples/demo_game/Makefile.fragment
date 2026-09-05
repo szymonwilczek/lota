@@ -14,10 +14,11 @@ TARGET := $(BUILD_DIR)/trust_pong
 SRCS := trust_pong.c ui.c
 
 CC ?= gcc
-PKG_OK := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --exists sdl2 libcurl && echo yes)
-
 STAGE_DIR ?= $(TOP_DIR)/build/stage
 export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
+
+LOTA_OPTIONAL_PKGS := sdl2 libcurl
+include ../optional-deps.mk
 
 CFLAGS := -Wall -Wextra -Werror -O2 -g
 CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-gaming)
@@ -33,7 +34,7 @@ ifdef SANITIZE
 CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
-ifeq ($(PKG_OK),yes)
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags sdl2 libcurl)
 endif
 
@@ -44,13 +45,13 @@ endif
 LDLIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-gaming)
 LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
 LDLIBS += -lpthread
-ifeq ($(PKG_OK),yes)
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 LDLIBS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs sdl2 libcurl)
 endif
 
 .PHONY: all clean
 
-ifeq ($(PKG_OK),yes)
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 all: $(TARGET)
 
 $(TARGET): $(SRCS) $(STAGE_DIR)/lib64/liblotagaming.so

@@ -25,6 +25,10 @@ CC ?= gcc
 STAGE_DIR ?= $(TOP_DIR)/build/stage
 export PKG_CONFIG_PATH := $(STAGE_DIR)/lib64/pkgconfig
 
+# optional; without it the C step is skipped and the Go gate still builds
+LOTA_OPTIONAL_PKGS := libcurl
+include ../optional-deps.mk
+
 LOTA_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags lota-gaming)
 LOTA_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs lota-gaming)
 
@@ -42,7 +46,9 @@ CFLAGS += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 CFLAGS += -fno-sanitize-recover=all
 endif
 CFLAGS += $(LOTA_CFLAGS)
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 CFLAGS += $(shell pkg-config --cflags libcurl)
+endif
 
 LDFLAGS := -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 ifdef SANITIZE
@@ -50,13 +56,20 @@ LDFLAGS += -fsanitize=$(SANITIZE)
 endif
 LDLIBS := $(LOTA_LIBS)
 LDLIBS += -Wl,-rpath,$(STAGE_DIR)/lib64
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 LDLIBS += $(shell pkg-config --libs libcurl)
+endif
 
 GATE := $(BUILD_DIR)/lota-release-gate
 
 .PHONY: all clean
 
+ifeq ($(LOTA_OPTIONAL_OK),yes)
 all: $(TARGET) $(GATE)
+else
+all: $(GATE)
+	@echo "SKIP: lota-ci-attest (install libcurl-devel)"
+endif
 
 $(TARGET): $(SRCS) $(STAGE_DIR)/lib64/liblotagaming.so
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)

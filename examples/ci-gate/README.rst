@@ -58,6 +58,12 @@ examples`` first lays the package contents out under ``build/stage`` (the
 
 With the packages installed system-wide, that line is the whole build.
 
+``libcurl`` is the one dependency here that is not LOTA's own, and a host is
+not expected to have it. Without ``libcurl-devel`` ``make examples`` prints
+``SKIP: lota-ci-attest (install libcurl-devel)`` and carries on: the Go gate
+beside it still builds, and so does every other example. The gate can be
+driven against a step built elsewhere.
+
 Run the end-to-end proof
 ========================
 
