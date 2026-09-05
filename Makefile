@@ -200,6 +200,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
 			  $(AGENT_DIR)/io_utils.c \
 			  $(AGENT_DIR)/exit_status.c \
 			  $(AGENT_DIR)/sb_dev.c \
+			  $(AGENT_DIR)/cgroup_guard.c \
 			  $(AGENT_DIR)/reload.c \
 			  $(AGENT_DIR)/test_servers.c \
 			  $(AGENT_DIR)/startup_policy.c \
@@ -1304,6 +1305,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
 	$(TEST_BIN_DIR)/test_sb_dev \
+	$(TEST_BIN_DIR)/test_cgroup_guard \
 	$(TEST_BIN_DIR)/test_kernel_measure \
 	$(TEST_BIN_DIR)/test_kernel_image \
 	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
@@ -1559,6 +1561,10 @@ $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DI
 $(TEST_BIN_DIR)/test_sb_dev: tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_sb_dev.c $(AGENT_DIR)/sb_dev.c
+
+$(TEST_BIN_DIR)/test_cgroup_guard: tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup_guard.c $(AGENT_DIR)/sb_dev.c
 
 $(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1861,6 +1867,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_sb_dev
+	@$(BUILD_DIR)/test_cgroup_guard
 	@$(BUILD_DIR)/test_kernel_measure
 	@$(BUILD_DIR)/test_kernel_image
 	@$(BUILD_DIR)/test_bpf_mount_hooks
@@ -2032,7 +2039,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_sb_dev test_kernel_measure test_kernel_image test_event_budget \
+	test_installer_probe test_devt test_sb_dev test_cgroup_guard test_kernel_measure test_kernel_image test_event_budget \
 	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
