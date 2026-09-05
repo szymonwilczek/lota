@@ -103,6 +103,16 @@ unpinned, and requires at least one root source to start at all. See
 `configs/ek-roots/README.rst <../../configs/ek-roots/README.rst>`__ for the
 full discovery and verification flow.
 
+``CA_ADDR`` (default ``127.0.0.1:8444``, the CA's own port) and
+``VERIFIER_ADDR`` (default ``127.0.0.1:9443``) are taken on a host that already
+attests. The script checks both before starting anything and names the
+variable to move a taken one:
+
+.. code:: sh
+
+   CA_ADDR=127.0.0.1:18444 VERIFIER_ADDR=127.0.0.1:19443 \
+     EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
+
 The script starts ``lota-verifier`` from a writable runtime directory
 (``RUN_DIR``, default: a fresh ``/tmp/lota-enrollment.*``) and points
 ``--aik-store`` / ``--state-db`` there. This keeps the verifier's durable

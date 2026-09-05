@@ -14,6 +14,9 @@
 #
 #   BIN=/usr/bin EK_ROOT=/var/lib/swtpm-localca/issuercert.pem ./run.sh
 #
+# CA_ADDR and VERIFIER_ADDR default to the CA's and verifier's own ports;
+# move them on a host that already attests.
+#
 # EK_ROOT is a file or a directory. A file is one self-signed root, as the
 # swtpm local CA issues, and goes to -ek-root. A directory is a pinned bundle
 # for a vendor EK chain with intermediates, and goes to -ek-root-bundle.
@@ -31,18 +34,53 @@ AIK_STORE="${AIK_STORE:-$RUN_DIR/aiks}"
 STATE_DB="${STATE_DB:-$AIK_STORE/verifier-state.sqlite}"
 POLICY="${POLICY:-$HERE/../../policies/testing.yaml}"
 
-CA_ADDR="127.0.0.1:8444"
-VERIFIER_ADDR="127.0.0.1:9443"
+CA_ADDR="${CA_ADDR:-127.0.0.1:8444}"
+VERIFIER_ADDR="${VERIFIER_ADDR:-127.0.0.1:9443}"
+
+# refuse a taken port before starting anything
+addr_in_use() {
+    local host=${1%%:*} port=${1##*:}
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+    # no ss: a successful connect means somebody is listening
+    (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null
+}
+
+refuse_if_taken() {
+    local var=$1 addr=$2
+
+    addr_in_use "$addr" || return 0
+    echo "$addr is already in use, and the demo will not take it from" \
+         "whatever holds it." >&2
+    echo "Give the demo an address of its own:" >&2
+    echo "  $var=127.0.0.1:1${addr##*:} ./$(basename "$0")" >&2
+    exit 1
+}
+
+refuse_if_taken CA_ADDR "$CA_ADDR"
+refuse_if_taken VERIFIER_ADDR "$VERIFIER_ADDR"
 
 agent="$BIN/lota-agent"
 ca="$BIN/lota-attest-ca"
 verifier="$BIN/lota-verifier"
 for b in "$agent" "$ca" "$verifier"; do
-    [ -x "$b" ] || { echo "missing binary: $b (run 'make all')" >&2; exit 1; }
+    [ -x "$b" ] || {
+        echo "missing binary: $b (run 'make all')" >&2
+        exit 1
+    }
 done
 
-[ -f "$CA_DIR/ca.crt" ] || { echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2; exit 1; }
-[ -f "$POLICY" ] || { echo "missing verifier policy: $POLICY" >&2; exit 1; }
+[ -f "$CA_DIR/ca.crt" ] || {
+    echo "no CA material; run ./gen-ca.sh $CA_DIR first" >&2
+    exit 1
+}
+[ -f "$POLICY" ] || {
+    echo "missing verifier policy: $POLICY" >&2
+    exit 1
+}
 mkdir -p "$RUN_DIR" "$AIK_STORE"
 
 cleanup() { kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true; }
@@ -79,13 +117,13 @@ echo "== 3/4 start the verifier (trusts only the CA root) =="
 (
     cd "$RUN_DIR"
     "$verifier" -addr "$VERIFIER_ADDR" \
-		-aik-ca-cert "$CA_DIR/ca.crt" \
-		-cert "$CA_DIR/tls.crt" -key "$CA_DIR/tls.key" \
-		-aik-store "$AIK_STORE" \
-		-state-db "$STATE_DB" \
-		-policy "$POLICY" \
-		-allow-permissive-policy \
-		-allow-tofu-boot-baseline
+                -aik-ca-cert "$CA_DIR/ca.crt" \
+                -cert "$CA_DIR/tls.crt" -key "$CA_DIR/tls.key" \
+                -aik-store "$AIK_STORE" \
+                -state-db "$STATE_DB" \
+                -policy "$POLICY" \
+                -allow-permissive-policy \
+                -allow-tofu-boot-baseline
 ) &
 VERIFIER_PID=$!
 sleep 1
@@ -95,8 +133,7 @@ sleep 1
 # The agent requires a root-owned config.
 DEMO_CONF="$RUN_DIR/demo.conf"
 printf '%s\n' \
-       "# Enrollment demo: no publisher profiles, so the run below attests once" \
-       "# to the verifier named on the command line." |
+       "# Enrollment demo: no profiles; attests once to the named verifier." |
     sudo tee "$DEMO_CONF" >/dev/null
 
 echo "== 4/4 attest =="
