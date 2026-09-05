@@ -4,9 +4,13 @@
 package metrics
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 func TestCounter(t *testing.T) {
@@ -160,6 +164,26 @@ func TestExport_Format(t *testing.T) {
 	for _, check := range typeChecks {
 		if !strings.Contains(output, check) {
 			t.Errorf("expected %q in output", check)
+		}
+	}
+}
+
+// Every verdict reason needs a zero series before it first fires, or alerts
+// on it read "no data" on a fresh verifier.
+// Seed from the verdict vocabulary, not a hand-kept list.
+func TestExport_SeedsEveryVerdictReason(t *testing.T) {
+	unknown := regexp.MustCompile(`^unknown_[0-9]+$`)
+	output := New().Export()
+
+	for code := uint32(1); code < 64; code++ {
+		reason := types.VerifyResultString(code)
+		if unknown.MatchString(reason) {
+			continue
+		}
+		want := fmt.Sprintf("lota_rejections_total{reason=%q} 0", reason)
+		if !strings.Contains(output, want) {
+			t.Errorf("verdict %d (%s) can refuse a round and has no series until it first fires",
+				code, reason)
 		}
 	}
 }
