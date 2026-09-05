@@ -199,7 +199,8 @@ func (m *Metrics) Export() string {
 		m.Rejections.Values(),
 		[]string{
 			"nonce_fail", "sig_fail", "pcr_fail",
-			"identity_fail", "integrity_mismatch", "revoked",
+			"identity_fail", "certificate_validity",
+			"integrity_mismatch", "revoked",
 			"banned", "baseline_error",
 		})
 

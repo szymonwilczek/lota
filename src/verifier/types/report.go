@@ -117,6 +117,10 @@ const (
 	// appraisal scope). Kept apart from VerifyPCRFail because the fix is
 	// host configuration, not the boot chain.
 	VerifyPolicyRequirement uint32 = 11
+
+	// the AIK certificate has expired or is not yet valid (host clock behind).
+	// Kept apart from VerifySigFail: the fix is re-enrolment, not distrust.
+	VerifyCertificateValidity uint32 = 12
 )
 
 // returns a deterministic string for a result code
@@ -146,6 +150,8 @@ func VerifyResultString(code uint32) string {
 		return "identity_fail"
 	case VerifyPolicyRequirement:
 		return "policy_requirement"
+	case VerifyCertificateValidity:
+		return "certificate_validity"
 	default:
 		return fmt.Sprintf("unknown_%d", code)
 	}
