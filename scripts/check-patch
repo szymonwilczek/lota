@@ -753,6 +753,27 @@ check_doc_diagnostics() {
     fi
 }
 
+# Strict docs build:
+# docs.yml only fires on Documentation/ changes, so a markup defect landing
+# from elsewhere goes unseen; run on every patch, only when sphinx-build
+# is installed.
+check_docs_strict() {
+    local out
+
+    if ! command -v sphinx-build >/dev/null 2>&1; then
+        skip "docs-strict" "install 'sphinx' to build the documentation strictly."
+        return
+    fi
+
+    if ! out=$(make check-docs-strict 2>&1); then
+        printf '%s\n' "$out" | grep -E "WARNING|ERROR|problems" | sed 's/^/  /' >&2
+        fail "docs-strict" \
+            "the strict documentation build reports the problems above; fix the markup."
+        return
+    fi
+    pass "docs-strict"
+}
+
 # true when the patch touches any C source or header
 patch_touches_c() {
     local path
@@ -1002,6 +1023,7 @@ main() {
     check_el9_decls "${changed_files[@]}"
     check_license_boundary
     check_doc_diagnostics
+    check_docs_strict
     check_stack_frames "${changed_files[@]}"
     check_tpm_strerror "${changed_files[@]}"
     check_abi
