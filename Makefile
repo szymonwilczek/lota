@@ -1942,6 +1942,11 @@ test-unit: all $(TEST_BINS)
 	fi
 	@tests/integration/test_enrollment_example_ports.sh
 	@if command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_enrollment_example_teardown.sh; \
+	else \
+		echo "SKIP: test_enrollment_example_teardown.sh (no openssl)"; \
+	fi
+	@if command -v openssl >/dev/null 2>&1; then \
 		tests/integration/test_ek_root_pin_nv_chain.sh; \
 	else \
 		echo "SKIP: test_ek_root_pin_nv_chain.sh (no openssl)"; \
