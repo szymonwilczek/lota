@@ -21,6 +21,12 @@ the demo -- sees the session end without reading the window:
 
    trust_pong: session terminated after 2 consecutive UNTRUSTED heartbeats
 
+The streak counts verdicts as they arrive, not the frames that observe one, so
+a single UNTRUSTED response between TRUSTED ones leaves the session running --
+which is the debounce a publisher copying this client inherits. A ``REJECT``
+counts as an UNTRUSTED heartbeat, and any other answer (``PENDING``, an
+unreachable server) neither adds to the streak nor clears it.
+
 trust_pong only **consumes** the verdict; it does not produce heartbeats
 itself. The heartbeats come from ``demo_anticheat``, which runs as a separate
 process exactly like a real anti-cheat helper ships next to a game.

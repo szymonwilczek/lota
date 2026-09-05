@@ -56,6 +56,7 @@ struct game_state {
 
 struct verdict_snapshot {
 	enum ui_verdict verdict;
+	unsigned int seq; /* bumped per published verdict, not per frame */
 	char reason[160];
 };
 
@@ -71,7 +72,9 @@ struct response_buf {
 	size_t cap;
 };
 
-static atomic_int g_poll_verdict = UI_VERDICT_CHECKING;
+/* published together under g_poll_lock: a snapshot is one verdict */
+static enum ui_verdict g_poll_verdict = UI_VERDICT_CHECKING;
+static unsigned int g_poll_seq;
 static char g_poll_reason[160];
 static pthread_mutex_t g_poll_lock;
 static atomic_bool g_poll_stop = false;
@@ -236,8 +239,9 @@ static enum ui_verdict verdict_from_label(const char *state)
 
 static void publish_verdict(enum ui_verdict v, const char *reason)
 {
-	atomic_store(&g_poll_verdict, (int)v);
 	pthread_mutex_lock(&g_poll_lock);
+	g_poll_verdict = v;
+	g_poll_seq++;
 	if (reason) {
 		strncpy(g_poll_reason, reason, sizeof(g_poll_reason) - 1);
 		g_poll_reason[sizeof(g_poll_reason) - 1] = '\0';
@@ -249,8 +253,9 @@ static void publish_verdict(enum ui_verdict v, const char *reason)
 
 static void snapshot_verdict(struct verdict_snapshot *out)
 {
-	out->verdict = (enum ui_verdict)atomic_load(&g_poll_verdict);
 	pthread_mutex_lock(&g_poll_lock);
+	out->verdict = g_poll_verdict;
+	out->seq = g_poll_seq;
 	memcpy(out->reason, g_poll_reason, sizeof(out->reason));
 	pthread_mutex_unlock(&g_poll_lock);
 }
@@ -467,6 +472,7 @@ int main(int argc, char **argv)
 	};
 
 	bool quit = false;
+	unsigned int counted_seq = 0;
 	while (!quit) {
 		SDL_Event ev;
 		while (SDL_PollEvent(&ev)) {
@@ -479,17 +485,22 @@ int main(int argc, char **argv)
 		struct verdict_snapshot snap;
 		snapshot_verdict(&snap);
 
-		if (snap.verdict == UI_VERDICT_UNTRUSTED) {
-			g.untrusted_streak++;
-			if (!g.frozen &&
-			    g.untrusted_streak >= UNTRUSTED_FREEZE_STREAK) {
-				g.frozen = true;
-				fprintf(stderr,
-					"trust_pong: session terminated after %d consecutive UNTRUSTED heartbeats\n",
-					g.untrusted_streak);
+		/* count each verdict once, not once per frame */
+		if (snap.seq != counted_seq) {
+			counted_seq = snap.seq;
+			if (snap.verdict == UI_VERDICT_UNTRUSTED) {
+				g.untrusted_streak++;
+				if (!g.frozen &&
+				    g.untrusted_streak >=
+					    UNTRUSTED_FREEZE_STREAK) {
+					g.frozen = true;
+					fprintf(stderr,
+						"trust_pong: session terminated after %d consecutive UNTRUSTED heartbeats\n",
+						g.untrusted_streak);
+				}
+			} else if (snap.verdict == UI_VERDICT_TRUSTED) {
+				g.untrusted_streak = 0;
 			}
-		} else if (snap.verdict == UI_VERDICT_TRUSTED) {
-			g.untrusted_streak = 0;
 		}
 
 		tick_game(&g);
