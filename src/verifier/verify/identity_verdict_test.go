@@ -27,6 +27,27 @@ func TestCertificateVerdict_KeyMismatchIsNotASignatureFailure(t *testing.T) {
 	}
 }
 
+// Nor is a certificate outside its validity window: AIK certificates carry
+// a TTL, so every long-lived host expires, and the answer is re-enrolment,
+// not distrust.
+func TestCertificateVerdict_ValidityWindowIsNotASignatureFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"expired", store.ErrCertificateExpired},
+		{"not yet valid", store.ErrCertificateNotYet},
+	} {
+		err := fmt.Errorf("AIK certificate verification failed: %w",
+			tc.err)
+
+		if got := certificateVerdict(err); got == types.VerifySigFail {
+			t.Errorf("%s: reported as %s, which names a corrupt or forged quote",
+				tc.name, types.VerifyResultString(got))
+		}
+	}
+}
+
 // Everything else that stops a report before its key is authenticated keeps
 // the verdict it had.
 // Widening the new one would trade one collapsed bucket for another.
