@@ -115,7 +115,11 @@ Shared-state requirements
   database is the schema its own build applies -- the version, the fingerprint
   of the migration text, and the tables those migrations create -- and refuses
   to serve one written by a different build. Run one build across the fleet;
-  :doc:`protocol-versions` says what each refusal means.
+  :doc:`protocol-versions` says what each refusal means. An instance that only
+  reads (``--report-only``, below) checks the same three markers and applies
+  nothing: it takes no lock, records no fingerprint for a database that carries
+  none, and refuses a database whose schema is behind its own, since the
+  migrations that would close the gap belong to a verifier on the primary.
 * **AIK certificate roots and PCR policy are configuration, not shared state.**
   Distribute the same ``--aik-ca-cert``, ``--aik-crl``, ``--policy`` and
   ``--policy-pubkey`` material to every instance through the usual configuration

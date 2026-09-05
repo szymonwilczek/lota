@@ -635,3 +635,101 @@ func TestPostgresRefusesADatabaseThisBuildDidNotWrite(t *testing.T) {
 		}
 	})
 }
+
+// A read-only open verifies the schema as a writer does and changes nothing,
+// not even recording a missing fingerprint.
+func TestPostgresReadOnlyOpenVerifiesAndWritesNothing(t *testing.T) {
+	dsn := os.Getenv("LOTA_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
+	}
+
+	prepared, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	t.Cleanup(func() { prepared.Close() })
+
+	var original sql.NullString
+	if err := prepared.QueryRow(
+		"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&original); err != nil {
+		t.Fatalf("read the recorded fingerprint: %v", err)
+	}
+
+	t.Run("a database this build wrote", func(t *testing.T) {
+		db, err := OpenPostgresDBReadOnly(dsn, DefaultPGMaxOpenConns)
+		if err != nil {
+			t.Fatalf("OpenPostgresDBReadOnly on this build's own database: %v", err)
+		}
+		defer db.Close()
+
+		var n int
+		if err := db.QueryRow("SELECT count(*) FROM clients").Scan(&n); err != nil {
+			t.Fatalf("a read-only open must still be able to read: %v", err)
+		}
+	})
+
+	t.Run("a database that records no fingerprint is read and left alone", func(t *testing.T) {
+		if _, err := prepared.Exec("UPDATE schema_version SET fingerprint = NULL"); err != nil {
+			t.Fatalf("clear the fingerprint: %v", err)
+		}
+		defer func() {
+			if _, err := prepared.Exec(
+				"UPDATE schema_version SET fingerprint = $1", original.String); err != nil {
+				t.Fatalf("restore the fingerprint: %v", err)
+			}
+		}()
+
+		db, err := OpenPostgresDBReadOnly(dsn, DefaultPGMaxOpenConns)
+		if err != nil {
+			t.Fatalf("a database predating fingerprints must still be readable: %v", err)
+		}
+		db.Close()
+
+		var after sql.NullString
+		if err := prepared.QueryRow(
+			"SELECT fingerprint FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&after); err != nil {
+			t.Fatalf("read the fingerprint back: %v", err)
+		}
+		if after.Valid {
+			t.Errorf("a read-only open recorded a fingerprint (%q); it must write nothing", after.String)
+		}
+	})
+
+	t.Run("migration text that is not this build's", func(t *testing.T) {
+		if _, err := prepared.Exec(
+			"UPDATE schema_version SET fingerprint = 'another-builds-schema'"); err != nil {
+			t.Fatalf("stamp another build's fingerprint: %v", err)
+		}
+		defer func() {
+			if _, err := prepared.Exec(
+				"UPDATE schema_version SET fingerprint = $1", original.String); err != nil {
+				t.Fatalf("restore the fingerprint: %v", err)
+			}
+		}()
+
+		db, err := OpenPostgresDBReadOnly(dsn, DefaultPGMaxOpenConns)
+		if err == nil {
+			db.Close()
+			t.Fatal("a reader must refuse a database written by different migrations")
+		}
+		if !errors.Is(err, ErrSchemaFingerprintMismatch) {
+			t.Fatalf("refusal = %v, want ErrSchemaFingerprintMismatch", err)
+		}
+	})
+
+	t.Run("a database no verifier has built", func(t *testing.T) {
+		empty := os.Getenv("LOTA_TEST_PG_EMPTY_DSN")
+		if empty == "" {
+			t.Skip("LOTA_TEST_PG_EMPTY_DSN not set; skipping the empty-database case")
+		}
+		db, err := OpenPostgresDBReadOnly(empty, DefaultPGMaxOpenConns)
+		if err == nil {
+			db.Close()
+			t.Fatal("a reader must refuse a database that carries no schema")
+		}
+		if !errors.Is(err, ErrSchemaAbsent) {
+			t.Fatalf("refusal = %v, want ErrSchemaAbsent", err)
+		}
+	})
+}
