@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/szymonwilczek/lota/verifier/types"
 )
 
 // holds all verifier metrics
@@ -179,6 +181,10 @@ func (h *Histogram) Sum() float64 {
 	return float64(h.sum.Load()) / 1e9
 }
 
+// rejection reasons that are not wire verdicts: an unreadable or unpinnable
+// baseline is a verifier fault, the host only sees an internal error
+var internalRejectionReasons = []string{"baseline_error"}
+
 // writes all metrics in Prometheus text exposition format
 func (m *Metrics) Export() string {
 	var b strings.Builder
@@ -193,16 +199,11 @@ func (m *Metrics) Export() string {
 		"Total successful attestations",
 		m.AttestationOK.Value())
 
-	// labeled rejections
+	// labeled rejections: wire verdicts plus internal reasons
 	writeLabeledCounter(&b, "lota_rejections_total",
 		"Total rejected attestations by reason", "reason",
 		m.Rejections.Values(),
-		[]string{
-			"nonce_fail", "sig_fail", "pcr_fail",
-			"identity_fail", "certificate_validity",
-			"integrity_mismatch", "revoked",
-			"banned", "baseline_error",
-		})
+		append(types.RejectionReasons(), internalRejectionReasons...))
 
 	// labeled re-anchor outcomes
 	writeLabeledCounter(&b, "lota_reanchors_total",

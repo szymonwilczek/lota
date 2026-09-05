@@ -194,6 +194,13 @@ GET /metrics
 
 Reader. Prometheus text exposition format (version 0.0.4), not JSON.
 
+``lota_rejections_total{reason}`` carries one series per reason a round can be
+refused for, and each exists at zero before it has ever fired: the reasons are
+the verdict vocabulary above plus ``baseline_error``, which the verifier counts
+when it cannot read or pin a baseline of its own and which reaches the host as
+``internal_error``. An alert expression naming a reason therefore matches on a
+verifier that has refused nothing yet.
+
 ``lota_connection_errors_total`` counts peers that spoke the attestation
 protocol and got it wrong. A peer that connects and leaves without speaking is
 a liveness question -- a load-balancer health check, or a port scan -- so it
