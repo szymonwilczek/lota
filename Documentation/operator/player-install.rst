@@ -7,7 +7,7 @@ LOTA player install (``lota-install``)
 
 ``lota-install`` is the player-side path onto a LOTA-attested host: one guided,
 reboot-resumable command instead of the operator checklist in
-:doc:`production-bringup/index <production-bringup/index>`. It drives the
+:doc:`production-bringup/index`. It drives the
 same hard requirements the agent enforces at startup, but it explains every
 change before making it, asks for consent, and survives the reboot the install
 inherently needs.

@@ -126,7 +126,7 @@ Shared-state requirements
   channel; they are not stored in the database.
 * **CA signing key.** The attestation CA is a separate service; its key handling
   (HSM/PKCS#11 or the dev-only PEM) is covered in
-  :doc:`../security/ca-key <../security/ca-key>`.
+  :doc:`../security/ca-key`.
 
 Scaling the read path
 ---------------------

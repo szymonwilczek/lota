@@ -8,8 +8,8 @@ Manual reference: host gates
 This is the manual equivalent of the developer bring-up script: the host-side
 gates an operator provisions before the agent will start. Attestation CA
 enrollment and sealed keys are covered in their own documents
-(:doc:`ca-enrollment <ca-enrollment>`,
-:doc:`sealed-keys <sealed-keys>`).
+(:doc:`ca-enrollment`,
+:doc:`sealed-keys`).
 
 1. Operator key + signed BPF object
 ===================================

@@ -113,7 +113,7 @@ hand the fleet's trust root to a file the operator believed they had
 overridden.
 
 The CA key ceremony, rotation, and the offline-root / online-intermediate
-topology are covered in :doc:`../../security/ca-key <../../security/ca-key>`.
+topology are covered in :doc:`the CA key page <../../security/ca-key>`.
 
 Materializing the EK root bundle
 --------------------------------
@@ -456,7 +456,7 @@ device ID and keep their verifier-side state.
 
 The verifier reads this tenant from the certificate and scopes the device's
 bans, revocations, PCR policy, and operator-API visibility to it. See
-:doc:`../multi-tenancy <../multi-tenancy>` for how tenancy scopes verifier
+:doc:`../multi-tenancy` for how tenancy scopes verifier
 state and how to configure scoped monitoring-API access.
 
 Assigning tenants with enrollment tokens

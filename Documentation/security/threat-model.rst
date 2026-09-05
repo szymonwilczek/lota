@@ -140,7 +140,7 @@ The CA key is a high-value fleet secret. It is loaded as a ``crypto.Signer``,
 so both an on-disk PKCS#8 PEM (the explicit dev-only fallback) and a PKCS#11
 token (HSM or SoftHSM, built with the ``pkcs11`` tag) are supported. Production
 deployments hold the key in an HSM; the on-disk path is logged loudly and is
-never the production default. See :doc:`ca-key <ca-key>`.
+never the production default. See :doc:`ca-key`.
 
 Verifier
 --------
@@ -164,7 +164,7 @@ The default store is SQLite for single-node deployments. A Postgres backend
 audit and attestation state in a shared database, so several verifier
 instances behind a load balancer share enforcement state and any instance
 answers for a client enrolled by any peer. See
-:doc:`../operator/ha-deployment <../operator/ha-deployment>` for the
+:doc:`../operator/ha-deployment` for the
 supported topologies.
 
 SDK consumer
@@ -607,7 +607,7 @@ Validation status
 =================
 
 The software paths are covered by local build, unit, fuzz, and integration
-tests as documented in :doc:`../contributor/development/index <../contributor/development/index>`.
+tests as documented in :doc:`../contributor/development/index`.
 
 Hardware TPM validation remains required for release claims that depend on
 physical TPM behavior. swtpm validation is useful for protocol and regression
@@ -680,7 +680,7 @@ principal it authenticates is unscoped. Delegating a tenant therefore means
 issuing a key in the key file, not narrowing an environment key. The endpoint
 list the instance logs at startup is built from the routes it registers, so it
 can be read as the API surface that instance exposes. See
-:doc:`../operator/multi-tenancy <../operator/multi-tenancy>` for configuration.
+:doc:`../operator/multi-tenancy` for configuration.
 
 Operational requirements
 ========================
@@ -699,5 +699,5 @@ Production deployments must:
 * document operator recovery for AIK rotation, policy rotation, and legitimate
   binary updates.
 
-See :doc:`../operator/production-bringup/index <../operator/production-bringup/index>`, :ghsrc:`policies/README.rst`, and
+See :doc:`../operator/production-bringup/index`, :ghsrc:`policies/README.rst`, and
 :ghsrc:`selinux/README.rst` for the deployment details.
