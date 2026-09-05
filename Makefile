@@ -1304,6 +1304,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
+	$(TEST_BIN_DIR)/test_live_fixtures \
 	$(TEST_BIN_DIR)/test_sb_dev \
 	$(TEST_BIN_DIR)/test_cgroup_guard \
 	$(TEST_BIN_DIR)/test_kernel_measure \
@@ -1556,6 +1557,10 @@ $(TEST_BIN_DIR)/test_io_read_file: tests/test_io_read_file.c $(AGENT_DIR)/io_uti
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_devt: tests/test_devt.c $(INC_DIR)/lota_devt.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_live_fixtures: tests/test_live_fixtures.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
 
@@ -1872,6 +1877,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
+	@$(BUILD_DIR)/test_live_fixtures
 	@$(BUILD_DIR)/test_sb_dev
 	@$(BUILD_DIR)/test_cgroup_guard
 	@$(BUILD_DIR)/test_kernel_measure
@@ -2046,7 +2052,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_sb_dev test_cgroup_guard test_kernel_measure test_kernel_image test_event_budget \
+	test_installer_probe test_devt test_live_fixtures test_sb_dev test_cgroup_guard test_kernel_measure test_kernel_image test_event_budget \
 	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
