@@ -147,6 +147,21 @@ prevents a local-root attacker from killing the agent out of band, dropping the
 BPF coverage, and swapping a tampered binary into place before the next
 attestation.
 
+A write to a cgroup's ``cgroup.kill`` kills every task in it without passing
+a signal hook. The agent therefore refuses write opens of its own cgroup's
+``cgroup.kill`` and every ancestor's to any task it has not authorised.
+``systemctl kill lota-agent`` and ``systemctl stop`` past its timeout take
+that road, so ``enforce`` refuses both like a raw ``kill`` and logs::
+
+  KILL_BLOCKED systemd -> (cgroup.kill) (pid=1, uid=0)
+
+At startup the agent logs the files it guards::
+
+  Kill guard armed on 2 cgroup.kill file(s) above /system.slice/lota-agent.service
+
+It refuses to start when it cannot resolve them. A host without a unified
+cgroup hierarchy has none to guard and logs that.
+
 **This applies in enforce mode only.** The hook reads the enforcement mode the
 way every other gate does: in ``monitor`` and ``maintenance`` the signal is
 reported and delivered, so an agent an operator is evaluating stops with
@@ -179,7 +194,9 @@ So the two supported paths are:
 #. **Stop now, resume at a reboot.** ``systemctl stop lota-agent``,
    ``lota-agent --shutdown`` and ``lota-install --pause`` all take the same
    route and all end enforcement immediately. Attestation resumes at the next
-   boot and not before. This is the intended way to pause a host.
+   boot and not before. This is the intended way to pause a host. The route is
+   ``ExecStop``, not a signal and not a cgroup kill, so it is unaffected by
+   either refusal above.
 #. **Cold reboot.** If the IPC path is unreachable (agent hang, socket gone,
    kernel deadlock) the only remaining recovery is to reboot the host. There is
    no kill-bypass for PID 1 and there never will be: every grace window would be

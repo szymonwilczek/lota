@@ -121,7 +121,7 @@ struct {
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 17);
+	__uint(max_entries, 18);
 	__type(key, u32);
 	__type(value, u64);
 } stats SEC(".maps");
@@ -161,6 +161,7 @@ struct {
 #define STAT_ALLOW_EVENTS_SUPPRESSED 14
 #define STAT_BLOCKED_EVENTS_SUPPRESSED 15
 #define STAT_MOUNTS_BLOCKED 16
+#define STAT_KILL_GUARD_BLOCKED 17
 
 /*
  * One rate-limit window per event class (see lota_event_budget.h).
@@ -265,6 +266,19 @@ struct {
 } trusted_libs SEC(".maps");
 
 /*
+ * Files whose write kills the agent past security_task_kill:
+ * cgroup.kill of its cgroup and every ancestor.
+ * Key: superblock dev + inode
+ * Value: LOTA_GUARD_*
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_GUARDED_FILES);
+	__type(key, struct trusted_lib_key);
+	__type(value, u32);
+} guarded_files SEC(".maps");
+
+/*
  * fs-verity digest allowlist.
  * Key: digest length + digest bytes (SHA-512 only)
  * Value: 1 = allowed
@@ -278,6 +292,10 @@ struct {
 	__type(key, struct lota_verity_digest_key);
 	__type(value, u32);
 } allow_verity SEC(".maps");
+
+/* RCU read section for task walks in sleepable hooks */
+extern void bpf_rcu_read_lock(void) __ksym;
+extern void bpf_rcu_read_unlock(void) __ksym;
 
 /* kfunc definition for bpf_get_fsverity_digest */
 extern int bpf_get_fsverity_digest(struct file *file,
@@ -556,6 +574,9 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 	if (__builtin_memcmp(name, "trusted_inodes",
 			     sizeof("trusted_inodes")) == 0)
 		return 1;
+	if (__builtin_memcmp(name, "guarded_files", sizeof("guarded_files")) ==
+	    0)
+		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
@@ -690,6 +711,34 @@ static __always_inline int is_trusted_inode(struct inode *inode)
 
 	allowed = bpf_map_lookup_elem(&trusted_libs, &key);
 	return (allowed && *allowed) ? 1 : 0;
+}
+
+/* LOTA_GUARD_* of @file, or 0; keyed by superblock dev, not stat's st_dev */
+static __always_inline u32 guarded_file_kind(struct file *file)
+{
+	struct super_block *sb;
+	struct trusted_lib_key key = {};
+	struct inode *inode;
+	u32 *kind;
+
+	if (!file)
+		return 0;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode)
+		return 0;
+
+	sb = BPF_CORE_READ(inode, i_sb);
+	if (!sb)
+		return 0;
+
+	key.dev = (u64)BPF_CORE_READ(sb, s_dev);
+	key.ino = (u64)BPF_CORE_READ(inode, i_ino);
+	if (key.dev == 0 || key.ino == 0)
+		return 0;
+
+	kind = bpf_map_lookup_elem(&guarded_files, &key);
+	return kind ? *kind : 0;
 }
 
 static __always_inline int is_write_open_flags(int flags)
@@ -904,7 +953,78 @@ int BPF_PROG(lota_move_mount, const struct path *from_path,
 }
 
 /*
- * Block in-place writes/truncation on trusted-library inodes.
+ * Agent/admin check for lsm.s hooks: without the RCU read lock the task
+ * pointer is untrusted and bpf_task_storage_get() rejects it.
+ */
+static __always_inline int sleepable_task_is_agent_or_admin(void)
+{
+	struct task_struct *task;
+	int ret;
+
+	task = (struct task_struct *)bpf_get_current_task_btf();
+	if (!task)
+		return 0;
+
+	bpf_rcu_read_lock();
+	ret = has_task_auth_flag(task, LOTA_TASK_AUTH_AGENT) ||
+	      has_task_auth_flag(task, LOTA_TASK_AUTH_ADMIN);
+	bpf_rcu_read_unlock();
+
+	return ret;
+}
+
+/* report a refused guarded-file open; logged as KILL_BLOCKED */
+static __always_inline void report_blocked_kill_guard(const char *what, u32 len)
+{
+	struct lota_exec_event *event;
+
+	inc_stat(STAT_KILL_GUARD_BLOCKED);
+
+	if (!should_emit_event(LOTA_MODE_ENFORCE, 1))
+		return;
+
+	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	if (!event) {
+		inc_stat(STAT_RINGBUF_DROPS);
+		return;
+	}
+
+	__builtin_memset(event, 0, sizeof(*event));
+	event->timestamp_ns = bpf_ktime_get_ns();
+	event->event_type = LOTA_EVENT_KILL_GUARD_BLOCKED;
+	event->tgid = bpf_get_current_pid_tgid() >> 32;
+	event->pid = bpf_get_current_pid_tgid() & 0xFFFFFFFF;
+	event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
+	event->gid = (u32)(bpf_get_current_uid_gid() >> 32);
+	bpf_get_current_comm(event->comm, sizeof(event->comm));
+	if (len > 0 && len < sizeof(event->filename))
+		bpf_probe_read_kernel(event->filename, len, what);
+
+	bpf_ringbuf_submit(event, 0);
+	inc_stat(STAT_EVENTS_SENT);
+}
+
+/*
+ * Refuse write opens of a guarded file; reads kill nobody.
+ * The agent and admin are exempt, as from the signal gate.
+ */
+static __always_inline int denies_kill_guard_open(struct file *file, u32 mode)
+{
+	if (mode != LOTA_MODE_ENFORCE)
+		return 0;
+
+	if (!is_write_open_flags(BPF_CORE_READ(file, f_flags)))
+		return 0;
+
+	if (!guarded_file_kind(file))
+		return 0;
+
+	return !sleepable_task_is_agent_or_admin();
+}
+
+/*
+ * Block in-place writes/truncation on trusted-library inodes,
+ * and writes to the files that would end a protected task without a signal.
  */
 SEC("lsm.s/file_open")
 int BPF_PROG(lota_file_open, struct file *file, int ret)
@@ -922,10 +1042,16 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 	if (is_kernel_mem_device(file))
 		return -EPERM;
 
-	if (!get_config(LOTA_CFG_STRICT_MMAP))
+	if (!file)
 		return 0;
 
-	if (!file)
+	/* ahead of strict_mmap: kill protection is not opt-in */
+	if (denies_kill_guard_open(file, mode)) {
+		report_blocked_kill_guard("(cgroup.kill)", 14);
+		return -EPERM;
+	}
+
+	if (!get_config(LOTA_CFG_STRICT_MMAP))
 		return 0;
 
 	if (!is_trusted_lib(file))
