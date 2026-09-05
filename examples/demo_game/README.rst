@@ -13,7 +13,13 @@ attention stays on the integration story:
 The banner across the top of the window mirrors the verdict the demo server
 publishes for the ``trust-pong`` game id, and the game freezes after two
 consecutive UNTRUSTED heartbeats with an overlay reading ``INTEGRITY LOSS``
-over ``session terminated after two UNTRUSTED heartbeats``.
+over ``session terminated after two UNTRUSTED heartbeats``. The same moment is
+printed to stderr, so an operator watching the terminal -- or a script driving
+the demo -- sees the session end without reading the window:
+
+.. code-block:: text
+
+   trust_pong: session terminated after 2 consecutive UNTRUSTED heartbeats
 
 trust_pong only **consumes** the verdict; it does not produce heartbeats
 itself. The heartbeats come from ``demo_anticheat``, which runs as a separate

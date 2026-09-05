@@ -34,6 +34,8 @@
 #include "ui.h"
 
 #define POLL_INTERVAL_MS 750
+/* consecutive UNTRUSTED heartbeats that end the session */
+#define UNTRUSTED_FREEZE_STREAK 2
 #define POLL_TIMEOUT_MS 600
 #define DEFAULT_NONCE_URL "http://127.0.0.1:7443/nonce"
 #define DEFAULT_STATE_URL "http://127.0.0.1:7443/state"
@@ -479,8 +481,13 @@ int main(int argc, char **argv)
 
 		if (snap.verdict == UI_VERDICT_UNTRUSTED) {
 			g.untrusted_streak++;
-			if (g.untrusted_streak >= 2)
+			if (!g.frozen &&
+			    g.untrusted_streak >= UNTRUSTED_FREEZE_STREAK) {
 				g.frozen = true;
+				fprintf(stderr,
+					"trust_pong: session terminated after %d consecutive UNTRUSTED heartbeats\n",
+					g.untrusted_streak);
+			}
 		} else if (snap.verdict == UI_VERDICT_TRUSTED) {
 			g.untrusted_streak = 0;
 		}
