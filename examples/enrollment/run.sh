@@ -83,7 +83,46 @@ done
 }
 mkdir -p "$RUN_DIR" "$AIK_STORE"
 
-cleanup() { kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true; }
+# SHA-256 of the anchor's SPKI: known before enrollment,
+# as the slot is claimed at consent
+publisher_id() {
+    command -v openssl >/dev/null 2>&1 || return 1
+    openssl x509 -in "$CA_DIR/ca.crt" -noout -pubkey |
+        openssl pkey -pubin -outform DER |
+        openssl dgst -sha256 -r | cut -d' ' -f1
+}
+
+CONSENT_ATTEMPTED=0
+
+# on every exit past consent: a failed run keeps the slot too
+say_what_was_left() {
+    local id
+
+    [ "$CONSENT_ATTEMPTED" = 1 ] || return 0
+
+    echo
+    if id=$(publisher_id); then
+        echo "This run answered to publisher $id."
+        echo "That is one of this machine's publisher slots, and a failed" \
+            "run holds it exactly as a successful one does. Give it" \
+            "back with:"
+        echo "  sudo lota-agent --forget-publisher $id"
+    else
+        echo "This run claimed one of this machine's publisher slots," \
+            "which a failed run holds exactly as a successful one" \
+            "does. Find it and give it back with:"
+        echo "  sudo lota-agent --list-publishers"
+        echo "  sudo lota-agent --forget-publisher <id>"
+    fi
+    echo "Keeping $CA_DIR costs that one slot however often this runs;" \
+        "CA material generated elsewhere is another publisher and" \
+        "another slot."
+}
+
+cleanup() {
+    kill "${CA_PID:-}" "${VERIFIER_PID:-}" 2>/dev/null || true
+    say_what_was_left
+}
 trap cleanup EXIT
 
 # A bundle carries the intermediates a vendor chain needs;
@@ -104,6 +143,7 @@ CA_PID=$!
 sleep 1
 
 echo "== 2/4 enroll the AIK (credential activation) =="
+CONSENT_ATTEMPTED=1
 sudo "$agent" --enroll \
      --ca-server "${CA_ADDR%%:*}" --ca-port "${CA_ADDR##*:}" \
      --ca-cert "$CA_DIR/ca.crt"

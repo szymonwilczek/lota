@@ -130,6 +130,26 @@ list, and the agent refuses a ``--server`` naming one verifier beside it; a
 demo configuration keeps this run pointed at the demo verifier and leaves the
 host's own publishers alone.
 
+What the run leaves on the machine
+----------------------------------
+
+The demo's ``ca.crt`` is a publisher: its identity is the SHA-256 of the
+certificate's SubjectPublicKeyInfo, and this machine answers to a bounded
+number of them. Keeping ``CA_DIR`` costs one slot however often the demo runs;
+CA material generated elsewhere is another publisher and another slot.
+
+The slot is claimed at consent, so a failed run holds it too; re-running is
+not a recovery. The script closes by naming the publisher and how to release
+it:
+
+.. code:: sh
+
+   sudo lota-agent --list-publishers
+   sudo lota-agent --forget-publisher <id>
+
+Nothing is released automatically: the demo enrolls through the host's real
+agent, and a wrong guess would drop a publisher the host answers to.
+
 Notes for production
 --------------------
 
