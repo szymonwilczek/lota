@@ -1309,6 +1309,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_kernel_measure \
 	$(TEST_BIN_DIR)/test_kernel_image \
 	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
+	$(TEST_BIN_DIR)/test_bpf_kill_guard \
 	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
 	$(TEST_BIN_DIR)/test_tpm_nv_chunk \
@@ -1569,6 +1570,10 @@ $(TEST_BIN_DIR)/test_cgroup_guard: tests/test_cgroup_guard.c $(AGENT_DIR)/cgroup
 $(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lelf
+
+$(TEST_BIN_DIR)/test_bpf_kill_guard: tests/test_bpf_kill_guard.c $(BPF_OBJ) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lbpf
 
 $(TEST_BIN_DIR)/test_kernel_measure: tests/test_kernel_measure.c $(AGENT_DIR)/kernel_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1871,6 +1876,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_kernel_measure
 	@$(BUILD_DIR)/test_kernel_image
 	@$(BUILD_DIR)/test_bpf_mount_hooks
+	@$(BUILD_DIR)/test_bpf_kill_guard
 	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
 	@$(BUILD_DIR)/test_tpm_nv_chunk
