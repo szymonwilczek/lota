@@ -179,15 +179,18 @@ func DefaultServerConfig() ServerConfig {
 }
 
 func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
-	// load tls certificate
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+	// load tls certificate; optional when report-only,
+	// but a non-loopback monitoring API still needs it
+	var tlsConfig *tls.Config
+	if cfg.CertFile != "" || cfg.KeyFile != "" || !cfg.ReportOnly {
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
 	}
 
 	logger := cfg.Logger
@@ -216,6 +219,7 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 		shutdownDrain:  cfg.ShutdownDrain,
 		readTimeout:    cfg.ReadTimeout,
 		writeTimeout:   cfg.WriteTimeout,
+		reportOnly:     cfg.ReportOnly,
 	}
 
 	if cfg.ScopedKeysFile != "" {
@@ -238,6 +242,19 @@ func NewServer(cfg ServerConfig, verifier *verify.Verifier) (*Server, error) {
 }
 
 func (s *Server) Start() error {
+	// report-only: monitoring API only, no attestation listener
+	if s.reportOnly {
+		if s.httpAddr == "" {
+			return fmt.Errorf("a reporting instance serves only the monitoring API and needs an address to serve it on")
+		}
+		if err := s.startHTTP(); err != nil {
+			return fmt.Errorf("failed to start HTTP API: %w", err)
+		}
+		s.log.Info("LOTA Verifier serving reports only",
+			"note", "no attestation listener; every endpoint that changes fleet state is refused")
+		return nil
+	}
+
 	listener, err := tls.Listen("tcp", s.addr, s.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err)

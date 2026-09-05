@@ -53,6 +53,7 @@ type APIHandler struct {
 	metrics        *metrics.Metrics
 	startTime      time.Time
 	adminAPIKey    string // if non-empty, required for mutating endpoints
+	reportOnly     bool   // instance reads a database it cannot write
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
@@ -81,6 +82,7 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	h := &APIHandler{
 		verifier:       verifier,
 		server:         srv,
+		reportOnly:     srv != nil && srv.reportOnly,
 		auditLog:       auditLog,
 		attestationLog: attestLog,
 		log:            logger.With("component", "api"),
@@ -297,6 +299,19 @@ func (h *APIHandler) adminConfigured() bool {
 // if no admin-capable key is configured, all mutating requests are rejected
 func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// read-only database: refuse before the key check and the write
+		if h.reportOnly {
+			h.log.Warn("state-changing endpoint called on a reporting instance",
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
+			writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{
+				Error: "this instance serves reports from a read-only database; " +
+					"send state changes to an instance on the primary",
+			})
+			return
+		}
+
 		if !h.adminConfigured() {
 			h.log.Warn("admin endpoint called but no API key configured",
 				"method", logging.SanitizeField(r.Method),
@@ -458,6 +473,14 @@ func (h *APIHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.TLS.Listening = health.Listening
 	resp.TLS.Address = health.Address
+
+	// no attestation listener by design: report the mode, not a fault
+	if h.reportOnly {
+		resp.Mode = "reporting"
+		resp.TLS.Address = ""
+		writeJSON(w, resp)
+		return
+	}
 
 	if !health.Listening {
 		resp.Status = "degraded"

@@ -119,6 +119,11 @@ Endpoint                                                   Tier    Purpose
 ``GET /api/v1/attestations``                               reader  attestation decision log
 =========================================================  ======  ===========================================
 
+Every ``admin`` row above changes fleet state and is refused with **503** on a
+reporting instance, before the key is weighed, naming the read-only database
+and sending the caller to an instance on the primary. The ``reader`` rows
+answer there exactly as they do on the primary.
+
 Health and statistics
 =====================
 
@@ -147,6 +152,12 @@ polling ``/health`` sees ``degraded`` and takes the instance out of rotation
 while the process is still there. The window defaults to zero -- the API
 goes as soon as it is idle -- and behind a load balancer it belongs at one
 health-check interval or more.
+
+A reporting instance (``--report-only``, :doc:`ha-deployment`) answers **200**
+with ``"mode": "reporting"`` and ``"listening": false``: it binds no
+attestation listener by design, so the missing listener is the shape of the
+deployment and not a fault. ``mode`` is absent on an instance that attests, so
+a caller that reached the wrong one can tell which it got.
 
 GET /api/v1/stats
 -----------------
