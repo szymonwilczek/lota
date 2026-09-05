@@ -382,6 +382,7 @@ func tokenMatchesHash(token string, expectedHash [32]byte) bool {
 // response structs (JSON serialization)
 type healthResponse struct {
 	Status    string `json:"status"`
+	Mode      string `json:"mode,omitempty"` // "reporting" when report-only
 	Uptime    string `json:"uptime"`
 	UptimeSec int64  `json:"uptime_sec"`
 	TLS       struct {

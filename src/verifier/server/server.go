@@ -70,6 +70,7 @@ type Server struct {
 
 	// http monitoring api
 	httpServer     *http.Server
+	reportOnly     bool
 	httpAddr       string
 	adminAPIKey    string
 	readerAPIKey   string
@@ -94,6 +95,10 @@ type ServerConfig struct {
 
 	// address for HTTP monitoring API (empty = disabled)
 	HTTPAddress string
+
+	// ReportOnly serves the monitoring API read-only off a hot standby:
+	// no attestation listener, mutating endpoints refused.
+	ReportOnly bool
 
 	// tls certificate and key paths
 	CertFile string
