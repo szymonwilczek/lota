@@ -135,17 +135,35 @@ The monitoring API's listings and lookups are single indexed reads, and their
 volume is far below the attestation path, so a single Postgres node serves them
 comfortably.
 
-**A verifier process needs a writable database.** It applies its schema on
-every database it opens, so an instance pointed at a hot standby is refused at
-startup, by name: the refusal says the database is a read-only standby and that
-the instance belongs on the primary. Read replicas therefore serve *reporting
-tools* that read Postgres directly -- a dashboard query, an export, an audit
-report -- and not verifier instances. Point every instance at the primary,
-and take the read load that is not the verifier's off the replica.
+**An attesting verifier needs a writable database.** It applies its schema at
+startup and writes on every round, so it refuses to start against a hot
+standby, saying the database is a read-only standby. Point every attesting
+instance at the primary.
+
+**A reporting instance takes the read load off it.** ``--report-only`` serves
+only the monitoring API, from a database it never writes::
+
+   lota-verifier --report-only \
+     --pg-dsn "postgres://…@pg-replica/lota?sslmode=verify-full" \
+     --http-addr 127.0.0.1:8081
+
+* No attestation listener: ``--cert``, ``--key`` and ``--addr`` are unused. A
+  non-loopback monitoring API still requires TLS and an API key.
+* The schema is verified, never applied, so the database may be a hot standby
+  or the primary.
+* Every ``admin`` endpoint (revoke, restore, ban, unban, force re-anchor,
+  acknowledge a re-anchor) answers **503** naming the read-only database,
+  before the key check. ``reader`` endpoints behave as on an attesting
+  instance.
+* ``/health`` answers **200** with ``"mode": "reporting"``.
+* ``--policy`` is ignored, with a warning.
+* With shards, it reads each shard's identity and the pinned shard set but
+  writes neither; pinning is left to attesting instances.
 
 Nothing on the attestation wire depends on which node answered, so a replica is
-a faithful source for those reports; the constraint is the verifier process,
-not the protocol.
+a faithful source for these answers. Reporting tools that query Postgres
+directly -- a dashboard, an export, an audit report -- read the same replica
+beside it.
 
 Scaling the write path (database sharding)
 ------------------------------------------
