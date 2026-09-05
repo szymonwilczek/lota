@@ -322,6 +322,27 @@ func recordedDetail(err error) string {
 	return detail
 }
 
+// What authenticated a client's first-use PCR0/1/7 baseline
+type bootBaselineRoad struct {
+	allowedBy string // logged as allowed_by; empty = not authenticated yet
+	note      string // operator caveat, optional
+}
+
+// Policy-only roads; the baseline store is left to the caller.
+func (v *Verifier) bootBaselineRoad(tenant string, bootFacts *BootFacts) bootBaselineRoad {
+	if v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
+		return bootBaselineRoad{allowedBy: "signed policy PCR0/1/7 pins"}
+	}
+	if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) &&
+		SecureBootAnchored(bootFacts) {
+		return bootBaselineRoad{
+			allowedBy: "event-log Secure Boot anchor",
+			note:      "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate",
+		}
+	}
+	return bootBaselineRoad{}
+}
+
 // VerifyReport verifies a report that arrived over an unnamed transport.
 func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (*types.VerifyResult, error) {
 	return v.VerifyReportFrom(challengeID, "", reportData)
@@ -742,25 +763,28 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	//	in policy; with the firmware boot-with-Secure-Boot-off path already
 	//	rejected machine-independently, the TOFU row serves as per-device
 	//	rollback/consistency anchor rather than the firmware trust control itself.
-	if v.requireBootEnrollment {
-		reader, readerOK := v.baselineStore.(BootBaselineReader)
-		enrolled := false
-		if readerOK && reader.GetBootBaseline(clientID) != nil {
-			enrolled = true
+	//
+	// The road is resolved even with the gate off: the pin logs it.
+	bootPin := v.bootBaselineRoad(tenant, bootFacts)
+	if bootPin.allowedBy == "" && v.requireBootEnrollment {
+		// store last: policy is in memory, the store is not
+		if reader, ok := v.baselineStore.(BootBaselineReader); ok &&
+			reader.GetBootBaseline(clientID) != nil {
+			bootPin.allowedBy = "baseline store enrollment"
 		}
-		if !enrolled && !v.pcrVerifier.PolicyDeclaresBootPCRsForTenant(tenant) {
-			if v.pcrVerifier.PolicyRequiresSecureBootForTenant(tenant) && SecureBootAnchored(bootFacts) {
-				logging.Security(clog, "boot baseline TOFU first-use accepted under event-log Secure Boot anchor",
-					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-					"note", "PCR0/1/7 row is a per-device rollback anchor; firmware trust comes from the event-log Secure Boot gate")
-			} else {
-				logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
-					"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
-					"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
-				v.metrics.Rejections.Inc("baseline_error")
-				result.Result = types.VerifyPolicyRequirement
-				return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
-			}
+	}
+	if bootPin.allowedBy == "" {
+		if v.requireBootEnrollment {
+			logging.Security(clog, "boot baseline not enrolled; refusing TOFU first-use",
+				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+				"hint", "load a signed policy that pins PCR0/PCR1/PCR7 for this fleet, enable require_secureboot for diverse fleets, or run with --allow-tofu-boot-baseline")
+			v.metrics.Rejections.Inc("baseline_error")
+			result.Result = types.VerifyPolicyRequirement
+			return result, errors.New("FAIL_BASELINE_ERROR: boot baseline not enrolled (TOFU first-use refused under RequireBootEnrollment)")
+		}
+		bootPin = bootBaselineRoad{
+			allowedBy: "--allow-tofu-boot-baseline",
+			note:      "nothing authenticated these values; the host pinned the firmware state it reported",
 		}
 	}
 
@@ -857,10 +881,18 @@ func (v *Verifier) VerifyReportFrom(challengeID, remoteAddr string, reportData [
 	if outcome.BootProvided {
 		switch outcome.BootResult {
 		case TOFUFirstUse:
-			clog.Info("TOFU: firmware/SecureBoot PCRs baseline established",
+			// every road logs at SECURITY; allowed_by tells them apart
+			pinArgs := []any{
 				"pcr0", hex.EncodeToString(bootPtr.PCR0[:]),
 				"pcr1", hex.EncodeToString(bootPtr.PCR1[:]),
-				"pcr7", hex.EncodeToString(bootPtr.PCR7[:]))
+				"pcr7", hex.EncodeToString(bootPtr.PCR7[:]),
+				"policy", v.pcrVerifier.PolicyNameForTenant(tenant),
+				"allowed_by", bootPin.allowedBy,
+			}
+			if bootPin.note != "" {
+				pinArgs = append(pinArgs, "note", bootPin.note)
+			}
+			logging.Security(clog, "boot baseline TOFU first-use accepted", pinArgs...)
 
 			// capture the event log + firmware version alongside the boot
 			// baseline so later self-service re-anchor can replay-diff
