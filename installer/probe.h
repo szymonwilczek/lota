@@ -293,6 +293,10 @@ int probe_module_sig_enforced(void);
 /* 0 when lockdown is [integrity] or [confidentiality] */
 int probe_lockdown_restrictive(void);
 
+/* Where lota-pcr14-lock persists the pre-extend PCR14;
+ * read by the fixed-path helpers below */
+const char *probe_pcr14_baseline_path(void);
+
 /* Derives the post-lock PCR14 value installed by the initramfs lock:
  * SHA256(baseline || SHA256("LOTA-PCR14-INITRAMFS-LOCK-v1")), where baseline
  * is the pre-extend PCR14 lota-pcr14-lock persisted this boot (the shim MOK
