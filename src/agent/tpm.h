@@ -1388,11 +1388,10 @@ int tpm_aik_reseal_auth(struct tpm_context *ctx);
 int tpm_reprovision_aik(struct tpm_context *ctx);
 
 /*
- * tpm_aik_strict_blocks_reprovision - pure recovery decision. Returns 1
- * when a strict-mode AIK-auth load failure must NOT trigger a silent AIK
- * rotation (i.e. strict and the failure was a PolicyPCR mismatch), else 0.
+ * tpm_aik_load_failure_blocks_reprovision - returns 1 when an AIK-auth
+ * load failure must not rotate the key, i.e. any failure other than -ENOENT.
  */
-int tpm_aik_strict_blocks_reprovision(int strict, int load_rc);
+int tpm_aik_load_failure_blocks_reprovision(int load_rc);
 
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
@@ -1419,6 +1418,7 @@ int tpm_test_aik_save_auth(struct tpm_context *ctx,
 int tpm_test_aik_load_auth(struct tpm_context *ctx);
 int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len);
 int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len);
+int tpm_test_aik_auth_record_exists(struct tpm_context *ctx);
 
 void tpm_test_set_prop_reader(tpm_test_prop_reader_fn reader);
 void tpm_test_reset_prop_reader(void);

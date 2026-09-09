@@ -212,9 +212,9 @@ static void test_strict_load_no_plaintext_fallback(void)
  * rotating over it destroys the identity and its certificate.
  * Only a missing record may reprovision.
  */
-static int blocks_reprovision(int strict, int load_rc)
+static int blocks_reprovision(int load_rc)
 {
-	return tpm_aik_strict_blocks_reprovision(strict, load_rc);
+	return tpm_aik_load_failure_blocks_reprovision(load_rc);
 }
 
 enum record_damage {
@@ -329,10 +329,10 @@ static void test_unreadable_record_is_not_a_missing_one(void)
 			FAIL(reason);
 			return;
 		}
-		if (blocks_reprovision(0, rc) != cases[i].want_block) {
+		if (blocks_reprovision(rc) != cases[i].want_block) {
 			snprintf(reason, sizeof(reason),
 				 "%s: reprovision decision is %d, want %d",
-				 cases[i].name, blocks_reprovision(0, rc),
+				 cases[i].name, blocks_reprovision(rc),
 				 cases[i].want_block);
 			FAIL(reason);
 			return;
@@ -344,25 +344,57 @@ static void test_unreadable_record_is_not_a_missing_one(void)
 static void test_recovery_decision(void)
 {
 	TEST("reprovision-block decision is correct");
-	/* the sealed auth no longer unseals in the current boot state */
-	if (blocks_reprovision(1, -LOTA_ERR_TPM_POLICY_FAIL) != 1) {
+	/* sealed auth no longer unseals; the record exists in either mode */
+	if (blocks_reprovision(-LOTA_ERR_TPM_POLICY_FAIL) != 1) {
 		FAIL("strict policy-fail not blocked");
 		return;
 	}
-	/* the record exists in either mode */
-	if (blocks_reprovision(0, -LOTA_ERR_TPM_POLICY_FAIL) != 1) {
-		FAIL("non-strict policy-fail not blocked");
-		return;
-	}
 	/* a genuinely missing auth leaves a key nothing can drive again */
-	if (blocks_reprovision(1, -ENOENT) != 0 ||
-	    blocks_reprovision(0, -ENOENT) != 0) {
+	if (blocks_reprovision(-ENOENT) != 0) {
 		FAIL("missing auth blocked");
 		return;
 	}
 	/* a successful load is never a reprovision trigger */
-	if (blocks_reprovision(1, 0) != 0 || blocks_reprovision(0, 0) != 0) {
+	if (blocks_reprovision(0) != 0) {
 		FAIL("success blocked");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Hardened mode reports -ENOENT when only the plaintext sidecar exists;
+ * the key is still authorized and must not rotate.
+ */
+static void test_leftover_sidecar_is_still_a_record(void)
+{
+	struct tpm_context ctx;
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+
+	TEST("hardened mode with only a sidecar left does not rotate");
+	init_ctx(&ctx);
+	for (unsigned i = 0; i < TPM_AIK_AUTH_SIZE; i++)
+		auth[i] = (uint8_t)(0x21 + i);
+	if (tpm_test_aik_save_auth(&ctx, auth) != 0) {
+		FAIL("seed plaintext");
+		return;
+	}
+
+	ctx.seal_aik_auth_strict = true;
+	memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+	ctx.aik_auth_loaded = false;
+	if (tpm_test_aik_load_auth(&ctx) != -ENOENT) {
+		FAIL("expected a missing sealed copy");
+		return;
+	}
+	/* the load code alone would rotate here */
+	if (blocks_reprovision(-ENOENT) != 0) {
+		FAIL("absent record blocked");
+		return;
+	}
+	/* the disk says the authorization is right there */
+	if (tpm_test_aik_auth_record_exists(&ctx) != 1) {
+		FAIL("sidecar not seen");
 		return;
 	}
 	PASS();
@@ -398,6 +430,7 @@ int main(void)
 	test_strict_load_no_plaintext_fallback();
 	test_unreadable_record_is_not_a_missing_one();
 	test_recovery_decision();
+	test_leftover_sidecar_is_still_a_record();
 	test_reseal_reprovision_arg_guards();
 
 	cleanup_dir();

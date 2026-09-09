@@ -116,10 +116,40 @@ the sealed auth unrecoverable. The agent will then **not** silently rotate the
 enrolled AIK; it reports the PolicyPCR mismatch and waits for an explicit
 recovery. Rotate and re-seal deliberately, then re-enroll:
 
+
 .. code-block:: sh
 
     sudo lota-agent --reprovision-aik
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert ca.crt
+
+An authorization the agent cannot read is never a reason to replace the key
+===========================================================================
+
+The rule is wider than the sealed case. The only failure that provisions a new
+attestation key is a record that is *absent*: no ``aik_auth.dat`` and no
+``aik_auth.sealed``, which leaves the key on the chip with no authorization
+anywhere and no way to use it again. Every other failure -- a record at a
+version this build does not read, a short write, a wrong magic, an all-zero
+secret, a sealed blob that will not unseal -- describes a record that exists
+and a key that still works, so the agent reports it and stops:
+
+.. code-block:: text
+
+    SECURITY: the attestation key's authorization could not be read
+              (Operation not supported). The key is left as it is.
+    SECURITY: /var/lib/lota/profiles/<id>/aik_auth.dat holds magic 0x41545541
+              version 2; this build reads magic 0x41545541 version 1.
+
+Replacing the key there would destroy the enrolled identity and orphan the
+certificate issued over it, and no backup brings it back: what a backup holds
+is the authorization, and the key it authorized is gone from the chip. Restore
+the record, or replace the key deliberately with ``--forget-publisher``,
+``--allow-publisher`` and ``--enroll`` -- which issues a new certificate,
+because the current one names the key being replaced.
+
+With sealing on and no sealed copy yet, the same rule reads the plaintext
+sidecar as the record it is: the agent refuses rather than rotating, and names
+``--seal-aik-auth`` as the way to seal what the host already has.
 
 Anti-rollback: what sealing binds, and what it does not
 =======================================================

@@ -65,6 +65,9 @@ static int tpm_aik_load_auth_plaintext(struct tpm_context *ctx);
 static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
 				    const uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_load_auth_sealed(struct tpm_context *ctx);
+static int tpm_aik_auth_record_exists(struct tpm_context *ctx);
+static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
+					     int load_rc);
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					 int had_existing_aik);
@@ -1835,17 +1838,17 @@ int tpm_provision_aik(struct tpm_context *ctx)
 		}
 
 		/*
-		 * Strict at-rest sealing: if the sealed auth failed only
-		 * because the host is no longer in the sealed boot state, do
-		 * NOT silently rotate the enrolled AIK. Surface the policy
-		 * error so the operator runs the explicit recovery
-		 * (--reprovision-aik) and re-enrolls deliberately.
+		 * Rotate only when no record exists.
+		 * An unreadable record still authorizes a good key; replacing it
+		 * orphans the certificate, and no backup brings the key back.
 		 */
-		if (tpm_aik_strict_blocks_reprovision(ctx->seal_aik_auth_strict,
-						      load_rc))
+		if (tpm_aik_load_failure_blocks_reprovision(load_rc) ||
+		    tpm_aik_auth_record_exists(ctx) == 1) {
+			tpm_aik_report_auth_load_failure(ctx, load_rc);
 			return load_rc;
+		}
 
-		/* missing/corrupt auth means the key is not safely usable */
+		/* no record anywhere: the key can never be driven again */
 		ret = tpm_aik_reprovision_with_auth(ctx, 1);
 		if (ret < 0)
 			return ret;
@@ -4130,19 +4133,102 @@ static int tpm_aik_load_auth(struct tpm_context *ctx)
 }
 
 /*
- * Pure recovery decision for a strict-mode AIK-auth load failure.
- *
- * Returns 1 when the agent must NOT silently reprovision (rotate) the AIK:
- * that is, in strict mode when the sealed auth failed specifically because
- * the host is no longer in the sealed boot state (PolicyPCR mismatch).
- * Silently rotating there would churn the enrolled AIK identity on every
- * legitimate firmware/kernel/agent change. In every other case (non-strict,
- * or a genuinely missing/corrupt auth) it returns 0 and the caller keeps
- * the existing reprovision-on-failure behaviour.
+ * Returns 1 unless load_rc is 0 or -ENOENT: unknown version, short record,
+ * bad magic, zero secret or a blob that no longer unseals all leave a working
+ * key. The caller still checks tpm_aik_auth_record_exists() on -ENOENT.
  */
-int tpm_aik_strict_blocks_reprovision(int strict, int load_rc)
+int tpm_aik_load_failure_blocks_reprovision(int load_rc)
 {
-	return (strict && load_rc == -LOTA_ERR_TPM_POLICY_FAIL) ? 1 : 0;
+	if (load_rc == 0)
+		return 0;
+
+	return load_rc == -ENOENT ? 0 : 1;
+}
+
+/*
+ * Returns 1 if either the plaintext or the sealed record is on disk.
+ * The hardened loader skips the sidecar and reports -ENOENT while it is present.
+ */
+static int tpm_aik_auth_record_exists(struct tpm_context *ctx)
+{
+	char path[PATH_MAX];
+
+	if (!ctx)
+		return -EINVAL;
+
+	if (tpm_aik_auth_path_for_ctx(ctx, path, sizeof(path)) == 0 &&
+	    access(path, F_OK) == 0)
+		return 1;
+	if (tpm_aik_auth_sealed_path_for_ctx(ctx, path, sizeof(path)) == 0 &&
+	    access(path, F_OK) == 0)
+		return 1;
+
+	return 0;
+}
+
+/*
+ * Report which record files exist and the version found,
+ * so a newer-format record can be told from a damaged disk.
+ */
+static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
+					     int load_rc)
+{
+	struct aik_auth_record rec;
+	char plain[PATH_MAX];
+	char sealed[PATH_MAX];
+	int have_plain = 0;
+	int have_sealed = 0;
+	ssize_t n = -1;
+	int fd;
+
+	if (!ctx)
+		return;
+
+	if (tpm_aik_auth_path_for_ctx(ctx, plain, sizeof(plain)) == 0)
+		have_plain = access(plain, F_OK) == 0;
+	if (tpm_aik_auth_sealed_path_for_ctx(ctx, sealed, sizeof(sealed)) == 0)
+		have_sealed = access(sealed, F_OK) == 0;
+
+	fprintf(stderr,
+		"SECURITY: the attestation key's authorization could not be "
+		"read (%s). The key is left as it is.\n",
+		tpm_strerror(load_rc));
+
+	if (have_plain) {
+		fd = open(plain, O_RDONLY | O_CLOEXEC);
+		if (fd >= 0) {
+			n = read(fd, &rec, sizeof(rec));
+			close(fd);
+		}
+	}
+	if (n == (ssize_t)sizeof(rec)) {
+		fprintf(stderr,
+			"SECURITY: %s holds magic 0x%08X version %u; this "
+			"build reads magic 0x%08X version %u.\n",
+			plain, le32toh(rec.magic), le32toh(rec.version),
+			TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION);
+		secure_bzero(&rec, sizeof(rec));
+	} else if (have_plain) {
+		fprintf(stderr,
+			"SECURITY: %s is shorter than the record it holds.\n",
+			plain);
+	}
+	if (have_sealed)
+		fprintf(stderr, "SECURITY: the sealed copy %s is present.\n",
+			sealed);
+
+	if (have_plain && !have_sealed &&
+	    (ctx->seal_aik_auth || ctx->seal_aik_auth_strict))
+		fprintf(stderr,
+			"SECURITY: run --seal-aik-auth to seal the record "
+			"this host already has.\n");
+	else
+		fprintf(stderr,
+			"SECURITY: restore the record, or replace the key "
+			"deliberately with --forget-publisher, "
+			"--allow-publisher and --enroll -- which issues a new "
+			"certificate, because the current one names the key "
+			"that is being replaced.\n");
 }
 
 /*
@@ -5618,5 +5704,10 @@ int tpm_test_aik_plaintext_path(struct tpm_context *ctx, char *buf, size_t len)
 int tpm_test_aik_sealed_path(struct tpm_context *ctx, char *buf, size_t len)
 {
 	return tpm_aik_auth_sealed_path_for_ctx(ctx, buf, len);
+}
+
+int tpm_test_aik_auth_record_exists(struct tpm_context *ctx)
+{
+	return tpm_aik_auth_record_exists(ctx);
 }
 #endif /* LOTA_TPM_TESTING */
