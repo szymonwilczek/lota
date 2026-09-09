@@ -10,13 +10,16 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <endian.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "../src/agent/agent_internal.h" // IWYU pragma: keep (defines LOTA_TPM_TESTING)
 
@@ -204,33 +207,162 @@ static void test_strict_load_no_plaintext_fallback(void)
 	PASS();
 }
 
+/*
+ * An auth record this build cannot read still authorizes the enrolled key;
+ * rotating over it destroys the identity and its certificate.
+ * Only a missing record may reprovision.
+ */
+static int blocks_reprovision(int strict, int load_rc)
+{
+	return tpm_aik_strict_blocks_reprovision(strict, load_rc);
+}
+
+enum record_damage {
+	DAMAGE_VERSION,
+	DAMAGE_MAGIC,
+	DAMAGE_TRUNCATE,
+	DAMAGE_ZERO_AUTH,
+	DAMAGE_ABSENT,
+};
+
+static int seed_damaged_record(struct tpm_context *ctx, enum record_damage what)
+{
+	uint8_t auth[TPM_AIK_AUTH_SIZE];
+	struct aik_auth_record rec;
+	char path[512];
+	size_t want;
+	FILE *f;
+	int fd;
+
+	init_ctx(ctx);
+	for (unsigned i = 0; i < TPM_AIK_AUTH_SIZE; i++)
+		auth[i] = (uint8_t)(0x70 + i);
+	if (tpm_test_aik_save_auth(ctx, auth) != 0)
+		return -1;
+	if (tpm_test_aik_plaintext_path(ctx, path, sizeof(path)) != 0)
+		return -1;
+
+	if (what == DAMAGE_ABSENT)
+		return unlink(path) == 0 ? 0 : -1;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return -1;
+	if (fread(&rec, 1, sizeof(rec), f) != sizeof(rec)) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	switch (what) {
+	case DAMAGE_VERSION:
+		rec.version = htole32(le32toh(rec.version) + 1);
+		break;
+	case DAMAGE_MAGIC:
+		rec.magic = htole32(le32toh(rec.magic) ^ 0xFFu);
+		break;
+	case DAMAGE_ZERO_AUTH:
+		memset(rec.auth, 0, sizeof(rec.auth));
+		break;
+	default:
+		break;
+	}
+
+	want = (what == DAMAGE_TRUNCATE) ? 8 : sizeof(rec);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
+	if (fwrite(&rec, 1, want, f) != want) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+	return 0;
+}
+
+static void test_unreadable_record_is_not_a_missing_one(void)
+{
+	static const struct {
+		enum record_damage what;
+		int want_rc;
+		int want_block;
+		const char *name;
+	} cases[] = {
+		{ DAMAGE_VERSION, -ENOTSUP, 1,
+		  "version this build cannot read" },
+		{ DAMAGE_MAGIC, -EINVAL, 1, "magic that is not the record's" },
+		{ DAMAGE_TRUNCATE, -EIO, 1, "record shorter than the record" },
+		{ DAMAGE_ZERO_AUTH, -EKEYREVOKED, 1, "all-zero secret" },
+		{ DAMAGE_ABSENT, -ENOENT, 0, "no record at all" },
+	};
+	struct tpm_context ctx;
+	char reason[160];
+
+	TEST("only an absent auth record may rotate the AIK");
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		int rc;
+
+		if (seed_damaged_record(&ctx, cases[i].what) != 0) {
+			FAIL("seed");
+			return;
+		}
+		memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+		ctx.aik_auth_loaded = false;
+
+		rc = tpm_test_aik_load_auth(&ctx);
+		if (rc != cases[i].want_rc) {
+			snprintf(reason, sizeof(reason),
+				 "%s: load returned %d, want %d", cases[i].name,
+				 rc, cases[i].want_rc);
+			FAIL(reason);
+			return;
+		}
+		if (ctx.aik_auth_loaded && rc != 0) {
+			snprintf(reason, sizeof(reason),
+				 "%s: auth marked loaded after a failed load",
+				 cases[i].name);
+			FAIL(reason);
+			return;
+		}
+		if (blocks_reprovision(0, rc) != cases[i].want_block) {
+			snprintf(reason, sizeof(reason),
+				 "%s: reprovision decision is %d, want %d",
+				 cases[i].name, blocks_reprovision(0, rc),
+				 cases[i].want_block);
+			FAIL(reason);
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_recovery_decision(void)
 {
-	TEST("strict-mode reprovision-block decision is correct");
-	/* non-strict: a load failure always allows reprovision */
-	if (tpm_aik_strict_blocks_reprovision(0, -LOTA_ERR_TPM_POLICY_FAIL) !=
-	    0) {
-		FAIL("non-strict blocked");
-		return;
-	}
-	/* strict + boot-state mismatch: must block silent AIK rotation */
-	if (tpm_aik_strict_blocks_reprovision(1, -LOTA_ERR_TPM_POLICY_FAIL) !=
-	    1) {
+	TEST("reprovision-block decision is correct");
+	/* the sealed auth no longer unseals in the current boot state */
+	if (blocks_reprovision(1, -LOTA_ERR_TPM_POLICY_FAIL) != 1) {
 		FAIL("strict policy-fail not blocked");
 		return;
 	}
-	/* strict but a genuinely missing/corrupt auth: reprovision is fine */
-	if (tpm_aik_strict_blocks_reprovision(1, -ENOENT) != 0) {
-		FAIL("strict missing-auth blocked");
+	/* the record exists in either mode */
+	if (blocks_reprovision(0, -LOTA_ERR_TPM_POLICY_FAIL) != 1) {
+		FAIL("non-strict policy-fail not blocked");
 		return;
 	}
-	if (tpm_aik_strict_blocks_reprovision(1, -EIO) != 0) {
-		FAIL("strict io-error blocked");
+	/* a genuinely missing auth leaves a key nothing can drive again */
+	if (blocks_reprovision(1, -ENOENT) != 0 ||
+	    blocks_reprovision(0, -ENOENT) != 0) {
+		FAIL("missing auth blocked");
 		return;
 	}
 	/* a successful load is never a reprovision trigger */
-	if (tpm_aik_strict_blocks_reprovision(1, 0) != 0) {
-		FAIL("strict success blocked");
+	if (blocks_reprovision(1, 0) != 0 || blocks_reprovision(0, 0) != 0) {
+		FAIL("success blocked");
 		return;
 	}
 	PASS();
@@ -264,6 +396,7 @@ int main(void)
 	test_sealed_path_derivation();
 	test_sealing_on_without_tpm_fails_cleanly();
 	test_strict_load_no_plaintext_fallback();
+	test_unreadable_record_is_not_a_missing_one();
 	test_recovery_decision();
 	test_reseal_reprovision_arg_guards();
 
