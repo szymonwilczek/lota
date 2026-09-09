@@ -106,6 +106,7 @@ struct lota_ac_session {
 	/* direct SDK mode */
 	int direct;
 	struct lota_client *client;
+	int connect_error; /* why client is NULL, reported on every call */
 
 	/* file mode */
 	char token_dir[256];
@@ -1045,6 +1046,8 @@ const char *lota_ac_strerror(int err)
 		return "nobody at this machine has agreed to this publisher";
 	case LOTA_AC_ERR_UNKNOWN_PROFILE:
 		return "this machine is not enrolled with that publisher";
+	case LOTA_AC_ERR_NO_KEY_SLOT:
+		return "this machine has no attestation-key slot left for that publisher";
 	case LOTA_AC_ERR_ACCESS_DENIED:
 		return "the agent refused this caller";
 	case LOTA_AC_ERR_TOKEN_DIR:
@@ -1115,6 +1118,8 @@ static int ac_error_from_connect(int connect_err)
 		return LOTA_AC_ERR_CONSENT_REQUIRED;
 	case LOTA_ERR_UNKNOWN_PROFILE:
 		return LOTA_AC_ERR_UNKNOWN_PROFILE;
+	case LOTA_ERR_NO_KEY_SLOT:
+		return LOTA_AC_ERR_NO_KEY_SLOT;
 	case LOTA_ERR_ACCESS_DENIED:
 		return LOTA_AC_ERR_ACCESS_DENIED;
 	case LOTA_ERR_RATE_LIMITED:
@@ -1198,8 +1203,9 @@ struct lota_ac_session *lota_ac_init(const struct lota_ac_config *cfg)
 		 */
 		if (!s->client) {
 			s->state = LOTA_AC_STATE_ERROR;
-			ac_fail(ac_error_from_connect(
-				lota_connect_last_error()));
+			s->connect_error = ac_error_from_connect(
+				lota_connect_last_error());
+			ac_fail(s->connect_error);
 		} else {
 			s->state = LOTA_AC_STATE_RUNNING;
 		}
@@ -1277,6 +1283,9 @@ int lota_ac_tick(struct lota_ac_session *session)
 		/* direct SDK mode */
 		if (!session->client) {
 			session->state = LOTA_AC_STATE_ERROR;
+			ac_fail(session->connect_error ?
+					session->connect_error :
+					LOTA_AC_ERR_NO_AGENT);
 			return -ENOTCONN;
 		}
 
@@ -1361,7 +1370,8 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 	 * heartbeat rate.
 	 */
 	if (!session->client) {
-		ac_fail(LOTA_AC_ERR_NO_AGENT);
+		ac_fail(session->connect_error ? session->connect_error :
+						 LOTA_AC_ERR_NO_AGENT);
 		return -ENOTCONN;
 	}
 
