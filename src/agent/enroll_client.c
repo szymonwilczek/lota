@@ -804,6 +804,16 @@ int do_allow_publisher(const char *profile_id)
 	return 0;
 }
 
+/* both units run with PrivateTmp=yes: their /tmp and /var/tmp are empty */
+static bool anchor_is_hidden_from_the_units(const char *path)
+{
+	if (!path)
+		return false;
+
+	return strncmp(path, "/tmp/", 5) == 0 ||
+	       strncmp(path, "/var/tmp/", 9) == 0;
+}
+
 /*
  * Register a publisher in lota.conf so a title of theirs can name it.
  *
@@ -969,6 +979,15 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Nothing enrols with them until somebody at this "
 		       "machine agrees:\n");
 		printf("  lota-agent --allow-publisher %s\n", paths.id);
+		/* before the reload hint: reloading would not fix this */
+		if (anchor_is_hidden_from_the_units(ca_cert))
+			printf("Warning: %s is under a private-tmp path. The "
+			       "agent units cannot read it, so this publisher "
+			       "would load\nwithout a profile and a title "
+			       "naming them would be refused. Put the anchor "
+			       "somewhere\nthe units read, such as "
+			       "/etc/lota/, and add it again from there.\n",
+			       ca_cert);
 		printf("A running host picks the publisher up on reload:\n");
 		printf("  systemctl try-reload-or-restart lota-agent "
 		       "lota-attest\n");

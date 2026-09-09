@@ -125,6 +125,18 @@ static void agent_reload_publishers(struct agent_loop_ctx *ctx)
 	*ctx->target_count = count;
 	ipc_set_profiles(ctx->ipc_ctx, ctx->targets, count);
 	lota_info("Publisher list reloaded: %zu publisher(s)", count);
+
+	/* name unreadable anchors on reload, as startup does */
+	for (size_t i = 0; i < count; i++) {
+		if (!ctx->targets[i].profile_error)
+			continue;
+		lota_warn("Cannot read the CA trust anchor %s (%s): answering "
+			  "for %s without a publisher profile, so a title "
+			  "naming them is refused",
+			  ctx->targets[i].ca_cert,
+			  strerror(-ctx->targets[i].profile_error),
+			  ctx->targets[i].label);
+	}
 }
 
 int agent_run_event_loop(struct agent_loop_ctx *ctx)

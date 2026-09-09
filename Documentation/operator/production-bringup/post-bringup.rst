@@ -407,6 +407,16 @@ host::
     sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
         --ca-cert /etc/lota/studio.pem --publisher-name studio
 
+**The anchor has to live where the units can read it.** ``--add-publisher``
+reads the file to derive the publisher's identity, but the two units are what
+read it from then on, and both run with ``PrivateTmp=yes`` -- so an anchor
+under ``/tmp`` or ``/var/tmp`` is readable from a shell and absent to them. The
+publisher then loads with no profile: it is counted on reload, and a title
+naming it is refused as though the host had never heard of it. The command
+warns when the path it was given is one of those, and the units say which
+anchor they could not read, on reload as well as at startup. ``/etc/lota/`` is
+the ordinary place for it.
+
 The rest of the file is copied through untouched and the section is appended,
 so whatever the operator put there survives. A publisher is its trust anchor
 rather than its label: adding the same anchor again is a no-op whichever name
