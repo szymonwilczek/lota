@@ -66,6 +66,8 @@ static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
 				    const uint8_t auth[TPM_AIK_AUTH_SIZE]);
 static int tpm_aik_load_auth_sealed(struct tpm_context *ctx);
 static int tpm_aik_auth_record_exists(struct tpm_context *ctx);
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len);
 static void tpm_aik_report_auth_load_failure(struct tpm_context *ctx,
 					     int load_rc);
 static int tpm_aik_generate_auth(uint8_t auth[TPM_AIK_AUTH_SIZE]);
@@ -1863,25 +1865,84 @@ int tpm_provision_aik(struct tpm_context *ctx)
 	return tpm_aik_save_new_key_metadata(ctx);
 }
 
-int tpm_reprovision_aik(struct tpm_context *ctx)
+/*
+ * Auth moved, key did not: leave the generation alone,
+ * since a bump marks every certificate over the key stale.
+ */
+static int tpm_aik_save_auth_rotation_metadata(struct tpm_context *ctx)
 {
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	if (!ctx->aik_meta_loaded)
+		return tpm_aik_save_new_key_metadata(ctx);
+	if (ctx->aik_meta.magic != TPM_AIK_META_MAGIC ||
+	    ctx->aik_meta.version != TPM_AIK_META_VERSION)
+		return -EINVAL;
+
+	ctx->aik_meta.auth_rotated_at = (int64_t)time(NULL);
+	return tpm_aik_save_metadata(ctx);
+}
+
+int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed)
+{
+	uint8_t before[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t after[sizeof(before)];
+	uint16_t before_len = 0;
+	uint16_t after_len = 0;
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	bool key_changed = true;
+	bool had_name = false;
 	int had;
 	int ret;
 
 	if (!ctx || !ctx->initialized)
 		return -EINVAL;
 
-	had = aik_exists(ctx, NULL);
+	if (out_key_changed)
+		*out_key_changed = false;
+
+	had = aik_exists(ctx, &key_handle);
 	if (had < 0)
 		return had;
+	if (had == 1) {
+		ret = tpm_object_name(ctx, key_handle, before, sizeof(before),
+				      &before_len);
+		tpm_tr_close(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		had_name = true;
+	}
 
-	/* rotate the AIK and its userAuth, sealing the new auth to the
-	 * current PCR state */
+	/* rotate the userAuth, sealing the new auth to the current PCR state */
 	ret = tpm_aik_reprovision_with_auth(ctx, had == 1 ? 1 : 0);
 	if (ret < 0)
 		return ret;
 
-	return tpm_aik_save_new_key_metadata(ctx);
+	/* same seed and template give the same key: compare Names */
+	if (had_name) {
+		key_handle = ESYS_TR_NONE;
+		ret = aik_exists(ctx, &key_handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1) {
+			ret = tpm_object_name(ctx, key_handle, after,
+					      sizeof(after), &after_len);
+			tpm_tr_close(ctx, &key_handle);
+			if (ret < 0)
+				return ret;
+			key_changed = before_len != after_len ||
+				      memcmp(before, after, before_len) != 0;
+		}
+	}
+
+	if (out_key_changed)
+		*out_key_changed = key_changed;
+
+	if (key_changed)
+		return tpm_aik_save_new_key_metadata(ctx);
+
+	return tpm_aik_save_auth_rotation_metadata(ctx);
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
