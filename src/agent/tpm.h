@@ -1393,6 +1393,14 @@ int tpm_reprovision_aik(struct tpm_context *ctx);
  */
 int tpm_aik_load_failure_blocks_reprovision(int load_rc);
 
+/*
+ * tpm_aik_slot_census - profile_aik_slot_tally() over the profiles under
+ * @base_dir (NULL for the default) and the handles the TPM holds.
+ * Returns 0 / negative errno.
+ */
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);

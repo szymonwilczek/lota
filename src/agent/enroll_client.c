@@ -1166,6 +1166,8 @@ static void print_key_capacity(const struct publisher_entry *entries,
 			       size_t count)
 {
 	size_t held = publishers_keys_held(entries, count);
+	struct profile_aik_slots slots;
+	bool have_census = false;
 	uint32_t used = 0;
 	uint32_t total = 0;
 	bool have_slots = false;
@@ -1173,6 +1175,8 @@ static void print_key_capacity(const struct publisher_entry *entries,
 	if (tpm_init(&g_agent.tpm_ctx) == 0) {
 		have_slots = tpm_persistent_slots(&g_agent.tpm_ctx, &used,
 						  &total) == 0;
+		have_census = tpm_aik_slot_census(&g_agent.tpm_ctx, NULL,
+						  &slots) == 0;
 		tpm_cleanup(&g_agent.tpm_ctx);
 	}
 
@@ -1201,6 +1205,31 @@ static void print_key_capacity(const struct publisher_entry *entries,
 		       "own capacity for keys\nis the lower limit on machines "
 		       "with little non-volatile memory.\n",
 		       LOTA_PROFILE_MAX_AIK_HANDLES);
+
+	/* what is left of the range, and which handles nothing records */
+	if (have_census) {
+		printf("Handle range %#010x-%#010x: %u of %u free",
+		       TPM_AIK_PROFILE_HANDLE_BASE,
+		       TPM_AIK_PROFILE_HANDLE_BASE +
+			       TPM_AIK_PROFILE_HANDLE_COUNT - 1,
+		       slots.free_slots, slots.total);
+		if (slots.recorded)
+			printf(", %u recorded here", slots.recorded);
+		printf(".\n");
+		if (slots.unrecorded) {
+			printf("%u handle%s in that range hold%s a key no "
+			       "publisher here records:\n ",
+			       slots.unrecorded,
+			       slots.unrecorded == 1 ? "" : "s",
+			       slots.unrecorded == 1 ? "s" : "");
+			for (uint32_t i = 0; i < slots.unrecorded; i++)
+				printf(" %#010x", slots.unrecorded_handles[i]);
+			printf("\nEach costs a publisher slot. LOTA will not "
+			       "evict what it did not put there;\nremove one "
+			       "with tpm2_evictcontrol -c <handle> once you "
+			       "know what it is.\n");
+		}
+	}
 	printf("\n");
 }
 

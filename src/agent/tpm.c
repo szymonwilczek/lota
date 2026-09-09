@@ -4152,6 +4152,40 @@ int tpm_aik_load_failure_blocks_reprovision(int load_rc)
 	return load_rc == -ENOENT ? 0 : 1;
 }
 
+int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
+			struct profile_aik_slots *out)
+{
+	uint32_t recorded[LOTA_PROFILE_MAX_AIK_HANDLES];
+	uint32_t in_use[LOTA_PROFILE_MAX_AIK_HANDLES];
+	size_t recorded_count = 0;
+	size_t in_use_count = 0;
+	int ret;
+
+	if (!ctx || !ctx->initialized || !out)
+		return -EINVAL;
+
+	ret = profile_aik_handles_recorded(
+		base_dir ? base_dir : LOTA_PROFILE_BASE_DIR, recorded,
+		sizeof(recorded) / sizeof(*recorded), &recorded_count);
+	if (ret < 0)
+		return ret;
+
+	for (uint32_t i = 0; i < TPM_AIK_PROFILE_HANDLE_COUNT; i++) {
+		uint32_t handle = TPM_AIK_PROFILE_HANDLE_BASE + i;
+
+		ret = tpm_handle_in_use(ctx, handle);
+		if (ret < 0)
+			return ret;
+		if (ret == 1)
+			in_use[in_use_count++] = handle;
+	}
+
+	return profile_aik_slot_tally(TPM_AIK_PROFILE_HANDLE_BASE,
+				      TPM_AIK_PROFILE_HANDLE_COUNT, recorded,
+				      recorded_count, in_use, in_use_count,
+				      out);
+}
+
 /*
  * Returns 1 if either the plaintext or the sealed record is on disk.
  * The hardened loader skips the sidecar and reports -ENOENT while it is present.

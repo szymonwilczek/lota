@@ -211,6 +211,24 @@ count and the two verbs that free a slot -- ``--list-publishers`` and
 ``--forget-publisher`` -- rather than an I/O error, because the machine is full,
 not broken and the space is reclaimable.
 
+Two different things take a slot, and the listing separates them. This build
+hands out eight handles, ``0x81010010`` to ``0x81010017``, and prints how many
+of them are free next to how many the profiles here record. A handle in that
+range that holds an object no profile records is the second kind: it is left
+behind by a wiped profile, a failed eviction, an earlier build or another
+program, and the allocator steps over it rather than evicting what it did not
+put there. The listing names each one::
+
+    Handle range 0x81010010-0x81010017: 0 of 8 free, 5 recorded here.
+    3 handles in that range hold a key no publisher here records:
+      0x81010012 0x81010013 0x81010014
+    Each costs a publisher slot. LOTA will not evict what it did not put there;
+    remove one with tpm2_evictcontrol -c <handle> once you know what it is.
+
+Without that line, a host with five keys and eight handles reads as having
+three slots left while having none, and the first symptom is the next
+publisher failing to bind.
+
 The diagnostic verbs take from the same pool, so they say what they cost
 before they cost it. ``--test-tpm`` reports state and never creates a key: it
 says when the handle is empty and tells the operator which command provisions

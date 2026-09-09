@@ -183,6 +183,32 @@ int profile_aik_handle_candidates(const char *base_dir, uint32_t base,
 				  size_t *out_count);
 
 /*
+ * Usage of the AIK handle range, which caps the publisher count. A slot is
+ * taken by a profile or by an object no profile records (wiped profile,
+ * failed eviction, other program); the allocator never evicts the latter.
+ */
+struct profile_aik_slots {
+	uint32_t total; /* handles in the range */
+	uint32_t recorded; /* slots a profile on this host records */
+	uint32_t unrecorded; /* objects in the range no profile records */
+	uint32_t free_slots; /* what a new publisher can still take */
+	uint32_t unrecorded_handles[LOTA_PROFILE_MAX_AIK_HANDLES];
+};
+
+/*
+ * Classify [base, base + count) from @recorded (profiles on disk) and @in_use
+ * (objects on the TPM); handles outside the range are ignored. No I/O.
+ */
+int profile_aik_slot_tally(uint32_t base, uint32_t count,
+			   const uint32_t *recorded, size_t recorded_count,
+			   const uint32_t *in_use, size_t in_use_count,
+			   struct profile_aik_slots *out);
+
+/* handles the profiles under @base_dir record, in directory order */
+int profile_aik_handles_recorded(const char *base_dir, uint32_t *out,
+				 size_t out_max, size_t *out_count);
+
+/*
  * profile_aik_cert_stored - does this publisher have an enrollment
  * certificate on disk?
  *

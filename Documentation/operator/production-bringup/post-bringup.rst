@@ -598,6 +598,17 @@ nothing prunes it, so a host that has been used carries more directories than
 it holds keys -- and the listing walks all of them, including the ones that
 hold a consent record and nothing else. The counts under it are over the same
 full set, which is what makes them worth reading on a host near its capacity.
+The listing also says how much of the attestation-key handle range is left.
+This build hands out eight handles, ``0x81010010`` to ``0x81010017``, and a
+slot goes two ways: a profile here records it, or the TPM holds an object at it
+that no profile records -- left by a wiped profile, a failed eviction, an
+earlier build or another program. The allocator steps over the second kind, so
+those slots are gone until somebody reclaims them, and the listing names each
+handle and says what it costs. Without that line a host with five keys and eight
+handles reads as having three slots free while having none, and the first symptom
+is the next publisher failing to bind. :doc:`../platform-support` covers the TPM's
+own capacity, which is the other half of the ceiling.
+
 ``lota-agent --forget-publisher <hex>`` destroys that key and deletes the rest,
 in that order -- a key with no directory left to name it would be worse than
 either state alone, so nothing is deleted if the eviction fails. An identity
