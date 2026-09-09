@@ -304,6 +304,16 @@ The report and enrollment wires are between LOTA's own programs, so their
 versions constrain which agent, verifier and CA builds interoperate rather
 than what an integrator may link against.
 
+Error codes are additive
+========================
+
+``lota_error`` in ``lota_gaming.h`` grows downward: a new condition takes the
+next unused value and the existing ones keep theirs, so a program built against
+an earlier header still reads every code it knew. A caller that switches on the
+enum has to keep a default arm, because a newer agent can return a code the
+program was not compiled against -- ``lota_strerror()`` has words for it either
+way.
+
 What a release promises
 =======================
 

@@ -562,6 +562,14 @@ identity everything else uses. ``lota-agent --enroll`` records it too: somebody
 with root named that CA and asked for the key, which is the same decision made
 a different way, and it keeps one rule for the agent to enforce.
 
+A title that names a publisher this machine has no attestation-key slot for is
+refused at connect too, with ``LOTA_IPC_ERR_NO_KEY_SLOT``
+(``LOTA_ERR_NO_KEY_SLOT`` in the SDK). The publisher is known here and somebody
+agreed to it; what is exhausted is the handle range, so no retry frees one and
+somebody at the machine has to forget a publisher or reclaim a handle. It is
+answered at connect, because every token in such a session would fail the same
+way.
+
 A title that selects a publisher nobody has agreed to is refused with a
 distinct error (``LOTA_ERR_CONSENT_REQUIRED``, readable through
 ``lota_connect_last_error()``) rather than a generic failure, because it is a

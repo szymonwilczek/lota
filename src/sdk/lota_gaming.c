@@ -297,6 +297,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_NO_TPM;
 	case LOTA_IPC_ERR_NO_ENFORCEMENT:
 		return LOTA_ERR_NO_ENFORCEMENT;
+	case LOTA_IPC_ERR_NO_KEY_SLOT:
+		return LOTA_ERR_NO_KEY_SLOT;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -515,6 +517,9 @@ static int select_publisher(struct lota_client *client, const char *hex)
 	 */
 	if (resp.result == LOTA_IPC_ERR_UNKNOWN_PROFILE)
 		return -ENOENT;
+	/* known publisher, no key slot left on this machine */
+	if (resp.result == LOTA_IPC_ERR_NO_KEY_SLOT)
+		return -ENOSPC;
 	if (resp.result != LOTA_IPC_OK)
 		return -EINVAL;
 
@@ -606,6 +611,7 @@ struct lota_client *lota_connect_opts(const struct lota_connect_opts *opts)
 		if (sel < 0) {
 			g_connect_error =
 				sel == -EACCES ? LOTA_ERR_CONSENT_REQUIRED :
+				sel == -ENOSPC ? LOTA_ERR_NO_KEY_SLOT :
 				sel == -EINVAL ? LOTA_ERR_INVALID_ARG :
 						 LOTA_ERR_UNKNOWN_PROFILE;
 			lota_disconnect(client);
@@ -1284,6 +1290,8 @@ const char *lota_strerror(int error)
 		return "The agent on this machine has no TPM and will not issue an unsigned token";
 	case LOTA_ERR_NO_ENFORCEMENT:
 		return "The agent on this machine enforces nothing, so there is no runtime policy to change";
+	case LOTA_ERR_NO_KEY_SLOT:
+		return "This machine has no attestation-key slot left for that publisher";
 	default:
 		return "Unknown error";
 	}

@@ -1233,6 +1233,17 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 */
 	if (client->profile && ctx->tpm) {
 		ret = tpm_bind_profile(ctx->tpm, &client->profile->paths);
+		if (ret == -ENOSPC) {
+			/* a full handle range, not a full disk */
+			lota_err("no attestation-key slot left for publisher "
+				 "%s: every handle this build reserves is "
+				 "taken. lota-agent --list-publishers says "
+				 "which, and --forget-publisher frees one",
+				 client->profile->paths.id);
+			fail = true;
+			fail_code = LOTA_IPC_ERR_NO_KEY_SLOT;
+			goto out;
+		}
 		if (ret < 0) {
 			lota_err(
 				"cannot bind publisher profile for GET_TOKEN: %s",
@@ -1564,6 +1575,7 @@ static void handle_set_profile(struct ipc_context *ctx,
 		snprintf(want + i * 2, 3, "%02x", req.profile_id[i]);
 
 	for (size_t i = 0; i < ctx->profile_count; i++) {
+		uint32_t recorded_handle = 0;
 		time_t agreed = 0;
 
 		if (!ctx->profiles[i].has_profile)
@@ -1585,6 +1597,31 @@ static void handle_set_profile(struct ipc_context *ctx,
 			build_error_response(client,
 					     LOTA_IPC_ERR_CONSENT_REQUIRED);
 			return;
+		}
+
+		/*
+		 * A publisher with no key yet needs a free handle; refuse here
+		 * rather than let the session fail at the first GET_TOKEN.
+		 */
+		if (ctx->tpm &&
+		    profile_aik_handle_load(&ctx->profiles[i].paths,
+					    &recorded_handle) == -ENOENT) {
+			struct profile_aik_slots slots;
+
+			if (tpm_aik_slot_census(ctx->tpm, NULL, &slots) == 0 &&
+			    slots.free_slots == 0) {
+				lota_warn("connection pid=%d asked for "
+					  "publisher %s, which holds no "
+					  "attestation key yet and this host "
+					  "has no slot left for one: "
+					  "--list-publishers says what holds "
+					  "the range, --forget-publisher frees "
+					  "a slot",
+					  client->peer_pid, want);
+				build_error_response(client,
+						     LOTA_IPC_ERR_NO_KEY_SLOT);
+				return;
+			}
 		}
 
 		client->profile = &ctx->profiles[i];

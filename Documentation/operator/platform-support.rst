@@ -229,6 +229,11 @@ Without that line, a host with five keys and eight handles reads as having
 three slots left while having none, and the first symptom is the next
 publisher failing to bind.
 
+A title that names a publisher with no slot left is refused at connect:
+``LOTA_ERR_NO_KEY_SLOT`` through ``lota_connect_last_error()``. That is a screen
+for the player -- the machine answers to as many publishers as it has room for
+and this one is over the line.
+
 The diagnostic verbs take from the same pool, so they say what they cost
 before they cost it. ``--test-tpm`` reports state and never creates a key: it
 says when the handle is empty and tells the operator which command provisions
