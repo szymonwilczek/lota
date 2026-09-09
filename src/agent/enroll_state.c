@@ -117,6 +117,34 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	return 0;
 }
 
+/*
+ * Read the two fields every record version starts with, for a diagnostic.
+ * Kept out of the loader so a refused record can never be acted on.
+ */
+int enroll_state_peek(const char *path, uint32_t *out_magic,
+		      uint32_t *out_version)
+{
+	uint32_t head[2];
+	ssize_t n;
+	int fd;
+
+	if (!path || !out_magic || !out_version)
+		return -EINVAL;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	n = read(fd, head, sizeof(head));
+	close(fd);
+	if (n != (ssize_t)sizeof(head))
+		return -EIO;
+
+	*out_magic = head[0];
+	*out_version = head[1];
+	return 0;
+}
+
 int enroll_state_record_present(int load_rc)
 {
 	return load_rc == -ENOENT ? 0 : 1;

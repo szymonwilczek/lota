@@ -222,6 +222,12 @@ selects the profile:
 
     sudo lota-agent --reenroll --ca-cert ca.crt
 
+``--reenroll`` needs the endpoint the first enrollment recorded. With no
+record it points at ``--enroll``; with an unreadable one it names the file,
+its magic and version against the build's, and the way out: restore the file,
+or enroll again naming the endpoint. The attestation key is kept either way;
+enrollment reissues only its certificate.
+
 A certificate that expires anyway (CA unreachable through the final third,
 or agent not running) is refused with ``FAIL - This host's attestation
 certificate is outside the window it is valid in``, counted as

@@ -710,8 +710,27 @@ int do_reenroll(const char *ca_cert)
 		return 1;
 	}
 	if (ret < 0) {
-		fprintf(stderr, "Failed to read enrollment state: %s\n",
-			strerror(-ret));
+		uint32_t magic = 0;
+		uint32_t version = 0;
+
+		/* unreadable, not absent: the endpoint to reuse is inside it */
+		fprintf(stderr,
+			"The enrollment record at %s could not be read (%s).\n",
+			paths.enroll_state, strerror(-ret));
+		if (enroll_state_peek(paths.enroll_state, &magic, &version) ==
+		    0)
+			fprintf(stderr,
+				"It holds magic 0x%08X version %u; this build "
+				"reads magic 0x%08X version %u.\n",
+				magic, version, LOTA_ENROLL_STATE_MAGIC,
+				LOTA_ENROLL_STATE_VERSION);
+		fprintf(stderr,
+			"Restore that file, or enroll again naming the "
+			"endpoint yourself:\n"
+			"  lota-agent --enroll --ca-server <host> --ca-port "
+			"<port> --ca-cert <their anchor>\n"
+			"The attestation key is kept either way; what is "
+			"reissued is the certificate over it.\n");
 		return 1;
 	}
 

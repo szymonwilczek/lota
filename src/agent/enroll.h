@@ -77,6 +77,10 @@ int enroll_state_load_path(const char *path, struct enroll_state *out);
 /* 1 if a record is on disk (readable or not) for this load result, else 0 */
 int enroll_state_record_present(int load_rc);
 
+/* magic + version of a refused record, for the refusal; 0 or -errno */
+int enroll_state_peek(const char *path, uint32_t *out_magic,
+		      uint32_t *out_version);
+
 struct enroll_challenge {
 	uint16_t status;
 	char session_id[LOTA_ENROLL_MAX_SESSION_ID + 1];
