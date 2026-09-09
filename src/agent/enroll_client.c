@@ -1060,10 +1060,23 @@ static void print_publisher(const struct publisher_entry *e,
 		printf("  agreed to      no (nothing enrolls until it is)\n");
 	}
 
-	if (e->enrolled)
+	if (e->enrolled) {
 		printf("  enrolled with  %s:%d\n", e->ca_server, e->ca_port);
-	else
+	} else if (e->enroll_unreadable) {
+		struct profile_paths ep;
+
+		printf("  enrolled with  yes -- but the record cannot be "
+		       "read (%s)\n",
+		       strerror(-e->enroll_rc));
+		if (paths_from_id(e->id, &ep) == 0)
+			printf("                 %s\n", ep.enroll_state);
+		printf("                 the key and certificate below were "
+		       "issued against it;\n"
+		       "                 restore it, or re-enroll: lota-agent "
+		       "--reenroll --ca-cert <their anchor>\n");
+	} else {
 		printf("  enrolled with  not yet\n");
+	}
 
 	if (e->has_aik_handle)
 		printf("  attestation key at TPM handle 0x%08X\n",
@@ -1127,6 +1140,18 @@ static void print_key_capacity(const struct publisher_entry *entries,
 
 	printf("Attestation keys: %zu held, one per publisher enrolled with.\n",
 	       held);
+	{
+		size_t unreadable = 0;
+
+		for (size_t i = 0; i < count; i++)
+			if (entries[i].enroll_unreadable)
+				unreadable++;
+		if (unreadable)
+			printf("%zu of them %s an enrollment record this "
+			       "build cannot read, so the count above is\n"
+			       "what is stored, not what has been enrolled.\n",
+			       unreadable, unreadable == 1 ? "holds" : "hold");
+	}
 	if (have_slots)
 		printf("This TPM holds %u persistent object%s of about %u, and "
 		       "each key needs one;\nthis build answers to at most %d "

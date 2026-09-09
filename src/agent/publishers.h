@@ -29,10 +29,14 @@ struct publisher_entry {
 	bool consented;
 	time_t consented_at;
 
-	/* enrollment record exists, naming where it was made */
+	/* enrollment record read, naming where it was made */
 	bool enrolled;
 	char ca_server[256];
 	int ca_port;
+
+	/* record on disk this build cannot read; @enroll_rc says why */
+	bool enroll_unreadable;
+	int enroll_rc;
 
 	/* the AIK this publisher's evidence is signed with */
 	bool has_aik_handle;

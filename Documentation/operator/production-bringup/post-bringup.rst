@@ -566,6 +566,22 @@ with what the machine has room for -- the keys held, the TPM's own persistent
 capacity and this build's maximum -- so the ceiling is readable before it is
 met; :doc:`../platform-support` covers what sets it.
 
+A profile whose enrollment record cannot be read is reported as holding one,
+not as never having enrolled. The record is what says where a publisher
+enrolled, and the attestation key and certificate stored beside it were issued
+against it, so a build that cannot read it must not print ``not yet`` above
+them:
+
+.. code-block:: text
+
+    enrolled with  yes -- but the record cannot be read (Operation not supported)
+                   /var/lib/lota/profiles/<id>/enroll_state.dat
+                   the key and certificate below were issued against it;
+                   restore it, or re-enroll: lota-agent --reenroll --ca-cert <their anchor>
+
+When any profile is in that state the summary says so, because the key count
+underneath is then what the machine stores.
+
 "Every publisher" is not bounded by that maximum. A profile directory is
 created the moment somebody agrees to a publisher, before any enrollment, and
 nothing prunes it, so a host that has been used carries more directories than
