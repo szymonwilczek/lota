@@ -126,6 +126,21 @@ static void test_rejects_v1_record(void)
 	unlink(path);
 }
 
+static void test_record_presence(void)
+{
+	/* a missing file is the only answer that means "nothing is there" */
+	CHECK(enroll_state_record_present(-ENOENT) == 0,
+	      "no file means no record");
+	CHECK(enroll_state_record_present(0) == 1,
+	      "a record that loads is one");
+	CHECK(enroll_state_record_present(-ENOTSUP) == 1,
+	      "a version this build cannot read is still a record");
+	CHECK(enroll_state_record_present(-EIO) == 1,
+	      "a short record is still a record");
+	CHECK(enroll_state_record_present(-EINVAL) == 1,
+	      "bytes that are not the record are still on disk");
+}
+
 static void test_rejects_bad_magic(void)
 {
 	const char *path = tmp_path();
@@ -224,6 +239,7 @@ int main(void)
 	test_roundtrip();
 	test_rejects_v1_record();
 	test_missing_is_enoent();
+	test_record_presence();
 	test_rejects_bad_magic();
 	test_rejects_truncated();
 	test_null_args();

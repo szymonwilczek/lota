@@ -99,10 +99,15 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	close(fd);
 	if (n < 0)
 		return -errno;
+	if ((size_t)n < offsetof(struct enroll_state, aik_generation))
+		return -EIO; /* too short to carry even a magic and a version */
 	if (st.magic != LOTA_ENROLL_STATE_MAGIC)
-		return -EINVAL;
-	if ((size_t)n != sizeof(st) || st.version != LOTA_ENROLL_STATE_VERSION)
-		return -EINVAL;
+		return -EINVAL; /* not an enrollment record at all */
+	/* version before length: an older record is short because it is old */
+	if (st.version != LOTA_ENROLL_STATE_VERSION)
+		return -ENOTSUP; /* a version this build does not read */
+	if ((size_t)n != sizeof(st))
+		return -EIO; /* shorter than the record it claims to be */
 
 	/* NUL-terminate the string fields defensively before use */
 	st.ca_server[sizeof(st.ca_server) - 1] = '\0';
@@ -110,6 +115,11 @@ int enroll_state_load_path(const char *path, struct enroll_state *out)
 	st.enroll_token[sizeof(st.enroll_token) - 1] = '\0';
 	*out = st;
 	return 0;
+}
+
+int enroll_state_record_present(int load_rc)
+{
+	return load_rc == -ENOENT ? 0 : 1;
 }
 
 int enroll_renew_anchor(const char *configured, const char *recorded,
