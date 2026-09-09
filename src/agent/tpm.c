@@ -3449,13 +3449,20 @@ static int tpm_load_ek(struct tpm_context *ctx, ESYS_TR *out_handle,
 	*out_handle = ESYS_TR_NONE;
 	*out_transient = false;
 
-	TPM_CALL_RETRY(ctx, rc,
-		       Esys_TR_FromTPMPublic(ctx->esys_ctx, TPM_EK_RSA_HANDLE,
-					     ESYS_TR_NONE, ESYS_TR_NONE,
-					     ESYS_TR_NONE, &ek_handle));
-	if (rc == TSS2_RC_SUCCESS) {
-		*out_handle = ek_handle;
-		return 0;
+	/*
+	 * Most hosts keep no persistent EK; anything short of a definite yes
+	 * falls back to the template, which derives the same key.
+	 */
+	if (tpm_handle_in_use(ctx, TPM_EK_RSA_HANDLE) == 1) {
+		TPM_CALL_RETRY(ctx, rc,
+			       Esys_TR_FromTPMPublic(ctx->esys_ctx,
+						     TPM_EK_RSA_HANDLE,
+						     ESYS_TR_NONE, ESYS_TR_NONE,
+						     ESYS_TR_NONE, &ek_handle));
+		if (rc == TSS2_RC_SUCCESS) {
+			*out_handle = ek_handle;
+			return 0;
+		}
 	}
 
 	{
@@ -4713,11 +4720,19 @@ static int tpm_nv_read_index(struct tpm_context *ctx, uint32_t index,
 	TPM2B_NAME *nv_name = NULL;
 	uint32_t max_nv_size = 1024; /* conservative default */
 	uint32_t prop_val;
+	int ret;
 
 	if (!ctx || !ctx->initialized || !buf || !out_size)
 		return -EINVAL;
 
 	*out_size = 0;
+
+	/* many chips ship no EK certificate in NV; callers expect -ENOENT */
+	ret = tpm_handle_in_use(ctx, index);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return -ENOENT;
 
 	/* query unlimited max NV buffer size */
 	if (tpm_get_prop(ctx, TPM2_PT_NV_BUFFER_MAX, &prop_val) == 0) {
@@ -4926,6 +4941,14 @@ static int seal_primary_lookup_persistent(struct tpm_context *ctx,
 {
 	ESYS_TR handle = ESYS_TR_NONE;
 	TSS2_RC rc;
+	int ret;
+
+	/* nothing persisted here is the default, and asking says so quietly */
+	ret = tpm_handle_in_use(ctx, TPM_SEAL_PRIMARY_HANDLE);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return 0;
 
 	TPM_CALL_RETRY(ctx, rc,
 		       Esys_TR_FromTPMPublic(ctx->esys_ctx,
