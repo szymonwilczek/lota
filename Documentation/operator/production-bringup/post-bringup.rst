@@ -623,6 +623,15 @@ either state alone, so nothing is deleted if the eviction fails. An identity
 this machine never answered to is refused: a mistyped identity would otherwise
 confirm a removal that did not happen while the real publisher stayed enrolled.
 
+The key it destroys is the one it can show belongs to that publisher. The
+attestation key is derived from the TPM's hierarchy seed and a template
+carrying the publisher's identity, so the agent derives it again and compares
+TPM Names before evicting anything. A handle holding something else -- another
+program's key, an object left by an earlier build -- is left alone: the
+publisher is still forgotten, and the command says the slot stays claimed by
+whatever holds it. Destroying a persistent object cannot be undone, and the
+handle is a slot, not an identity.
+
 Forgetting is about the identity, not about refusing the publisher. A profile
 still in ``lota.conf`` can be agreed to again, and enrolls with a **new** key
 that the old evidence cannot be linked to.

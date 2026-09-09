@@ -4152,6 +4152,92 @@ int tpm_aik_load_failure_blocks_reprovision(int load_rc)
 	return load_rc == -ENOENT ? 0 : 1;
 }
 
+/* copy @object's TPM Name into @out; 0 or negative errno */
+static int tpm_object_name(struct tpm_context *ctx, ESYS_TR object,
+			   uint8_t *out, size_t out_max, uint16_t *out_len)
+{
+	TPM2B_PUBLIC *out_public = NULL;
+	TPM2B_NAME *qualified = NULL;
+	TPM2B_NAME *name = NULL;
+	TSS2_RC rc;
+	int ret;
+
+	struct esys_read_public_args args = {
+		.esys_ctx = ctx->esys_ctx,
+		.object_handle = object,
+		.out_public_out = &out_public,
+		.name_out = &name,
+		.qualified_name_out = &qualified,
+	};
+
+	ret = tpm_call_with_backoff(ctx, esys_read_public_thunk, &args, &rc, 3,
+				    (void **)&out_public, (void **)&name,
+				    (void **)&qualified);
+	if (ret < 0)
+		return ret;
+
+	if (!name || name->size == 0 || name->size > out_max) {
+		ret = -EIO;
+	} else {
+		memcpy(out, name->name, name->size);
+		*out_len = name->size;
+		ret = 0;
+	}
+
+	Esys_Free(out_public);
+	Esys_Free(name);
+	Esys_Free(qualified);
+	return ret;
+}
+
+/*
+ * The AIK is a primary derived from the hierarchy seed and the publisher's
+ * template, so re-derive it and compare Names; nothing on disk records which
+ * object was put at the handle.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx)
+{
+	uint8_t at_handle[sizeof(((TPM2B_NAME *)0)->name)];
+	uint8_t derived[sizeof(at_handle)];
+	uint16_t at_handle_len = 0;
+	uint16_t derived_len = 0;
+	uint8_t zero_auth[TPM_AIK_AUTH_SIZE] = { 0 };
+	ESYS_TR key_handle = ESYS_TR_NONE;
+	ESYS_TR transient = ESYS_TR_NONE;
+	int ret;
+
+	if (!ctx || !ctx->initialized)
+		return -EINVAL;
+
+	ret = aik_exists(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+	if (ret == 0)
+		return 0; /* nothing at the handle */
+
+	ret = tpm_object_name(ctx, key_handle, at_handle, sizeof(at_handle),
+			      &at_handle_len);
+	tpm_tr_close(ctx, &key_handle);
+	if (ret < 0)
+		return ret;
+
+	/* userAuth is not part of the Name, so any auth will do */
+	ret = create_aik_primary(ctx, &transient, zero_auth);
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_object_name(ctx, transient, derived, sizeof(derived),
+			      &derived_len);
+	Esys_FlushContext(ctx->esys_ctx, transient);
+	if (ret < 0)
+		return ret;
+
+	if (at_handle_len != derived_len)
+		return 0;
+
+	return memcmp(at_handle, derived, at_handle_len) == 0 ? 1 : 0;
+}
+
 int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
 			struct profile_aik_slots *out)
 {

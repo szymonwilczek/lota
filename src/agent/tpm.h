@@ -1401,6 +1401,14 @@ int tpm_aik_load_failure_blocks_reprovision(int load_rc);
 int tpm_aik_slot_census(struct tpm_context *ctx, const char *base_dir,
 			struct profile_aik_slots *out);
 
+/*
+ * tpm_aik_handle_holds_profile_key - does the bound profile's handle hold the
+ * key that profile derives?
+ * Returns 1 if so, 0 if the handle is empty or holds another object,
+ * or a negative errno.
+ */
+int tpm_aik_handle_holds_profile_key(struct tpm_context *ctx);
+
 #ifdef LOTA_TPM_TESTING
 typedef int (*tpm_test_prop_reader_fn)(struct tpm_context *ctx, TPM2_PT prop,
 				       uint32_t *out_val);

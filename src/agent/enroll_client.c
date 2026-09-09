@@ -1300,6 +1300,7 @@ int do_forget_publisher(const char *profile_id)
 {
 	struct profile_paths paths;
 	uint32_t handle = 0;
+	bool foreign_key = false;
 	bool had_key = false;
 	int ret;
 
@@ -1327,6 +1328,8 @@ int do_forget_publisher(const char *profile_id)
 	}
 
 	if (profile_aik_handle_load(&paths, &handle) == 0) {
+		int owns;
+
 		ret = tpm_init(&g_agent.tpm_ctx);
 		if (ret < 0) {
 			fprintf(stderr,
@@ -1336,6 +1339,31 @@ int do_forget_publisher(const char *profile_id)
 				tpm_strerror(ret));
 			return 1;
 		}
+
+		/*
+		 * Evict only this publisher's own key: an object that replaced
+		 * it at the handle belongs to whoever put it there.
+		 */
+		owns = tpm_bind_profile(&g_agent.tpm_ctx, &paths) == 0 ?
+			       tpm_aik_handle_holds_profile_key(
+				       &g_agent.tpm_ctx) :
+			       -EIO;
+		if (owns < 0) {
+			fprintf(stderr,
+				"Could not check what the key at 0x%08X is "
+				"(%s).\nNothing was deleted: destroying an "
+				"object this publisher may not own cannot be "
+				"undone.\n",
+				handle, tpm_strerror(owns));
+			tpm_cleanup(&g_agent.tpm_ctx);
+			return 1;
+		}
+		if (owns == 0) {
+			foreign_key = true;
+			tpm_cleanup(&g_agent.tpm_ctx);
+			goto forget;
+		}
+
 		ret = tpm_evict_profile_aik(&g_agent.tpm_ctx, handle);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		if (ret == 0) {
@@ -1351,6 +1379,7 @@ int do_forget_publisher(const char *profile_id)
 		}
 	}
 
+forget:
 	ret = publishers_forget(&paths);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to remove %s: %s\n", paths.dir,
@@ -1362,6 +1391,12 @@ int do_forget_publisher(const char *profile_id)
 	if (had_key)
 		printf("Its attestation key is destroyed; that identity "
 		       "cannot be handed back.\n");
+	if (foreign_key)
+		printf("The key at 0x%08X is not this publisher's, so it was "
+		       "left alone.\nThat slot stays claimed by whatever "
+		       "holds it; lota-agent --list-publishers names the "
+		       "handles\nin the range nothing here records.\n",
+		       handle);
 	printf("A title of theirs can ask again, and will need consent and a "
 	       "new key.\n");
 	return 0;
