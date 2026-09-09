@@ -86,9 +86,7 @@ static void test_missing_is_enoent(void)
 static void test_rejects_v1_record(void)
 {
 	/* record written before the token field existed:
-	 * version 1, ending where enroll_token begins
-	 * loader requires the current record,
-	 * so the host re-enrolls instead of running on state it cannot fully read */
+	 * version 1, ending where enroll_token begins */
 	const size_t v1_size = offsetof(struct enroll_state, enroll_token);
 	const char *path = tmp_path();
 	struct enroll_state in, out;
@@ -109,8 +107,9 @@ static void test_rejects_v1_record(void)
 	}
 
 	memset(&out, 0xFF, sizeof(out));
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "v1 record rejected");
+	/* -ENOTSUP, not -ENOENT: re-enrolling would overwrite the certificate */
+	CHECK(enroll_state_load_path(path, &out) == -ENOTSUP,
+	      "a record at a version this build does not read says so");
 
 	/* short record claiming the current version is refused too */
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -121,8 +120,8 @@ static void test_rejects_v1_record(void)
 		      "write truncated current record");
 		close(fd);
 	}
-	CHECK(enroll_state_load_path(path, &out) == -EINVAL,
-	      "truncated current record rejected");
+	CHECK(enroll_state_load_path(path, &out) == -EIO,
+	      "a record shorter than the record says so");
 
 	unlink(path);
 }
