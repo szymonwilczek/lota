@@ -400,6 +400,130 @@ static void test_leftover_sidecar_is_still_a_record(void)
 	PASS();
 }
 
+/* write @len bytes of @magic with @version + 1 */
+static int write_bumped_record(const char *path, uint32_t magic,
+			       uint32_t version, size_t len)
+{
+	uint8_t buf[512];
+	uint32_t le_magic = htole32(magic);
+	uint32_t le_version = htole32(version + 1);
+	FILE *f;
+	int fd;
+
+	if (len > sizeof(buf))
+		return -1;
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, &le_magic, sizeof(le_magic));
+	memcpy(buf + sizeof(le_magic), &le_version, sizeof(le_version));
+
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
+	if (fwrite(buf, 1, len, f) != len) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+	return 0;
+}
+
+/*
+ * Every version-guarded state file refuses an unknown version:
+ * the clock snapshot is discarded, metadata and auth records stop the run.
+ */
+static void test_state_files_at_an_unknown_version(void)
+{
+	struct tpm_context ctx;
+	struct lota_clock_state clock_out;
+	char path[512];
+	int rc;
+
+	TEST("every version-guarded state file refuses a version it cannot read");
+	init_ctx(&ctx);
+
+	/* clock_state.dat: refused, and the caller carries on without it */
+	snprintf(ctx.clock_state_path, sizeof(ctx.clock_state_path),
+		 "%s/clock_state.dat", test_dir);
+	if (write_bumped_record(ctx.clock_state_path, TPM_CLOCK_STATE_MAGIC,
+				TPM_CLOCK_STATE_VERSION,
+				sizeof(struct lota_clock_state)) != 0) {
+		FAIL("seed clock state");
+		return;
+	}
+	memset(&clock_out, 0, sizeof(clock_out));
+	rc = tpm_clock_state_load(&ctx, &clock_out);
+	if (rc == 0) {
+		FAIL("clock state accepted an unknown version");
+		return;
+	}
+	if (clock_out.version != 0) {
+		FAIL("clock state handed back a record it refused");
+		return;
+	}
+
+	/* aik_meta.dat: refused, and the run stops */
+	if (write_bumped_record(ctx.aik_meta_path, TPM_AIK_META_MAGIC,
+				TPM_AIK_META_VERSION,
+				sizeof(struct aik_metadata)) != 0) {
+		FAIL("seed metadata");
+		return;
+	}
+	ctx.initialized = true; /* no esys_ctx: this path is pure file I/O */
+	rc = tpm_aik_load_metadata(&ctx);
+	ctx.initialized = false;
+	if (rc != -ENOTSUP) {
+		FAIL("metadata did not refuse an unknown version");
+		return;
+	}
+	if (ctx.aik_meta_loaded) {
+		FAIL("metadata marked loaded after a refusal");
+		return;
+	}
+
+	/* aik_auth.dat: refused, and the key it names is left alone */
+	if (tpm_test_aik_plaintext_path(&ctx, path, sizeof(path)) != 0 ||
+	    write_bumped_record(path, TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION,
+				sizeof(struct aik_auth_record)) != 0) {
+		FAIL("seed auth record");
+		return;
+	}
+	rc = tpm_test_aik_load_auth(&ctx);
+	if (rc != -ENOTSUP || blocks_reprovision(rc) != 1) {
+		FAIL("auth record did not refuse an unknown version");
+		return;
+	}
+
+	/*
+	 * aik_auth.sealed: unsealing needs a TPM, so check only that a copy
+	 * that fails to load still counts as a record and blocks rotation
+	 */
+	if (tpm_test_aik_sealed_path(&ctx, path, sizeof(path)) != 0 ||
+	    write_bumped_record(path, TPM_AIK_AUTH_MAGIC, TPM_AIK_AUTH_VERSION,
+				64) != 0) {
+		FAIL("seed sealed copy");
+		return;
+	}
+	ctx.seal_aik_auth_strict = true;
+	memset(ctx.aik_auth, 0, sizeof(ctx.aik_auth));
+	ctx.aik_auth_loaded = false;
+	rc = tpm_test_aik_load_auth(&ctx);
+	if (rc == 0) {
+		FAIL("sealed copy unsealed without a TPM");
+		return;
+	}
+	if (blocks_reprovision(rc) != 1 ||
+	    tpm_test_aik_auth_record_exists(&ctx) != 1) {
+		FAIL("an unreadable sealed copy would rotate the key");
+		return;
+	}
+	PASS();
+}
+
 static void test_reseal_reprovision_arg_guards(void)
 {
 	struct tpm_context ctx;
@@ -431,6 +555,7 @@ int main(void)
 	test_unreadable_record_is_not_a_missing_one();
 	test_recovery_decision();
 	test_leftover_sidecar_is_still_a_record();
+	test_state_files_at_an_unknown_version();
 	test_reseal_reprovision_arg_guards();
 
 	cleanup_dir();
