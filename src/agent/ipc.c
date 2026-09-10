@@ -1137,23 +1137,26 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
 
-	if (token_gate_needs_attested(view_flags) &&
-	    !(view_flags & LOTA_STATUS_ATTESTED)) {
-		fail = true;
-		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
-		goto out;
-	}
-
 	/*
 	 * Refuse to issue tokens while the TPM is in DA lockout: a Quote
 	 * attempt would either hang the IPC thread on retry or surface a
 	 * second-class error to the client. Fail closed with a dedicated
 	 * status code so SDK consumers can back off coherently.
+	 *
+	 * Checked before the verdict: a lockout is why the verdict lapsed,
+	 * and NOT_ATTESTED would invite a retry that cannot succeed.
 	 */
 	if ((ctx->tpm && tpm_is_locked_out(ctx->tpm)) ||
 	    (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_TPM_LOCKOUT;
+		goto out;
+	}
+
+	if (token_gate_needs_attested(view_flags) &&
+	    !(view_flags & LOTA_STATUS_ATTESTED)) {
+		fail = true;
+		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
 		goto out;
 	}
 

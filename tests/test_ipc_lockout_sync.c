@@ -299,8 +299,9 @@ static int read_frame(struct ipc_context *ctx, int fd,
 	return -ETIMEDOUT;
 }
 
-/* one loop sync with an attested verdict, so GET_TOKEN reaches the gate */
-static int sync_round(struct ipc_context *ctx, int fd, uint32_t host_flags)
+/* one loop sync; @attested is the verdict it reports */
+static int sync_round(struct ipc_context *ctx, int fd, uint32_t host_flags,
+		      bool attested)
 {
 	uint8_t buf[sizeof(struct lota_ipc_attest_sync) +
 		    sizeof(struct lota_ipc_attest_verdict)];
@@ -324,8 +325,8 @@ static int sync_round(struct ipc_context *ctx, int fd, uint32_t host_flags)
 			return -EINVAL;
 		verdict.profile_id[i] = (uint8_t)byte;
 	}
-	verdict.attested = 1;
-	verdict.valid_until = (uint64_t)time(NULL) + 3600;
+	verdict.attested = attested ? 1 : 0;
+	verdict.valid_until = attested ? (uint64_t)time(NULL) + 3600 : 0;
 
 	memcpy(buf, &sync, sizeof(sync));
 	memcpy(buf + sizeof(sync), &verdict, sizeof(verdict));
@@ -370,7 +371,7 @@ test_the_published_word_carries_the_loops_lockout(struct ipc_context *ctx,
 {
 	TEST("a lockout the loop observed reaches the published status word");
 
-	if (sync_round(ctx, loop_fd, LOTA_STATUS_TPM_LOCKOUT) < 0) {
+	if (sync_round(ctx, loop_fd, LOTA_STATUS_TPM_LOCKOUT, true) < 0) {
 		FAIL("sync refused");
 		return;
 	}
@@ -406,6 +407,35 @@ test_a_title_is_refused_with_the_lockout_code(struct ipc_context *ctx)
 	PASS();
 }
 
+/* a lockout fails rounds, so the verdict lapses: still name the lockout */
+static void
+test_a_lapsed_verdict_does_not_hide_the_lockout(struct ipc_context *ctx,
+						int loop_fd)
+{
+	uint32_t result = 0;
+
+	TEST("a locked chip is named even once the verdict has lapsed");
+
+	if (sync_round(ctx, loop_fd, LOTA_STATUS_TPM_LOCKOUT, false) < 0) {
+		FAIL("sync refused");
+		return;
+	}
+
+	if (token_result(ctx, &result) < 0) {
+		FAIL("no answer to GET_TOKEN");
+		return;
+	}
+	if (result == LOTA_IPC_ERR_NOT_ATTESTED) {
+		FAIL("the lockout is hidden behind the lapsed verdict");
+		return;
+	}
+	if (result != LOTA_IPC_ERR_TPM_LOCKOUT) {
+		FAIL("the refusal does not name the lockout");
+		return;
+	}
+	PASS();
+}
+
 /* a sticky bit would refuse tokens until the daemon restarts */
 static void test_a_cleared_lockout_clears_the_word(struct ipc_context *ctx,
 						   int loop_fd)
@@ -414,7 +444,7 @@ static void test_a_cleared_lockout_clears_the_word(struct ipc_context *ctx,
 
 	TEST("the bit clears when the loop stops observing the lockout");
 
-	if (sync_round(ctx, loop_fd, 0) < 0) {
+	if (sync_round(ctx, loop_fd, 0, true) < 0) {
 		FAIL("sync refused");
 		return;
 	}
@@ -481,6 +511,7 @@ int main(void)
 
 	test_the_published_word_carries_the_loops_lockout(&ctx, loop_fd);
 	test_a_title_is_refused_with_the_lockout_code(&ctx);
+	test_a_lapsed_verdict_does_not_hide_the_lockout(&ctx, loop_fd);
 	test_a_cleared_lockout_clears_the_word(&ctx, loop_fd);
 
 	close(loop_fd);
