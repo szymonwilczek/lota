@@ -268,6 +268,40 @@ static void test_resume_does_not_license_a_new_binary(void)
 }
 
 /*
+ * A replaced /run baseline handoff makes the derivation miss (fail-closed),
+ * but the register holds only this agent's extend: not a foreign writer.
+ */
+static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
+{
+	static const uint8_t forged[LOTA_HASH_SIZE] = {
+		0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+		0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+		0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+	};
+	struct scenario s;
+	enum tpm_pcr14_state got;
+
+	TEST("a replaced baseline handoff is not called a foreign extend");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+
+	/* same register, same binary; only the handoff file changed */
+	s.obs.baseline = forged;
+	if (tpm_derive_locked_pcr14(s.self_hash, forged, s.expected_locked) < 0)
+		FAIL("failed to derive from the forged handoff");
+
+	got = tpm_classify_pcr14(&s.obs);
+
+	if (got == TPM_PCR14_ALREADY_COMMITTED)
+		FAIL("a missed derivation must not be accepted");
+	if (got == TPM_PCR14_MUTATED_IN_SESSION)
+		FAIL("an untouched register reported as extended by somebody else");
+	PASS();
+}
+
+/*
  * A cold boot advances resetCount, and a register that is already dirty
  * at that point was written before the agent ran.
  * That path must not be confused with a restart, whose resetCount never moves.
@@ -433,6 +467,7 @@ int main(void)
 	test_forged_snapshot_cannot_fake_a_resume();
 	test_foreign_extend_is_still_refused();
 	test_resume_does_not_license_a_new_binary();
+	test_a_replaced_handoff_is_not_a_foreign_extend();
 	test_reset_count_advance_is_not_a_resume();
 	test_the_two_accepting_verdicts_are_told_apart();
 
