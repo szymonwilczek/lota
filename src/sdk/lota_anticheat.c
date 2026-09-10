@@ -1048,6 +1048,8 @@ const char *lota_ac_strerror(int err)
 		return "this machine is not enrolled with that publisher";
 	case LOTA_AC_ERR_NO_KEY_SLOT:
 		return "this machine has no attestation-key slot left for that publisher";
+	case LOTA_AC_ERR_TPM_LOCKOUT:
+		return "the TPM on this machine is locked out and signs nothing until it is cleared";
 	case LOTA_AC_ERR_ACCESS_DENIED:
 		return "the agent refused this caller";
 	case LOTA_AC_ERR_TOKEN_DIR:
@@ -1421,6 +1423,11 @@ int lota_ac_heartbeat(struct lota_ac_session *session, uint8_t *buf,
 			if (ret == LOTA_ERR_NOT_ATTESTED) {
 				ac_fail(LOTA_AC_ERR_NOT_ATTESTED);
 				return -ENODATA;
+			}
+
+			if (ret == LOTA_ERR_TPM_LOCKED) {
+				ac_fail(LOTA_AC_ERR_TPM_LOCKOUT);
+				return -EIO;
 			}
 
 			/*

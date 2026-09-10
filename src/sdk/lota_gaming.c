@@ -299,6 +299,8 @@ static int ipc_result_to_error(uint32_t result)
 		return LOTA_ERR_NO_ENFORCEMENT;
 	case LOTA_IPC_ERR_NO_KEY_SLOT:
 		return LOTA_ERR_NO_KEY_SLOT;
+	case LOTA_IPC_ERR_TPM_LOCKOUT:
+		return LOTA_ERR_TPM_LOCKED;
 	case LOTA_IPC_ERR_TPM_FAILURE:
 	case LOTA_IPC_ERR_INTERNAL:
 	default:
@@ -1292,6 +1294,8 @@ const char *lota_strerror(int error)
 		return "The agent on this machine enforces nothing, so there is no runtime policy to change";
 	case LOTA_ERR_NO_KEY_SLOT:
 		return "This machine has no attestation-key slot left for that publisher";
+	case LOTA_ERR_TPM_LOCKED:
+		return "The TPM on this machine is locked out after too many failed authorizations and signs nothing until it is cleared";
 	default:
 		return "Unknown error";
 	}

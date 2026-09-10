@@ -332,8 +332,11 @@ never something an integrator sends: the SDK has no such call.
 The loop also passes on a TPM dictionary-attack lockout. It asks the chip for
 a quote every round, while the daemon may go long without a TPM call, so the
 status word carries ``LOTA_STATUS_TPM_LOCKOUT`` from whichever process saw it
-first. A title asking for a token meanwhile gets the lockout code, not a
-generic error, and can back off.
+first. A title asking for a token meanwhile gets the lockout code
+(``LOTA_ERR_TPM_LOCKED`` in the SDK, ``LOTA_AC_ERR_TPM_LOCKOUT`` in the
+anti-cheat wrapper), not a generic error, and can back off. The lockout is
+checked before the verdict: it is why the verdict lapsed, and "not attested"
+would invite a retry that cannot succeed.
 
 Two consequences worth knowing:
 
