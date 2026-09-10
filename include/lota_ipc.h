@@ -401,10 +401,16 @@ struct lota_ipc_attest_sync {
 	uint32_t count; /* verdicts that follow */
 	uint32_t attest_count; /* successful rounds since the loop started */
 	uint32_t fail_count;
-	uint32_t _reserved1;
+	uint32_t host_flags; /* LOTA_IPC_SYNC_HOST_FLAGS the loop observed */
 	uint64_t last_attest_time;
 	/* struct lota_ipc_attest_verdict verdicts[count] follows */
 } __attribute__((packed));
+
+/*
+ * Status bits only the loop observes: it calls the TPM every round,
+ * the daemon may not for a long time. Bits the daemon can set itself stay out.
+ */
+#define LOTA_IPC_SYNC_HOST_FLAGS LOTA_STATUS_TPM_LOCKOUT
 
 /*
  * What a publisher is owed, as only the socket owner can know it:

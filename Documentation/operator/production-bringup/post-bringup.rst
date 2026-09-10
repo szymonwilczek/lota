@@ -329,6 +329,12 @@ verdicts out, sessions and enrollment requests in. That exchange is refused
 unless the peer is the same agent binary running as the same user, and it is
 never something an integrator sends: the SDK has no such call.
 
+The loop also passes on a TPM dictionary-attack lockout. It asks the chip for
+a quote every round, while the daemon may go long without a TPM call, so the
+status word carries ``LOTA_STATUS_TPM_LOCKOUT`` from whichever process saw it
+first. A title asking for a token meanwhile gets the lockout code, not a
+generic error, and can back off.
+
 Two consequences worth knowing:
 
 * **Stopping ``lota-attest.service`` does not stop a title from getting an
