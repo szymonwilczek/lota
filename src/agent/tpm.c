@@ -2537,7 +2537,7 @@ static int sha256_two_block(const uint8_t block_a[LOTA_HASH_SIZE],
  */
 static bool firmware_is_uefi(const struct tpm_context *ctx)
 {
-	const char *path = ctx->allow_env_tpm_overrides ?
+	const char *path = (ctx && ctx->allow_env_tpm_overrides) ?
 				   getenv("LOTA_UEFI_FIRMWARE_PATH") :
 				   NULL;
 
@@ -2545,6 +2545,29 @@ static bool firmware_is_uefi(const struct tpm_context *ctx)
 		path = UEFI_FIRMWARE_PATH;
 
 	return access(path, F_OK) == 0;
+}
+
+/* wording quoted by the platform-support page */
+static void report_non_uefi(void)
+{
+	fprintf(stderr,
+		"SECURITY: this host did not boot via UEFI (%s absent). "
+		"LOTA requires UEFI measured boot: legacy BIOS/CSM "
+		"measures neither the firmware and Secure Boot state "
+		"the verifier pins nor the PCR14 baseline the boot "
+		"commitment chains onto, so such a host cannot attest. "
+		"Switch the firmware out of legacy/CSM mode and "
+		"reinstall\n",
+		UEFI_FIRMWARE_PATH);
+}
+
+int tpm_firmware_refuses_attestation(const struct tpm_context *ctx)
+{
+	if (firmware_is_uefi(ctx))
+		return 0;
+
+	report_non_uefi();
+	return 1;
 }
 
 /*
@@ -2834,16 +2857,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	if (!ctx || !ctx->initialized || !self_hash)
 		return -EINVAL;
 
+	/* bring-up already asked; this covers direct callers */
 	if (!firmware_is_uefi(ctx)) {
-		fprintf(stderr,
-			"SECURITY: this host did not boot via UEFI (%s absent). "
-			"LOTA requires UEFI measured boot: legacy BIOS/CSM "
-			"measures neither the firmware and Secure Boot state "
-			"the verifier pins nor the PCR14 baseline the boot "
-			"commitment chains onto, so such a host cannot attest. "
-			"Switch the firmware out of legacy/CSM mode and "
-			"reinstall\n",
-			UEFI_FIRMWARE_PATH);
+		report_non_uefi();
 		return -ENOTSUP;
 	}
 

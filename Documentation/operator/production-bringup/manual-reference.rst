@@ -253,7 +253,9 @@ zero. Because the verifier derives the baseline from the signed log, a forged
 Both halves of that chain are mandatory, and both refuse a non-UEFI host before
 touching the TPM: the initramfs helper exits non-zero (which aborts the boot
 transition, its unit is ordered before ``initrd-root-fs.target``) and the agent
-returns ``ENOTSUP`` from its self-measurement, each naming the absent
+asks the same question during bring-up, before ``Initializing TPM``, so a slow,
+absent or locked-out chip cannot delay the refusal. Self-measurement checks
+again and returns ``ENOTSUP``. Every refusal names the absent
 ``/sys/firmware/efi``. Legacy BIOS/CSM is unsupported -- see
 :doc:`../platform-support`. When the lock did not run this boot the agent says
 so and names the fix: install the ``90lota`` dracut module, rebuild the

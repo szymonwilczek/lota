@@ -1396,6 +1396,14 @@ int tpm_aik_reseal_auth(struct tpm_context *ctx);
 int tpm_reprovision_aik(struct tpm_context *ctx, bool *out_key_changed);
 
 /*
+ * tpm_firmware_refuses_attestation - non-UEFI (BIOS/CSM) hosts cannot attest.
+ * Reads a path, no TPM state, so @ctx need not be initialized; only its
+ * env-override permission is used (LOTA_TCTI rule).
+ * Returns 1 if refused (reason printed), else 0.
+ */
+int tpm_firmware_refuses_attestation(const struct tpm_context *ctx);
+
+/*
  * tpm_aik_load_failure_blocks_reprovision - returns 1 when an AIK-auth
  * load failure must not rotate the key, i.e. any failure other than -ENOENT.
  */

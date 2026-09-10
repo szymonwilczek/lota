@@ -413,6 +413,13 @@ static int run_daemon(const struct run_daemon_params *params)
 					     "enabled" :
 					     "disabled or unreadable");
 
+	/* reads a path, not the chip: refuse before the TPM is opened */
+	if (tpm_firmware_refuses_attestation(&g_agent.tpm_ctx)) {
+		lota_err("This host cannot attest: it did not boot via UEFI.");
+		ret = -ENOTSUP;
+		goto cleanup_tpm;
+	}
+
 	lota_info("Initializing TPM");
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
