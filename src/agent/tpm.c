@@ -2808,9 +2808,13 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 		return TPM_PCR14_TAMPERED_BEFORE_START;
 
 	/* same boot session from here down */
-	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0 &&
-	    memcmp(obs->prev->self_hash, obs->self_hash, LOTA_HASH_SIZE) != 0)
-		return TPM_PCR14_BINARY_CHANGED;
+	if (memcmp(obs->current, obs->prev->pcr14, LOTA_HASH_SIZE) == 0) {
+		/* register untouched: the binary or the /run handoff moved */
+		if (memcmp(obs->prev->self_hash, obs->self_hash,
+			   LOTA_HASH_SIZE) != 0)
+			return TPM_PCR14_BINARY_CHANGED;
+		return TPM_PCR14_HANDOFF_CHANGED;
+	}
 
 	return TPM_PCR14_MUTATED_IN_SESSION;
 }
@@ -3059,6 +3063,33 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 				"rebind it. Cold reboot to re-extend PCR14 "
 				"against the "
 				"current agent binary\n");
+		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
+		return -EBADMSG;
+
+	case TPM_PCR14_HANDOFF_CHANGED:
+		/*
+		 * An extended register with a rewritten snapshot looks the same;
+		 * name both, the reboot-fixable one first.
+		 */
+		fprintf(stderr,
+			"SECURITY: PCR14 holds exactly the value lota-agent "
+			"recorded for this boot session and the agent binary is "
+			"unchanged, but the boot commitment no longer derives "
+			"from the baseline handoff at %s: that handoff is not "
+			"the one this commitment was built on. The handoff is "
+			"written once per boot by the initramfs helper "
+			"(lota-pcr14-lock) and only read afterwards, so the "
+			"likely cause is that it was replaced after the helper "
+			"wrote it -- cold reboot to have the helper write it "
+			"again, and check what has write access to /run/lota. "
+			"One other cause leaves identical evidence and cannot "
+			"be told apart from here: PCR14 extended by another "
+			"writer and the snapshot at %s rewritten to match. If a "
+			"cold reboot does not clear this, treat it as that one "
+			"and audit both files' writers\n",
+			LOTA_PCR14_BASELINE_PATH,
+			ctx->clock_state_path[0] ? ctx->clock_state_path :
+						   TPM_CLOCK_STATE_PATH);
 		print_platform_clock(ctx, "PCR14 boot-commitment: TPM clock");
 		return -EBADMSG;
 

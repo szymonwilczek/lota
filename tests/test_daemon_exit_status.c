@@ -52,8 +52,8 @@ static int tests_passed;
 static const enum tpm_pcr14_state refusing_verdicts[] = {
 	TPM_PCR14_LOCK_MISSING,	      TPM_PCR14_SPENT_BY_SHUTDOWN,
 	TPM_PCR14_BINARY_CHANGED,     TPM_PCR14_TAMPERED_BEFORE_START,
-	TPM_PCR14_MUTATED_IN_SESSION, TPM_PCR14_UNATTRIBUTABLE,
-	TPM_PCR14_STATE_ROLLBACK,
+	TPM_PCR14_MUTATED_IN_SESSION, TPM_PCR14_HANDOFF_CHANGED,
+	TPM_PCR14_UNATTRIBUTABLE,     TPM_PCR14_STATE_ROLLBACK,
 };
 
 static const char *verdict_name(enum tpm_pcr14_state state)
@@ -73,6 +73,8 @@ static const char *verdict_name(enum tpm_pcr14_state state)
 		return "tampered before start";
 	case TPM_PCR14_MUTATED_IN_SESSION:
 		return "mutated in session";
+	case TPM_PCR14_HANDOFF_CHANGED:
+		return "handoff changed";
 	case TPM_PCR14_UNATTRIBUTABLE:
 		return "unattributable";
 	case TPM_PCR14_STATE_ROLLBACK:

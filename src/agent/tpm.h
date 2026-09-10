@@ -305,6 +305,11 @@ enum tpm_pcr14_state {
 	TPM_PCR14_TAMPERED_BEFORE_START,
 	/* Something extended PCR14 after this agent's last commitment */
 	TPM_PCR14_MUTATED_IN_SESSION,
+	/*
+	 * Register and binary match the snapshot, the derivation misses:
+	 * the /run baseline handoff moved (or the snapshot was forged)
+	 */
+	TPM_PCR14_HANDOFF_CHANGED,
 	/* Unexpected value and no snapshot to attribute it with */
 	TPM_PCR14_UNATTRIBUTABLE,
 	/* TPM reports an older resetCount than the snapshot recorded */

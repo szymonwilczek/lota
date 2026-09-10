@@ -269,7 +269,7 @@ static void test_resume_does_not_license_a_new_binary(void)
 
 /*
  * A replaced /run baseline handoff makes the derivation miss (fail-closed),
- * but the register holds only this agent's extend: not a foreign writer.
+ * but the register is untouched: not a foreign writer.
  */
 static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
 {
@@ -282,7 +282,7 @@ static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
 	struct scenario s;
 	enum tpm_pcr14_state got;
 
-	TEST("a replaced baseline handoff is not called a foreign extend");
+	TEST("a replaced baseline handoff is named, not called a foreign extend");
 
 	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
 		FAIL("failed to derive the register value");
@@ -294,10 +294,10 @@ static void test_a_replaced_handoff_is_not_a_foreign_extend(void)
 
 	got = tpm_classify_pcr14(&s.obs);
 
-	if (got == TPM_PCR14_ALREADY_COMMITTED)
-		FAIL("a missed derivation must not be accepted");
 	if (got == TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("an untouched register reported as extended by somebody else");
+	if (got != TPM_PCR14_HANDOFF_CHANGED)
+		FAIL("the handoff is not named as what moved");
 	PASS();
 }
 
@@ -336,10 +336,14 @@ static void test_reset_count_advance_is_not_a_resume(void)
  * never read from the clock-state file. A local root who can rewrite that file
  * and who has extended PCR14 must not be able to dress the result up as
  * suspend/resume.
+ *
+ * A rewritten snapshot leaves the same evidence as a replaced handoff,
+ * so it lands in HANDOFF_CHANGED; what matters is that it still refuses.
  */
 static void test_forged_snapshot_cannot_fake_a_resume(void)
 {
 	struct scenario s;
+	enum tpm_pcr14_state got;
 
 	TEST("a forged clock-state snapshot cannot fake a resume");
 
@@ -351,8 +355,12 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 	/* ... and wrote a snapshot that claims it is what we committed */
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 
-	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
+	got = tpm_classify_pcr14(&s.obs);
+
+	if (got == TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a forged snapshot was allowed to explain the register");
+	if (got != TPM_PCR14_HANDOFF_CHANGED)
+		FAIL("a forged snapshot must refuse through the verdict whose evidence it copies");
 	PASS();
 }
 
