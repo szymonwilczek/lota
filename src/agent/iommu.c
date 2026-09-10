@@ -7,6 +7,7 @@
  */
 #include <dirent.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,19 @@
 
 /* Sysfs path for IOMMU class */
 #define IOMMU_SYSFS_PATH "/sys/class/iommu"
+
+/* Where the kernel command line is read from */
+#define IOMMU_CMDLINE_PATH "/proc/cmdline"
+
+/* prefix @path with @root (NULL: live machine); -1 if truncated */
+static int iommu_path(char *buf, size_t len, const char *root, const char *path)
+{
+	int n = snprintf(buf, len, "%s%s", root ? root : "", path);
+
+	if (n < 0 || (size_t)n >= len)
+		return -1;
+	return 0;
+}
 
 /* klogctl actions */
 #define SYSLOG_ACTION_SIZE_BUFFER 10
@@ -54,8 +68,9 @@ static bool cmdline_has_param(const char *cmdline, const char *param)
 	return false;
 }
 
-int iommu_check_sysfs(struct iommu_status *status)
+int iommu_check_sysfs(struct iommu_status *status, const char *root)
 {
+	char path[PATH_MAX];
 	DIR *dir;
 	struct dirent *entry;
 	int count = 0;
@@ -63,7 +78,10 @@ int iommu_check_sysfs(struct iommu_status *status)
 	if (!status)
 		return -1;
 
-	dir = opendir(IOMMU_SYSFS_PATH);
+	if (iommu_path(path, sizeof(path), root, IOMMU_SYSFS_PATH) < 0)
+		return -1;
+
+	dir = opendir(path);
 	if (!dir) {
 		/* kernel might not support it */
 		return 0;
@@ -95,18 +113,22 @@ int iommu_check_sysfs(struct iommu_status *status)
 	return count;
 }
 
-int iommu_check_cmdline(struct iommu_status *status)
+int iommu_check_cmdline(struct iommu_status *status, const char *root)
 {
 	int fd;
 #define IOMMU_READ_BUF_SIZE 4096
 	char buf[IOMMU_READ_BUF_SIZE];
+	char path[PATH_MAX];
 	ssize_t n;
 	int ret = -1;
 
 	if (!status)
 		return -1;
 
-	fd = open("/proc/cmdline", O_RDONLY);
+	if (iommu_path(path, sizeof(path), root, IOMMU_CMDLINE_PATH) < 0)
+		return -1;
+
+	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return -1;
 
@@ -218,13 +240,18 @@ int iommu_check_dmesg(struct iommu_status *status)
 
 bool iommu_verify_full(struct iommu_status *status)
 {
+	return iommu_verify_full_at(status, NULL);
+}
+
+bool iommu_verify_full_at(struct iommu_status *status, const char *root)
+{
 	if (!status)
 		return false;
 
 	memset(status, 0, sizeof(*status));
 
-	iommu_check_sysfs(status);
-	iommu_check_cmdline(status);
+	iommu_check_sysfs(status, root);
+	iommu_check_cmdline(status, root);
 	iommu_check_dmesg(status);
 
 	/*

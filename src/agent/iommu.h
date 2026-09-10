@@ -17,24 +17,26 @@
 /*
  * iommu_check_sysfs - Check /sys/class/iommu/ for active IOMMU units
  * @status: Output structure to populate
+ * @root: Prefix the sysfs path is read under, NULL for the live machine
  *
  * Scans /sys/class/iommu/ for dmar* (Intel) or ivhd* (AMD) entries.
  * Sets IOMMU_FLAG_SYSFS_PRESENT and vendor type.
  *
  * Returns: Number of IOMMU units found, 0 if none
  */
-int iommu_check_sysfs(struct iommu_status *status);
+int iommu_check_sysfs(struct iommu_status *status, const char *root);
 
 /*
  * iommu_check_cmdline - Validate /proc/cmdline for IOMMU boot parameters
  * @status: Output structure to populate
+ * @root: Prefix /proc/cmdline is read under, NULL for the live machine
  *
  * Looks for: intel_iommu=on, amd_iommu=on/force, iommu.strict=1
  * Sets IOMMU_FLAG_CMDLINE_SET if found.
  *
  * Returns: 0 if IOMMU param found, -1 if missing
  */
-int iommu_check_cmdline(struct iommu_status *status);
+int iommu_check_cmdline(struct iommu_status *status, const char *root);
 
 /*
  * iommu_check_dmesg - Parse kernel ring buffer for IOMMU messages
@@ -59,6 +61,12 @@ int iommu_check_dmesg(struct iommu_status *status);
  * Returns: true if IOMMU is properly enabled, false otherwise
  */
 bool iommu_verify_full(struct iommu_status *status);
+
+/*
+ * iommu_verify_full_at - iommu_verify_full() with every path read under @root
+ * (NULL for the live machine)
+ */
+bool iommu_verify_full_at(struct iommu_status *status, const char *root);
 
 /*
  * iommu_status_to_string - Convert status flags to human-readable string
