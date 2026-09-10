@@ -1802,6 +1802,31 @@ static void recompute_host_attestation(struct ipc_context *ctx)
 }
 
 /*
+ * Set LOTA_STATUS_TPM_LOCKOUT while the loop or this process sees a lockout,
+ * clear it when neither does, so clearing the chip needs no restart.
+ * Transitions are logged here: this is the journal an operator reads.
+ */
+static void adopt_loop_observations(struct ipc_context *ctx,
+				    const struct lota_ipc_attest_sync *hdr)
+{
+	bool reported = (hdr->host_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
+	bool locked = reported || (ctx->tpm && tpm_is_locked_out(ctx->tpm));
+	bool was = (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
+
+	if (locked && !was)
+		lota_err("TPM DA lockout: the attestation loop cannot use the "
+			 "chip, so tokens are refused with "
+			 "LOTA_IPC_ERR_TPM_LOCKOUT until it is cleared");
+	else if (!locked && was)
+		lota_notice("TPM DA lockout cleared: token issuance resumes");
+
+	if (locked)
+		ctx->status_flags |= LOTA_STATUS_TPM_LOCKOUT;
+	else
+		ctx->status_flags &= ~(uint32_t)LOTA_STATUS_TPM_LOCKOUT;
+}
+
+/*
  * Adopt the attestation loop's counters and announce any round they show.
  *
  * The loop sends running totals, not events, so a round is seen as a counter
@@ -1941,6 +1966,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 	client->subscribed = true;
 	client->event_mask = LOTA_IPC_EVENT_PROFILE;
 
+	adopt_loop_observations(ctx, &hdr);
 	recompute_host_attestation(ctx);
 	adopt_attest_counters(ctx, &hdr);
 
