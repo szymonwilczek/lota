@@ -1299,6 +1299,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_attest_stage \
 	$(TEST_BIN_DIR)/test_attest_aggregate \
 	$(TEST_BIN_DIR)/test_status_flags \
+	$(TEST_BIN_DIR)/test_iommu_evidence \
 	$(TEST_BIN_DIR)/test_publisher_profile \
 	$(TEST_BIN_DIR)/test_esrt \
 	$(TEST_BIN_DIR)/test_aik_cert_renew \
@@ -1539,6 +1540,11 @@ $(TEST_BIN_DIR)/test_status_flags: tests/test_status_flags.c \
 		$(AGENT_DIR)/status_flags.h $(INC_DIR)/lota_ipc.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+$(TEST_BIN_DIR)/test_iommu_evidence: tests/test_iommu_evidence.c \
+		$(AGENT_DIR)/iommu.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_esrt: tests/test_esrt.c $(AGENT_DIR)/esrt.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1874,6 +1880,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_attest_stage
 	@$(BUILD_DIR)/test_attest_aggregate
 	@$(BUILD_DIR)/test_status_flags
+	@$(BUILD_DIR)/test_iommu_evidence
 	@$(BUILD_DIR)/test_publisher_profile
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
@@ -2062,7 +2069,7 @@ VALGRIND_UNIT_BINS := \
 	test_ptrace_policy test_signal_policy test_module_purpose \
 	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
-	test_status_flags test_terminate_policy \
+	test_status_flags test_iommu_evidence test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout
