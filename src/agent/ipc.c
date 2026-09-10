@@ -1813,8 +1813,20 @@ static void adopt_loop_observations(struct ipc_context *ctx,
 				    const struct lota_ipc_attest_sync *hdr)
 {
 	bool reported = (hdr->host_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
-	bool locked = reported || (ctx->tpm && tpm_is_locked_out(ctx->tpm));
 	bool was = (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) != 0;
+	bool mine = ctx->tpm && tpm_is_locked_out(ctx->tpm);
+	bool locked;
+
+	/*
+	 * Our latch clears only on a successful call, which the gate never
+	 * makes; a round the loop completed proves the chip works again.
+	 */
+	if (mine && !reported && hdr->attest_count > ctx->attest_count) {
+		tpm_reset_lockout_state(ctx->tpm);
+		mine = false;
+	}
+
+	locked = reported || mine;
 
 	if (locked && !was)
 		lota_err("TPM DA lockout: the attestation loop cannot use the "
