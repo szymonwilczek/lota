@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Unit tests for a TPM lockout the attestation loop observed reaching the
- * daemon's status word and GET_TOKEN. The daemon's own TPM context sees
- * nothing (tpm_is_locked_out() stub returns false).
+ * daemon's status word and GET_TOKEN.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -35,10 +34,19 @@ const char *tpm_strerror(int err)
 	return "test";
 }
 
+/* the daemon's own lockout latch; false except in the stale-latch case */
+static bool daemon_latch;
+
 bool tpm_is_locked_out(const struct tpm_context *ctx)
 {
 	(void)ctx;
-	return false;
+	return daemon_latch;
+}
+
+void tpm_reset_lockout_state(struct tpm_context *ctx)
+{
+	(void)ctx;
+	daemon_latch = false;
 }
 
 int tpm_quote(struct tpm_context *ctx, const uint8_t *nonce, uint32_t pcr_mask,
@@ -191,6 +199,10 @@ static const char *const test_profile_hex = "aabbccddeeff0011"
 
 static char test_socket[108];
 
+/* The loop's tallies, as its sync header carries them */
+static uint32_t rounds_completed;
+static uint32_t rounds_failed;
+
 static int listener_open(void)
 {
 	struct sockaddr_un addr;
@@ -311,9 +323,16 @@ static int sync_round(struct ipc_context *ctx, int fd, uint32_t host_flags,
 	uint8_t payload[LOTA_IPC_MAX_PAYLOAD];
 	int ret;
 
+	/* the tallies tell the socket owner whether the chip was used */
+	if (attested)
+		rounds_completed++;
+	else
+		rounds_failed++;
+
 	memset(&sync, 0, sizeof(sync));
 	sync.count = 1;
-	sync.attest_count = 1;
+	sync.attest_count = rounds_completed;
+	sync.fail_count = rounds_failed;
 	sync.last_attest_time = (uint64_t)time(NULL);
 	sync.host_flags = host_flags;
 
@@ -436,6 +455,58 @@ test_a_lapsed_verdict_does_not_hide_the_lockout(struct ipc_context *ctx,
 	PASS();
 }
 
+/*
+ * The daemon's latch clears only on a TPM call the lockout gate forbids,
+ * so a round the loop completed has to clear it.
+ */
+static void
+test_a_stale_latch_does_not_outlive_the_lockout(struct ipc_context *ctx,
+						int loop_fd)
+{
+	struct tpm_context *dummy = (struct tpm_context *)ctx;
+	uint32_t result = 0;
+
+	TEST("the daemons own latch clears when the loop uses the chip again");
+
+	ctx->tpm = dummy;
+	daemon_latch = true;
+
+	if (sync_round(ctx, loop_fd, LOTA_STATUS_TPM_LOCKOUT, false) < 0) {
+		FAIL("sync refused");
+		goto out;
+	}
+	if (!(ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT)) {
+		FAIL("a lockout this process can see was not published");
+		goto out;
+	}
+
+	if (sync_round(ctx, loop_fd, 0, true) < 0) {
+		FAIL("sync refused");
+		goto out;
+	}
+
+	if (daemon_latch) {
+		FAIL("the stale latch survived a round the loop completed");
+		goto out;
+	}
+	if (ctx->status_flags & LOTA_STATUS_TPM_LOCKOUT) {
+		FAIL("the bit outlived the lockout");
+		goto out;
+	}
+	if (token_result(ctx, &result) < 0) {
+		FAIL("no answer to GET_TOKEN");
+		goto out;
+	}
+	if (result == LOTA_IPC_ERR_TPM_LOCKOUT) {
+		FAIL("a recovered host is refused until it is restarted");
+		goto out;
+	}
+	PASS();
+out:
+	ctx->tpm = NULL;
+	daemon_latch = false;
+}
+
 /* a sticky bit would refuse tokens until the daemon restarts */
 static void test_a_cleared_lockout_clears_the_word(struct ipc_context *ctx,
 						   int loop_fd)
@@ -513,6 +584,7 @@ int main(void)
 	test_a_title_is_refused_with_the_lockout_code(&ctx);
 	test_a_lapsed_verdict_does_not_hide_the_lockout(&ctx, loop_fd);
 	test_a_cleared_lockout_clears_the_word(&ctx, loop_fd);
+	test_a_stale_latch_does_not_outlive_the_lockout(&ctx, loop_fd);
 
 	close(loop_fd);
 	ipc_cleanup(&ctx);
