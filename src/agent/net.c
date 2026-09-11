@@ -26,6 +26,7 @@
 #include <openssl/prov_ssl.h>
 #include <openssl/types.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -197,7 +198,7 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 		lota_warn("Do NOT use in production.");
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
 	} else if (ca_cert_path) {
-		/* custom CA certificate provided */
+		/* pinned anchor: a CA or the listener's own certificate */
 		if (SSL_CTX_load_verify_locations(ssl_ctx, ca_cert_path,
 						  NULL) != 1) {
 			lota_err("Failed to load CA certificate: %s",
@@ -205,6 +206,12 @@ int net_context_init(struct net_context *ctx, const char *server, int port,
 			SSL_CTX_free(ssl_ctx);
 			return -EINVAL;
 		}
+		/*
+		 * Let the chain end at the pinned certificate even when it is
+		 * a CA-issued leaf whose issuer is not in the store.
+		 */
+		X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(ssl_ctx),
+					    X509_V_FLAG_PARTIAL_CHAIN);
 		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
 	} else {
 		/*
