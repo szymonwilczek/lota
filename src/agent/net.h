@@ -74,6 +74,12 @@ struct verifier_result {
 #define VERIFY_CERTIFICATE_VALIDITY 12
 
 /*
+ * net_transport_error - negative errno for a TLS read or write that moved no
+ * bytes, from SSL_get_error() @ssl_err and the socket's @sock_errno. Pure.
+ */
+int net_transport_error(int ssl_err, int sock_errno);
+
+/*
  * The likely cause of a connect(2) that was refused, as a sentence the operator
  * can act on, or NULL when there is nothing better to say than the errno.
  *

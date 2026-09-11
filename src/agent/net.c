@@ -83,6 +83,14 @@ static int normalize_socket_fd(int fd)
 	return fd;
 }
 
+int net_transport_error(int ssl_err, int sock_errno)
+{
+	(void)ssl_err;
+	(void)sock_errno;
+
+	return -EIO;
+}
+
 /*
  * Wait for SSL socket to become ready using poll().
  * Prevents busy-waiting on SSL_ERROR_WANT_READ/WRITE.
@@ -545,7 +553,7 @@ int net_recv_challenge(struct net_context *ctx,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -590,7 +598,7 @@ int net_send_report(struct net_context *ctx, const void *report,
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -618,7 +626,7 @@ int net_recv_result(struct net_context *ctx, struct verifier_result *result)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += ret;
 	}
@@ -664,7 +672,7 @@ int net_write_all(struct net_context *ctx, const void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}
@@ -693,7 +701,7 @@ int net_read_full(struct net_context *ctx, void *buf, size_t len)
 					return wait_ret;
 				continue;
 			}
-			return -EIO;
+			return net_transport_error(ssl_err, errno);
 		}
 		total += (size_t)ret;
 	}
