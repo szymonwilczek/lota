@@ -198,7 +198,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"Failed to set up the TLS channel to the CA at %s:%d "
 			"(check --ca-cert): %s\n",
-			server, port, strerror(-ret));
+			server, port, net_strerror(ret));
 		goto out;
 	}
 	net_inited = 1;
@@ -207,7 +207,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"Could not reach the attestation CA at %s:%d: %s. "
 			"Confirm lota-attest-ca is running and reachable.\n",
-			server, port, strerror(-ret));
+			server, port, net_strerror(ret));
 		goto out;
 	}
 
@@ -518,7 +518,7 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	ret = net_init();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		return ret;
 	}
 

@@ -704,23 +704,21 @@ check_stack_frames() {
     fi
 }
 
-# TPM codes rendered for an operator:
-# tpm_* returns LOTA's private range above POSIX, which strerror() prints as
-# "Unknown error 4098" -- and 4098 is the one that warns of a coming lockout
-check_tpm_strerror() {
+# tpm_*/net_* private codes must not reach strerror()
+check_private_errno() {
     local output
 
     if ! patch_touches_c "$@"; then
-        pass "tpm-strerror"
+        pass "private-errno"
         return
     fi
 
-    if output="$(scripts/check-tpm-strerror.sh 2>&1)"; then
-        pass "tpm-strerror"
+    if output="$(scripts/check-private-errno.sh 2>&1)"; then
+        pass "private-errno"
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
-        fail "tpm-strerror" \
-            "render the code with tpm_strerror(), which falls through to strerror() for ordinary errnos."
+        fail "private-errno" \
+            "render the code with that layer's tpm_strerror() or net_strerror(), each of which falls through to strerror() for ordinary errnos."
     fi
 }
 
@@ -1025,7 +1023,7 @@ main() {
     check_doc_diagnostics
     check_docs_strict
     check_stack_frames "${changed_files[@]}"
-    check_tpm_strerror "${changed_files[@]}"
+    check_private_errno "${changed_files[@]}"
     check_abi
     check_sparse "${changed_files[@]}"
     check_smatch "${changed_files[@]}"
