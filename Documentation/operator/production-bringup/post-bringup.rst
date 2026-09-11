@@ -301,6 +301,11 @@ The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
 independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
 TLS socket misses the deadline and systemd restarts it.
 
+Between an agent upgrade and the reboot after it, PCR 14 commits to the old
+build and the loop's startup self-measurement refuses every start. That status
+is in ``RestartPreventExitStatus``, so the unit stays ``failed`` instead of
+cycling in ``activating``, and the journal ends on the line saying to reboot.
+
 A round that fails names the stage it failed at in the journal -- setting up
 TLS, reaching the verifier, building or sending the report, or the verdict
 itself -- alongside the failure count and the backoff:
