@@ -665,9 +665,14 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 			"Warning: %s is not a CA certificate, so this "
 			"publisher's identity on this host is pinned to it.\n"
 			"If it is the server's TLS certificate, re-issuing it "
-			"with a new key makes this host a new device to that "
-			"publisher: a new profile, a new attestation key in a "
+			"with a new key starts a second publisher on this "
+			"machine: a new profile, a new attestation key in a "
 			"new TPM slot, and consent asked again.\n"
+			"The publisher is not told, and sees one device either "
+			"way: their CA names a device by its endorsement key, "
+			"which no certificate on this side changes.\n"
+			"The first profile keeps its slot until it is taken "
+			"back with --forget-publisher.\n"
 			"Name the CA certificate that signs it instead, if "
 			"there is one.\n",
 			ca_cert);
@@ -908,8 +913,9 @@ int do_add_publisher(const char *config_path, const char *name,
 			"Warning: %s is not a CA certificate, so this "
 			"publisher's identity on this host is pinned to it. "
 			"If it is the server's TLS certificate, re-issuing it "
-			"with a new key makes this host a new device to that "
-			"publisher.\n",
+			"with a new key starts a second publisher on this "
+			"machine, and the first keeps its TPM slot until it is "
+			"taken back.\n",
 			ca_cert);
 
 	/*
