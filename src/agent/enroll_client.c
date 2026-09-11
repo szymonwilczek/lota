@@ -680,6 +680,42 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 	return 0;
 }
 
+/*
+ * Report another profile at this CA endpoint; not a refusal, as one CA may
+ * serve several publishers. When that profile's anchor path now names this
+ * one, it is a rotated pin and the older profile is orphaned.
+ */
+static void report_endpoint_already_enrolled(const struct profile_paths *paths,
+					     const char *server, int port)
+{
+	char other[LOTA_PROFILE_ID_LEN];
+	char names_now[LOTA_PROFILE_ID_LEN];
+
+	if (publishers_endpoint_shared(LOTA_PROFILE_BASE_DIR, paths->id, server,
+				       port, other, sizeof(other)) != 1)
+		return;
+
+	if (publisher_anchor_names_another(LOTA_PROFILE_BASE_DIR, other,
+					   names_now, sizeof(names_now)) == 1 &&
+	    strcmp(names_now, paths->id) == 0) {
+		printf("This machine already enrolled with %s:%d as publisher "
+		       "%s, against the same\ncertificate before it was "
+		       "re-issued. This enrollment is that publisher again, "
+		       "as a\nsecond publisher here: another attestation key "
+		       "in another TPM slot.\n",
+		       server, port, other);
+		printf("The older profile is reached by nothing now. Give its "
+		       "slot back with:\n  lota-agent --forget-publisher %s\n",
+		       other);
+		return;
+	}
+
+	printf("This machine already enrolled with %s:%d as publisher %s, "
+	       "under a different\ntrust anchor. Both keep their own key and "
+	       "their own slot.\n",
+	       server, port, other);
+}
+
 int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin, const char *token_file)
 {
@@ -697,6 +733,7 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 		return 1;
 	}
 	printf("Publisher profile: %s\n", paths.id);
+	report_endpoint_already_enrolled(&paths, server, port);
 
 	/*
 	 * Running --enroll is the consent:
@@ -1197,6 +1234,22 @@ static void print_publisher(const struct publisher_entry *e,
 		       "over, so every quote is refused. Re-enroll this\n"
 		       "                 publisher: lota-agent --reenroll "
 		       "--ca-cert <their anchor>\n");
+
+	/* a re-keyed pin names another profile; this one holds a dead slot */
+	{
+		char names_now[LOTA_PROFILE_ID_LEN];
+
+		if (publisher_anchor_names_another(LOTA_PROFILE_BASE_DIR, e->id,
+						   names_now,
+						   sizeof(names_now)) == 1)
+			printf("  SUPERSEDED     the certificate this profile "
+			       "pinned names %s now,\n"
+			       "                 so nothing reaches this "
+			       "profile again. It holds its key\n"
+			       "                 and its slot until: "
+			       "lota-agent --forget-publisher %s\n",
+			       names_now, e->id);
+	}
 }
 
 /*

@@ -206,7 +206,10 @@ second profile: another AIK in another TPM persistent slot, consent recorded
 again, the old profile left unread. The publisher's CA names a device by its
 endorsement key and sees one device with two live attestation certificates;
 the host spends two of its eight slots on one publisher, and seven rotations
-fill them all. ``--forget-publisher`` returns a slot. Issue the listener from
+fill them all. ``--forget-publisher`` returns a slot. An enrollment that finds
+another profile at the same CA host and port says so, naming it when its anchor
+path is the certificate now pinned, and ``--list-publishers`` marks a profile
+whose pinned certificate now names another publisher. Issue the listener from
 the CA and pass the CA, as :ghsrc:`examples/enrollment/gen-ca.sh` does.
 
 The AIK is part of the profile, not shared across it. Each publisher's

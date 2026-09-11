@@ -607,6 +607,11 @@ with what the machine has room for -- the keys held, the TPM's own persistent
 capacity and this build's maximum -- so the ceiling is readable before it is
 met; :doc:`../platform-support` covers what sets it.
 
+A profile whose pinned certificate now names another publisher, as after a TLS
+listener certificate is re-issued over a new key, is marked ``SUPERSEDED`` with
+that publisher. Nothing reaches it, yet it holds its attestation key and a slot
+until ``--forget-publisher`` frees them.
+
 A profile whose enrollment record cannot be read is reported as holding one,
 not as never having enrolled. The record is what says where a publisher
 enrolled, and the attestation key and certificate stored beside it were issued
