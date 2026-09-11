@@ -158,27 +158,25 @@ static void test_a_served_daemon_carries_its_own_status(void)
 		PASS();
 }
 
-/*
- * The unit file's behaviour depends on the number, not on the name,
- * so the two are compared here.
- */
-static void test_the_unit_prevents_restarting_on_that_status(void)
+/* whether @unit's RestartPreventExitStatus= lists @status */
+static bool unit_prevents_restart_on(const char *unit, int status)
 {
 	char line[512];
 	char wanted[64];
+	char path[256];
 	bool found = false;
-	FILE *fp = fopen("systemd/lota-agent.service", "re");
+	FILE *fp;
 
-	if (!fp)
-		fp = fopen("../systemd/lota-agent.service", "re");
-
-	TEST("the packaged unit prevents a restart on that status");
+	snprintf(path, sizeof(path), "systemd/%s", unit);
+	fp = fopen(path, "re");
 	if (!fp) {
-		FAIL("could not open lota-agent.service");
-		return;
+		snprintf(path, sizeof(path), "../systemd/%s", unit);
+		fp = fopen(path, "re");
 	}
+	if (!fp)
+		return false;
 
-	snprintf(wanted, sizeof(wanted), "%d", LOTA_EXIT_OPERATOR_ACTION);
+	snprintf(wanted, sizeof(wanted), "%d", status);
 	while (fgets(line, sizeof(line), fp)) {
 		if (strncmp(line, "RestartPreventExitStatus=", 25) != 0)
 			continue;
@@ -187,7 +185,15 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
 	}
 	fclose(fp);
 
-	if (!found)
+	return found;
+}
+
+static void test_the_unit_prevents_restarting_on_that_status(void)
+{
+	TEST("the packaged unit prevents a restart on that status");
+
+	if (!unit_prevents_restart_on("lota-agent.service",
+				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
 	else
 		PASS();
@@ -205,30 +211,26 @@ static void test_the_unit_prevents_restarting_on_that_status(void)
  */
 static void test_the_unit_does_not_retry_a_running_instance(void)
 {
-	char line[512];
-	char wanted[64];
-	bool found = false;
-	FILE *fp = fopen("systemd/lota-agent.service", "re");
-
-	if (!fp)
-		fp = fopen("../systemd/lota-agent.service", "re");
-
 	TEST("the packaged unit does not retry under a running agent");
-	if (!fp) {
-		FAIL("could not open lota-agent.service");
-		return;
-	}
 
-	snprintf(wanted, sizeof(wanted), "%d", LOTA_EXIT_ALREADY_RUNNING);
-	while (fgets(line, sizeof(line), fp)) {
-		if (strncmp(line, "RestartPreventExitStatus=", 25) != 0)
-			continue;
-		if (strstr(line + 25, wanted))
-			found = true;
-	}
-	fclose(fp);
+	if (!unit_prevents_restart_on("lota-agent.service",
+				      LOTA_EXIT_ALREADY_RUNNING))
+		FAIL("RestartPreventExitStatus does not list the status");
+	else
+		PASS();
+}
 
-	if (!found)
+/*
+ * A restart between an agent upgrade and the reboot meets a PCR 14 committed
+ * to the old binary; without the status the attest unit retries every 30 s
+ * until reboot, stuck in activating.
+ */
+static void test_the_attest_unit_stops_on_a_spent_commitment(void)
+{
+	TEST("the attest unit prevents a restart on that status");
+
+	if (!unit_prevents_restart_on("lota-attest.service",
+				      LOTA_EXIT_OPERATOR_ACTION))
 		FAIL("RestartPreventExitStatus does not list the status");
 	else
 		PASS();
@@ -259,6 +261,7 @@ int main(void)
 	test_a_served_daemon_carries_its_own_status();
 	test_the_unit_prevents_restarting_on_that_status();
 	test_the_unit_does_not_retry_a_running_instance();
+	test_the_attest_unit_stops_on_a_spent_commitment();
 	test_the_two_no_retry_statuses_differ();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
