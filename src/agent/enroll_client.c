@@ -226,7 +226,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	if (ret < 0) {
 		fprintf(stderr,
 			"Failed to send the enrollment request to the CA: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 
@@ -235,7 +235,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"No challenge received from the CA (connection "
 			"dropped?): %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 	ret = enroll_decode_challenge(rbuf, rlen, &ch);
@@ -290,7 +290,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	if (ret < 0) {
 		fprintf(stderr,
 			"Failed to send the credential response to the CA: %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 
@@ -299,7 +299,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"No completion response from the CA (connection "
 			"dropped?): %s\n",
-			strerror(-ret));
+			net_strerror(ret));
 		goto out;
 	}
 	ret = enroll_decode_result(rbuf, rlen, &res);

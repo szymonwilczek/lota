@@ -314,6 +314,13 @@ The stage is what separates a host that cannot reach its verifier from one the
 verifier is refusing, and it is reported whether or not anything is reading the
 loop's progress output.
 
+After the stage comes the condition. A failure the socket reported keeps its
+errno (``Connection refused``, ``Connection reset by peer``, ``Broken pipe``);
+the rest are named by the agent: a peer that closed the connection before the
+exchange finished, a peer that went away without closing it, a TLS protocol
+failure on an established connection. None is reported as
+``Input/output error``.
+
 Which unit a title talks to
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -85,10 +85,22 @@ static int normalize_socket_fd(int fd)
 
 int net_transport_error(int ssl_err, int sock_errno)
 {
-	(void)ssl_err;
-	(void)sock_errno;
-
-	return -EIO;
+	switch (ssl_err) {
+	case SSL_ERROR_ZERO_RETURN:
+		return -LOTA_ERR_NET_PEER_CLOSED;
+	case SSL_ERROR_SYSCALL:
+		/* SO_RCVTIMEO/SO_SNDTIMEO expiry arrives as EAGAIN */
+		if (sock_errno == EAGAIN || sock_errno == EWOULDBLOCK)
+			return -ETIMEDOUT;
+		if (sock_errno)
+			return -sock_errno;
+		/* no errno, no close_notify: the peer was killed */
+		return -LOTA_ERR_NET_PEER_GONE;
+	case SSL_ERROR_SSL:
+		return -LOTA_ERR_NET_TLS;
+	default:
+		return -EIO;
+	}
 }
 
 /*

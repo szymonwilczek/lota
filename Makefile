@@ -213,6 +213,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/kernel_image.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
+              $(AGENT_DIR)/net_errno.c \
               $(AGENT_DIR)/pin.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
@@ -1462,7 +1463,7 @@ $(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
@@ -1534,7 +1535,7 @@ $(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/atte
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

@@ -74,6 +74,21 @@ struct verifier_result {
 #define VERIFY_CERTIFICATE_VALIDITY 12
 
 /*
+ * LOTA-private transport error codes: POSIX has none for a peer going away.
+ * Above glibc's 1..133 and disjoint from the TPM block at 4097; render with
+ * net_strerror(). A socket errno, when there is one, is returned instead.
+ */
+#define LOTA_ERR_NET_PEER_CLOSED 4353 /* TLS shutdown mid-exchange */
+#define LOTA_ERR_NET_PEER_GONE 4354 /* EOF with no shutdown and no errno */
+#define LOTA_ERR_NET_TLS 4355 /* TLS refused a record on a live connection */
+
+/* name of a LOTA-private transport code, NULL for anything else */
+const char *net_err_name(int err);
+
+/* net_err_name(), falling back to strerror() */
+const char *net_strerror(int err);
+
+/*
  * net_transport_error - negative errno for a TLS read or write that moved no
  * bytes, from SSL_get_error() @ssl_err and the socket's @sock_errno. Pure.
  */
