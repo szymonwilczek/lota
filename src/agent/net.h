@@ -81,9 +81,15 @@ struct verifier_result {
 #define LOTA_ERR_NET_PEER_CLOSED 4353 /* TLS shutdown mid-exchange */
 #define LOTA_ERR_NET_PEER_GONE 4354 /* EOF with no shutdown and no errno */
 #define LOTA_ERR_NET_TLS 4355 /* TLS refused a record on a live connection */
+#define LOTA_ERR_NET_TLS_HANDSHAKE 4356 /* handshake did not complete */
+#define LOTA_ERR_NET_TLS_CERT 4357 /* peer certificate failed verification */
+#define LOTA_ERR_NET_TLS_PIN 4358 /* peer certificate is not the pinned one */
 
 /* name of a LOTA-private transport code, NULL for anything else */
 const char *net_err_name(int err);
+
+/* TLS refused (certificates) rather than peer unreachable (address/port) */
+int net_err_is_tls(int err);
 
 /* net_err_name(), falling back to strerror() */
 const char *net_strerror(int err);

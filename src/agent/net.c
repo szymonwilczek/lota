@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -140,8 +141,20 @@ static int ssl_wait(SSL *ssl, int event)
 
 int net_init(void)
 {
+	struct sigaction sa;
+
 	if (ssl_initialized)
 		return 0;
+
+	/*
+	 * A write to a closed peer must fail with EPIPE, not kill the process;
+	 * one-shot verbs never run the daemon's signal setup.
+	 */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = SIG_IGN;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGPIPE, &sa, NULL) < 0)
+		return -errno;
 
 	ssl_initialized = 1;
 	return 0;
@@ -412,7 +425,8 @@ int net_connect(struct net_context *ctx)
 		SSL_free(ssl);
 		close(sock);
 		ctx->socket_fd = -1;
-		return -ECONNABORTED;
+		/* the socket connected: TLS refused, the host was reachable */
+		return -LOTA_ERR_NET_TLS_HANDSHAKE;
 	}
 
 	if (ctx->skip_verify) {
@@ -447,7 +461,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 
 		/* verify server presented a certificate */
@@ -458,7 +472,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_CERT;
 		}
 		X509_free(peer_cert);
 	}
@@ -476,7 +490,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 
 		unsigned char digest[LOTA_PIN_SHA256_LEN];
@@ -492,7 +506,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 		X509_free(peer_cert);
 
@@ -522,7 +536,7 @@ int net_connect(struct net_context *ctx)
 			SSL_free(ssl);
 			close(sock);
 			ctx->socket_fd = -1;
-			return -EACCES;
+			return -LOTA_ERR_NET_TLS_PIN;
 		}
 	}
 

@@ -170,6 +170,12 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+When the TLS layer refuses the connection -- the ``--ca-cert`` anchor does not
+verify the listener's certificate, or that certificate is not the pinned one --
+the agent says the CA answered, this host refused it, and names the
+``--ca-cert`` file. Only a CA that could not be reached gets the advice to
+confirm ``lota-attest-ca`` is running and reachable.
+
 A CA that refuses the enrollment says why in the agent's own output.
 Each refusal prints the status the CA sent and the sentence
 that goes with it -- an endorsement key that is not accepted here, an

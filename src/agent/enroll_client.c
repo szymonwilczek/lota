@@ -204,10 +204,22 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	net_inited = 1;
 	ret = net_connect(&net);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Could not reach the attestation CA at %s:%d: %s. "
-			"Confirm lota-attest-ca is running and reachable.\n",
-			server, port, net_strerror(ret));
+		/* refused here: the remedy is --ca-cert, not the CA */
+		if (net_err_is_tls(ret))
+			fprintf(stderr,
+				"The attestation CA at %s:%d answered, and "
+				"this host refused the TLS connection: %s.\n"
+				"What decides that is the certificate named by "
+				"--ca-cert%s%s%s.\n",
+				server, port, net_strerror(ret),
+				ca_cert ? " (" : "", ca_cert ? ca_cert : "",
+				ca_cert ? ")" : "");
+		else
+			fprintf(stderr,
+				"Could not reach the attestation CA at %s:%d: "
+				"%s. Confirm lota-attest-ca is running and "
+				"reachable.\n",
+				server, port, net_strerror(ret));
 		goto out;
 	}
 
