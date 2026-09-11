@@ -1274,6 +1274,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_verify_result_str \
 	$(TEST_BIN_DIR)/test_connect_hint \
 	$(TEST_BIN_DIR)/test_net_errors \
+	$(TEST_BIN_DIR)/test_tls_anchor \
 	$(TEST_BIN_DIR)/test_xattr_carry \
 	$(TEST_BIN_DIR)/test_config \
 	$(TEST_BIN_DIR)/test_config_alloc \
@@ -1464,6 +1465,10 @@ $(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c 
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
 $(TEST_BIN_DIR)/test_net_errors: tests/test_net_errors.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c $(AGENT_DIR)/attest_stage.c $(AGENT_DIR)/tpm_errno.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
+
+$(TEST_BIN_DIR)/test_tls_anchor: tests/test_tls_anchor.c $(AGENT_DIR)/net.c $(AGENT_DIR)/net_errno.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
@@ -1924,6 +1929,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_verify_result_str
 	@$(BUILD_DIR)/test_connect_hint
 	@$(BUILD_DIR)/test_net_errors
+	@$(BUILD_DIR)/test_tls_anchor
 	@$(BUILD_DIR)/test_xattr_carry
 	@$(BUILD_DIR)/test_runtime_measure
 	@$(BUILD_DIR)/test_runtime_image_measure
@@ -2086,7 +2092,7 @@ VALGRIND_UNIT_BINS := \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_iommu_evidence test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
-	test_net_errors \
+	test_net_errors test_tls_anchor \
 	test_xattr_carry test_ima_policy_scope test_integrity_baseline \
 	test_daemon_exit_status test_integrity_map_layout
 
