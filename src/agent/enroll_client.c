@@ -507,6 +507,34 @@ static void report_no_room_for_a_key(struct tpm_context *tpm,
 }
 
 /*
+ * A failure at the CA leaves the profile, handle and key in place for a retry
+ * with the same anchor; name the slot it holds and how to free it.
+ */
+static void report_slot_the_attempt_took(const struct profile_paths *paths)
+{
+	uint32_t handle = 0;
+
+	if (profile_aik_handle_load(paths, &handle) == 0)
+		fprintf(stderr,
+			"This attempt holds a publisher slot on this machine: "
+			"profile %s, attestation key at TPM handle 0x%08X.\n",
+			paths->id, handle);
+	else
+		fprintf(stderr,
+			"This attempt holds a publisher slot on this machine: "
+			"profile %s.\n",
+			paths->id);
+	fprintf(stderr,
+		"Enrolling again with the same --ca-cert reuses it and costs "
+		"nothing more; a different certificate is a different "
+		"publisher and takes another of the %d slots this build "
+		"answers to.\n"
+		"Give this one back with:\n"
+		"  lota-agent --forget-publisher %s\n",
+		LOTA_PROFILE_MAX_AIK_HANDLES, paths->id);
+}
+
+/*
  * Bring up the TPM, provision the AIK, run one enrollment against the CA,
  * store the certificate, and record the endpoint. Returns 0 on success,
  * negative errno on failure.
@@ -588,6 +616,8 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	if (ret == 0)
 		persist_enroll_state(paths, server, port, ca_cert, skip_verify,
 				     pin, token);
+	else
+		report_slot_the_attempt_took(paths);
 
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();

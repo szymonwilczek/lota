@@ -188,6 +188,12 @@ the same way every time. A status the agent has no name for is printed as a
 number and said to be one, which is what an older agent meeting a newer CA
 looks like.
 
+An enrollment that fails at the CA keeps its profile directory, recorded handle
+and attestation key; enrolling again with the same anchor reuses them. Publisher
+slots are limited, so the failure names the profile it holds and the verb that
+frees it. A different certificate is a different publisher and takes another
+slot.
+
 The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
 warn when the file named is not a CA certificate, naming what a re-key of it
 would cost; an anchor produces no such line. It is a warning rather than a
