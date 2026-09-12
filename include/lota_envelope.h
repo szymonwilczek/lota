@@ -41,7 +41,7 @@
 extern "C" {
 #endif
 
-#define LOTA_ENVELOPE_MAGIC 0x564E454Cu /* "LENV" little-endian */
+#define LOTA_ENVELOPE_MAGIC 0x564E454Cu /* "LENV" on disk, little-endian */
 #define LOTA_ENVELOPE_VERSION 1u
 
 /* AES-256-GCM parameters. */

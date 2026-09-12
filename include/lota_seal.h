@@ -28,7 +28,7 @@
 extern "C" {
 #endif
 
-#define LOTA_SEAL_MAGIC 0x4C53454Cu /* "LSEL" little-endian */
+#define LOTA_SEAL_MAGIC 0x4C45534Cu /* "LSEL" on disk, little-endian */
 #define LOTA_SEAL_VERSION 1u
 
 /*
