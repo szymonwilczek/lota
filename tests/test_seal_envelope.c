@@ -180,6 +180,20 @@ static void test_parse_rejects_malformed(void)
 	PASS();
 }
 
+/* read off written bytes; LSEL twin in test_seal_blob.c */
+static void test_magic_is_the_four_bytes_the_header_names(void)
+{
+	uint8_t blob[LOTA_ENVELOPE_HEADER_SIZE + 320 + 4096];
+
+	TEST("an envelope opens with the four bytes LENV");
+	build_blob(blob);
+	if (memcmp(blob, "LENV", 4) != 0) {
+		FAIL("the blob does not start with LENV");
+		return;
+	}
+	PASS();
+}
+
 static void test_is_envelope(void)
 {
 	uint8_t env[LOTA_ENVELOPE_HEADER_SIZE + 320 + 4096];
@@ -350,6 +364,7 @@ int main(void)
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
 	test_parse_rejects_malformed();
+	test_magic_is_the_four_bytes_the_header_names();
 	test_is_envelope();
 	test_aead_roundtrip();
 	test_aead_rejects_tamper();

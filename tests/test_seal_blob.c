@@ -138,6 +138,25 @@ static void test_agent_bound_mask_is_separate_and_named(void)
 	PASS();
 }
 
+/* read off written bytes; LENV twin in test_seal_envelope.c */
+static void test_magic_is_the_four_bytes_the_header_names(void)
+{
+	struct lota_seal_meta m;
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+
+	TEST("a sealed blob opens with the four bytes LSEL");
+	fill_meta(&m);
+	if (lota_seal_serialize_header(blob, &m) != 0) {
+		FAIL("serialize");
+		return;
+	}
+	if (memcmp(blob, "LSEL", 4) != 0) {
+		FAIL("the blob does not start with LSEL");
+		return;
+	}
+	PASS();
+}
+
 static void test_serialize_roundtrip(void)
 {
 	struct lota_seal_meta in, out;
@@ -427,6 +446,7 @@ int main(void)
 	test_default_mask_excludes_the_boot_commitment();
 	test_agent_bound_mask_is_separate_and_named();
 	test_usage_states_the_default_seal_set();
+	test_magic_is_the_four_bytes_the_header_names();
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
 	test_parse_rejects_truncated();
