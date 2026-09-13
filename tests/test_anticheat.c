@@ -1597,8 +1597,7 @@ static int last_error_is(int expected, const char *what)
 	if (got == LOTA_AC_ERR_CONFIG_SIZE)
 		printf("FAIL (%s left the seeded error behind)\n", what);
 	else
-		printf("FAIL (%s left %d, expected %d)\n", what, got,
-		       expected);
+		printf("FAIL (%s left %d, expected %d)\n", what, got, expected);
 	return 0;
 }
 
@@ -1682,8 +1681,7 @@ static void test_last_error_measure_helpers(void)
 		FAIL("the expected measure could not be computed");
 		return;
 	}
-	if (!last_error_is(LOTA_AC_ERR_OK,
-			   "compute_expected_runtime_measure"))
+	if (!last_error_is(LOTA_AC_ERR_OK, "compute_expected_runtime_measure"))
 		return;
 	PASS();
 }
