@@ -632,6 +632,28 @@ static struct lota_client *hook_connect(void)
 }
 
 /*
+ * Add this process to protected_pids, which scopes every runtime gate.
+ * Called after each connect, since the launch path connects before
+ * refresh_once(). Once per process; the fork handler clears the latch.
+ */
+static void hook_register_self(void)
+{
+	int ret;
+
+	if (!g_hook.client || atomic_load(&g_hook.self_protected))
+		return;
+
+	ret = lota_protect_self(g_hook.client);
+	if (ret != LOTA_OK) {
+		LOG_WRN("lota_protect_self: %s", lota_strerror(ret));
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 1);
+	LOG_INF("registered pid=%d for runtime enforcement", (int)getpid());
+}
+
+/*
  * Perform one refresh cycle.
  *
  * Reconnects to the agent if needed, queries status, writes files.
@@ -652,30 +674,9 @@ static void refresh_once(void)
 		}
 		hook_offline_clear();
 		LOG_DBG("connected to agent");
-
-		/*
-		 * Opt this process into the BPF strict_mmap and
-		 * block_anon_exec gates. The agent's hooks are scoped
-		 * to protected_pids; without the call the game process
-		 * is invisible to the runtime enforcement layer and any
-		 * LD_PRELOAD-style injection would slip through. One
-		 * shot per process: a successful response sets
-		 * self_protected so a later reconnect (post agent
-		 * restart) does not re-issue the request.
-		 */
-		if (!atomic_load(&g_hook.self_protected)) {
-			ret = lota_protect_self(g_hook.client);
-			if (ret == LOTA_OK) {
-				atomic_store(&g_hook.self_protected, 1);
-				LOG_INF("registered pid=%d for runtime "
-					"enforcement",
-					(int)getpid());
-			} else {
-				LOG_WRN("lota_protect_self: %s",
-					lota_strerror(ret));
-			}
-		}
 	}
+
+	hook_register_self();
 
 	ret = lota_get_status(g_hook.client, &status);
 	if (ret != LOTA_OK) {

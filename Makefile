@@ -1441,10 +1441,13 @@ $(TEST_BIN_DIR)/test_token_gate: tests/test_token_gate.c $(AGENT_DIR)/token_gate
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c $(VERSION_FILE) | $(BUILD_DIR)
+# the test #includes lota_wine_hook.c; list it so a hook edit rebuilds
+$(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c \
+		$(SDK_DIR)/lota_wine_hook.c $(VERSION_FILE) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) $(SDK_VERSION_CFLAGS) -DLOTA_HOOK_TESTING \
-		-o $@ $(filter-out $(VERSION_FILE),$^) -lpthread
+		-o $@ $(filter-out $(VERSION_FILE) $(SDK_DIR)/lota_wine_hook.c,$^) \
+		-lpthread
 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
