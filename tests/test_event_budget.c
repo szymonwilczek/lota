@@ -8,8 +8,8 @@
  * mode so neither class can flood the ring buffer and starve the other, while
  * outside ENFORCE nothing is gated.
  *
- * The class windows bound rate, not ring space; under ring pressure a loud
- * event type must yield room to a quiet one.
+ * A budget bounds rate, not ring space; under ring pressure a loud event
+ * type must yield room to a quiet one.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */

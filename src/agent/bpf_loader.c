@@ -61,6 +61,7 @@
 #define STAT_BPF_SYSCALL_BLOCKED 13
 #define STAT_MOUNTS_BLOCKED 16
 #define STAT_KILL_GUARD_BLOCKED 17
+#define STAT_EVENTS_YIELDED 18
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -2128,6 +2129,7 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_MOUNTS_BLOCKED, &stats->mounts_blocked);
 	read_stat(ctx->stats_fd, STAT_KILL_GUARD_BLOCKED,
 		  &stats->kill_guard_blocked);
+	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
 
 	return 0;
 }

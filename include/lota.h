@@ -80,6 +80,9 @@ enum lota_event_type {
 	LOTA_EVENT_KILL_GUARD_BLOCKED, /* write that would kill a guarded task */
 };
 
+/* One past the last event type, so a per-type array covers every one */
+#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_KILL_GUARD_BLOCKED + 1)
+
 /*
  * Event flags (struct lota_exec_event.flags).
  *
