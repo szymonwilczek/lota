@@ -8,6 +8,9 @@
  * mode so neither class can flood the ring buffer and starve the other, while
  * outside ENFORCE nothing is gated.
  *
+ * The class windows bound rate, not ring space; under ring pressure a loud
+ * event type must yield room to a quiet one.
+ *
  * Copyright (C) 2026 Szymon Wilczek
  */
 
@@ -80,6 +83,49 @@ static void test_exhaustion_boundary(void)
 	      "past the cap stays exhausted");
 }
 
+/* pressure comes from ring occupancy, not the class counters */
+static void test_pressure_is_read_from_the_ring(void)
+{
+	const unsigned long long ring = 256ULL * 1024ULL;
+
+	CHECK(!lota_event_ring_under_pressure(0, ring),
+	      "an empty ring is not under pressure");
+	CHECK(!lota_event_ring_under_pressure(
+		      ring * LOTA_EVENT_RING_PRESSURE_PCT / 100 - 1, ring),
+	      "one byte below the watermark is not under pressure");
+	CHECK(lota_event_ring_under_pressure(
+		      ring * LOTA_EVENT_RING_PRESSURE_PCT / 100, ring),
+	      "the watermark itself is under pressure");
+	CHECK(lota_event_ring_under_pressure(ring, ring),
+	      "a full ring is under pressure");
+	CHECK(!lota_event_ring_under_pressure(0, 0),
+	      "an unknown ring size reports no pressure");
+}
+
+/*
+ * Under pressure a type that already spoke this window yields; one that has
+ * not keeps its detail, e.g. a lone mmap block amid refused signals.
+ */
+static void test_a_quiet_type_keeps_its_detail_under_a_flood(void)
+{
+	const unsigned long long ring = 256ULL * 1024ULL;
+	const unsigned long long full = ring;
+
+	CHECK(!lota_event_type_yields(0, full, ring),
+	      "a type's first event of the window survives a full ring");
+	CHECK(!lota_event_type_yields(LOTA_EVENT_PRESSURE_SHARE - 1, full,
+				      ring),
+	      "a quiet type keeps its detail up to its share");
+	CHECK(lota_event_type_yields(LOTA_EVENT_PRESSURE_SHARE, full, ring),
+	      "a type past its share yields the ring under pressure");
+	CHECK(lota_event_type_yields(100000, full, ring),
+	      "a flooding type keeps yielding");
+	CHECK(!lota_event_type_yields(100000, 0, ring),
+	      "with room in the ring no type yields, however loud");
+	CHECK(!lota_event_type_yields(100000, 0, 0),
+	      "an unknown ring size gates nothing");
+}
+
 int main(void)
 {
 	printf("=== event budget tests ===\n");
@@ -87,6 +133,8 @@ int main(void)
 	test_allowed_budget_and_unbounded_modes();
 	test_window_expiry();
 	test_exhaustion_boundary();
+	test_pressure_is_read_from_the_ring();
+	test_a_quiet_type_keeps_its_detail_under_a_flood();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);
