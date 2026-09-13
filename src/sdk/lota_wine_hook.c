@@ -66,6 +66,8 @@ static struct {
 	char token_path[PATH_MAX];
 	char snapshot_path[PATH_MAX]; /* atomic snapshot file (flags + token) */
 	pid_t init_pid;
+	time_t init_time; /* when the loader started bringing us up */
+	int protect_delay_sec; /* wait before joining protected_pids */
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
@@ -632,6 +634,35 @@ static struct lota_client *hook_connect(void)
 }
 
 /*
+ * Seconds to wait before joining the protected set. Unset or invalid is the
+ * default; 0 registers on the first connect (objects carry fs-verity).
+ */
+static int hook_protect_delay(const char *env)
+{
+	char *end;
+	long val;
+
+	if (!env || !*env)
+		return LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC;
+
+	errno = 0;
+	val = strtol(env, &end, 10);
+	if (errno || end == env || *end || val < 0 || val > INT_MAX)
+		return LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC;
+
+	return (int)val;
+}
+
+/* Has the loader been given its @delay_sec seconds yet? */
+static bool hook_protect_due(time_t init_time, int delay_sec, time_t now)
+{
+	if (delay_sec <= 0)
+		return true;
+
+	return now >= init_time + delay_sec;
+}
+
+/*
  * Add this process to protected_pids, which scopes every runtime gate.
  * Called after each connect, since the launch path connects before
  * refresh_once(). Once per process; the fork handler clears the latch.
@@ -641,6 +672,11 @@ static void hook_register_self(void)
 	int ret;
 
 	if (!g_hook.client || atomic_load(&g_hook.self_protected))
+		return;
+
+	/* let the loader map its libraries first */
+	if (!hook_protect_due(g_hook.init_time, g_hook.protect_delay_sec,
+			      time(NULL)))
 		return;
 
 	ret = lota_protect_self(g_hook.client);
@@ -768,6 +804,9 @@ static void *refresh_thread_fn(void *arg)
 					lota_strerror(ret), g_hook.refresh_sec);
 		}
 
+		/* usually too early on the first cycle; no-op once latched */
+		hook_register_self();
+
 		if (subscribed) {
 			ret = lota_poll_events(g_hook.client, 5000);
 		} else {
@@ -808,6 +847,9 @@ static void hook_child_after_fork(void)
 	 * lota_protect_self() against the child PID.
 	 */
 	atomic_store(&g_hook.self_protected, 0);
+
+	/* the child is bringing up its own image: give it the same wait */
+	g_hook.init_time = time(NULL);
 	hook_offline_clear();
 }
 
@@ -844,6 +886,11 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 				     atoi(env) :
 				     LOTA_HOOK_DEFAULT_REFRESH_SEC;
 
+	/* the registration delay counts from here */
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec =
+		hook_protect_delay(getenv(LOTA_HOOK_ENV_PROTECT_DELAY));
+
 	/* settle on a token directory the player owns */
 	if (setup_token_dir() < 0)
 		return;
@@ -858,8 +905,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	/* export token directory for wine-side discovery */
 	setenv(LOTA_HOOK_ENV_TOKEN_DIR, g_hook.token_dir, 0);
 
-	LOG_INF("initializing (token_dir=%s, refresh=%ds)", g_hook.token_dir,
-		g_hook.refresh_sec);
+	LOG_INF("initializing (token_dir=%s, refresh=%ds, protect_delay=%ds)",
+		g_hook.token_dir, g_hook.refresh_sec, g_hook.protect_delay_sec);
 
 	g_hook.init_pid = getpid();
 	pthread_atfork(NULL, NULL, hook_child_after_fork);

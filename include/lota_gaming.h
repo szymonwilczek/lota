@@ -407,6 +407,11 @@ int lota_ping(struct lota_client *client, uint64_t *uptime_sec);
  * ptrace_access_check, and task_kill hooks gate every access into
  * or out of this process against the trust set.
  *
+ * Call it once the loader is done: a protected task maps only files with
+ * an allowed fs-verity digest or a trusted_libs inode, so registering
+ * earlier refuses the process its own libraries. Libraries loaded later
+ * need covering (see LOTA_HOOK_ENV_PROTECT_DELAY).
+ *
  * Returns LOTA_OK on success.
  *         LOTA_ERR_ACCESS_DENIED if the PID identity check fails.
  *         LOTA_ERR_RATE_LIMITED  if the caller's UID exceeded the

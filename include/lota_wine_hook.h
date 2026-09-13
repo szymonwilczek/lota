@@ -85,8 +85,15 @@ extern "C" {
  */
 #define LOTA_HOOK_SNAPSHOT_FILE LOTA_SNAPSHOT_FILE_NAME
 
+/*
+ * Seconds from hook init to joining the protected set (default 20; 0 joins
+ * on the first connect). Joining earlier refuses Proton its own ntdll.so.
+ */
+#define LOTA_HOOK_ENV_PROTECT_DELAY "LOTA_HOOK_PROTECT_DELAY"
+
 /* defaults */
 #define LOTA_HOOK_DEFAULT_REFRESH_SEC 60
+#define LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC 20
 #define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000
 
 /*
