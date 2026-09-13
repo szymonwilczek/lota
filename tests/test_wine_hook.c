@@ -1577,6 +1577,120 @@ static void test_the_registration_is_not_repeated(void)
 	PASS();
 }
 
+/*
+ * A protected task maps only allowlisted or trusted libraries, so a title
+ * registered mid-load is refused its own. Registration waits a grace period.
+ */
+static void test_the_loader_grace_period_holds_the_registration(void)
+{
+	TEST("the grace period holds the registration until the loader is done");
+
+	if (hook_protect_due(1000, 20, 1000)) {
+		FAIL("registered at init, before the loader has mapped a thing");
+		return;
+	}
+	if (hook_protect_due(1000, 20, 1019)) {
+		FAIL("registered one second before the grace period ends");
+		return;
+	}
+	if (!hook_protect_due(1000, 20, 1020)) {
+		FAIL("the grace period elapsed and the title is still not registered");
+		return;
+	}
+	if (!hook_protect_due(1000, 0, 1000)) {
+		FAIL("a zero delay must register on the first connect");
+		return;
+	}
+
+	PASS();
+}
+
+/* A host whose objects carry verity digests can ask for no wait at all. */
+static void test_the_grace_period_is_configurable(void)
+{
+	TEST("the grace period reads its length from the environment");
+
+	if (hook_protect_delay(NULL) != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("unset must fall back to the default grace period");
+		return;
+	}
+	if (hook_protect_delay("0") != 0) {
+		FAIL("0 must disable the wait");
+		return;
+	}
+	if (hook_protect_delay("45") != 45) {
+		FAIL("an explicit length must be honoured");
+		return;
+	}
+	if (hook_protect_delay("-5") != LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("a negative length must fall back to the default");
+		return;
+	}
+	if (hook_protect_delay("later") !=
+	    LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC) {
+		FAIL("a value that is not a number must fall back");
+		return;
+	}
+
+	PASS();
+}
+
+/* The same rule on the wire: nothing is sent until the grace period ends. */
+static void test_a_refresh_inside_the_grace_period_does_not_register(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("a refresh inside the grace period does not register");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("grace");
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 30;
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count != 0) {
+		lota_disconnect(g_hook.client);
+		g_hook.client = NULL;
+		stop_mock_agent(agent);
+		FAIL("registered while the loader is still mapping libraries");
+		return;
+	}
+
+	/* the title is up: the grace period has passed */
+	g_hook.init_time -= 31;
+	refresh_once();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count != 1) {
+		FAIL("the title is never registered once its loader is done");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1649,6 +1763,9 @@ int main(void)
 	/* connect-then-register sequence */
 	test_the_launch_path_registers_the_title();
 	test_the_registration_is_not_repeated();
+	test_the_loader_grace_period_holds_the_registration();
+	test_the_grace_period_is_configurable();
+	test_a_refresh_inside_the_grace_period_does_not_register();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();
