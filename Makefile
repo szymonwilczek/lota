@@ -1844,6 +1844,8 @@ $(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
 		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
+		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
+		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
 		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
@@ -1853,6 +1855,8 @@ $(TEST_BIN_DIR)/test_startup_refusal_status: tests/test_startup_refusal_status.c
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
 		$(AGENT_DIR)/sb_dev.c $(AGENT_DIR)/cgroup_guard.c \
+		$(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c \
+		$(AGENT_DIR)/pin.c $(AGENT_DIR)/policy_pubkey.c \
 		| $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto \
