@@ -2029,6 +2029,90 @@ static void test_an_untouched_token_dir_reports_no_repair(void)
 	PASS();
 }
 
+/*
+ * Each connect failure needs its own line: a session without the lota group
+ * and a socket never created must not read the same.
+ */
+static void test_an_unreachable_socket_is_classified(void)
+{
+	char judged[PATH_MAX];
+	char sock[PATH_MAX];
+	int fd;
+	int ret;
+
+	TEST("the hook names why the agent socket could not be opened");
+
+	snprintf(sock, sizeof(sock), "%s/absent.sock", tmpdir);
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s", sock);
+
+	ret = hook_probe_socket(judged, sizeof(judged));
+	if (ret != -ENOENT) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("a socket that is not there is not reported as absent");
+		return;
+	}
+	if (strcmp(judged, sock) != 0) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("the probe does not name the path it judged");
+		return;
+	}
+
+	snprintf(sock, sizeof(sock), "%s/closed.sock", tmpdir);
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s", sock);
+	fd = open(sock, O_CREAT | O_WRONLY | O_TRUNC, 0000);
+	if (fd < 0) {
+		g_hook.socket_path[0] = '\0';
+		FAIL("could not create the test socket path");
+		return;
+	}
+	close(fd);
+
+	if (getuid() == 0) {
+		unlink(sock);
+		g_hook.socket_path[0] = '\0';
+		SKIP("root opens a mode 0000 path");
+		return;
+	}
+
+	ret = hook_probe_socket(judged, sizeof(judged));
+	unlink(sock);
+	g_hook.socket_path[0] = '\0';
+	if (ret != -EACCES) {
+		FAIL("a socket this process may not open is not reported as refused");
+		return;
+	}
+
+	PASS();
+}
+
+/* The reason a player can act on, not the errno alone. */
+static void test_a_refused_socket_names_the_group(void)
+{
+	const char *denied;
+	const char *absent;
+
+	TEST("a refused socket names the group a player is missing");
+
+	denied = hook_connect_reason(-EACCES);
+	if (!denied || !strstr(denied, "lota group")) {
+		FAIL("permission denied does not name the group");
+		return;
+	}
+
+	absent = hook_connect_reason(-ENOENT);
+	if (!absent || strstr(absent, "lota group")) {
+		FAIL("an absent socket is explained as a group problem");
+		return;
+	}
+
+	if (hook_connect_reason(-EPROTO)) {
+		FAIL("an errno with nothing to say invents a reason");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -2063,6 +2147,8 @@ int main(void)
 	test_ensure_token_dir_existing_mode_tightened();
 	test_a_repaired_token_dir_mode_is_reported();
 	test_an_untouched_token_dir_reports_no_repair();
+	test_an_unreachable_socket_is_classified();
+	test_a_refused_socket_names_the_group();
 
 	/* atomic_write */
 	test_atomic_write_creates_file();
