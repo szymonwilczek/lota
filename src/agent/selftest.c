@@ -529,9 +529,18 @@ int do_unseal(void)
 	/* framing is checked before the TPM opens: a refusal is the file's */
 	if (envelope) {
 		struct lota_envelope_meta emeta;
+		size_t kek_off = 0;
 
 		ret = lota_envelope_parse_header_why(blob, blob_len, &emeta,
-						     NULL, &why);
+						     &kek_off, &why);
+		/* the sealed KEK inside is a blob too: check its framing */
+		if (ret == 0) {
+			struct lota_seal_meta kmeta;
+
+			ret = lota_seal_parse_header_why(blob + kek_off,
+							 emeta.kek_blob_len,
+							 &kmeta, NULL, &why);
+		}
 	} else {
 		struct lota_seal_meta smeta;
 
