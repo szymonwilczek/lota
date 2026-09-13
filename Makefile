@@ -1352,6 +1352,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_loader_attach \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed \
+	$(TEST_BIN_DIR)/test_watchdog_supervisor \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
 	$(TEST_BIN_DIR)/test_integrity_baseline \
@@ -1832,6 +1833,11 @@ $(TEST_BIN_DIR)/test_bpf_loader_open_fails_closed: tests/test_bpf_loader_open_fa
 		-Wl,--wrap=bpf_program__attach \
 		-Wl,--wrap=ring_buffer__new
 
+# forks a child that the supervisor really kills: thread and signal under test
+$(TEST_BIN_DIR)/test_watchdog_supervisor: tests/test_watchdog_supervisor.c $(AGENT_DIR)/watchdog.c $(AGENT_DIR)/sdnotify.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^ -lsystemd
+
 $(TEST_BIN_DIR)/test_protect_pid_validation: tests/test_protect_pid_validation.c \
 		$(AGENT_DIR)/startup_policy.c $(AGENT_DIR)/bpf_loader.c \
 		$(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c \
@@ -1975,6 +1981,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_loader_attach
 	@$(BUILD_DIR)/test_bpf_loader_load_source
 	@$(BUILD_DIR)/test_bpf_loader_open_fails_closed
+	@$(BUILD_DIR)/test_watchdog_supervisor
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
 	@$(BUILD_DIR)/test_integrity_baseline
