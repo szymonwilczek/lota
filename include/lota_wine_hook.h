@@ -69,6 +69,11 @@ extern "C" {
  *   LOTA_FAIL_COUNT    unsigned
  *   LOTA_UPDATED       UNIX_TIMESTAMP (when file was written)
  *   LOTA_PID           hook process PID
+ *   LOTA_PROTECTED     1 | 0  (in the protected set)
+ *
+ * After a gate refused an object:
+ *   LOTA_REFUSED_OBJECT  refused path
+ *   LOTA_REFUSED_AT      UNIX_TIMESTAMP
  */
 #define LOTA_HOOK_STATUS_FILE "lota-status"
 
@@ -96,13 +101,16 @@ extern "C" {
 #define LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC 20
 #define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000
 
+/* the hook is built hidden so its SDK copy cannot shadow the game's */
+#define LOTA_HOOK_EXPORT __attribute__((visibility("default")))
+
 /*
  * lota_hook_active - Check whether the hook is running.
  *
  * Returns 1 if the background refresh thread is alive,
  * 0 otherwise (disabled, init failed, or not loaded).
  */
-int lota_hook_active(void);
+LOTA_HOOK_EXPORT int lota_hook_active(void);
 
 /*
  * lota_hook_status_path - Return absolute path to the status file.
@@ -110,7 +118,7 @@ int lota_hook_active(void);
  * Returns pointer to internal static buffer, or NULL if the hook
  * has not been initialised.
  */
-const char *lota_hook_status_path(void);
+LOTA_HOOK_EXPORT const char *lota_hook_status_path(void);
 
 /*
  * lota_hook_token_path - Return absolute path to the token file.
@@ -118,7 +126,7 @@ const char *lota_hook_status_path(void);
  * Returns pointer to internal static buffer, or NULL if the hook
  * has not been initialised.
  */
-const char *lota_hook_token_path(void);
+LOTA_HOOK_EXPORT const char *lota_hook_token_path(void);
 
 #ifdef __cplusplus
 }

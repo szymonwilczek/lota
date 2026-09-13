@@ -289,7 +289,11 @@ Verify after launching CS2 (run from the operator account, not root, so
    cat     "$XDG_RUNTIME_DIR/lota-hook/lota-status"
 
 A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
-``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process. The
+``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process.
+``LOTA_PROTECTED=1`` appears once the title registers,
+``LOTA_HOOK_PROTECT_DELAY`` seconds into the launch. An object the gates
+refuse is named in ``LOTA_REFUSED_OBJECT`` (with ``LOTA_REFUSED_AT``) and on
+the game's stderr. The
 ``lota-token.bin`` file size matches the ``LOTA_GAMING_MAX_TOKEN`` budget
 exposed by the gaming SDK; the first four bytes are the ``LOTK`` magic followed
 by the wire header, the TPM Quote bytes, and the AIK signature.

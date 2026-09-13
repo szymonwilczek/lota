@@ -22,6 +22,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -68,6 +69,8 @@ static struct {
 	pid_t init_pid;
 	time_t init_time; /* when the loader started bringing us up */
 	int protect_delay_sec; /* wait before joining protected_pids */
+	char refused_object[256]; /* last object that would not load */
+	time_t refused_at;
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
@@ -470,7 +473,7 @@ static int atomic_write(const char *path, const void *data, size_t len)
  */
 static int write_status_payload(const struct lota_status *status, int offline)
 {
-	char buf[512];
+	char buf[1024];
 	int len;
 
 	len = snprintf(buf, sizeof(buf),
@@ -481,14 +484,28 @@ static int write_status_payload(const struct lota_status *status, int offline)
 		       "LOTA_ATTEST_COUNT=%u\n"
 		       "LOTA_FAIL_COUNT=%u\n"
 		       "LOTA_UPDATED=%lu\n"
-		       "LOTA_PID=%d\n",
+		       "LOTA_PID=%d\n"
+		       "LOTA_PROTECTED=%d\n",
 		       (status->flags & LOTA_FLAG_ATTESTED) ? 1 : 0, offline,
 		       status->flags, (unsigned long)status->valid_until,
 		       status->attest_count, status->fail_count,
-		       (unsigned long)time(NULL), (int)getpid());
+		       (unsigned long)time(NULL), (int)getpid(),
+		       atomic_load(&g_hook.self_protected) ? 1 : 0);
 
 	if (len < 0 || (size_t)len >= sizeof(buf))
 		return -ENOMEM;
+
+	if (g_hook.refused_object[0]) {
+		int add = snprintf(buf + len, sizeof(buf) - (size_t)len,
+				   "LOTA_REFUSED_OBJECT=%s\n"
+				   "LOTA_REFUSED_AT=%lu\n",
+				   g_hook.refused_object,
+				   (unsigned long)g_hook.refused_at);
+
+		if (add < 0 || (size_t)(len + add) >= sizeof(buf))
+			return -ENOMEM;
+		len += add;
+	}
 
 	return atomic_write(g_hook.status_path, buf, (size_t)len);
 }
@@ -687,6 +704,57 @@ static void hook_register_self(void)
 
 	atomic_store(&g_hook.self_protected, 1);
 	LOG_INF("registered pid=%d for runtime enforcement", (int)getpid());
+}
+
+/*
+ * Was a failed load the gate's refusal? Reading dlerror() would consume
+ * the title's message, so judge the object: an existing readable path
+ * was refused, a bare name never found is just missing.
+ */
+static bool hook_refusal_is_gate(const char *path)
+{
+	if (!path || !strchr(path, '/'))
+		return false;
+
+	return access(path, R_OK) == 0;
+}
+
+/* Keep the refusal where the player's launcher already reads. */
+static void hook_record_refusal(const char *path)
+{
+	snprintf(g_hook.refused_object, sizeof(g_hook.refused_object), "%s",
+		 path);
+	g_hook.refused_at = time(NULL);
+}
+
+/*
+ * Report a gate refusal on stderr and in the status file;
+ * the handle and the pending dlerror() are the real dlopen()'s, untouched.
+ */
+LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
+{
+	static void *(*real_dlopen)(const char *, int);
+	void *handle;
+
+	if (!real_dlopen) {
+		real_dlopen = dlsym(RTLD_NEXT, "dlopen");
+		if (!real_dlopen) {
+			LOG_ERR("no dlopen underneath the hook");
+			return NULL;
+		}
+	}
+
+	handle = real_dlopen(file, mode);
+	if (handle || !atomic_load(&g_hook.self_protected))
+		return handle;
+
+	if (hook_refusal_is_gate(file)) {
+		hook_record_refusal(file);
+		LOG_ERR("%s did not load while this process is in LOTA's protected set -- a protected process may map only objects the agent allows, so cover this one (fs-verity digest or trusted_libs) or start the title with %s longer than it takes to reach this load",
+			file, LOTA_HOOK_ENV_PROTECT_DELAY);
+	}
+
+	return handle;
 }
 
 /*
@@ -978,19 +1046,19 @@ __attribute__((destructor)) static void lota_wine_hook_fini(void)
 
 /* exported query functions */
 
-int lota_hook_active(void)
+LOTA_HOOK_EXPORT int lota_hook_active(void)
 {
 	return g_hook.thread_started && g_hook.running;
 }
 
-const char *lota_hook_status_path(void)
+LOTA_HOOK_EXPORT const char *lota_hook_status_path(void)
 {
 	if (!g_hook.status_path[0])
 		return NULL;
 	return g_hook.status_path;
 }
 
-const char *lota_hook_token_path(void)
+LOTA_HOOK_EXPORT const char *lota_hook_token_path(void)
 {
 	if (!g_hook.token_path[0])
 		return NULL;

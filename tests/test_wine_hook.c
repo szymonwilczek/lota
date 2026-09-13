@@ -1784,6 +1784,7 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 
 	TEST("the dlopen wrapper hands back what the loader returned");
 
+	g_hook.log_level = HOOK_LOG_SILENT;
 	atomic_store(&g_hook.self_protected, 1);
 	g_hook.refused_object[0] = '\0';
 

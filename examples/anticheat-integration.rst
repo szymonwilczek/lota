@@ -264,7 +264,10 @@ kills the title. Two points are safe:
   (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` on the far side).
 
 A refusal surfaces as ``dlopen()`` failing with "failed to map segment from
-shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line.
+shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
+Wine hook also reports it on the title's stderr and as ``LOTA_REFUSED_OBJECT``
+in its status file. A producer registering itself should read a load failure
+after registering the same way, not as a corrupt install.
 
 What the token actually proves
 ==============================
