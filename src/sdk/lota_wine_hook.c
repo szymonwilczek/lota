@@ -41,6 +41,7 @@
 
 #include "../../include/lota_endian.h"
 #include "../../include/lota_gaming.h"
+#include "../../include/lota_ipc.h"
 #include "../../include/lota_snapshot.h"
 #include "../../include/lota_wine_hook.h"
 
@@ -73,6 +74,7 @@ static struct {
 	time_t refused_at;
 	struct lota_status last_status; /* the last one the agent gave */
 	atomic_int have_status;
+	atomic_int offline_errno; /* the refusal already reported, negated */
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
@@ -602,6 +604,7 @@ static void hook_offline_publish(void)
 static void hook_offline_clear(void)
 {
 	atomic_store(&g_hook.offline_published, 0);
+	atomic_store(&g_hook.offline_errno, 0);
 }
 
 #ifdef LOTA_HOOK_TESTING
@@ -686,6 +689,91 @@ static int write_token(struct lota_client *client, uint32_t flags)
 
 	(void)write_snapshot(flags, wire, written);
 	return 0;
+}
+
+/*
+ * Probe the sockets lota_connect() would try, in its order, since it reports
+ * every failure as LOTA_ERR_CONNECTION_FAILED. Names the judged path in @path;
+ * returns 0 or the negative errno it refused with.
+ */
+static int hook_probe_socket(char *path, size_t len)
+{
+	const char *candidates[2];
+	const char *runtime;
+	char session[PATH_MAX];
+	int count = 0;
+
+	if (g_hook.socket_path[0]) {
+		candidates[count++] = g_hook.socket_path;
+	} else {
+		candidates[count++] = LOTA_IPC_SOCKET_PATH;
+		runtime = getenv("XDG_RUNTIME_DIR");
+		if (runtime && runtime[0]) {
+			snprintf(session, sizeof(session), "%s/lota/lota.sock",
+				 runtime);
+			candidates[count++] = session;
+		}
+	}
+
+	snprintf(path, len, "%s", candidates[0]);
+
+	for (int i = 0; i < count; i++) {
+		struct stat st;
+
+		if (stat(candidates[i], &st) != 0)
+			continue;
+
+		/* the first candidate that exists is the one to explain */
+		snprintf(path, len, "%s", candidates[i]);
+		if (access(candidates[i], R_OK | W_OK) != 0)
+			return -errno;
+
+		return -ECONNREFUSED;
+	}
+
+	return -ENOENT;
+}
+
+/* hint for @err, or NULL when the errno says enough */
+static const char *hook_connect_reason(int err)
+{
+	switch (err) {
+	case -EACCES:
+	case -EPERM:
+		return "the session is usually missing the lota group";
+	case -ENOENT:
+		return "the agent is not running, or its per-session listener is not configured for this session";
+	case -ECONNREFUSED:
+		return "the agent is stopped or restarting";
+	case -ETIMEDOUT:
+		return "the agent did not answer before the connect timeout";
+	default:
+		return NULL;
+	}
+}
+
+/* warn on the first refusal and each new reason; repeats stay at debug */
+static void hook_report_unreachable(void)
+{
+	char path[PATH_MAX];
+	const char *why;
+	int err;
+
+	err = hook_probe_socket(path, sizeof(path));
+	why = hook_connect_reason(err);
+
+	if (atomic_exchange(&g_hook.offline_errno, err) == err) {
+		LOG_DBG("agent still unreachable at %s: %s", path,
+			strerror(-err));
+		return;
+	}
+
+	if (why)
+		LOG_WRN("cannot reach the agent at %s: %s -- %s", path,
+			strerror(-err), why);
+	else
+		LOG_WRN("cannot reach the agent at %s: %s", path,
+			strerror(-err));
 }
 
 static struct lota_client *hook_connect(void)
@@ -826,7 +914,7 @@ static void refresh_once(void)
 	if (!g_hook.client) {
 		g_hook.client = hook_connect();
 		if (!g_hook.client) {
-			LOG_DBG("agent not available");
+			hook_report_unreachable();
 			hook_offline_publish();
 			return;
 		}
@@ -909,8 +997,8 @@ static void *refresh_thread_fn(void *arg)
 		if (!g_hook.client) {
 			g_hook.client = hook_connect();
 			if (!g_hook.client) {
-				LOG_DBG("agent not available, retrying in %ds",
-					g_hook.refresh_sec);
+				hook_report_unreachable();
+				LOG_DBG("retrying in %ds", g_hook.refresh_sec);
 				hook_offline_publish();
 				sleep(g_hook.refresh_sec);
 				continue;

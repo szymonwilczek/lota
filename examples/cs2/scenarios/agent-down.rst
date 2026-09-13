@@ -153,7 +153,12 @@ What this proves
 Failure-mode notes
 ------------------
 
-If the watcher stays at ``OFFLINE`` after step 3:
+If the watcher stays at ``OFFLINE`` after step 3, read the hook's ``warn``
+line (shown by default, repeated only when the reason changes). It names the
+socket and why it could not be opened: ``the agent is not running, or its
+per-session listener is not configured for this session`` when no socket
+exists, ``the session is usually missing the lota group`` when it may not be
+opened. Then check:
 
 - Confirm the agent banner prints
   ``IPC extra listener on /run/user/<uid>/lota/lota.sock``. If only the
