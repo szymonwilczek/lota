@@ -1966,6 +1966,69 @@ static void test_a_refusal_publishes_itself(void)
 	PASS();
 }
 
+/* a token directory repaired to 0700 must log the mode it had */
+static void test_a_repaired_token_dir_mode_is_reported(void)
+{
+	mode_t repaired;
+	struct stat st;
+
+	TEST("a token directory repaired to 0700 says what it was");
+
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/loose",
+		 tmpdir);
+	if (mkdir(g_hook.token_dir, 0777) != 0 && errno != EEXIST) {
+		FAIL("could not create the test directory");
+		return;
+	}
+	if (chmod(g_hook.token_dir, 0777) != 0) {
+		FAIL("could not set the test mode");
+		return;
+	}
+
+	repaired = 0;
+	if (ensure_token_dir(&repaired) != 0) {
+		FAIL("ensure_token_dir refused a directory it owns");
+		return;
+	}
+	if (stat(g_hook.token_dir, &st) != 0 || (st.st_mode & 0777) != 0700) {
+		FAIL("the directory was not tightened to 0700");
+		return;
+	}
+	if (repaired != 0777) {
+		FAIL("the repair does not name the mode it found");
+		return;
+	}
+
+	PASS();
+}
+
+/* A directory that was already 0700 was not repaired and says nothing. */
+static void test_an_untouched_token_dir_reports_no_repair(void)
+{
+	mode_t repaired;
+
+	TEST("a token directory already at 0700 reports no repair");
+
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/tight",
+		 tmpdir);
+	if (mkdir(g_hook.token_dir, 0700) != 0 && errno != EEXIST) {
+		FAIL("could not create the test directory");
+		return;
+	}
+
+	repaired = 0777;
+	if (ensure_token_dir(&repaired) != 0) {
+		FAIL("ensure_token_dir refused a directory it owns");
+		return;
+	}
+	if (repaired != 0) {
+		FAIL("a directory that was not repaired reports a repair");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1998,6 +2061,8 @@ int main(void)
 	test_ensure_token_dir_not_a_dir();
 	test_ensure_token_dir_rejects_symlink();
 	test_ensure_token_dir_existing_mode_tightened();
+	test_a_repaired_token_dir_mode_is_reported();
+	test_an_untouched_token_dir_reports_no_repair();
 
 	/* atomic_write */
 	test_atomic_write_creates_file();
