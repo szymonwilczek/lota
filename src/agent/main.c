@@ -50,6 +50,7 @@
 #include "startup_policy.h"
 #include "status_flags.h"
 #include "tpm.h"
+#include "watchdog.h"
 
 /* Global state */
 struct agent_globals g_agent = {
@@ -653,7 +654,22 @@ static int run_daemon(const struct run_daemon_params *params)
 		.container_watch = &g_agent.container_watch,
 		.running = &g_agent.running,
 	};
+	/* task_kill refuses systemd's watchdog kill; supervise from inside */
+	if (wd_enabled) {
+		ret = watchdog_start(wd_usec);
+		if (ret < 0) {
+			lota_err("Failed to start the watchdog supervisor: %s. "
+				 "The unit declares WatchdogSec= and nothing "
+				 "else can act on it, so the agent does not "
+				 "run without one.",
+				 strerror(-ret));
+			goto cleanup_bpf;
+		}
+	}
+
 	ret = agent_run_event_loop(&loop_ctx);
+
+	watchdog_stop();
 
 	/* clean shutdown via signal - do not propagate EINTR as failure */
 	if (!g_agent.running)

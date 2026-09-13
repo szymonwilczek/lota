@@ -146,7 +146,8 @@ SDK_VERSION_CFLAGS := -DLOTA_BUILD_VERSION_STRING=\"$(LOTA_VERSION_STRING)\"
 HARDENING_LDFLAGS := -Wl,-z,relro,-z,now -Wl,-z,noexecstack -Wl,-z,separate-code
 
 # Agent link flags
-LDFLAGS := -pie $(HARDENING_LDFLAGS)
+# -pthread: the watchdog supervisor runs on a thread of its own
+LDFLAGS := -pie -pthread $(HARDENING_LDFLAGS)
 LDFLAGS += -lbpf -ltss2-esys -ltss2-mu -ltss2-tcti-device -ltss2-tctildr -lcrypto -lssl -lsystemd -lseccomp
 
 ifdef SANITIZE
@@ -230,6 +231,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/token_gate.c \
               $(AGENT_DIR)/dbus.c \
               $(AGENT_DIR)/sdnotify.c \
+              $(AGENT_DIR)/watchdog.c \
               $(AGENT_DIR)/journal.c \
               $(AGENT_DIR)/selftest.c \
               $(AGENT_DIR)/event.c \
