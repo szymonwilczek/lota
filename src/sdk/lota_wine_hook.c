@@ -587,9 +587,6 @@ static int LOTA_UNUSED fetch_token_wire(struct lota_client *client,
 
 #undef LOTA_UNUSED
 
-/* Runtime-only: refresh, thread, fork safety, constructor/destructor */
-#ifndef LOTA_HOOK_TESTING
-
 /*
  * Fetch and write the binary token file.
  *
@@ -702,6 +699,9 @@ static void refresh_once(void)
 		unlink(g_hook.snapshot_path);
 	}
 }
+
+/* load-time only; the tests drive the connect and refresh path above */
+#ifndef LOTA_HOOK_TESTING
 
 static void hook_status_cb(const struct lota_status *status, uint32_t events,
 			   void *user_data)

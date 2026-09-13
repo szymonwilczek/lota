@@ -24,14 +24,19 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../src/sdk/lota_wine_hook.c"
 #include "lota_gaming.h"
+#include "lota_ipc.h"
 
 static int tests_run;
 static int tests_passed;
@@ -52,6 +57,12 @@ static int tests_passed;
 	do {                               \
 		printf("FAIL: %s\n", msg); \
 	} while (0)
+
+static void SKIP(const char *msg)
+{
+	tests_passed++;
+	printf("SKIP (%s)\n", msg);
+}
 
 /* temp directory for test artifacts */
 static char tmpdir[64];
@@ -1263,6 +1274,309 @@ static void test_hook_token_path_when_empty(void)
 	PASS();
 }
 
+/* mock agent: a child answers the SDK and logs each command id it gets */
+static char mock_socket[104];
+static char mock_cmdlog[PATH_MAX];
+static int mock_agent_errno;
+
+static int mock_errno_is_sandbox(int err)
+{
+	return err == EPERM || err == EACCES || err == EROFS;
+}
+
+static int mock_send_response(int fd, uint32_t result, const void *payload,
+			      uint32_t payload_len)
+{
+	struct lota_ipc_response resp;
+
+	resp.magic = LOTA_IPC_MAGIC;
+	resp.version = LOTA_IPC_VERSION;
+	resp.result = result;
+	resp.payload_len = payload_len;
+
+	if (send(fd, &resp, sizeof(resp), MSG_NOSIGNAL) != sizeof(resp))
+		return -1;
+
+	if (payload_len > 0 && payload) {
+		if (send(fd, payload, payload_len, MSG_NOSIGNAL) !=
+		    (ssize_t)payload_len)
+			return -1;
+	}
+
+	return 0;
+}
+
+static int mock_recv_request(int fd, struct lota_ipc_request *req,
+			     void *payload, size_t max_payload)
+{
+	ssize_t n;
+
+	n = recv(fd, req, sizeof(*req), MSG_WAITALL);
+	if (n != sizeof(*req))
+		return -1;
+
+	if (req->payload_len > 0) {
+		size_t want = req->payload_len;
+
+		if (want > max_payload)
+			want = max_payload;
+		n = recv(fd, payload, want, MSG_WAITALL);
+		if (n != (ssize_t)want)
+			return -1;
+	}
+
+	return 0;
+}
+
+/* Serve one client until it hangs up, recording each command id. */
+static void mock_agent_serve(int client_fd)
+{
+	struct lota_ipc_request req;
+	uint8_t payload[256];
+	FILE *log;
+	int fd;
+
+	fd = open(mock_cmdlog, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+	if (fd < 0)
+		_exit(90);
+	log = fdopen(fd, "a");
+	if (!log)
+		_exit(90);
+
+	while (mock_recv_request(client_fd, &req, payload, sizeof(payload)) ==
+	       0) {
+		fprintf(log, "%u\n", req.cmd);
+		fflush(log);
+
+		if (req.cmd == LOTA_IPC_CMD_GET_STATUS) {
+			struct lota_ipc_status status;
+
+			memset(&status, 0, sizeof(status));
+			if (mock_send_response(client_fd, LOTA_IPC_OK, &status,
+					       sizeof(status)) < 0)
+				break;
+			continue;
+		}
+
+		if (mock_send_response(client_fd, LOTA_IPC_OK, NULL, 0) < 0)
+			break;
+	}
+
+	fclose(log);
+}
+
+static pid_t start_mock_agent(void)
+{
+	struct sockaddr_un addr;
+	int listen_fd;
+	pid_t pid;
+
+	mock_agent_errno = 0;
+	snprintf(mock_socket, sizeof(mock_socket), "%s/agent.sock", tmpdir);
+	snprintf(mock_cmdlog, sizeof(mock_cmdlog), "%s/agent.cmds", tmpdir);
+	unlink(mock_socket);
+	unlink(mock_cmdlog);
+
+	listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (listen_fd < 0) {
+		mock_agent_errno = errno;
+		return -1;
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, mock_socket, sizeof(addr.sun_path) - 1);
+
+	if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		return -1;
+	}
+
+	if (listen(listen_fd, 4) < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		unlink(mock_socket);
+		return -1;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		mock_agent_errno = errno;
+		close(listen_fd);
+		unlink(mock_socket);
+		return -1;
+	}
+
+	if (pid == 0) {
+		/* child: serve clients until the parent kills us */
+		for (;;) {
+			int client_fd = accept(listen_fd, NULL, NULL);
+
+			if (client_fd < 0)
+				_exit(99);
+			mock_agent_serve(client_fd);
+			close(client_fd);
+		}
+	}
+
+	close(listen_fd);
+	usleep(30000); /* let the child reach accept() */
+	return pid;
+}
+
+static void stop_mock_agent(pid_t pid)
+{
+	int status;
+
+	kill(pid, SIGKILL);
+	waitpid(pid, &status, 0);
+	unlink(mock_socket);
+}
+
+/* How many times @cmd appears in the mock agent's command log. */
+static int mock_cmd_count(uint32_t cmd)
+{
+	char line[32];
+	FILE *log;
+	int count = 0;
+
+	log = fopen(mock_cmdlog, "r");
+	if (!log)
+		return -1;
+
+	while (fgets(line, sizeof(line), log)) {
+		if ((uint32_t)strtoul(line, NULL, 10) == cmd)
+			count++;
+	}
+
+	fclose(log);
+	return count;
+}
+
+/* Point the hook's files and socket at the test directory. */
+static void hook_state_for_mock_agent(const char *tag)
+{
+	snprintf(g_hook.socket_path, sizeof(g_hook.socket_path), "%s",
+		 mock_socket);
+	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/%s.status",
+		 tmpdir, tag);
+	snprintf(g_hook.token_path, sizeof(g_hook.token_path), "%s/%s.token",
+		 tmpdir, tag);
+	snprintf(g_hook.snapshot_path, sizeof(g_hook.snapshot_path),
+		 "%s/%s.snapshot", tmpdir, tag);
+	g_hook.refresh_sec = 1;
+	atomic_store(&g_hook.self_protected, 0);
+	atomic_store(&g_hook.offline_published, 0);
+}
+
+/*
+ * The refresh thread connects before calling refresh_once(),
+ * so registering only on its NULL-client branch never runs.
+ */
+static void test_the_launch_path_registers_the_title(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("the launch path registers the title it hooks");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("launch");
+
+	/* exactly what refresh_thread_fn() does when it comes up */
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count < 0) {
+		FAIL("no command log from the mock agent");
+		return;
+	}
+	if (count == 0) {
+		FAIL("PROTECT_PID never sent, the title is not protected");
+		return;
+	}
+
+	PASS();
+}
+
+/* The latch holds: a later refresh does not re-register the process. */
+static void test_the_registration_is_not_repeated(void)
+{
+	pid_t agent;
+	int count;
+
+	TEST("a later refresh does not register twice");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("repeat");
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+	refresh_once();
+
+	/* a reconnect takes the other branch and must not re-register */
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	refresh_once();
+
+	if (g_hook.client) {
+		lota_disconnect(g_hook.client);
+		g_hook.client = NULL;
+	}
+	stop_mock_agent(agent);
+
+	count = mock_cmd_count(LOTA_IPC_CMD_PROTECT_PID);
+	if (count < 0) {
+		FAIL("no command log from the mock agent");
+		return;
+	}
+	if (count == 0) {
+		FAIL("PROTECT_PID never sent, the title is not protected");
+		return;
+	}
+	if (count > 1) {
+		FAIL("registration repeated after the first success");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1331,6 +1645,10 @@ int main(void)
 	test_policy_empty_env_strings_ignored();
 	test_policy_prefix_must_match_at_start();
 	test_policy_whitespace_tolerant();
+
+	/* connect-then-register sequence */
+	test_the_launch_path_registers_the_title();
+	test_the_registration_is_not_repeated();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();
