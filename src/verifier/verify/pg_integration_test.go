@@ -499,3 +499,29 @@ func TestPG_AgentHashRepinArchivesAndRateLimits(t *testing.T) {
 		t.Fatalf("expected ErrAgentHashRepinRateLimited, got %v", err)
 	}
 }
+
+// Postgres refuses a row with no agent hash and writes no archive row.
+func TestPG_AgentHashRepinRefusesRowWithNoPinnedHash(t *testing.T) {
+	bs := pgBaselineStore(t)
+	const clientID = "pg-unpinned"
+
+	operatorPCR14 := fill(0x14)
+	if res, _ := bs.CheckAndUpdate(clientID, operatorPCR14); res != TOFUFirstUse {
+		t.Fatalf("out-of-band pin: expected TOFUFirstUse, got %v", res)
+	}
+
+	st := bs.GetAgentHashRepinState(clientID)
+	if !st.Present || st.Pinned {
+		t.Fatalf("expected a present row with no pin, got present=%v pinned=%v",
+			st.Present, st.Pinned)
+	}
+
+	if err := bs.ArchiveAndRepinAgentHash(clientID, fill(0xC7), fill(0x15),
+		time.Now()); !errors.Is(err, ErrAgentHashNotPinned) {
+		t.Fatalf("expected ErrAgentHashNotPinned, got %v", err)
+	}
+
+	if b := bs.GetBaseline(clientID); b == nil || b.PCR14 != operatorPCR14 {
+		t.Fatal("the operator's PCR 14 pin was replaced by the refused re-pin")
+	}
+}
