@@ -21,6 +21,7 @@
 #endif
 #include <dirent.h>
 #include <sys/stat.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -1691,6 +1692,151 @@ static void test_a_refresh_inside_the_grace_period_does_not_register(void)
 	PASS();
 }
 
+/*
+ * Reading dlerror() would consume the caller's message, so the hook judges
+ * the object: an existing readable path was refused, an absent one is missing.
+ */
+static void test_a_gate_refusal_is_told_apart_from_a_missing_file(void)
+{
+	char present[PATH_MAX];
+	char absent[PATH_MAX];
+
+	TEST("a gate refusal is told apart from a missing file");
+
+	snprintf(present, sizeof(present), "%s/libpresent.so", tmpdir);
+	snprintf(absent, sizeof(absent), "%s/libabsent.so", tmpdir);
+	if (touch_file(present, "not really an ELF") != 0) {
+		FAIL("could not create the test object");
+		return;
+	}
+
+	if (!hook_refusal_is_gate(present)) {
+		FAIL("an object that is there was refused, not missing");
+		return;
+	}
+	if (hook_refusal_is_gate(absent)) {
+		FAIL("a file that is not there must not be blamed on the gate");
+		return;
+	}
+	if (hook_refusal_is_gate("libfoo.so.1")) {
+		FAIL("a soname the loader never found is not a refusal");
+		return;
+	}
+	if (hook_refusal_is_gate(NULL)) {
+		FAIL("a load of nothing is not a refusal");
+		return;
+	}
+
+	unlink(present);
+	PASS();
+}
+
+/* The player's file sink says it happened, not only the agent journal. */
+static void test_the_status_file_names_the_refused_object(void)
+{
+	struct lota_status status;
+	char path[PATH_MAX];
+	char buf[1024];
+	ssize_t n;
+
+	TEST("the status file names the object the gate refused");
+
+	snprintf(path, sizeof(path), "%s/status_refused", tmpdir);
+	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s", path);
+	atomic_store(&g_hook.self_protected, 1);
+	hook_record_refusal("/opt/game/lib/libcodec.so");
+
+	memset(&status, 0, sizeof(status));
+	status.flags = LOTA_FLAG_ATTESTED;
+	if (write_status(&status) != 0) {
+		FAIL("write_status failed");
+		return;
+	}
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("read failed");
+		return;
+	}
+	if (!strstr(buf, "LOTA_PROTECTED=1")) {
+		FAIL("the sink does not say the title is in the protected set");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=/opt/game/lib/libcodec.so")) {
+		FAIL("the sink does not name the refused object");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_AT=")) {
+		FAIL("the sink does not say when it happened");
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 0);
+	g_hook.refused_object[0] = '\0';
+	PASS();
+}
+
+/* Nothing the hook does to explain a refusal may change what loads. */
+static void test_the_loader_wrapper_hands_back_what_it_got(void)
+{
+	char broken[PATH_MAX];
+	void *handle;
+
+	TEST("the dlopen wrapper hands back what the loader returned");
+
+	atomic_store(&g_hook.self_protected, 1);
+	g_hook.refused_object[0] = '\0';
+
+	handle = dlopen("libm.so.6", RTLD_NOW);
+	if (!handle) {
+		atomic_store(&g_hook.self_protected, 0);
+		SKIP("libm.so.6 is not loadable here");
+		return;
+	}
+	dlclose(handle);
+	if (g_hook.refused_object[0]) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a load that succeeded was recorded as a refusal");
+		return;
+	}
+
+	handle = dlopen("/nonexistent/lota-no-such-object.so", RTLD_NOW);
+	if (handle) {
+		dlclose(handle);
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a load of nothing returned a handle");
+		return;
+	}
+	if (g_hook.refused_object[0]) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("a missing file was recorded as a gate refusal");
+		return;
+	}
+
+	/* an object that is there and did not load: what a refusal is */
+	snprintf(broken, sizeof(broken), "%s/libbroken.so", tmpdir);
+	if (touch_file(broken, "not really an ELF") != 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("could not create the test object");
+		return;
+	}
+	handle = dlopen(broken, RTLD_NOW);
+	atomic_store(&g_hook.self_protected, 0);
+	if (handle) {
+		dlclose(handle);
+		FAIL("a file that is not an object returned a handle");
+		return;
+	}
+	if (strcmp(g_hook.refused_object, broken) != 0) {
+		FAIL("a failed load of an object that is there went unrecorded");
+		return;
+	}
+
+	unlink(broken);
+	g_hook.refused_object[0] = '\0';
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1766,6 +1912,9 @@ int main(void)
 	test_the_loader_grace_period_holds_the_registration();
 	test_the_grace_period_is_configurable();
 	test_a_refresh_inside_the_grace_period_does_not_register();
+	test_a_gate_refusal_is_told_apart_from_a_missing_file();
+	test_the_status_file_names_the_refused_object();
+	test_the_loader_wrapper_hands_back_what_it_got();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();
