@@ -257,6 +257,11 @@ int container_watch_init(struct container_watch *w, const char *root,
 	return ret;
 }
 
+bool container_watch_bind_pending(int err)
+{
+	return err == -ENOENT;
+}
+
 int container_watch_fd(const struct container_watch *w)
 {
 	if (!w)

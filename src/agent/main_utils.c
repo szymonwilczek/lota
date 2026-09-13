@@ -457,9 +457,11 @@ static int add_listener_for_uid(uint32_t uid, void *user)
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Warning: cannot create container socket dir %s: %s\n",
-			dir, strerror(-ret));
+		/* no login yet, or logind still mounting: the watch retries */
+		if (!container_watch_bind_pending(ret))
+			fprintf(stderr,
+				"Warning: cannot create container socket dir %s: %s\n",
+				dir, strerror(-ret));
 		return ret;
 	}
 
