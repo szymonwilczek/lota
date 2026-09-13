@@ -169,37 +169,7 @@ func TestRequirementRefusalNamesTheRequirement(t *testing.T) {
 	}
 }
 
-// Refusals outside the classes above keep their old verdicts.
-func TestRegisterRefusalsKeepTheirVerdicts(t *testing.T) {
-	listed := [types.HashSize]byte{0xCD}
-	unlisted := [types.HashSize]byte{0xAB}
-	v := &PCRVerifier{}
-
-	report := &types.AttestationReport{}
-	report.TPM.PCRMask = 1 << 7
-	report.TPM.PCRValues[7] = unlisted
-	policy := &PCRPolicy{Name: "p", PCRs: map[int]string{
-		7: hex.EncodeToString(listed[:]),
-	}}
-
-	err := v.verifyAgainstPolicy(report, policy, nil)
-	if err == nil {
-		t.Fatal("a register that moved was accepted")
-	}
-	if got := policyVerdict(err); got != types.VerifyPCRFail {
-		t.Fatalf("verdict %d, want VerifyPCRFail", got)
-	}
-
-	// and the host with no DMA remapping keeps the verdict named for it
-	err = v.verifyAgainstPolicy(&types.AttestationReport{},
-		&PCRPolicy{Name: "p", RequireIOMMU: true}, nil)
-	if err == nil {
-		t.Fatal("a host with DMA remapping off was accepted")
-	}
-	if got := policyVerdict(err); got != types.VerifyIOMMUFail {
-		t.Fatalf("verdict %d, want VerifyIOMMUFail", got)
-	}
-}
+// Class-level verdicts stay in policy_verdict_test.go.
 
 // A profile with no certificate on disk reports without one.
 func TestReportWithoutAIKCertificateNamesTheAbsentCertificate(t *testing.T) {

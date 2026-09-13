@@ -899,11 +899,60 @@ const char *net_result_str(uint32_t result)
 	case VERIFY_INTERNAL_ERROR:
 		return "FAIL - Verifier internal error";
 	case VERIFY_POLICY_REQUIREMENT:
+		/* unclassified requirement, e.g. an unenrolled firmware baseline */
 		return "FAIL - This host does not meet a requirement the "
-		       "publisher's policy states about it (the kernel image "
-		       "allow-list, Secure Boot, kernel lockdown, module "
-		       "signing or appraisal scope). The verifier's log names "
-		       "which one; the verdict alone does not";
+		       "publisher's policy states about it, and the verdict "
+		       "does not say which. The requirements this agent knows "
+		       "have a verdict of their own, so this is either one a "
+		       "newer verifier states -- update the agent and attest "
+		       "again -- or one only the publisher can settle, such "
+		       "as a host whose firmware baseline nobody has enrolled";
+	case VERIFY_SECUREBOOT_REQUIRED:
+		return "FAIL - Secure Boot is not on for this host and the "
+		       "publisher's policy requires it. The firmware's own "
+		       "measurement is what is read here, so the machine's "
+		       "own report cannot substitute for it: turn Secure Boot "
+		       "on in firmware setup, boot, then attest again";
+	case VERIFY_LOCKDOWN_REQUIRED:
+		return "FAIL - This host's kernel is not in lockdown and the "
+		       "publisher's policy requires it. Boot with "
+		       "lockdown=integrity on the kernel command line (Secure "
+		       "Boot turns it on by itself on most distributions)";
+	case VERIFY_MODULE_SIG_REQUIRED:
+		return "FAIL - This host's kernel loads unsigned modules and "
+		       "the publisher's policy requires signature "
+		       "enforcement. Boot with module.sig_enforce=1, or a "
+		       "kernel built with CONFIG_MODULE_SIG_FORCE";
+	case VERIFY_ENFORCE_REQUIRED:
+		return "FAIL - The LOTA LSM is loaded on this host but is not "
+		       "enforcing, and the publisher's policy requires it to "
+		       "be. Set enforce = true in /etc/lota/agent.conf and "
+		       "restart lota-agent";
+	case VERIFY_IMA_APPRAISAL_REQUIRED:
+		return "FAIL - This host's kernel appraises no executable and "
+		       "the publisher's policy requires IMA appraisal. It is "
+		       "a boot-time policy and a signed filesystem: see the "
+		       "publisher's bring-up instructions before turning it "
+		       "on, because a host that appraises what it cannot "
+		       "verify does not boot";
+	case VERIFY_KERNEL_IMAGE_REQUIRED:
+		return "FAIL - This host's kernel is not one the publisher's "
+		       "policy allows, or its boot did not measure a kernel "
+		       "image the policy could be checked against. Boot a "
+		       "kernel the publisher lists, from a bootloader that "
+		       "measures it into PCR 9";
+	case VERIFY_CMDLINE_REQUIRED:
+		return "FAIL - This host's kernel command line carries a "
+		       "parameter the publisher's policy denies, or its boot "
+		       "did not measure the command line at all. The "
+		       "verifier's log names the parameter; the usual ones "
+		       "are debug and kernel-integrity switches added by hand";
+	case VERIFY_CERTIFICATE_MISSING:
+		return "FAIL - This host presented no attestation "
+		       "certificate, so the publisher has nothing to identify "
+		       "it by. The enrolment did not finish or its "
+		       "certificate is not on disk. Run lota-agent --reenroll "
+		       "--ca-cert <their anchor>";
 	case VERIFY_CERTIFICATE_VALIDITY:
 		return "FAIL - This host's attestation certificate is outside "
 		       "the window it is valid in. Either it has expired, "

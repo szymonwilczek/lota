@@ -485,11 +485,15 @@ Reader. Query: ``limit`` (default 100, maximum 10000). **200**::
 
 ``result`` is the verdict the verifier reached, and an accepted round reads
 ``ok``. The refusals are ``nonce_fail``, ``sig_fail``, ``identity_fail``,
-``certificate_validity``, ``pcr_fail``, ``iommu_fail``,
-``policy_requirement``, ``integrity_mismatch``, ``old_version``, ``revoked``,
-``banned`` and ``internal_error`` -- the same
-vocabulary the agent is answered with, so a round an operator reads here and
-a round a host reports are named the same thing.
+``certificate_validity``, ``certificate_missing``, ``pcr_fail``,
+``iommu_fail``, ``secureboot_required``, ``lockdown_required``,
+``module_sig_required``, ``enforce_required``, ``ima_appraisal_required``,
+``kernel_image_required``, ``cmdline_required``, ``policy_requirement``,
+``integrity_mismatch``, ``old_version``, ``revoked``, ``banned`` and
+``internal_error`` -- the same vocabulary the agent is answered with. Each
+policy requirement has its own verdict (a host refused for Secure Boot reads
+``secureboot_required`` on both sides); ``policy_requirement`` covers a
+refusal none of them names.
 
 ``kernel_hash`` is the kernel image hash the agent reported. It is covered by
 the quote, so it is attested, and it is advisory: nothing is gated on it,

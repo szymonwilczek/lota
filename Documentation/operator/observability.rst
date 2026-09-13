@@ -55,15 +55,26 @@ Metric                                          Type      Meaning
 ``lota_rejections_total{reason}``               counter   Rejections by reason: ``pcr_fail`` (a
                                                           register moved) and ``integrity_mismatch``
                                                           (a pinned measurement moved) are the tamper
-                                                          signals; ``policy_requirement`` and
-                                                          ``iommu_fail`` are host configuration the
-                                                          policy demands; ``sig_fail``,
+                                                          signals; ``secureboot_required``,
+                                                          ``lockdown_required``,
+                                                          ``module_sig_required``,
+                                                          ``enforce_required``,
+                                                          ``ima_appraisal_required``,
+                                                          ``kernel_image_required``,
+                                                          ``cmdline_required``,
+                                                          ``iommu_fail`` and the
+                                                          ``policy_requirement`` remainder
+                                                          are host configuration the policy
+                                                          demands, one series per
+                                                          requirement; ``sig_fail``,
                                                           ``nonce_fail``, ``identity_fail``,
                                                           ``certificate_validity`` (the AIK
                                                           certificate has expired or is not
                                                           yet valid; the host re-enrolls),
-                                                          ``revoked``, ``banned``,
-                                                          ``old_version``,
+                                                          ``certificate_missing`` (the host
+                                                          presented none; its enrolment is
+                                                          unfinished), ``revoked``,
+                                                          ``banned``, ``old_version``,
                                                           ``internal_error`` and
                                                           ``baseline_error`` (verifier store
                                                           failure) complete the set. Every
@@ -180,9 +191,12 @@ LotaIntegrityLoss (critical)
 Device presented PCR or runtime state that does not match its policy or
 recorded baseline (``pcr_fail`` or ``integrity_mismatch``). This is the
 product's primary tamper signal and the alert the forced drill below
-exercises. A host that simply does not meet a requirement -- Secure Boot,
-lockdown, module signing, the kernel image allow-list, appraisal scope --
-counts as ``policy_requirement`` instead and is a configuration problem.
+exercises. A host missing a policy requirement counts under that
+requirement's reason instead (``secureboot_required``, ``lockdown_required``,
+``module_sig_required``, ``enforce_required``, ``ima_appraisal_required``,
+``kernel_image_required``, ``cmdline_required``): a configuration problem,
+not a tamper signal. ``policy_requirement`` covers the rest, such as a
+firmware baseline nobody enrolled.
 
 1. Identify the device: ``GET /api/v1/attestations?limit=50`` and filter
    the failed records; each carries the client ID and failure detail. A PCR
@@ -293,8 +307,8 @@ certificate, or infrastructure problems.
 1. The rejections-by-reason dashboard panel says which failure dominates:
    ``sig_fail`` after a CA change means certificates (did the AIK CA
    rotate without redistributing?), ``pcr_fail`` across the fleet means a
-   policy pushed with wrong pins, ``policy_requirement`` across the fleet
-   means a policy demanding something the fleet does not have, and
+   policy pushed with wrong pins, a ``*_required`` reason names the
+   requirement the fleet does not meet, and
    ``integrity_mismatch`` across the fleet after an agent update means the
    new build is not on the allow-list. ``baseline_error`` means the store.
 2. Correlate the onset with the last policy or infrastructure change and
