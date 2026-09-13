@@ -1573,6 +1573,207 @@ static void test_last_error_heartbeat_causes(void)
 	lota_ac_shutdown(s);
 }
 
+/*
+ * A refusing call must leave its own reason, a successful one must clear it.
+ * Each case seeds a code no call under test produces, then reads it back.
+ */
+static void seed_stale_error(void)
+{
+	struct lota_ac_config cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.provider = LOTA_AC_PROVIDER_EAC;
+	cfg.game_id = "stale-seed";
+	lota_ac_init(&cfg); /* struct_size 0: LOTA_AC_ERR_CONFIG_SIZE */
+}
+
+static int last_error_is(int expected, const char *what)
+{
+	int got = lota_ac_last_error();
+
+	if (got == expected)
+		return 1;
+
+	if (got == LOTA_AC_ERR_CONFIG_SIZE)
+		printf("FAIL (%s left the seeded error behind)\n", what);
+	else
+		printf("FAIL (%s left %d, expected %d)\n", what, got,
+		       expected);
+	return 0;
+}
+
+static int rt_count_cb(const char *path, void *user)
+{
+	(void)path;
+	(*(int *)user)++;
+	return 0;
+}
+
+static void test_last_error_measure_helpers(void)
+{
+	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t measure[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	int objects = 0;
+
+	TEST("last_error: a binding hash without a game id is invalid");
+	seed_stale_error();
+	lota_ac_compute_game_binding_hash(NULL, "/proc/self/exe", game_hash);
+	if (!last_error_is(-EINVAL, "compute_game_binding_hash"))
+		return;
+	PASS();
+
+	TEST("last_error: a binding hash that was computed clears the last");
+	seed_stale_error();
+	if (lota_ac_compute_game_binding_hash("test-game", "/proc/self/exe",
+					      game_hash) != 0) {
+		FAIL("the binding hash could not be computed");
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK, "compute_game_binding_hash"))
+		return;
+	PASS();
+
+	TEST("last_error: a runtime measure of nowhere is invalid");
+	seed_stale_error();
+	lota_ac_compute_runtime_measure(NULL);
+	if (!last_error_is(-EINVAL, "compute_runtime_measure"))
+		return;
+	PASS();
+
+	TEST("last_error: a runtime measure that was taken clears the last");
+	seed_stale_error();
+	if (lota_ac_compute_runtime_measure(measure) != 0) {
+		FAIL("this process could not measure itself");
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK, "compute_runtime_measure"))
+		return;
+	PASS();
+
+	TEST("last_error: an enumeration with no callback is invalid");
+	seed_stale_error();
+	lota_ac_list_runtime_objects(NULL, NULL);
+	if (!last_error_is(-EINVAL, "list_runtime_objects"))
+		return;
+	PASS();
+
+	TEST("last_error: an enumeration that ran clears the last");
+	seed_stale_error();
+	if (lota_ac_list_runtime_objects(rt_count_cb, &objects) != 0 ||
+	    objects == 0) {
+		FAIL("this process listed no loaded object");
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK, "list_runtime_objects"))
+		return;
+	PASS();
+
+	TEST("last_error: an expected measure over no paths is invalid");
+	seed_stale_error();
+	lota_ac_compute_expected_runtime_measure(NULL, measure);
+	if (!last_error_is(-EINVAL, "compute_expected_runtime_measure"))
+		return;
+	PASS();
+
+	TEST("last_error: an expected measure that was computed clears it");
+	seed_stale_error();
+	if (lota_ac_compute_expected_runtime_measure("/proc/self/exe",
+						     measure) != 0) {
+		FAIL("the expected measure could not be computed");
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK,
+			   "compute_expected_runtime_measure"))
+		return;
+	PASS();
+}
+
+/* the session-bound calls, two of which an integrator polls in a loop */
+static void test_last_error_session_calls(void)
+{
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "test-game",
+	};
+	struct lota_ac_session *s;
+	struct lota_ac_info info;
+
+	TEST("last_error: telemetry about no session is invalid");
+	seed_stale_error();
+	lota_ac_get_info(NULL, &info);
+	if (!last_error_is(-EINVAL, "get_info"))
+		return;
+	PASS();
+
+	TEST("last_error: a refresh of no session is invalid");
+	seed_stale_error();
+	lota_ac_tick(NULL);
+	if (!last_error_is(-EINVAL, "tick"))
+		return;
+	PASS();
+
+	cfg.token_dir = test_dir;
+	s = lota_ac_init(&cfg);
+	if (!s) {
+		TEST("last_error: a session for the session-bound calls");
+		FAIL("init refused a valid file-mode configuration");
+		return;
+	}
+
+	TEST("last_error: telemetry that was handed over clears the last");
+	seed_stale_error();
+	if (lota_ac_get_info(s, &info) != 0) {
+		FAIL("get_info refused a live session");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK, "get_info")) {
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	TEST("last_error: a refresh that ran clears the last");
+	seed_stale_error();
+	if (lota_ac_tick(s) != 0) {
+		FAIL("tick refused a live session");
+		lota_ac_shutdown(s);
+		return;
+	}
+	if (!last_error_is(LOTA_AC_ERR_OK, "tick")) {
+		lota_ac_shutdown(s);
+		return;
+	}
+	PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* The server side reads the same accessor after a verdict it did not like */
+static void test_last_error_verify_heartbeat(void)
+{
+	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
+	uint8_t measure[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
+	struct lota_ac_info info;
+	uint8_t buf[LOTA_AC_HEADER_SIZE] = { 0 };
+
+	TEST("last_error: a verdict on no packet is invalid");
+	seed_stale_error();
+	lota_ac_verify_heartbeat(NULL, 0, NULL, 0, game_hash, measure, &info);
+	if (!last_error_is(LOTA_AC_ERR_INVALID_ARG, "verify_heartbeat"))
+		return;
+	PASS();
+
+	TEST("last_error: a verdict on a packet that is not one names it");
+	seed_stale_error();
+	lota_ac_verify_heartbeat(buf, sizeof(buf), NULL, 0, game_hash, measure,
+				 &info);
+	if (!last_error_is(LOTA_AC_ERR_MALFORMED, "verify_heartbeat"))
+		return;
+	PASS();
+}
+
 /* a code an integrator logs is worth a sentence; a number is not one */
 static void test_last_error_strings(void)
 {
@@ -2400,6 +2601,9 @@ int main(void)
 	test_last_error_init_causes();
 	test_last_error_no_agent();
 	test_last_error_heartbeat_causes();
+	test_last_error_measure_helpers();
+	test_last_error_session_calls();
+	test_last_error_verify_heartbeat();
 	test_last_error_strings();
 
 	printf("\nIntegration:\n");
