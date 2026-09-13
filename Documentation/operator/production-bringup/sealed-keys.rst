@@ -114,6 +114,13 @@ exactly.
 Look at the file, not the host: a truncated transfer, a copy cut from a larger
 archive, or a blob from a build with different framing.
 
+Key material behind the header that does not decode is the file's fault too:
+
+.. code-block:: text
+
+    $ sudo lota-agent --unseal < damaged.sealed
+    Unseal failed: Bad message
+
 A TPM refusal is what sealing exists for:
 
 .. code-block:: text

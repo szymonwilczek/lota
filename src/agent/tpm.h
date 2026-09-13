@@ -1259,20 +1259,13 @@ int tpm_seal_secret(struct tpm_context *ctx, const uint8_t *secret,
 		    size_t out_cap, size_t *out_len);
 
 /*
- * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret().
- * @ctx:        initialised TPM context
- * @blob:       sealed blob
- * @blob_len:   length of @blob
- * @out_secret: buffer receiving the plaintext
- * @out_cap:    capacity of @out_secret
- * @out_len:    set to the plaintext length on success
+ * tpm_unseal_secret - Release a secret sealed by tpm_seal_secret() into
+ * @out_secret (@out_cap bytes), its length in @out_len, over an encrypted
+ * PolicyPCR session.
  *
- * Recreates the storage primary, loads the sealed object, and unseals it
- * over a primary-salted, response-encrypted policy session that satisfies
- * the blob's PolicyPCR. Fails (mapped TPM policy error) when the current
- * PCRs differ from the seal-time state. Returns 0 on success, -EINVAL on a
- * malformed blob or bad arguments, -ENOSPC if @out_secret is too small,
- * negative errno / LOTA_ERR_TPM_* on TPM failure.
+ * Returns 0, -EINVAL/-EMSGSIZE on a bad header, -EBADMSG on a body that does
+ * not unmarshal, -ENOSPC if @out_cap is too small, or a negative errno /
+ * LOTA_ERR_TPM_* (policy failure when the PCRs moved).
  */
 int tpm_unseal_secret(struct tpm_context *ctx, const uint8_t *blob,
 		      size_t blob_len, uint8_t *out_secret, size_t out_cap,
