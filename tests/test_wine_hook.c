@@ -1838,6 +1838,134 @@ static void test_the_loader_wrapper_hands_back_what_it_got(void)
 	PASS();
 }
 
+/*
+ * The file is rewritten only on an agent status event, so a registration
+ * made between events leaves LOTA_PROTECTED=0 on disk indefinitely.
+ */
+static void test_a_registration_publishes_itself(void)
+{
+	pid_t agent;
+	char path[PATH_MAX];
+	char buf[1024];
+	ssize_t n;
+
+	TEST("a registration reaches the status file when it is made");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("publish");
+	snprintf(path, sizeof(path), "%s/publish.status", tmpdir);
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 3600; /* the loader is still running */
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+
+	/* the loader is done: what every cycle of the thread loop does */
+	g_hook.protect_delay_sec = 0;
+	hook_register_self();
+
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+	atomic_store(&g_hook.self_protected, 0);
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	if (n <= 0) {
+		FAIL("no status file to read");
+		return;
+	}
+	if (!strstr(buf, "LOTA_PROTECTED=1")) {
+		FAIL("the sink still says the title is not in the gates");
+		return;
+	}
+
+	PASS();
+}
+
+/* likewise a refusal: no agent event follows it */
+static void test_a_refusal_publishes_itself(void)
+{
+	pid_t agent;
+	char path[PATH_MAX];
+	char broken[PATH_MAX];
+	char buf[1024];
+	void *handle;
+	ssize_t n;
+
+	TEST("a refusal reaches the status file when the load fails");
+
+	agent = start_mock_agent();
+	if (agent < 0) {
+		if (mock_errno_is_sandbox(mock_agent_errno)) {
+			SKIP("no unix socket in this sandbox");
+			return;
+		}
+		FAIL("mock agent did not start");
+		return;
+	}
+
+	hook_state_for_mock_agent("refused_publish");
+	snprintf(path, sizeof(path), "%s/refused_publish.status", tmpdir);
+	g_hook.init_time = time(NULL);
+	g_hook.protect_delay_sec = 0;
+
+	g_hook.client = hook_connect();
+	if (!g_hook.client) {
+		stop_mock_agent(agent);
+		FAIL("hook did not connect to the mock agent");
+		return;
+	}
+	refresh_once();
+	lota_disconnect(g_hook.client);
+	g_hook.client = NULL;
+	stop_mock_agent(agent);
+
+	snprintf(broken, sizeof(broken), "%s/libpublish.so", tmpdir);
+	if (touch_file(broken, "not really an ELF") != 0) {
+		atomic_store(&g_hook.self_protected, 0);
+		FAIL("could not create the test object");
+		return;
+	}
+
+	atomic_store(&g_hook.self_protected, 1);
+	handle = dlopen(broken, RTLD_NOW);
+	atomic_store(&g_hook.self_protected, 0);
+	if (handle) {
+		dlclose(handle);
+		unlink(broken);
+		FAIL("a file that is not an object returned a handle");
+		return;
+	}
+
+	n = read_file_contents(path, buf, sizeof(buf));
+	unlink(broken);
+	g_hook.refused_object[0] = '\0';
+	if (n <= 0) {
+		FAIL("no status file to read");
+		return;
+	}
+	if (!strstr(buf, "LOTA_REFUSED_OBJECT=")) {
+		FAIL("the sink does not carry the refusal the title just met");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Wine Hook Unit Tests ===\n\n");
@@ -1916,6 +2044,8 @@ int main(void)
 	test_a_gate_refusal_is_told_apart_from_a_missing_file();
 	test_the_status_file_names_the_refused_object();
 	test_the_loader_wrapper_hands_back_what_it_got();
+	test_a_registration_publishes_itself();
+	test_a_refusal_publishes_itself();
 
 	/* exported query functions */
 	test_hook_active_when_not_started();
