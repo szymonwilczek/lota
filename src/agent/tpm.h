@@ -14,6 +14,7 @@
 #define LOTA_TPM_TESTING 1
 #endif
 
+#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -76,6 +77,18 @@ struct tpm_quote_response;
  * clearly instead of the misleading -EIO.
  */
 #define LOTA_ERR_TPM_POLICY_FAIL 4099
+
+/*
+ * Whether to print the boot-state hint after a failed unseal: only for a TPM
+ * refusal with no cause. PolicyPCR names the state itself, and -EBADMSG
+ * is a tampered envelope.
+ */
+static inline bool tpm_unseal_boot_state_unknown(int err)
+{
+	if (err >= 0)
+		return false;
+	return err != -LOTA_ERR_TPM_POLICY_FAIL && err != -EBADMSG;
+}
 
 /*
  * tpm_strerror - error-to-string helper that handles both POSIX

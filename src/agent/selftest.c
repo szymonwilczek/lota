@@ -477,6 +477,20 @@ out:
 	return rc;
 }
 
+/* name the refused field; the errno cannot tell short from foreign */
+static void report_framing_refusal(const struct lota_blob_refusal *why)
+{
+	if (why->expected)
+		fprintf(stderr,
+			"Not a sealed blob this build can read: %s "
+			"(%u, expected %u).\n",
+			lota_blob_reason_str(why->reason), why->value,
+			why->expected);
+	else
+		fprintf(stderr, "Not a sealed blob this build can read: %s.\n",
+			lota_blob_reason_str(why->reason));
+}
+
 /*
  * do_unseal - read a sealed blob from stdin, unseal it, write the secret
  * to stdout. Fails closed when the host is not in the sealed PCR state.
@@ -486,6 +500,7 @@ int do_unseal(void)
 	uint8_t *blob = NULL;
 	uint8_t *secret = NULL;
 	size_t blob_len = 0, secret_len = 0;
+	struct lota_blob_refusal why;
 	bool envelope = false;
 	int ret;
 	int rc = 1;
@@ -511,6 +526,23 @@ int do_unseal(void)
 	/* leading magic selects the decoder: envelope vs direct seal */
 	envelope = lota_envelope_is_envelope(blob, blob_len) != 0;
 
+	/* framing is checked before the TPM opens: a refusal is the file's */
+	if (envelope) {
+		struct lota_envelope_meta emeta;
+
+		ret = lota_envelope_parse_header_why(blob, blob_len, &emeta,
+						     NULL, &why);
+	} else {
+		struct lota_seal_meta smeta;
+
+		ret = lota_seal_parse_header_why(blob, blob_len, &smeta, NULL,
+						 &why);
+	}
+	if (ret < 0) {
+		report_framing_refusal(&why);
+		goto out;
+	}
+
 	/* PCR-policy mismatch is the expected unseal failure.
 	 * Keep its report clean by silencing the TSS library's own error
 	 * logging (overwrite=0 respects an operator-set TSS2_LOG). */
@@ -535,8 +567,7 @@ int do_unseal(void)
 	tpm_cleanup(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Unseal failed: %s\n", tpm_strerror(ret));
-		/* -EBADMSG is an envelope tamper, not a boot-state mismatch */
-		if (ret != -LOTA_ERR_TPM_POLICY_FAIL && ret != -EBADMSG)
+		if (tpm_unseal_boot_state_unknown(ret))
 			fprintf(stderr,
 				"(the host may not be in the sealed boot "
 				"state)\n");

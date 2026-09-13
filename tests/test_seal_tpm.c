@@ -226,6 +226,34 @@ static void test_policy_fail_maps_clean(void)
 	PASS();
 }
 
+/* the boot-state hint must not follow a framing or PolicyPCR refusal */
+static void test_boot_state_hint_is_for_a_tpm_that_did_not_say(void)
+{
+	TEST("the boot-state hint is only for an unexplained TPM refusal");
+
+	if (tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_POLICY_FAIL)) {
+		FAIL("a policy failure already names the state");
+		return;
+	}
+	if (tpm_unseal_boot_state_unknown(-EBADMSG)) {
+		FAIL("an envelope tamper is a file, not a boot state");
+		return;
+	}
+	if (tpm_unseal_boot_state_unknown(0)) {
+		FAIL("a successful unseal");
+		return;
+	}
+	if (!tpm_unseal_boot_state_unknown(-EIO)) {
+		FAIL("a TPM that refused without saying why");
+		return;
+	}
+	if (!tpm_unseal_boot_state_unknown(-LOTA_ERR_TPM_LOCKED)) {
+		FAIL("a lockout is still an answer from the chip");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("Running LOTA sealed-keys TPM-side tests...\n\n");
@@ -238,6 +266,7 @@ int main(void)
 	test_seal_arg_validation();
 	test_unseal_arg_validation();
 	test_policy_fail_maps_clean();
+	test_boot_state_hint_is_for_a_tpm_that_did_not_say();
 
 	printf("\n%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
