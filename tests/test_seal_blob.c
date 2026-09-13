@@ -246,6 +246,159 @@ static size_t build_blob(uint8_t *blob)
 	return (size_t)LOTA_SEAL_HEADER_SIZE + m.pub_len + m.priv_len;
 }
 
+/* each malformed field shares one -EINVAL; *why must name it */
+static void test_parse_names_the_field_it_refused(void)
+{
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	struct lota_seal_meta out;
+	struct lota_blob_refusal why;
+	size_t n;
+
+	TEST("a refused header names the field it was refused on");
+
+	n = build_blob(blob);
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != 0 ||
+	    why.reason != LOTA_BLOB_OK) {
+		FAIL("a good header did not parse cleanly");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[0] ^= 0xFF;
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_MAGIC) {
+		FAIL("magic");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[4] = 0x09;
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_VERSION || why.value != 9 ||
+	    why.expected != LOTA_SEAL_VERSION) {
+		FAIL("version");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[13] = 1;
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_RESERVED) {
+		FAIL("reserved");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le32(blob + 8, 0);
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_PCR_MASK) {
+		FAIL("pcr mask");
+		return;
+	}
+
+	n = build_blob(blob);
+	blob[12] = 1;
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_PCR_ALG) {
+		FAIL("pcr alg");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le16(blob + 48, 2000);
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_PUB_LEN || why.value != 2000 ||
+	    why.expected != LOTA_SEAL_MAX_PUB) {
+		FAIL("pub_len over the maximum");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le16(blob + 48, 0);
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_PUB_LEN || why.value != 0) {
+		FAIL("zero pub_len");
+		return;
+	}
+
+	n = build_blob(blob);
+	lota__seal_write_le16(blob + 50, LOTA_SEAL_MAX_PRIV + 1);
+	if (lota_seal_parse_header_why(blob, n, &out, NULL, &why) != -EINVAL ||
+	    why.reason != LOTA_BLOB_PRIV_LEN ||
+	    why.expected != LOTA_SEAL_MAX_PRIV) {
+		FAIL("priv_len over the maximum");
+		return;
+	}
+
+	PASS();
+}
+
+/* one byte short or long are both -EMSGSIZE; *why tells them apart */
+static void test_parse_names_a_length_that_does_not_add_up(void)
+{
+	uint8_t blob[LOTA_SEAL_MAX_BLOB];
+	struct lota_seal_meta out;
+	struct lota_blob_refusal why;
+	size_t n;
+
+	TEST("a length refusal names the length, not the boot state");
+
+	n = build_blob(blob);
+	if (lota_seal_parse_header_why(blob, LOTA_SEAL_HEADER_SIZE - 1, &out,
+				       NULL, &why) != -EMSGSIZE ||
+	    why.reason != LOTA_BLOB_SHORT ||
+	    why.value != LOTA_SEAL_HEADER_SIZE - 1 ||
+	    why.expected != LOTA_SEAL_HEADER_SIZE) {
+		FAIL("short header");
+		return;
+	}
+
+	if (lota_seal_parse_header_why(blob, n + 1, &out, NULL, &why) !=
+		    -EMSGSIZE ||
+	    why.reason != LOTA_BLOB_BODY_LENGTH || why.value != n + 1 ||
+	    why.expected != n) {
+		FAIL("trailing slack");
+		return;
+	}
+
+	if (lota_seal_parse_header_why(blob, n - 1, &out, NULL, &why) !=
+		    -EMSGSIZE ||
+	    why.reason != LOTA_BLOB_BODY_LENGTH || why.value != n - 1 ||
+	    why.expected != n) {
+		FAIL("short body");
+		return;
+	}
+
+	PASS();
+}
+
+/* no reason text may blame the boot state: the blob never reached a TPM */
+static void test_reason_text_is_about_the_file(void)
+{
+	static const enum lota_blob_reason all[] = {
+		LOTA_BLOB_OK,	   LOTA_BLOB_SHORT,	  LOTA_BLOB_MAGIC,
+		LOTA_BLOB_VERSION, LOTA_BLOB_RESERVED,	  LOTA_BLOB_PCR_MASK,
+		LOTA_BLOB_PCR_ALG, LOTA_BLOB_PUB_LEN,	  LOTA_BLOB_PRIV_LEN,
+		LOTA_BLOB_KEK_LEN, LOTA_BLOB_PAYLOAD_LEN, LOTA_BLOB_BODY_LENGTH,
+	};
+
+	TEST("every refusal reads as a complaint about the file");
+	for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+		const char *text = lota_blob_reason_str(all[i]);
+
+		if (!text || text[0] == '\0') {
+			FAIL("a reason has no text");
+			return;
+		}
+		if (strstr(text, "boot") || strstr(text, "PCR state") ||
+		    strstr(text, "host")) {
+			FAIL("a framing refusal blames the host");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_parse_rejects_truncated(void)
 {
 	uint8_t blob[LOTA_SEAL_MAX_BLOB];
@@ -449,6 +602,9 @@ int main(void)
 	test_magic_is_the_four_bytes_the_header_names();
 	test_serialize_roundtrip();
 	test_serialize_rejects_bad_fields();
+	test_parse_names_the_field_it_refused();
+	test_parse_names_a_length_that_does_not_add_up();
+	test_reason_text_is_about_the_file();
 	test_parse_rejects_truncated();
 	test_parse_rejects_bad_magic();
 	test_parse_rejects_bad_version();

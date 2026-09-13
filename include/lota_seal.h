@@ -115,6 +115,80 @@ struct lota_seal_meta {
 	uint16_t priv_len;
 };
 
+/*
+ * Header field a blob or envelope parse refused; the errno alone cannot tell
+ * a truncated file from a foreign one.
+ */
+enum lota_blob_reason {
+	LOTA_BLOB_OK = 0,
+	LOTA_BLOB_SHORT,
+	LOTA_BLOB_MAGIC,
+	LOTA_BLOB_VERSION,
+	LOTA_BLOB_RESERVED,
+	LOTA_BLOB_PCR_MASK,
+	LOTA_BLOB_PCR_ALG,
+	LOTA_BLOB_PUB_LEN,
+	LOTA_BLOB_PRIV_LEN,
+	LOTA_BLOB_KEK_LEN,
+	LOTA_BLOB_PAYLOAD_LEN,
+	LOTA_BLOB_BODY_LENGTH,
+};
+
+/*
+ * @reason: which field was refused.
+ * @value: that field as it was read, where it is a number worth printing.
+ * @expected: what the format requires of it, 0 where the reason has no
+ *            single number to compare against.
+ */
+struct lota_blob_refusal {
+	enum lota_blob_reason reason;
+	uint32_t value;
+	uint32_t expected;
+};
+
+/* @reason as a phrase about the file; the blob never reached a TPM */
+static inline const char *lota_blob_reason_str(enum lota_blob_reason reason)
+{
+	switch (reason) {
+	case LOTA_BLOB_OK:
+		return "the header parsed";
+	case LOTA_BLOB_SHORT:
+		return "it is shorter than the fixed header";
+	case LOTA_BLOB_MAGIC:
+		return "it does not open with the magic bytes of a LOTA blob";
+	case LOTA_BLOB_VERSION:
+		return "it names a format version this build does not read";
+	case LOTA_BLOB_RESERVED:
+		return "a reserved header byte is set";
+	case LOTA_BLOB_PCR_MASK:
+		return "the PCR selection is empty or names a PCR above 23";
+	case LOTA_BLOB_PCR_ALG:
+		return "the PCR digest algorithm is not SHA-256";
+	case LOTA_BLOB_PUB_LEN:
+		return "the declared public-area length is out of range";
+	case LOTA_BLOB_PRIV_LEN:
+		return "the declared private-area length is out of range";
+	case LOTA_BLOB_KEK_LEN:
+		return "the declared sealed-key length is out of range";
+	case LOTA_BLOB_PAYLOAD_LEN:
+		return "the declared payload length is out of range";
+	case LOTA_BLOB_BODY_LENGTH:
+		return "the declared bodies do not fill the file exactly";
+	}
+	return "the header was refused";
+}
+
+static inline void lota__blob_refuse(struct lota_blob_refusal *why,
+				     enum lota_blob_reason reason,
+				     uint32_t value, uint32_t expected)
+{
+	if (!why)
+		return;
+	why->reason = reason;
+	why->value = value;
+	why->expected = expected;
+}
+
 static inline uint16_t lota__seal_read_le16(const uint8_t *p)
 {
 	return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
@@ -198,46 +272,78 @@ static inline int lota_seal_serialize_header(uint8_t *out,
  * Verifies magic, version, reserved bytes, mask, alg, the length fields,
  * and that the declared bodies fit exactly within len.
  *
+ * Fills *why, if non-NULL, with the refused field.
+ *
  * Returns 0 on success, -EINVAL on a malformed header,
  * -EMSGSIZE on a length mismatch.
  */
-static inline int lota_seal_parse_header(const uint8_t *buf, size_t len,
-					 struct lota_seal_meta *m,
-					 size_t *body_off)
+static inline int lota_seal_parse_header_why(const uint8_t *buf, size_t len,
+					     struct lota_seal_meta *m,
+					     size_t *body_off,
+					     struct lota_blob_refusal *why)
 {
+	lota__blob_refuse(why, LOTA_BLOB_OK, 0, 0);
+
 	if (!buf || !m)
 		return -EINVAL;
-	if (len < LOTA_SEAL_HEADER_SIZE)
+	if (len < LOTA_SEAL_HEADER_SIZE) {
+		lota__blob_refuse(why, LOTA_BLOB_SHORT, (uint32_t)len,
+				  LOTA_SEAL_HEADER_SIZE);
 		return -EMSGSIZE;
+	}
 
-	if (lota__seal_read_le32(buf + 0) != LOTA_SEAL_MAGIC)
+	if (lota__seal_read_le32(buf + 0) != LOTA_SEAL_MAGIC) {
+		lota__blob_refuse(why, LOTA_BLOB_MAGIC, 0, 0);
 		return -EINVAL;
-	if (lota__seal_read_le16(buf + 4) != (uint16_t)LOTA_SEAL_VERSION)
+	}
+	uint16_t version = lota__seal_read_le16(buf + 4);
+	if (version != (uint16_t)LOTA_SEAL_VERSION) {
+		lota__blob_refuse(why, LOTA_BLOB_VERSION, version,
+				  LOTA_SEAL_VERSION);
 		return -EINVAL;
-	if (lota__seal_read_le16(buf + 6) != 0)
+	}
+	if (lota__seal_read_le16(buf + 6) != 0) {
+		lota__blob_refuse(why, LOTA_BLOB_RESERVED, 0, 0);
 		return -EINVAL;
+	}
 
 	uint32_t pcr_mask = lota__seal_read_le32(buf + 8);
 	uint8_t pcr_alg = buf[12];
-	if (buf[13] != 0 || buf[14] != 0 || buf[15] != 0)
+	if (buf[13] != 0 || buf[14] != 0 || buf[15] != 0) {
+		lota__blob_refuse(why, LOTA_BLOB_RESERVED, 0, 0);
 		return -EINVAL;
-	if (lota_seal_validate_pcr_mask(pcr_mask) != 0)
+	}
+	if (lota_seal_validate_pcr_mask(pcr_mask) != 0) {
+		lota__blob_refuse(why, LOTA_BLOB_PCR_MASK, pcr_mask, 0);
 		return -EINVAL;
-	if (pcr_alg != LOTA_SEAL_PCR_ALG_SHA256)
+	}
+	if (pcr_alg != LOTA_SEAL_PCR_ALG_SHA256) {
+		lota__blob_refuse(why, LOTA_BLOB_PCR_ALG, pcr_alg,
+				  LOTA_SEAL_PCR_ALG_SHA256);
 		return -EINVAL;
+	}
 
 	uint16_t pub_len = lota__seal_read_le16(buf + 48);
 	uint16_t priv_len = lota__seal_read_le16(buf + 50);
-	if (pub_len == 0 || pub_len > LOTA_SEAL_MAX_PUB)
+	if (pub_len == 0 || pub_len > LOTA_SEAL_MAX_PUB) {
+		lota__blob_refuse(why, LOTA_BLOB_PUB_LEN, pub_len,
+				  LOTA_SEAL_MAX_PUB);
 		return -EINVAL;
-	if (priv_len == 0 || priv_len > LOTA_SEAL_MAX_PRIV)
+	}
+	if (priv_len == 0 || priv_len > LOTA_SEAL_MAX_PRIV) {
+		lota__blob_refuse(why, LOTA_BLOB_PRIV_LEN, priv_len,
+				  LOTA_SEAL_MAX_PRIV);
 		return -EINVAL;
+	}
 
 	/* bodies must fit exactly: no trailing slack, no overflow */
 	size_t need = (size_t)LOTA_SEAL_HEADER_SIZE + (size_t)pub_len +
 		      (size_t)priv_len;
-	if (need != len)
+	if (need != len) {
+		lota__blob_refuse(why, LOTA_BLOB_BODY_LENGTH, (uint32_t)len,
+				  (uint32_t)need);
 		return -EMSGSIZE;
+	}
 
 	m->pcr_mask = pcr_mask;
 	m->pcr_alg = pcr_alg;
@@ -247,6 +353,14 @@ static inline int lota_seal_parse_header(const uint8_t *buf, size_t len,
 	if (body_off)
 		*body_off = LOTA_SEAL_HEADER_SIZE;
 	return 0;
+}
+
+/* The same parse for a caller that has nobody to explain the refusal to. */
+static inline int lota_seal_parse_header(const uint8_t *buf, size_t len,
+					 struct lota_seal_meta *m,
+					 size_t *body_off)
+{
+	return lota_seal_parse_header_why(buf, len, m, body_off, NULL);
 }
 
 #ifdef __cplusplus
