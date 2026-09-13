@@ -268,6 +268,8 @@ shared object"; the agent journal has the matching ``MMAP_BLOCKED`` line. The
 Wine hook also reports it on the title's stderr and as ``LOTA_REFUSED_OBJECT``
 in its status file. A producer registering itself should read a load failure
 after registering the same way, not as a corrupt install.
+``LOTA_REFUSED_OBJECT`` and ``LOTA_PROTECTED`` are written when they happen,
+not on the next agent status event, which a steady host never sends.
 
 What the token actually proves
 ==============================

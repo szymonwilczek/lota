@@ -71,9 +71,20 @@ static struct {
 	int protect_delay_sec; /* wait before joining protected_pids */
 	char refused_object[256]; /* last object that would not load */
 	time_t refused_at;
+	struct lota_status last_status; /* the last one the agent gave */
+	atomic_int have_status;
 	atomic_int self_protected;
 	atomic_int offline_published;
 } g_hook;
+
+/* Guards last_status against the loader thread reading it. */
+static pthread_mutex_t g_status_lock;
+static pthread_once_t g_status_lock_once = PTHREAD_ONCE_INIT;
+
+static void status_lock_init(void)
+{
+	pthread_mutex_init(&g_status_lock, NULL);
+}
 
 #define HOOK_PREFIX "lota-hook"
 
@@ -515,6 +526,35 @@ static int write_status(const struct lota_status *status)
 	return write_status_payload(status, 0);
 }
 
+/* lets the hook republish its own state without asking the agent */
+static void hook_cache_status(const struct lota_status *status)
+{
+	pthread_once(&g_status_lock_once, status_lock_init);
+	pthread_mutex_lock(&g_status_lock);
+	g_hook.last_status = *status;
+	pthread_mutex_unlock(&g_status_lock);
+	atomic_store(&g_hook.have_status, 1);
+}
+
+/* rewrite the status file from the cache; no-op before the first status */
+static void hook_publish_state(void)
+{
+	struct lota_status status;
+	int ret;
+
+	if (!atomic_load(&g_hook.have_status))
+		return;
+
+	pthread_once(&g_status_lock_once, status_lock_init);
+	pthread_mutex_lock(&g_status_lock);
+	status = g_hook.last_status;
+	pthread_mutex_unlock(&g_status_lock);
+
+	ret = write_status(&status);
+	if (ret < 0)
+		LOG_DBG("write_status: %s", strerror(-ret));
+}
+
 /*
  * Publish an explicit "offline" status so consumers of lota-status
  * (verify-attested.sh, server-side bridges) observe the transition to OFFLINE.
@@ -704,6 +744,7 @@ static void hook_register_self(void)
 
 	atomic_store(&g_hook.self_protected, 1);
 	LOG_INF("registered pid=%d for runtime enforcement", (int)getpid());
+	hook_publish_state();
 }
 
 /*
@@ -750,6 +791,7 @@ LOTA_HOOK_EXPORT void *dlopen(const char *file, int mode)
 
 	if (hook_refusal_is_gate(file)) {
 		hook_record_refusal(file);
+		hook_publish_state();
 		LOG_ERR("%s did not load while this process is in LOTA's protected set -- a protected process may map only objects the agent allows, so cover this one (fs-verity digest or trusted_libs) or start the title with %s longer than it takes to reach this load",
 			file, LOTA_HOOK_ENV_PROTECT_DELAY);
 	}
@@ -790,6 +832,8 @@ static void refresh_once(void)
 		hook_offline_publish();
 		return;
 	}
+
+	hook_cache_status(&status);
 
 	ret = write_status(&status);
 	if (ret < 0)
