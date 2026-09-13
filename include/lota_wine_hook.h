@@ -45,11 +45,9 @@ extern "C" {
  *   2. $XDG_RUNTIME_DIR/lota-hook (standard)
  *   3. /tmp/lota-<uid>            (no runtime directory)
  *
- * Each candidate must be a directory the calling user owns, at mode 0700;
- * one that is not is reported and the next is used. The files here carry a signed
- * attestation token, so the directory is the player's own and never
- * the agent's: $XDG_RUNTIME_DIR/lota belongs to the daemon, which creates it
- * root:lota 0750 for the container socket.
+ * A candidate the caller does not own is reported and skipped;
+ * one at a mode other than 0700 is tightened and its old mode reported.
+ * Never $XDG_RUNTIME_DIR/lota: the daemon owns it (root:lota 0750).
  */
 #define LOTA_HOOK_ENV_TOKEN_DIR "LOTA_HOOK_TOKEN_DIR"
 

@@ -329,9 +329,11 @@ static int token_dir_candidate(int n)
  *  - owned by current uid
  *  - mode forced to 0700 (private attestation artifacts)
  *
+ * @repaired_from: receives the mode a tightened directory had, else 0.
+ *
  * Returns 0 on success, negative errno on failure.
  */
-static int ensure_token_dir(void)
+static int ensure_token_dir(mode_t *repaired_from)
 {
 	struct stat st;
 	int dirfd;
@@ -372,6 +374,9 @@ static int ensure_token_dir(void)
 		return -EACCES;
 	}
 
+	if (repaired_from)
+		*repaired_from = 0;
+
 	if ((st.st_mode & 0777) != 0700) {
 		if (fchmod(dirfd, 0700) < 0) {
 			int err = errno;
@@ -380,6 +385,8 @@ static int ensure_token_dir(void)
 				strerror(err));
 			return -err;
 		}
+		if (repaired_from)
+			*repaired_from = st.st_mode & 0777;
 	}
 
 	close(dirfd);
@@ -406,14 +413,19 @@ static int setup_token_dir(void)
 	int last = -ENOENT;
 
 	for (int n = 0; n < 3; n++) {
+		mode_t repaired = 0;
 		int ret;
 
 		if (token_dir_candidate(n) != 0)
 			continue;
 
-		ret = ensure_token_dir();
-		if (ret == 0)
+		ret = ensure_token_dir(&repaired);
+		if (ret == 0) {
+			if (repaired)
+				LOG_WRN("token dir %s was mode %04o, tightened to 0700",
+					g_hook.token_dir, (unsigned)repaired);
 			return 0;
+		}
 
 		last = ret;
 		LOG_WRN("token dir unusable (%s); trying the next one",

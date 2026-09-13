@@ -382,7 +382,7 @@ static void test_ensure_token_dir_creates(void)
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s/subdir",
 		 tmpdir);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
@@ -408,7 +408,7 @@ static void test_ensure_token_dir_exists(void)
 	/* tmpdir already exists */
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", tmpdir);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
@@ -431,7 +431,7 @@ static void test_ensure_token_dir_not_a_dir(void)
 
 	/* suppress stderr for this test */
 	g_hook.log_level = HOOK_LOG_SILENT;
-	int ret = ensure_token_dir();
+	int ret = ensure_token_dir(NULL);
 	g_hook.log_level = HOOK_LOG_WARN;
 
 	if (ret != -ENOTDIR) {
@@ -463,7 +463,7 @@ static void test_ensure_token_dir_rejects_symlink(void)
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", linkpath);
 
 	g_hook.log_level = HOOK_LOG_SILENT;
-	int ret = ensure_token_dir();
+	int ret = ensure_token_dir(NULL);
 	g_hook.log_level = HOOK_LOG_WARN;
 
 	if (ret != -ELOOP && ret != -ENOTDIR) {
@@ -489,7 +489,7 @@ static void test_ensure_token_dir_existing_mode_tightened(void)
 
 	snprintf(g_hook.token_dir, sizeof(g_hook.token_dir), "%s", path);
 
-	if (ensure_token_dir() != 0) {
+	if (ensure_token_dir(NULL) != 0) {
 		FAIL("ensure_token_dir failed");
 		return;
 	}
