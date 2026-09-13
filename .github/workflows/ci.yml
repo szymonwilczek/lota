@@ -377,6 +377,7 @@ jobs:
             scripts/check-go-coverage.sh \
             scripts/check-license-boundary.sh \
             scripts/check-doc-diagnostics.sh \
+            scripts/check-config-commands.sh \
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
@@ -434,6 +435,9 @@ jobs:
 
       - name: Check the documentation quotes messages the tree prints
         run: make check-doc-diagnostics
+
+      - name: Check shipped configuration names commands that resolve
+        run: make check-config-commands
 
   yamllint:
     name: yamllint
