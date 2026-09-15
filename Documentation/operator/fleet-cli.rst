@@ -123,9 +123,10 @@ metric.
 the AIK registration, on every storage backend. The device keeps its
 certificate, so a running host returns at its next heartbeat and is
 re-baselined on what it measures then. Use ``revoke`` (or a hardware ban) to
-keep a host out. Revocations and hardware bans are keyed separately and
-**survive the delete**: removing a device cannot shed a ban. The action
-is audited (``delete_client``).
+keep a host out. A deleted client leaves ``devices list`` immediately.
+Revocations and hardware bans are keyed separately and **survive the delete**:
+removing a device cannot shed a ban. The action is audited
+(``delete_client``).
 
 ``reanchor-review`` is the post-fact review queue for self-service
 re-anchors taken on the Low-Firmware-Assurance path; see the enrollment

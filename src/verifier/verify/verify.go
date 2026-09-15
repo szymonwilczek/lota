@@ -1568,5 +1568,11 @@ func (v *Verifier) DeleteClient(clientID string) error {
 	if !known {
 		return ErrUnknownClient
 	}
-	return v.baselineStore.ClearBaseline(clientID)
+	if err := v.baselineStore.ClearBaseline(clientID); err != nil {
+		return err
+	}
+
+	// otherwise listed until the nonce store evicts it
+	v.nonceStore.ForgetClient(clientID)
+	return nil
 }

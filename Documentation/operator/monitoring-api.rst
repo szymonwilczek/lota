@@ -418,9 +418,11 @@ DELETE /api/v1/clients/{id}
 Admin. Removes the client's verifier-side trust state: the baselines and
 the AIK registration, on every storage backend. The device keeps its
 certificate, so its next attestation is a first sight and becomes the new
-baseline; revoke or ban it first to keep it out. Revocations and hardware
-bans survive the delete. Body: ``reason`` and ``actor`` required, ``note``
-optional. **200**::
+baseline; revoke or ban it first to keep it out. The per-identity attestation
+state (counter, last-attestation time, rate-limit window) goes too, so the
+client leaves ``GET /api/v1/clients`` at once; the used-nonce history stays.
+Revocations and hardware bans survive the delete. Body: ``reason`` and
+``actor`` required, ``note`` optional. **200**::
 
    {"status": "deleted", "client_id": "host-0001"}
 

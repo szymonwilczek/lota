@@ -649,6 +649,17 @@ func (ns *NonceStore) ClientLastAttestation(clientID string) time.Time {
 	return time.Time{}
 }
 
+// ForgetClient drops a deleted client's identity and binding state
+// (counter, last attestation, rate-limit window).
+// The used-nonce history (replay defence) is keyed separately and stays.
+func (ns *NonceStore) ForgetClient(clientID string) {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+
+	delete(ns.identityChallenges, clientID)
+	delete(ns.bindingChallenges, clientID)
+}
+
 // returns all hardware identities with active attestation state
 func (ns *NonceStore) ListActiveClients() []string {
 	ns.mu.RLock()
