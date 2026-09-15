@@ -119,8 +119,8 @@ update) that the self-service re-anchor refuses or is not enabled for.
 The action is audited (``reanchor``) and counted in the forced re-anchor
 metric.
 
-``delete`` removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration). The device keeps its
+``delete`` removes the client's verifier-side trust state: the baselines and
+the AIK registration, on every storage backend. The device keeps its
 certificate, so a running host returns at its next heartbeat and is
 re-baselined on what it measures then. Use ``revoke`` (or a hardware ban) to
 keep a host out. Revocations and hardware bans are keyed separately and

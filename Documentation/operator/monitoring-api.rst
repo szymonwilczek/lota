@@ -415,8 +415,8 @@ with action ``reanchor`` and counts toward the forced re-anchor metric.
 DELETE /api/v1/clients/{id}
 ---------------------------
 
-Admin. Removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration). The device keeps its
+Admin. Removes the client's verifier-side trust state: the baselines and
+the AIK registration, on every storage backend. The device keeps its
 certificate, so its next attestation is a first sight and becomes the new
 baseline; revoke or ban it first to keep it out. Revocations and hardware
 bans survive the delete. Body: ``reason`` and ``actor`` required, ``note``
