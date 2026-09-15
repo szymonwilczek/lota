@@ -456,12 +456,21 @@ func TestReanchorReviewAck(t *testing.T) {
 	c, rec := fakeVerifier(t, http.StatusOK,
 		`{"status":"reviewed","client_id":"host1"}`)
 
-	if err := c.ReanchorReviewAck("host1"); err != nil {
+	if err := c.ReanchorReviewAck("host1", "reviewed the drift", "alice@ops", ""); err != nil {
 		t.Fatalf("ReanchorReviewAck: %v", err)
 	}
 	if rec.method != http.MethodPost ||
 		rec.path != "/api/v1/clients/host1/reanchor-review-ack" {
 		t.Fatalf("request = %s %s", rec.method, rec.path)
+	}
+
+	// attribution reaches the audit row
+	var got map[string]string
+	if err := json.Unmarshal(rec.body, &got); err != nil {
+		t.Fatalf("body %q: %v", rec.body, err)
+	}
+	if got["actor"] != "alice@ops" || got["reason"] != "reviewed the drift" {
+		t.Fatalf("body = %v", got)
 	}
 }
 

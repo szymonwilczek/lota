@@ -1585,21 +1585,64 @@ func (h *APIHandler) handleReanchorReviewList(w http.ResponseWriter, r *http.Req
 
 // handleReanchorReviewAck clears a client's pending-review flag once an
 // operator has inspected its LFA re-anchor (admin only).
+// Requires actor and reason and writes an audit row; unknown clients and
+// clients with nothing queued are refused.
 func (h *APIHandler) handleReanchorReviewAck(w http.ResponseWriter, r *http.Request) {
 	clientID := r.PathValue("clientID")
 	if clientID == "" {
 		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "missing client id"})
 		return
 	}
-	if !principalAllowsTenant(requestPrincipal(r), h.clientTenant(clientID)) {
+
+	var req lifecycleRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if req.Actor == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "actor is required"})
+		return
+	}
+	if req.Reason == "" {
+		writeJSONStatus(w, http.StatusBadRequest, errorResponse{Error: "reason is required"})
+		return
+	}
+
+	logID := sanitizeLogField(clientID)
+
+	tenant := h.clientTenant(clientID)
+	if !principalAllowsTenant(requestPrincipal(r), tenant) {
 		writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
 		return
 	}
 	if err := h.verifier.AcknowledgeReanchorReview(clientID); err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		switch {
+		case errors.Is(err, verify.ErrUnknownClient):
+			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client not found"})
+		case errors.Is(err, verify.ErrNoReviewPending):
+			writeJSONStatus(w, http.StatusConflict,
+				errorResponse{Error: "no re-anchor review pending for this client"})
+		default:
+			h.log.Error("re-anchor review acknowledgement failed",
+				"client_id", logID, "error", err)
+			writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
+		}
 		return
 	}
-	h.log.Info("operator acknowledged LFA re-anchor review", "client_id", clientID)
+
+	if h.auditLog != nil {
+		if err := h.auditLog.Log(tenant, "reanchor_review_ack", clientID,
+			req.Reason, req.Actor, req.Note); err != nil {
+			h.log.Error("audit log write failed",
+				"action", "reanchor_review_ack", "client_id", logID, "error", err)
+		}
+	}
+	h.log.Info("operator acknowledged LFA re-anchor review",
+		"client_id", logID,
+		"actor", logging.SanitizeField(req.Actor),
+		"note", logging.SanitizeField(req.Note))
 	writeJSON(w, map[string]string{"status": "reviewed", "client_id": clientID})
 }
 

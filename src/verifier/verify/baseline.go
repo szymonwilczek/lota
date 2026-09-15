@@ -381,8 +381,12 @@ type ReanchorStorer interface {
 	// operator has looked at its LFA re-anchor.
 	// It does not touch the baseline;
 	// it only takes the client off the review list.
+	// Returns ErrNoReviewPending when nothing is queued.
 	AcknowledgeLFAReview(clientID string) error
 }
+
+// ErrNoReviewPending: the client has no LFA re-anchor awaiting review.
+var ErrNoReviewPending = errors.New("no re-anchor review pending")
 
 // AgentHashRepinState is the per-client bookkeeping behind the agent-hash
 // re-pin rate limit.
@@ -679,9 +683,11 @@ func (s *BaselineStore) ListLFAReviewPending() []string {
 func (s *BaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if st := s.reanchor[clientID]; st != nil {
-		st.LFAReviewPending = false
+	st := s.reanchor[clientID]
+	if st == nil || !st.LFAReviewPending {
+		return ErrNoReviewPending
 	}
+	st.LFAReviewPending = false
 	return nil
 }
 

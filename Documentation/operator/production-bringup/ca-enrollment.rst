@@ -292,8 +292,9 @@ rather than a UEFI capsule) takes a Low-Firmware-Assurance path. The LFA
 re-anchor also applies automatically -- the player is never blocked waiting on
 the operator -- but it flags the device for post-fact review: list flagged
 devices with ``GET /api/v1/reanchor/review`` and clear one after inspecting it
-with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (each LFA re-anchor
-is also logged at security level and counted in the ``lfa`` re-anchor metric).
+with ``POST /api/v1/clients/{clientID}/reanchor-review-ack`` (``actor`` and
+``reason`` required). Each LFA re-anchor is also logged at security level and
+counted in the ``lfa`` re-anchor metric.
 If a reviewed re-anchor looks wrong, revoke or ban the device through the
 existing endpoints.
 

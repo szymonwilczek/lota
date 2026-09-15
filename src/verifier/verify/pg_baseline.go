@@ -1115,10 +1115,22 @@ func (s *PostgresBaselineStore) ListLFAReviewPending() []string {
 }
 
 // AcknowledgeLFAReview clears a client's pending-review flag (Postgres).
+// No matching row means nothing was queued.
 func (s *PostgresBaselineStore) AcknowledgeLFAReview(clientID string) error {
-	_, err := s.db.ExecContext(context.Background(),
-		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1", clientID)
-	return err
+	res, err := s.db.ExecContext(context.Background(),
+		"UPDATE baselines SET lfa_review_pending = FALSE WHERE client_id = $1 AND lfa_review_pending",
+		clientID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoReviewPending
+	}
+	return nil
 }
 
 // RecordKernelHash implements KernelHashRecorder against Postgres.

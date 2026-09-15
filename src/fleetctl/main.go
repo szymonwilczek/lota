@@ -72,7 +72,8 @@ Commands:
   delete <client-id> -reason R -actor A [-note S]
                                           remove a client's trust state
   reanchor-review list                    clients awaiting LFA review
-  reanchor-review ack <client-id>         acknowledge an LFA re-anchor
+  reanchor-review ack <client-id> -reason R -actor A [-note S]
+                                          acknowledge an LFA re-anchor
   audit [-limit N] [-tenant T]            operator audit log
   attests [-limit N] [-tenant T]          attestation decision log
 
@@ -621,13 +622,16 @@ func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 		return nil
 
 	case "ack":
-		if len(args) != 2 {
-			return fmt.Errorf("%w: reanchor-review ack needs exactly one client ID", errUsage)
-		}
-		if err := ctx.api.ReanchorReviewAck(args[1]); err != nil {
+		// attributed like every other trust change
+		id, reason, actor, note, err := parseActionArgs("reanchor-review ack",
+			stderr, args[1:], true, true)
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(ctx.stdout, "reviewed %s\n", args[1])
+		if err := ctx.api.ReanchorReviewAck(id, reason, actor, note); err != nil {
+			return err
+		}
+		fmt.Fprintf(ctx.stdout, "reviewed %s\n", id)
 		return nil
 
 	default:

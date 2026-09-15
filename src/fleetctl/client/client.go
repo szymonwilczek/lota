@@ -439,11 +439,12 @@ func (c *Client) ReanchorReviewList() ([]string, error) {
 	return resp.PendingReview, nil
 }
 
-// ReanchorReviewAck clears a client's pending-review flag.
-func (c *Client) ReanchorReviewAck(clientID string) error {
+// ReanchorReviewAck clears a client's pending-review flag with attribution.
+func (c *Client) ReanchorReviewAck(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost,
 		"/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor-review-ack",
-		nil, nil, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // AuditEntry is one entry of the GET /api/v1/audit listing.

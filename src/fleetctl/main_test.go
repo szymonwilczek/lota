@@ -376,7 +376,8 @@ func TestReanchorReviewListAndAck(t *testing.T) {
 	}
 
 	code, out, _ = runCLI(t, noEnv, "-server", f.srv.URL,
-		"reanchor-review", "ack", "host1")
+		"reanchor-review", "ack", "host1",
+		"-reason", "reviewed the drift", "-actor", "alice@ops")
 	if code != exitOK || !strings.Contains(out, "reviewed host1") {
 		t.Fatalf("ack: exit = %d, output = %q", code, out)
 	}
@@ -844,5 +845,17 @@ func TestPopulatedReanchorReviewQueueStaysPipeable(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "2 client") {
 		t.Fatalf("stderr = %q, want the queue summary", errOut)
+	}
+}
+
+// Two-word subcommand, so not in trustChangingVerbs; checked on its own.
+func TestReanchorReviewAckRefusesWithoutTheFlags(t *testing.T) {
+	code, _, stderr := runCLI(t, noEnv, "-server", "http://127.0.0.1:0",
+		"reanchor-review", "ack", "client-1")
+	if code != exitUsage {
+		t.Fatalf("ack with no flags: exit = %d, want usage error (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "-reason") {
+		t.Fatalf("stderr = %q, want the missing flag named", stderr)
 	}
 }

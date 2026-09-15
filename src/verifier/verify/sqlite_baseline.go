@@ -1065,12 +1065,24 @@ func (s *SQLiteBaselineStore) ListLFAReviewPending() []string {
 }
 
 // AcknowledgeLFAReview clears a client's pending-review flag (SQLite).
+// No matching row means nothing was queued.
 func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
-		"UPDATE baselines SET lfa_review_pending = 0 WHERE client_id = ?", clientID)
-	return err
+	res, err := s.db.Exec(
+		"UPDATE baselines SET lfa_review_pending = 0 WHERE client_id = ? AND lfa_review_pending = 1",
+		clientID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoReviewPending
+	}
+	return nil
 }
 
 // RecordKernelHash stores the kernel hash a client reported and returns
