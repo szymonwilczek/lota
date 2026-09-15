@@ -6,16 +6,18 @@
 # Verifier exposes Prometheus text metrics at GET /metrics on the HTTP monitoring
 # API (--http-addr, disabled by default).
 #
-# Endpoint sits on the reader tier:
-# on loopback bind no key is required; non-loopback bind fails closed unless
-# LOTA_READER_API_KEY (or a scoped key file) is configured, and then every scrape
-# must present the reader key as Bearer token.
+# Transport follows the bind:
 #
-# Monitoring API itself is plain HTTP - scrape it over loopback or trusted network,
-# or terminate TLS in front of it; never expose it directly to an untrusted network.
+#   loopback (127.0.0.1)   plain HTTP; no key required, a configured one is
+#                          still enforced
+#   any other address      HTTPS with the verifier's certificate; reader key
+#                          required
 #
-# Adjust targets/credentials_file to the deployment and drop this file
-# (with the alerts directory next to it) into /etc/prometheus.
+# Endpoint sits on the reader tier; an admin key works too, but scrape with
+# the reader key.
+#
+# Adjust targets, credentials_file and the CA path, then drop this file (with
+# the alerts directory next to it) into /etc/prometheus.
 
 global:
   scrape_interval: 30s
@@ -25,15 +27,33 @@ rule_files:
   - alerts/lota-verifier-alerts.yaml
 
 scrape_configs:
+  # remote verifier: HTTPS, reader key mandatory
   - job_name: lota-verifier
     metrics_path: /metrics
-    scheme: http
-    # reader-tier API key, one line, root-only file.
-    # Required whenever the verifier binds the monitoring API beyond loopback
-    # Harmless on loopback bind
+    scheme: https
+    tls_config:
+      # CA of the verifier's certificate; set server_name to the
+      # certificate's name when the target is an IP address
+      ca_file: /etc/prometheus/lota-verifier-ca.crt
+      # server_name: verifier.internal
+    # reader-tier API key, one line, root-only file
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/lota-reader.key
     static_configs:
       - targets:
-          - "127.0.0.1:8080"
+          - "verifier.internal:8080"
+
+  # Prometheus on the verifier's host: plain HTTP.
+  # Drop authorization only when the verifier runs with no keys;
+  # otherwise it answers 401.
+  #
+  # - job_name: lota-verifier-loopback
+  #   metrics_path: /metrics
+  #   scheme: http
+  #   authorization:
+  #     type: Bearer
+  #     credentials_file: /etc/prometheus/lota-reader.key
+  #   static_configs:
+  #     - targets:
+  #         - "127.0.0.1:8080"

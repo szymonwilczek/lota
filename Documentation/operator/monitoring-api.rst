@@ -16,6 +16,16 @@ covered in :doc:`production-bringup/ca-enrollment`.
 Conventions
 ===========
 
+Transport
+---------
+
+The transport follows the bind. On ``127.0.0.1`` the API is plain HTTP and
+requires no key, but enforces any key the verifier is configured with. On any
+other address it is **HTTPS** with the verifier's ``--cert``/``--key`` pair,
+and the verifier refuses to start without a reader or admin key. Remote
+clients use ``https://`` and the issuing CA, as in
+``deploy/observability/prometheus.yml``.
+
 Authentication
 --------------
 
