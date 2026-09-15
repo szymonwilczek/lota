@@ -204,7 +204,7 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	case "delete":
 		err = cmdDelete(ctx, stderr, args)
 	case "reanchor-review":
-		err = cmdReanchorReview(ctx, args)
+		err = cmdReanchorReview(ctx, stderr, args)
 	case "audit":
 		err = cmdAudit(ctx, stderr, args)
 	case "attests":
@@ -595,7 +595,7 @@ func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return nil
 }
 
-func cmdReanchorReview(ctx *cmdContext, args []string) error {
+func cmdReanchorReview(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("%w: reanchor-review needs a subcommand (list, ack)", errUsage)
 	}
@@ -615,6 +615,9 @@ func cmdReanchorReview(ctx *cmdContext, args []string) error {
 		for _, id := range clients {
 			fmt.Fprintln(ctx.stdout, id)
 		}
+
+		// count on stderr keeps stdout pipeable and an empty queue visible
+		fmt.Fprintf(stderr, "%d client(s) awaiting re-anchor review\n", len(clients))
 		return nil
 
 	case "ack":

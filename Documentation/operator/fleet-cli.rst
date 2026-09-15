@@ -105,7 +105,9 @@ rendering, for scripting against the full field set.
 Exit codes: 0 on success, 1 when the operation fails **or reports a
 negative result** (a degraded ``health``), 2 on a usage error. ``devices list`` and ``reanchor-review list``
 print bare IDs on stdout (page summaries go to stderr), so their output
-pipes cleanly into further tooling.
+pipes cleanly into further tooling. An empty review queue therefore prints
+its count and nothing else: a queue with nothing in it and a command that
+did nothing are not the same answer.
 
 Lifecycle actions
 =================
