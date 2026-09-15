@@ -416,9 +416,10 @@ DELETE /api/v1/clients/{id}
 ---------------------------
 
 Admin. Removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration), forcing a fresh
-enrollment. Revocations and hardware bans are keyed separately and
-survive the delete. Body: ``reason`` and ``actor`` required, ``note``
+where the store carries one, the AIK registration). The device keeps its
+certificate, so its next attestation is a first sight and becomes the new
+baseline; revoke or ban it first to keep it out. Revocations and hardware
+bans survive the delete. Body: ``reason`` and ``actor`` required, ``note``
 optional. **200**::
 
    {"status": "deleted", "client_id": "host-0001"}

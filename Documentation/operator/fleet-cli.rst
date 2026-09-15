@@ -120,8 +120,10 @@ The action is audited (``reanchor``) and counted in the forced re-anchor
 metric.
 
 ``delete`` removes the client's verifier-side trust state (baselines and,
-where the store carries one, the AIK registration), forcing a fresh
-enrollment. Revocations and hardware bans are keyed separately and
+where the store carries one, the AIK registration). The device keeps its
+certificate, so a running host returns at its next heartbeat and is
+re-baselined on what it measures then. Use ``revoke`` (or a hardware ban) to
+keep a host out. Revocations and hardware bans are keyed separately and
 **survive the delete**: removing a device cannot shed a ban. The action
 is audited (``delete_client``).
 

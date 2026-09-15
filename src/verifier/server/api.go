@@ -1731,8 +1731,9 @@ func (h *APIHandler) handleForceReanchor(w http.ResponseWriter, r *http.Request)
 }
 
 // DELETE /api/v1/clients/{id}
-// Remove the client's AIK registration and baselines, forcing fresh
-// enrollment (admin only).
+// Remove the client's AIK registration and baselines (admin only).
+// The device keeps its certificate; its next attestation becomes the new
+// baseline. Revoke or ban first to keep it out.
 // Revocations and hardware bans survive the delete.
 // Body names who removed the client and why ({"actor", "reason"}),
 // both required.
