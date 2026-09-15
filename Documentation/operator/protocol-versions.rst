@@ -56,6 +56,11 @@ acceptance of a report from a wire the verifier does not implement. This is
 deliberate: the report is the security-load-bearing message, so the verifier
 refuses to guess at a layout it was not built to parse.
 
+That verdict covers the version field alone. Any other parse failure (a
+truncated section, a length prefix past the end, foreign magic) is
+``report_malformed``: a link or peer problem, not an agent to upgrade, and not
+counted among agents still behind during a rollout.
+
 Consequences:
 
 * The report wire version changes **only** on a breaking layout change, not on
