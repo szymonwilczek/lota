@@ -54,6 +54,7 @@ BPF_DIR := $(SRC_DIR)/bpf
 AGENT_DIR := $(SRC_DIR)/agent
 INC_DIR := include
 BUILD_DIR := build
+export LOTA_BUILD_DIR := $(abspath $(BUILD_DIR))
 VERSION_FILE := VERSION
 PROJECT_VERSION := $(strip $(shell sed -n '1p' $(VERSION_FILE) 2>/dev/null))
 GOCACHE ?= $(abspath $(BUILD_DIR)/.gocache)

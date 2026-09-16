@@ -10,7 +10,9 @@
 #   - a running lota-agent in enforce mode with BPF attached
 #   - ${BUILD_DIR}/examples/block_victim + ${BUILD_DIR}/examples/evil.so
 #     (build with `make all examples`, or set BUILD_DIR= to point
-#     at an out-of-tree build root)
+#     at an out-of-tree build root).
+#     Unset, BUILD_DIR follows LOTA_BUILD_DIR, which a make recipe exports
+#     as the directory that build used.
 #
 # Coverage matrix:
 #   mmap_file       -> examples/block-demo/run.sh
@@ -44,7 +46,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 VICTIM_BIN="$BUILD_DIR/examples/block_victim"
 EVIL_SO="$BUILD_DIR/examples/evil.so"
 SOCKET="/run/lota/lota.sock"

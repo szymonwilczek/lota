@@ -10,7 +10,9 @@
 # who runs none cannot be expressed.
 #
 # Requires:
-#   - ${BUILD_DIR}/lota-agent (build with `make all`)
+#   - ${BUILD_DIR}/lota-agent (build with `make all`).
+#     Unset, BUILD_DIR follows LOTA_BUILD_DIR, which a make recipe exports
+#     as the directory that build used.
 #   - openssl, for the trust anchor a publisher is identified by
 #
 # Runs unprivileged:
@@ -23,7 +25,7 @@ set -euo pipefail
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
 AGENT_BIN="$BUILD_DIR/lota-agent"
 
 if [[ ! -x "$AGENT_BIN" ]]; then
