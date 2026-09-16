@@ -15,6 +15,9 @@ id, game id, socket path, heartbeat interval) is a flag.
 Build with ``make examples`` from the repository root. The binary lands at
 ``build/examples/demo_anticheat``.
 
+``run.sh`` looks for the binaries in ``BIN`` and ``EXAMPLES_BIN`` if set,
+else in ``$LOTA_BUILD_DIR``, else in ``build/``.
+
 It builds the way a studio's build does: through ``pkg-config`` against the
 **installed** SDK, never against the build tree. ``make examples`` first
 lays the package contents out under ``build/stage`` (the ``sdk-stage``

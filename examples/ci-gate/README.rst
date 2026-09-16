@@ -45,6 +45,9 @@ Build
 Both build from ``make examples`` at the repository root, into
 ``build/examples/``.
 
+``run.sh`` looks for them in ``BIN`` and ``EXAMPLES_BIN`` if set, else in
+``$LOTA_BUILD_DIR``, else in ``build/``.
+
 The C step builds the way an integrator's does: through ``pkg-config``
 against the **installed** SDK, never against the build tree. ``make
 examples`` first lays the package contents out under ``build/stage`` (the

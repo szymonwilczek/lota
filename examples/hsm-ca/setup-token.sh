@@ -27,6 +27,9 @@
 
 set -euo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# build dir the printed CA commands use; default $LOTA_BUILD_DIR, then the tree's
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$HERE/../../build}}"
 OUT_DIR="${1:-./hsm-ca}"
 TOKEN_LABEL="${2:-lota-ca}"
 KEY_LABEL="${3:-lota-ca-key}"
@@ -118,8 +121,8 @@ Point a PKCS#11-enabled CA at the token:
   export SOFTHSM2_CONF=$SOFTHSM2_CONF
   export LOTA_CA_PKCS11_PIN=$PIN
 
-  make attest-ca GO_TAGS=pkcs11
-  build/lota-attest-ca -listen :8444 \\
+  make BUILD_DIR=$BUILD_DIR attest-ca GO_TAGS=pkcs11
+  $BUILD_DIR/lota-attest-ca -listen :8444 \\
       -ca-cert $OUT_DIR/ca.crt \\
       -ca-key-pkcs11-module $MODULE \\
       -ca-key-pkcs11-token $TOKEN_LABEL \\

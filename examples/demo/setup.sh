@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # BUILD_DIR can be overridden in the environment so the demo runs from a
 # writable build root (e.g. /var/tmp/lota-build) when the repository is
-# mounted read-only.
-BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build}"
+# mounted read-only; default $LOTA_BUILD_DIR, then $ROOT_DIR/build.
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$ROOT_DIR/build}}"
 EXAMPLES_BIN="$BUILD_DIR/examples"
 
 LISTEN_ADDR="${LOTA_DEMO_LISTEN:-127.0.0.1:7443}"
