@@ -265,7 +265,7 @@ jobs:
         run: make check-includes
 
   fuzz:
-    name: fuzz targets (C build)
+    name: fuzz targets (C build + reproducers)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -296,8 +296,8 @@ jobs:
             PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
           sudo ldconfig
 
-      - name: Build every fuzz target
-        run: make -o include/vmlinux.h fuzz-all
+      - name: Build every fuzz target and replay the committed reproducers
+        run: make -o include/vmlinux.h fuzz-regress
 
   el9-decls:
     name: declarations against el9 headers

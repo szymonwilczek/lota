@@ -56,8 +56,9 @@ Checks:
     spatch is missing),
   - stack-frame ceiling over the shipped C sources when C changes
     (blocking),
-  - every C fuzz target builds when C, the Makefile or fuzz/ changes
-    (blocking; skipped if clang is missing, which CI never is),
+  - every C fuzz target builds and passes its committed reproducers when
+    C, the Makefile or fuzz/ changes (blocking; skipped if clang is
+    missing, which CI never is),
   - BPF mirror drift guard when src/bpf/lota_lsm.bpf.c or fuzz/bpf_oracle
     changes (blocking).
 USAGE
@@ -1018,6 +1019,7 @@ check_coccinelle() {
 }
 
 # Fuzz targets link hand-picked agent sources, so any C change can break one.
+# Build them and replay fuzz/regressions/
 # Only run when C, the Makefile or fuzz/ changed.
 check_fuzz() {
     local path touched=1 out
@@ -1037,12 +1039,12 @@ check_fuzz() {
         return
     fi
 
-    if out=$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" fuzz-all 2>&1); then
+    if out=$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" fuzz-regress 2>&1); then
         pass "fuzz"
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "fuzz" \
-             "run make BUILD_DIR=/tmp/lota-build fuzz-all and fix the target that does not build."
+             "run make BUILD_DIR=/tmp/lota-build fuzz-regress; fix the target that does not build or still fails its reproducer."
     fi
 }
 

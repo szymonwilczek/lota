@@ -32,7 +32,8 @@ Testing policy
      - IPC, config, TLS-pin, wire, enrollment-reply decoders,
        sealed-envelope parser/AEAD, TPM attest unmarshal, policy signature
        verify, server SDK token verify, TPM2B response/credential unmarshal
-     - ``make fuzz-all``
+     - ``make fuzz-all``, then run a target from the build directory;
+       ``make fuzz-regress`` replays the committed reproducers
    * - Kernel
      - BPF LSM live in a guest
      - Syzkaller harness ``lota_bpf_fuzz`` (see :ghsrc:`syzkaller/README.rst`)
@@ -61,8 +62,21 @@ a crash. Each C fuzz target probes the attach at start-up and, where it is
 refused, prints ``leak detection is off for this process`` and runs without
 it. Leaks are caught only on hosts that allow the attach.
 
-A fuzz crash leaves a reproducer under ``testdata/fuzz/<Target>/``. Commit it
-so the regression is locked in.
+Commit a fuzz failure's reproducer in the commit before the fix, so that
+commit fails and the fix makes it pass:
+
+* **Go.** ``go test -fuzz`` writes the input to ``testdata/fuzz/<FuzzTarget>/``
+  in the package; plain ``go test`` replays it. Commit the file as written.
+* **C.** libFuzzer writes ``crash-<sha1>`` (or ``leak-``, ``timeout-``) into its
+  working directory. Copy it to ``fuzz/regressions/<make-target>/`` under a
+  name that says what it caught, and check that it fails the unfixed target.
+  ``make fuzz-regress`` replays them; the ``fuzz`` CI job and
+  ``scripts/check-patch`` run it.
+* **Kernel.** ``syz-manager`` keeps each crash, with a reproducer when it can
+  derive one, under ``crashes/`` in its work directory; nothing in tree replays
+  the BPF programs. Report the crash with that reproducer, and have the fix
+  carry a test that drives the same hook, such as
+  ``tests/integration/test_bpf_gates.sh``.
 
 Package manifests
 =================

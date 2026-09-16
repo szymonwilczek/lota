@@ -475,7 +475,7 @@ $(INC_DIR)/vmlinux.h:
 
 # Phony targets
 .PHONY: check-docs-strict
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca container-image-attest-ca-hsm helm-package helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-el9-decls check-license-boundary check-test-build-dir check-doc-diagnostics check-config-commands check-stack-frames check-private-errno check-package-manifests check-helm-chart check-container-images lint lint-c lint-go print-lint-go-modules sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all fuzz-regress syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -2460,9 +2460,36 @@ update-bpf-mirror:
 	mv $(BPF_MIRROR_LOCK).new $(BPF_MIRROR_LOCK); \
 	echo "bpf-mirror: lock refreshed"
 
-fuzz-all: fuzz-agent fuzz-config fuzz-enroll \
+FUZZ_TARGETS := fuzz-agent fuzz-config fuzz-enroll \
 	fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk \
-	fuzz-tpm-resp fuzz-bpf-all
+	fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
+	fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang
+
+fuzz-all: $(FUZZ_TARGETS)
+
+# Replay fuzz/regressions/<target>/ against each target; any target that
+# still fails fails the run. New artifacts go to the build dir, not the tree.
+FUZZ_REGRESS_DIR := fuzz/regressions
+
+fuzz-regress: fuzz-all
+	@rc=0; \
+	for t in $(FUZZ_TARGETS); do \
+		d=$(FUZZ_REGRESS_DIR)/$$t; \
+		[ -d $$d ] || continue; \
+		set -- $$(find $$d -type f ! -name '*.rst' | sort); \
+		[ $$# -gt 0 ] || continue; \
+		echo "== $$t: $$# reproducer(s)"; \
+		if ! $(BUILD_DIR)/$$t \
+			-artifact_prefix=$(BUILD_DIR)/fuzz/regress-$$t- "$$@" \
+			>$(BUILD_DIR)/fuzz/regress-$$t.log 2>&1; then \
+			grep -E 'ERROR|SUMMARY|Running:|in LLVMFuzzerTestOneInput' \
+				$(BUILD_DIR)/fuzz/regress-$$t.log | tail -20 >&2; \
+			echo "fuzz-regress: $$t still fails on a committed reproducer," \
+				"log in $(BUILD_DIR)/fuzz/regress-$$t.log" >&2; \
+			rc=1; \
+		fi; \
+	done; \
+	exit $$rc
 
 # syzkaller bring-up harness: loads the production BPF LSM object,
 # attaches every hook in enforce mode, and idles so syz-executor's
@@ -2536,6 +2563,7 @@ help:
 	@echo ""
 	@echo "Fuzz targets:"
 	@echo "  fuzz-all         Build every fuzz target"
+	@echo "  fuzz-regress     Replay the committed C fuzz reproducers"
 	@echo "  fuzz-agent       Build IPC/agent fuzz target"
 	@echo "  fuzz-config      Build config parser fuzz target"
 	@echo "  fuzz-seal-envelope Build sealed-envelope parser/AEAD fuzz target"
