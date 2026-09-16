@@ -237,6 +237,7 @@ func NewNonceStoreFromConfig(cfg NonceStoreConfig) *NonceStore {
 		backend = newMemoryUsedNonceBackend(cfg.UsedNonceHistory)
 	}
 
+	// nil unless the backend partitions its state; routed calls check it
 	var routed RoutedUsedNonceBackend
 	if r, ok := backend.(RoutedUsedNonceBackend); ok {
 		routed = r
