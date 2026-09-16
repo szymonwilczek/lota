@@ -651,6 +651,8 @@ reproducible-build: all
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
 RPMLINT ?= rpmlint
+# rpm spelling of the version (- as ~); exact sibling depends need it
+RPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 PKG_DIR ?= $(BUILD_DIR)/packages
 NFPM_CONFIGS := lota-agent lota-verifier lota-attest-ca lota-sdk lota-sdk-devel
 CHANGELOG_TMPL := packaging/nfpm/changelog.yaml
@@ -692,7 +694,8 @@ packages: all selinux-pp
 	$(Q)sed 's/@LOTA_VERSION@/$(PROJECT_VERSION)/g' $(CHANGELOG_TMPL) > $(CHANGELOG_GEN)
 	$(Q)for c in $(NFPM_CONFIGS); do \
 		echo "  NFPM    $$c"; \
-		LOTA_VERSION=$(PROJECT_VERSION) $(NFPM) pkg \
+		LOTA_VERSION=$(PROJECT_VERSION) \
+		LOTA_RPM_VERSION=$(RPM_VERSION) $(NFPM) pkg \
 			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
 	done
 	@echo "RPMs written to $(PKG_DIR)"
@@ -808,9 +811,8 @@ observability-lint:
 # Archives HEAD into a tarball and builds an SRPM into OUTDIR.
 # COPR drives this through .copr/Makefile; locally run `make srpm`.
 # The spec carries @VERSION@ and @CHANGELOG@: both are filled from VERSION here
-# (rpm spells the prerelease ~), so a version bump touches VERSION alone.
+# (as RPM_VERSION), so a version bump touches VERSION alone.
 # An entry is added unless the spec already holds one for this version.
-SRPM_VERSION := $(subst -,~,$(PROJECT_VERSION))
 SRPM_TREE := $(BUILD_DIR)/srpmtree
 SRPM_SPEC := $(SRPM_TREE)/SPECS/lota.spec
 OUTDIR ?= $(BUILD_DIR)/srpm
@@ -818,9 +820,9 @@ OUTDIR ?= $(BUILD_DIR)/srpm
 srpm: check-package-manifests
 	$(Q)rm -rf $(SRPM_TREE)
 	$(Q)mkdir -p $(SRPM_TREE)/SOURCES $(SRPM_TREE)/SPECS $(OUTDIR)
-	$(Q)git archive --format=tar.gz --prefix=lota-$(SRPM_VERSION)/ \
-		-o $(SRPM_TREE)/SOURCES/lota-$(SRPM_VERSION).tar.gz HEAD
-	$(Q)awk -v ver='$(SRPM_VERSION)' -v src='$(PROJECT_VERSION)' \
+	$(Q)git archive --format=tar.gz --prefix=lota-$(RPM_VERSION)/ \
+		-o $(SRPM_TREE)/SOURCES/lota-$(RPM_VERSION).tar.gz HEAD
+	$(Q)awk -v ver='$(RPM_VERSION)' -v src='$(PROJECT_VERSION)' \
 		-v date="$$(LC_ALL=C git log -1 --format=%cd --date=format:'%a %b %d %Y')" ' \
 	NR == FNR { \
 		if ($$1 == "Release:") { rel = $$2; sub(/%.*/, "", rel) } \
