@@ -76,6 +76,10 @@ Provides and Requires are compared too. rpmbuild derives
 not, so the nfpm config declares it. A subpackage the spec pins to one build of
 a sibling, such as the devel package to its runtime, is pinned in nfpm as well.
 
+``make install`` is compared too, under ``/usr/share/lota`` only: the
+installer's stages read from there, so every file the packages ship under it
+must also be placed by ``make install``.
+
 Adding a file to a package therefore means adding it in three places: the
 install rule in the ``Makefile``, the nfpm config for its package, and the
 matching ``%files`` section of the spec.

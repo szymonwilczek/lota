@@ -532,6 +532,91 @@ check_sibling_version_locks() {
 
 check_sibling_version_locks
 
+# Paths the `install` target writes, one per line, with DESTDIR empty.
+# Variables are expanded as in guarded_installs; a destination ending in /
+# takes the source's name. Destinations built by a shell loop or a make
+# function stay unresolved, so compare only trees that spell each path out.
+make_install_paths() {
+    awk '
+		function expand(s,   rounds, name, val) {
+			for (rounds = 0; rounds < 8; rounds++) {
+				if (!match(s, /\$\([A-Za-z_][A-Za-z0-9_]*\)/))
+					break
+				name = substr(s, RSTART + 2, RLENGTH - 3)
+				val = (name in var) ? var[name] : ""
+				s = substr(s, 1, RSTART - 1) val \
+				    substr(s, RSTART + RLENGTH)
+			}
+			return s
+		}
+
+		NR == FNR {
+			if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*[ \t]*[:?]?=/) {
+				name = $0
+				sub(/[ \t]*[:?]?=.*$/, "", name)
+				value = $0
+				sub(/^[^=]*=[ \t]*/, "", value)
+				if (!(name in var))
+					var[name] = value
+			}
+			next
+		}
+
+		{
+			line = joined $0
+			if (line ~ /\\$/) {
+				sub(/[ \t]*\\$/, " ", line)
+				joined = line
+				next
+			}
+			joined = ""
+		}
+
+		line ~ /^install:/ { in_install = 1; next }
+		!in_install { next }
+		line !~ /^[ \t]/ { in_install = 0; next }
+
+		{
+			n = split(line, stmt, /;/)
+			for (i = 1; i <= n; i++) {
+				if (stmt[i] !~ /install[ \t]+-m/)
+					continue
+				m = split(stmt[i], word, /[ \t]+/)
+				dest = expand(word[m])
+				if (dest ~ /\/$/ && m > 1) {
+					name = expand(word[m - 1])
+					sub(/.*\//, "", name)
+					dest = dest name
+				}
+				sub(/^\$\(DESTDIR\)/, "", dest)
+				if (dest ~ /^\//)
+					print dest
+			}
+		}
+	' "$MAKEFILE" "$MAKEFILE" | sort -u
+}
+
+# Fail on a /usr/share/lota file the packages ship and `make install` does not
+# place; the installer stages read from there.
+check_source_install_data() {
+    local cfg pkg path packaged installed
+
+    installed=$(make_install_paths)
+    packaged=$(for cfg in "$NFPM_DIR"/*.yaml; do nfpm_paths "$cfg"; done | sort -u)
+
+    while read -r path; do
+	[ -n "$path" ] || continue
+	grep -qxF "$path" <<<"$installed" && continue
+
+	fail=1
+	echo "FAIL: the packages ship ${path} and \`make install\` does not place it"
+	echo "  a host built from source has nothing at the path the installer"
+	echo "  and the operator reference both name"
+    done < <(grep '^/usr/share/lota/' <<<"$packaged" || true)
+}
+
+check_source_install_data
+
 # Every path the spec ships, across its subpackages
 spec_installed=$(while read -r section; do
                      [ -n "$section" ] || continue
