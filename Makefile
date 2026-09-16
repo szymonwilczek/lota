@@ -987,7 +987,8 @@ check-license-boundary:
 	@scripts/check-license-boundary.sh
 
 # Test build-directory gate
-# Fails when a test names the default build directory instead of $(BUILD_DIR).
+# Fails when a test or example script names the default build directory
+# instead of $(BUILD_DIR).
 # See scripts/check-test-build-dir.sh
 check-test-build-dir:
 	@scripts/check-test-build-dir.sh
@@ -2497,7 +2498,7 @@ help:
 	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
 	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"
-	@echo "  check-test-build-dir  Fail on a test naming the default build directory"
+	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

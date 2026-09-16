@@ -44,8 +44,8 @@ Checks:
     which CI never is),
   - every Go module in the tree named by the linted-module list,
   - no compiled binary among the tracked files,
-  - no test naming the default build directory instead of the one the build
-    used,
+  - no test or example script naming the default build directory instead of
+    the one the build used,
   - include hygiene when C changes (skipped if clang-include-cleaner or
     bear is missing),
   - sparse semantic analysis when C changes (blocking; skipped if sparse
@@ -853,8 +853,8 @@ check_license_boundary() {
 }
 
 # Test build directory:
-# tests must take the build directory from the build, not name the default.
-# Runs on every patch: a recipe change alone can break a test.
+# tests and example scripts must take the build directory from the build, not
+# name the default. Runs on every patch: a recipe change alone can break one.
 check_test_build_dir() {
     local output
     if output="$(scripts/check-test-build-dir.sh 2>&1)"; then
@@ -862,7 +862,7 @@ check_test_build_dir() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "test-build-dir" \
-             "a test names the default build directory; take the path from the build so BUILD_DIR moves it too."
+             "a test or an example script names the default build directory; take the path from the build so BUILD_DIR moves it too."
     fi
 }
 

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Szymon Wilczek
+#
+# build directories scripts/check-test-build-dir.sh must not read as the
+# tree's. One <path>:<substring> per line, its reason above it.
+
+# builds the CA twice under its own mktemp root and compares the two
+tests/integration/test_attestca_build_tags.sh:$WORK_DIR/build

@@ -34,12 +34,11 @@ come from ``go build`` or ``make`` run inside a source directory, whose default
 output lands beside the sources; list those outputs in ``.gitignore``.
 
 The test build-directory check (``make check-test-build-dir``) fails on a test
-that names the default build directory, since the quick start and
-:doc:`../contributing` set a different ``BUILD_DIR``. A C or Go test takes the
-path as a ``-D`` from its recipe, with an ``#ifndef`` fallback that some recipe
-must define. A shell test reads ``$LOTA_BUILD_DIR``, which the Makefile exports
-as an absolute path, and may name the default only as its fallback. The check
-runs on every patch, since the recipe and the test live in different files.
+or example script that names the default build directory. C and Go tests take
+the path as a ``-D`` from their recipe; shell scripts read ``$LOTA_BUILD_DIR``
+and may name the default only as its fallback. A ``build`` directory that is
+not the tree's goes in ``scripts/test-build-dir-exemptions.txt``. The check
+runs on every patch.
 
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch

@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Build-directory gate for the test tree.
+# Build-directory gate for the tests and the example scripts.
 #
-# A test that names the default build directory breaks under any other
-# BUILD_DIR, which the quick start and the contributing guide both set.
+# A test or example script that names the default build directory breaks
+# under any other BUILD_DIR, which the quick start and the contributing guide
+# both set.
 #
 #   C and Go: the path comes as a -D from the test's recipe; an #ifndef
 #   fallback naming the default is allowed only when a recipe defines it.
 #
 #   shell: the directory comes from $LOTA_BUILD_DIR; the default may appear
 #   only as its fallback.
+#
+# Other build directories go in scripts/test-build-dir-exemptions.txt.
 #
 # Usage: scripts/check-test-build-dir.sh
 # Requires: awk, sed, git (no build, no toolchain)
@@ -33,8 +36,24 @@ if [[ -z ${DEFAULT_DIR:-} ]]; then
     exit 1
 fi
 
-# only line a shell test may name the default on
-BLESSED="BUILD_DIR=\"\${LOTA_BUILD_DIR:-\$REPO_DIR/$DEFAULT_DIR}\""
+# a shell line may name the default only as this fallback
+BLESSED="\${LOTA_BUILD_DIR:-"
+
+EXEMPTIONS="scripts/test-build-dir-exemptions.txt"
+
+# true when an exemption for this file matches the line
+exempted() {
+    local path="$1" line="$2" entry file needle
+    [[ -f $EXEMPTIONS ]] || return 1
+    while IFS= read -r entry; do
+	[[ $entry =~ ^[[:space:]]*(#.*)?$ ]] && continue
+	file="${entry%%:*}"
+	needle="${entry#*:}"
+	[[ $path == "$file" ]] || continue
+	[[ $line == *"$needle"* ]] && return 0
+    done <"$EXEMPTIONS"
+    return 1
+}
 
 # Print the file without comments, keeping string literals.
 strip_comments() {
@@ -93,12 +112,15 @@ scan_sh() {
     while IFS= read -r line; do
 	lineno=$((lineno + 1))
 	[[ $line =~ ^[[:space:]]*# ]] && continue
-	if [[ $line != *"\$REPO_DIR/$DEFAULT_DIR"* ]] &&
-	       ! [[ $line =~ (^|[^[:alnum:]_/])"$DEFAULT_DIR"/ ]]; then
+	# the default as a path component: rooted somewhere ($ROOT/build,
+	# $HERE/../../build) or leading a relative path (build/lota-agent)
+	if ! [[ $line =~ /"$DEFAULT_DIR"(/|\"|\'|\}|\)|[[:space:]]|$) ]] &&
+		! [[ $line =~ (^|[[:space:]]|\"|\'|=|\()"$DEFAULT_DIR"/ ]]; then
 	    continue
 	fi
 	[[ $line == *"$BLESSED"* ]] && continue
-	report "$path:$lineno: names the default build directory; read it from \$LOTA_BUILD_DIR ($BLESSED)"
+	exempted "$path" "$line" && continue
+	report "$path:$lineno: names the default build directory; take it from \${LOTA_BUILD_DIR:-...} and derive the rest"
     done <"$path"
 }
 
@@ -112,10 +134,11 @@ main() {
 	    *.c | *.h | *.go) scan_c_or_go "$path" ;;
 	    *.sh) scan_sh "$path" ;;
 	esac
-    done < <(git ls-files 'tests/*.c' 'tests/*.h' 'tests/*.go' 'tests/*.sh')
+    done < <(git ls-files 'tests/*.c' 'tests/*.h' 'tests/*.go' 'tests/*.sh' \
+		 'examples/*.sh')
 
     if ((FAILURES != 0)); then
-	printf 'check-test-build-dir: %d test(s) name a directory the build may not have used\n' "$FAILURES" >&2
+	printf 'check-test-build-dir: %d line(s) name a directory the build may not have used\n' "$FAILURES" >&2
 	printf 'see Documentation/contributor/development/patch-checks.rst\n' >&2
 	return 1
     fi
