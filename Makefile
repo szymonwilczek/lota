@@ -638,7 +638,8 @@ reproducible-build: all
 # Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
 # Depends on the build artifacts (all), so the configs find the binaries and
 # libraries they reference.
-# Agent package ships the BPF object signed, with its .sig and public key.
+# Agent package ships the BPF object signed, with its .sig and public key;
+# a build missing either is refused.
 #
 # Changelog version tracks VERSION:
 # Template placeholder is substituted from PROJECT_VERSION into a generated file
