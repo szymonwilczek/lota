@@ -620,18 +620,33 @@ $(LOADGEN_BIN): $(wildcard $(SRC_DIR)/verifier/loadgen/*.go $(SRC_DIR)/verifier/
 
 # Canonical reproducible build
 # This target pins the remaining environmental inputs the toolchain reads
-# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the local
-#  -- so the artifacts depend only on the source tree.
+# -- the build timestamp (SOURCE_DATE_EPOCH), the time zone and the locale
+# -- so the artifacts depend only on the source tree.
 # SOURCE_DATE_EPOCH defaults to the HEAD commit time, so a build from a
 # given commit (or tag) is deterministic.
-# Override REPRO_SOURCE_DATE_EPOCH for an out-of-tree source drop without
-# git.
+# Outside a git checkout there is none; stamping targets refuse.
+# Set REPRO_SOURCE_DATE_EPOCH to the release date instead.
 # See Documentation/security/reproducible-builds.rst for how to verify shipped == tag.
-REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+REPRO_SOURCE_DATE_EPOCH ?= $(shell git -C $(CURDIR) log -1 --pretty=%ct 2>/dev/null)
+
+# First step of every target that stamps the build timestamp.
+define require_source_date_epoch
+	@test -n "$(REPRO_SOURCE_DATE_EPOCH)" || { \
+		echo "$@: no commit time to read and REPRO_SOURCE_DATE_EPOCH is unset." >&2; \
+		echo "  This tree has no git checkout to take the timestamp from." >&2; \
+		echo "  Pass the source's own release date, in seconds:" >&2; \
+		echo "    make $@ REPRO_SOURCE_DATE_EPOCH=\$$(date -u -d 2026-01-31 +%s)" >&2; \
+		exit 1; \
+	}
+endef
+
 reproducible-build: export SOURCE_DATE_EPOCH = $(REPRO_SOURCE_DATE_EPOCH)
 reproducible-build: export TZ = UTC
 reproducible-build: export LC_ALL = C
-reproducible-build: all
+# Refuse before building; the sub-make inherits the pinned environment.
+reproducible-build:
+	$(require_source_date_epoch)
+	$(Q)$(MAKE) all
 	@echo "Reproducible build complete (SOURCE_DATE_EPOCH=$(REPRO_SOURCE_DATE_EPOCH), TZ=UTC, LC_ALL=C)"
 
 # Native packages (RPM via nfpm)
@@ -761,12 +776,15 @@ KO_BUILD_HSM = env KO_CONFIG_PATH=$(KO_HSM_CONFIG) KO_DOCKER_REPO=$(KO_DOCKER_RE
 container-images: container-image-verifier container-image-attest-ca container-image-attest-ca-hsm
 
 container-image-verifier:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/verifier && $(KO_BUILD) .
 
 container-image-attest-ca:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD) .
 
 container-image-attest-ca-hsm:
+	$(require_source_date_epoch)
 	$(Q)cd $(SRC_DIR)/attestca && $(KO_BUILD_HSM) .
 
 # Helm chart validation (no Kubernetes cluster required)
