@@ -33,6 +33,14 @@ executable, a shared library, an object file or an archive. Such files usually
 come from ``go build`` or ``make`` run inside a source directory, whose default
 output lands beside the sources; list those outputs in ``.gitignore``.
 
+The test build-directory check (``make check-test-build-dir``) fails on a test
+that names the default build directory, since the quick start and
+:doc:`../contributing` set a different ``BUILD_DIR``. A C or Go test takes the
+path as a ``-D`` from its recipe, with an ``#ifndef`` fallback that some recipe
+must define. A shell test reads ``$LOTA_BUILD_DIR``, which the Makefile exports
+as an absolute path, and may name the default only as its fallback. The check
+runs on every patch, since the recipe and the test live in different files.
+
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch
 output tree. It builds from nothing on purpose: Sphinx re-reads only the
