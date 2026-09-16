@@ -1438,7 +1438,8 @@ TEST_BINS := \
 
 $(TEST_SDK_BIN): tests/test_sdk_ipc.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
+	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $< \
+		-L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 $(TEST_BIN_DIR)/test_hash_verify: tests/test_hash_verify.c $(AGENT_DIR)/hash_verify.c | $(BUILD_DIR)
 	$(QUIET_CC)
