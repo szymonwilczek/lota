@@ -454,6 +454,24 @@ func BenchmarkRSASSAVerify(b *testing.B) {
 	}
 }
 
+// BenchmarkRSASSAVerifyParallel runs the verify over GOMAXPROCS goroutines;
+// -cpu=1,8,16 separates per-core from per-thread scaling.
+func BenchmarkRSASSAVerifyParallel(b *testing.B) {
+	verifier := NewRSASSAVerifier()
+	attestData := make([]byte, 145)
+	rand.Read(attestData)
+
+	hash := sha256.Sum256(attestData)
+	signature, _ := rsa.SignPKCS1v15(rand.Reader, testKeyPair, crypto.SHA256, hash[:])
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			verifier.VerifyQuoteSignature(attestData, signature, &testKeyPair.PublicKey)
+		}
+	})
+}
+
 func BenchmarkRSAPSSVerify(b *testing.B) {
 	verifier := NewRSAPSSVerifier()
 	attestData := make([]byte, 145)
