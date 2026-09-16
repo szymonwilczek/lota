@@ -54,6 +54,13 @@ Testing policy
        :ghsrc:`benchmarks/README.rst`)
      - ``make bench-c``, ``make bench-go``; CI job ``benchmarks``
 
+LeakSanitizer attaches to the process's threads with ptrace before it scans.
+On a host that refuses the attach (a LOTA agent enforcing ``block_ptrace``
+refuses it for every task) the scan aborts, and libFuzzer records the abort as
+a crash. Each C fuzz target probes the attach at start-up and, where it is
+refused, prints ``leak detection is off for this process`` and runs without
+it. Leaks are caught only on hosts that allow the attach.
+
 A fuzz crash leaves a reproducer under ``testdata/fuzz/<Target>/``. Commit it
 so the regression is locked in.
 

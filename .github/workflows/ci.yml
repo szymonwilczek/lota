@@ -431,6 +431,7 @@ jobs:
             tests/integration/test_installer_status_stages.sh \
             tests/integration/test_attestca_build_tags.sh \
             tests/integration/test_bench_targets.sh \
+            tests/integration/test_fuzz_leak_detection.sh \
             tests/integration/test_hsm_ca_example.sh \
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \

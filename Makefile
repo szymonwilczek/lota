@@ -2117,6 +2117,11 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
 	fi
+	@if command -v clang >/dev/null 2>&1; then \
+		tests/integration/test_fuzz_leak_detection.sh; \
+	else \
+		echo "SKIP: test_fuzz_leak_detection.sh (no clang)"; \
+	fi
 	@if command -v go >/dev/null 2>&1; then \
 		tests/integration/test_bench_targets.sh; \
 	else \
@@ -2249,10 +2254,17 @@ valgrind-smoke: all examples
 FUZZ_CFLAGS := $(CFLAGS) -fsanitize=fuzzer,address -g -O1
 FUZZ_LDFLAGS := $(LDFLAGS) -fsanitize=fuzzer,address
 
+# Linked into every fuzz target: disables LSan where ptrace attach is refused
+FUZZ_LSAN_OBJ := $(BUILD_DIR)/fuzz/lsan_options.o
+
 # Every C libFuzzer harness lives under fuzz/ as fuzz_<name>.c;
 # the agent sources they exercise stay under src/agent/
 FUZZ_AGENT_OBJS := $(filter-out $(BUILD_DIR)/agent/main.o $(BUILD_DIR)/agent/ipc.o $(BUILD_DIR)/agent/reload.o $(BUILD_DIR)/agent/test_servers.o $(BUILD_DIR)/agent/startup_policy.o $(BUILD_DIR)/agent/daemon_loop.o, $(AGENT_OBJS))
-FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o
+FUZZ_AGENT_OBJS += $(BUILD_DIR)/fuzz/fuzz_ipc.o $(FUZZ_LSAN_OBJ)
+
+$(FUZZ_LSAN_OBJ): fuzz/lsan_options.c | $(BUILD_DIR)/fuzz
+	$(QUIET_CLANG)
+	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
@@ -2277,7 +2289,7 @@ $(BUILD_DIR)/fuzz/config_%.o: src/agent/%.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -MMD -MP -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS)
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS) $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
@@ -2286,7 +2298,7 @@ $(BUILD_DIR)/fuzz/fuzz_enroll.o: fuzz/fuzz_enroll.c src/agent/enroll.c src/agent
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o
+fuzz-enroll: $(BUILD_DIR)/fuzz/fuzz_enroll.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-enroll $^
 
@@ -2299,7 +2311,7 @@ $(BUILD_DIR)/fuzz/seal_envelope_obj.o: src/agent/seal_envelope.c | $(BUILD_DIR)/
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o
+fuzz-seal-envelope: $(BUILD_DIR)/fuzz/fuzz_seal_envelope.o $(BUILD_DIR)/fuzz/seal_envelope_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-seal-envelope $^ -lcrypto
 
@@ -2308,7 +2320,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o: fuzz/fuzz_tpm_attest.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o
+fuzz-tpm-attest: $(BUILD_DIR)/fuzz/fuzz_tpm_attest.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-attest $^ -ltss2-mu
 
@@ -2321,7 +2333,7 @@ $(BUILD_DIR)/fuzz/policy_sign_obj.o: src/agent/policy_sign.c src/agent/policy_si
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o
+fuzz-policy-sign: $(BUILD_DIR)/fuzz/fuzz_policy_sign.o $(BUILD_DIR)/fuzz/policy_sign_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-policy-sign $^ -lcrypto
 
@@ -2334,7 +2346,7 @@ $(BUILD_DIR)/fuzz/server_sdk_obj.o: src/sdk/lota_server.c $(VERSION_FILE) | $(BU
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) $(SDK_VERSION_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o
+fuzz-server-sdk: $(BUILD_DIR)/fuzz/fuzz_server_sdk.o $(BUILD_DIR)/fuzz/server_sdk_obj.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-server-sdk $^ -lcrypto
 
@@ -2343,7 +2355,7 @@ $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o: fuzz/fuzz_tpm_resp.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o
+fuzz-tpm-resp: $(BUILD_DIR)/fuzz/fuzz_tpm_resp.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-tpm-resp $^ -ltss2-mu
 
@@ -2360,7 +2372,7 @@ $(BUILD_DIR)/fuzz/fuzz_devt.o: fuzz/bpf_oracle/fuzz_devt.c include/lota_devt.h |
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o
+fuzz-bpf-devt: $(BUILD_DIR)/fuzz/fuzz_devt.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-devt $^
 
@@ -2368,7 +2380,7 @@ $(BUILD_DIR)/fuzz/fuzz_open_flags.o: fuzz/bpf_oracle/fuzz_open_flags.c fuzz/bpf_
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o
+fuzz-bpf-open-flags: $(BUILD_DIR)/fuzz/fuzz_open_flags.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-open-flags $^
 
@@ -2376,7 +2388,7 @@ $(BUILD_DIR)/fuzz/fuzz_kmem_device.o: fuzz/bpf_oracle/fuzz_kmem_device.c fuzz/bp
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o
+fuzz-bpf-kmem-device: $(BUILD_DIR)/fuzz/fuzz_kmem_device.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-kmem-device $^
 
@@ -2384,7 +2396,7 @@ $(BUILD_DIR)/fuzz/fuzz_event_budget.o: fuzz/bpf_oracle/fuzz_event_budget.c inclu
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o
+fuzz-bpf-event-budget: $(BUILD_DIR)/fuzz/fuzz_event_budget.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-event-budget $^
 
@@ -2392,7 +2404,7 @@ $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o: fuzz/bpf_oracle/fuzz_inaccessible_ex
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o
+fuzz-bpf-inaccessible-exec: $(BUILD_DIR)/fuzz/fuzz_inaccessible_exec.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-inaccessible-exec $^
 
@@ -2400,7 +2412,7 @@ $(BUILD_DIR)/fuzz/fuzz_shebang.o: fuzz/bpf_oracle/fuzz_shebang.c fuzz/bpf_oracle
 	$(QUIET_CLANG)
 	$(Q)clang $(BPF_ORACLE_CFLAGS) -c $< -o $@
 
-fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o
+fuzz-bpf-shebang: $(BUILD_DIR)/fuzz/fuzz_shebang.o $(FUZZ_LSAN_OBJ)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-bpf-shebang $^
 
