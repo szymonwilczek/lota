@@ -1001,7 +1001,7 @@ SERVER_SDK_MODULE := $(if $(wildcard sdk/server/go.mod),sdk/server,src/sdk/serve
 # SDK and the examples are the code an integrator copies,
 # so they are linted at least as strictly as the rest.
 LINT_GO_MODULES := src/verifier src/attestca src/crl src/fleetctl \
-	$(SERVER_SDK_MODULE) examples/demo_server
+	$(SERVER_SDK_MODULE) examples/demo_server examples/ci-gate/gate
 
 lint: lint-c lint-go
 
