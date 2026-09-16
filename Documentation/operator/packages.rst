@@ -53,8 +53,10 @@ Building
 
 builds every RPM under ``build/packages`` (``PKG_DIR``), each named from the
 project version. The target depends on a full build so the configs find the
-binaries and libraries they reference. ``rpmlint`` then runs over the built
-RPMs when it is installed, reporting any packaging warnings.
+binaries and libraries they reference. It ends in ``make package-lint``, which
+runs ``rpmlint`` with ``packaging/nfpm/lota.rpmlintrc`` and fails on any error
+that file does not filter; CI runs the same target. Without ``rpmlint``
+installed the lint is skipped.
 
 Installing
 ==========

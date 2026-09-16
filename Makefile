@@ -638,15 +638,13 @@ reproducible-build: all
 # Builds one .rpm per config under packaging/nfpm/ into $(PKG_DIR).
 # Depends on the build artifacts (all), so the configs find the binaries and
 # libraries they reference.
-# Agent package ships the BPF object UNSIGNED on purpose:
-# each adopter signs it during bring-up.
+# Agent package ships the BPF object signed, with its .sig and public key.
 #
 # Changelog version tracks VERSION:
 # Template placeholder is substituted from PROJECT_VERSION into a generated file
 # the configs point at, so it never has to be bumped alongside VERSION.
 #
-# rpmlint runs over the built RPMs when installed (report only, non-fatal);
-# the release CI is the gating lint.
+# Ends in package-lint; an rpmlint error fails the build.
 #
 # .spec / COPR path layers on top for the Fedora build service.
 NFPM ?= nfpm
@@ -702,10 +700,20 @@ packages: all selinux-pp
 			-f packaging/nfpm/$$c.yaml -p rpm -t $(PKG_DIR)/ || exit 1; \
 	done
 	@echo "RPMs written to $(PKG_DIR)"
+	$(Q)$(MAKE) package-lint
+
+# rpmlint over the built RPMs, local and CI alike. Without lota.rpmlintrc
+# the deliberate findings bury new ones; skipped when rpmlint is missing.
+.PHONY: package-lint
+package-lint:
+	$(Q)ls $(PKG_DIR)/*.rpm >/dev/null 2>&1 || { \
+		echo "package-lint: no RPMs in $(PKG_DIR); run make packages first" >&2; \
+		exit 1; \
+	}
 	$(Q)if command -v $(RPMLINT) >/dev/null 2>&1; then \
 		echo "  RPMLINT $(PKG_DIR)"; \
 		$(RPMLINT) --ignore-unused-rpmlintrc \
-			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm || true; \
+			-r packaging/nfpm/lota.rpmlintrc $(PKG_DIR)/*.rpm; \
 	else \
 		echo "  RPMLINT skipped ($(RPMLINT) not installed)"; \
 	fi
@@ -2438,6 +2446,7 @@ help:
 	@echo "  wine-hook        Build Wine/Proton LD_PRELOAD hook"
 	@echo "  anticheat        Build anti-cheat compatibility layer"
 	@echo "  packages         Build native RPMs (agent, verifier, attest-ca, sdk-devel) via nfpm"
+	@echo "  package-lint     rpmlint the built RPMs with the project filter file (gating)"
 	@echo "  rhel-package-smoke Build+install the RPMs on Rocky 9 (podman); no attestation"
 	@echo "  container-images Build distroless OCI images for verifier + attest-CA (ko)"
 	@echo "  container-image-attest-ca-hsm  Build the PKCS#11 (HSM) attest-CA image"
