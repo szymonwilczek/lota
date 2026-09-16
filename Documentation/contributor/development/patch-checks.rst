@@ -40,6 +40,11 @@ and may name the default only as its fallback. A ``build`` directory that is
 not the tree's goes in ``scripts/test-build-dir-exemptions.txt``. The check
 runs on every patch.
 
+The fuzz check builds every C fuzz target (``make fuzz-all``) whenever a
+patch touches C, the Makefile or ``fuzz/``: each target links a hand-picked set
+of agent sources, so a change outside ``fuzz/`` can break one. It is skipped
+without clang; the ``fuzz`` CI job always runs it.
+
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch
 output tree. It builds from nothing on purpose: Sphinx re-reads only the
