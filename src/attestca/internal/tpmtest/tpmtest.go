@@ -65,7 +65,8 @@ func NewVendorRoot(tb testing.TB, cn string) Root {
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
+		// the root signs its CRLs too; Go requires CRLSign for that
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
 	if err != nil {

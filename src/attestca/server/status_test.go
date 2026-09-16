@@ -11,11 +11,15 @@
 package server
 
 import (
+	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/szymonwilczek/lota/attestca/ca"
 	"github.com/szymonwilczek/lota/attestca/credential"
@@ -138,5 +142,69 @@ func TestBeginStatusClassifiesEveryDeliberateRefusal(t *testing.T) {
 func TestBeginStatusKeepsInternalErrorForFaults(t *testing.T) {
 	if got := beginStatus(errors.New("write pseudonym key: disk full")); got != wire.StatusInternalError {
 		t.Fatalf("status %d for a CA fault, want StatusInternalError", got)
+	}
+}
+
+// newSvcStaleCRL builds a CA whose only CRL for the EK's issuer is past
+// NextUpdate; the EK itself is not revoked.
+func newSvcStaleCRL(t *testing.T) (*enroll.Service, tpmtest.EK) {
+	t.Helper()
+	root := tpmtest.NewVendorRoot(t, "tpm-vendor-root")
+	ek := tpmtest.NewEKCert(t, root)
+
+	tmpl := &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-72 * time.Hour),
+		NextUpdate: time.Now().Add(-48 * time.Hour),
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, tmpl, root.Cert, root.Key)
+	if err != nil {
+		t.Fatalf("create CRL: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "vendor.crl")
+	if err := os.WriteFile(path, tpmtest.PEM("X509 CRL", der), 0o600); err != nil {
+		t.Fatalf("write CRL: %v", err)
+	}
+
+	caCertPEM, caKeyPEM := tpmtest.LOTACAPEM(t)
+	issuer, err := ca.NewIssuer(ca.IssuerConfig{
+		CACertPEM:  caCertPEM,
+		CAKeyPEM:   caKeyPEM,
+		EKRootPEMs: [][]byte{tpmtest.PEM("CERTIFICATE", root.DER)},
+		EKCRLPaths: []string{path},
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	svc, err := enroll.NewService(issuer, []byte("pseudonym-key-0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+	return svc, ek
+}
+
+// A stale CRL fails until the operator refreshes it, so it must not be
+// reported as a transient CA fault.
+func TestStaleCRLIsNotReportedAsACAFault(t *testing.T) {
+	svc, ek := newSvcStaleCRL(t)
+	addr, pool, stop := startServer(t, svc)
+	defer stop()
+
+	challenge, result := enrollClient(t, addr, pool, ek, nil, nil)
+	if result != nil {
+		t.Fatalf("expected rejection at challenge, got result %+v", result)
+	}
+	if challenge.Status == wire.StatusInternalError {
+		t.Fatal("a stale manufacturer CRL is reported as an internal CA error, " +
+			"which tells the host to retry a refusal no retry can lift")
+	}
+}
+
+// Same refusal through the classifier, wrapped as the issuer wraps it.
+func TestBeginStatusDoesNotCallAStaleCRLAFault(t *testing.T) {
+	err := fmt.Errorf("EK verification: %w",
+		fmt.Errorf("EK certificate revocation: %w", crl.ErrCRLStale))
+	if got := beginStatus(err); got == wire.StatusInternalError {
+		t.Fatalf("status %d for a stale CRL feed, which is not a CA fault", got)
 	}
 }
