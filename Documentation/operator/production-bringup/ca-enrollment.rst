@@ -45,6 +45,12 @@ Pair the bundle with the manufacturers' EK revocation feeds: ``-ek-crl <file>``
 SIGHUP reloads a rewritten feed in place. See the "Manufacturer CRLs" section of
 :ghsrc:`configs/ek-roots/README.rst`.
 
+Two ceilings bound what an unauthenticated peer can hold open: ``-max-pending``
+caps concurrent half-finished enrollments (default 4096, then the
+concurrency-limit status), ``-session-ttl`` how long one survives unanswered
+(default 2 minutes). Lower them on a public CA. A non-positive value stops the
+CA at startup. Both are logged on the startup line beside ``aik_cert_ttl``.
+
 CA signing key
 ==============
 
