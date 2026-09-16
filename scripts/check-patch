@@ -39,6 +39,10 @@ Checks:
   - trailing whitespace in patches and commit messages,
   - clang-format and gofmt on changed C, header, and Go files,
   - full project build,
+  - golangci-lint over every module a Go change touches, and over all of them
+    when .golangci.yml changes (blocking; skipped if golangci-lint is missing,
+    which CI never is),
+  - every Go module in the tree named by the linted-module list,
   - include hygiene when C changes (skipped if clang-include-cleaner or
     bear is missing),
   - sparse semantic analysis when C changes (blocking; skipped if sparse
@@ -135,7 +139,7 @@ collect_changed_files() {
             git diff --name-only --diff-filter=ACMRT --cached
             git diff --name-only --diff-filter=ACMRT
         } | sort -u
-    )
+            )
 }
 
 check_ci_policy() {
@@ -152,7 +156,7 @@ check_ci_policy() {
     else
         sed 's/^/  /' "$output_file"
         fail "DCO and hotpath documentation" \
-            "run scripts/check-pr-quality.sh $base $head and fix the reported commit."
+             "run scripts/check-pr-quality.sh $base $head and fix the reported commit."
     fi
 
     if grep -q '^ai_assisted=true$' "$github_output"; then
@@ -180,7 +184,7 @@ check_commit_subjects() {
         pass "commit subject style"
     else
         fail "commit subject style" \
-            "replace scoped conventional subjects such as fix(...): or feat(...): with the project subject style."
+             "replace scoped conventional subjects such as fix(...): or feat(...): with the project subject style."
     fi
 }
 
@@ -250,20 +254,20 @@ check_commit_body_contract() {
         write_commit_message "$commit" "$msg_file"
         if grep -q '^Problem:[[:space:]].' "$msg_file"; then
             printf '  Problem: must be standalone: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         elif ! grep -q '^Problem:$' "$msg_file"; then
             printf '  missing Problem: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         fi
         if grep -q '^Solution:[[:space:]].' "$msg_file"; then
             printf '  Solution: must be standalone: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         elif ! grep -q '^Solution:$' "$msg_file"; then
             printf '  missing Solution: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         fi
     done
@@ -274,7 +278,7 @@ check_commit_body_contract() {
         pass "commit body contract"
     else
         fail "commit body contract" \
-            "place Problem: and Solution: on their own lines, then put text on the following line."
+             "place Problem: and Solution: on their own lines, then put text on the following line."
     fi
 }
 
@@ -327,7 +331,7 @@ check_commit_body_layout() {
         pass "commit body layout"
     else
         fail "commit body layout" \
-            "run scripts/format-patch over the same base..head range, then review the rewritten descriptions."
+             "run scripts/format-patch over the same base..head range, then review the rewritten descriptions."
     fi
 }
 
@@ -348,8 +352,8 @@ check_body_proportion() {
 
         if ((min_words > 0 && words < min_words)); then
             printf '  %s %s: %d files, %d changed lines, %d body words, expected at least %d\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")" \
-                "$files" "$lines" "$words" "$min_words"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")" \
+                   "$files" "$lines" "$words" "$min_words"
             rc=1
         fi
     done
@@ -358,7 +362,7 @@ check_body_proportion() {
         pass "commit body detail"
     else
         fail "commit body detail" \
-            "expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
+             "expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
     fi
 }
 
@@ -394,7 +398,7 @@ check_patch_whitespace() {
         pass "patch trailing whitespace"
     else
         fail "patch trailing whitespace" \
-            "remove reported trailing whitespace from files before pushing."
+             "remove reported trailing whitespace from files before pushing."
     fi
 }
 
@@ -409,7 +413,7 @@ check_message_whitespace() {
         write_commit_message "$commit" "$msg_file"
         if grep -nE '[[:blank:]]$' "$msg_file"; then
             printf '  trailing whitespace in message: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         fi
 
@@ -419,10 +423,10 @@ check_message_whitespace() {
 				{ blank++ }
 				END { print blank + 0 }
 			' "$msg_file"
-        )
+                            )
         if ((trailing_blank_count > 0)); then
             printf '  trailing blank line in message: %s %s\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+                   "$(short_commit "$commit")" "$(commit_subject "$commit")"
             rc=1
         fi
     done
@@ -433,7 +437,7 @@ check_message_whitespace() {
         pass "commit message trailing whitespace"
     else
         fail "commit message trailing whitespace" \
-            "run scripts/format-patch over the same base..head range."
+             "run scripts/format-patch over the same base..head range."
     fi
 }
 
@@ -448,12 +452,12 @@ check_commit_signatures() {
     for commit in "$@"; do
         status=$(git log -1 --format='%G?' "$commit")
         case "$status" in
-        G | U) ;;
-        *)
-            printf '  %s %s (signature: %s)\n' \
-                "$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
-            rc=1
-            ;;
+            G | U) ;;
+            *)
+                printf '  %s %s (signature: %s)\n' \
+                       "$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
+                rc=1
+                ;;
         esac
     done
 
@@ -461,7 +465,7 @@ check_commit_signatures() {
         pass "commit signatures"
     else
         fail "commit signatures" \
-            "sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
+             "sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
     fi
 }
 
@@ -486,7 +490,7 @@ check_file_endings() {
 				{ blank++ }
 				END { print blank + 0 }
 			' "$path"
-        )
+                   )
         if ((blank_count > 0)); then
             printf '  %s ends with %d trailing blank line(s)\n' "$path" "$blank_count"
             rc=1
@@ -497,7 +501,7 @@ check_file_endings() {
         pass "file trailing blank lines"
     else
         fail "file trailing blank lines" \
-            "remove blank lines after the last content line in changed text files."
+             "remove blank lines after the last content line in changed text files."
     fi
 }
 
@@ -509,10 +513,10 @@ check_clang_format() {
 
     for path in "$@"; do
         case "$path" in
-        *.c | *.h)
-            [[ $path == include/vmlinux.h ]] && continue
-            [[ -f $path ]] && c_files+=("$path")
-            ;;
+            *.c | *.h)
+                [[ $path == include/vmlinux.h ]] && continue
+                [[ -f $path ]] && c_files+=("$path")
+                ;;
         esac
     done
 
@@ -529,7 +533,7 @@ check_clang_format() {
 
     if [[ -z $formatter ]]; then
         fail "clang-format" \
-            "install clang-format or clang-format-22 and run it on changed C and header files."
+             "install clang-format or clang-format-22 and run it on changed C and header files."
         return
     fi
 
@@ -539,7 +543,7 @@ check_clang_format() {
     else
         sed 's/^/  /' "$output_file"
         fail "clang-format" \
-            "run $formatter -i on the reported C and header files."
+             "run $formatter -i on the reported C and header files."
     fi
     rm -f "$output_file"
 }
@@ -551,9 +555,9 @@ check_gofmt() {
 
     for path in "$@"; do
         case "$path" in
-        *.go)
-            [[ -f $path ]] && go_files+=("$path")
-            ;;
+            *.go)
+                [[ -f $path ]] && go_files+=("$path")
+                ;;
         esac
     done
 
@@ -576,13 +580,100 @@ check_gofmt() {
     fi
 }
 
+# Lint each module the patch touches as a whole, since unused needs the full
+# module; a .golangci.yml change lints every module.
+check_lint_go() {
+    local path module out root config bin
+    local -a lint_modules=() modules=()
+
+    if ! lint_go_modules lint_modules; then
+        fail "lint-go" "make print-lint-go-modules named no module; the linter has nothing to read."
+        return
+    fi
+
+    for path in "$@"; do
+        if [[ $path == ".golangci.yml" ]]; then
+            modules=("${lint_modules[@]}")
+            break
+        fi
+    done
+    if ((${#modules[@]} == 0)); then
+        for path in "$@"; do
+            case "$path" in
+                *.go | */go.mod | */go.sum) ;;
+                *) continue ;;
+            esac
+            for module in "${lint_modules[@]}"; do
+                [[ $path == "$module"/* ]] || continue
+                if ! array_has "$module" "${modules[@]}"; then
+                    modules+=("$module")
+                fi
+            done
+        done
+    fi
+
+    if ((${#modules[@]} == 0)); then
+        pass "lint-go"
+        return
+    fi
+
+    bin=${GOLANGCI_LINT:-golangci-lint}
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        skip "lint-go" \
+             "install golangci-lint v2 from https://golangci-lint.run; the Go static analysis workflow runs it regardless."
+        return
+    fi
+
+    root=$(git rev-parse --show-toplevel)
+    config="$root/.golangci.yml"
+    for module in "${modules[@]}"; do
+        # deleted by the patch
+        [[ -d $module ]] || continue
+        if ! out=$(cd "$root/$module" && "$bin" run --config "$config" ./... 2>&1); then
+            printf '%s\n' "$out" | sed 's/^/  /'
+            fail "lint-go" \
+                 "golangci-lint findings above in $module; run make lint-go and answer them."
+            return
+        fi
+    done
+    pass "lint-go"
+}
+
+# Fail on a go.mod outside the lint list.
+# Runs on every patch, not only on Go ones.
+check_lint_go_coverage() {
+    local path module
+    local -a lint_modules=() unlisted=()
+
+    if ! lint_go_modules lint_modules; then
+        fail "lint-go coverage" "make print-lint-go-modules named no module."
+        return
+    fi
+
+    while IFS= read -r path; do
+        [[ -n $path ]] || continue
+        module=${path%/go.mod}
+        if ! array_has "$module" "${lint_modules[@]}"; then
+            unlisted+=("$module")
+        fi
+    done < <(git ls-files '*go.mod')
+
+    if ((${#unlisted[@]} != 0)); then
+        printf '  %s\n' "${unlisted[@]}"
+        fail "lint-go coverage" \
+             "add the module(s) above to LINT_GO_MODULES in the Makefile; nothing lints a module the list does not name."
+        return
+    fi
+    pass "lint-go coverage"
+}
+
 check_build() {
     if env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
-        make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
+           make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
         pass "build"
     else
         fail "build" \
-            "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all and fix the compiler error."
+             "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all and fix the compiler error."
     fi
 }
 
@@ -601,7 +692,7 @@ check_abi() {
     local output
 
     if ! command -v nm >/dev/null 2>&1 ||
-        ! command -v readelf >/dev/null 2>&1; then
+            ! command -v readelf >/dev/null 2>&1; then
         skip "abi" "install binutils (nm, readelf) to run the ABI gate."
         return
     fi
@@ -611,7 +702,7 @@ check_abi() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "abi" \
-            "a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
+             "a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
     fi
 }
 
@@ -621,10 +712,10 @@ check_includes() {
 
     for path in "$@"; do
         case "$path" in
-        *.c | *.h)
-            touches_c=1
-            break
-            ;;
+            *.c | *.h)
+                touches_c=1
+                break
+                ;;
         esac
     done
 
@@ -634,9 +725,9 @@ check_includes() {
     fi
 
     if ! command -v clang-include-cleaner >/dev/null 2>&1 ||
-        ! command -v bear >/dev/null 2>&1; then
+            ! command -v bear >/dev/null 2>&1; then
         skip "include-hygiene" \
-            "install clang-include-cleaner (clang-tools-extra) and bear to run it."
+             "install clang-include-cleaner (clang-tools-extra) and bear to run it."
         return
     fi
 
@@ -644,7 +735,7 @@ check_includes() {
         pass "include-hygiene"
     else
         fail "include-hygiene" \
-            "remove transitive includes; auto-fix with scripts/fix-includes.sh."
+             "remove transitive includes; auto-fix with scripts/fix-includes.sh."
     fi
 }
 
@@ -658,10 +749,10 @@ check_el9_decls() {
 
     for path in "$@"; do
         case "$path" in
-        *.c | *.h)
-            touches_c=1
-            break
-            ;;
+            *.c | *.h)
+                touches_c=1
+                break
+                ;;
         esac
     done
 
@@ -672,7 +763,7 @@ check_el9_decls() {
 
     if ! command -v podman >/dev/null 2>&1; then
         skip "el9-decls" \
-            "install podman to compile the tree against el9 headers."
+             "install podman to compile the tree against el9 headers."
         return
     fi
 
@@ -680,7 +771,7 @@ check_el9_decls() {
         pass "el9-decls"
     else
         fail "el9-decls" \
-            "include the header that declares the symbol; el9 does not pull it in."
+             "include the header that declares the symbol; el9 does not pull it in."
     fi
 }
 
@@ -700,7 +791,7 @@ check_stack_frames() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "stack-frames" \
-            "move the object to the heap; see config_new() in src/agent/config.c."
+             "move the object to the heap; see config_new() in src/agent/config.c."
     fi
 }
 
@@ -718,7 +809,7 @@ check_private_errno() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "private-errno" \
-            "render the code with that layer's tpm_strerror() or net_strerror(), each of which falls through to strerror() for ordinary errnos."
+             "render the code with that layer's tpm_strerror() or net_strerror(), each of which falls through to strerror() for ordinary errnos."
     fi
 }
 
@@ -732,7 +823,7 @@ check_license_boundary() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "license-boundary" \
-            "an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
+             "an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
     fi
 }
 
@@ -747,7 +838,7 @@ check_doc_diagnostics() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "doc-diagnostics" \
-            "the documentation quotes a message the program cannot print; quote it verbatim or exempt the literal."
+             "the documentation quotes a message the program cannot print; quote it verbatim or exempt the literal."
     fi
 }
 
@@ -758,7 +849,7 @@ check_config_commands() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "config-commands" \
-            "a shipped policy or configuration file names a command the program cannot run; name the verb it has."
+             "a shipped policy or configuration file names a command the program cannot run; name the verb it has."
     fi
 }
 
@@ -777,10 +868,27 @@ check_docs_strict() {
     if ! out=$(make check-docs-strict 2>&1); then
         printf '%s\n' "$out" | grep -E "WARNING|ERROR|problems" | sed 's/^/  /' >&2
         fail "docs-strict" \
-            "the strict documentation build reports the problems above; fix the markup."
+             "the strict documentation build reports the problems above; fix the markup."
         return
     fi
     pass "docs-strict"
+}
+
+# Fill array $1 with the lint-go module list from the Makefile.
+lint_go_modules() {
+    local -n out=$1
+    mapfile -t out < <(make -s print-lint-go-modules 2>/dev/null)
+    ((${#out[@]} != 0))
+}
+
+array_has() {
+    local needle=$1
+    shift
+    local item
+    for item in "$@"; do
+        [[ $item == "$needle" ]] && return 0
+    done
+    return 1
 }
 
 # true when the patch touches any C source or header
@@ -788,9 +896,9 @@ patch_touches_c() {
     local path
     for path in "$@"; do
         case "$path" in
-        *.c | *.h)
-            return 0
-            ;;
+            *.c | *.h)
+                return 0
+                ;;
         esac
     done
     return 1
@@ -833,7 +941,7 @@ check_smatch() {
     fi
     if ! command -v smatch >/dev/null 2>&1; then
         skip "smatch" \
-            "build smatch from https://repo.or.cz/smatch.git and add it to PATH; CI runs it regardless."
+             "build smatch from https://repo.or.cz/smatch.git and add it to PATH; CI runs it regardless."
         return
     fi
 
@@ -864,7 +972,7 @@ check_coccinelle() {
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "coccicheck" \
-            "a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
+             "a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
     fi
 }
 
@@ -875,9 +983,9 @@ check_bpf_mirror() {
     local path touched=1 out
     for path in "$@"; do
         case "$path" in
-        src/bpf/lota_lsm.bpf.c | fuzz/bpf_oracle/*)
-            touched=0
-            ;;
+            src/bpf/lota_lsm.bpf.c | fuzz/bpf_oracle/*)
+                touched=0
+                ;;
         esac
     done
     if ((touched != 0)); then
@@ -890,7 +998,7 @@ check_bpf_mirror() {
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "bpf-mirror" \
-            "src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
+             "src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
     fi
 }
 
@@ -901,9 +1009,9 @@ check_helm_chart() {
 
     for path in "$@"; do
         case "$path" in
-        deploy/helm/* | scripts/check-helm-chart.sh)
-            touched=0
-            ;;
+            deploy/helm/* | scripts/check-helm-chart.sh)
+                touched=0
+                ;;
         esac
     done
     if ((touched != 0)); then
@@ -916,7 +1024,7 @@ check_helm_chart() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "helm-chart" \
-            "Chart.yaml must carry appVersion \"@VERSION@\"; make helm-package fills it."
+             "Chart.yaml must carry appVersion \"@VERSION@\"; make helm-package fills it."
     fi
 }
 
@@ -927,11 +1035,11 @@ check_container_images() {
 
     for path in "$@"; do
         case "$path" in
-        src/attestca/.ko.yaml | src/verifier/.ko.yaml | packaging/ko/* | \
-            Makefile | .github/workflows/release.yml | \
-            scripts/check-container-images.sh)
-            touched=0
-            ;;
+            src/attestca/.ko.yaml | src/verifier/.ko.yaml | packaging/ko/* | \
+                Makefile | .github/workflows/release.yml | \
+                scripts/check-container-images.sh)
+                touched=0
+                ;;
         esac
     done
     if ((touched != 0)); then
@@ -944,7 +1052,7 @@ check_container_images() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "container-images" \
-            "a published image has to offer the key road its documentation claims."
+             "a published image has to offer the key road its documentation claims."
     fi
 }
 
@@ -956,10 +1064,10 @@ check_package_manifests() {
     local path touched=1 out
     for path in "$@"; do
         case "$path" in
-        packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
-            scripts/check-package-manifests.sh)
-            touched=0
-            ;;
+            packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
+                scripts/check-package-manifests.sh)
+                touched=0
+                ;;
         esac
     done
     if ((touched != 0)); then
@@ -972,7 +1080,7 @@ check_package_manifests() {
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "package-manifests" \
-            "the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
+             "the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
     fi
 }
 
@@ -995,7 +1103,7 @@ main() {
     else
         if ! base=$(resolve_base); then
             fail "base selection" \
-                "pass the base commit explicitly, for example scripts/check-patch origin/lota-next HEAD."
+                 "pass the base commit explicitly, for example scripts/check-patch origin/lota-next HEAD."
             return 1
         fi
     fi
@@ -1028,6 +1136,8 @@ main() {
     check_clang_format "${changed_files[@]}"
     check_gofmt "${changed_files[@]}"
     check_build
+    check_lint_go "${changed_files[@]}"
+    check_lint_go_coverage
     check_includes "${changed_files[@]}"
     check_el9_decls "${changed_files[@]}"
     check_license_boundary
