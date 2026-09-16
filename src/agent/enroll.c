@@ -468,6 +468,14 @@ const char *lota_enroll_status_text(unsigned int status)
 	case LOTA_ENROLL_STATUS_TOKEN_REJECTED:
 		return "the enrollment token was not accepted. Check the token "
 		       "file against the CA's configured token set";
+	case LOTA_ENROLL_STATUS_CRL_STALE:
+		return "the CA cannot tell whether this machine's endorsement "
+		       "key has been revoked: every revocation list it holds "
+		       "for that key's manufacturer is past the date it "
+		       "promised a replacement by, and it refuses to trust an "
+		       "issuer it has no current list for. Nothing is wrong "
+		       "with this machine and nothing on it can change the "
+		       "answer -- whoever runs the CA refreshes the feed";
 	}
 
 	return NULL;

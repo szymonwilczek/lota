@@ -97,6 +97,12 @@ func TestBeginStatusClassifiesEveryDeliberateRefusal(t *testing.T) {
 			want: wire.StatusEKRejected,
 		},
 		{
+			name: "no current CRL for the EK issuer",
+			err: fmt.Errorf("EK verification: %w",
+				fmt.Errorf("EK certificate revocation: %w", crl.ErrCRLStale)),
+			want: wire.StatusCRLStale,
+		},
+		{
 			name: "EK revoked by the manufacturer feed",
 			err: fmt.Errorf("EK verification: %w",
 				fmt.Errorf("EK certificate revocation: %w", crl.ErrCertificateRevoked)),
@@ -198,13 +204,16 @@ func TestStaleCRLIsNotReportedAsACAFault(t *testing.T) {
 		t.Fatal("a stale manufacturer CRL is reported as an internal CA error, " +
 			"which tells the host to retry a refusal no retry can lift")
 	}
+	if challenge.Status != wire.StatusCRLStale {
+		t.Fatalf("status %d, want StatusCRLStale", challenge.Status)
+	}
 }
 
 // Same refusal through the classifier, wrapped as the issuer wraps it.
 func TestBeginStatusDoesNotCallAStaleCRLAFault(t *testing.T) {
 	err := fmt.Errorf("EK verification: %w",
 		fmt.Errorf("EK certificate revocation: %w", crl.ErrCRLStale))
-	if got := beginStatus(err); got == wire.StatusInternalError {
-		t.Fatalf("status %d for a stale CRL feed, which is not a CA fault", got)
+	if got := beginStatus(err); got != wire.StatusCRLStale {
+		t.Fatalf("status %d for a stale CRL feed, want StatusCRLStale", got)
 	}
 }
