@@ -12,7 +12,7 @@ Contributors can run ``scripts/check-patch [<base> [<head>]]`` before pushing a
 branch. The script reports each check with ``PASS`` or ``FAIL`` and includes a
 suggested fix for failures. It validates commit message shape, DCO trailers,
 commit signatures, message and patch whitespace, clang-format, gofmt,
-golangci-lint, the full
+golangci-lint, the absence of compiled files in the index, the full
 build, include hygiene, the license boundary
 (:doc:`license-boundary`), the public API and ABI surface
 (:doc:`api-stability`), the diagnostics the documentation quotes, the strict
@@ -27,6 +27,11 @@ module. The module list comes from ``make print-lint-go-modules``, the list
 ``make lint-go`` uses, and a Go module missing from it fails the gate. Without
 ``golangci-lint`` installed the check is skipped; the ``Go static analysis``
 workflow runs it on every pull request.
+
+The tracked-file type check fails on any compiled file in the index: an
+executable, a shared library, an object file or an archive. Such files usually
+come from ``go build`` or ``make`` run inside a source directory, whose default
+output lands beside the sources; list those outputs in ``.gitignore``.
 
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch

@@ -43,6 +43,7 @@ Checks:
     when .golangci.yml changes (blocking; skipped if golangci-lint is missing,
     which CI never is),
   - every Go module in the tree named by the linted-module list,
+  - no compiled binary among the tracked files,
   - include hygiene when C changes (skipped if clang-include-cleaner or
     bear is missing),
   - sparse semantic analysis when C changes (blocking; skipped if sparse
@@ -667,6 +668,28 @@ check_lint_go_coverage() {
     pass "lint-go coverage"
 }
 
+# Fail on a compiled file in the index; no other check sees one.
+# Usually a `go build` or `make` output left beside the sources.
+check_no_build_artifacts() {
+    local out
+
+    if ! command -v file >/dev/null 2>&1; then
+        skip "build artifacts" \
+             "install file(1) to read the type of every tracked file."
+        return
+    fi
+
+    out=$(git ls-files -z | xargs -0 file --mime-type 2>/dev/null |
+              grep -E 'application/x-(executable|pie-executable|sharedlib|object|archive)$' || true)
+    if [[ -n $out ]]; then
+        printf '%s\n' "$out" | sed 's/^/  /'
+        fail "build artifacts" \
+             "remove the compiled file(s) above from the index and add them to .gitignore; a build output is not a tracked file."
+        return
+    fi
+    pass "build artifacts"
+}
+
 check_build() {
     if env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
            make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
@@ -1135,6 +1158,7 @@ main() {
     check_file_endings "${changed_files[@]}"
     check_clang_format "${changed_files[@]}"
     check_gofmt "${changed_files[@]}"
+    check_no_build_artifacts
     check_build
     check_lint_go "${changed_files[@]}"
     check_lint_go_coverage
