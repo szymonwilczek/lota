@@ -2117,6 +2117,11 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_attestca_build_tags.sh (no go or C compiler)"; \
 	fi
+	@if command -v go >/dev/null 2>&1; then \
+		tests/integration/test_bench_targets.sh; \
+	else \
+		echo "SKIP: test_bench_targets.sh (no go)"; \
+	fi
 	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
 		command -v openssl >/dev/null 2>&1; then \
 		tests/integration/test_hsm_ca_example.sh; \
@@ -2572,21 +2577,37 @@ bench: bench-c bench-go
 	@echo "Benchmarks complete. Raw output under $(BENCH_RESULTS)/"
 	@echo "Render Documentation/performance/evaluation.rst with: benchmarks/scripts/run_all.sh"
 
+# /bin/sh has no pipefail: a pipe into tee reports tee's status,
+# so the runner's own status goes through a file.
 bench-go:
 	@mkdir -p $(BENCH_RESULTS)
-	@for m in $(GO_BENCH_MODULES); do \
+	@rc=0; \
+	for m in $(GO_BENCH_MODULES); do \
 		name=$$(echo $$m | tr '/' '-'); \
+		out=$(abspath $(BENCH_RESULTS))/go-$$name.txt; \
 		echo "== go bench: $$m =="; \
 		( cd $$m && go test -run '^$$' -bench=. -benchmem \
-			-count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) ./... ) \
-			| tee $(abspath $(BENCH_RESULTS))/go-$$name.txt; \
-	done
+			-count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) ./...; \
+			echo $$? >$$out.status ) | tee $$out; \
+		s=$$(cat $$out.status); rm -f $$out.status; \
+		if [ "$$s" != 0 ]; then \
+			echo "bench-go: $$m exited $$s, $$out is not a measurement" >&2; \
+			rc=$$s; \
+		fi; \
+	done; \
+	exit $$rc
 
 bench-c: $(BENCH_C_BIN)
 	@mkdir -p $(BENCH_RESULTS)
 	@rm -f $(BENCH_RESULTS)/c-sdk.json
-	@BENCH_JSON=$(abspath $(BENCH_RESULTS))/c-sdk.json $(BENCH_C_BIN) \
-		| tee $(BENCH_RESULTS)/c-sdk.txt
+	@out=$(BENCH_RESULTS)/c-sdk.txt; \
+	( BENCH_JSON=$(abspath $(BENCH_RESULTS))/c-sdk.json $(BENCH_C_BIN); \
+		echo $$? >$$out.status ) | tee $$out; \
+	s=$$(cat $$out.status); rm -f $$out.status; \
+	if [ "$$s" != 0 ]; then \
+		echo "bench-c: $(BENCH_C_BIN) exited $$s, $$out is not a measurement" >&2; \
+		exit $$s; \
+	fi
 
 $(BENCH_C_BIN): $(BENCH_DIR)/c/bench_sdk.c $(ANTICHEAT_SRCS) \
 		$(SDK_DIR)/lota_gaming.c $(SERVER_SDK_SRCS) $(VERSION_FILE) \
