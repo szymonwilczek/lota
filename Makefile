@@ -2265,16 +2265,19 @@ fuzz-agent: $(FUZZ_AGENT_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-agent $(FUZZ_AGENT_OBJS) $(LDFLAGS)
 
-# Config parser fuzz (standalone, libc only)
+# Config parser fuzz (links config.c, pin.c, io_utils.c; tpm.h headers only)
+FUZZ_CONFIG_SRCS := src/agent/config.c src/agent/pin.c src/agent/io_utils.c
+FUZZ_CONFIG_OBJS := $(patsubst src/agent/%.c,$(BUILD_DIR)/fuzz/config_%.o,$(FUZZ_CONFIG_SRCS))
+
 $(BUILD_DIR)/fuzz/fuzz_config.o: fuzz/fuzz_config.c src/agent/config.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/config_obj.o: src/agent/config.c src/agent/config.h | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/config_%.o: src/agent/%.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
-	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -DLOTA_TPM_H -DTPM_AIK_HANDLE=0x81010002 -c $< -o $@
+	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -MMD -MP -c $< -o $@
 
-fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(BUILD_DIR)/fuzz/config_obj.o
+fuzz-config: $(BUILD_DIR)/fuzz/fuzz_config.o $(FUZZ_CONFIG_OBJS)
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -o $(BUILD_DIR)/fuzz-config $^
 
@@ -2625,3 +2628,4 @@ bench-clean:
 -include $(SERVER_SDK_OBJS:.o=.d)
 -include $(WINE_HOOK_OBJS:.o=.d)
 -include $(ANTICHEAT_OBJS:.o=.d)
+-include $(FUZZ_CONFIG_OBJS:.o=.d)
