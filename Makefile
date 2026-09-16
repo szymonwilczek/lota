@@ -664,6 +664,9 @@ CHANGELOG_GEN := $(BUILD_DIR)/changelog.gen.yaml
 # lota-install's SELinux stage can load it without the operator
 # hand-compiling the module out of band.
 SELINUX_PP := selinux/lota.pp
+SELINUX_IF := selinux/lota.if
+# Must match both package manifests and lota-install's SELinux stage default.
+SELINUX_DATA_DIR := /usr/share/lota/selinux
 $(SELINUX_PP):
 	$(Q)$(MAKE) -C selinux lota.pp
 
@@ -1205,7 +1208,9 @@ coccicheck:
 	echo "coccicheck: clean"
 
 # Install to system (requires root)
-install: check-version-tag all
+# selinux-pp is required, not guarded: without the module lota-install's
+# SELinux stage has nothing to load.
+install: check-version-tag all selinux-pp
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
 	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
@@ -1249,6 +1254,12 @@ install: check-version-tag all
 	install -d $(DESTDIR)/usr/share/lota/ima
 	install -m 644 configs/ima/lota-ima-policy \
 		$(DESTDIR)/usr/share/lota/ima/lota-ima-policy
+	install -d $(DESTDIR)$(SELINUX_DATA_DIR)
+	install -m 644 $(SELINUX_PP) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.pp
+	@# The interfaces are callable only from a file the policy devel
+	@# Makefile can see, so the source ships beside the module for a
+	@# caller to copy.
+	install -m 644 $(SELINUX_IF) $(DESTDIR)$(SELINUX_DATA_DIR)/lota.if
 	install -d $(DESTDIR)/etc/dbus-1/system.d
 	install -m 644 dbus/org.lota.Agent1.conf $(DESTDIR)/etc/dbus-1/system.d/
 	install -d $(DESTDIR)/usr/lib/sysusers.d
