@@ -245,35 +245,90 @@ const char *installer_trust_key_source_says(enum trust_key_source src)
 	return "nowhere -- no readable key was found";
 }
 
+static int same_file(const char *a, const char *b)
+{
+	struct stat sa, sb;
+
+	if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+		return strcmp(a, b) == 0;
+	return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+/*
+ * What the agent resolves with @src taken away, in its own order.
+ * Nothing when that is @key again: a setting that names the packaged file,
+ * or a link to it, has no key behind it.
+ */
 const char *installer_trust_fallback(const char *key, enum trust_key_source src,
 				     const char *conf_pubkey,
 				     const char *override_path,
 				     const char *packaged_path)
 {
-	(void)key;
-	(void)src;
-	(void)conf_pubkey;
-	(void)override_path;
-	return packaged_path;
+	const char *next;
+
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		next = policy_pubkey_resolve(conf_pubkey, override_path,
+					     packaged_path);
+		break;
+	case TRUST_KEY_CONFIGURED:
+		next = policy_pubkey_resolve(NULL, override_path,
+					     packaged_path);
+		break;
+	case TRUST_KEY_OVERRIDE:
+		next = policy_pubkey_resolve(NULL, NULL, packaged_path);
+		break;
+	default:
+		return NULL;
+	}
+	if (!next || !key || same_file(key, next))
+		return NULL;
+	return next;
+}
+
+static const char *trust_fallback_step(enum trust_key_source src)
+{
+	switch (src) {
+	case TRUST_KEY_NAMED:
+		return "leave out --policy-pubkey and the agent uses";
+	case TRUST_KEY_CONFIGURED:
+		return "remove policy_pubkey from " PATH_LOTA_CONF
+		       " and the agent falls through to";
+	default:
+		return "move it out of the way and the agent falls through to";
+	}
 }
 
 void installer_trust_refusal(char *buf, size_t cap, const char *key,
 			     enum trust_key_source src, const char *fallback,
 			     const char *obj)
 {
+	char either[1024];
+
+	if (fallback)
+		snprintf(either, sizeof(either),
+			 "either this key did not sign the shipped object - "
+			 "%s %s -",
+			 trust_fallback_step(src), fallback);
+	else
+		snprintf(either, sizeof(either),
+			 "nothing else on this host would verify the object in "
+			 "its place, so moving this key aside leaves none. "
+			 "Either the object, signature or key changed after "
+			 "the package installed them - reinstall the agent "
+			 "package to put all three back -");
+
 	snprintf(buf, cap,
 		 "The BPF object signature does not verify against "
 		 "%s, which is %s and is the key the agent resolves "
 		 "for this host. The package ships object, signature "
 		 "and key together and replaces all three on an "
 		 "upgrade, so this means they no longer belong to each "
-		 "other: either the key above did not sign the shipped "
-		 "object - take it out of the way and the agent falls "
-		 "through to the packaged %s - or the fleet signs "
-		 "enforcement itself and has to re-sign this object "
+		 "other: %s or the fleet signs enforcement itself and has to "
+		 "re-sign this object "
 		 "(lota-agent --sign-policy %s --signing-key <key>). "
 		 "The installer never signs on this host by design.",
-		 key, installer_trust_key_source_says(src), fallback, obj);
+		 key, installer_trust_key_source_says(src), either, obj);
 }
 
 /* policy_pubkey read fresh from lota.conf, not cached */
