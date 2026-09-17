@@ -196,6 +196,12 @@ What the stages do
    already run and refused to start this boot is told that instead: the
    register carries the extend of that attempt, and the next boot meets the
    same refusal, so the checkpoint names ``journalctl -u lota-agent -b``.
+   A pause is the exception: an agent stopped with ``lota-install --pause`` or
+   ``lota-agent --shutdown`` spent the register on purpose and refuses to start
+   until the next boot, so the checkpoint asks for that reboot, as
+   ``--resume`` does. It reads the pause from the flag the agent records in
+   ``/var/lib/lota/clock_state.dat``, while PCR 14 still holds the value the
+   agent left.
    PCR 14 only resets on a hardware reset, so this cannot be skipped. On a
    Secure Boot machine PCR 14 is already non-zero before any of this -- shim
    measures the MOK variables into it -- and the checkpoint says.

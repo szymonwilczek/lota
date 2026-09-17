@@ -1413,13 +1413,22 @@ int probe_agent_paused(void)
  * variables there.
  * Whether the lock ran this boot separates the last from the others,
  * and whether the unit has failed separates the first two.
+ * A pause is the one refusal the next boot clears.
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,
 					   int agent_paused, char *note,
 					   size_t cap)
 {
-	(void)agent_paused;
+	if (agent_paused && !agent_active) {
+		snprintf(note, cap,
+			 "lota-agent was paused this boot (lota-install "
+			 "--pause or lota-agent --shutdown), which spends its "
+			 "PCR14 commitment until the next boot, so it refuses "
+			 "to start again until then. A reboot resumes it; "
+			 "'lota-install --resume' offers one.");
+		return STAGE_REBOOT;
+	}
 
 	/*
 	 * A reboot is what this stage asks for, and it is the one thing that
