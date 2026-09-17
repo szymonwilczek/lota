@@ -265,7 +265,7 @@ struct lota_ipc_token {
 	uint64_t runtime_protect_epoch; /* Monotonic runtime protection mutation
 					   id */
 	uint16_t pid_list_size; /* Bytes for protected_pids[] */
-	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set, 2 = + image digests */
 
 	/*
 	 * Variable-length data follows:

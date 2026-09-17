@@ -40,7 +40,7 @@ extern "C" {
  *   136     2     pid_list_size  (bytes, must be protect_pid_count * 4)
  *   138     2     attest_size    (TPMS_ATTEST blob size)
  *   140     2     sig_size       (TPM signature size)
- *   142     2     runtime_protect_version (0/1 = PID-set only,
+ *   142     2     runtime_protect_version (1 = PID-set only,
  *                                          2 = PID-set + kernel image digests)
  *   ---     ---   --------------------------------
  *   144     var   protected_pids[protect_pid_count] (little-endian uint32)
@@ -105,7 +105,7 @@ struct lota_token_wire {
 	/* 136   2   pid_list_size (protect_pid_count * sizeof(uint32_t)) */
 	/* 138   2   attest_size  (TPMS_ATTEST blob size) */
 	/* 140   2   sig_size     (TPM signature size) */
-	/* 142   2   runtime_protect_version (0/1 = PID set, 2 = + image) */
+	/* 142   2   runtime_protect_version (1 = PID set, 2 = + image) */
 	/* ---   --- ----------------------------------- */
 	/* 144   var protected_pids[protect_pid_count] */
 	/* 144+P var protected_image_digests[protect_pid_count][32] (v2 only) */

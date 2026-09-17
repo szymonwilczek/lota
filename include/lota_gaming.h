@@ -263,7 +263,7 @@ struct lota_token {
 	/* SHA-256 over canonical runtime protected PID set. */
 	uint8_t runtime_protect_digest[32];
 	uint64_t runtime_protect_epoch; /* Monotonic runtime PID-set mutation id */
-	uint16_t runtime_protect_version; /* 0/1 = PID set, 2 = + image digests */
+	uint16_t runtime_protect_version; /* 1 = PID set, 2 = + image digests */
 	uint32_t protect_pid_count;
 	uint32_t *protected_pids; /* heap-allocated canonical list */
 
