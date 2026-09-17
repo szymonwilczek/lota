@@ -1562,6 +1562,24 @@ static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
 	return STAGE_DONE;
 }
 
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n)
+{
+	(void)deferred;
+	(void)n;
+	snprintf(buf, cap,
+		 "Host-local setup is done. What is left "
+		 "changes how this machine boots -- the "
+		 "initramfs PCR 14 lock, the kernel integrity "
+		 "floor and the IMA appraisal scope -- so it "
+		 "waits for a person: "
+		 "run 'sudo lota-install'. To have a package "
+		 "install do it too, create %s (or set "
+		 "LOTA_AUTO_BRINGUP=1) before installing.",
+		 PATH_AUTO_BRINGUP);
+	return EXIT_INSTALL_OK;
+}
+
 const struct stage install_stages[] = {
 	{
 		.title = "Preflight: Hardware and Host Requirements",

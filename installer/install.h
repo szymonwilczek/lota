@@ -187,6 +187,18 @@ void installer_trust_refusal(char *buf, size_t cap, const char *key,
 			     enum trust_key_source src, const char *fallback,
 			     const char *obj);
 
+/*
+ * install_unattended_checkpoint - an unattended run stops at the checkpoint
+ *
+ * @buf, @cap: filled with what the run prints there.
+ * @deferred:  indices into install_stages[] the run left to a person.
+ * @n:         how many.
+ *
+ * Returns the exit code the run ends with.
+ */
+int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
+				  int n);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;

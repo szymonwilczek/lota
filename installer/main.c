@@ -521,7 +521,8 @@ int main(int argc, char **argv)
 {
 	struct install_ctx ctx;
 	char note[STAGE_NOTE_CAP];
-	int deferred_boot_path = 0;
+	int deferred[16];
+	int n_deferred = 0;
 	int auto_bringup;
 	int i;
 
@@ -589,18 +590,12 @@ int main(int argc, char **argv)
 		 * the boot-path change, so unattended run stops here rather than
 		 * reporting reboot nobody asked for.
 		 */
-		if (ctx.opts.unattended && deferred_boot_path && s->barrier) {
-			ui_text(&ctx.ui,
-				"Host-local setup is done. What is left "
-				"changes how this machine boots -- the "
-				"initramfs PCR 14 lock, the kernel integrity "
-				"floor and the IMA appraisal scope -- so it "
-				"waits for a person: "
-				"run 'sudo lota-install'. To have a package "
-				"install do it too, create %s (or set "
-				"LOTA_AUTO_BRINGUP=1) before installing.",
-				PATH_AUTO_BRINGUP);
-			return EXIT_INSTALL_OK;
+		if (ctx.opts.unattended && n_deferred && s->barrier) {
+			int rc = install_unattended_checkpoint(
+				note, sizeof(note), deferred, n_deferred);
+
+			ui_text(&ctx.ui, "%s", note);
+			return rc;
 		}
 
 		if (ctx.opts.unattended && s->boot_path && !auto_bringup &&
@@ -608,7 +603,9 @@ int main(int argc, char **argv)
 			ui_stage_result(&ctx.ui, UI_PENDING, s->title,
 					"left to a person: this changes how "
 					"the machine boots");
-			deferred_boot_path = 1;
+			if (n_deferred <
+			    (int)(sizeof(deferred) / sizeof(deferred[0])))
+				deferred[n_deferred++] = i;
 			continue;
 		}
 
