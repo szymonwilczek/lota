@@ -706,12 +706,18 @@ static void test_installer_relabel_reapplies_the_device_labels(void)
  * The resource manager is in subsystem tpmrm, not tpm, and it is the node the
  * agent's gate reads first. A documented remedy matching on tpm alone brings
  * /dev/tpm0 back, exits 0, and leaves the agent refusing for the same reason
- * the operator was told to fix.
+ * the operator was told to fix. A trigger without --action sends a change
+ * event, which re-runs the rules and re-applies no SECLABEL, so a device that
+ * lost its label keeps the stock one.
  */
 static void test_documented_tpm_relabel_reaches_both_nodes(void)
 {
-	static const char *const pages[] = { "configs/udev/99-lota-tpm.rules",
-					     "selinux/README.rst" };
+	static const char *const pages[] = {
+		"configs/udev/99-lota-tpm.rules",
+		"selinux/README.rst",
+		"Documentation/operator/production-bringup/manual-reference.rst",
+		"Documentation/operator/production-bringup/gate-matrix.rst",
+	};
 
 	TEST("docs: the TPM relabel command reaches both nodes");
 
@@ -739,8 +745,12 @@ static void test_documented_tpm_relabel_reaches_both_nodes(void)
 			if (!strstr(cmd, "udevadm trigger"))
 				continue;
 			saw = true;
-			if (!strstr(cmd, "--action=add") ||
-			    !strstr(cmd, "tpmrm")) {
+			if (!strstr(cmd, "--action=add")) {
+				fclose(fp);
+				FAIL("a documented trigger sends a change event, which re-applies no label");
+				return;
+			}
+			if (!strstr(cmd, "tpmrm")) {
 				fclose(fp);
 				FAIL("a documented trigger leaves /dev/tpmrm0 where it was");
 				return;
