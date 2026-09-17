@@ -319,19 +319,34 @@ Deliberate counterpart of the self-service path works on every profile
 and needs no verifier flag. When a platform change is legitimate but the
 self-service re-anchor refuses it (or the profile does not enable it), drop
 the device's pinned baselines through the admin API; the next attestation
-re-establishes trust per the active TOFU/policy configuration:
+re-establishes trust per the active TOFU/policy configuration.
+
+The commands below run from any host that reaches the verifier's monitoring
+API. Off the verifier's host that API is HTTPS under the verifier's
+``--cert``; ``--cacert`` names its issuing CA. ``LOTA_ADMIN_API_KEY`` holds
+the verifier's admin key and ``CLIENT_ID`` the device ID: ``Device ID`` from
+``lota-agent --enroll``, the AIK certificate's ``CommonName``, as
+``GET /api/v1/clients`` lists it. Do not write the ID into a ``{...}``
+placeholder: curl treats braces in a URL as a pattern.
 
 .. code-block:: sh
 
-    curl -X POST https://verifier:8080/api/v1/clients/{clientID}/reanchor \
-        -H "Authorization: Bearer $ADMIN_KEY" \
+    curl --cacert verifier-ca.crt -X POST \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID/reanchor" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
         -d '{"actor":"ops@example.com","reason":"planned firmware update"}'
 
-``actor`` and ``reason`` are required and land in the audit log together with
-the optional ``note``;
-the action is also logged at security level and counted in the ``forced``
-re-anchor metric. The enrollment is untouched -- the host keeps attesting
-with its enrolled AIK identity.
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "reanchored", "client_id": "<client-id>"}
+
+``actor`` and ``reason`` are required and land in the audit log with the
+optional ``note``; a request missing either gets **400** and changes nothing.
+The action is also logged at security level and counted in the ``forced``
+re-anchor metric. The enrollment is untouched -- the host keeps attesting with
+its enrolled AIK identity.
 
 To remove a device from the fleet entirely (decommissioned host, or trust
 state that must be rebuilt from scratch), delete the client. This drops the
@@ -341,9 +356,16 @@ it out. ``actor`` and ``reason`` are required, ``note`` is optional:
 
 .. code-block:: sh
 
-    curl -X DELETE https://verifier:8080/api/v1/clients/{clientID} \
-        -H "Authorization: Bearer $ADMIN_KEY" \
+    curl --cacert verifier-ca.crt -X DELETE \
+        "https://verifier.example:8080/api/v1/clients/$CLIENT_ID" \
+        -H "Authorization: Bearer $LOTA_ADMIN_API_KEY" \
         -d '{"actor":"ops@example.com","reason":"decommissioned"}'
+
+The verifier answers:
+
+.. code-block:: json
+
+    {"status": "deleted", "client_id": "<client-id>"}
 
 Revocations and hardware bans are keyed separately and survive the delete,
 so removing a client cannot be used to shed either -- a revoked identity
