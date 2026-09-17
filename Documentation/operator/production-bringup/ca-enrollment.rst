@@ -133,16 +133,17 @@ then materialize the bundle:
 .. code-block:: sh
 
     # walk the EK cert's issuer chain to the self-signed root and draft a line
-    sudo tpm2_nvread 0x01c00002 -o ek.der
+    sudo tpm2_nvread 0x01c00002 > ek.der
     cp configs/ek-roots/sources.example sources
     scripts/lota-ek-root-pin.sh ek.der >>sources
 
     # after verifying each pin out of band, fetch and pin the roots
     scripts/lota-ek-roots-update.sh sources /var/lib/lota/ek-roots
 
-``lota-ek-root-pin.sh`` prints a fingerprint over what the network returned; it
-does not vouch for it, so confirm the pin against the vendor before the line
-enters ``sources``.
+The redirect leaves ``ek.der`` owned by the operator, so later steps need no
+``sudo``; ``sudo tpm2_nvread -o`` would leave a file only root can open.
+``lota-ek-root-pin.sh`` fingerprints what the network returned without
+vouching for it; confirm the pin with the vendor before it enters ``sources``.
 
 The bundle does not have to cover the whole path. A TPM that stores
 manufacturer intermediates of its own presents them with the enrollment
@@ -482,13 +483,16 @@ ignored:
     3b1f...c7  acme
     9a20...4e  beta
 
-The fingerprint is the SHA-256 of the endorsement key's public modulus. For an
-EK certificate in ``ek.pem`` an operator computes it with:
+The fingerprint is the SHA-256 of the endorsement key's public modulus. For
+the ``ek.der`` read in `Materializing the EK root bundle`_:
 
 .. code-block:: sh
 
-    openssl x509 -in ek.pem -noout -modulus \
-      | sed 's/^Modulus=//' | xxd -r -p | sha256sum
+    modulus=$(openssl x509 -inform DER -in ek.der -noout -modulus) &&
+        printf '%s' "${modulus#Modulus=}" | xxd -r -p | sha256sum
+
+The ``&&`` stops a failed read; without it ``sha256sum`` hashes nothing and
+prints ``e3b0c442...``, a plausible fingerprint that matches no TPM.
 
 Point the CA at the manifest with ``--tenant-manifest``:
 
