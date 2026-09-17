@@ -270,9 +270,12 @@ created before the publisher's identity entered the TPM creation template is
 one key shared by every publisher enrolled on that host, and a TPM key cannot
 be rewritten in place, so the agent refuses such a record instead of carrying
 it forward and says which publisher it belongs to. Re-enrolling that profile
-creates its own key; the device pseudonym is derived from the key and moves
-with it, so the publisher sees a device it has not met before and its verifier
-re-establishes the baseline.
+replaces the key with one of its own, certified under the same device ID:
+an HMAC over the endorsement key's modulus, keyed by the CA's pseudonym key,
+with the tenant mixed in when it is not ``default``. The attestation key is
+not an input, so the publisher's verifier checks the next report against the
+baseline it already holds. The ID changes only with another TPM, another
+tenant, or a replaced pseudonym key.
 
 Point every verifier at the CA root:
 
