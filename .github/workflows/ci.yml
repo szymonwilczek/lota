@@ -437,6 +437,7 @@ jobs:
             src/initramfs/90lota/module-setup.sh
           shellcheck -s sh -S error \
             scripts/check-el9-decls.sh \
+            scripts/veristat-gate.sh \
             packaging/nfpm/scripts/agent-postinstall.sh
 
   package-manifests:
@@ -620,9 +621,8 @@ jobs:
         # the veristat gate inside it. veristat pushes every program through
         # that kernel's real verifier (instruction limit, pointer checks,
         # trusted-pointer rules, ...).
-        # Any rejection fails the job and the full verifier log for the program
-        # is dumped. VM shares this checkout over 9p, so the object built above
-        # and scripts/veristat-gate.sh are visible inside.
+        # Any rejection fails the job and prints the first rejected program's
+        # verifier log. The VM sees this checkout over 9p.
         # lsm=bpf is required on the guest command line so the BPF_PROG_TYPE_LSM
         # programs are loadable.
         # KVM is used when /dev/kvm is exposed (privileged container) and TCG is
