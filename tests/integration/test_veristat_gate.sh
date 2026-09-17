@@ -10,6 +10,9 @@
 # Like veristat 0.5.1, the stand-in zeroes the row and marks the program failing
 # in verbose mode, whatever the verifier said.
 #
+# A load that fails before the verifier (no root, map creation refused) is a
+# setup failure, not a rejection.
+#
 # Requires:
 #   - bash, sh, awk
 #
@@ -56,6 +59,8 @@ for p in $STUB_PROGS; do
 		echo "lota_lsm.bpf.o  $p  failure  123  20  1  29  0" ;;
 	reject:* | pass:*)
 		echo "lota_lsm.bpf.o  $p  success  2000  800  40  700  3900" ;;
+	setup:* | unpriv:*)
+		echo "lota_lsm.bpf.o  $p  failure  0  0  0  700  0" ;;
 	esac
 done
 echo "Done. Processed 1 files, 0 programs. Skipped 14 files, 0 programs."
@@ -83,8 +88,25 @@ Error: failed to load object file
 LOG
 	exit 255
 	;;
+setup)
+	cat >&2 <<'LOG'
+libbpf: map 'events': failed to create: -EPERM
+Error: failed to load object file
+LOG
+	exit 255
+	;;
 esac
 exit 0
+EOF
+
+# id: root everywhere but the unprivileged scenario.
+cat >"$STUBS/id" <<'EOF'
+#!/bin/sh
+if [ "$STUB_SCENARIO" = unpriv ]; then
+	echo 1000
+else
+	echo 0
+fi
 EOF
 
 for tool in mount umount; do
@@ -149,5 +171,27 @@ fi
 if grep -Eq '^ *0 +0 +failure' "$WORK_DIR/reject.out"; then
     fail "gate printed a zeroed failure row" reject
 fi
+
+echo "[veristat-gate] a load that fails before the verifier is not a rejection"
+rc=$(run_gate setup)
+[[ "$rc" == 1 ]] || fail "gate reported $rc for a load that never reached the verifier" setup
+if grep -q "verifier rejected" "$WORK_DIR/setup.out"; then
+    fail "gate called a setup failure a verifier rejection" setup
+fi
+grep -q "no program reached the BPF verifier" "$WORK_DIR/setup.out" ||
+    fail "gate did not say the verifier was never reached" setup
+grep -q "map 'events': failed to create: -EPERM" "$WORK_DIR/setup.out" ||
+    fail "gate did not print the load's own error" setup
+grep -q "lota-agent" "$WORK_DIR/setup.out" ||
+    fail "gate did not name the enforcing agent as a cause to check" setup
+
+echo "[veristat-gate] an unprivileged run says so"
+rc=$(run_gate unpriv)
+[[ "$rc" == 1 ]] || fail "gate reported $rc for an unprivileged run" unpriv
+if grep -q "verifier rejected" "$WORK_DIR/unpriv.out"; then
+    fail "gate called an unprivileged run a verifier rejection" unpriv
+fi
+grep -q "not running as root" "$WORK_DIR/unpriv.out" ||
+    fail "gate did not say it lacks root" unpriv
 
 echo "[veristat-gate] PASS"
