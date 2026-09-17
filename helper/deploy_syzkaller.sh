@@ -48,15 +48,17 @@ require_cmd python3
 
 echo "=== Packaging Syzkaller for Remote Deployment to $REMOTE_HOST ==="
 
+require_file syzkaller/lota_hooks.txt
 require_file syzkaller/lota.txt
 require_file syzkaller/lota.cfg
 require_file syzkaller/lota-fuzz.service
 require_file syzkaller/repo/Makefile
 
-echo "-> Syncing custom syzlang (lota.txt) into syzkaller repo..."
+echo "-> Syncing custom syzlang (lota_hooks.txt, lota.txt) into syzkaller repo..."
+cp -f syzkaller/lota_hooks.txt syzkaller/repo/sys/linux/lota_hooks.txt
 cp -f syzkaller/lota.txt syzkaller/repo/sys/linux/lota.txt
 
-echo "-> Rebuilding syzkaller binaries (so they include updated lota.txt)..."
+echo "-> Rebuilding syzkaller binaries (so they include the LOTA descriptions)..."
 (cd syzkaller/repo && make)
 
 rm -rf "$DIST_DIR" "$DIST_DIR.tar.gz"

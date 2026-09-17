@@ -42,46 +42,62 @@ programs the agent ships live so the fuzzer can reach them.
 Hook coverage matrix
 --------------------
 
-With the harness live and the syscalls below enabled, syz-executor reaches
-every stage of the kernel surface:
+Every LSM program the harness attaches has a row naming the
+``lota.cfg.example`` ``enable_syscalls`` entries that reach it, as
+``make check-syzkaller-matrix`` enforces:
 
-+--------------------------------------+--------------------------------------+
-| LSM hook                             | Driven by syscalls                   |
-| (``src/bpf/lota_lsm.bpf.c``)         |                                      |
-+======================================+======================================+
-| ``bprm_check_security``              | ``execve``, ``execveat``             |
-+--------------------------------------+--------------------------------------+
-| ``mmap_file``                        | ``mmap`` (PROT_EXEC of a file fd),   |
-|                                      | ``memfd_create``\ +\ ``mmap``        |
-+--------------------------------------+--------------------------------------+
-| ``file_mprotect``                    | ``mprotect`` (to PROT_EXEC)          |
-+--------------------------------------+--------------------------------------+
-| ``kernel_read_file``                 | ``finit_module``                     |
-+--------------------------------------+--------------------------------------+
-| ``kernel_load_data``                 | ``init_module``, ``kexec_load``      |
-+--------------------------------------+--------------------------------------+
-| ``ptrace_access_check``              | ``ptrace(PTRACE_ATTACH/SEIZE)``      |
-+--------------------------------------+--------------------------------------+
-| ``task_kill``                        | ``kill``, ``tgkill``,                |
-|                                      | ``pidfd_send_signal``                |
-+--------------------------------------+--------------------------------------+
-| ``task_fix_setuid``                  | ``setuid``, ``setreuid``,            |
-|                                      | ``setresuid``                        |
-+--------------------------------------+--------------------------------------+
-| ``sb_mount``                         | ``mount``, ``move_mount``,           |
-|                                      | ``fsmount``                          |
-+--------------------------------------+--------------------------------------+
-| ``bpf`` / ``bpf_map``                | ``bpf()`` (all commands)             |
-+--------------------------------------+--------------------------------------+
-| ``task_free``                        | process exit (exercised as executors |
-|                                      | die)                                 |
-+--------------------------------------+--------------------------------------+
++------------------------------+------------------------------------------------------+
+| LSM program                  | Driven by (``enable_syscalls`` entries)              |
+| (``src/bpf/lota_lsm.bpf.c``) |                                                      |
++==============================+======================================================+
+| ``bprm_check_security``      | ``execve``, ``execveat``                             |
++------------------------------+------------------------------------------------------+
+| ``mmap_file``                | ``mmap`` (PROT_EXEC of a file fd), ``memfd_create``  |
+|                              | then ``mmap``; every exec maps its image             |
++------------------------------+------------------------------------------------------+
+| ``file_mprotect``            | ``mprotect`` (to PROT_EXEC)                          |
++------------------------------+------------------------------------------------------+
+| ``file_open``                | ``openat``; ``openat$lota_mem``,                     |
+|                              | ``openat$lota_kmem`` and ``openat$lota_port`` take   |
+|                              | the refusal branch                                   |
++------------------------------+------------------------------------------------------+
+| ``kernel_read_file``         | ``finit_module`` on a file from ``openat$binfmt``    |
++------------------------------+------------------------------------------------------+
+| ``kernel_load_data``         | ``init_module``, ``kexec_load``                      |
++------------------------------+------------------------------------------------------+
+| ``ptrace_access_check``      | ``ptrace$setopts`` (PTRACE_SEIZE)                    |
++------------------------------+------------------------------------------------------+
+| ``task_kill``                | ``kill``, ``tgkill``, ``pidfd_send_signal``          |
++------------------------------+------------------------------------------------------+
+| ``task_fix_setuid``          | ``setuid``, ``setreuid``, ``setresuid``              |
++------------------------------+------------------------------------------------------+
+| ``sb_mount``                 | ``mount``, including MS_BIND and MS_MOVE             |
++------------------------------+------------------------------------------------------+
+| ``move_mount``               | ``move_mount`` of a tree from ``open_tree``, or of a |
+|                              | mount from ``fsopen``,                               |
+|                              | ``fsconfig$FSCONFIG_CMD_CREATE`` and ``fsmount``     |
++------------------------------+------------------------------------------------------+
+| ``bpf``                      | every bpf() command, such as ``bpf$MAP_CREATE``,     |
+|                              | ``bpf$MAP_LOOKUP_ELEM`` and ``bpf$OBJ_GET_MAP``      |
++------------------------------+------------------------------------------------------+
+| ``bpf_map``                  | ``bpf$MAP_CREATE``, ``bpf$OBJ_GET_MAP``: each hands  |
+|                              | out a map fd                                         |
++------------------------------+------------------------------------------------------+
+| ``task_free``                | process exit (exercised as executors die)            |
++------------------------------+------------------------------------------------------+
 
 The harness keeps four idle **protected** victim processes alive so the
 PID-scoped gates (``ptrace_access_check``, ``task_kill``, ``file_mprotect``,
 ``mmap_file``) can take their enforcement branch, not only their lookup path.
 The global gates (``bpf``, module load, mount, setuid) fire on the executor
 directly.
+
+In the harness's enforce mode ``file_open`` refuses ``/dev/mem``,
+``/dev/kmem`` (where the kernel still has it) and ``/dev/port``; the
+``openat$lota_*`` calls in ``lota_hooks.txt`` open them, which the generic
+``openat`` rarely does. The harness leaves ``strict_mmap`` off, so
+``file_open``, ``sb_mount`` and ``move_mount`` run only their lookup path, not
+their trusted-file branches.
 
 Prerequisites
 -------------
@@ -102,7 +118,8 @@ Setup
 .. code:: bash
 
    git clone https://github.com/google/syzkaller syzkaller/repo
-   cp syzkaller/lota.txt syzkaller/repo/sys/linux/lota.txt   # MODE B only, see below
+   cp syzkaller/lota_hooks.txt syzkaller/repo/sys/linux/lota_hooks.txt
+   cp syzkaller/lota.txt syzkaller/repo/sys/linux/lota.txt   # MODE B, see below
    cd syzkaller/repo
    make
 
@@ -185,8 +202,10 @@ hand: boot the image, ``journalctl -u lota-bpf-fuzz`` must show
 Edit ``lota.cfg`` (start from ``lota.cfg.example``) and set ``kernel_obj``,
 ``image``, ``sshkey``, ``syzkaller``, and the ``kernel`` bzImage path. Keep
 ``sandbox: "none"`` (the harness and gates assume the initial namespaces) and
-the ``lsm=...,bpf`` cmdline. The ``enable_syscalls`` list already covers the
-hook-coverage matrix above.
+the ``lsm=...,bpf`` cmdline. ``enable_syscalls`` names calls from both
+description files, so both must be in ``sys/linux`` before ``make``. No call
+the matrix names may appear in ``syz-manager``'s start-up list of transitively
+disabled calls.
 
 Running
 -------
@@ -229,8 +248,9 @@ MODE B: fuzzing the agent IPC parser (optional)
 
 ``lota.txt`` describes the LOTA IPC wire protocol for fuzzing ``ipc.c``. This
 only does something if the **real agent** is running in the guest and listening
-on ``/run/lota/lota.sock``; the bring-up harness does not open that socket.
+on ``/run/lota/lota.sock``; the bring-up harness does not open that socket, and
+without the agent every ``$lota`` call fails to connect and does nothing.
 Because an agent crash is a userspace SIGSEGV that syzkaller cannot observe,
 this mode mainly drives the agent to surface kernel-side effects, and is
-secondary to the libFuzzer IPC harness (``make fuzz-agent``). Enable it only
-when you have provisioned the full agent (TPM + attestation) in the image.
+secondary to the libFuzzer IPC harness (``make fuzz-agent``). The calls stay
+enabled either way and take effect once the image runs a provisioned agent.
