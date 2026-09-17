@@ -13,6 +13,9 @@
  * The exit code says the same thing: a run that left work to a person has not
  * finished the install, and a caller that reads only the code must see that.
  *
+ * A stage the run applied says so in words of its own, apart from a stage that
+ * found nothing to do, so an upgrade transcript shows what the upgrade redid.
+ *
  * A run that stops for a reboot quotes the stage's reason in a sentence of its
  * own, and stage notes mostly end in a full stop already.
  */
@@ -197,6 +200,49 @@ static void test_a_reboot_reason_without_a_stop(void)
 	reboot_sentence_ends_once("PCR14 only resets on a hardware reset");
 }
 
+static void test_an_applied_stage_says_so(void)
+{
+	const char *done = ui_result_word(UI_DONE);
+	enum ui_result r = install_stage_result(STAGE_DONE, 1);
+
+	TEST("a stage applied in this run is not already satisfied");
+	if (r == UI_DONE || strcmp(ui_result_word(r), done) == 0) {
+		FAIL(ui_result_word(r));
+		return;
+	}
+	if (!strstr(ui_result_word(r), "applied")) {
+		FAIL(ui_result_word(r));
+		return;
+	}
+	PASS();
+}
+
+static void test_an_untouched_stage_keeps_its_word(void)
+{
+	TEST("a stage with nothing to do is still already satisfied");
+	if (install_stage_result(STAGE_DONE, 0) != UI_DONE)
+		FAIL(ui_result_word(install_stage_result(STAGE_DONE, 0)));
+	else
+		PASS();
+}
+
+static void test_applied_changes_only_a_satisfied_stage(void)
+{
+	static const enum stage_state other[] = { STAGE_PENDING, STAGE_REBOOT,
+						  STAGE_BLOCKED, STAGE_SKIP,
+						  STAGE_ERROR };
+	size_t i;
+
+	TEST("an applied stage that is not satisfied says what it is");
+	for (i = 0; i < sizeof(other) / sizeof(other[0]); i++)
+		if (install_stage_result(other[i], 1) !=
+		    install_stage_result(other[i], 0)) {
+			FAIL(ui_result_word(install_stage_result(other[i], 1)));
+			return;
+		}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== lota-install: the unattended checkpoint ===\n");
@@ -208,6 +254,9 @@ int main(void)
 	test_the_codes_are_distinct();
 	test_a_reboot_reason_that_ends_in_a_stop();
 	test_a_reboot_reason_without_a_stop();
+	test_an_applied_stage_says_so();
+	test_an_untouched_stage_keeps_its_word();
+	test_applied_changes_only_a_satisfied_stage();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -1604,6 +1604,27 @@ void install_reboot_required(char *buf, size_t cap, const char *note)
 		 note ? note : "", stop ? "" : ".");
 }
 
+enum ui_result install_stage_result(enum stage_state st, int applied)
+{
+	(void)applied;
+
+	switch (st) {
+	case STAGE_DONE:
+		return UI_DONE;
+	case STAGE_REBOOT:
+		return UI_REBOOT;
+	case STAGE_SKIP:
+		return UI_SKIP;
+	case STAGE_PENDING:
+		return UI_PENDING;
+	case STAGE_BLOCKED:
+		return UI_BLOCKED;
+	case STAGE_ERROR:
+	default:
+		return UI_FAIL;
+	}
+}
+
 const struct stage install_stages[] = {
 	{
 		.title = "Preflight: Hardware and Host Requirements",

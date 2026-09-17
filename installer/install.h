@@ -209,6 +209,14 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
  */
 void install_reboot_required(char *buf, size_t cap, const char *note);
 
+/*
+ * install_stage_result - the outcome a stage reports
+ *
+ * @st:      what the stage's probe says now.
+ * @applied: 1 when this run applied the stage just before that probe.
+ */
+enum ui_result install_stage_result(enum stage_state st, int applied);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;

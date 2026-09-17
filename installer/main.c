@@ -227,25 +227,6 @@ static int parse_args(int argc, char **argv, struct install_opts *opts)
 	return 0;
 }
 
-static enum ui_result state_result(enum stage_state st)
-{
-	switch (st) {
-	case STAGE_DONE:
-		return UI_DONE;
-	case STAGE_REBOOT:
-		return UI_REBOOT;
-	case STAGE_SKIP:
-		return UI_SKIP;
-	case STAGE_PENDING:
-		return UI_PENDING;
-	case STAGE_BLOCKED:
-		return UI_BLOCKED;
-	case STAGE_ERROR:
-	default:
-		return UI_FAIL;
-	}
-}
-
 /* Does a stage note punctuate itself? */
 static int ends_in_stop(const char *note)
 {
@@ -275,7 +256,8 @@ static int run_status(struct install_ctx *ctx)
 		enum stage_state st = s->probe(ctx, note, sizeof(note));
 
 		ui_stage_begin(&ctx->ui, i + 1, install_step_count, s->title);
-		ui_stage_result(&ctx->ui, state_result(st), s->title, note);
+		ui_stage_result(&ctx->ui, install_stage_result(st, 0), s->title,
+				note);
 		if (st != STAGE_DONE && st != STAGE_SKIP)
 			pending++;
 		if (st == STAGE_BLOCKED)
@@ -292,7 +274,7 @@ static int run_status(struct install_ctx *ctx)
 
 		ui_stage_begin(&ctx->ui, install_step_count, install_step_count,
 			       install_selfcheck_title);
-		ui_stage_result(&ctx->ui, state_result(st),
+		ui_stage_result(&ctx->ui, install_stage_result(st, 0),
 				install_selfcheck_title, note);
 		if (st != STAGE_DONE && st != STAGE_SKIP)
 			pending++;
@@ -639,8 +621,8 @@ int main(int argc, char **argv)
 		switch (st) {
 		case STAGE_DONE:
 		case STAGE_SKIP:
-			ui_stage_result(&ctx.ui, state_result(st), s->title,
-					note);
+			ui_stage_result(&ctx.ui, install_stage_result(st, 0),
+					s->title, note);
 			break;
 		case STAGE_REBOOT:
 			ui_stage_result(&ctx.ui, UI_REBOOT, s->title, note);
