@@ -133,8 +133,13 @@ scope went unverified.
 
 .. code-block:: sh
 
-    sudo grubby --update-kernel=ALL --args="ima=on ima_appraise=enforce"
+    sudo grubby --update-kernel=ALL --args="ima_appraise=enforce"
     sudo reboot
+
+IMA needs no parameter to be on. The kernel takes ``ima=`` only in a kdump
+kernel and anywhere else ignores it, logging ``ima: Warning: ima setup option
+only permitted in kdump`` on every boot, so a cmdline carrying ``ima=on`` gains
+nothing but that line.
 
 **On a Secure Boot host the kernel discards that parameter.**
 ``default_appraise_setup()`` refuses to be told the mode where
