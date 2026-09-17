@@ -25,6 +25,7 @@
 #define EXIT_INSTALL_FAIL 1
 #define EXIT_INSTALL_USAGE 2
 #define EXIT_INSTALL_REBOOT 10 /* re-run after reboot to resume */
+#define EXIT_INSTALL_DEFERRED 11 /* boot-path stages left to a person */
 
 /* Well-known artifact paths laid down by the LOTA package */
 #define PATH_AGENT_BIN "/usr/bin/lota-agent"

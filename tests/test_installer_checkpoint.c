@@ -9,6 +9,9 @@
  * left, so it names the stages that were left and no others: a host where one
  * of them deferred and the rest reported themselves satisfied in the same run
  * must not be sent back for all of them.
+ *
+ * The exit code says the same thing: a run that left work to a person has not
+ * finished the install, and a caller that reads only the code must see that.
  */
 
 #include <stdio.h>
@@ -123,6 +126,46 @@ static void test_two_deferred_stages_are_both_named(void)
 		PASS();
 }
 
+/*
+ * The deferral has a code of its own: 0 is what --status answers on a host
+ * with nothing left, and an automated caller has only the code to go on.
+ */
+static void test_a_deferral_is_not_success(void)
+{
+	int d[1];
+	int rc;
+
+	TEST("a deferral exits with its own code, not 0");
+	d[0] = stage_named("Kernel integrity floor on the cmdline");
+	rc = install_unattended_checkpoint(note, sizeof(note), d, 1);
+	if (rc != EXIT_INSTALL_DEFERRED) {
+		char msg[64];
+
+		snprintf(msg, sizeof(msg), "exit %d, want %d", rc,
+			 EXIT_INSTALL_DEFERRED);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
+static void test_the_codes_are_distinct(void)
+{
+	static const int codes[] = { EXIT_INSTALL_OK, EXIT_INSTALL_FAIL,
+				     EXIT_INSTALL_USAGE, EXIT_INSTALL_REBOOT,
+				     EXIT_INSTALL_DEFERRED };
+	size_t i, j;
+
+	TEST("every exit code means one outcome");
+	for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++)
+		for (j = 0; j < i; j++)
+			if (codes[i] == codes[j]) {
+				FAIL("two outcomes share a code");
+				return;
+			}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== lota-install: the unattended checkpoint ===\n");
@@ -130,6 +173,8 @@ int main(void)
 	test_one_deferred_stage_is_named_alone();
 	test_the_initramfs_stage_alone();
 	test_two_deferred_stages_are_both_named();
+	test_a_deferral_is_not_success();
+	test_the_codes_are_distinct();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
