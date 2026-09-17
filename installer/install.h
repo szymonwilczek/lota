@@ -163,6 +163,30 @@ const char *installer_trust_key(const char *named, const char *conf_pubkey,
 /* human-readable @src */
 const char *installer_trust_key_source_says(enum trust_key_source src);
 
+/*
+ * installer_trust_fallback - the key the agent resolves once @key is gone
+ *
+ * @key:           the key installer_trust_key() returned.
+ * @src:           where it came from.
+ * @conf_pubkey, @override_path, @packaged_path: as for installer_trust_key().
+ *
+ * Returns NULL when nothing else would verify the object in its place.
+ */
+const char *installer_trust_fallback(const char *key, enum trust_key_source src,
+				     const char *conf_pubkey,
+				     const char *override_path,
+				     const char *packaged_path);
+
+/*
+ * installer_trust_refusal - the note for an object @key does not verify
+ *
+ * @fallback: what installer_trust_fallback() returned.
+ * @obj:      the enforcement object.
+ */
+void installer_trust_refusal(char *buf, size_t cap, const char *key,
+			     enum trust_key_source src, const char *fallback,
+			     const char *obj);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;

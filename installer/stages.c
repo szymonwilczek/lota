@@ -245,18 +245,49 @@ const char *installer_trust_key_source_says(enum trust_key_source src)
 	return "nowhere -- no readable key was found";
 }
 
+const char *installer_trust_fallback(const char *key, enum trust_key_source src,
+				     const char *conf_pubkey,
+				     const char *override_path,
+				     const char *packaged_path)
+{
+	(void)key;
+	(void)src;
+	(void)conf_pubkey;
+	(void)override_path;
+	return packaged_path;
+}
+
+void installer_trust_refusal(char *buf, size_t cap, const char *key,
+			     enum trust_key_source src, const char *fallback,
+			     const char *obj)
+{
+	snprintf(buf, cap,
+		 "The BPF object signature does not verify against "
+		 "%s, which is %s and is the key the agent resolves "
+		 "for this host. The package ships object, signature "
+		 "and key together and replaces all three on an "
+		 "upgrade, so this means they no longer belong to each "
+		 "other: either the key above did not sign the shipped "
+		 "object - take it out of the way and the agent falls "
+		 "through to the packaged %s - or the fleet signs "
+		 "enforcement itself and has to re-sign this object "
+		 "(lota-agent --sign-policy %s --signing-key <key>). "
+		 "The installer never signs on this host by design.",
+		 key, installer_trust_key_source_says(src), fallback, obj);
+}
+
 /* policy_pubkey read fresh from lota.conf, not cached */
 static const char *trust_key_in_use(const struct install_ctx *ctx,
 				    char *conf_buf, size_t conf_cap,
-				    enum trust_key_source *src)
+				    enum trust_key_source *src,
+				    const char **configured)
 {
-	const char *configured = NULL;
-
+	*configured = NULL;
 	if (probe_conf_value(PATH_LOTA_CONF, "policy_pubkey", conf_buf,
 			     conf_cap) == 1)
-		configured = conf_buf;
+		*configured = conf_buf;
 
-	return installer_trust_key(ctx->opts.policy_pubkey, configured,
+	return installer_trust_key(ctx->opts.policy_pubkey, *configured,
 				   PATH_POLICY_PUB_OVERRIDE,
 				   PATH_ENFORCEMENT_PUB, src);
 }
@@ -266,8 +297,9 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 {
 	enum trust_key_source src = TRUST_KEY_NONE;
 	char conf_key[PATH_MAX];
-	const char *key =
-		trust_key_in_use(ctx, conf_key, sizeof(conf_key), &src);
+	const char *configured;
+	const char *key = trust_key_in_use(ctx, conf_key, sizeof(conf_key),
+					   &src, &configured);
 	char sig[512];
 	char out[4096];
 	int rc;
@@ -314,20 +346,12 @@ static enum stage_state st_trust_probe(struct install_ctx *ctx, char *note,
 		rc = run_capture(argv, out, sizeof(out));
 	}
 	if (rc != 0) {
-		snprintf(note, cap,
-			 "The BPF object signature does not verify against "
-			 "%s, which is %s and is the key the agent resolves "
-			 "for this host. The package ships object, signature "
-			 "and key together and replaces all three on an "
-			 "upgrade, so this means they no longer belong to each "
-			 "other: either the key above did not sign the shipped "
-			 "object - take it out of the way and the agent falls "
-			 "through to the packaged %s - or the fleet signs "
-			 "enforcement itself and has to re-sign this object "
-			 "(lota-agent --sign-policy %s --signing-key <key>). "
-			 "The installer never signs on this host by design.",
-			 key, installer_trust_key_source_says(src),
-			 PATH_ENFORCEMENT_PUB, PATH_BPF_OBJ);
+		installer_trust_refusal(
+			note, cap, key, src,
+			installer_trust_fallback(key, src, configured,
+						 PATH_POLICY_PUB_OVERRIDE,
+						 PATH_ENFORCEMENT_PUB),
+			PATH_BPF_OBJ);
 		return STAGE_BLOCKED;
 	}
 
