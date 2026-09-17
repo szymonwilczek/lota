@@ -536,20 +536,70 @@ cleanup:
 		fprintf(stderr, "warning: cleanup failed\n");
 }
 
+/*
+ * The reboot-into-setup request is an EFI variable write, which a full store
+ * refuses even when the firmware supports it. The startup screen needs no
+ * write, so it follows the command.
+ */
+static void test_secureboot_remediation_when_the_request_fails(void)
+{
+	char msg[STAGE_NOTE_CAP];
+	const char *cmd;
+	const char *screen;
+
+	TEST("a refused request still leaves the startup screen");
+	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 1,
+				     msg, sizeof(msg));
+	cmd = strstr(msg, "systemctl reboot --firmware-setup");
+	screen = strstr(msg, "startup screen");
+	if (!cmd || !screen || !strstr(msg, "vendor logo")) {
+		FAIL(msg);
+		return;
+	}
+	if (screen < cmd) {
+		FAIL("the keystroke is offered before the command");
+		return;
+	}
+	if (!strstr(msg, "Cannot allocate memory")) {
+		FAIL("the refusal a full store gives is not named");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * Longest message: the longest DMI machine name, setup mode, request taken.
+ * Truncation drops the last instructions first.
+ */
+static void test_secureboot_remediation_fits_a_note(void)
+{
+	char msg[STAGE_NOTE_CAP];
+	char machine[192];
+	size_t len;
+
+	TEST("the longest Secure Boot route fits in a stage note");
+	memset(machine, 'M', sizeof(machine) - 1);
+	machine[sizeof(machine) - 1] = '\0';
+	probe_secureboot_remediation(machine, 0, 1, 1, msg, sizeof(msg));
+	len = strlen(msg);
+	if (len + 1 >= sizeof(msg) ||
+	    strcmp(msg + len - 19, "'mokutil --import'.") != 0) {
+		FAIL(msg + (len > 60 ? len - 60 : 0));
+		return;
+	}
+	PASS();
+}
+
 static void test_secureboot_remediation(void)
 {
 	char msg[STAGE_NOTE_CAP];
 	char small[64];
 
-	TEST("firmware that takes the request gets the command, not a key");
+	TEST("firmware that takes the request gets the command first");
 	probe_secureboot_remediation("Example Corp Example Board X1", 0, 0, 1,
 				     msg, sizeof(msg));
 	if (!strstr(msg, "systemctl reboot --firmware-setup")) {
 		FAIL("boot-to-setup command missing");
-		return;
-	}
-	if (strstr(msg, "vendor logo")) {
-		FAIL("a keystroke was offered where the command works");
 		return;
 	}
 	PASS();
@@ -1457,6 +1507,8 @@ int main(void)
 	test_machine_description();
 	test_efivar_payload();
 	test_secureboot_remediation();
+	test_secureboot_remediation_when_the_request_fails();
+	test_secureboot_remediation_fits_a_note();
 	test_auto_bringup_opt_in();
 	test_manifest_line();
 	test_installed_kernels();
