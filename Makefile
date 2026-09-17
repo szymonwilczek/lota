@@ -2425,8 +2425,10 @@ fuzz-bpf-all: fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device \
 # fuzz/bpf_oracle/mirror.lock pins that source by content hash.
 # check-bpf-mirror fails when production drifts from the lock,
 # so a change to a mirrored helper forces a re-verify of the copy.
+# Line references to the source also fail: the lock misses a moved helper.
 BPF_MIRROR_SRC := src/bpf/lota_lsm.bpf.c
-BPF_MIRROR_LOCK := fuzz/bpf_oracle/mirror.lock
+BPF_MIRROR_DIR := fuzz/bpf_oracle
+BPF_MIRROR_LOCK := $(BPF_MIRROR_DIR)/mirror.lock
 BPF_MIRROR_FUNCS := is_write_open_flags is_kernel_mem_device is_shebang_binprm is_inaccessible_exec_path
 BPF_MIRROR_MACROS := LOTA_O_ACCMODE LOTA_O_WRONLY LOTA_O_RDWR LOTA_O_TRUNC S_IFMT S_IFCHR BINPRM_FLAGS_PATH_INACCESSIBLE
 
@@ -2446,14 +2448,23 @@ check-bpf-mirror:
 	$(Q)cur=$$(mktemp); lck=$$(mktemp); \
 	{ $(BPF_MIRROR_GEN); } > $$cur; \
 	grep -vE '^#' $(BPF_MIRROR_LOCK) | grep -vE '^[[:space:]]*$$' > $$lck; \
-	if diff -u $$lck $$cur >/dev/null; then \
-		echo "bpf-mirror: in sync"; rm -f $$cur $$lck; \
-	else \
-		echo "ERROR: src/bpf/lota_lsm.bpf.c mirrored logic changed:"; \
+	rc=0; \
+	if ! diff -u $$lck $$cur >/dev/null; then \
+		echo "ERROR: $(BPF_MIRROR_SRC) mirrored logic changed:"; \
 		diff -u $$lck $$cur || true; \
-		echo "Re-verify fuzz/bpf_oracle/lota_lsm_logic.h, then: make update-bpf-mirror"; \
-		rm -f $$cur $$lck; exit 1; \
-	fi
+		echo "Re-verify $(BPF_MIRROR_DIR)/lota_lsm_logic.h, then: make update-bpf-mirror"; \
+		rc=1; \
+	fi; \
+	rm -f $$cur $$lck; \
+	lines=$$(grep -rnE 'lota_lsm\.bpf\.c:[0-9]' $(BPF_MIRROR_DIR) || true); \
+	if [ -n "$$lines" ]; then \
+		echo "ERROR: $(BPF_MIRROR_DIR) cites $(BPF_MIRROR_SRC) by line, which the lock does not pin:"; \
+		echo "$$lines"; \
+		echo "Name the helper or macro instead."; \
+		rc=1; \
+	fi; \
+	[ $$rc = 0 ] && echo "bpf-mirror: in sync"; \
+	exit $$rc
 
 update-bpf-mirror:
 	$(Q)sed -n '1,/do not hand-edit\./p' $(BPF_MIRROR_LOCK) > $(BPF_MIRROR_LOCK).new; \

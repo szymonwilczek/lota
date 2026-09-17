@@ -45,6 +45,13 @@ The fuzz check (``make fuzz-regress``) builds every C fuzz target and replays
 targets link agent sources, so a change outside ``fuzz/`` can break one. It is
 skipped without clang; the ``fuzz`` CI job always runs it.
 
+The BPF mirror check (``make check-bpf-mirror``) runs when a patch touches
+``src/bpf/lota_lsm.bpf.c`` or ``fuzz/bpf_oracle/``. The oracle fuzzers run
+copies of BPF helpers, pinned by content in ``fuzz/bpf_oracle/mirror.lock``;
+when an original changes, re-verify the copy and run ``make
+update-bpf-mirror``. A line-number reference to the BPF source under
+``fuzz/bpf_oracle/`` also fails, since the lock misses a moved helper.
+
 The syzkaller matrix check (``make check-syzkaller-matrix``) runs when a patch
 touches ``src/bpf/lota_lsm.bpf.c``, ``syzkaller/`` or the Makefile. It fails
 when an LSM program has no row in the hook matrix of ``syzkaller/README.rst``,

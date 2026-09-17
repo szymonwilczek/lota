@@ -1049,7 +1049,8 @@ check_fuzz() {
 }
 
 # fuzz/bpf_oracle mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
-# make check-bpf-mirror fails when that source drifts from the pinned lock.
+# make check-bpf-mirror fails when that source drifts from the pinned lock
+# or the sandbox cites it by line number.
 # Only run when the BPF source or the sandbox changed.
 check_bpf_mirror() {
     local path touched=1 out
@@ -1070,7 +1071,7 @@ check_bpf_mirror() {
     else
         printf '%s\n' "$out" | grep -v '^make'
         fail "bpf-mirror" \
-             "src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
+             "src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock (re-verify the mirror, then run make update-bpf-mirror), or fuzz/bpf_oracle cites it by line (name the symbol)."
     fi
 }
 
