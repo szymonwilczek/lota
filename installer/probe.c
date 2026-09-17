@@ -486,19 +486,20 @@ void probe_secureboot_remediation(const char *machine, int is_virtual,
 	}
 
 	/*
-	 * reboot-to-setup request is the only route this can state with certainty,
-	 * and the firmware itself says whether it honours it.
-	 * Where it does not, the firmware's own splash screen names its key
-	 * -- which is a better source than a table here could be, since the menu
-	 * layout and the key differ between revisions of a single model.
+	 * Support is not room: the request is an EFI variable write, which a
+	 * full store refuses. The startup screen's own key is the fallback;
+	 * no table here, since the key differs between revisions of one model.
 	 */
 	if (firmware_setup_supported == 1) {
 		used += (size_t)snprintf(
 			out + used, cap - used,
 			"Run 'systemctl reboot --firmware-setup' to reboot "
-			"straight into firmware setup -- this firmware accepts "
-			"that request, so no key has to be caught at the right "
-			"moment. ");
+			"straight into firmware setup; this firmware accepts "
+			"that request. If it is refused ('Cannot allocate "
+			"memory' means the EFI variable store is full), reboot "
+			"and enter setup the way the startup screen says "
+			"instead (commonly Del, F2, F10 or Esc, held while the "
+			"vendor logo is up). ");
 	} else {
 		used += (size_t)snprintf(
 			out + used, cap - used,
