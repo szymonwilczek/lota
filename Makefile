@@ -2127,6 +2127,7 @@ test-unit: all $(TEST_BINS)
 	else \
 		echo "SKIP: test_bench_targets.sh (no go)"; \
 	fi
+	@tests/integration/test_veristat_gate.sh
 	@if command -v softhsm2-util >/dev/null 2>&1 && command -v pkcs11-tool >/dev/null 2>&1 && \
 		command -v openssl >/dev/null 2>&1; then \
 		tests/integration/test_hsm_ca_example.sh; \
