@@ -1075,6 +1075,17 @@ static int do_apply(struct tui *t, int i)
 		t->auto_run = 0;
 		return 0;
 	}
+
+	/* the probe says what holds now; the run did the work */
+	if (t->st[i] == STAGE_DONE) {
+		static const char applied[] = "Applied. ";
+		size_t pre = sizeof(applied) - 1;
+		size_t len = strnlen(t->note[i], sizeof(t->note[i]) - pre - 1);
+
+		memmove(t->note[i] + pre, t->note[i], len);
+		memcpy(t->note[i], applied, pre);
+		t->note[i][pre + len] = '\0';
+	}
 	return 1;
 }
 

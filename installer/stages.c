@@ -1604,13 +1604,12 @@ void install_reboot_required(char *buf, size_t cap, const char *note)
 		 note ? note : "", stop ? "" : ".");
 }
 
+/* "already satisfied" means nothing ran; a stage this run fixed says so */
 enum ui_result install_stage_result(enum stage_state st, int applied)
 {
-	(void)applied;
-
 	switch (st) {
 	case STAGE_DONE:
-		return UI_DONE;
+		return applied ? UI_APPLIED : UI_DONE;
 	case STAGE_REBOOT:
 		return UI_REBOOT;
 	case STAGE_SKIP:

@@ -100,7 +100,11 @@ follows terminal resizes. Keys:
 The original scrollback is restored on exit and a one-line result is printed
 to the normal screen: complete (exit ``0``), reboot required (``10``) or
 re-run to continue (``1``). Without a TTY, or with ``--plain``, the same stages
-run as a sequential prompted flow suitable for logs and scripts.
+run as a sequential prompted flow suitable for logs and scripts. There a stage
+with work to do prints what it found after ``Before this stage:`` and ends
+``applied``; a stage with nothing to do reports ``already satisfied``. An
+upgrade that brings a binary without fs-verity thus shows that stage as
+``applied``.
 
 Exit codes:
 

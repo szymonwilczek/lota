@@ -565,6 +565,7 @@ int main(int argc, char **argv)
 	for (i = 0; i < install_stage_count; i++) {
 		const struct stage *s = &install_stages[i];
 		enum stage_state st = s->probe(&ctx, note, sizeof(note));
+		int applied = 0;
 
 		ui_stage_begin(&ctx.ui, i + 1, install_step_count, s->title);
 
@@ -595,7 +596,8 @@ int main(int argc, char **argv)
 
 		if (st == STAGE_PENDING && s->apply) {
 			ui_explain(&ctx.ui, s->explain);
-			ui_text(&ctx.ui, "Current state: %s.", note);
+			ui_text(&ctx.ui, "Before this stage: %s%s", note,
+				ends_in_stop(note) ? "" : ".");
 			if (!ui_confirm(&ctx.ui, "Apply this stage?",
 					ctx.opts.yes)) {
 				ui_text(&ctx.ui, "Aborted at your request. "
@@ -611,6 +613,7 @@ int main(int argc, char **argv)
 				return EXIT_INSTALL_FAIL;
 			}
 			ctx.applied = 1;
+			applied = 1;
 			st = s->probe(&ctx, note, sizeof(note));
 			/* boot-chain stages stay un-probeable until the reboot
 			 * reboot_needed records their success */
@@ -621,7 +624,8 @@ int main(int argc, char **argv)
 		switch (st) {
 		case STAGE_DONE:
 		case STAGE_SKIP:
-			ui_stage_result(&ctx.ui, install_stage_result(st, 0),
+			ui_stage_result(&ctx.ui,
+					install_stage_result(st, applied),
 					s->title, note);
 			break;
 		case STAGE_REBOOT:
