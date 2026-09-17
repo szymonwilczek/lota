@@ -1093,7 +1093,7 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
 					 agent_service_active(),
 					 !ctx->applied && agent_start_failed(),
-					 note, cap);
+					 probe_agent_paused(), note, cap);
 }
 
 /* stage 10: agent service */

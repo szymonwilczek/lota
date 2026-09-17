@@ -425,10 +425,22 @@ int probe_pcr14_lock_ran(void);
 int probe_pcr14_lock_ran_at(const char *baseline_path);
 
 /*
+ * 1 when the snapshot at @snapshot_path records a pause (PCR 14 spent on an
+ * operator-requested shutdown) and @live still holds the value it left, else 0.
+ * Mirrors tpm_classify_pcr14(); the result only picks the operator's sentence.
+ */
+int probe_agent_paused_at(const char *snapshot_path,
+			  const uint8_t live[PROBE_HASH_SIZE]);
+
+/* probe_agent_paused_at() on the agent's snapshot and the live PCR 14 */
+int probe_agent_paused(void);
+
+/*
  * Verdict for the reboot barrier, and the sentence explaining it.
  *
  * Pure: the caller reads PCR 14, the handoff and the service state; this decides.
- * @pcr_state is an enum probe_pcr14, @lock_ran and @agent_active are 1/0.
+ * @pcr_state is an enum probe_pcr14, @lock_ran, @agent_active, @agent_failed
+ * and @agent_paused are 1/0.
  *
  * A first install on a Secure Boot host and a host carrying a commitment from
  * an earlier agent run look identical in the register and need the same reboot;
@@ -437,7 +449,8 @@ int probe_pcr14_lock_ran_at(const char *baseline_path);
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,
-					   char *note, size_t cap);
+					   int agent_paused, char *note,
+					   size_t cap);
 
 /*
  * One file the operator named on the command line.

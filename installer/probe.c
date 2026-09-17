@@ -831,19 +831,28 @@ int probe_hex_to_bytes(const char *hex, uint8_t *out, size_t n)
 	return 0;
 }
 
-int probe_pcr14_state(void)
+static int read_live_pcr14(uint8_t live[PROBE_HASH_SIZE])
 {
-	uint8_t live[PROBE_HASH_SIZE];
-	uint8_t lock[PROBE_HASH_SIZE];
-	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
 	char buf[2 * PROBE_HASH_SIZE + 8] = { 0 };
 	int ret = probe_read_text("/sys/class/tpm/tpm0/pcr-sha256/14", buf,
 				  sizeof(buf));
 
 	if (ret < 0)
 		return ret;
-	if (probe_hex_to_bytes(buf, live, sizeof(live)) < 0)
+	if (probe_hex_to_bytes(buf, live, PROBE_HASH_SIZE) < 0)
 		return -EBADMSG;
+	return 0;
+}
+
+int probe_pcr14_state(void)
+{
+	uint8_t live[PROBE_HASH_SIZE];
+	uint8_t lock[PROBE_HASH_SIZE];
+	uint8_t zero[PROBE_HASH_SIZE] = { 0 };
+	int ret = read_live_pcr14(live);
+
+	if (ret < 0)
+		return ret;
 
 	if (memcmp(live, zero, sizeof(zero)) == 0)
 		return PROBE_PCR14_ZERO;
@@ -1343,6 +1352,57 @@ int probe_pcr14_lock_ran(void)
 }
 
 /*
+ * Layout of struct lota_clock_state (src/agent/tpm.h), spelled out because the
+ * installer does not link the TPM stack. The probe tests write it through the
+ * agent's struct.
+ */
+#define CLOCK_STATE_PATH "/var/lib/lota/clock_state.dat"
+#define CLOCK_STATE_MAGIC 0x4C434C4BU /* "LCLK" */
+#define CLOCK_STATE_VERSION 1U
+#define CLOCK_STATE_SIZE 120
+#define CLOCK_STATE_PCR14_OFF 16
+#define CLOCK_STATE_FLAGS_OFF 88
+#define CLOCK_STATE_FLAG_SHUTDOWN_POISON 0x02U
+
+static uint32_t le32_at(const uint8_t *p)
+{
+	return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+	       (uint32_t)p[3] << 24;
+}
+
+int probe_agent_paused_at(const char *snapshot_path,
+			  const uint8_t live[PROBE_HASH_SIZE])
+{
+	uint8_t snap[CLOCK_STATE_SIZE];
+	ssize_t n;
+	int fd;
+
+	if (!snapshot_path || !live)
+		return 0;
+	fd = open(snapshot_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return 0;
+	n = read(fd, snap, sizeof(snap));
+	close(fd);
+
+	if (n != (ssize_t)sizeof(snap) || le32_at(snap) != CLOCK_STATE_MAGIC ||
+	    le32_at(snap + 4) != CLOCK_STATE_VERSION)
+		return 0;
+	if (!(snap[CLOCK_STATE_FLAGS_OFF] & CLOCK_STATE_FLAG_SHUTDOWN_POISON))
+		return 0;
+	return memcmp(snap + CLOCK_STATE_PCR14_OFF, live, PROBE_HASH_SIZE) == 0;
+}
+
+int probe_agent_paused(void)
+{
+	uint8_t live[PROBE_HASH_SIZE];
+
+	if (read_live_pcr14(live) < 0)
+		return 0;
+	return probe_agent_paused_at(CLOCK_STATE_PATH, live);
+}
+
+/*
  * Verdict for the reboot barrier.
  *
  * A register the installer cannot derive means one of three things, and they
@@ -1356,8 +1416,11 @@ int probe_pcr14_lock_ran(void)
  */
 enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
 					   int agent_active, int agent_failed,
-					   char *note, size_t cap)
+					   int agent_paused, char *note,
+					   size_t cap)
 {
+	(void)agent_paused;
+
 	/*
 	 * A reboot is what this stage asks for, and it is the one thing that
 	 * cannot help here: the agent refused a gate that will refuse it again
