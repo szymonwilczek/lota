@@ -1562,21 +1562,34 @@ static enum stage_state st_firmware_readiness_probe(struct install_ctx *ctx,
 	return STAGE_DONE;
 }
 
+/*
+ * Names what was deferred, by the titles the run printed a moment ago:
+ * a stage that reported itself satisfied is not work left.
+ */
 int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 				  int n)
 {
-	(void)deferred;
-	(void)n;
+	char left[1024] = "";
+	size_t used = 0;
+	int i;
+
+	for (i = 0; i < n && used < sizeof(left); i++) {
+		const char *sep = i == 0 ? "" : i == n - 1 ? " and " : ", ";
+		int w = snprintf(left + used, sizeof(left) - used, "%s'%s'",
+				 sep, install_stages[deferred[i]].title);
+
+		if (w < 0)
+			break;
+		used += (size_t)w;
+	}
+
 	snprintf(buf, cap,
-		 "Host-local setup is done. What is left "
-		 "changes how this machine boots -- the "
-		 "initramfs PCR 14 lock, the kernel integrity "
-		 "floor and the IMA appraisal scope -- so it "
-		 "waits for a person: "
-		 "run 'sudo lota-install'. To have a package "
-		 "install do it too, create %s (or set "
-		 "LOTA_AUTO_BRINGUP=1) before installing.",
-		 PATH_AUTO_BRINGUP);
+		 "Host-local setup is done. What is left changes how this "
+		 "machine boots, so it waits for a person: %s. Run "
+		 "'sudo lota-install' to finish %s. To have a package install "
+		 "do it too, create %s (or set LOTA_AUTO_BRINGUP=1) before "
+		 "installing.",
+		 left, n == 1 ? "it" : "them", PATH_AUTO_BRINGUP);
 	return EXIT_INSTALL_OK;
 }
 
