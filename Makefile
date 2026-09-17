@@ -2503,6 +2503,57 @@ $(SYZ_FUZZ_LOADER): syzkaller/lota_bpf_fuzz.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -lbpf
 
+# Hook matrix guard: one README row per LSM program, naming only programs the
+# object defines and syscalls lota.cfg.example enables, as ``literals``
+SYZ_MATRIX_DOC := syzkaller/README.rst
+SYZ_MATRIX_CFG := syzkaller/lota.cfg.example
+
+define SYZ_MATRIX_CELLS
+awk -v col=$(1) ' \
+	/^Hook coverage matrix$$/ { inm = 1; next } \
+	inm && /^[+|]/ { intab = 1 } \
+	inm && intab && !/^[+|]/ { exit } \
+	inm && /^\+=/ { body = 1 } \
+	body && /^\|/ { \
+		split($$0, c, "|"); cell = c[col + 1]; \
+		while (match(cell, /``[^`]+``/)) { \
+			print substr(cell, RSTART + 2, RLENGTH - 4); \
+			cell = substr(cell, RSTART + RLENGTH); \
+		} \
+	}' $(SYZ_MATRIX_DOC)
+endef
+
+.PHONY: check-syzkaller-matrix
+check-syzkaller-matrix:
+	$(Q)rc=0; \
+	progs=$$(sed -n 's/^SEC("lsm\(\.s\)\{0,1\}\/\([a-z_]*\)")$$/\2/p' $(BPF_MIRROR_SRC) | sort -u); \
+	rows=$$($(call SYZ_MATRIX_CELLS,1) | grep -E '^[a-z_]+$$' | sort -u); \
+	calls=$$($(call SYZ_MATRIX_CELLS,2) | grep -E '^[a-z0-9_]+(\$$[A-Za-z0-9_]+)?$$' | sort -u); \
+	enabled=$$(sed -n '/"enable_syscalls"/,/\]/s/^ *"\([^"]*\)",\{0,1\}$$/\1/p' $(SYZ_MATRIX_CFG) | sort -u); \
+	if [ -z "$$progs" ] || [ -z "$$rows" ]; then \
+		echo "ERROR: no LSM programs in $(BPF_MIRROR_SRC) or no matrix in $(SYZ_MATRIX_DOC)"; \
+		exit 1; \
+	fi; \
+	missing=$$(printf '%s\n' $$progs | while read -r p; do \
+		printf '%s\n' $$rows | grep -qx "$$p" || echo "$$p"; done); \
+	stale=$$(printf '%s\n' $$rows | while read -r p; do \
+		printf '%s\n' $$progs | grep -qx "$$p" || echo "$$p"; done); \
+	unlisted=$$(printf '%s\n' $$calls | while read -r c; do \
+		[ -z "$$c" ] || printf '%s\n' $$enabled | grep -qxF "$$c" || echo "$$c"; done); \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix has no row for:" $$missing; rc=1; \
+	fi; \
+	if [ -n "$$stale" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix names programs $(BPF_MIRROR_SRC) lacks:" $$stale; rc=1; \
+	fi; \
+	if [ -n "$$unlisted" ]; then \
+		echo "ERROR: $(SYZ_MATRIX_DOC) hook matrix names calls $(SYZ_MATRIX_CFG) does not enable:" $$unlisted; rc=1; \
+	fi; \
+	if [ $$rc = 0 ]; then \
+		echo "syzkaller-matrix: $$(printf '%s\n' $$progs | wc -l) programs, each with a row"; \
+	fi; \
+	exit $$rc
+
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
 	@echo ""
@@ -2547,6 +2598,7 @@ help:
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
 	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"
 	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
+	@echo "  check-syzkaller-matrix  Fail on an LSM program with no row in the syzkaller hook matrix"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

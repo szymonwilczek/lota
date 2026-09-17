@@ -1074,7 +1074,32 @@ check_bpf_mirror() {
     fi
 }
 
-# Helm chart must take its version from VERSION.
+# syzkaller hook matrix must cover every LSM program.
+# Only run when the BPF source, syzkaller/ or the Makefile changed.
+check_syzkaller_matrix() {
+    local path touched=1 out
+    for path in "$@"; do
+        case "$path" in
+            src/bpf/lota_lsm.bpf.c | syzkaller/* | Makefile)
+                touched=0
+                ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "syzkaller-matrix"
+        return
+    fi
+
+    if out=$(make check-syzkaller-matrix 2>&1); then
+        pass "syzkaller-matrix"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "syzkaller-matrix" \
+             "give every LSM program a row in syzkaller/README.rst's hook matrix and enable every call a row names in syzkaller/lota.cfg.example."
+    fi
+}
+
+# Helm chart must take its version from VERSION and render pods that start.
 # Only run when the chart or the check changed.
 check_helm_chart() {
     local path touched=1 output
@@ -1096,7 +1121,7 @@ check_helm_chart() {
     else
         printf '%s\n' "$output" | sed 's/^/  /' >&2
         fail "helm-chart" \
-             "Chart.yaml must carry appVersion \"@VERSION@\"; make helm-package fills it."
+             "the chart must carry appVersion \"@VERSION@\" and render pods that start."
     fi
 }
 
@@ -1226,6 +1251,7 @@ main() {
     check_coccinelle "${changed_files[@]}"
     check_fuzz "${changed_files[@]}"
     check_bpf_mirror "${changed_files[@]}"
+    check_syzkaller_matrix "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
     check_helm_chart "${changed_files[@]}"
     check_container_images "${changed_files[@]}"

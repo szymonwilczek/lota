@@ -452,6 +452,18 @@ jobs:
       - name: Compare the two package manifests
         run: make check-package-manifests
 
+  syzkaller-matrix:
+    name: syzkaller hook matrix
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every LSM program has a row and every row's calls are enabled
+        run: make check-syzkaller-matrix
+
   test-build-dir:
     name: test build directory
     runs-on: ubuntu-24.04

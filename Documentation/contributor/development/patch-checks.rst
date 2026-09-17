@@ -45,6 +45,13 @@ The fuzz check (``make fuzz-regress``) builds every C fuzz target and replays
 targets link agent sources, so a change outside ``fuzz/`` can break one. It is
 skipped without clang; the ``fuzz`` CI job always runs it.
 
+The syzkaller matrix check (``make check-syzkaller-matrix``) runs when a patch
+touches ``src/bpf/lota_lsm.bpf.c``, ``syzkaller/`` or the Makefile. It fails
+when an LSM program has no row in the hook matrix of ``syzkaller/README.rst``,
+when a row names a program the source lacks, or when it names a call
+``syzkaller/lota.cfg.example`` does not enable. Without it a new hook can go
+unfuzzed silently.
+
 The strict documentation build (``make check-docs-strict``) is the build
 ``docs.yml`` runs, with every warning promoted to an error, into a scratch
 output tree. It builds from nothing on purpose: Sphinx re-reads only the
