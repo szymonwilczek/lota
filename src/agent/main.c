@@ -501,8 +501,9 @@ static int run_daemon(const struct run_daemon_params *params)
 				 "so it is byte for byte the key every other "
 				 "publisher enrolled here holds. Run "
 				 "lota-agent --reenroll --ca-cert <their "
-				 "anchor> to replace it; the device pseudonym "
-				 "is derived from the key and moves with it.");
+				 "anchor> to replace it; the CA certifies the "
+				 "new key under the device ID this host "
+				 "already has.");
 			ret = -ENOTSUP;
 			goto cleanup_tpm;
 		}
