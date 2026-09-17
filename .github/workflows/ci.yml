@@ -476,6 +476,18 @@ jobs:
       - name: Check the repository map names every tracked directory
         run: make check-repo-map
 
+  header-paths:
+    name: header tree pointers
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check every path an installed header points at resolves
+        run: make check-header-paths
+
   test-build-dir:
     name: test build directory
     runs-on: ubuntu-24.04

@@ -2610,6 +2610,30 @@ check-repo-map:
 	fi; \
 	exit $$rc
 
+# Every tree path an installed header names must resolve;
+# include/linux/ paths name the kernel tree and are skipped
+.PHONY: check-header-paths
+check-header-paths:
+	$(Q)rc=0; \
+	dirs=$$(git ls-files | sed -n 's,^\([^./][^/]*\)/.*,\1,p' | sort -u | paste -sd'|'); \
+	if [ -z "$$dirs" ]; then \
+		echo "ERROR: no tracked directories - run from a git checkout"; \
+		exit 1; \
+	fi; \
+	refs=$$(grep -onE "($$dirs)/[A-Za-z0-9_./-]+" $(wildcard include/*.h) | \
+		sed 's/\.$$//' | grep -v ':include/linux/' | sort -u); \
+	for ref in $$refs; do \
+		path=$$(printf '%s' "$$ref" | cut -d: -f3-); \
+		[ -e "$$path" ] || { \
+			echo "ERROR: $$(printf '%s' "$$ref" | cut -d: -f1,2) points at $$path, which is not in the tree"; \
+			rc=1; \
+		}; \
+	done; \
+	if [ $$rc = 0 ]; then \
+		echo "header-paths: $$(printf '%s\n' $$refs | wc -l) pointers, each resolving"; \
+	fi; \
+	exit $$rc
+
 help:
 	@echo "LOTA $(PROJECT_VERSION)"
 	@echo ""
@@ -2656,6 +2680,7 @@ help:
 	@echo "  check-test-build-dir  Fail on a test or demo naming the default build directory"
 	@echo "  check-syzkaller-matrix  Fail on an LSM program with no row in the syzkaller hook matrix"
 	@echo "  check-repo-map   Fail on a tracked directory the repository map does not name"
+	@echo "  check-header-paths  Fail on an installed header pointing at a path the tree lacks"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

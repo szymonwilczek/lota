@@ -1113,6 +1113,31 @@ check_repo_map() {
     fi
 }
 
+# Only when a header, the Makefile or this script changed
+check_header_paths() {
+    local path touched=1 out
+
+    for path in "$@"; do
+        case "$path" in
+            include/* | Makefile | scripts/check-patch)
+                touched=0
+                ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "header-paths"
+        return
+    fi
+
+    if out=$(make check-header-paths 2>&1); then
+        pass "header-paths"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "header-paths" \
+             "point every path in an installed header at a file or directory the tree has."
+    fi
+}
+
 # Helm chart must take its version from VERSION and render pods that start.
 # Only run when the chart or the check changed.
 check_helm_chart() {
@@ -1267,6 +1292,7 @@ main() {
     check_bpf_mirror "${changed_files[@]}"
     check_syzkaller_matrix "${changed_files[@]}"
     check_repo_map
+    check_header_paths "${changed_files[@]}"
     check_package_manifests "${changed_files[@]}"
     check_helm_chart "${changed_files[@]}"
     check_container_images "${changed_files[@]}"
