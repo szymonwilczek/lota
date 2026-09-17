@@ -20,7 +20,7 @@ var newKeyNewDevice = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)pseudonym\s+is\s+derived\s+from\s+the\s+(attestation\s+)?key`),
 	regexp.MustCompile(`(?i)moves\s+with\s+it`),
 	regexp.MustCompile(`(?i)a\s+device\s+it\s+has\s+not\s+met`),
-	regexp.MustCompile(`(?i)re-?establish\w*\s+the\s+baseline`),
+	regexp.MustCompile(`(?i)re-?establish\w*\s+(the|its)\s+baseline`),
 }
 
 func paragraphContaining(t *testing.T, path, needle string) string {
@@ -97,5 +97,33 @@ func TestReenrollPageSaysWhatMovesThePseudonym(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Errorf("the paragraph does not say %q:\n%s", missing, para)
+	}
+}
+
+func TestNothingElseSaysANewKeyIsANewDevice(t *testing.T) {
+	files := []string{
+		"../../../Documentation/operator/production-bringup/post-bringup.rst",
+		"../../../Documentation/security/threat-model.rst",
+		"../../../src/agent/main.c",
+	}
+
+	literalJoin := regexp.MustCompile(`"\s*\n\s*"`)
+
+	for _, f := range files {
+		raw, err := os.ReadFile(filepath.Clean(f))
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		text := string(raw)
+		if strings.HasSuffix(f, ".c") {
+			text = literalJoin.ReplaceAllString(text, "")
+		}
+		flat := strings.Join(strings.Fields(text), " ")
+		for _, claim := range newKeyNewDevice {
+			if m := claim.FindString(flat); m != "" {
+				t.Errorf("%s says re-enrolling onto a new key %q; the attestation key is not part of the device ID",
+					f, m)
+			}
+		}
 	}
 }
