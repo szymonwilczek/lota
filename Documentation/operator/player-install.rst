@@ -97,15 +97,23 @@ follows terminal resizes. Keys:
    * - ``q``, ``Ctrl-C``
      - Quit (``Ctrl-C`` first aborts a running command)
 
-The original scrollback is restored on exit and a one-line result (complete /
-reboot required / re-run to continue) is printed to the normal screen. Without a
-TTY, or with ``--plain``, the same stages run as a sequential prompted flow
-suitable for logs and scripts.
+The original scrollback is restored on exit and a one-line result is printed
+to the normal screen: complete (exit ``0``), reboot required (``10``) or
+re-run to continue (``1``). Without a TTY, or with ``--plain``, the same stages
+run as a sequential prompted flow suitable for logs and scripts.
 
-Exit codes: ``0`` complete, ``1`` failed or blocked on missing input, ``2``
-usage, ``10`` reboot required -- reboot and re-run the same command, the
-installer detects the finished stages from live system state and continues at
-the first unmet one.
+Exit codes:
+
+* ``0`` -- complete: every stage is satisfied, the same answer ``--status``
+  gives with exit ``0``;
+* ``1`` -- failed, blocked on missing input, or stopped before the end;
+* ``2`` -- usage;
+* ``10`` -- reboot required: reboot and re-run the same command, the installer
+  detects the finished stages from live system state and continues at the
+  first unmet one;
+* ``11`` -- ``--unattended`` only: host-local setup is done and the boot-path
+  stages it names are left to a person, so the host is not finished. Run
+  ``sudo lota-install`` to complete it.
 
 There is no state file to corrupt: every done-condition is probed from the
 system itself (installed files, the fs-verity bit, the initramfs content,

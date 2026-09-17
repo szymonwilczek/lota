@@ -1590,7 +1590,7 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 		 "do it too, create %s (or set LOTA_AUTO_BRINGUP=1) before "
 		 "installing.",
 		 left, n == 1 ? "it" : "them", PATH_AUTO_BRINGUP);
-	return EXIT_INSTALL_OK;
+	return EXIT_INSTALL_DEFERRED;
 }
 
 const struct stage install_stages[] = {

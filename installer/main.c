@@ -74,8 +74,10 @@ static void usage(FILE *out)
 		"  --resume               Explain that resuming needs a reboot,\n"
 		"                         and offer to reboot now\n"
 		"\n"
-		"Exit codes: 0 complete, 1 failed/blocked, 2 usage,\n"
-		"            10 reboot required (re-run to resume).\n",
+		"Exit codes: 0 complete, 1 failed/blocked/not finished,\n"
+		"            2 usage, 10 reboot required (re-run to resume),\n"
+		"            11 boot-path stages left to a person\n"
+		"            (--unattended).\n",
 		PATH_POLICY_PUB_OVERRIDE, PATH_ENFORCEMENT_PUB,
 		PATH_SELINUX_PP_DEFAULT, PATH_AUTO_BRINGUP);
 }

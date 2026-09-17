@@ -79,8 +79,9 @@ the package just wrote, and loads the SELinux fence. Each of those is
 reversible and none of them changes how the machine boots.
 
 What it deliberately leaves alone is the boot path -- the 90lota initramfs
-module and the kernel integrity floor on the command line -- and it says so
-before exiting. Finish with::
+module and the kernel integrity floor on the command line -- and it names the
+stages it left before exiting with code ``11``, which a tool that runs
+``lota-install --unattended`` itself reads as "not finished". Finish with::
 
    sudo lota-install
 
