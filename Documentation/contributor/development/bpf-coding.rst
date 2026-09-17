@@ -20,6 +20,22 @@ program depending on how clang laid out the branches. ``veristat`` in CI
 catches acceptance regressions, but only for the kernel it runs on; the
 NULL-init rule keeps acceptance independent of compiler layout.
 
+Reading a veristat gate failure
+===============================
+
+The ``bpf-veristat`` CI job runs ``scripts/veristat-gate.sh`` in a VM booted on
+the deployment kernel. On a failure the gate loads the object with ``bpftool
+prog load`` and prints the verifier log of the first refused program; libbpf
+stops there, so the next one's log shows once it loads. A load that fails
+before the verifier (no root, or an enforcing ``lota-agent`` refusing map
+creation) is reported as a setup failure. To run it as the job does:
+
+.. code:: bash
+
+   make bpf
+   vng --run "$(uname -r)" --append "lsm=bpf" \
+       --exec "cd '$PWD' && sh scripts/veristat-gate.sh build/lota_lsm.bpf.o"
+
 Cross-CPU map updates
 =====================
 

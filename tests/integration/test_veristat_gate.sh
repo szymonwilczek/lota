@@ -55,9 +55,9 @@ if [ "$verbose" = 1 ]; then
 fi
 for p in $STUB_PROGS; do
 	case "$STUB_SCENARIO:$p" in
-	reject:lota_task_free)
+	reject:lota_task_free | loads:lota_bpf)
 		echo "lota_lsm.bpf.o  $p  failure  123  20  1  29  0" ;;
-	reject:* | pass:*)
+	reject:* | pass:* | loads:*)
 		echo "lota_lsm.bpf.o  $p  success  2000  800  40  700  3900" ;;
 	setup:* | unpriv:*)
 		echo "lota_lsm.bpf.o  $p  failure  0  0  0  700  0" ;;
@@ -193,5 +193,14 @@ if grep -q "verifier rejected" "$WORK_DIR/unpriv.out"; then
 fi
 grep -q "not running as root" "$WORK_DIR/unpriv.out" ||
     fail "gate did not say it lacks root" unpriv
+
+echo "[veristat-gate] a failure the whole-object load does not reproduce says so"
+rc=$(run_gate loads)
+[[ "$rc" == 1 ]] || fail "gate reported $rc for a failure veristat reports" loads
+if grep -q "verifier rejected" "$WORK_DIR/loads.out"; then
+	fail "gate called a program the kernel accepted a verifier rejection" loads
+fi
+grep -q "the whole object loads with every program accepted" "$WORK_DIR/loads.out" ||
+	fail "gate did not say the object loads" loads
 
 echo "[veristat-gate] PASS"
