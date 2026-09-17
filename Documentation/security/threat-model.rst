@@ -107,8 +107,9 @@ The AIK metadata record carries the derivation in its ``key_derivation`` byte:
 ``PER_PUBLISHER`` for a key derived from a publisher's identity, ``SHARED`` for
 the key of a host with no publisher profile. The daemon reads that byte before
 it uses a profile's key, and a profile holding a shared key is refused by name,
-with the re-enrollment that replaces it. The device pseudonym is derived from
-the key and moves with it.
+with the re-enrollment that replaces it. That keeps the device pseudonym: the
+CA derives it from the endorsement key, its pseudonym key and a non-default
+tenant, never from the attestation key.
 
 The record's version takes no part in that decision: every build writes
 version 1. A record at any other version is refused outright -- the build

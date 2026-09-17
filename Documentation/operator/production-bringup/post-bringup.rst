@@ -103,9 +103,9 @@ The most common failures, with the gate that produced them:
   key of its own``. The host was enrolled by a build that gave every publisher
   the same TPM key. A key cannot be rewritten in place, so the agent refuses
   to attest with it and the fix is one command per publisher:
-  ``sudo lota-agent --reenroll --ca-cert <their anchor>``. The device
-  pseudonym is derived from the key and moves with it, so each publisher's
-  verifier sees a device it has not met and re-establishes its baseline.
+  ``sudo lota-agent --reenroll --ca-cert <their anchor>``. The attestation
+  key is not part of the device ID, so the CA certifies the new key under the
+  existing one and each verifier keeps the baseline it holds.
   Nothing has been spent: the refusal happens before the boot commitment, so
   the host comes up in the same boot once the enrollment is done.
 
