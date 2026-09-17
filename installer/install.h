@@ -200,6 +200,15 @@ void installer_trust_refusal(char *buf, size_t cap, const char *key,
 int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 				  int n);
 
+/*
+ * install_reboot_required - the sentence a run that stops for a reboot opens
+ * with
+ *
+ * @buf, @cap: filled with the sentence.
+ * @note:      why, as the stage that asked for the reboot put it.
+ */
+void install_reboot_required(char *buf, size_t cap, const char *note);
+
 /* Stage table (stages.c); barrier_index marks the reboot checkpoint */
 extern const struct stage install_stages[];
 extern const int install_stage_count;

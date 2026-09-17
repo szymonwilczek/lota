@@ -1593,6 +1593,13 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 	return EXIT_INSTALL_DEFERRED;
 }
 
+void install_reboot_required(char *buf, size_t cap, const char *note)
+{
+	snprintf(buf, cap,
+		 "Reboot is required before the install can continue: %s.",
+		 note);
+}
+
 const struct stage install_stages[] = {
 	{
 		.title = "Preflight: Hardware and Host Requirements",

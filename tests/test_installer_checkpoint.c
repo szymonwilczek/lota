@@ -12,6 +12,9 @@
  *
  * The exit code says the same thing: a run that left work to a person has not
  * finished the install, and a caller that reads only the code must see that.
+ *
+ * A run that stops for a reboot quotes the stage's reason in a sentence of its
+ * own, and stage notes mostly end in a full stop already.
  */
 
 #include <stdio.h>
@@ -166,6 +169,34 @@ static void test_the_codes_are_distinct(void)
 	PASS();
 }
 
+static void reboot_sentence_ends_once(const char *reason)
+{
+	char buf[512];
+	size_t len;
+
+	install_reboot_required(buf, sizeof(buf), reason);
+	len = strlen(buf);
+	if (!strstr(buf, "Reboot is required") ||
+	    !strstr(buf, "hardware reset"))
+		FAIL(buf);
+	else if (len < 2 || buf[len - 1] != '.' || buf[len - 2] == '.')
+		FAIL(buf);
+	else
+		PASS();
+}
+
+static void test_a_reboot_reason_that_ends_in_a_stop(void)
+{
+	TEST("a reason with its own full stop gets no second one");
+	reboot_sentence_ends_once("PCR14 only resets on a hardware reset.");
+}
+
+static void test_a_reboot_reason_without_a_stop(void)
+{
+	TEST("a reason without a full stop gets one");
+	reboot_sentence_ends_once("PCR14 only resets on a hardware reset");
+}
+
 int main(void)
 {
 	printf("\n=== lota-install: the unattended checkpoint ===\n");
@@ -175,6 +206,8 @@ int main(void)
 	test_two_deferred_stages_are_both_named();
 	test_a_deferral_is_not_success();
 	test_the_codes_are_distinct();
+	test_a_reboot_reason_that_ends_in_a_stop();
+	test_a_reboot_reason_without_a_stop();
 
 	printf("\nPassed: %d / %d\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

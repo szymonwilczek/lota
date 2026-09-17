@@ -308,10 +308,10 @@ static int run_status(struct install_ctx *ctx)
 
 static void print_reboot_box(struct install_ctx *ctx, const char *note)
 {
-	ui_text(&ctx->ui,
-		"\nReboot is required before the install can "
-		"continue: %s.",
-		note);
+	char why[STAGE_NOTE_CAP + 128];
+
+	install_reboot_required(why, sizeof(why), note);
+	ui_text(&ctx->ui, "\n%s", why);
 	ui_text(&ctx->ui, "PCR 14 - the TPM slot LOTA measures itself into - "
 			  "only resets on a hardware reset, so this cannot "
 			  "be skipped or faked in software.");
