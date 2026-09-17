@@ -29,21 +29,23 @@ lifted to scalar parameters. `reference.h` reimplements the intended verdict
 independently, sourced from the system ABI headers rather than the BPF
 program's hand-defined constants.
 
-| Harness | Mirror (`lota_lsm_logic.h`) | Production source |
+| Harness | Mirror (`lota_lsm_logic.h`) | Production helper (`src/bpf/lota_lsm.bpf.c`) |
 |---|---|---|
-| `fuzz_open_flags.c` | `mirror_is_write_open_flags` | `src/bpf/lota_lsm.bpf.c:737` (+ `O_*` macros `:83-94`) |
-| `fuzz_kmem_device.c` | `mirror_is_kernel_mem_device` | `src/bpf/lota_lsm.bpf.c:760` (+ `S_IF*` macros `:96-100`) |
-| `fuzz_inaccessible_exec.c` | `mirror_is_inaccessible_exec` | `src/bpf/lota_lsm.bpf.c:801` (+ flag `:64-65`) |
-| `fuzz_shebang.c` | `mirror_is_shebang` | `src/bpf/lota_lsm.bpf.c:788` |
+| `fuzz_open_flags.c` | `mirror_is_write_open_flags` | `is_write_open_flags` (+ `LOTA_O_*` macros) |
+| `fuzz_kmem_device.c` | `mirror_is_kernel_mem_device` | `is_kernel_mem_device` (+ `S_IFMT`, `S_IFCHR`) |
+| `fuzz_inaccessible_exec.c` | `mirror_is_inaccessible_exec` | `is_inaccessible_exec_path` (+ `BINPRM_FLAGS_PATH_INACCESSIBLE`) |
+| `fuzz_shebang.c` | `mirror_is_shebang` | `is_shebang_binprm` |
 
 ### Keeping the mirror honest
 
-Mirror is a copy and can drift from production. When a mirrored helper or
-macro in `src/bpf/lota_lsm.bpf.c` changes, update the matching block in
-`lota_lsm_logic.h` and the line references in this file. A `check-bpf-mirror`
-guard that diffs the production lines against the mirror is the planned next
-step; until then this is a manual review obligation on changes to the
-referenced source lines.
+`mirror.lock` pins each mirrored helper by a hash of its body and each macro by
+its `#define`. `make check-bpf-mirror` (run by `scripts/check-patch`) fails when
+production no longer matches the lock, or when a file here cites
+`src/bpf/lota_lsm.bpf.c` by line number; name the helper or macro instead.
+
+On a reported change, update the block in `lota_lsm_logic.h` (and `reference.h`
+if the intended verdict changed), run `make update-bpf-mirror` and commit the
+lock with the change.
 
 ## Build / run
 
