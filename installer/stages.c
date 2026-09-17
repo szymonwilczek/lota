@@ -1593,11 +1593,15 @@ int install_unattended_checkpoint(char *buf, size_t cap, const int *deferred,
 	return EXIT_INSTALL_DEFERRED;
 }
 
+/* the stage's reason is quoted whole, and mostly brings its own full stop */
 void install_reboot_required(char *buf, size_t cap, const char *note)
 {
+	size_t len = note ? strlen(note) : 0;
+	int stop = len && strchr(".!?", note[len - 1]);
+
 	snprintf(buf, cap,
-		 "Reboot is required before the install can continue: %s.",
-		 note);
+		 "Reboot is required before the install can continue: %s%s",
+		 note ? note : "", stop ? "" : ".");
 }
 
 const struct stage install_stages[] = {
