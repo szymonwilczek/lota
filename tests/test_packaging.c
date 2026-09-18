@@ -1839,6 +1839,95 @@ static void test_probe_quotes_the_keys_the_host_attests_with(void)
 }
 
 /*
+ * A key replaced before the CA answers is named by no certificate:
+ * run_enrollment() calls net_connect() before tpm_provision_aik().
+ */
+static void test_enrollment_reaches_the_ca_before_it_spends_a_key(void)
+{
+	static char buf[262144];
+	const char *enrolls, *end, *opens, *asks, *helper;
+	size_t span;
+
+	TEST("agent: enrollment reaches the CA before replacing a key");
+
+	if (!slurp_shipped("src/agent/enroll_client.c", buf, sizeof(buf))) {
+		FAIL("could not read the enrollment client");
+		return;
+	}
+
+	enrolls = strstr(buf, "static int run_enrollment(");
+	end = enrolls ? strstr(enrolls, "\n}\n") : NULL;
+	if (!enrolls || !end) {
+		FAIL("could not find the enrollment this all runs through");
+		return;
+	}
+	span = (size_t)(end - enrolls);
+
+	asks = memmem(enrolls, span, "tpm_provision_aik(",
+		      strlen("tpm_provision_aik("));
+	if (!asks) {
+		FAIL("the enrollment no longer asks for a key");
+		return;
+	}
+	opens = memmem(enrolls, span, "ca_session_opens(",
+		       strlen("ca_session_opens("));
+	if (!opens || opens > asks) {
+		FAIL("the key is replaced before the CA is reached");
+		return;
+	}
+
+	/* and what it opens is a session, not a name that reads like one */
+	helper = strstr(buf, "static int ca_session_opens(");
+	if (!helper || helper > enrolls) {
+		FAIL("nothing opens a session to the CA");
+		return;
+	}
+	if (!memmem(helper, (size_t)(enrolls - helper), "net_connect(",
+		    strlen("net_connect("))) {
+		FAIL("the session is declared open without connecting");
+		return;
+	}
+	PASS();
+}
+
+/* A command-line endpoint beats the recorded one; a stale one spends the key. */
+static void test_reenroll_dials_what_the_command_line_named(void)
+{
+	static char buf[262144];
+	const char *verb, *end;
+	size_t span;
+
+	TEST("agent: --reenroll dials the endpoint it was given");
+
+	if (!slurp_shipped("src/agent/enroll_client.c", buf, sizeof(buf))) {
+		FAIL("could not read the enrollment client");
+		return;
+	}
+
+	verb = strstr(buf, "int do_reenroll(");
+	end = verb ? strstr(verb, "\n}\n") : NULL;
+	if (!verb || !end) {
+		FAIL("could not find the re-enrollment verb");
+		return;
+	}
+	span = (size_t)(end - verb);
+
+	if (!memmem(verb, span, "enroll_endpoint_server(",
+		    strlen("enroll_endpoint_server(")) ||
+	    !memmem(verb, span, "enroll_endpoint_port(",
+		    strlen("enroll_endpoint_port("))) {
+		FAIL("the verb dials the record whatever it was given");
+		return;
+	}
+	if (!memmem(verb, span, "enroll_endpoint_source(",
+		    strlen("enroll_endpoint_source("))) {
+		FAIL("the run never says which endpoint it dialled");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A key --seal-aik-auth cannot seal usually has no plaintext left,
  * so the failure line must read each key's auth state, not assert plaintext.
  */
@@ -1920,6 +2009,8 @@ int main(void)
 	test_shared_key_refusal_names_the_publisher();
 	test_shared_key_refusal_survives_several_publishers();
 	test_probe_quotes_the_keys_the_host_attests_with();
+	test_enrollment_reaches_the_ca_before_it_spends_a_key();
+	test_reenroll_dials_what_the_command_line_named();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
