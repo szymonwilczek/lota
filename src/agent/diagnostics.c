@@ -193,7 +193,9 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	 * persistent daemon must not: it is reached only when this function
 	 * falls through to "return -1" below, where the flag is cleared again.
 	 */
-	g_agent.tpm_ctx.allow_env_tpm_overrides = true;
+	g_agent.tpm_ctx.allow_env_tpm_overrides = attest_env_overrides_allowed(
+		opts->attest_flag, opts->attest_interval,
+		cfg ? cfg->profile_count : 0);
 
 	if (opts->shutdown_flag) {
 		int sret = ipc_request_shutdown();
