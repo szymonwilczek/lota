@@ -901,6 +901,17 @@ resolve_attest_profile(const char *ca_cert, struct profile_paths *storage)
 	return storage;
 }
 
+/* A bind drops the AIK record, the only mark of a shared key: reload it. */
+static int provision_bound_aik(void)
+{
+	int ret = tpm_aik_load_metadata(&g_agent.tpm_ctx);
+
+	if (ret < 0)
+		return ret;
+
+	return tpm_provision_aik(&g_agent.tpm_ctx);
+}
+
 /*
  * Exit status for a refused self-measurement: LOTA_EXIT_OPERATOR_ACTION
  * when lota_daemon_exit_status() says a restart cannot clear it, else 1.
@@ -977,7 +988,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 
 	printf("Checking AIK...\n");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
@@ -1204,7 +1215,7 @@ static int bind_target(struct attest_target *t)
 		return ret;
 	}
 
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
 		/*
 		 * Replacing a shared key would orphan its certificate,
@@ -1883,7 +1894,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 
 	lota_info("Checking AIK");
 	key_present = tpm_aik_key_present(&g_agent.tpm_ctx);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	ret = provision_bound_aik();
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
