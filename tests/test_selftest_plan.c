@@ -10,8 +10,8 @@
  * that takes one of those slots costs the machine something it was never asked
  * about.
  *
- * The decision is a pure function of one answer from the TPM: is a key already
- * at the handle.
+ * Both decisions are pure: whether a key is at the handle,
+ * and whose key is quoted.
  */
 
 #include <errno.h>
@@ -55,6 +55,26 @@ static void test_unreadable_tpm_creates_nothing(void)
 	CHECK(selftest_aik_plan(-5) == SELFTEST_AIK_SKIP,
 	      "an unreadable handle is not treated as an invitation to "
 	      "provision");
+}
+
+/*
+ * Once publishers hold keys, the pre-profile records pair the first
+ * publisher's handle with a stale authorization: quoting fails and
+ * spends a DA attempt.
+ */
+static void test_publisher_keys_are_what_is_quoted(void)
+{
+	CHECK(selftest_quote_key(1) == SELFTEST_QUOTE_PER_PUBLISHER,
+	      "one publisher holding a key is the key the probe quotes with");
+	CHECK(selftest_quote_key(5) == SELFTEST_QUOTE_PER_PUBLISHER,
+	      "several publishers holding keys are all the probe's to quote");
+}
+
+static void test_no_publisher_leaves_the_pre_profile_key(void)
+{
+	CHECK(selftest_quote_key(0) == SELFTEST_QUOTE_PRE_PROFILE,
+	      "with no publisher holding a key the pre-profile records are "
+	      "the ones that describe this host");
 }
 
 /*
@@ -106,6 +126,8 @@ int main(void)
 	test_existing_key_is_used();
 	test_free_handle_creates_nothing();
 	test_unreadable_tpm_creates_nothing();
+	test_publisher_keys_are_what_is_quoted();
+	test_no_publisher_leaves_the_pre_profile_key();
 	test_a_failed_section_is_not_success();
 	test_nothing_failed_is_success();
 	test_the_tally_counts_what_it_is_told();

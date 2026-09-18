@@ -35,6 +35,21 @@ static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 				   SELFTEST_AIK_SKIP;
 }
 
+/* Whose attestation key --test-tpm quotes with */
+enum selftest_quote_key {
+	/* No publisher key: the /var/lib/lota records name the host's key */
+	SELFTEST_QUOTE_PRE_PROFILE,
+	/* Each publisher's own key; the pre-profile records are stale */
+	SELFTEST_QUOTE_PER_PUBLISHER,
+};
+
+/* @keys_held: publishers_keys_held() over this host's profiles */
+static inline enum selftest_quote_key selftest_quote_key(size_t keys_held)
+{
+	return keys_held > 0 ? SELFTEST_QUOTE_PER_PUBLISHER :
+			       SELFTEST_QUOTE_PRE_PROFILE;
+}
+
 /*
  * What a probe learned about the things it tried.
  *
