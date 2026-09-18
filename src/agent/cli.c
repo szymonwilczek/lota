@@ -483,6 +483,7 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 				return 1;
 			}
 			opts->ca_port = (int)v;
+			opts->ca_port_given = true;
 		} break;
 		case 'K':
 			opts->no_verify_tls = 1;

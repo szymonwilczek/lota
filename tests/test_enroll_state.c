@@ -233,8 +233,56 @@ static void test_renew_anchor_prefers_the_configured_one(void)
 	      "NULL output is refused");
 }
 
+static void test_nothing_given_keeps_the_recorded_endpoint(void)
+{
+	CHECK(enroll_endpoint_source(NULL, 0) == ENROLL_ENDPOINT_FROM_RECORD,
+	      "a bare --reenroll dials the recorded endpoint");
+	CHECK(strcmp(enroll_endpoint_server("ca.example", NULL),
+		     "ca.example") == 0,
+	      "the recorded host stands when none was given");
+	CHECK(enroll_endpoint_port(8545, 0) == 8545,
+	      "the recorded port stands when none was given");
+	CHECK(enroll_endpoint_source("", 0) == ENROLL_ENDPOINT_FROM_RECORD,
+	      "an empty host is not a host that was named");
+	CHECK(strcmp(enroll_endpoint_server("ca.example", ""), "ca.example") ==
+		      0,
+	      "an empty host does not displace the recorded one");
+}
+
+static void test_a_given_endpoint_wins(void)
+{
+	CHECK(enroll_endpoint_source("ca.new", 9000) ==
+		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
+	      "a host and port on the command line are what the run dials");
+	CHECK(strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") == 0,
+	      "the given host displaces the recorded one");
+	CHECK(enroll_endpoint_port(8546, 8545) == 8545,
+	      "the given port displaces the recorded one");
+}
+
+/* A field not given keeps the recorded value. */
+static void test_either_field_alone_is_an_endpoint(void)
+{
+	CHECK(enroll_endpoint_source(NULL, 8545) ==
+		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
+	      "a port alone is an endpoint the command line named");
+	CHECK(enroll_endpoint_source("ca.new", 0) ==
+		      ENROLL_ENDPOINT_FROM_COMMAND_LINE,
+	      "a host alone is an endpoint the command line named");
+	CHECK(strcmp(enroll_endpoint_server("ca.old", NULL), "ca.old") == 0 &&
+		      enroll_endpoint_port(8546, 8545) == 8545,
+	      "a port alone keeps the recorded host");
+	CHECK(strcmp(enroll_endpoint_server("ca.old", "ca.new"), "ca.new") ==
+			      0 &&
+		      enroll_endpoint_port(8546, 0) == 8546,
+	      "a host alone keeps the recorded port");
+}
+
 int main(void)
 {
+	test_nothing_given_keeps_the_recorded_endpoint();
+	test_a_given_endpoint_wins();
+	test_either_field_alone_is_an_endpoint();
 	test_renew_anchor_prefers_the_configured_one();
 	test_roundtrip();
 	test_rejects_v1_record();

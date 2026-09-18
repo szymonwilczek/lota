@@ -352,8 +352,11 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			opts->server_overridden ? opts->server_addr : NULL,
 			opts->server_port, opts->attest_interval, true));
 
+	/* only a typed --ca-port overrides the recorded one */
 	if (opts->reenroll_flag)
-		return diagnostic_exit_code(do_reenroll(opts->ca_cert_path));
+		return diagnostic_exit_code(
+			do_reenroll(opts->ca_cert_path, opts->ca_server,
+				    opts->ca_port_given ? opts->ca_port : 0));
 
 	if (opts->enroll_flag) {
 		if (!opts->ca_server) {

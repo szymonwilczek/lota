@@ -747,8 +747,9 @@ a profile whose keys have since been pointed somewhere else is reported once::
    --ca-server ca.example --ca-port 8444 --ca-cert /etc/lota/ca.crt to
    move it
 
-``--reenroll`` reuses the recorded endpoint by design and will not move it;
-moving a publisher's CA is an ``--enroll`` naming the new address.
+``--reenroll`` reuses the recorded endpoint; ``--ca-server``/``--ca-port``
+override it for a moved CA, and the new endpoint is recorded once the CA
+certifies the key. An unreachable CA changes nothing on the host.
 
 First enrollment stays operator-driven. ``lota-attest.service`` carries
 ``ConditionDirectoryNotEmpty=/var/lib/lota/profiles`` and stays inactive until

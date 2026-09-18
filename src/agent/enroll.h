@@ -200,16 +200,43 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 int do_enroll(const char *server, int port, const char *ca_cert,
 	      int skip_verify, const uint8_t *pin, const char *token_file);
 
+/* Endpoint a re-enrollment dials */
+enum enroll_endpoint_source {
+	ENROLL_ENDPOINT_FROM_RECORD, /* nothing named on the command line */
+	ENROLL_ENDPOINT_FROM_COMMAND_LINE, /* a host, a port or both named */
+};
+
+/* @given_server: --ca-server or NULL; @given_port: --ca-port or 0 */
+static inline enum enroll_endpoint_source
+enroll_endpoint_source(const char *given_server, int given_port)
+{
+	return (given_server && given_server[0]) || given_port > 0 ?
+		       ENROLL_ENDPOINT_FROM_COMMAND_LINE :
+		       ENROLL_ENDPOINT_FROM_RECORD;
+}
+
+/* Per field: one not given keeps the record's */
+static inline const char *enroll_endpoint_server(const char *recorded_server,
+						 const char *given_server)
+{
+	return given_server && given_server[0] ? given_server : recorded_server;
+}
+
+static inline int enroll_endpoint_port(int recorded_port, int given_port)
+{
+	return given_port > 0 ? given_port : recorded_port;
+}
+
 /*
  * Guided re-enrollment:
- * Reuse the endpoint recorded by the last successful -enroll against the same
+ * Reuse the endpoint recorded by the last successful --enroll against the same
  * CA trust anchor, run fresh credential activation, and refresh the certificate
  * and recorded state.
  *
- * Needs no other CA arguments and no manual CA steps.
+ * ca_server and ca_port override the recorded endpoint unless NULL / 0.
  * Returns 0 on success, 1 on failure.
  */
-int do_reenroll(const char *ca_cert);
+int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port);
 
 /*
  * Daemon-side certificate renewal:

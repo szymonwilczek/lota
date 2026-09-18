@@ -120,6 +120,37 @@ static int store_cert(const char *path, const uint8_t *der, size_t len)
 	return write_file_atomic(path, der, len, 0644);
 }
 
+/* TLS setup failed before sending: the cause is local */
+static void report_ca_setup_failed(const char *server, int port,
+				   const char *ca_cert, int ret)
+{
+	fprintf(stderr,
+		"Failed to set up the TLS channel to the CA at %s:%d: %s.\n"
+		"What it is built from is the certificate named by "
+		"--ca-cert%s%s%s.\n",
+		server, port, net_strerror(ret), ca_cert ? " (" : "",
+		ca_cert ? ca_cert : "", ca_cert ? ")" : "");
+}
+
+/* A TLS refusal is reported apart: the CA answered, the anchor is at fault */
+static void report_ca_unreachable(const char *server, int port,
+				  const char *ca_cert, int ret)
+{
+	if (net_err_is_tls(ret))
+		fprintf(stderr,
+			"The attestation CA at %s:%d answered, and "
+			"this host refused the TLS connection: %s.\n"
+			"What decides that is the certificate named by "
+			"--ca-cert%s%s%s.\n",
+			server, port, net_strerror(ret), ca_cert ? " (" : "",
+			ca_cert ? ca_cert : "", ca_cert ? ")" : "");
+	else
+		fprintf(stderr,
+			"Could not reach the attestation CA at %s:%d: %s. "
+			"Confirm lota-attest-ca is running and reachable.\n",
+			server, port, net_strerror(ret));
+}
+
 int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		 const char *ca_cert, int skip_verify, const uint8_t *pin,
 		 const char *token, const char *out_cert_path)
@@ -195,31 +226,13 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	memset(&net, 0, sizeof(net));
 	ret = net_context_init(&net, server, port, ca_cert, skip_verify, pin);
 	if (ret < 0) {
-		fprintf(stderr,
-			"Failed to set up the TLS channel to the CA at %s:%d "
-			"(check --ca-cert): %s\n",
-			server, port, net_strerror(ret));
+		report_ca_setup_failed(server, port, ca_cert, ret);
 		goto out;
 	}
 	net_inited = 1;
 	ret = net_connect(&net);
 	if (ret < 0) {
-		/* refused here: the remedy is --ca-cert, not the CA */
-		if (net_err_is_tls(ret))
-			fprintf(stderr,
-				"The attestation CA at %s:%d answered, and "
-				"this host refused the TLS connection: %s.\n"
-				"What decides that is the certificate named by "
-				"--ca-cert%s%s%s.\n",
-				server, port, net_strerror(ret),
-				ca_cert ? " (" : "", ca_cert ? ca_cert : "",
-				ca_cert ? ")" : "");
-		else
-			fprintf(stderr,
-				"Could not reach the attestation CA at %s:%d: "
-				"%s. Confirm lota-attest-ca is running and "
-				"reachable.\n",
-				server, port, net_strerror(ret));
+		report_ca_unreachable(server, port, ca_cert, ret);
 		goto out;
 	}
 
@@ -535,6 +548,32 @@ static void report_slot_the_attempt_took(const struct profile_paths *paths)
 }
 
 /*
+ * Handshake and hang up before the host changes: a failure here costs no TPM
+ * object, persistent slot or dictionary-attack attempt.
+ */
+static int ca_session_opens(const char *server, int port, const char *ca_cert,
+			    int skip_verify, const uint8_t *pin)
+{
+	struct net_context net;
+	int ret;
+
+	memset(&net, 0, sizeof(net));
+	ret = net_context_init(&net, server, port, ca_cert, skip_verify, pin);
+	if (ret < 0) {
+		report_ca_setup_failed(server, port, ca_cert, ret);
+		return ret;
+	}
+
+	ret = net_connect(&net);
+	if (ret < 0)
+		report_ca_unreachable(server, port, ca_cert, ret);
+	else
+		net_disconnect(&net);
+	net_context_cleanup(&net);
+	return ret;
+}
+
+/*
  * Bring up the TPM, provision the AIK, run one enrollment against the CA,
  * store the certificate, and record the endpoint. Returns 0 on success,
  * negative errno on failure.
@@ -559,6 +598,17 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize network: %s\n",
 			net_strerror(ret));
+		return ret;
+	}
+
+	/* before the TPM, so an absent CA spends no key */
+	printf("Reaching the CA at %s:%d...\n", server, port);
+	ret = ca_session_opens(server, port, ca_cert, skip_verify, pin);
+	if (ret < 0) {
+		fprintf(stderr,
+			"Nothing on this host was changed: no key was created "
+			"or replaced, and no certificate was written.\n");
+		net_cleanup();
 		return ret;
 	}
 
@@ -774,10 +824,12 @@ int do_enroll(const char *server, int port, const char *ca_cert,
 	return ret == 0 ? 0 : 1;
 }
 
-int do_reenroll(const char *ca_cert)
+int do_reenroll(const char *ca_cert, const char *ca_server, int ca_port)
 {
 	struct profile_paths paths;
 	struct enroll_state st;
+	const char *server;
+	int port;
 	int ret;
 
 	if (resolve_profile(ca_cert, &paths) < 0)
@@ -818,16 +870,25 @@ int do_reenroll(const char *ca_cert)
 		return 1;
 	}
 
-	printf("=== Re-enrolling with %s:%d (profile %s) ===\n\n", st.ca_server,
-	       st.ca_port, paths.id);
-
 	/*
-	 * endpoint comes from the record, the anchor from the caller:
-	 * the anchor is what selected this record in the first place,
-	 * so stale path in the record cannot send the re-enrollment somewhere else
+	 * Anchor from the caller, which selected this record by it, so a stale
+	 * path in the record cannot redirect to another publisher.
+	 * Endpoint from the record unless given.
 	 */
-	ret = run_enrollment(&paths, st.ca_server, st.ca_port, ca_cert,
-			     st.no_verify_tls,
+	server = enroll_endpoint_server(st.ca_server, ca_server);
+	port = enroll_endpoint_port(st.ca_port, ca_port);
+
+	printf("=== Re-enrolling with %s:%d (profile %s) ===\n", server, port,
+	       paths.id);
+	if (enroll_endpoint_source(ca_server, ca_port) ==
+	    ENROLL_ENDPOINT_FROM_COMMAND_LINE)
+		printf("The record names %s:%d; this run uses the endpoint "
+		       "given on the command line, and records it once the CA "
+		       "certifies the key.\n",
+		       st.ca_server, st.ca_port);
+	printf("\n");
+
+	ret = run_enrollment(&paths, server, port, ca_cert, st.no_verify_tls,
 			     st.has_pin ? st.pin_sha256 : NULL,
 			     st.enroll_token[0] ? st.enroll_token : NULL);
 	OPENSSL_cleanse(&st, sizeof(st));

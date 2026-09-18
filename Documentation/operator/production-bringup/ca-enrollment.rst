@@ -254,6 +254,24 @@ with ``Enrollment record for publisher <id> is unreadable``, naming the file
 and the way out, instead of enrolling over it, and the renewal line says the
 endpoint is inside that record.
 
+A CA that has moved is named on the command line. ``--ca-server`` and
+``--ca-port`` override the recorded endpoint per field, so a port alone keeps
+the recorded host:
+
+.. code-block:: sh
+
+    sudo lota-agent --reenroll --ca-cert ca.crt \
+        --ca-server ca.example --ca-port 8545
+
+The run prints the endpoint it dialled (and the recorded one, when they
+differ) and records the new one once the CA certifies the key. The CA session
+opens before anything on the host changes, so an unreachable CA or a refused
+anchor costs no TPM object, slot or dictionary-attack attempt, and the run
+says ``Nothing on this host was changed: no key was created or replaced, and
+no certificate was written``. Only the consent record stays, for the next
+attempt to reuse. Otherwise the shared-key re-enrollment below would leave a
+key no certificate names.
+
 A certificate that expires anyway (CA unreachable through the final third,
 or agent not running) is refused with ``FAIL - This host's attestation
 certificate is outside the window it is valid in``, counted as
