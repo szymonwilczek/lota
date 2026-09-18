@@ -104,7 +104,10 @@ run as a sequential prompted flow suitable for logs and scripts. There a stage
 with work to do prints what it found after ``Before this stage:`` and ends
 ``applied``; a stage with nothing to do reports ``already satisfied``. An
 upgrade that brings a binary without fs-verity thus shows that stage as
-``applied``.
+``applied``. Prompts take ``y`` or ``n`` (``q`` quits) and the bracket shows
+what Enter means: yes for a stage, no for ``--pause`` and ``--resume``, whose
+yes cannot be undone in the same boot. An unrecognised answer is asked again
+and never proceeds.
 
 Exit codes:
 
@@ -370,8 +373,8 @@ Pausing and removing
   contract, not a bug: same-boot re-attestation after a shutdown would let a
   tampered session pose as the original one.
 * **Resume:** ``sudo lota-install --resume`` explains that resuming is a reboot
-  and offers to reboot now; after it the socket-activated agent starts on its
-  own and re-measures into a fresh PCR 14.
+  and offers to reboot now (default no); the socket-activated agent then
+  starts on its own and re-measures into a fresh PCR 14.
 * **Remove:** take the host off the kernel floor (drop the cmdline parameters)
   and disable the service. The agent then refuses to run and the host simply
   stops attesting. The design degrades gracefully: ``disabled`` means

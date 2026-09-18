@@ -483,9 +483,11 @@ static void confirm_drain(const char *line)
 		;
 }
 
-int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
+int ui_confirm(struct ui *ui, const char *prompt, int assume_yes,
+	       enum ui_default def)
 {
-	const int def = 1;
+	const int enter = def == UI_DEFAULT_YES;
+	const char *bracket = enter ? "[Y/n, q to quit]" : "[y/N, q to quit]";
 	char line[64];
 	int answer, try;
 
@@ -499,17 +501,17 @@ int ui_confirm(struct ui *ui, const char *prompt, int assume_yes)
 
 	for (try = 0; try < UI_CONFIRM_TRIES; try++) {
 		if (ui->tty)
-			printf("  %s->%s %s %s[Y/n, q to quit]%s ",
-			       col(ui, SGR_CYAN), col(ui, SGR_RESET), prompt,
-			       col(ui, SGR_DIM), col(ui, SGR_RESET));
+			printf("  %s->%s %s %s%s%s ", col(ui, SGR_CYAN),
+			       col(ui, SGR_RESET), prompt, col(ui, SGR_DIM),
+			       bracket, col(ui, SGR_RESET));
 		else
-			printf("[lota-install] %s [Y/n, q to quit] ", prompt);
+			printf("[lota-install] %s %s ", prompt, bracket);
 		fflush(stdout);
 
 		if (!fgets(line, sizeof(line), stdin))
 			return 0;
 		confirm_drain(line);
-		if (confirm_answer(line, def, &answer))
+		if (confirm_answer(line, enter, &answer))
 			return answer;
 		ui_text(ui, "Answer y or n ('q' quits).");
 	}

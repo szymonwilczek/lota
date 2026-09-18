@@ -323,7 +323,8 @@ static int do_pause(struct install_ctx *ctx)
 		"(PCR 14) on purpose, so this boot can no longer attest. That "
 		"is the security contract, not a fault: resuming therefore "
 		"needs a reboot (see --resume).");
-	if (!ui_confirm(&ctx->ui, "Pause the agent now?", ctx->opts.yes)) {
+	if (!ui_confirm(&ctx->ui, "Pause the agent now?", ctx->opts.yes,
+			UI_DEFAULT_NO)) {
 		ui_text(&ctx->ui, "Left running. Nothing changed.");
 		return EXIT_INSTALL_OK;
 	}
@@ -468,7 +469,8 @@ static int do_resume(struct install_ctx *ctx)
 			"Reboot when ready: 'sudo systemctl reboot'.");
 		return EXIT_INSTALL_OK;
 	}
-	if (!ui_confirm(&ctx->ui, "Reboot now to resume?", ctx->opts.yes)) {
+	if (!ui_confirm(&ctx->ui, "Reboot now to resume?", ctx->opts.yes,
+			UI_DEFAULT_NO)) {
 		ui_text(&ctx->ui,
 			"Reboot when ready: 'sudo systemctl reboot'.");
 		return EXIT_INSTALL_OK;
@@ -599,7 +601,7 @@ int main(int argc, char **argv)
 			ui_text(&ctx.ui, "Before this stage: %s%s", note,
 				ends_in_stop(note) ? "" : ".");
 			if (!ui_confirm(&ctx.ui, "Apply this stage?",
-					ctx.opts.yes)) {
+					ctx.opts.yes, UI_DEFAULT_YES)) {
 				ui_text(&ctx.ui, "Aborted at your request. "
 						 "Nothing further was "
 						 "changed. Re-run to "

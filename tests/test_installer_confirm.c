@@ -28,10 +28,11 @@ static int g_failures;
 	} while (0)
 
 /*
- * Run ui_confirm() with @input on stdin; the prompt it prints lands in @out.
+ * Feed @input to ui_confirm() with default @def; its prompt lands in @out.
  * stdin is a file, so end of input arrives as in a scripted run.
  */
-static int ask(const char *input, char *out, size_t outsz)
+static int ask_def(const char *input, enum ui_default def, char *out,
+		   size_t outsz)
 {
 	char in_path[] = "/tmp/lota-confirm-in-XXXXXX";
 	char out_path[] = "/tmp/lota-confirm-out-XXXXXX";
@@ -66,7 +67,7 @@ static int ask(const char *input, char *out, size_t outsz)
 	}
 
 	ui_init(&ui, 1);
-	rc = ui_confirm(&ui, "Apply this stage?", 0);
+	rc = ui_confirm(&ui, "Apply this stage?", 0, def);
 
 	fflush(stdout);
 	if (dup2(saved, STDOUT_FILENO) < 0) {
@@ -85,6 +86,12 @@ static int ask(const char *input, char *out, size_t outsz)
 	unlink(in_path);
 	unlink(out_path);
 	return rc;
+}
+
+/* Default yes, as for a stage. */
+static int ask(const char *input, char *out, size_t outsz)
+{
+	return ask_def(input, UI_DEFAULT_YES, out, outsz);
 }
 
 /* Every spelling of no declines. */
@@ -136,16 +143,35 @@ static void test_unknown_never_proceeds(void)
 	      "an unrecognised answer is asked again, and no then declines");
 }
 
+/* Enter takes the caller's default; under UI_DEFAULT_NO it declines. */
+static void test_enter_takes_the_default(void)
+{
+	char seen[1024];
+
+	CHECK(ask_def("\n", UI_DEFAULT_YES, seen, sizeof(seen)) == 1,
+	      "Enter proceeds where the default is yes");
+	CHECK(ask_def("\n", UI_DEFAULT_NO, seen, sizeof(seen)) == 0,
+	      "Enter declines where the default is no");
+	CHECK(ask_def("y\n", UI_DEFAULT_NO, seen, sizeof(seen)) == 1,
+	      "yes still proceeds where the default is no");
+	CHECK(ask_def("n\n", UI_DEFAULT_YES, seen, sizeof(seen)) == 0,
+	      "no still declines where the default is yes");
+}
+
 static void test_prompt_names_the_answers(void)
 {
 	char seen[1024];
 
-	(void)ask("y\n", seen, sizeof(seen));
+	(void)ask_def("y\n", UI_DEFAULT_YES, seen, sizeof(seen));
 	CHECK(strstr(seen, "Apply this stage?") != NULL,
 	      "the prompt is printed");
 	CHECK(strstr(seen, "Y/n") != NULL,
 	      "the bracket names yes and no, and which one Enter takes");
 	CHECK(strstr(seen, "q") != NULL, "the bracket still names quit");
+
+	(void)ask_def("y\n", UI_DEFAULT_NO, seen, sizeof(seen));
+	CHECK(strstr(seen, "y/N") != NULL,
+	      "a question that defaults to no says so in the bracket");
 }
 
 int main(void)
@@ -154,6 +180,7 @@ int main(void)
 	test_quit_declines();
 	test_yes_proceeds();
 	test_unknown_never_proceeds();
+	test_enter_takes_the_default();
 	test_prompt_names_the_answers();
 
 	if (g_failures) {
