@@ -229,7 +229,7 @@ socket that never appears:
 .. code:: bash
 
    # what the agent is allowed under the player's runtime directory
-   sudo sesearch -A -s lota_agent_t -t user_tmp_t
+   sudo sesearch -A -s lota_agent_t -t user_tmp_t -ds -dt
 
 A host that runs no titles does not need this module, and an agent without
 it keeps every other function.
@@ -243,26 +243,65 @@ path -- search on ``/run``, search on the user temporary directories and
 write on the socket -- and ``lota_gaming_client`` calls both, so a title
 following the Interface Reference below reaches the agent from either side.
 
-Steam
-~~~~~
+Reading the module back out of the policy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Steam and games launched through Steam can query LOTA attestation status:
+Every search below matches its types literally (``-ds -dt``). Without them
+``sesearch`` expands attributes and answers with the base policy's rules for
+``domain`` and ``unconfined_domain_type``, which hold without this module.
+
+Each search also starts from ``lota_agent_t``, the module's own type. A search
+from a title's domain misleads:
+
+* **The domain need not exist.** The Steam, Wine and games blocks are
+  ``optional_policy`` and are dropped at build time where the policy does not
+  declare the type. ``sesearch`` then refuses the search with
+  ``steam_t is not a valid type attribute``: the block is absent, not broken.
+* **The rules need not survive linking.** A title domain with
+  ``unconfined_domain_type`` already reaches every domain, so the linker drops
+  the module's rules out of it as redundant.
+
+The installed module keeps every rule, linked or not:
 
 .. code:: bash
 
-   # Verify Steam can access LOTA
-   sudo sesearch -A -s steam_t -t lota_var_t
+   # writes lota_gaming.cil into the working directory
+   rm -f lota_gaming.cil
+   sudo semodule -c -E lota_gaming
+   grep -E 'steam|wine' lota_gaming.cil
+
+With the file still there the extract stops at ``lota_gaming is already
+extracted with extension cil``; the module is not missing.
+
+Steam
+~~~~~
+
+Steam and games launched through Steam can query LOTA attestation status
+where the policy declares a Steam domain:
+
+.. code:: bash
+
+   # is the domain the Steam block needs declared here at all
+   seinfo -t | grep -w steam_t
+
+   # what the agent is allowed towards it, where it is declared
+   sudo sesearch -A -s lota_agent_t -t steam_t -ds -dt
+
+An empty first answer means no Steam domain: the block was dropped and only
+the extracted module holds its rules. Such a title runs under whatever domain
+the policy gives it.
 
 Proton/Wine
 ~~~~~~~~~~~
 
-Windows games running via Proton have access to LOTA for anti-cheat
-verification:
+Windows games running via Proton reach LOTA for anti-cheat verification.
+A declared ``wine_t`` is usually unconfined, so only the agent's side of the
+rules survives linking:
 
 .. code:: bash
 
-   # Check Wine access
-   sudo sesearch -A -s wine_t -t lota_agent_t
+   # what the agent is allowed towards a Proton title
+   sudo sesearch -A -s lota_agent_t -t wine_t -ds -dt
 
 Anti-Cheat Systems
 ~~~~~~~~~~~~~~~~~~
@@ -413,7 +452,7 @@ BPF program loading fails
    getsebool lota_bpf_load
 
    # Check BPF capabilities
-   sudo sesearch -A -s lota_agent_t -c bpf
+   sudo sesearch -A -s lota_agent_t -c bpf -ds -dt
 
 Steam cannot connect to LOTA
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -423,8 +462,17 @@ Steam cannot connect to LOTA
    # Verify socket label
    ls -Z /run/lota/lota.sock
 
-   # Check Steam access
-   sudo sesearch -A -s steam_t -t lota_var_t -c sock_file
+   # what the title actually runs as -- the rules apply to that domain
+   ps -eZ | grep -i steam
+
+   # is a Steam domain declared here at all
+   seinfo -t | grep -w steam_t
+
+   # what the agent is allowed towards it, where it is declared
+   sudo sesearch -A -s lota_agent_t -t steam_t -ds -dt
+
+The policy refuses an unconfined title nothing; look elsewhere for the
+failure.
 
 Network attestation blocked
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
