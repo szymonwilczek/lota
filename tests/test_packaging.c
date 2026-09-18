@@ -717,6 +717,146 @@ static void test_selinux_reference_searches_the_modules_own_rules(void)
 	PASS();
 }
 
+static void rstrip(char *line)
+{
+	size_t n = strlen(line);
+
+	while (n && isspace((unsigned char)line[n - 1]))
+		line[--n] = '\0';
+}
+
+/* one command, backslash continuations folded in */
+static bool read_command(FILE *fp, char *cmd, size_t cap)
+{
+	char *cont;
+
+	if (!fgets(cmd, (int)cap, fp))
+		return false;
+	rstrip(cmd);
+	cont = cmd + strlen(cmd);
+	while (cont > cmd && cont[-1] == '\\') {
+		char more[512];
+
+		cont[-1] = '\0';
+		if (!fgets(more, sizeof(more), fp))
+			break;
+		rstrip(more);
+		snprintf(cmd + strlen(cmd), cap - strlen(cmd), "%s", more);
+		cont = cmd + strlen(cmd);
+	}
+	return true;
+}
+
+static bool rst_underline(const char *line)
+{
+	size_t n = strlen(line);
+
+	if (n < 3 || isalnum((unsigned char)line[0]) ||
+	    isspace((unsigned char)line[0]))
+		return false;
+	for (size_t i = 1; i < n; i++) {
+		if (line[i] != line[0])
+			return false;
+	}
+	return true;
+}
+
+/*
+ * A lockout grep spelled differently from tpm2_getcap's output matches
+ * nothing, which reads as a healthy TPM.
+ * Every alternative must match a line of the page's own sample output.
+ */
+static void test_lockout_runbook_matches_what_the_chip_prints(void)
+{
+	enum {
+		SAMPLE_MAX = 16
+	};
+	char sample[SAMPLE_MAX][256];
+	size_t nsample = 0;
+	char line[256];
+	char cmd[1024];
+	char pattern[512];
+	char *open_quote;
+	char *close_quote;
+	char *alt;
+	FILE *fp;
+	bool found = false;
+
+	TEST("selinux: the lockout search matches what the chip prints");
+
+	fp = open_shipped("selinux/README.rst");
+	if (!fp) {
+		FAIL("could not open selinux/README.rst");
+		return;
+	}
+	while (read_command(fp, cmd, sizeof(cmd))) {
+		if (strstr(cmd, "tpm2_getcap properties-variable")) {
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		fclose(fp);
+		FAIL("the runbook reads no variable properties off the chip");
+		return;
+	}
+	open_quote = strstr(cmd, "grep -E \"");
+	if (!open_quote) {
+		fclose(fp);
+		FAIL("the lockout confirmation matches the dump against nothing");
+		return;
+	}
+	open_quote += strlen("grep -E \"");
+	close_quote = strchr(open_quote, '"');
+	if (!close_quote) {
+		fclose(fp);
+		FAIL("the lockout confirmation has an unterminated pattern");
+		return;
+	}
+	*close_quote = '\0';
+	snprintf(pattern, sizeof(pattern), "%s", open_quote);
+
+	/* the sample's literal block, within this section only */
+	while (fgets(line, sizeof(line), fp)) {
+		rstrip(line);
+		if (!nsample) {
+			size_t n = strlen(line);
+
+			if (rst_underline(line))
+				break;
+			if (n >= 2 && line[n - 1] == ':' && line[n - 2] == ':')
+				nsample = 1;
+			continue;
+		}
+		if (!line[0])
+			continue;
+		if (!isspace((unsigned char)line[0]))
+			break;
+		if (nsample - 1 < SAMPLE_MAX)
+			snprintf(sample[nsample - 1], sizeof(sample[0]), "%s",
+				 line);
+		nsample++;
+	}
+	fclose(fp);
+	if (nsample < 2) {
+		FAIL("the page quotes no output for the pattern to match");
+		return;
+	}
+	for (alt = strtok(pattern, "|"); alt; alt = strtok(NULL, "|")) {
+		bool hit = false;
+
+		for (size_t i = 0; i + 1 < nsample && i < SAMPLE_MAX; i++) {
+			if (strstr(sample[i], alt))
+				hit = true;
+		}
+		if (!hit) {
+			FAIL("the lockout confirmation matches on a field the chip does not print");
+			return;
+		}
+	}
+	PASS();
+}
+
 /* whole file into caller's buffer, NUL-terminated; 0 when it cannot be read */
 static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 {
@@ -1585,6 +1725,7 @@ int main(void)
 	test_selinux_policy_carries_no_portcon();
 	test_selinux_gaming_client_reaches_container_socket();
 	test_selinux_reference_searches_the_modules_own_rules();
+	test_lockout_runbook_matches_what_the_chip_prints();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
