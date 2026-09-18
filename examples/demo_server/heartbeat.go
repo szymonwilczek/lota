@@ -95,7 +95,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	game, known := s.gamesByHash[hdr.gameIDHash]
 	if !known {
 		s.recordVerdictWithLicense(sessionHex, gameHashHex,
-			verdictUntrust, "")
+			verdictUntrust, "", "unknown game_id_hash")
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, "unknown game_id_hash")
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -118,7 +118,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	if reason, ok := s.checkFreshness(hdr); !ok {
 		s.recordVerdictWithLicense(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID)
+			verdictUntrust, game.licenseID, reason)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -129,7 +129,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	if s.aik == nil {
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictReject, game.licenseID, hdr)
+			verdictReject, game.licenseID, "no AIK configured", hdr)
 		logf("session=%s seq=%d state=REJECT reason=%q",
 			sessionHex, hdr.sequence, "server has no AIK configured")
 		writeJSON(w, http.StatusServiceUnavailable, heartbeatResponse{
@@ -142,7 +142,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	claims, verr := verifysdk.VerifyToken(tokenBytes, s.aik, expected[:])
 	if verr != nil {
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID, hdr)
+			verdictUntrust, game.licenseID, verr.Error(), hdr)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, verr.Error())
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -151,8 +151,9 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Flags != hdr.lotaFlags {
-		s.recordVerdict(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID, hdr)
+		s.recordVerdict(sessionHex, gameHashHex, verdictUntrust,
+			game.licenseID,
+			"header flags do not match signed token", hdr)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, "flag mismatch")
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -165,7 +166,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		reason := fmt.Sprintf(
 			"token is missing required attestation flags 0x%08x", missing)
 		s.recordVerdict(sessionHex, gameHashHex,
-			verdictUntrust, game.licenseID, hdr)
+			verdictUntrust, game.licenseID, reason, hdr)
 		logf("session=%s seq=%d state=UNTRUSTED reason=%q",
 			sessionHex, hdr.sequence, reason)
 		writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -175,7 +176,7 @@ func (s *demoServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.recordVerdict(sessionHex, gameHashHex,
-		verdictTrusted, game.licenseID, hdr)
+		verdictTrusted, game.licenseID, "", hdr)
 	logf("session=%s seq=%d state=TRUSTED license=%s",
 		sessionHex, hdr.sequence, game.licenseID)
 	writeJSON(w, http.StatusOK, heartbeatResponse{
@@ -402,15 +403,18 @@ func (s *demoServer) checkFreshness(hdr *lachHeader) (string, bool) {
 	return "", true
 }
 
-func (s *demoServer) recordVerdictWithLicense(sessionHex, gameHashHex, verdict, license string) {
-	s.recordVerdict(sessionHex, gameHashHex, verdict, license, nil)
+func (s *demoServer) recordVerdictWithLicense(sessionHex, gameHashHex, verdict,
+	license, reason string,
+) {
+	s.recordVerdict(sessionHex, gameHashHex, verdict, license, reason, nil)
 }
 
 // recordVerdict updates per-session and per-game state. When hdr is
 // non-nil the per-session row also advances lastSeq + lastTimestamp
 // so a subsequent replay of the same packet trips the freshness gate.
-func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license string,
-	hdr *lachHeader,
+// reason is what the producer was answered with, empty when trusted.
+func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license,
+	reason string, hdr *lachHeader,
 ) {
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -424,6 +428,7 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license str
 		}
 		st.lastVerdict = verdict
 		st.lastLicense = license
+		st.lastReason = reason
 		st.updatedAt = now
 		if hdr != nil {
 			st.lastSeq = hdr.sequence
@@ -434,6 +439,7 @@ func (s *demoServer) recordVerdict(sessionHex, gameHashHex, verdict, license str
 		s.verdict[gameHashHex] = &sessionState{
 			lastVerdict: verdict,
 			lastLicense: license,
+			lastReason:  reason,
 			updatedAt:   now,
 			gameIDHex:   gameHashHex,
 		}

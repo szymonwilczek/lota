@@ -187,6 +187,16 @@ Returns the most recent verdict the server saw for a given game id, or
 endpoint to drive its banner so the SDL2 client itself never has to parse LACH
 packets.
 
+::
+
+   {"game_id":"trust-pong","state":"UNTRUSTED",
+    "license":"lota-demo-CS2-clone",
+    "reason":"token is missing required attestation flags 0x00000200",
+    "updated_at_unix":1750000000}
+
+``reason`` is the sentence the producer was answered with, so the polling
+client can explain the verdict; it is absent from a trusted one.
+
 Logging
 -------
 

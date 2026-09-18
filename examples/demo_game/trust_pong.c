@@ -287,14 +287,22 @@ static void *poll_thread(void *arg)
 		} else {
 			char *state = extract_string(body.data, "state");
 			char *license = extract_string(body.data, "license");
-			char reason[160];
-			snprintf(reason, sizeof(reason), "%s%s%s",
-				 state ? state : "?",
-				 license ? " license=" : "",
-				 license ? license : "");
-			publish_verdict(verdict_from_label(state), reason);
+			char *why = extract_string(body.data, "reason");
+			char detail[160];
+
+			/* the reason, when present, replaces the license */
+			if (why)
+				snprintf(detail, sizeof(detail), "%s: %s",
+					 state ? state : "?", why);
+			else
+				snprintf(detail, sizeof(detail), "%s%s%s",
+					 state ? state : "?",
+					 license ? " license=" : "",
+					 license ? license : "");
+			publish_verdict(verdict_from_label(state), detail);
 			free(state);
 			free(license);
+			free(why);
 		}
 		free(body.data);
 
