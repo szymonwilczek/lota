@@ -205,7 +205,8 @@ struct lota_ac_config {
 	 * of that publisher's attestation-CA trust anchor SubjectPublicKeyInfo.
 	 * See struct lota_connect_opts, which this is passed through to.
 	 *
-	 * NULL on a single-publisher host.
+	 * NULL on a single-publisher host; one that answers for several
+	 * refuses a session that names none.
 	 * Ignored in file mode, where the Wine hook owns the agent connection.
 	 */
 	const char *publisher_profile;

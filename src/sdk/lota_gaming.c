@@ -1283,7 +1283,7 @@ const char *lota_strerror(int error)
 	case LOTA_ERR_ACCESS_DENIED:
 		return "Access denied";
 	case LOTA_ERR_UNKNOWN_PROFILE:
-		return "This machine holds no enrollment for that publisher";
+		return "This machine cannot tell which publisher that is for (none named, or no enrollment)";
 	case LOTA_ERR_CONSENT_REQUIRED:
 		return "Nobody on this machine has agreed to answer to that publisher";
 	case LOTA_ERR_UNMEASURABLE_SELF:

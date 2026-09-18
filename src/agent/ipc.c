@@ -1184,6 +1184,21 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	}
 
 	/*
+	 * Nothing below picks a publisher: the quote would be signed by
+	 * whichever AIK the TPM is bound to. One publisher is no guess,
+	 * a title there names nobody. Before the TPM check, because the
+	 * omission is the caller's and no TPM would change the answer.
+	 */
+	if (!client->profile && ctx->profile_count > 1) {
+		lota_err(
+			"Refusing GET_TOKEN for pid=%d: this agent answers for %zu publishers and the connection named none. Send SET_PROFILE first",
+			client->peer_pid, ctx->profile_count);
+		fail = true;
+		fail_code = LOTA_IPC_ERR_UNKNOWN_PROFILE;
+		goto out;
+	}
+
+	/*
 	 * Signing is the whole of a token, so a server with no TPM has nothing
 	 * to give: an unsigned token is not evidence and is never issued.
 	 * Said here, before the protected set is reaped and every protected

@@ -135,9 +135,11 @@ an integration:
        publisher is what opens a session for them, and a session-gated
        host -- the consumer default -- reports only while one is open.
        A producer that names nobody is never attested for anybody and
-       every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
-       your CA anchor's SubjectPublicKeyInfo, which your installer
-       already knows because ``--add-publisher`` prints it.
+       every beat reads ``NOT_ATTESTED``; a host that answers for
+       several publishers refuses its token requests outright. The id is
+       the hex SHA-256 of your CA anchor's SubjectPublicKeyInfo, which
+       your installer already knows because ``--add-publisher`` prints
+       it.
    * - Token directory
      - ``token_dir`` in ``struct lota_ac_config``, or ``NULL`` to
        auto-detect. Auto-detection follows the producer exactly:
