@@ -418,12 +418,27 @@ TPM DoS / DA lockout runbook
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 When ``LOTA_STATUS_TPM_LOCKOUT`` shows up on ``lota-agent status`` or on the
-D-Bus ``StatusChanged`` signal:
+D-Bus ``StatusChanged`` signal, confirm the chip is in dictionary-attack
+lockout:
 
 .. code:: bash
 
-   # Confirm the TPM is currently in dictionary-attack lockout.
-   sudo tpm2_getcap properties-variable | grep -E "lockoutCounter|lockoutInterval"
+   sudo tpm2_getcap properties-variable \
+       | grep -E "inLockout|lockoutAuthSet|TPM2_PT_LOCKOUT_COUNTER"
+
+The pattern uses ``tpm2_getcap``'s own names; any other spelling matches
+nothing and reads as a healthy TPM. A chip not in lockout answers::
+
+     lockoutAuthSet:            0
+     inLockout:                 0
+   TPM2_PT_LOCKOUT_COUNTER: 0x0
+
+``inLockout`` says the lockout is engaged; the counter, how close a chip still
+answering is to it. With ``lockoutAuthSet`` and the authorization lost, the
+reset below is unavailable and the lockout can only be waited out. Then find
+what is spending the attempts, and reset:
+
+.. code:: bash
 
    # Identify other processes holding the TPM resource manager fd.
    sudo lsof /dev/tpmrm0 /dev/tpm0
