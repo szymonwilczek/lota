@@ -587,6 +587,136 @@ static void test_selinux_gaming_client_reaches_container_socket(void)
 	PASS();
 }
 
+enum {
+	TYPE_LEN = 64,
+	TYPES_MAX = 32
+};
+
+/* the argument a flag takes on a command line, e.g. -s lota_agent_t */
+static bool cmd_flag_arg(const char *cmd, const char *flag, char *out,
+			 size_t cap)
+{
+	const char *p = strstr(cmd, flag);
+	size_t n = 0;
+
+	if (!p)
+		return false;
+	p += strlen(flag);
+	while (*p == ' ')
+		p++;
+	while (n + 1 < cap && *p && !isspace((unsigned char)*p))
+		out[n++] = *p++;
+	out[n] = '\0';
+	return n > 0;
+}
+
+/*
+ * Types the LOTA policy declares itself. gen_require() names are indented,
+ * so only a line opening with "type " is a declaration.
+ */
+static size_t lota_declared_types(char types[][TYPE_LEN], size_t cap)
+{
+	static const char *const sources[] = { "selinux/lota.te",
+					       "selinux/lota_gaming.te" };
+	size_t n = 0;
+
+	for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
+		FILE *fp = open_shipped(sources[i]);
+		char line[512];
+
+		if (!fp)
+			return 0;
+		while (n < cap && fgets(line, sizeof(line), fp)) {
+			char *semi;
+
+			if (strncmp(line, "type ", 5) != 0)
+				continue;
+			semi = strchr(line + 5, ';');
+			if (!semi)
+				continue;
+			*semi = '\0';
+			if (strlen(line + 5) >= TYPE_LEN)
+				continue;
+			memcpy(types[n++], line + 5, strlen(line + 5) + 1);
+		}
+		fclose(fp);
+	}
+	return n;
+}
+
+static const char *shell_command(const char *line)
+{
+	while (isspace((unsigned char)*line))
+		line++;
+	if (strncmp(line, "sudo ", 5) == 0)
+		line += 5;
+	return line;
+}
+
+/*
+ * A documented sesearch must answer with the module's own rules: from a type
+ * the policy declares, matched literally (-ds -dt). A domain a gaming block
+ * only requires may be undeclared, and sesearch refuses the search ("steam_t
+ * is not a valid type attribute"); an unconfined one has its module rules
+ * dropped as redundant, and attribute expansion answers with base-policy
+ * rules instead.
+ */
+static void test_selinux_reference_searches_the_modules_own_rules(void)
+{
+	char types[TYPES_MAX][TYPE_LEN];
+	size_t ntypes;
+	FILE *fp;
+	char line[1024];
+	bool saw = false;
+
+	TEST("selinux: documented searches match the module's rules");
+
+	ntypes = lota_declared_types(types, TYPES_MAX);
+	if (!ntypes) {
+		FAIL("the policy sources declare no types to search for");
+		return;
+	}
+	fp = open_shipped("selinux/README.rst");
+	if (!fp) {
+		FAIL("could not open selinux/README.rst");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		const char *cmd = shell_command(line);
+		char src[TYPE_LEN];
+		bool ours = false;
+
+		if (strncmp(cmd, "sesearch", 8) != 0)
+			continue;
+		saw = true;
+		if (!cmd_flag_arg(cmd, "-s ", src, sizeof(src))) {
+			fclose(fp);
+			FAIL("a documented search names no source domain");
+			return;
+		}
+		for (size_t i = 0; i < ntypes; i++) {
+			if (strcmp(types[i], src) == 0)
+				ours = true;
+		}
+		if (!ours) {
+			fclose(fp);
+			FAIL("a documented search starts from a domain the policy need not declare");
+			return;
+		}
+		if (!strstr(cmd, "-ds") || !strstr(cmd, "-dt")) {
+			fclose(fp);
+			FAIL("a documented search lets attribute rules answer for the module");
+			return;
+		}
+	}
+	fclose(fp);
+	if (!saw) {
+		FAIL("the reference documents no search at all");
+		return;
+	}
+	PASS();
+}
+
 /* whole file into caller's buffer, NUL-terminated; 0 when it cannot be read */
 static size_t slurp_shipped(const char *rel, char *buf, size_t cap)
 {
@@ -1454,6 +1584,7 @@ int main(void)
 	test_selinux_reports_every_tunable();
 	test_selinux_policy_carries_no_portcon();
 	test_selinux_gaming_client_reaches_container_socket();
+	test_selinux_reference_searches_the_modules_own_rules();
 	test_installer_labels_the_config_directory();
 	test_installer_relabel_reapplies_the_device_labels();
 	test_documented_tpm_relabel_reaches_both_nodes();
