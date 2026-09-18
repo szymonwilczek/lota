@@ -1016,9 +1016,10 @@ check-private-errno:
 	@scripts/check-private-errno.sh
 
 # Public API/ABI gate
-# Compares the SDK's exported symbols, sonames and installed header set against
-# the baseline in packaging/abi/, and compiles every public header against the installed set alone.
-# abi-baseline rewrites the symbol lists after deliberate surface change;
+# Compares the SDK's exported symbols, sonames, installed header set and type
+# layout against the baseline in packaging/abi/, and compiles every public
+# header against the installed set alone.
+# abi-baseline rewrites the baseline after deliberate surface change;
 # see Documentation/contributor/development/api-stability.rst
 check-abi:
 	@scripts/check-abi.sh
@@ -2673,7 +2674,7 @@ help:
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  check-el9-decls  Syntax-check the C tree against el9 headers"
-	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  check-abi        Fail on drift in the public SDK symbols, headers and type layout"
 	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  check-doc-diagnostics  Fail on a quoted message the program cannot print"
 	@echo "  check-config-commands  Fail on a shipped config naming a command that does not resolve"

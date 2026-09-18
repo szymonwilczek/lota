@@ -712,10 +712,11 @@ check_build() {
 # contributor to install it
 #
 # Public API/ABI:
-# SDK's exported symbols, sonames and installed header set against the baseline
-# in packaging/abi/
-# Runs on every patch: non-static helper added anywhere the libraries link,
-# or header list edited in packaging, moves the frozen surface.
+# SDK's exported symbols, sonames, installed header set and type layout,
+# against the baseline in packaging/abi/
+# Runs on every patch: a non-static helper anywhere the libraries link,
+# a header list edit in packaging or a struct member added moves the frozen
+# surface.
 check_abi() {
     local output
 
