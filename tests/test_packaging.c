@@ -1750,6 +1750,46 @@ static void test_shared_key_refusal_names_the_publisher(void)
 }
 
 /*
+ * A shared key shows only in the AIK record, which binding a profile drops:
+ * attest.c asks for the key once, after tpm_aik_load_metadata() in the same
+ * function.
+ */
+static void test_shared_key_refusal_survives_several_publishers(void)
+{
+	static char buf[131072];
+	const char *at, *body, *reads, *asks;
+
+	TEST("agent: the shared-key refusal holds with several publishers");
+
+	if (!slurp_shipped("src/agent/attest.c", buf, sizeof(buf))) {
+		FAIL("could not read the attestation loop");
+		return;
+	}
+
+	asks = strstr(buf, "tpm_provision_aik(");
+	if (!asks) {
+		FAIL("the loop no longer asks for the publisher's key");
+		return;
+	}
+	if (strstr(asks + 1, "tpm_provision_aik(")) {
+		FAIL("the key is asked for in more than one place");
+		return;
+	}
+
+	/* from the previous function's closing brace */
+	for (body = buf, at = buf; at && at < asks;
+	     at = strstr(at + 1, "\n}\n"))
+		body = at;
+	reads = memmem(body, (size_t)(asks - body), "tpm_aik_load_metadata(",
+		       strlen("tpm_aik_load_metadata("));
+	if (!reads) {
+		FAIL("the key is asked for before the publisher's record is read");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A key --seal-aik-auth cannot seal usually has no plaintext left,
  * so the failure line must read each key's auth state, not assert plaintext.
  */
@@ -1829,6 +1869,7 @@ int main(void)
 	test_a_full_tpm_is_refused_the_same_way_twice();
 	test_seal_report_reads_the_state_it_reports();
 	test_shared_key_refusal_names_the_publisher();
+	test_shared_key_refusal_survives_several_publishers();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
