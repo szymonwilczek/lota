@@ -1790,6 +1790,55 @@ static void test_shared_key_refusal_survives_several_publishers(void)
 }
 
 /*
+ * The pre-profile record names the base handle, now the first publisher's:
+ * quoting with it fails and spends a DA attempt. --test-tpm quotes each
+ * publisher through its profile.
+ */
+static void test_probe_quotes_the_keys_the_host_attests_with(void)
+{
+	static char buf[131072];
+	const char *verb, *end, *helpers;
+	size_t span;
+
+	TEST("agent: --test-tpm quotes the keys the host attests with");
+
+	if (!slurp_shipped("src/agent/selftest.c", buf, sizeof(buf))) {
+		FAIL("could not read the probe");
+		return;
+	}
+	/* quote helpers precede the verb */
+	verb = strstr(buf, "int test_tpm(void)");
+	end = verb ? strstr(verb, "\nint test_iommu(void)") : NULL;
+	if (!verb || !end) {
+		FAIL("the probe no longer has a TPM verb to read");
+		return;
+	}
+	span = (size_t)(end - verb);
+
+	if (!memmem(verb, span, "publishers_", strlen("publishers_"))) {
+		FAIL("the probe never asks which publishers hold a key");
+		return;
+	}
+	if (!memmem(verb, span, "selftest_quote_key(",
+		    strlen("selftest_quote_key("))) {
+		FAIL("the probe does not decide whose key it quotes with");
+		return;
+	}
+
+	helpers = strstr(buf, "static void selftest_quote");
+	if (!helpers || helpers > verb) {
+		FAIL("the probe has nothing that quotes a publisher's key");
+		return;
+	}
+	if (!memmem(helpers, (size_t)(verb - helpers), "tpm_bind_profile(",
+		    strlen("tpm_bind_profile("))) {
+		FAIL("the probe quotes without binding a publisher's profile");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A key --seal-aik-auth cannot seal usually has no plaintext left,
  * so the failure line must read each key's auth state, not assert plaintext.
  */
@@ -1870,6 +1919,7 @@ int main(void)
 	test_seal_report_reads_the_state_it_reports();
 	test_shared_key_refusal_names_the_publisher();
 	test_shared_key_refusal_survives_several_publishers();
+	test_probe_quotes_the_keys_the_host_attests_with();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
