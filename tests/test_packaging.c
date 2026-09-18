@@ -1662,6 +1662,94 @@ static void test_a_full_tpm_is_refused_the_same_way_twice(void)
 }
 
 /*
+ * The page promises the shared-key refusal names the publisher: the daemon
+ * and the attest loop both print TPM_AIK_SHARED_KEY_ADVICE, the loop with
+ * t->label.
+ */
+static void test_shared_key_refusal_names_the_publisher(void)
+{
+	static const char *const page =
+		"Documentation/operator/production-bringup/ca-enrollment.rst";
+	static const char *const advice = "TPM_AIK_SHARED_KEY_ADVICE";
+	char buf[65536];
+	FILE *fp;
+	char line[1024];
+	unsigned defined = 0, in_daemon = 0, in_loop = 0, named = 0;
+
+	TEST("agent: the shared-key refusal names the publisher in both paths");
+
+	if (!slurp_shipped(page, buf, sizeof(buf))) {
+		FAIL("could not read the CA enrollment page");
+		return;
+	}
+	if (!strstr(buf, "says which publisher it belongs to")) {
+		/* the page no longer promises it; nothing to hold to */
+		PASS();
+		return;
+	}
+
+	if (!slurp_shipped("src/agent/tpm.h", buf, sizeof(buf))) {
+		FAIL("could not read the TPM header");
+		return;
+	}
+	if (strstr(buf, advice))
+		defined++;
+
+	fp = open_shipped("src/agent/main.c");
+	if (!fp) {
+		FAIL("could not open the daemon");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp))
+		if (strstr(line, advice))
+			in_daemon++;
+	fclose(fp);
+
+	fp = open_shipped("src/agent/attest.c");
+	if (!fp) {
+		FAIL("could not open the attestation loop");
+		return;
+	}
+	while (fgets(line, sizeof(line), fp)) {
+		if (!strstr(line, advice))
+			continue;
+		in_loop++;
+	}
+	fclose(fp);
+
+	/* the loop's own line has to carry the publisher's label */
+	if (!slurp_shipped("src/agent/attest.c", buf, sizeof(buf))) {
+		FAIL("could not read the attestation loop");
+		return;
+	}
+	{
+		const char *at = strstr(buf, advice);
+		const char *end;
+
+		if (at) {
+			end = strstr(at, ");");
+			if (end && memmem(at, (size_t)(end - at), "t->label",
+					  strlen("t->label")))
+				named++;
+		}
+	}
+
+	if (defined == 0) {
+		FAIL("the sentence has no single home the two paths share");
+		return;
+	}
+	if (in_daemon == 0 || in_loop == 0) {
+		FAIL("one of the two refusals spells its own sentence");
+		return;
+	}
+	if (named == 0) {
+		FAIL("the loop's refusal does not name the publisher");
+		return;
+	}
+	PASS();
+}
+
+/*
  * A key --seal-aik-auth cannot seal usually has no plaintext left,
  * so the failure line must read each key's auth state, not assert plaintext.
  */
@@ -1740,6 +1828,7 @@ int main(void)
 	test_static_archive_paragraph_matches_the_archives();
 	test_a_full_tpm_is_refused_the_same_way_twice();
 	test_seal_report_reads_the_state_it_reports();
+	test_shared_key_refusal_names_the_publisher();
 
 	printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
 	return (tests_passed == tests_run) ? 0 : 1;
