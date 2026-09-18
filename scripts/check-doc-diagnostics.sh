@@ -84,9 +84,8 @@ def unescape(text):
 
 
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
-# adjacent literals are one message; only whitespace and comments may
-# separate them, which is how every wrapped lota_err() in the tree is written
-GAP = re.compile(r"(?:\s|/\*.*?\*/|//[^\n]*\n)*", re.S)
+# between adjacent literals: whitespace, comments, macro line continuations
+GAP = re.compile(r"(?:\s|\\\n|/\*.*?\*/|//[^\n]*\n)*", re.S)
 
 
 def c_messages(path, text):

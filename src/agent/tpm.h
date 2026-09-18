@@ -625,6 +625,14 @@ int tpm_aik_profile_unique(const char *profile_id, uint8_t out[LOTA_HASH_SIZE],
  */
 bool tpm_aik_key_is_shared(const struct tpm_context *ctx);
 
+/* Shared-key refusal; the attest loop appends the publisher. */
+#define TPM_AIK_SHARED_KEY_ADVICE                                             \
+	"This publisher's attestation key was created before each publisher " \
+	"got a key of its own, so it is byte for byte the key every other "   \
+	"publisher enrolled here holds. Run lota-agent --reenroll --ca-cert " \
+	"<their anchor> to replace it; the CA certifies the new key under "   \
+	"the device ID this host already has."
+
 /*
  * tpm_aik_key_present - does the TPM hold a key at this profile's handle
  *
