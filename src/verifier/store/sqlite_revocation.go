@@ -400,11 +400,17 @@ func (l *SQLiteAuditLog) Query(limit int) []AuditEntry {
 type SQLiteAttestationLog struct {
 	mu sync.Mutex
 	db *sql.DB
+	window time.Duration // zero records every round
 }
 
 // creates an attestation log backed by the given database
 func NewSQLiteAttestationLog(db *sql.DB) *SQLiteAttestationLog {
-	return &SQLiteAttestationLog{db: db}
+	return NewSQLiteAttestationLogWindow(db, DefaultCollapseWindow)
+}
+
+// the same, with a deployment's own collapse window
+func NewSQLiteAttestationLogWindow(db *sql.DB, window time.Duration) *SQLiteAttestationLog {
+	return &SQLiteAttestationLog{db: db, window: window}
 }
 
 func (l *SQLiteAttestationLog) Record(entry AttestationRecord) error {
