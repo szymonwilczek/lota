@@ -136,7 +136,8 @@ func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogC
 	return l
 }
 
-// drop @n records from a full buffer; an unbounded one dies with the process
+// drop @n records from a full buffer: heartbeats, then events, oldest first.
+// Reuses @buf's storage; the caller keeps only the result.
 func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
 	if n <= 0 {
 		return buf
@@ -145,8 +146,30 @@ func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
 		return buf[:0]
 	}
 
-	// oldest first, whatever they say
-	return append(buf[:0], buf[n:]...)
+	heartbeats := 0
+	for i := range buf {
+		if !attestationIsEvent(buf[i]) {
+			heartbeats++
+		}
+	}
+
+	dropHeartbeats := min(n, heartbeats)
+	dropEvents := n - dropHeartbeats
+
+	kept := buf[:0]
+	for i := range buf {
+		if attestationIsEvent(buf[i]) {
+			if dropEvents > 0 {
+				dropEvents--
+				continue
+			}
+		} else if dropHeartbeats > 0 {
+			dropHeartbeats--
+			continue
+		}
+		kept = append(kept, buf[i])
+	}
+	return kept
 }
 
 // Record buffers entry and returns immediately;
@@ -162,7 +185,7 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 	l.mu.Lock()
 	overflow := len(l.buf) >= l.maxBuffer
 	if overflow {
-		// bound memory by dropping the oldest records;
+		// bound memory by shedding records, heartbeats first;
 		// liveness of the verify path beats completeness
 		// of best-effort audit trail.
 		// Whole batch goes at once so the shift costs O(maxBuffer) every
@@ -203,7 +226,7 @@ func (l *BatchedAttestationLog) reportDrop() {
 	if !l.lastDropReport.CompareAndSwap(last, now.UnixNano()) {
 		return
 	}
-	l.log.Warn("attestation-log buffer full; oldest decision records dropped",
+	l.log.Warn("attestation-log buffer full; decision records shed",
 		"dropped_total", l.DroppedCount(),
 		"buffer", l.maxBuffer,
 		"hint", "the decision log backend is not keeping up; records lost here are not recoverable")

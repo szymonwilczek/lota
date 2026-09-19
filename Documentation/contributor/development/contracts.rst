@@ -197,9 +197,12 @@ The contract this creates:
   that *do* gate stay synchronous. A graceful shutdown flushes the tail,
   bounded: a backend that has stopped answering does not hold the process
   open, and what is still buffered at the deadline is counted as lost.
-- **Bounded memory.** Under a stalled database the buffer drops its oldest
-  records past ``MaxBuffer``. The hot path is never blocked and never sees
-  the error.
+- **Bounded memory, shedding heartbeats first.** Past ``MaxBuffer`` the
+  buffer sheds trusted rounds, oldest first; their standing row already
+  says what they say. Refusals go only when no trusted round is left. The
+  hot path never blocks and never sees the error.
+- **What a shed costs.** A shed first sighting or verdict change to trusted
+  is not lost: the next trusted round opens the row, at its later time.
 - **Reported loss.** What the writer could not keep reaches somebody: a
   rate-limited warning naming the running total, the
   ``lota_attestation_log_dropped_total`` and

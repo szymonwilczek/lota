@@ -102,9 +102,12 @@ Metric                                          Type      Meaning
 ``lota_attestation_log_dropped_total``          counter   Decision records dropped because the log
                                                           buffer was full. Non-zero means the decision
                                                           log is missing rounds this verifier served:
-                                                          the backend stopped keeping up and the oldest
-                                                          buffered records went so the verify path
-                                                          would not wait. Not recoverable.
+                                                          the backend stopped keeping up and buffered
+                                                          records went so the verify path would not
+                                                          wait. Trusted rounds go first, so a small
+                                                          count is lost heartbeats; a count larger than
+                                                          the trusted rounds in flight means refusals
+                                                          went too. Not recoverable.
 ``lota_attestation_log_failed_total``           counter   Decision records lost to a failed log write.
                                                           Same consequence, different cause: the write
                                                           reached the backend and did not land.
@@ -372,12 +375,13 @@ never waits on it -- but the audit trail has holes for this window, and the
 records that went are not recoverable.
 
 Which counter moved says which half it is. ``lota_attestation_log_dropped_total``
-means the backend stopped keeping up: the writer's buffer filled and the
-oldest records went so the verify path would not block. ``lota_attestation_log_failed_total``
-means the write reached the backend and did not land.
+means the backend stopped keeping up and the full buffer shed records,
+trusted rounds first, so refusals usually survive.
+``lota_attestation_log_failed_total`` means the write reached the backend and
+did not land.
 
 1. The verifier log carries the running total beside each event
-   (``attestation-log buffer full; oldest decision records dropped``, or
+   (``attestation-log buffer full; decision records shed``, or
    ``attestation-log flush failed``), and one summary line at shutdown.
 2. Both point at the database: check its latency, its connection count,
    and whether anything holds a lock on ``attestation_log``. Enforcement
