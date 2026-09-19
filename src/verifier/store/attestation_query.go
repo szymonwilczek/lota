@@ -38,12 +38,7 @@ type AttestationQuerier interface {
 }
 
 // WHERE clause and arguments for @q; shared so both SQL stores agree
-func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string) (string, []any) {
-	var (
-		where string
-		args  []any
-	)
-
+func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string) (where string, args []any) {
 	add := func(clause string, arg any) {
 		args = append(args, arg)
 		cond := clause + " " + placeholder(len(args))

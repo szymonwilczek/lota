@@ -523,6 +523,7 @@ func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []A
 	defer l.mu.Unlock()
 
 	where, args := attestationQueryClauses(q, func(int) string { return "?" })
+	// #nosec G202 -- constant fragments and placeholders; values are arguments
 	query := sqliteAttestationSelect + where + " ORDER BY id DESC"
 	if q.Limit > 0 {
 		query += " LIMIT ?"

@@ -515,6 +515,7 @@ func (l *PostgresAttestationLog) QueryAttestationsFiltered(q AttestationQuery) [
 	where, args := attestationQueryClauses(q, func(n int) string {
 		return "$" + strconv.Itoa(n)
 	})
+	// #nosec G202 -- constant fragments and placeholders; values are arguments
 	query := pgAttestationSelect + where + " ORDER BY id DESC"
 	if q.Limit > 0 {
 		query += " LIMIT $" + strconv.Itoa(len(args)+1)
