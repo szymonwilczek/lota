@@ -37,8 +37,11 @@ type AttestationQuerier interface {
 	QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord
 }
 
-// WHERE clause and arguments for @q; shared so both SQL stores agree
-func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string) (where string, args []any) {
+// WHERE clause and arguments for @q; shared so both SQL stores agree.
+// @timeArg renders a bound as the store writes its times.
+func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string,
+	timeArg func(time.Time) any,
+) (where string, args []any) {
 	add := func(clause string, arg any) {
 		args = append(args, arg)
 		cond := clause + " " + placeholder(len(args))
@@ -51,10 +54,10 @@ func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string)
 
 	// overlap, not containment: a row may open before the window
 	if !q.Since.IsZero() {
-		add("last_seen >=", q.Since)
+		add("last_seen >=", timeArg(q.Since))
 	}
 	if !q.Until.IsZero() {
-		add("timestamp <=", q.Until)
+		add("timestamp <=", timeArg(q.Until))
 	}
 
 	if q.Result != "" {

@@ -513,9 +513,10 @@ func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecor
 
 // zero query: the whole log, newest first
 func (l *PostgresAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	// timestamptz compares instants; the bound goes as UTC
 	where, args := attestationQueryClauses(q, func(n int) string {
 		return "$" + strconv.Itoa(n)
-	})
+	}, func(t time.Time) any { return t.UTC() })
 	// #nosec G202 -- constant fragments and placeholders; values are arguments
 	query := pgAttestationSelect + where + " ORDER BY id DESC"
 	if q.Limit > 0 {

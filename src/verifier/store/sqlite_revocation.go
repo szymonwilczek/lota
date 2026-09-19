@@ -427,12 +427,21 @@ type attestationExecer interface {
 func attestationStanding(x attestationExecer, query, tenant, clientID string) (int64, AttestationRecord) {
 	var id int64
 	var r AttestationRecord
+	var opened, seen any
 
-	err := x.QueryRow(query, tenant, clientID).Scan(&id, &r.Timestamp, &r.LastSeen,
+	err := x.QueryRow(query, tenant, clientID).Scan(&id, &opened, &seen,
 		&r.Rounds, &r.Tenant, &r.ClientID, &r.HardwareID, &r.Result, &r.PCR14,
 		&r.Details, &r.KernelHash)
 	if err != nil {
 		// unreadable counts as none: never fold into an unknown row
+		return 0, AttestationRecord{}
+	}
+
+	// unreadable times: same answer
+	if r.Timestamp, err = attestationTimeValue(opened); err != nil {
+		return 0, AttestationRecord{}
+	}
+	if r.LastSeen, err = attestationTimeValue(seen); err != nil {
 		return 0, AttestationRecord{}
 	}
 	return id, r
@@ -460,14 +469,16 @@ func (l *SQLiteAttestationLog) record(x attestationExecer, entry AttestationReco
 	id, standing := attestationStanding(x, sqliteStandingQuery, entry.Tenant, entry.ClientID)
 	if id != 0 && attestationCollapses(standing, entry, l.window) {
 		// duration and address describe the latest contact only
-		_, err := x.Exec(sqliteExtendStanding, entry.Timestamp,
+		_, err := x.Exec(sqliteExtendStanding, attestationTimeArg(entry.Timestamp),
 			entry.DurationMs, entry.RemoteAddr, id)
 		return err
 	}
 
-	_, err := x.Exec(sqliteInsertRow, entry.Timestamp, entry.Tenant, entry.ClientID,
+	// as UTC instants: compared as text, read back from any zone
+	at := attestationTimeArg(entry.Timestamp)
+	_, err := x.Exec(sqliteInsertRow, at, entry.Tenant, entry.ClientID,
 		entry.HardwareID, entry.Result, entry.DurationMs, entry.PCR14,
-		entry.Details, entry.RemoteAddr, entry.KernelHash, entry.Timestamp)
+		entry.Details, entry.RemoteAddr, entry.KernelHash, at)
 	return err
 }
 
@@ -522,7 +533,8 @@ func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []A
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	where, args := attestationQueryClauses(q, func(int) string { return "?" })
+	where, args := attestationQueryClauses(q, func(int) string { return "?" },
+		attestationTimeArg)
 	// #nosec G202 -- constant fragments and placeholders; values are arguments
 	query := sqliteAttestationSelect + where + " ORDER BY id DESC"
 	if q.Limit > 0 {
@@ -539,11 +551,20 @@ func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []A
 	var entries []AttestationRecord
 	for rows.Next() {
 		var e AttestationRecord
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
+		var opened, seen any
+		if err := rows.Scan(&e.ID, &opened, &e.Tenant, &e.ClientID, &e.HardwareID,
 			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
-			&e.KernelHash, &e.LastSeen, &e.Rounds); err == nil {
-			entries = append(entries, e)
+			&e.KernelHash, &seen, &e.Rounds); err != nil {
+			continue
 		}
+		var err error
+		if e.Timestamp, err = attestationTimeValue(opened); err != nil {
+			continue
+		}
+		if e.LastSeen, err = attestationTimeValue(seen); err != nil {
+			continue
+		}
+		entries = append(entries, e)
 	}
 	return entries
 }
