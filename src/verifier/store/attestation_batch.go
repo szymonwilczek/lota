@@ -239,6 +239,16 @@ func (l *BatchedAttestationLog) QueryAttestations(limit int) []AttestationRecord
 	return l.backend.QueryAttestations(limit)
 }
 
+// flushes, then narrows in the backend or, if it cannot, here
+func (l *BatchedAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	l.flush()
+
+	if narrower, ok := l.backend.(AttestationQuerier); ok {
+		return narrower.QueryAttestationsFiltered(q)
+	}
+	return filterAttestations(l.backend.QueryAttestations(0), q)
+}
+
 // Flush drains the buffer synchronously.
 // Safe to call concurrently with Record.
 func (l *BatchedAttestationLog) Flush() {

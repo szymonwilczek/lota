@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -501,20 +502,26 @@ func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error 
 	return tx.Commit()
 }
 
+const pgAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardware_id,
+	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
+	 FROM attestation_log`
+
 func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
-	          FROM attestation_log ORDER BY id DESC`
-	if limit > 0 {
-		query += " LIMIT $1"
+	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
+}
+
+// zero query: the whole log, newest first
+func (l *PostgresAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	where, args := attestationQueryClauses(q, func(n int) string {
+		return "$" + strconv.Itoa(n)
+	})
+	query := pgAttestationSelect + where + " ORDER BY id DESC"
+	if q.Limit > 0 {
+		query += " LIMIT $" + strconv.Itoa(len(args)+1)
+		args = append(args, q.Limit)
 	}
 
-	var rows *sql.Rows
-	var err error
-	if limit > 0 {
-		rows, err = l.db.Query(query, limit)
-	} else {
-		rows, err = l.db.Query(query)
-	}
+	rows, err := l.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}

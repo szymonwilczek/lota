@@ -174,6 +174,10 @@ also holds an advisory lock per tenant and client until commit, so
 instances sharing a database record one host serially, first round
 included. An unreadable newest row is never extended.
 
+``AttestationQuerier`` narrows a read by window, verdict, events-only and
+client. A window returns the rows that overlap it, not only those opened
+inside it. Both SQL stores build the clauses with one function.
+
 Attestation log durability
 ==========================
 

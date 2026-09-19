@@ -1369,9 +1369,26 @@ type attestationResponse struct {
 	KernelHash string  `json:"kernel_hash,omitempty"`
 	Details    string  `json:"details,omitempty"`
 	RemoteAddr string  `json:"remote_addr,omitempty"`
+
+	LastSeen string `json:"last_seen,omitempty"` // last round of the row
+	Rounds   int64  `json:"rounds,omitempty"`    // identical rounds it covers
 }
 
-// GET /api/v1/attestations?limit=N - query attestation decision log
+// RFC 3339 ?since / ?until; unparsable is unset: a wider window beats none
+func attestationTimeParam(r *http.Request, key string) time.Time {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// GET /api/v1/attestations?limit=N&since=&until=&result=&events=&client_id=
+// - query attestation decision log
 func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request) {
 	if h.attestationLog == nil {
 		writeJSONStatus(w, http.StatusServiceUnavailable, errorResponse{Error: "attestation log not configured"})
@@ -1388,8 +1405,22 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 		limit = 10000
 	}
 
+	q := store.AttestationQuery{
+		Limit:      limit,
+		Since:      attestationTimeParam(r, "since"),
+		Until:      attestationTimeParam(r, "until"),
+		Result:     r.URL.Query().Get("result"),
+		EventsOnly: r.URL.Query().Get("events") == "true",
+		ClientID:   r.URL.Query().Get("client_id"),
+	}
+
 	p := requestPrincipal(r)
-	entries := h.attestationLog.QueryAttestations(limit)
+	var entries []store.AttestationRecord
+	if narrower, ok := h.attestationLog.(store.AttestationQuerier); ok {
+		entries = narrower.QueryAttestationsFiltered(q)
+	} else {
+		entries = h.attestationLog.QueryAttestations(limit)
+	}
 	resp := make([]attestationResponse, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
@@ -1408,6 +1439,8 @@ func (h *APIHandler) handleAttestationLog(w http.ResponseWriter, r *http.Request
 			KernelHash: e.KernelHash,
 			Details:    sanitizeAttestationDetail(e.Details),
 			RemoteAddr: e.RemoteAddr,
+			LastSeen:   e.LastSeen.UTC().Format(time.RFC3339),
+			Rounds:     e.Rounds,
 		})
 	}
 

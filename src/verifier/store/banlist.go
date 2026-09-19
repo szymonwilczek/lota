@@ -507,6 +507,11 @@ func (l *MemoryAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	return nil
 }
 
+// zero query: the whole log, newest first
+func (l *MemoryAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	return filterAttestations(l.QueryAttestations(0), q)
+}
+
 func (l *MemoryAttestationLog) QueryAttestations(limit int) []AttestationRecord {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

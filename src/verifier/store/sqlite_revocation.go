@@ -509,28 +509,27 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	return tx.Commit()
 }
 
-// ignores @q but its limit for now
-func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
-	return l.QueryAttestations(q.Limit)
-}
+const sqliteAttestationSelect = `SELECT id, timestamp, tenant, client_id, hardware_id,
+	 result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
+	 FROM attestation_log`
 
 func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
+	return l.QueryAttestationsFiltered(AttestationQuery{Limit: limit})
+}
+
+// zero query: the whole log, newest first
+func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
-	          FROM attestation_log ORDER BY id DESC`
-	if limit > 0 {
+	where, args := attestationQueryClauses(q, func(int) string { return "?" })
+	query := sqliteAttestationSelect + where + " ORDER BY id DESC"
+	if q.Limit > 0 {
 		query += " LIMIT ?"
+		args = append(args, q.Limit)
 	}
 
-	var rows *sql.Rows
-	var err error
-	if limit > 0 {
-		rows, err = l.db.Query(query, limit)
-	} else {
-		rows, err = l.db.Query(query)
-	}
+	rows, err := l.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}

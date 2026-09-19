@@ -36,3 +36,84 @@ type AttestationQuery struct {
 type AttestationQuerier interface {
 	QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord
 }
+
+// WHERE clause and arguments for @q; shared so both SQL stores agree
+func attestationQueryClauses(q AttestationQuery, placeholder func(n int) string) (string, []any) {
+	var (
+		where string
+		args  []any
+	)
+
+	add := func(clause string, arg any) {
+		args = append(args, arg)
+		cond := clause + " " + placeholder(len(args))
+		if where == "" {
+			where = " WHERE " + cond
+			return
+		}
+		where += " AND " + cond
+	}
+
+	// overlap, not containment: a row may open before the window
+	if !q.Since.IsZero() {
+		add("last_seen >=", q.Since)
+	}
+	if !q.Until.IsZero() {
+		add("timestamp <=", q.Until)
+	}
+
+	if q.Result != "" {
+		add("result =", q.Result)
+	} else if q.EventsOnly {
+		add("result <>", attestationResultOK)
+	}
+
+	if q.Tenant != "" {
+		add("tenant =", q.Tenant)
+	}
+	if q.ClientID != "" {
+		add("client_id =", q.ClientID)
+	}
+	return where, args
+}
+
+// apply @q to rows in hand, newest first; same answer as the SQL clauses
+func filterAttestations(rows []AttestationRecord, q AttestationQuery) []AttestationRecord {
+	out := make([]AttestationRecord, 0, len(rows))
+
+	for i := range rows {
+		r := &rows[i]
+
+		last := r.LastSeen
+		if last.IsZero() {
+			last = r.Timestamp
+		}
+		if !q.Since.IsZero() && last.Before(q.Since) {
+			continue
+		}
+		if !q.Until.IsZero() && r.Timestamp.After(q.Until) {
+			continue
+		}
+
+		if q.Result != "" {
+			if r.Result != q.Result {
+				continue
+			}
+		} else if q.EventsOnly && !attestationIsEvent(*r) {
+			continue
+		}
+
+		if q.Tenant != "" && r.Tenant != q.Tenant {
+			continue
+		}
+		if q.ClientID != "" && r.ClientID != q.ClientID {
+			continue
+		}
+
+		out = append(out, *r)
+		if q.Limit > 0 && len(out) == q.Limit {
+			break
+		}
+	}
+	return out
+}
