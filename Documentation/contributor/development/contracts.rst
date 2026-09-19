@@ -172,7 +172,8 @@ writes a row per round). A steady host leaves one row per window.
 Both SQL stores read and extend the newest row in one transaction; Postgres
 also holds an advisory lock per tenant and client until commit, so
 instances sharing a database record one host serially, first round
-included. An unreadable newest row is never extended.
+included. SQLite serializes on its mutex. An unreadable newest row is never
+extended.
 
 ``AttestationQuerier`` narrows a read by window, verdict, events-only and
 client. A window returns the rows that overlap it, not only those opened

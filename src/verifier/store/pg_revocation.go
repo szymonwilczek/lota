@@ -11,7 +11,6 @@
 package store
 
 import (
-	"cmp"
 	"database/sql"
 	"fmt"
 	"slices"
@@ -412,23 +411,23 @@ const pgStandingQuery = `SELECT ` + attestationStandingCols + `
 	 FROM attestation_log WHERE tenant = $1 AND client_id = $2
 	 ORDER BY id DESC LIMIT 1`
 
-// held to commit; covers a client with no row yet
-const pgLockSubject = `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`
+// held to commit; also covers a host with no row yet
+const pgSubjectLock = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+
+// client IDs are unique per tenant; NUL is not valid Postgres text
+func pgSubjectKey(r *AttestationRecord) string {
+	return r.Tenant + "\x1f" + r.ClientID
+}
 
 // lock each subject once, in one order, so two batches cannot deadlock
 func pgLockSubjects(x attestationExecer, entries []AttestationRecord) error {
-	keys := make([][2]string, 0, len(entries))
+	keys := make([]string, 0, len(entries))
 	for i := range entries {
-		keys = append(keys, [2]string{entries[i].Tenant, entries[i].ClientID})
+		keys = append(keys, pgSubjectKey(&entries[i]))
 	}
-	slices.SortFunc(keys, func(a, b [2]string) int {
-		if c := cmp.Compare(a[0], b[0]); c != 0 {
-			return c
-		}
-		return cmp.Compare(a[1], b[1])
-	})
+	slices.Sort(keys)
 	for _, k := range slices.Compact(keys) {
-		if _, err := x.Exec(pgLockSubject, k[0], k[1]); err != nil {
+		if _, err := x.Exec(pgSubjectLock, k); err != nil {
 			return err
 		}
 	}
@@ -450,6 +449,11 @@ func (l *PostgresAttestationLog) record(x attestationExecer, entry AttestationRe
 		entry.Timestamp = now
 	}
 
+	// reentrant: free when RecordBatch already holds it
+	if _, err := x.Exec(pgSubjectLock, pgSubjectKey(&entry)); err != nil {
+		return err
+	}
+
 	id, standing := attestationStanding(x, pgStandingQuery, entry.Tenant, entry.ClientID)
 	if id != 0 && attestationCollapses(standing, entry, l.window) {
 		_, err := x.Exec(pgExtendStanding, entry.Timestamp, entry.DurationMs,
@@ -463,14 +467,11 @@ func (l *PostgresAttestationLog) record(x attestationExecer, entry AttestationRe
 	return err
 }
 
-// read and extend the standing row in one transaction
+// read and extend the standing row under the subject lock
 func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
 	tx, err := l.db.Begin()
 	if err != nil {
 		return err
-	}
-	if err := pgLockSubjects(tx, []AttestationRecord{entry}); err != nil {
-		return rollbackOnErr(tx, err)
 	}
 	if err := l.record(tx, entry, time.Now().UTC()); err != nil {
 		return rollbackOnErr(tx, err)

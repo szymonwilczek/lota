@@ -131,6 +131,8 @@ Three optimisations change the write cost above:
   host leaves one row an hour instead of twelve; refusals keep a row each.
   The table still grows with events, so retention stays the operator's
   decision.
+  Each record locks its host and reads its row first; different hosts
+  still commit concurrently.
 * **The connection pool is tunable** (``--pg-max-open-conns``), which
   chiefly lifts enrollment bursts (see below).
 
