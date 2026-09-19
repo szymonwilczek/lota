@@ -48,6 +48,7 @@ type BatchedAttestationLogConfig struct {
 type AttestationLogLoss interface {
 	AttestationRecordsDropped(n int64)
 	AttestationRecordsFailed(n int64)
+	AttestationEventsLost(n int64)
 }
 
 const (
@@ -84,8 +85,9 @@ type BatchedAttestationLog struct {
 	done    chan struct{}
 	closed  atomic.Bool
 
-	dropped atomic.Int64
-	failed  atomic.Int64
+	dropped    atomic.Int64
+	failed     atomic.Int64
+	eventsLost atomic.Int64
 
 	lastDropReport atomic.Int64
 	loss           AttestationLogLoss
@@ -138,12 +140,13 @@ func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogC
 
 // drop @n records from a full buffer: heartbeats, then events, oldest first.
 // Reuses @buf's storage; the caller keeps only the result.
-func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
+// Returns the kept records and how many of the dropped were events.
+func shedOldest(buf []AttestationRecord, n int) (kept []AttestationRecord, events int) {
 	if n <= 0 {
-		return buf
+		return buf, 0
 	}
 	if n >= len(buf) {
-		return buf[:0]
+		return buf[:0], countAttestationEvents(buf)
 	}
 
 	heartbeats := 0
@@ -155,8 +158,9 @@ func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
 
 	dropHeartbeats := min(n, heartbeats)
 	dropEvents := n - dropHeartbeats
+	events = dropEvents
 
-	kept := buf[:0]
+	kept = buf[:0]
 	for i := range buf {
 		if attestationIsEvent(buf[i]) {
 			if dropEvents > 0 {
@@ -169,7 +173,18 @@ func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
 		}
 		kept = append(kept, buf[i])
 	}
-	return kept
+	return kept, events
+}
+
+// how many of @buf are records somebody reads this log for
+func countAttestationEvents(buf []AttestationRecord) int {
+	n := 0
+	for i := range buf {
+		if attestationIsEvent(buf[i]) {
+			n++
+		}
+	}
+	return n
 }
 
 // Record buffers entry and returns immediately;
@@ -182,6 +197,7 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 	}
 
 	drop := 0
+	shedEvents := 0
 	l.mu.Lock()
 	overflow := len(l.buf) >= l.maxBuffer
 	if overflow {
@@ -193,8 +209,11 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 		// shift makes this path O(maxBuffer) under the mutex, which
 		// re-serializes the hot path exactly when the backend is stalled
 		drop = min(l.maxBatch, len(l.buf))
-		l.buf = shedOldest(l.buf, drop)
+		l.buf, shedEvents = shedOldest(l.buf, drop)
 		l.dropped.Add(int64(drop))
+		if shedEvents > 0 {
+			l.eventsLost.Add(int64(shedEvents))
+		}
 	}
 	l.buf = append(l.buf, entry)
 	full := overflow || len(l.buf) >= l.maxBatch
@@ -205,6 +224,9 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 		// and the report itself only when the rate limit lets it through
 		if l.loss != nil {
 			l.loss.AttestationRecordsDropped(int64(drop))
+			if shedEvents > 0 {
+				l.loss.AttestationEventsLost(int64(shedEvents))
+			}
 		}
 		l.reportDrop()
 	}
@@ -226,10 +248,16 @@ func (l *BatchedAttestationLog) reportDrop() {
 	if !l.lastDropReport.CompareAndSwap(last, now.UnixNano()) {
 		return
 	}
+	events := l.EventsLostCount()
+	hint := "the decision log backend is not keeping up; trusted rounds are shed first, so what is lost is how long a quiet host stayed quiet"
+	if events > 0 {
+		hint = "the decision log backend is not keeping up and the buffer has run out of trusted rounds to shed: refusals and bans are being lost"
+	}
 	l.log.Warn("attestation-log buffer full; decision records shed",
 		"dropped_total", l.DroppedCount(),
+		"events_lost_total", events,
 		"buffer", l.maxBuffer,
-		"hint", "the decision log backend is not keeping up; records lost here are not recoverable")
+		"hint", hint)
 }
 
 // QueryAttestations flushes any buffered records first so the monitoring surface
@@ -277,13 +305,19 @@ func (l *BatchedAttestationLog) Close() error {
 
 	l.mu.Lock()
 	pending := len(l.buf)
+	// the worker's batch is out of reach: counts only the buffer's events
+	pendingEvents := countAttestationEvents(l.buf)
 	l.mu.Unlock()
 
 	// plus the batch stuck in the worker, at most maxBatch
 	lost := int64(pending + l.maxBatch)
 	l.failed.Add(lost)
+	l.eventsLost.Add(int64(pendingEvents))
 	if l.loss != nil {
 		l.loss.AttestationRecordsFailed(lost)
+		if pendingEvents > 0 {
+			l.loss.AttestationEventsLost(int64(pendingEvents))
+		}
 	}
 	l.log.Warn("attestation-log did not flush before shutdown deadline; buffered decision records lost",
 		"records", lost, "deadline", l.closeTimeout,
@@ -298,6 +332,9 @@ var ErrCloseTimedOut = errors.New("attestation log did not flush before the shut
 // FailedCount returns the number lost to flush errors.
 func (l *BatchedAttestationLog) DroppedCount() int64 { return l.dropped.Load() }
 func (l *BatchedAttestationLog) FailedCount() int64  { return l.failed.Load() }
+
+// EventsLostCount returns how many of the lost records were events.
+func (l *BatchedAttestationLog) EventsLostCount() int64 { return l.eventsLost.Load() }
 
 func (l *BatchedAttestationLog) signal() {
 	select {
@@ -339,27 +376,37 @@ func (l *BatchedAttestationLog) flush() {
 	// RecordBatch is all-or-nothing, but the per-record fallback can lose
 	// one entry and persist the rest
 	var (
-		err  error
-		lost int
+		err        error
+		lost       int
+		lostEvents int
 	)
 	if l.batcher != nil {
 		if err = l.batcher.RecordBatch(batch); err != nil {
 			lost = len(batch)
+			lostEvents = countAttestationEvents(batch)
 		}
 	} else {
 		for i := range batch {
 			if e := l.backend.Record(batch[i]); e != nil {
 				err = e
 				lost++
+				if attestationIsEvent(batch[i]) {
+					lostEvents++
+				}
 			}
 		}
 	}
 	if lost > 0 {
+		// never landed counts as lost, same as shed
 		l.failed.Add(int64(lost))
+		l.eventsLost.Add(int64(lostEvents))
 		if l.loss != nil {
 			l.loss.AttestationRecordsFailed(int64(lost))
+			if lostEvents > 0 {
+				l.loss.AttestationEventsLost(int64(lostEvents))
+			}
 		}
 		l.log.Warn("attestation-log flush failed; records dropped",
-			"records", lost, "batch", len(batch), "error", err)
+			"records", lost, "events", lostEvents, "batch", len(batch), "error", err)
 	}
 }

@@ -218,6 +218,9 @@ The contract this creates:
   shutdown. A deployment that lost part of its decision log has to look
   different from one that did not, so a counter with no reader is not
   counting.
+- **What kind of loss.** ``lota_attestation_log_events_lost_total`` counts
+  the events among it, shed or never landed. Shed trusted rounds are the
+  bound working; a lost refusal is a hole in the audit trail.
 
 Any new attestation-log backend implements ``BatchRecorder`` so a batch
 costs one round trip; a backend that does not is still correct through the

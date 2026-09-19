@@ -104,13 +104,14 @@ Metric                                          Type      Meaning
                                                           log is missing rounds this verifier served:
                                                           the backend stopped keeping up and buffered
                                                           records went so the verify path would not
-                                                          wait. Trusted rounds go first, so a small
-                                                          count is lost heartbeats; a count larger than
-                                                          the trusted rounds in flight means refusals
-                                                          went too. Not recoverable.
+                                                          wait. Trusted rounds go first. Not
+                                                          recoverable.
 ``lota_attestation_log_failed_total``           counter   Decision records lost to a failed log write.
                                                           Same consequence, different cause: the write
                                                           reached the backend and did not land.
+``lota_attestation_log_events_lost_total``      counter   Events (refusals, bans, unparsable reports)
+                                                          among the records lost above. Alert on this
+                                                          one: lost trusted rounds cost only detail.
 ``lota_verification_duration_seconds``          histogram Attestation verification latency.
 ``lota_pending_challenges``                     gauge     Outstanding attestation challenges. A peer
                                                           that leaves without answering releases its
@@ -379,6 +380,10 @@ means the backend stopped keeping up and the full buffer shed records,
 trusted rounds first, so refusals usually survive.
 ``lota_attestation_log_failed_total`` means the write reached the backend and
 did not land.
+
+``lota_attestation_log_events_lost_total`` says how bad either one is. At
+zero, only detail on quiet hosts is lost. Above zero, refusals and bans are
+missing from the log, and the warning's hint says so.
 
 1. The verifier log carries the running total beside each event
    (``attestation-log buffer full; decision records shed``, or

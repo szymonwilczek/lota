@@ -251,6 +251,7 @@ func TestExport_AttestationLogLoss(t *testing.T) {
 	for _, want := range []string{
 		"lota_attestation_log_dropped_total 0",
 		"lota_attestation_log_failed_total 0",
+		"lota_attestation_log_events_lost_total 0",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("expected zero-value %q in output", want)
@@ -260,6 +261,8 @@ func TestExport_AttestationLogLoss(t *testing.T) {
 	m.AttestationRecordsDropped(3)
 	m.AttestationRecordsDropped(2)
 	m.AttestationRecordsFailed(4)
+	m.AttestationEventsLost(1)
+	m.AttestationEventsLost(2)
 
 	output = m.Export()
 	checks := []string{
@@ -267,6 +270,8 @@ func TestExport_AttestationLogLoss(t *testing.T) {
 		"lota_attestation_log_dropped_total 5",
 		"# TYPE lota_attestation_log_failed_total counter",
 		"lota_attestation_log_failed_total 4",
+		"# TYPE lota_attestation_log_events_lost_total counter",
+		"lota_attestation_log_events_lost_total 3",
 	}
 	for _, check := range checks {
 		if !strings.Contains(output, check) {

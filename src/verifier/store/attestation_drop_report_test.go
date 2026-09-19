@@ -99,12 +99,14 @@ func TestOverflowReportIsRateLimited(t *testing.T) {
 
 // countingLoss stands for whatever a deployment reads its loss off.
 type countingLoss struct {
-	dropped atomic.Int64
-	failed  atomic.Int64
+	dropped    atomic.Int64
+	failed     atomic.Int64
+	eventsLost atomic.Int64
 }
 
 func (c *countingLoss) AttestationRecordsDropped(n int64) { c.dropped.Add(n) }
 func (c *countingLoss) AttestationRecordsFailed(n int64)  { c.failed.Add(n) }
+func (c *countingLoss) AttestationEventsLost(n int64)     { c.eventsLost.Add(n) }
 
 // The loss has to reach a counter a dashboard can plot,
 // not only a log line somebody has to be reading at the time.

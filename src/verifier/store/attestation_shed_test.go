@@ -30,7 +30,7 @@ func mixedBuffer(n int) []AttestationRecord {
 // heartbeats go first; a refusal is what the log is read for
 func TestSheddingTakesHeartbeatsFirst(t *testing.T) {
 	buf := mixedBuffer(40) // 30 trusted, 10 refusals
-	kept := shedOldest(buf, 12)
+	kept, _ := shedOldest(buf, 12)
 
 	if len(kept) != 28 {
 		t.Fatalf("shedding 12 of 40 leaves 28, got %d", len(kept))
@@ -51,7 +51,7 @@ func TestSheddingTakesTheOldestHeartbeats(t *testing.T) {
 	buf := mixedBuffer(40)
 	// read before the shed: it reuses the buffer it is handed
 	at := buf[0].Timestamp
-	kept := shedOldest(buf, 6)
+	kept, _ := shedOldest(buf, 6)
 
 	for _, r := range kept {
 		if r.Result != "ok" {
@@ -77,7 +77,7 @@ func TestSheddingFallsBackToEvents(t *testing.T) {
 		})
 	}
 
-	kept := shedOldest(buf, 4)
+	kept, _ := shedOldest(buf, 4)
 	if len(kept) != 6 {
 		t.Fatalf("shedding 4 of 10 leaves 6, got %d", len(kept))
 	}
@@ -88,7 +88,7 @@ func TestSheddingFallsBackToEvents(t *testing.T) {
 
 // the flush writes in buffer order; reordered rows open out of sequence
 func TestSheddingKeepsOrder(t *testing.T) {
-	kept := shedOldest(mixedBuffer(40), 9)
+	kept, _ := shedOldest(mixedBuffer(40), 9)
 
 	for i := 1; i < len(kept); i++ {
 		if kept[i].Timestamp.Before(kept[i-1].Timestamp) {
@@ -98,10 +98,10 @@ func TestSheddingKeepsOrder(t *testing.T) {
 }
 
 func TestSheddingBounds(t *testing.T) {
-	if got := shedOldest(mixedBuffer(8), 99); len(got) != 0 {
+	if got, _ := shedOldest(mixedBuffer(8), 99); len(got) != 0 {
 		t.Errorf("shedding more than the buffer holds empties it, got %d", len(got))
 	}
-	if got := shedOldest(mixedBuffer(8), 0); len(got) != 8 {
+	if got, _ := shedOldest(mixedBuffer(8), 0); len(got) != 8 {
 		t.Errorf("shedding nothing keeps everything, got %d", len(got))
 	}
 }
