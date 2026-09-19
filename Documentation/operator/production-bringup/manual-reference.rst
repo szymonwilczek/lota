@@ -206,6 +206,15 @@ without verity, where the binary's only claim is a signed ``security.ima``
 xattr, appraisal is what makes that claim real and the agent refuses to start
 without it.
 
+**A host whose scope cannot be read reports no appraisal either.** The scope
+is read from ``/sys/kernel/security/ima/policy``, which a kernel without
+``CONFIG_IMA_READ_POLICY`` never publishes and which otherwise needs
+``CAP_SYS_ADMIN``, so the attestation loop (empty bounding set) never reads
+it. The agent starts, says at startup that the scope was unreadable, and
+leaves ``LOTA_FLAG_KERNEL_APPRAISAL`` clear: an unverified property is not
+reported. A fleet that wants the flag on appraising hosts builds kernels that
+publish their policy.
+
 The shipped :ghsrc:`configs/ima/lota-ima-policy` is the **developer baseline** that
 ``scripts/lota-dev-bringup.sh`` loads on a dev host running ``ima_appraise=log``:
 it measures every exec/mmap for the IMA log and its ``appraise_type=imasig``

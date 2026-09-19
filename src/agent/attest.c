@@ -124,6 +124,11 @@ static uint32_t rand_u32_best_effort(void)
 	return v;
 }
 
+/*
+ * Kernel facts for the report, each read live. Without CAP_SYS_ADMIN the IMA
+ * policy is unreadable (-EACCES) and the appraisal flag stays clear: the quote
+ * signs it, so understating is the safe direction.
+ */
 static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
 					     bool *lockdown, bool *appraisal)
 {
