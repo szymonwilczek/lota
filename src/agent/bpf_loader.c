@@ -33,6 +33,7 @@
 #include "bpf_loader.h"
 #include "cgroup_guard.h"
 #include "journal.h"
+#include "kernel_floor_hint.h"
 #include "policy_sign.h"
 #include "sb_dev.h"
 
@@ -736,22 +737,24 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 {
 	/* read first: verity decides whether the appraisal gate is advisory */
 	int verity = agent_self_fsverity_enabled();
+	bool secureboot = bpf_loader_secure_boot_enabled() == 0;
+	char floor_msg[512];
 	int ret;
 
 	ret = bpf_loader_kernel_lockdown_restrictive(LOTA_KERNEL_LOCKDOWN_PATH);
 	if (ret < 0) {
-		lota_err("Kernel lockdown is not in restrictive mode "
-			 "(integrity/confidentiality required)");
+		kernel_floor_message(LOTA_KERNEL_FLOOR_LOCKDOWN, secureboot,
+				     floor_msg, sizeof(floor_msg));
+		lota_err("%s", floor_msg);
 		return ret;
 	}
 
 	ret = bpf_loader_kernel_module_sig_enforced(
 		LOTA_MODULE_SIG_ENFORCE_PATH);
 	if (ret < 0) {
-		lota_err(
-			"Kernel module signature enforcement is not active "
-			"(module.sig_enforce=1 required to close the boot -> agent "
-			"module-load window)");
+		kernel_floor_message(LOTA_KERNEL_FLOOR_MODULE_SIG, secureboot,
+				     floor_msg, sizeof(floor_msg));
+		lota_err("%s", floor_msg);
 		return ret;
 	}
 
