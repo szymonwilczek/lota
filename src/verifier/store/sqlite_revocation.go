@@ -509,6 +509,11 @@ func (l *SQLiteAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	return tx.Commit()
 }
 
+// ignores @q but its limit for now
+func (l *SQLiteAttestationLog) QueryAttestationsFiltered(q AttestationQuery) []AttestationRecord {
+	return l.QueryAttestations(q.Limit)
+}
+
 func (l *SQLiteAttestationLog) QueryAttestations(limit int) []AttestationRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
