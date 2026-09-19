@@ -11,9 +11,10 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
-	"strings"
+	"slices"
 	"sync"
 	"time"
 )
@@ -388,70 +389,120 @@ func (l *PostgresAuditLog) Query(limit int) []AuditEntry {
 // PostgresAttestationLog implements AttestationLog using
 // the attestation_log table
 // No store-level lock:
-// Record is one INSERT on the attestation hot path (one call per verified report),
+// Record is one transaction on the attestation hot path (one call per verified report),
 // so process-wide mutex here caps fleet attestation throughput at one commit latency per report
 type PostgresAttestationLog struct {
-	db *sql.DB
+	db     *sql.DB
+	window time.Duration // zero records every round
 }
 
 // NewPostgresAttestationLog creates an attestation log backed by
 // the given Postgres database
 func NewPostgresAttestationLog(db *sql.DB) *PostgresAttestationLog {
-	return &PostgresAttestationLog{db: db}
+	return NewPostgresAttestationLogWindow(db, DefaultCollapseWindow)
 }
 
-func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
-	ts := entry.Timestamp
-	if ts.IsZero() {
-		ts = time.Now().UTC()
+// the same, with a deployment's own collapse window
+func NewPostgresAttestationLogWindow(db *sql.DB, window time.Duration) *PostgresAttestationLog {
+	return &PostgresAttestationLog{db: db, window: window}
+}
+
+const pgStandingQuery = `SELECT ` + attestationStandingCols + `
+	 FROM attestation_log WHERE tenant = $1 AND client_id = $2
+	 ORDER BY id DESC LIMIT 1`
+
+// held to commit; covers a client with no row yet
+const pgLockSubject = `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`
+
+// lock each subject once, in one order, so two batches cannot deadlock
+func pgLockSubjects(x attestationExecer, entries []AttestationRecord) error {
+	keys := make([][2]string, 0, len(entries))
+	for i := range entries {
+		keys = append(keys, [2]string{entries[i].Tenant, entries[i].ClientID})
+	}
+	slices.SortFunc(keys, func(a, b [2]string) int {
+		if c := cmp.Compare(a[0], b[0]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a[1], b[1])
+	})
+	for _, k := range slices.Compact(keys) {
+		if _, err := x.Exec(pgLockSubject, k[0], k[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const pgExtendStanding = `UPDATE attestation_log
+	 SET last_seen = $1, rounds = rounds + 1, duration_ms = $2, remote_addr = $3
+	 WHERE id = $4`
+
+const pgInsertRow = `INSERT INTO attestation_log
+	 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14,
+	  details, remote_addr, kernel_hash, last_seen, rounds)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)`
+
+// extend the standing row or open a new one
+func (l *PostgresAttestationLog) record(x attestationExecer, entry AttestationRecord, now time.Time) error {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = now
 	}
 
-	_, err := l.db.Exec(
-		`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		ts, entry.Tenant, entry.ClientID, entry.HardwareID, entry.Result,
-		entry.DurationMs, entry.PCR14, entry.Details, entry.RemoteAddr,
-		entry.KernelHash,
-	)
+	id, standing := attestationStanding(x, pgStandingQuery, entry.Tenant, entry.ClientID)
+	if id != 0 && attestationCollapses(standing, entry, l.window) {
+		_, err := x.Exec(pgExtendStanding, entry.Timestamp, entry.DurationMs,
+			entry.RemoteAddr, id)
+		return err
+	}
+
+	_, err := x.Exec(pgInsertRow, entry.Timestamp, entry.Tenant, entry.ClientID,
+		entry.HardwareID, entry.Result, entry.DurationMs, entry.PCR14,
+		entry.Details, entry.RemoteAddr, entry.KernelHash, entry.Timestamp)
 	return err
 }
 
+// read and extend the standing row in one transaction
+func (l *PostgresAttestationLog) Record(entry AttestationRecord) error {
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := pgLockSubjects(tx, []AttestationRecord{entry}); err != nil {
+		return rollbackOnErr(tx, err)
+	}
+	if err := l.record(tx, entry, time.Now().UTC()); err != nil {
+		return rollbackOnErr(tx, err)
+	}
+	return tx.Commit()
+}
+
+// each round sees the ones before it, as if recorded one by one
 func (l *PostgresAttestationLog) RecordBatch(entries []AttestationRecord) error {
 	if len(entries) == 0 {
 		return nil
 	}
 
-	const cols = 10
-	var sb strings.Builder
-	sb.WriteString(`INSERT INTO attestation_log
-		 (timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash) VALUES `)
-	args := make([]any, 0, len(entries)*cols)
-	now := time.Now().UTC()
-	for i := range entries {
-		ts := entries[i].Timestamp
-		if ts.IsZero() {
-			ts = now
-		}
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		base := i * cols
-		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8,
-			base+9, base+10)
-		args = append(args, ts, entries[i].Tenant, entries[i].ClientID,
-			entries[i].HardwareID, entries[i].Result, entries[i].DurationMs,
-			entries[i].PCR14, entries[i].Details, entries[i].RemoteAddr,
-			entries[i].KernelHash)
+	tx, err := l.db.Begin()
+	if err != nil {
+		return err
 	}
 
-	_, err := l.db.Exec(sb.String(), args...)
-	return err
+	if err := pgLockSubjects(tx, entries); err != nil {
+		return rollbackOnErr(tx, err)
+	}
+
+	now := time.Now().UTC()
+	for i := range entries {
+		if err := l.record(tx, entries[i], now); err != nil {
+			return rollbackOnErr(tx, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecord {
-	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash
+	query := `SELECT id, timestamp, tenant, client_id, hardware_id, result, duration_ms, pcr14, details, remote_addr, kernel_hash, last_seen, rounds
 	          FROM attestation_log ORDER BY id DESC`
 	if limit > 0 {
 		query += " LIMIT $1"
@@ -474,7 +525,7 @@ func (l *PostgresAttestationLog) QueryAttestations(limit int) []AttestationRecor
 		var e AttestationRecord
 		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Tenant, &e.ClientID, &e.HardwareID,
 			&e.Result, &e.DurationMs, &e.PCR14, &e.Details, &e.RemoteAddr,
-			&e.KernelHash); err == nil {
+			&e.KernelHash, &e.LastSeen, &e.Rounds); err == nil {
 			entries = append(entries, e)
 		}
 	}

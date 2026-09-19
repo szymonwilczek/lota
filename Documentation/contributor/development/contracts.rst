@@ -158,6 +158,22 @@ an unconditional row rewrite costs a WAL record and a commit fsync each
 time, so the UPDATE is conditional on a real tenant change
 (``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
 
+What a decision-log row means
+=============================
+
+A row in ``attestation_log`` records an event on one host, not a round. A
+trusted round matching the host's newest trusted row (tenant, client,
+hardware ID, PCR 14, kernel hash, detail) extends it: ``last_seen`` moves
+and ``rounds`` counts it. Every other round opens a row: a first round, any
+non-trusted verdict, a recovery, a round behind ``last_seen``, or one past
+the collapse window from the row's opening. A steady host leaves one row per
+window.
+
+Both SQL stores read and extend the newest row in one transaction; Postgres
+also holds an advisory lock per tenant and client until commit, so
+instances sharing a database record one host serially, first round
+included. An unreadable newest row is never extended.
+
 Attestation log durability
 ==========================
 

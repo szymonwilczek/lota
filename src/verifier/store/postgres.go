@@ -125,13 +125,22 @@ var pgMigrations = []migration{
 				details     TEXT NOT NULL DEFAULT '',
 				remote_addr TEXT NOT NULL DEFAULT '',
 				tenant      TEXT NOT NULL DEFAULT 'default',
-				kernel_hash TEXT NOT NULL DEFAULT ''
+				kernel_hash TEXT NOT NULL DEFAULT '',
+
+				-- identical trusted rounds extend one row;
+				-- timestamp is its first, last_seen its last
+				last_seen   TIMESTAMPTZ NOT NULL,
+				rounds      BIGINT NOT NULL DEFAULT 1
 			);
 
 			CREATE INDEX idx_attestation_log_timestamp ON attestation_log(timestamp);
 			CREATE INDEX idx_attestation_log_client ON attestation_log(client_id);
 			CREATE INDEX idx_attestation_log_result ON attestation_log(result);
 			CREATE INDEX idx_attestation_log_tenant ON attestation_log(tenant);
+
+			-- newest row per tenant and client, read by every record
+			CREATE INDEX idx_attestation_log_standing
+				ON attestation_log(tenant, client_id, id DESC);
 
 			CREATE TABLE baseline_archive (
 				id           BIGSERIAL PRIMARY KEY,
