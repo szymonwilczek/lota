@@ -422,6 +422,11 @@ type AttestationRecord struct {
 	// whether a device's kernel changed.
 	// It is covered by the quote, so a recorded value is attested.
 	KernelHash string
+
+	// Last round this row stands for, and the round count.
+	// Until rounds collapse: Timestamp and 1.
+	LastSeen time.Time
+	Rounds   int64
 }
 
 // implements AttestationLog using an in-memory slice
