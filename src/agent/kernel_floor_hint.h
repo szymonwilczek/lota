@@ -27,24 +27,55 @@ static inline void kernel_floor_message(enum lota_kernel_floor which,
 	if (!out || cap == 0)
 		return;
 
-	/* not read yet: both sentences name a kernel parameter */
-	(void)secureboot;
+	/* Secure Boot off: enable it. On: the cmdline parameter is missing. */
+	if (which == LOTA_KERNEL_FLOOR_LOCKDOWN) {
+		if (secureboot)
+			snprintf(
+				out, cap,
+				"Kernel lockdown is not in restrictive mode "
+				"(integrity/confidentiality required). Secure "
+				"Boot is on, so the kernel did not take itself "
+				"there: boot with lockdown=integrity on the "
+				"kernel command line.");
+		else
+			snprintf(out, cap,
+				 "Kernel lockdown is not in restrictive mode "
+				 "(integrity/confidentiality required), and "
+				 "Secure Boot is off on this host, which is "
+				 "what puts the kernel there. It is a firmware "
+				 "setting, so the agent cannot turn it on; "
+				 "'lota-install --status' names this machine "
+				 "and the way into its setup screen.");
+		return;
+	}
 
-	if (which == LOTA_KERNEL_FLOOR_LOCKDOWN)
-		snprintf(out, cap,
-			 "Kernel lockdown is not in restrictive mode "
-			 "(integrity/confidentiality required)");
-	else
+	if (secureboot)
 		snprintf(out, cap,
 			 "Kernel module signature enforcement is not active "
-			 "(module.sig_enforce=1 required to close the boot -> "
-			 "agent module-load window)");
+			 "(module.sig_enforce=1 closes the window between the "
+			 "boot and the agent). Secure Boot is on, so boot with "
+			 "that parameter on the kernel command line.");
+	else
+		snprintf(out, cap,
+			 "Kernel module signature enforcement is not active, "
+			 "so an unsigned module can be loaded in the window "
+			 "between the boot and the agent. Secure Boot is off "
+			 "on this host, which is what makes the kernel enforce "
+			 "signatures. It is a firmware setting, so the agent "
+			 "cannot turn it on; 'lota-install --status' names "
+			 "this machine and the way into its setup screen.");
 }
 
 /* Advice under a startup refusal @err: fix the policy, or the host */
 static inline const char *startup_refusal_advice(int err)
 {
-	(void)err;
+	/*
+	 * -ENOTSUP is the floor, a state of the host: the only policy edit
+	 * that passes it drops the requirement. An edit repairs the rest.
+	 */
+	if (err == -ENOTSUP)
+		return "The line above is a state of this host, not of this "
+		       "configuration: raise it and start again.";
 
 	return "Correct the policy and start again.";
 }
