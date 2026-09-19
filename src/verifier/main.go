@@ -106,6 +106,7 @@ var (
 	aikCRLs             stringSliceFlag
 	pgShardDSNs         stringSliceFlag
 	pgDSN               = flag.String("pg-dsn", "", "PostgreSQL DSN for shared multi-instance storage (or LOTA_PG_DSN env); selects the Postgres backend for baseline, nonce, revocation, ban, audit and attestation state. The database must be writable: the verifier applies its schema at startup, so a hot standby is refused. Mutually exclusive with --db.")
+	attestLogWindow     = flag.Duration("attestation-log-window", store.DefaultCollapseWindow, "How long one decision-log row may stand for. A trusted round that repeats what the row standing for that host already says advances it -- last seen, rounds -- instead of writing another row, so the log grows with what happened rather than with how long the fleet stayed up. Refusals, verdict changes and first sightings always get their own row whatever this is set to. Zero writes every round as its own row, which is what a deployment whose retention rule counts rows asks for.")
 	pgMaxOpenConns      = flag.Int("pg-max-open-conns", store.DefaultPGMaxOpenConns, "Maximum open Postgres connections per instance (per shard when sharded). Postgres group-commits concurrent transactions, so a wider pool raises enrollment/attestation burst throughput; keep the value times the instance count under the database's max_connections.")
 	stateDBPath         = flag.String("state-db", "", "SQLite database an instance without --db or --pg-dsn keeps its durable state in: used nonce history, revocations, hardware bans, the audit log and the attestation decision log (defaults to <aik-store>/verifier-state.sqlite); set --allow-insecure-memory-state to keep none of it")
 	scopedKeysFile      = flag.String("api-keys-file", "", "YAML file of scoped monitoring-API keys (entries of key_sha256, role: reader|admin, tenants list or * for all); reloaded on SIGHUP. Environment keys keep working with global scope.")
@@ -193,7 +194,7 @@ func sqliteEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metrics
 		revocations: store.NewSQLiteRevocationStore(db, audit),
 		bans:        store.NewSQLiteBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewSQLiteAttestationLog(db),
+			store.NewSQLiteAttestationLogWindow(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }
@@ -207,7 +208,7 @@ func postgresEnforcementStores(db *sql.DB, logger *slog.Logger, m *metrics.Metri
 		revocations: store.NewPostgresRevocationStore(db, audit),
 		bans:        store.NewPostgresBanStore(db, audit),
 		attestations: store.NewBatchedAttestationLog(
-			store.NewPostgresAttestationLog(db),
+			store.NewPostgresAttestationLogWindow(db, *attestLogWindow),
 			store.BatchedAttestationLogConfig{Logger: logger, Loss: m}),
 	}
 }

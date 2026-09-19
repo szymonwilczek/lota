@@ -166,8 +166,8 @@ trusted round matching the host's newest trusted row (tenant, client,
 hardware ID, PCR 14, kernel hash, detail) extends it: ``last_seen`` moves
 and ``rounds`` counts it. Every other round opens a row: a first round, any
 non-trusted verdict, a recovery, a round behind ``last_seen``, or one past
-the collapse window from the row's opening. A steady host leaves one row per
-window.
+``--attestation-log-window`` from the row's opening (default one hour; zero
+writes a row per round). A steady host leaves one row per window.
 
 Both SQL stores read and extend the newest row in one transaction; Postgres
 also holds an advisory lock per tenant and client until commit, so

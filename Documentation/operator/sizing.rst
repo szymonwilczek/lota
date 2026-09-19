@@ -115,7 +115,7 @@ crash -- not only attestation-log entries, but the used-nonce history and
 the baseline pins written in the same window. To scale *past* one
 database, shard (next section).
 
-Two optimisations change the per-report write cost above:
+Three optimisations change the write cost above:
 
 * **The attestation-log write is batched off the hot path** (async,
   one commit per flush instead of one per report), so the audit log is
@@ -125,6 +125,12 @@ Two optimisations change the per-report write cost above:
   per ~256). It becomes eventually consistent within one flush interval
   (~1 s); a crash loses at most that window of *audit* records, never a
   verdict or session.
+* **The attestation log records events, not rounds**: identical trusted
+  rounds extend one row for up to ``--attestation-log-window``. At the
+  shipped five-minute interval and the default one-hour window, a trusted
+  host leaves one row an hour instead of twelve; refusals keep a row each.
+  The table still grows with events, so retention stays the operator's
+  decision.
 * **The connection pool is tunable** (``--pg-max-open-conns``), which
   chiefly lifts enrollment bursts (see below).
 

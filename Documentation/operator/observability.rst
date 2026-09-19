@@ -389,7 +389,35 @@ did not land.
    so a healthy verdict rate beside this alert is the expected picture.
 3. Note the window in the incident record. The API cannot serve what was
    dropped, so an operator reading ``GET /api/v1/attestations`` for that
-   period is reading an incomplete log.
+   period is reading an incomplete log: ``rounds`` there can undercount,
+   never overcount.
+
+Reading the log
+===============
+
+A trusted round identical to the host's newest row extends it
+(``last_seen``, ``rounds``). A refusal, a verdict change and a host's first
+round always open a new row. A row extends for at most
+``--attestation-log-window`` from its opening (default one hour; zero writes
+a row per round), so a quiet period resolves to the window: the timestamps
+of the rounds a row covers are not kept.
+
+``GET /api/v1/attestations`` narrows accordingly::
+
+   # what went wrong anywhere, yesterday
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?events=true&since=2026-09-18T00:00:00Z&until=2026-09-19T00:00:00Z"
+
+   # one host's history
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?client_id=$CLIENT&limit=50"
+
+   # every round refused for one reason
+   curl -H "Authorization: Bearer $READER_KEY" \
+     "http://127.0.0.1:8080/api/v1/attestations?result=pcr_fail"
+
+A window returns the rows that overlap it, including one opened before
+``since``.
 
 Forced integrity-loss drill
 ===========================
