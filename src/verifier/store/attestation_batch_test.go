@@ -139,6 +139,13 @@ func (b *blockingLog) RecordBatch(e []AttestationRecord) error {
 
 func (b *blockingLog) QueryAttestations(int) []AttestationRecord { return nil }
 
+// every record handed to the backend
+func (b *blockingLog) all() []AttestationRecord {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]AttestationRecord(nil), b.records...)
+}
+
 // Past MaxBuffer the oldest records drop and the buffer stays bounded,
 // rather than growing without limit while the backend is stalled
 func TestBatchedAttestationLogDropsUnderPressure(t *testing.T) {

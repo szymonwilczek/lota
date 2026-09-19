@@ -136,6 +136,19 @@ func NewBatchedAttestationLog(backend AttestationLog, cfg BatchedAttestationLogC
 	return l
 }
 
+// drop @n records from a full buffer; an unbounded one dies with the process
+func shedOldest(buf []AttestationRecord, n int) []AttestationRecord {
+	if n <= 0 {
+		return buf
+	}
+	if n >= len(buf) {
+		return buf[:0]
+	}
+
+	// oldest first, whatever they say
+	return append(buf[:0], buf[n:]...)
+}
+
 // Record buffers entry and returns immediately;
 // it never performs database write on the caller's goroutine.
 func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
@@ -157,7 +170,7 @@ func (l *BatchedAttestationLog) Record(entry AttestationRecord) error {
 		// shift makes this path O(maxBuffer) under the mutex, which
 		// re-serializes the hot path exactly when the backend is stalled
 		drop = min(l.maxBatch, len(l.buf))
-		l.buf = append(l.buf[:0], l.buf[drop:]...)
+		l.buf = shedOldest(l.buf, drop)
 		l.dropped.Add(int64(drop))
 	}
 	l.buf = append(l.buf, entry)
