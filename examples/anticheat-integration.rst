@@ -225,6 +225,19 @@ A session whose agent is unreachable is **returned**, not refused, in
 once the host is ready. ``lota_ac_last_error()`` names that case too, so
 "not ready yet" is never mistaken for a configuration the library rejected.
 
+What "last attested" means on a player's machine
+===============================================
+
+``last_attest_time`` from ``lota_get_status()`` is ``0`` until the host
+attests. On a session-gated host, the consumer default, that holds until a
+title of the publisher runs. ``0`` is a state, not an error; render it as
+"never", not as the epoch, as ``tests/demo_sdk.c`` does.
+
+The field is the last successful round and stands still while nothing
+attests, so its age is not a liveness signal. "Attested right now" is
+``LOTA_FLAG_ATTESTED`` with ``valid_until``; the agent drops the flag when
+the publisher's last session closes.
+
 An agent that goes away mid-session
 ===================================
 

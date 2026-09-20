@@ -1951,11 +1951,7 @@ static void handle_sync_attest(struct ipc_context *ctx,
 		}
 	}
 
-	/*
-	 * Loop is the process that attests, so its tallies are the host's.
-	 * Assigned after the response is built and the status recomputed,
-	 * because ipc_update_status() stamps last_attest_time with now
-	 */
+	/* Loop is the process that attests, so its tallies are the host's */
 	resp->magic = LOTA_IPC_MAGIC;
 	resp->version = LOTA_IPC_VERSION;
 	resp->result = LOTA_IPC_OK;
@@ -3457,7 +3453,6 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 	ctx->status_flags = flags;
 	ctx->valid_until = valid_until;
-	ctx->last_attest_time = (uint64_t)time(NULL);
 
 	if (old_flags != flags) {
 		notify_subscribers(ctx, LOTA_IPC_EVENT_STATUS);
@@ -3467,10 +3462,12 @@ void ipc_update_status(struct ipc_context *ctx, uint32_t flags,
 
 void ipc_record_attestation(struct ipc_context *ctx, bool success)
 {
-	if (success)
+	if (success) {
 		ctx->attest_count++;
-	else
+		ctx->last_attest_time = (uint64_t)time(NULL);
+	} else {
 		ctx->fail_count++;
+	}
 
 	notify_subscribers(ctx, LOTA_IPC_EVENT_ATTEST);
 	dbus_emit_attestation_result(ctx->dbus, success);
