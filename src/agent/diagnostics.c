@@ -24,6 +24,7 @@
 #include "io_utils.h"
 #include "main_utils.h"
 #include "selftest.h"
+#include "terminate_report.h"
 #include "test_servers.h"
 #include "tpm.h"
 
@@ -210,6 +211,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 	if (opts->terminate_protected_flag) {
 		uint32_t sig = opts->force_flag ? SIGKILL : SIGTERM;
 		uint32_t count = 0;
+		char line[256];
 		int tret = ipc_request_terminate_protected(
 			opts->terminate_protected_pid, sig, &count);
 
@@ -250,11 +252,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 			return 1;
 		}
 
-		printf("Sent %s to protected PID %u; %u process%s still "
-		       "protected.\n",
-		       opts->force_flag ? "SIGKILL" : "SIGTERM",
-		       opts->terminate_protected_pid, count,
-		       count == 1 ? "" : "es");
+		terminate_sent_message(opts->terminate_protected_pid,
+				       opts->force_flag, count, line,
+				       sizeof(line));
+		printf("%s\n", line);
 		return 0;
 	}
 
