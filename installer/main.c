@@ -27,7 +27,7 @@ static void usage(FILE *out)
 	fprintf(out,
 		"Usage: lota-install [options]\n"
 		"\n"
-		"Guided, reboot-resumable install of the LOTA player agent.\n"
+		"Guided, reboot-resumable install of the LOTA agent.\n"
 		"Each stage probes live system state, explains what it is\n"
 		"about to change and why, and asks before changing it.\n"
 		"Re-running after the mid-install reboot resumes at the\n"
@@ -518,7 +518,7 @@ int main(int argc, char **argv)
 	ui_init(&ctx.ui, ctx.opts.plain);
 
 	ui_banner(&ctx.ui, "LOTA Guided Install", LOTA_INSTALL_VERSION,
-		  "Hardware-rooted Attestation for the player host");
+		  "Hardware-rooted attestation for this host");
 
 	if (ctx.opts.pause)
 		return do_pause(&ctx);
