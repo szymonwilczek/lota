@@ -31,6 +31,12 @@ The three install surfaces and their audiences:
      - Contributor iterating on a dev host
      - Generates a throwaway signing key. Never for production.
 
+This page is the reference: it states what each stage does and why, and
+assumes the reader knows what a TPM and an initramfs are. Somebody installing
+LOTA on their own PC to play a game wants
+:doc:`../player/index` instead, which walks the same tool
+end to end and explains the terms as it goes.
+
 Running it
 ==========
 
