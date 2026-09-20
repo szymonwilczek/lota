@@ -54,6 +54,13 @@ extern "C" {
 /* Directory name appended to $XDG_RUNTIME_DIR for the default above */
 #define LOTA_HOOK_TOKEN_DIR_NAME "lota-hook"
 
+/*
+ * Publisher to attest for: hex SHA-256 (either case) of its CA anchor
+ * SubjectPublicKeyInfo. Needed for a token on a multi-enrollment host;
+ * an invalid value is reported and ignored.
+ */
+#define LOTA_HOOK_ENV_PUBLISHER "LOTA_HOOK_PUBLISHER"
+
 /* token refresh interval in seconds (default: 60). */
 #define LOTA_HOOK_ENV_REFRESH_SEC "LOTA_HOOK_REFRESH_SEC"
 
