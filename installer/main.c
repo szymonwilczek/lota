@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (C) 2026 Szymon Wilczek
  *
- * lota-install - Guided, reboot-resumable Player Install
+ * lota-install - Guided, reboot-resumable install
  */
 
 #include <errno.h>

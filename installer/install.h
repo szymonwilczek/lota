@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (C) 2026 Szymon Wilczek
  *
- * lota-install - Guided, reboot-resumable Player Install
+ * lota-install - Guided, reboot-resumable install
  *
  * Installer never trusts a state file for progress:
  * every stage owns a probe over live system state (installed files, fs-verity
@@ -128,8 +128,8 @@ struct stage {
 	 * the initramfs, or the kernel command line.
 	 * Unattended run leaves these alone unless the host asked for them,
 	 * because package install that changes the boot path of machine nobody
-	 * was sitting at is how player ends up with system that does not come
-	 * back the way it went down.
+	 * was sitting at is how somebody ends up with system that does not
+	 * come back the way it went down.
 	 */
 	int boot_path;
 };
