@@ -36,6 +36,7 @@ static void hex_encode_upper(const uint8_t *in, size_t in_len, char *out,
 #include "agent.h"
 #include "bpf_loader.h"
 #include "config.h"
+#include "ipc.h"
 #include "journal.h"
 #include "main_utils.h"
 
@@ -66,8 +67,12 @@ static void agent_policy_snapshot_clear(void)
 		free(g_agent.policy_protect_pids);
 		g_agent.policy_protect_pids = NULL;
 	}
+
 	g_agent.policy_protect_pid_count = 0;
 	g_agent.policy_protect_epoch = 0;
+
+	/* epoch restarts: a stale verdict would match it by number */
+	ipc_runtime_coverage_forget();
 
 	if (g_agent.policy_trust_libs) {
 		OPENSSL_cleanse(g_agent.policy_trust_libs,
@@ -909,6 +914,8 @@ allowlist_done:
 		g_agent.policy_protect_pids = canon_pids;
 		g_agent.policy_protect_pid_count = canon_pid_count;
 		g_agent.policy_protect_epoch = 0;
+		/* epoch restarts, as above */
+		ipc_runtime_coverage_forget();
 		g_agent.policy_trust_libs = canon_libs;
 		g_agent.policy_trust_lib_count = canon_lib_count;
 		g_agent.policy_snapshot_set = 1;

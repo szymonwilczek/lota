@@ -1019,44 +1019,70 @@ static void client_attestation_view(const struct ipc_context *ctx,
 }
 
 /*
- * Whether the runtime measurement would cover every object of every protected
- * process right now.
- *
- * Status word and the token have to agree on this bit:
- * the anti-cheat heartbeat binds the flags it read from the status into the nonce
- * the token is then quoted over, so a bit that appears in one and not the other
- * breaks that binding.
- * The coverage walk is the same enumeration the measurement performs, without
- * the fold, and the digests it reads come from the cache the measurement fills.
+ * Cached coverage verdict: the walk takes seconds for a large game.
+ * Dropped on an epoch change or by ipc_runtime_coverage_forget().
+ */
+static struct {
+	uint64_t epoch; /* protected-set mutation id it was taken under */
+	bool full;
+	bool valid;
+} g_coverage;
+
+void ipc_runtime_coverage_forget(void)
+{
+	g_coverage.valid = false;
+}
+
+/*
+ * The heartbeat binds the status flags into the token nonce,
+ * so the status word and the token must carry the same bit.
  */
 static bool runtime_coverage_is_full(void)
 {
+	uint64_t epoch;
+	bool full;
 	int count;
 
 	/*
 	 * Reap here, not in each caller. An exited PID is unmeasurable,
 	 * so a stale entry would report partial coverage.
 	 * Reaping in one place keeps the status word and the token in agreement.
+	 * Before the cache check: a dropped PID bumps the epoch.
 	 */
 	runtime_protect_reap_exited();
 
 	agent_globals_lock(&g_agent);
 	count = g_agent.policy_protect_pid_count;
+	epoch = g_agent.policy_protect_epoch;
 	agent_globals_unlock(&g_agent);
 
-	if (count <= 0 || !g_agent.policy_protect_pids)
-		return lota_coverage_is_full(0, true);
+	if (g_coverage.valid && g_coverage.epoch == epoch)
+		return g_coverage.full;
 
-	for (int i = 0; i < count; i++) {
-		struct lota_runtime_measure_coverage cov;
+	full = true;
+	if (count <= 0 || !g_agent.policy_protect_pids) {
+		count = 0;
+	} else {
+		for (int i = 0; i < count; i++) {
+			struct lota_runtime_measure_coverage cov;
 
-		if (lota_runtime_coverage_pid(
-			    (pid_t)g_agent.policy_protect_pids[i], &cov) != 0)
-			return lota_coverage_is_full((size_t)count, false);
-		if (cov.unmeasurable > 0)
-			return lota_coverage_is_full((size_t)count, false);
+			if (lota_runtime_coverage_pid(
+				    (pid_t)g_agent.policy_protect_pids[i],
+				    &cov) != 0 ||
+			    cov.unmeasurable > 0) {
+				full = false;
+				break;
+			}
+		}
 	}
-	return lota_coverage_is_full((size_t)count, true);
+
+	full = lota_coverage_is_full((size_t)count, full);
+
+	g_coverage.epoch = epoch;
+	g_coverage.full = full;
+	g_coverage.valid = true;
+
+	return full;
 }
 
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx)

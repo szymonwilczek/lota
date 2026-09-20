@@ -38,6 +38,11 @@ const char *mode_to_string(int mode)
 	return "monitor";
 }
 
+/* No socket owner here, so no verdict to drop */
+void ipc_runtime_coverage_forget(void)
+{
+}
+
 static int tests_run;
 static int tests_passed;
 

@@ -80,8 +80,7 @@ static inline bool lota_coverage_is_full(size_t protected_count,
  *
  * Coverage belongs to the host, not to the caller, so every path that hands
  * out a status word must fold it here.
- * Compute @fully_measured when the word is built: a protected process can
- * map an unmeasurable object at any time.
+ * @fully_measured is a cached walk, not one per caller.
  */
 static inline uint32_t lota_status_fold_coverage(uint32_t flags,
 						 bool fully_measured)

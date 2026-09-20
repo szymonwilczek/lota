@@ -409,6 +409,62 @@ static void test_second_caller_pays_nothing(struct ipc_context *ctx)
 	PASS();
 }
 
+/* A new mapping may lack a digest and bumps no epoch: forget must re-walk */
+static void test_mapping_change_costs_a_fresh_walk(struct ipc_context *ctx)
+{
+	struct lota_ipc_status st;
+	int before;
+
+	TEST("a protected process mapping an object is walked again");
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	before = coverage_walks;
+
+	ipc_runtime_coverage_forget();
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (coverage_walks != before + 1) {
+		FAIL("the answer after a mapping change reused the old verdict");
+		return;
+	}
+
+	PASS();
+}
+
+/* Membership changes bump the epoch, which alone forces a re-walk */
+static void test_set_change_costs_a_fresh_walk(struct ipc_context *ctx)
+{
+	struct lota_ipc_status st;
+	int before;
+
+	TEST("a change to the protected set is walked again");
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	before = coverage_walks;
+
+	g_agent.policy_protect_epoch += 1;
+
+	if (read_status(ctx, &st) < 0) {
+		FAIL("status");
+		return;
+	}
+	if (coverage_walks != before + 1) {
+		FAIL("the answer after a set change reused the old verdict");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	struct ipc_context ctx;
@@ -440,6 +496,8 @@ int main(void)
 
 	test_repeat_answers_share_one_walk(&ctx);
 	test_second_caller_pays_nothing(&ctx);
+	test_mapping_change_costs_a_fresh_walk(&ctx);
+	test_set_change_costs_a_fresh_walk(&ctx);
 
 	ipc_cleanup(&ctx);
 	unlink(test_socket);

@@ -308,6 +308,14 @@ void ipc_set_mode(struct ipc_context *ctx, uint8_t mode);
 uint32_t ipc_host_status_flags(const struct ipc_context *ctx);
 
 /*
+ * ipc_runtime_coverage_forget - drop the cached coverage verdict
+ *
+ * Call on every executable mapping of a protected process,
+ * including those inside the re-measure cooldown.
+ */
+void ipc_runtime_coverage_forget(void);
+
+/*
  * ipc_set_profiles - Hand the IPC layer the publisher profiles
  * @ctx: Server context
  * @profiles: Targets owned by the attestation loop, borrowed for the run

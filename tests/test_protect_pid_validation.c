@@ -49,6 +49,11 @@ int __wrap_bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 	return 0;
 }
 
+/* No socket owner here, so no verdict to drop */
+void ipc_runtime_coverage_forget(void)
+{
+}
+
 /* named by the apply path, which nothing here reaches */
 const char *mode_to_string(int mode)
 {

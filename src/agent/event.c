@@ -14,6 +14,7 @@
 #include "agent.h"
 #include "event.h"
 #include "hash_verify.h"
+#include "ipc.h"
 #include "journal.h"
 #include "path_validate.h"
 #include "runtime_image_measure.h"
@@ -212,15 +213,19 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 	case LOTA_EVENT_MMAP_EXEC:
 		event_type_str = "MMAP_EXEC";
 		has_file = 1;
-		if (event->flags & LOTA_EVENT_FLAG_PROTECTED)
+		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
+			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
+		}
 		break;
 	case LOTA_EVENT_MMAP_BLOCKED:
 		event_type_str = "MMAP_BLOCKED";
 		has_file = 1;
 		is_blocked = true;
-		if (event->flags & LOTA_EVENT_FLAG_PROTECTED)
+		if (event->flags & LOTA_EVENT_FLAG_PROTECTED) {
+			ipc_runtime_coverage_forget();
 			remeasure_protected_image(event);
+		}
 		break;
 	case LOTA_EVENT_PTRACE:
 		event_type_str = "PTRACE";
