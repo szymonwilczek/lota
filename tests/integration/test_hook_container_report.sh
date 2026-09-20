@@ -9,7 +9,8 @@
 # looks the same as a hook that never loaded.
 #
 # Requires:
-#   - build/liblota_wine_hook.so (make liblota_wine_hook)
+#   - liblota_wine_hook.so in the build directory, which follows
+#     LOTA_BUILD_DIR the way the other integration tests do
 #   - hook_preload_target beside it, built with the same flags (make test-bins)
 #   - bash, and a writable temp directory
 #
@@ -21,7 +22,8 @@ set -euo pipefail
 export LC_ALL=C
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-HOOK_LIB="$REPO_DIR/build/liblota_wine_hook.so"
+BUILD_DIR="${BUILD_DIR:-${LOTA_BUILD_DIR:-$REPO_DIR/build}}"
+HOOK_LIB="$BUILD_DIR/liblota_wine_hook.so"
 TARGET="$(dirname "$HOOK_LIB")/hook_preload_target"
 
 for artifact in "$HOOK_LIB" "$TARGET"; do

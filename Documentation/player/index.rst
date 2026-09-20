@@ -363,6 +363,18 @@ the agent -- check the service above, and check that the launch options were
 pasted into *this* game. The file is left behind when the game exits, so read
 ``LOTA_UPDATED`` (a Unix timestamp) before trusting what it says.
 
+An empty ``lota-hook`` directory with the game running has one other cause,
+and the bridge says which::
+
+    lota-hook: /run/user/1000/lota-hook is inside this container, so the host
+    cannot read the status or the token written there; launch the title
+    through lota-proton-hook, which shares it
+
+The game's launch options do not start it through ``lota-proton-hook``, so
+the files stay inside the game's container. The game still gets its token,
+but nothing outside it can read the files. Pasting the line from
+``lota-steam-setup`` fixes it.
+
 If a game still refuses to start, the thing to send its support is what those
 commands print. It tells them in one line whether the problem is on your PC or
 on theirs.

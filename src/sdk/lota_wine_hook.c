@@ -45,6 +45,7 @@
 #include "../../include/lota_ipc.h"
 #include "../../include/lota_snapshot.h"
 #include "../../include/lota_wine_hook.h"
+#include "hook_container.h"
 
 /* log levels */
 enum hook_log_level {
@@ -442,6 +443,60 @@ static int setup_token_dir(void)
 	g_hook.token_dir[0] = '\0';
 	return last;
 }
+
+#ifndef LOTA_HOOK_TESTING
+/*
+ * Warn on stderr when the token directory is private to the container.
+ * Only inside a container: on the host a non-mount directory is normal.
+ */
+static void report_unshared_token_dir(void)
+{
+	char msg[PATH_MAX + 256];
+	bool mounted = false;
+	char line[PATH_MAX * 2];
+	bool skipping = false;
+	FILE *f;
+
+	if (!hook_in_container(getenv("container")))
+		return;
+
+	/*
+	 * Unreadable mountinfo: say nothing rather than guess. Read line by
+	 * line (it has no size and runs to tens of KB); an overlong line is
+	 * skipped whole, since a fragment could fake the fields.
+	 */
+	f = fopen("/proc/self/mountinfo", "re");
+	if (!f)
+		return;
+
+	while (fgets(line, sizeof(line), f)) {
+		bool complete = strchr(line, '\n') != NULL;
+
+		if (skipping) {
+			skipping = !complete;
+			continue;
+		}
+
+		if (!complete) {
+			skipping = true;
+			continue;
+		}
+
+		if (hook_dir_is_mount(line, g_hook.token_dir)) {
+			mounted = true;
+			break;
+		}
+	}
+
+	fclose(f);
+
+	if (mounted)
+		return;
+
+	hook_container_private_message(g_hook.token_dir, msg, sizeof(msg));
+	LOG_WRN("%s", msg);
+}
+#endif
 
 /*
  * Write data to a file atomically.
@@ -1252,6 +1307,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 	/* settle on a token directory the player owns */
 	if (setup_token_dir() < 0)
 		return;
+
+	report_unshared_token_dir();
 
 	snprintf(g_hook.status_path, sizeof(g_hook.status_path), "%s/%s",
 		 g_hook.token_dir, LOTA_HOOK_STATUS_FILE);
