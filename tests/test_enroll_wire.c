@@ -3,8 +3,9 @@
  * Unit tests for the attestation-CA enrollment wire codec (enroll.c).
  *
  * Byte layout is pinned here so the C agent and the Go CA
- * (src/attestca/wire) stay in lockstep: a "LCAE" magic, version 1, and
- * big-endian length-prefixed fields.
+ * (src/attestca/wire) stay in lockstep: a "LCAE" magic, the protocol version,
+ * and big-endian length-prefixed fields. Optional fields are a zero length
+ * or count, never a version.
  *
  * Copyright (C) 2026 Szymon Wilczek
  */
@@ -40,8 +41,11 @@ static void test_encode_begin_layout(void)
 	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 					sizeof(aik), NULL, 0, NULL, 0);
 
-	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00,
-				 0x02, 0xAA, 0xBB, 0x00, 0x01, 0xCC };
+	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
+				 0x01, 0x00, 0x02, 0xAA, 0xBB, /* EK leaf */
+				 0x00, 0x01, 0xCC, /* AIK template */
+				 0x00, 0x00, /* no token */
+				 0x00, 0x00 }; /* no intermediates */
 
 	CHECK(n == (ssize_t)sizeof(want), "encode_begin length");
 	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
@@ -84,10 +88,12 @@ static void test_encode_begin_token_layout(void)
 					sizeof(aik), token, sizeof(token), NULL,
 					0);
 
-	/* version 2, token appended; pinned against the Go wire tests */
-	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x02,
-				 0x00, 0x02, 0xAA, 0xBB, 0x00, 0x01,
-				 0xCC, 0x00, 0x02, 't',	 'k' };
+	/* pinned against the Go wire tests */
+	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
+				 0x01, 0x00, 0x02, 0xAA, 0xBB, /* EK leaf */
+				 0x00, 0x01, 0xCC, /* AIK template */
+				 0x00, 0x02, 't',  'k', /* the token */
+				 0x00, 0x00 }; /* no intermediates */
 
 	CHECK(n == (ssize_t)sizeof(want), "encode_begin token length");
 	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
@@ -165,24 +171,29 @@ static void test_decode_rejects_malformed(void)
 		      -EPROTONOSUPPORT,
 	      "decode rejects bad version");
 
-	/* CA mirrors a version-2 begin with version-2 replies */
-	const uint8_t v2_reply[] = {
-		0x4C, 0x43, 0x41, 0x45, 0x00, 0x02, /* magic, version 2 */
+	/* any other version, the old shape selectors included, is a newer CA */
+	uint8_t reply[] = {
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, /* magic, version */
 		0x00, 0x00, /* status OK */
 		0x00, 0x01, 'a', /* session id */
 		0x00, 0x01, 0x01, /* credential blob */
 		0x00, 0x01, 0x02 /* encrypted secret */
 	};
-	CHECK(enroll_decode_challenge(v2_reply, sizeof(v2_reply), &ch) == 0,
-	      "decode accepts a version-2 reply");
+	CHECK(enroll_decode_challenge(reply, sizeof(reply), &ch) == 0,
+	      "decode accepts the version in service");
 
-	/* and a version-3 begin with version-3 replies */
-	uint8_t v3_reply[sizeof(v2_reply)];
+	static const uint8_t newer[] = { 0x00, 0x02, 0x03, 0x04 };
 
-	memcpy(v3_reply, v2_reply, sizeof(v2_reply));
-	v3_reply[5] = 0x03;
-	CHECK(enroll_decode_challenge(v3_reply, sizeof(v3_reply), &ch) == 0,
-	      "decode accepts a version-3 reply");
+	for (size_t i = 0; i < sizeof(newer); i++) {
+		char msg[64];
+
+		snprintf(msg, sizeof(msg), "decode refuses version %u",
+			 newer[i]);
+		reply[5] = newer[i];
+		CHECK(enroll_decode_challenge(reply, sizeof(reply), &ch) ==
+			      -EPROTONOSUPPORT,
+		      msg);
+	}
 
 	const uint8_t truncated[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00 };
 	CHECK(enroll_decode_challenge(truncated, sizeof(truncated), &ch) < 0,
@@ -197,12 +208,8 @@ static void test_decode_rejects_malformed(void)
 }
 
 /*
- * Version 3 is the frame that carries the manufacturer intermediates.
- * It is additive over version 2: the token field stays where it was and may be
- * empty, and the chain follows as a count and one length-prefixed certificate
- * per element.
- * Layout is pinned byte for byte against the Go wire, which is the only thing
- * keeping the two implementations in step.
+ * The chain closes the frame: a count, then length-prefixed certificates.
+ * Pinned byte for byte against the Go wire.
  */
 static void test_encode_begin_chain_layout(void)
 {
@@ -217,7 +224,7 @@ static void test_encode_begin_chain_layout(void)
 					sizeof(aik), NULL, 0, chain, 2);
 
 	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
-				 0x03, 0x00, 0x02, 0xAA, 0xBB, /* EK leaf */
+				 0x01, 0x00, 0x02, 0xAA, 0xBB, /* EK leaf */
 				 0x00, 0x01, 0xCC, /* AIK template */
 				 0x00, 0x00, /* no token */
 				 0x00, 0x02, /* two intermediates */
@@ -230,26 +237,58 @@ static void test_encode_begin_chain_layout(void)
 }
 
 /*
- * A host with no chain to present must keep speaking the frame a CA that
- * predates this field understands, so the version still follows what the
- * request actually carries.
+ * The version is the agent's, whatever fields the request carries.
  */
-static void test_encode_begin_chain_absent(void)
+static void test_encode_begin_version_is_the_agents(void)
 {
 	const uint8_t ek[] = { 0xAA };
 	const uint8_t aik[] = { 0xCC };
 	const uint8_t token[] = { 't' };
+	const uint8_t cert[] = { 0x30, 0x01, 0xDD };
+	const struct enroll_cert_ref chain[] = { { cert, sizeof(cert) } };
 	uint8_t out[64];
 
 	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), NULL, 0, NULL, 0) > 0 &&
-		      out[5] == 0x01,
-	      "no chain and no token stays version 1");
+		      out[4] == 0x00 && out[5] == LOTA_ENROLL_VERSION,
+	      "a request with neither field names the agent's version");
 	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
 				  sizeof(aik), token, sizeof(token), NULL,
 				  0) > 0 &&
-		      out[5] == 0x02,
-	      "a token without a chain stays version 2");
+		      out[5] == LOTA_ENROLL_VERSION,
+	      "a token does not move the version");
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), NULL, 0, chain, 1) > 0 &&
+		      out[5] == LOTA_ENROLL_VERSION,
+	      "a chain does not move the version");
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), token, sizeof(token), chain,
+				  1) > 0 &&
+		      out[5] == LOTA_ENROLL_VERSION,
+	      "both fields together do not move the version");
+}
+
+/*
+ * Begin and complete of one ceremony carry the same version.
+ */
+static void test_begin_and_complete_agree_on_version(void)
+{
+	const uint8_t ek[] = { 0xAA };
+	const uint8_t aik[] = { 0xCC };
+	const uint8_t token[] = { 't' };
+	const uint8_t cert[] = { 0x30, 0x01, 0xDD };
+	const struct enroll_cert_ref chain[] = { { cert, sizeof(cert) } };
+	uint8_t begin[64];
+	uint8_t complete[64];
+
+	CHECK(enroll_encode_complete(complete, sizeof(complete), "s", ek,
+				     sizeof(ek)) > 0,
+	      "encode_complete succeeds");
+	CHECK(enroll_encode_begin(begin, sizeof(begin), ek, sizeof(ek), aik,
+				  sizeof(aik), token, sizeof(token), chain,
+				  1) > 0 &&
+		      memcmp(begin, complete, 6) == 0,
+	      "begin and complete share one preamble");
 }
 
 /*
@@ -462,7 +501,8 @@ int main(void)
 	test_decode_result();
 	test_decode_rejects_malformed();
 	test_encode_begin_chain_layout();
-	test_encode_begin_chain_absent();
+	test_encode_begin_version_is_the_agents();
+	test_begin_and_complete_agree_on_version();
 	test_encode_begin_chain_bounds();
 	test_split_cert_chain();
 	test_split_cert_chain_tolerates_junk();

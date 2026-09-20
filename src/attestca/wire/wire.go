@@ -5,13 +5,13 @@
 // Four length-prefixed, big-endian messages carry one enrollment over a
 // TLS connection:
 //
-//	agent -> CA : BeginRequest    (EK cert + AIK TPMT_PUBLIC + token, v2)
+//	agent -> CA : BeginRequest    (EK cert + AIK TPMT_PUBLIC + token + EK chain)
 //	CA -> agent : ChallengeReply  (session id + credential blob + secret)
 //	agent -> CA : CompleteRequest (session id + activated secret)
 //	CA -> agent : ResultReply     (AIK certificate + device id)
 //
-// Every variable field is bounded so a peer cannot force an unbounded
-// allocation.
+// One layout per message: an optional field is a zero length or count,
+// never a version. Every variable field is bounded.
 // C agent mirrors this layout in include/lota_enroll.h
 
 package wire
@@ -30,21 +30,12 @@ const (
 	// big-endian here for a stable on-wire byte order)
 	Magic uint32 = 0x4C434145
 
-	// Version1 frames carry no enrollment token.
-	// Version2 appends one to BeginRequest.
-	// Version3 appends the manufacturer intermediates the device holds and
-	// carries the token field even when it is empty.
-	// All three are current modes: untenanted enrollment is Version1,
-	// tenant enrollment presents its token and is Version2,
-	// and a device presenting an EK certificate chain is Version3.
-	// Agent picks by what it holds;
-	// CA mirrors the version of the request in its replies.
+	// Version1 is the one protocol version in service; it dates the peer,
+	// not the frame. A layout change takes the next number (see frameVersion).
 	Version1 uint16 = 1
-	Version2 uint16 = 2
-	Version3 uint16 = 3
 
 	// Version is the newest protocol version this package speaks.
-	Version = Version3
+	Version = Version1
 
 	MaxEKCertSize      = 2048
 	MaxAIKPublicSize   = 1024
@@ -93,13 +84,11 @@ type BeginRequest struct {
 	EKCertDER []byte
 	AIKPublic []byte // marshaled TPMT_PUBLIC
 
-	// Token is the optional enrollment token, carried by Version2 frames
-	// and later. EncodeBegin derives the frame version from its presence;
-	// DecodeBegin leaves it nil on a Version1 frame.
+	// Token is the optional enrollment token; length zero when absent.
 	Token []byte
 
-	// EKChainDER holds the manufacturer intermediates the device read out
-	// of its own TPM, leaf-ward first, carried by Version3 frames only.
+	// EKChainDER holds the manufacturer intermediates read from the TPM,
+	// leaf-ward first; count zero when absent.
 	// They are untrusted path material: they may complete a route to a
 	// pinned root, never widen the set of roots.
 	EKChainDER [][]byte
@@ -150,19 +139,12 @@ type encoder struct {
 	err error
 }
 
-// frameVersion validates a message's Version field.
-// Unset field is refused: the version selects the frame layout, so guessing one
-// for a caller that never set it would encode a frame the caller did not ask for.
-// Every server reply mirrors the version of the request it answers, so real encode
-// path always has one to pass.
+// frameVersion is the only version check; a revision adds its case here.
+// Unset is refused: a reply must mirror its request, never guess.
 func frameVersion(v uint16) (uint16, error) {
 	switch v {
 	case Version1:
 		return Version1, nil
-	case Version2:
-		return Version2, nil
-	case Version3:
-		return Version3, nil
 	default:
 		return 0, ErrBadVersion
 	}
@@ -206,11 +188,8 @@ func (e *encoder) result() ([]byte, error) {
 	return e.buf, nil
 }
 
-// EncodeBegin serializes a BeginRequest.
-// Frame version follows what the request carries, because that is what the
-// versions differ by: an untenanted request has neither field and is Version1,
-// a tenant request carries a token and is Version2, and a device presenting
-// its manufacturer intermediates is Version3.
+// EncodeBegin serializes a BeginRequest in the newest version,
+// every field written; absent ones as zero length or count.
 func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	if len(r.EKCertDER) > MaxEKCertSize || len(r.AIKPublic) > MaxAIKPublicSize ||
 		len(r.Token) > MaxEnrollTokenSize || len(r.EKChainDER) > MaxEKChainCerts {
@@ -226,32 +205,20 @@ func EncodeBegin(r *BeginRequest) ([]byte, error) {
 	if chainBytes > MaxEKChainBytes {
 		return nil, ErrTooLarge
 	}
-	version := Version1
-	switch {
-	case len(r.EKChainDER) > 0:
-		version = Version3
-	case len(r.Token) > 0:
-		version = Version2
-	}
-	e := newEncoder(version)
+
+	e := newEncoder(Version)
 	e.bytes16(r.EKCertDER)
 	e.bytes16(r.AIKPublic)
-	// Version3 carries the token field whether or not it holds one
-	if version >= Version2 {
-		e.bytes16(r.Token)
+	e.bytes16(r.Token)
+	n := len(r.EKChainDER)
+
+	// already bounded above; kept for the uint16 conversion, as in bytes16
+	if n < 0 || n > math.MaxUint16 {
+		return nil, ErrTooLarge
 	}
-	if version >= Version3 {
-		n := len(r.EKChainDER)
-		// bounded by MaxEKChainCerts above; guarded here the way bytes16
-		// guards its own length prefix, so the conversion cannot overflow
-		// whatever a future caller does
-		if n < 0 || n > math.MaxUint16 {
-			return nil, ErrTooLarge
-		}
-		e.u16(uint16(n))
-		for _, c := range r.EKChainDER {
-			e.bytes16(c)
-		}
+	e.u16(uint16(n))
+	for _, c := range r.EKChainDER {
+		e.bytes16(c)
 	}
 	return e.result()
 }
@@ -319,9 +286,9 @@ func newDecoder(b []byte) (*decoder, error) {
 	if binary.BigEndian.Uint32(b[0:4]) != Magic {
 		return nil, ErrBadMagic
 	}
-	v := binary.BigEndian.Uint16(b[4:6])
-	if v != Version1 && v != Version2 && v != Version3 {
-		return nil, ErrBadVersion
+	v, err := frameVersion(binary.BigEndian.Uint16(b[4:6]))
+	if err != nil {
+		return nil, err
 	}
 	return &decoder{buf: b, off: 6, version: v}, nil
 }
@@ -367,17 +334,13 @@ func DecodeBegin(b []byte) (*BeginRequest, error) {
 		return nil, err
 	}
 	req := &BeginRequest{EKCertDER: ekCert, AIKPublic: aikPub, Version: d.version}
-	if d.version >= Version2 {
-		req.Token, err = d.bytes16(MaxEnrollTokenSize)
-		if err != nil {
-			return nil, err
-		}
+	req.Token, err = d.bytes16(MaxEnrollTokenSize)
+	if err != nil {
+		return nil, err
 	}
-	if d.version >= Version3 {
-		req.EKChainDER, err = d.chain()
-		if err != nil {
-			return nil, err
-		}
+	req.EKChainDER, err = d.chain()
+	if err != nil {
+		return nil, err
 	}
 	return req, nil
 }

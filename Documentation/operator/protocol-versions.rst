@@ -94,28 +94,22 @@ Enrollment protocol (agent - CA)
 The enrollment wire also carries a version, but it is **additive and
 negotiated**, not strict. The rule the project follows:
 
-* A new field is introduced under a bumped enrollment version. The encoder emits
-  the **lower** version when the new field is absent, and the CA **mirrors the
-  version of the request it received** in its replies.
-* A new agent that sends no new-field data therefore still speaks the old wire to
-  an old CA, and a new CA still answers an old agent in the old wire. Only when a
-  new agent actually uses a new field does it require a CA new enough to
-  understand it.
+* A new field comes with a bumped enrollment version and is on the wire in
+  every frame of that version, empty when unused. An agent sends the newest
+  version it speaks; the CA **mirrors the version of the request it
+  received** in its replies.
+* A new CA therefore answers an old agent in the old wire, so the CA tier can
+  move first. A peer refuses a version its build does not implement.
 
-Two fields use this mechanism today. The enrollment token carries a device's
-tenant to the CA: a token-bearing request is sent under version 2, a token-less
-request under version 1. The EK certificate chain carries the manufacturer
-intermediates a firmware TPM stores on the chip: a device that has them sends
-version 3, which also carries the token field whether or not it holds a token.
-An operator who has deployed neither sees no version change on the enrollment
-path at all.
+One version is in service currently. The enrollment token (tenant) and the EK
+certificate chain (manufacturer intermediates of a firmware TPM) do not
+change it: a request without them writes a zero-length token and a zero
+chain count. Adopting tenancy or enrolling a firmware TPM changes no
+version.
 
-Consequence: the CA and the agent fleet can be brought up in either order.
-Deploy the CA first if you intend to start using a new enrollment field, so the
-field has somewhere to land; otherwise the order does not matter. A host whose
-TPM stores an EK chain is the one case where the order matters in practice --
-it sends version 3 because it has no other way to be verified, so its CA has to
-understand version 3.
+Consequence: today the CA and the agent fleet can be brought up in either
+order. After a future version bump, deploy the CA before the agents that send
+it; older agents keep enrolling against the new CA.
 
 Persistent schema (verifier - database)
 =======================================

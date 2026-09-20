@@ -354,9 +354,10 @@ func TestServerTokenEnrollment(t *testing.T) {
 	if result == nil || result.Status != wire.StatusOK {
 		t.Fatalf("token enrollment failed: %+v", result)
 	}
-	// version-2 exchange must be answered with version-2 frames
-	if challenge.Version != wire.Version2 || result.Version != wire.Version2 {
-		t.Fatalf("reply versions %d/%d, want %d", challenge.Version, result.Version, wire.Version2)
+
+	// replies mirror the request's version
+	if challenge.Version != wire.Version1 || result.Version != wire.Version1 {
+		t.Fatalf("reply versions %d/%d, want %d", challenge.Version, result.Version, wire.Version1)
 	}
 	aikCert, err := x509.ParseCertificate(result.AIKCertDER)
 	if err != nil {
@@ -380,7 +381,7 @@ func TestServerRejectsUnknownToken(t *testing.T) {
 	if challenge.Status != wire.StatusTokenRejected {
 		t.Fatalf("status %d, want StatusTokenRejected", challenge.Status)
 	}
-	if challenge.Version != wire.Version2 {
-		t.Fatalf("rejection version %d, want %d", challenge.Version, wire.Version2)
+	if challenge.Version != wire.Version1 {
+		t.Fatalf("rejection version %d, want %d", challenge.Version, wire.Version1)
 	}
 }

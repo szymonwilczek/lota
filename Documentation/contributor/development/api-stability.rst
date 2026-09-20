@@ -309,9 +309,9 @@ carries its version in the message:
        every trust decision rests on, so a layout change is a flag day for
        the agent fleet and the verifier tier together.
    * - Enrollment
-     - ``LOTA_ENROLL_VERSION``, ``LOTA_ENROLL_VERSION_TOKEN``
-     - Additive and negotiated. Both frame versions are current modes, and
-       the CA answers in the version of the request it received.
+     - ``LOTA_ENROLL_VERSION``
+     - Additive and negotiated. One version is in service; it dates the
+       peer, not the frame. The CA answers in the request's version.
    * - Session token
      - ``LOTA_TOKEN_VERSION``
      - Public API, because ``lota_token.h`` is installed and a server links
