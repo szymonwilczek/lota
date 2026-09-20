@@ -311,9 +311,9 @@ Titles that run under Proton or Wine
 A Windows title reaches the agent through a Linux-side bridge
 (``liblota_wine_hook.so``), because a DLL inside the Wine prefix cannot open a
 host socket. Steam has to be told to preload it, which is one line pasted into
-that title's launch options -- ``lota-steam-setup`` prints the exact string,
-including the ``PRESSURE_VESSEL_FILESYSTEMS_RW`` entry the container manager
-needs to see the socket at all.
+that title's launch options -- ``lota-steam-setup`` prints the exact string.
+Container mounts are not pasted: ``lota-proton-hook`` adds the socket and
+token directories to ``PRESSURE_VESSEL_FILESYSTEMS_RW`` itself.
 
 A title running inside a Proton container reaches the agent through a
 per-user socket, and ``lota-steam-setup --register-uid`` records the account

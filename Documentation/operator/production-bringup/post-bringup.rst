@@ -279,11 +279,11 @@ directory of the player's own. It writes ``lota-status``,
 ``lota-token.bin`` and ``lota-attestation.bin`` into
 ``$XDG_RUNTIME_DIR/lota-hook`` -- not into ``$XDG_RUNTIME_DIR/lota``, which
 the agent owns as ``root:lota`` and which a process running as the player
-cannot write. A title launched through pressure-vessel therefore needs both
-directories bound into the container, which is what the launch string
-``lota-steam-setup --verify`` prints does; ``--verify`` also reports the
-token directory, and names the ``/tmp/lota-<uid>`` fallback the hook takes
-when a leftover in the runtime directory belongs to somebody else.
+cannot write. Under pressure-vessel both directories must be bound into the
+container; ``lota-proton-hook`` creates the token directory and shares both
+before the container is built. ``--verify`` also reports the token directory,
+and names the ``/tmp/lota-<uid>`` fallback the hook takes when a leftover in
+the runtime directory belongs to somebody else.
 
 Single-operator hosts can reach the same listener by the other road:
 ``lota-steam-setup --install-systemd-dropin`` writes
