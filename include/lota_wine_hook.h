@@ -97,7 +97,11 @@ extern "C" {
 /* defaults */
 #define LOTA_HOOK_DEFAULT_REFRESH_SEC 60
 #define LOTA_HOOK_DEFAULT_PROTECT_DELAY_SEC 20
-#define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000
+
+#define LOTA_HOOK_CONNECT_TIMEOUT_MS 2000 /* local socket */
+
+/* a status answer may wait on a measurement; on timeout, ask again */
+#define LOTA_HOOK_REQUEST_TIMEOUT_MS (10 * LOTA_HOOK_CONNECT_TIMEOUT_MS)
 
 /* the hook is built hidden so its SDK copy cannot shadow the game's */
 #define LOTA_HOOK_EXPORT __attribute__((visibility("default")))
