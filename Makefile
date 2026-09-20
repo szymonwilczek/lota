@@ -2171,6 +2171,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_dropin.sh
 	@tests/integration/test_steam_setup_no_session.sh
 	@tests/integration/test_proton_hook_disable.sh
+	@tests/integration/test_proton_hook_shares.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
 	@tests/integration/test_installer_status_stages.sh
 	@if command -v pkg-config >/dev/null 2>&1; then \
