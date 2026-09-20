@@ -68,6 +68,12 @@ static bool enroll_version_supported(uint16_t version)
 	return version == LOTA_ENROLL_VERSION;
 }
 
+/* trailing bytes: a newer frame, whose extra fields must not be dropped */
+static int rd_end(const struct rd *r)
+{
+	return r->pos == r->len ? 0 : -EBADMSG;
+}
+
 static int rd_preamble(struct rd *r)
 {
 	uint32_t magic;
@@ -318,7 +324,7 @@ int enroll_decode_challenge(const uint8_t *body, size_t len,
 			 &out->enc_secret_len);
 	if (ret < 0)
 		return ret;
-	return 0;
+	return rd_end(&r);
 }
 
 int enroll_token_from_file(const char *path, char *out, size_t out_size)
@@ -395,7 +401,7 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 	if (ret < 0)
 		return ret;
 	out->device_id[dev_len] = '\0';
-	return 0;
+	return rd_end(&r);
 }
 
 /*

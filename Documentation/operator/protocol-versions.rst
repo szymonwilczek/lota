@@ -100,6 +100,9 @@ negotiated**, not strict. The rule the project follows:
   received** in its replies.
 * A new CA therefore answers an old agent in the old wire, so the CA tier can
   move first. A peer refuses a version its build does not implement.
+* A frame with bytes after its last field is refused, whatever its version.
+  Skipping them would take a newer frame for an older one and drop its new
+  fields, such as an enrollment token.
 
 One version is in service currently. The enrollment token (tenant) and the EK
 certificate chain (manufacturer intermediates of a firmware TPM) do not

@@ -319,6 +319,49 @@ func TestDecodeRejectsRetiredVersions(t *testing.T) {
 	}
 }
 
+// trailing bytes are refused, or a begin with a token could enroll untenanted
+func TestDecodeRejectsTrailingBytes(t *testing.T) {
+	begin, err := EncodeBegin(&BeginRequest{EKCertDER: []byte{0xAA}, AIKPublic: []byte{0xBB}, Token: []byte("t")})
+	if err != nil {
+		t.Fatalf("EncodeBegin: %v", err)
+	}
+	challenge, err := EncodeChallenge(&ChallengeReply{SessionID: "s", Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeChallenge: %v", err)
+	}
+	complete, err := EncodeComplete(&CompleteRequest{SessionID: "s", Secret: []byte{1}, Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeComplete: %v", err)
+	}
+	result, err := EncodeResult(&ResultReply{DeviceID: "d", Version: Version1})
+	if err != nil {
+		t.Fatalf("EncodeResult: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   []byte
+		decode func([]byte) error
+	}{
+		{"begin", begin, func(b []byte) error { _, err := DecodeBegin(b); return err }},
+		{"challenge", challenge, func(b []byte) error { _, err := DecodeChallenge(b); return err }},
+		{"complete", complete, func(b []byte) error { _, err := DecodeComplete(b); return err }},
+		{"result", result, func(b []byte) error { _, err := DecodeResult(b); return err }},
+	} {
+		if err := tc.decode(tc.body); err != nil {
+			t.Fatalf("%s: whole body: %v", tc.name, err)
+		}
+		// one byte too many is a different frame, not this one
+		if err := tc.decode(append(tc.body, 0x00)); err != ErrTrailing {
+			t.Fatalf("%s with a trailing byte: want ErrTrailing, got %v", tc.name, err)
+		}
+		// and so is a whole appended field
+		if err := tc.decode(append(tc.body, 0x00, 0x01, 0xFF)); err != ErrTrailing {
+			t.Fatalf("%s with an appended field: want ErrTrailing, got %v", tc.name, err)
+		}
+	}
+}
+
 // chain closes the frame: a count, then length-prefixed certificates;
 // pinned byte for byte against tests/test_enroll_wire.c
 func TestBeginChainByteLayout(t *testing.T) {

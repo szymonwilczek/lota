@@ -77,6 +77,7 @@ var (
 	ErrBadVersion = errors.New("enroll: unsupported protocol version")
 	ErrTooLarge   = errors.New("enroll: field exceeds bound")
 	ErrShort      = errors.New("enroll: frame truncated")
+	ErrTrailing   = errors.New("enroll: bytes after the frame body")
 )
 
 // BeginRequest is the agent's opening message.
@@ -342,6 +343,9 @@ func DecodeBegin(b []byte) (*BeginRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := d.end(); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 
@@ -373,6 +377,15 @@ func (d *decoder) chain() ([][]byte, error) {
 	return out, nil
 }
 
+// end refuses trailing bytes: a newer frame, whose extra fields must not be
+// silently dropped.
+func (d *decoder) end() error {
+	if d.off != len(d.buf) {
+		return ErrTrailing
+	}
+	return nil
+}
+
 // DecodeChallenge parses a ChallengeReply.
 func DecodeChallenge(b []byte) (*ChallengeReply, error) {
 	d, err := newDecoder(b)
@@ -393,6 +406,9 @@ func DecodeChallenge(b []byte) (*ChallengeReply, error) {
 	}
 	secret, err := d.bytes16(MaxEncSecretSize)
 	if err != nil {
+		return nil, err
+	}
+	if err := d.end(); err != nil {
 		return nil, err
 	}
 	return &ChallengeReply{
@@ -418,6 +434,9 @@ func DecodeComplete(b []byte) (*CompleteRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := d.end(); err != nil {
+		return nil, err
+	}
 	return &CompleteRequest{SessionID: string(sid), Secret: secret, Version: d.version}, nil
 }
 
@@ -437,6 +456,9 @@ func DecodeResult(b []byte) (*ResultReply, error) {
 	}
 	dev, err := d.bytes16(MaxDeviceIDSize)
 	if err != nil {
+		return nil, err
+	}
+	if err := d.end(); err != nil {
 		return nil, err
 	}
 	return &ResultReply{Status: status, AIKCertDER: cert, DeviceID: string(dev), Version: d.version}, nil

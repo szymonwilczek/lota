@@ -207,6 +207,50 @@ static void test_decode_rejects_malformed(void)
 	      "decode rejects an oversized field length");
 }
 
+/* trailing bytes in a reply are refused, not skipped */
+static void test_decode_rejects_trailing_bytes(void)
+{
+	const uint8_t challenge[] = {
+		0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, /* magic, version */
+		0x00, 0x00, /* status OK */
+		0x00, 0x01, 'a', /* session id */
+		0x00, 0x01, 0x01, /* credential blob */
+		0x00, 0x01, 0x02 /* encrypted secret */
+	};
+	const uint8_t result[] = { 0x4C, 0x43, 0x41, 0x45,
+				   0x00, 0x01, 0x00, 0x00, /* status OK */
+				   0x00, 0x01, 0x30, /* AIK certificate */
+				   0x00, 0x01, 'd' }; /* device id */
+	uint8_t padded[32];
+	struct enroll_challenge ch;
+	struct enroll_result res;
+
+	CHECK(enroll_decode_challenge(challenge, sizeof(challenge), &ch) == 0 &&
+		      enroll_decode_result(result, sizeof(result), &res) == 0,
+	      "both replies decode whole");
+
+	memcpy(padded, challenge, sizeof(challenge));
+	padded[sizeof(challenge)] = 0x00;
+	CHECK(enroll_decode_challenge(padded, sizeof(challenge) + 1, &ch) ==
+		      -EBADMSG,
+	      "a challenge with a trailing byte is refused");
+
+	memcpy(padded, result, sizeof(result));
+	padded[sizeof(result)] = 0x00;
+	CHECK(enroll_decode_result(padded, sizeof(result) + 1, &res) ==
+		      -EBADMSG,
+	      "a result with a trailing byte is refused");
+
+	/* a whole appended field, as a newer CA would send */
+	memcpy(padded, result, sizeof(result));
+	padded[sizeof(result)] = 0x00;
+	padded[sizeof(result) + 1] = 0x01;
+	padded[sizeof(result) + 2] = 0xFF;
+	CHECK(enroll_decode_result(padded, sizeof(result) + 3, &res) ==
+		      -EBADMSG,
+	      "a result with an appended field is refused");
+}
+
 /*
  * The chain closes the frame: a count, then length-prefixed certificates.
  * Pinned byte for byte against the Go wire.
@@ -500,6 +544,7 @@ int main(void)
 	test_decode_challenge();
 	test_decode_result();
 	test_decode_rejects_malformed();
+	test_decode_rejects_trailing_bytes();
 	test_encode_begin_chain_layout();
 	test_encode_begin_version_is_the_agents();
 	test_begin_and_complete_agree_on_version();
