@@ -86,11 +86,10 @@ static int ipc_request_shutdown(void)
  * The agent answers for a caller kill(2) would already have allowed,
  * so this runs as the player who owns the title, without sudo.
  *
- * @out_count receives the protected-set size the agent reported,
- * which is what the caller can observe rather than a promise the process has gone.
+ * @out_others receives the protected set size, not counting @pid.
  */
 static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
-					   uint32_t *out_count)
+					   uint32_t *out_others)
 {
 	struct sockaddr_un addr;
 	struct lota_ipc_request req = {
@@ -172,8 +171,8 @@ static int ipc_request_terminate_protected(uint32_t pid, uint32_t sig,
 	if (ret < 0)
 		return ret;
 
-	if (out_count)
-		*out_count = body.protect_pid_count;
+	if (out_others)
+		*out_others = body.other_protect_pid_count;
 
 	return 0;
 }
@@ -210,10 +209,10 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 
 	if (opts->terminate_protected_flag) {
 		uint32_t sig = opts->force_flag ? SIGKILL : SIGTERM;
-		uint32_t count = 0;
+		uint32_t others = 0;
 		char line[256];
 		int tret = ipc_request_terminate_protected(
-			opts->terminate_protected_pid, sig, &count);
+			opts->terminate_protected_pid, sig, &others);
 
 		if (tret == -EINVAL) {
 			fprintf(stderr,
@@ -253,7 +252,7 @@ int diagnostics_dispatch(struct cli_options *opts, struct lota_config *cfg)
 		}
 
 		terminate_sent_message(opts->terminate_protected_pid,
-				       opts->force_flag, count, line,
+				       opts->force_flag, others, line,
 				       sizeof(line));
 		printf("%s\n", line);
 		return 0;

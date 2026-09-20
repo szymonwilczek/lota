@@ -467,16 +467,11 @@ struct lota_ipc_terminate_request {
 
 /*
  * TERMINATE_PROTECTED response payload
- *
- * @protect_pid_count is the set as it stands when the answer is written.
- * SIGKILL'd process is usually still in it: the kernel drops the task
- * and the agent reaps it on the next round, so the count is what the caller
- * can observe, not a promise that the process has gone.
  */
 struct lota_ipc_terminate_response {
 	uint32_t pid;
 	uint32_t signal;
-	uint32_t protect_pid_count;
+	uint32_t other_protect_pid_count; /* protected set minus @pid */
 	uint32_t _reserved1;
 } __attribute__((packed));
 
