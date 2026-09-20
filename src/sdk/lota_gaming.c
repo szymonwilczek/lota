@@ -642,6 +642,15 @@ int lota_get_fd(struct lota_client *client)
 	return client->fd;
 }
 
+int lota_set_request_timeout(struct lota_client *client, int timeout_ms)
+{
+	if (!client || timeout_ms <= 0)
+		return LOTA_ERR_INVALID_ARG;
+
+	client->timeout_ms = timeout_ms;
+	return LOTA_OK;
+}
+
 int lota_ping(struct lota_client *client, uint64_t *uptime_sec)
 {
 	struct lota_ipc_request req;

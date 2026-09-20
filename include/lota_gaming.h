@@ -381,6 +381,20 @@ void lota_disconnect(struct lota_client *client);
 int lota_get_fd(struct lota_client *client);
 
 /*
+ * lota_set_request_timeout - Set the deadline for a request's answer
+ * @client:     Client handle
+ * @timeout_ms: Milliseconds a request may wait for its answer (> 0)
+ *
+ * The connect timeout bounds reaching the local socket. An answer can take
+ * longer: a status call may first measure a large protected process.
+ * With one shared deadline a busy agent is reported as a missing one.
+ * Does not affect a request already in flight.
+ *
+ * Returns LOTA_OK, or LOTA_ERR_INVALID_ARG for no client or timeout_ms <= 0.
+ */
+int lota_set_request_timeout(struct lota_client *client, int timeout_ms);
+
+/*
  * lota_ping - Check if agent is responsive
  *
  * Returns LOTA_OK if the agent responds, error code otherwise.

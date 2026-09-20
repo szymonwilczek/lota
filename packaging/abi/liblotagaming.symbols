@@ -11,6 +11,7 @@ lota_ping@@LOTAGAMING_1.0
 lota_poll_events@@LOTAGAMING_1.0
 lota_protect_self@@LOTAGAMING_1.0
 lota_sdk_version@@LOTAGAMING_1.0
+lota_set_request_timeout@@LOTAGAMING_1.1
 lota_strerror@@LOTAGAMING_1.0
 lota_subscribe@@LOTAGAMING_1.0
 lota_token_free@@LOTAGAMING_1.0
