@@ -2308,7 +2308,7 @@ $(FUZZ_LSAN_OBJ): fuzz/lsan_options.c | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c | $(BUILD_DIR)/fuzz
+$(BUILD_DIR)/fuzz/fuzz_ipc.o: fuzz/fuzz_ipc.c src/agent/ipc.c src/agent/ipc.h | $(BUILD_DIR)/fuzz
 	$(QUIET_CLANG)
 	$(Q)clang $(FUZZ_CFLAGS) -I$(INC_DIR) -c $< -o $@
 
