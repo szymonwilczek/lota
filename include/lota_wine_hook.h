@@ -29,6 +29,12 @@ extern "C" {
 /* set to "1" or "true" to disable the hook entirely. */
 #define LOTA_HOOK_ENV_DISABLE "LOTA_HOOK_DISABLE"
 
+/* comma-separated exe prefixes to hook; only these, the skip list unused */
+#define LOTA_HOOK_ENV_ACTIVATE_PATH "LOTA_HOOK_ACTIVATE_PATH"
+
+/* comma-separated exe prefixes to skip, on top of the system paths */
+#define LOTA_HOOK_ENV_SKIP_PATH "LOTA_HOOK_SKIP_PATH"
+
 /*
  * Log level: debug | info | warn | error | silent
  * Default: warn

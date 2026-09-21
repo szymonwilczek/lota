@@ -261,8 +261,8 @@ static bool should_activate(void)
 	if (read_self_exe(exe, sizeof(exe)) != 0 || !exe[0])
 		return true;
 
-	return policy_should_activate(exe, getenv("LOTA_HOOK_ACTIVATE_PATH"),
-				      getenv("LOTA_HOOK_SKIP_PATH"));
+	return policy_should_activate(exe, getenv(LOTA_HOOK_ENV_ACTIVATE_PATH),
+				      getenv(LOTA_HOOK_ENV_SKIP_PATH));
 }
 #endif
 
@@ -1274,12 +1274,8 @@ __attribute__((constructor)) static void lota_wine_hook_init(void)
 		return;
 
 	/*
-	 * LD_PRELOAD is inherited by every fork+exec inside the launcher
-	 * shell, including throwaway POSIX utilities. Skip those so the
-	 * hook never blocks `basename cs2.sh` or its peers on agent I/O.
-	 * Operators can override with LOTA_HOOK_ACTIVATE_COMM (positive
-	 * allowlist) or LOTA_HOOK_SKIP_COMM (extend the built-in skip
-	 * list); see should_activate() for the policy.
+	 * LD_PRELOAD reaches every utility the launcher shell runs;
+	 * skip them so none blocks on agent I/O. See should_activate().
 	 */
 	if (!should_activate())
 		return;
