@@ -1466,6 +1466,135 @@ static void test_comments_name_symbols_that_exist(void)
 	PASS();
 }
 
+#define PAGE_SYMBOLS_MAX 1024
+
+/* LOTA_ tokens the pages name, and those the tree spells outside its prose */
+static char tree_symbols[SYMBOLS_MAX][SYMBOL_MAX];
+static size_t tree_symbol_count;
+static char page_symbols[PAGE_SYMBOLS_MAX][SYMBOL_MAX];
+static char page_sources[PAGE_SYMBOLS_MAX][160];
+static size_t page_symbol_count;
+
+static void remember_page_mention(const char *tok, const char *path)
+{
+	if (symbol_seen(page_symbols, page_symbol_count, tok))
+		return;
+	if (page_symbol_count >= PAGE_SYMBOLS_MAX)
+		return;
+	snprintf(page_sources[page_symbol_count], sizeof(page_sources[0]), "%s",
+		 path);
+	snprintf(page_symbols[page_symbol_count], SYMBOL_MAX, "%s", tok);
+	page_symbol_count++;
+}
+
+static void keep_tree_symbol(const char *tok, bool on_a_page, const char *path)
+{
+	if (strncmp(tok, "LOTA_", 5) != 0 || !symbol_is_a_name(tok))
+		return;
+	if (on_a_page)
+		remember_page_mention(tok, path);
+	else
+		remember_symbol(tree_symbols, &tree_symbol_count, tok);
+}
+
+/* Pages and build files are flat text: every LOTA_ token counts */
+static void scan_flat(const char *path, bool on_a_page)
+{
+	FILE *fp = fopen(path, "re");
+	char tok[SYMBOL_MAX];
+	size_t tok_len = 0;
+	int c;
+
+	if (!fp)
+		return;
+
+	while ((c = fgetc(fp)) != EOF) {
+		if (isalnum(c) || c == '_') {
+			if (tok_len < sizeof(tok) - 1)
+				tok[tok_len++] = (char)c;
+			continue;
+		}
+		if (tok_len) {
+			tok[tok_len] = '\0';
+			keep_tree_symbol(tok, on_a_page, path);
+			tok_len = 0;
+		}
+	}
+	if (tok_len) {
+		tok[tok_len] = '\0';
+		keep_tree_symbol(tok, on_a_page, path);
+	}
+	fclose(fp);
+}
+
+/* generated output and unshipped notes */
+static bool walk_skips(const char *name)
+{
+	return strcmp(name, "build") == 0 || strcmp(name, "docs") == 0;
+}
+
+static void texts_under(const char *dir)
+{
+	DIR *d = opendir(dir);
+	struct dirent *ent;
+
+	if (!d)
+		return;
+
+	while ((ent = readdir(d)) != NULL) {
+		char path[512];
+		bool on_a_page;
+
+		if (ent->d_name[0] == '.' || walk_skips(ent->d_name))
+			continue;
+
+		if (dir[0] == '.' && dir[1] == '\0')
+			snprintf(path, sizeof(path), "%s", ent->d_name);
+		else
+			snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+
+		if (ent->d_type == DT_DIR) {
+			texts_under(path);
+			continue;
+		}
+		on_a_page = has_suffix(ent->d_name, ".rst") ||
+			    has_suffix(ent->d_name, ".md");
+		scan_flat(path, on_a_page);
+	}
+	closedir(d);
+}
+
+/* A page naming a symbol the tree lacks sends its reader after nothing */
+static void test_pages_name_symbols_that_exist(void)
+{
+	struct stat st;
+	size_t i;
+
+	TEST("docs: every shipped page names a symbol the tree defines");
+
+	texts_under(stat("src", &st) == 0 ? "." : "..");
+
+	if (!tree_symbol_count || !page_symbol_count) {
+		FAIL("no pages were read");
+		return;
+	}
+
+	for (i = 0; i < page_symbol_count; i++) {
+		char msg[512];
+
+		if (symbol_seen(tree_symbols, tree_symbol_count,
+				page_symbols[i]))
+			continue;
+
+		snprintf(msg, sizeof(msg),
+			 "%.160s names %.80s, which the tree does not define",
+			 page_sources[i], page_symbols[i]);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+}
+
 /*
  * Reads one shipped command per call, joining the backslash continuations a script
  * or a code block wraps a long invocation over.
@@ -2308,6 +2437,7 @@ int main(void)
 	test_documented_api_calls_use_the_bearer_header();
 	test_the_gate_runs_the_unit_tests();
 	test_comments_name_symbols_that_exist();
+	test_pages_name_symbols_that_exist();
 	test_enrollment_example_runs_on_a_provisioned_host();
 	test_bringup_reference_matches_the_packaged_object();
 	test_tpm_clear_section_says_what_nv_costs();
