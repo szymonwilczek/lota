@@ -161,6 +161,28 @@ an unconditional row rewrite costs a WAL record and a commit fsync each
 time, so the UPDATE is conditional on a real tenant change
 (``TestPostgresRepeatedTenantStampDoesNotRewriteRow``).
 
+What the agent journals about a measurement round
+=================================================
+
+Every token round measures each protected process, but an fs-verity digest
+does not change while mapped, so the answer rarely differs from the last one.
+The journal carries only answers that differ:
+
+- **A first answer is written**, unless every object measured.
+- **A changed answer is written, both ways.** The line ending a run says how
+  many further rounds the replaced answer held.
+- **The sentence is compared**, not the verdict, so a new unmeasurable object
+  mid-session is news.
+- **An answer with no room in the table is written**, not assumed a repeat.
+
+A standing answer has no window, unlike a decision-log row: every token
+carries the measured coverage in ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, so a
+quiet journal hides no evidence. Shutdown reports the quiet as
+``Runtime measurement reports: repeated=`` and ``unremembered=``.
+
+The decision lives in the pure header ``src/agent/measure_report.h``, tested
+both ways: a missing line fails as readily as a repeated one.
+
 What a decision-log row means
 =============================
 

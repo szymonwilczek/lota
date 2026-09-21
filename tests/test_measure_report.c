@@ -180,6 +180,27 @@ static void test_the_new_line_says_how_long_the_old_one_held(void)
 	CHECK(held == 0, "a suppressed round replaces nothing");
 }
 
+/* The held count is a separate clause, or no statement would ever repeat */
+static void test_the_held_clause_hangs_off_the_line(void)
+{
+	char clause[128];
+
+	measure_report_held_clause(clause, sizeof(clause), 0);
+	CHECK(clause[0] == '\0',
+	      "an answer that replaces nothing says nothing");
+
+	measure_report_held_clause(clause, sizeof(clause), 1);
+	CHECK(strstr(clause, "1 further round") != NULL,
+	      "a single held round reads as one");
+
+	measure_report_held_clause(clause, sizeof(clause), 923);
+	CHECK(strstr(clause, "923 further rounds") != NULL,
+	      "a long run reads as many");
+
+	measure_report_held_clause(NULL, 0, 5);
+	CHECK(true, "no buffer for the clause is not a crash");
+}
+
 /* A reused PID is a different image with a different sentence */
 static void test_pid_reuse_cannot_suppress_a_new_statement(void)
 {
@@ -250,6 +271,7 @@ int main(void)
 	test_a_changed_answer_is_stated();
 	test_the_return_to_measurable_is_stated();
 	test_the_new_line_says_how_long_the_old_one_held();
+	test_the_held_clause_hangs_off_the_line();
 	test_pid_reuse_cannot_suppress_a_new_statement();
 	test_what_cannot_be_remembered_is_stated();
 	test_the_caller_owns_the_buffer();

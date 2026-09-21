@@ -696,6 +696,14 @@ static int run_daemon(const struct run_daemon_params *params)
 			  h_resolved, h_errors);
 	}
 
+	{
+		uint64_t m_repeated, m_unremembered;
+		ipc_runtime_measure_stats(&m_repeated, &m_unremembered);
+		lota_info("Runtime measurement reports: repeated=%lu "
+			  "unremembered=%lu",
+			  m_repeated, m_unremembered);
+	}
+
 cleanup_bpf:
 	/*
 	 * Dirty-shutdown coverage.

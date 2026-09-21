@@ -481,3 +481,13 @@ A relying party that requires full coverage asks for
 get it. That is a statement about the platform, not about the machine
 concealing anything: an unmeasurable object is reported as unmeasured and is
 never folded in as though it had been measured.
+
+What the agent journals about it
+--------------------------------
+
+The agent writes a line when its answer about a process changes, not every
+token round. A title that cannot be measured is reported when it starts and
+when the reason changes; recovery is reported too, with how many rounds the
+failure held. Repeated rounds are counted in the shutdown statistics as
+``Runtime measurement reports: repeated=``. A quiet journal means the answer
+did not change; each token still carries that round's coverage.

@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <lota_ipc.h>
 
@@ -33,6 +34,7 @@ enum measure_answer {
 
 struct measure_report_entry {
 	bool used;
+	bool stated; /* written; clean answers are kept silently */
 	uint32_t pid;
 	int answer;
 	char statement[MEASURE_REPORT_STATEMENT_MAX];
@@ -59,15 +61,64 @@ static inline bool measure_report_note(struct measure_report_table *table,
 				       uint32_t pid, int answer,
 				       const char *statement, uint64_t *held)
 {
+	struct measure_report_entry *entry = NULL;
+	uint32_t i;
+
 	if (held)
 		*held = 0;
 
 	if (!table || !statement)
 		return true;
 
-	(void)pid;
-	(void)answer;
-	return true;
+	for (i = 0; i < MEASURE_REPORT_MAX_PIDS; i++) {
+		if (table->entries[i].used && table->entries[i].pid == pid) {
+			entry = &table->entries[i];
+			break;
+		}
+	}
+
+	if (entry) {
+		if (entry->answer == answer &&
+		    strcmp(entry->statement, statement) == 0) {
+			entry->repeats++;
+			if (entry->stated)
+				table->suppressed++;
+			return false;
+		}
+
+		/* a changed answer ends the old run; report its length */
+		if (held)
+			*held = entry->repeats;
+		entry->answer = answer;
+		entry->stated = true;
+		entry->repeats = 0;
+		snprintf(entry->statement, sizeof(entry->statement), "%s",
+			 statement);
+		return true;
+	}
+
+	for (i = 0; i < MEASURE_REPORT_MAX_PIDS; i++) {
+		if (!table->entries[i].used) {
+			entry = &table->entries[i];
+			break;
+		}
+	}
+
+	/* table full: an unremembered answer cannot be a known repeat */
+	if (!entry) {
+		table->unremembered++;
+		return true;
+	}
+
+	entry->used = true;
+	entry->pid = pid;
+	entry->answer = answer;
+	entry->repeats = 0;
+	snprintf(entry->statement, sizeof(entry->statement), "%s", statement);
+
+	/* a first answer is news unless it is a clean measurement */
+	entry->stated = answer != MEASURE_ANSWER_MEASURED;
+	return entry->stated;
 }
 
 /*
@@ -157,6 +208,30 @@ static inline void measure_report_line(char *out, size_t cap, int answer,
 			 pid);
 		return;
 	}
+}
+
+/*
+ * measure_report_held_clause - Format how long the replaced answer held
+ * @out: caller's buffer
+ * @cap: its size
+ * @held: rounds the replaced answer held
+ *
+ * Kept out of the compared statement, which would otherwise change every
+ * round. Empty when @held is 0.
+ */
+static inline void measure_report_held_clause(char *out, size_t cap,
+					      uint64_t held)
+{
+	if (!out || cap == 0)
+		return;
+
+	if (held == 0) {
+		out[0] = '\0';
+		return;
+	}
+
+	snprintf(out, cap, " (the previous answer held %llu further round%s)",
+		 (unsigned long long)held, held == 1 ? "" : "s");
 }
 
 #endif /* LOTA_AGENT_MEASURE_REPORT_H */
