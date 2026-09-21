@@ -11,10 +11,12 @@
  */
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static int tests_run;
 static int tests_passed;
@@ -1104,6 +1106,14 @@ static void test_documented_cmdline_carries_no_kdump_option(void)
  * so the wrong header still answers 200 and hides that it was never read;
  * the moment a key is configured every copy of it is a 401.
  */
+static bool has_suffix(const char *name, const char *suffix)
+{
+	size_t n = strlen(name);
+	size_t s = strlen(suffix);
+
+	return n >= s && strcmp(name + n - s, suffix) == 0;
+}
+
 static void lowercase(const char *src, char *dst, size_t dst_size)
 {
 	size_t i;
@@ -1113,46 +1123,98 @@ static void lowercase(const char *src, char *dst, size_t dst_size)
 	dst[i] = '\0';
 }
 
+/* False at the first credential header that is not Bearer; names the page */
+static bool page_credentials_are_readable(const char *path, bool *saw_any,
+					  char *offender, size_t offender_size)
+{
+	FILE *fp = fopen(path, "re");
+	char line[1024];
+	char lower[1024];
+
+	if (!fp)
+		return true;
+
+	while (fgets(line, sizeof(line), fp)) {
+		/* any header carrying a credential */
+		if (!strstr(line, "-H \""))
+			continue;
+		lowercase(line, lower, sizeof(lower));
+		if (!strstr(lower, "key") && !strstr(lower, "token") &&
+		    !strstr(lower, "bearer"))
+			continue;
+		*saw_any = true;
+		if (!strstr(line, "Authorization: Bearer")) {
+			snprintf(
+				offender, offender_size,
+				"%.400s authenticates with a header the API never reads",
+				path);
+			fclose(fp);
+			return false;
+		}
+	}
+	fclose(fp);
+	return true;
+}
+
+/* Every shipped page, not a list that misses the next one */
+static bool pages_under(const char *dir, bool *saw_any, char *offender,
+			size_t offender_size)
+{
+	DIR *d = opendir(dir);
+	struct dirent *ent;
+	bool ok = true;
+
+	if (!d)
+		return true;
+
+	while (ok && (ent = readdir(d)) != NULL) {
+		char path[512];
+
+		/* _build is rendered copies, not pages */
+		if (ent->d_name[0] == '.' || strcmp(ent->d_name, "_build") == 0)
+			continue;
+
+		snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+		if (ent->d_type == DT_DIR) {
+			ok = pages_under(path, saw_any, offender,
+					 offender_size);
+			continue;
+		}
+		if (has_suffix(ent->d_name, ".rst") ||
+		    has_suffix(ent->d_name, ".md"))
+			ok = page_credentials_are_readable(
+				path, saw_any, offender, offender_size);
+	}
+	closedir(d);
+	return ok;
+}
+
 static void test_documented_api_calls_use_the_bearer_header(void)
 {
-	static const char *const pages[] = {
-		"examples/ha-postgres/README.rst",
-		"Documentation/operator/production-bringup/ca-enrollment.rst",
-		"Documentation/operator/observability.rst",
-	};
+	static const char *const roots[] = { "Documentation", "examples" };
+	char offender[512];
+	bool saw = false;
+	size_t i;
 
 	TEST("docs: every documented API call sends Authorization: Bearer");
 
-	for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
-		FILE *fp = open_shipped(pages[i]);
-		char line[1024];
-		char lower[1024];
-		bool saw = false;
+	for (i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+		char root[512];
+		struct stat st;
 
-		if (!fp) {
-			FAIL("could not open a page that calls the API");
+		snprintf(root, sizeof(root), "%s", roots[i]);
+		if (stat(root, &st) != 0)
+			snprintf(root, sizeof(root), "../%s", roots[i]);
+
+		if (!pages_under(root, &saw, offender, sizeof(offender))) {
+			FAIL(offender);
 			return;
 		}
-		while (fgets(line, sizeof(line), fp)) {
-			/* a header carrying a credential, whichever name it was given */
-			if (!strstr(line, "-H \""))
-				continue;
-			lowercase(line, lower, sizeof(lower));
-			if (!strstr(lower, "key") && !strstr(lower, "token") &&
-			    !strstr(lower, "bearer"))
-				continue;
-			saw = true;
-			if (!strstr(line, "Authorization: Bearer")) {
-				fclose(fp);
-				FAIL("a documented call authenticates with a header the API never reads");
-				return;
-			}
-		}
-		fclose(fp);
-		if (!saw) {
-			FAIL("a page that calls the API sends no credential at all");
-			return;
-		}
+	}
+
+	if (!saw) {
+		FAIL("no shipped page calls the API with a credential");
+		return;
 	}
 	PASS();
 }
