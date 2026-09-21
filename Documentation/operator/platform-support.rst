@@ -491,3 +491,7 @@ when the reason changes; recovery is reported too, with how many rounds the
 failure held. Repeated rounds are counted in the shutdown statistics as
 ``Runtime measurement reports: repeated=``. A quiet journal means the answer
 did not change; each token still carries that round's coverage.
+
+The line names the object by full path and says whether it is the process's
+executable (token refused) or a mapped object (coverage partial). The path
+stays in the log; the runtime image digest folds only the ``soname``.

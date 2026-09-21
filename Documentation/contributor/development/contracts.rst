@@ -175,6 +175,10 @@ The journal carries only answers that differ:
   mid-session is news.
 - **An answer with no room in the table is written**, not assumed a repeat.
 
+The sentence names the object's path and role. ``LOTA_RT_REASON_MAX`` and
+``MEASURE_REPORT_STATEMENT_MAX`` must hold a whole path, or two objects cut to
+one prefix compare equal; a new field grows both.
+
 A standing answer has no window, unlike a decision-log row: every token
 carries the measured coverage in ``LOTA_FLAG_IMAGE_FULLY_MEASURED``, so a
 quiet journal hides no evidence. Shutdown reports the quiet as
