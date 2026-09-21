@@ -141,10 +141,11 @@ struct lota_runtime_measure_failure {
 	int err;
 };
 
+#define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
+
 /*
- * Render a failure as one operator-readable sentence naming
- * the object and the reason, into buf.
- * Always NUL-terminates.
+ * Render a failure into buf as one sentence: object path, its role in the
+ * process, and the reason. Always NUL-terminates.
  * Safe with a NULL failure, which renders the errno alone.
  */
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,

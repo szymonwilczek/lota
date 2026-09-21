@@ -352,18 +352,22 @@ your title ships.
 When a measurement is refused
 -----------------------------
 
-The agent log names the object rather than the process, so the fix is directed
-rather than guessed:
+The agent log names the object by path and its role in the process:
 
 .. code:: text
 
    runtime image measurement failed for pid=2039:
-     libcurl.so.4 carries no fs-verity digest
+     /usr/lib64/libcurl.so.4, an object the process has mapped,
+     carries no fs-verity digest
      (enable fs-verity on it, or drop the process from the protected set)
 
-   runtime image measurement failed for pid=2039:
-     libfoo.so.1 carries a 48-byte fs-verity digest;
+   runtime image measurement failed for the requesting pid=2039:
+     the process's own executable /opt/title/bin/producer
+     carries a 48-byte fs-verity digest;
      LOTA takes SHA-256 (32) or SHA-512 (64)
+
+A mapped object leaves the token issuable with partial coverage; the
+process's own executable refuses it outright.
 
 The heartbeat surfaces the same condition as ``-ENODATA``, which the producer
 prints as ``lota_ac_heartbeat: No data available``. That errno also covers a

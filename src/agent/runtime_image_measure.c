@@ -397,7 +397,9 @@ out:
 void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 			    int err, char *buf, size_t buflen)
 {
-	const char *soname;
+	char subject[LOTA_RT_REASON_MAX];
+	const char *object;
+	const char *tail;
 
 	if (!buf || buflen == 0)
 		return;
@@ -405,12 +407,31 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	if (err < 0)
 		err = -err;
 
-	if (!fail || fail->soname[0] == '\0') {
+	if (!fail || (fail->soname[0] == '\0' && fail->path[0] == '\0')) {
 		snprintf(buf, buflen, "%s", strerror(err));
 		return;
 	}
 
-	soname = fail->soname;
+	/* basename only when the mapping was never parsed */
+	object = fail->path[0] ? fail->path : fail->soname;
+
+	/* role is unknown when the mapping would not open */
+	switch (fail->role) {
+	case LOTA_RT_ROLE_EXECUTABLE:
+		snprintf(subject, sizeof(subject),
+			 "the process's own executable %s", object);
+		tail = "";
+		break;
+	case LOTA_RT_ROLE_MAPPED_OBJECT:
+		snprintf(subject, sizeof(subject),
+			 "%s, an object the process has mapped", object);
+		tail = ",";
+		break;
+	default:
+		snprintf(subject, sizeof(subject), "%s", object);
+		tail = "";
+		break;
+	}
 
 	/*
 	 * two measurable-object cases are what integrator hits,
@@ -419,23 +440,23 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	 */
 	if (err == ENODATA) {
 		snprintf(buf, buflen,
-			 "%s carries no fs-verity digest (enable fs-verity on "
-			 "it, or drop the process from the protected set)",
-			 soname);
+			 "%s%s carries no fs-verity digest (enable fs-verity "
+			 "on it, or drop the process from the protected set)",
+			 subject, tail);
 		return;
 	}
 
 	if (err == EINVAL && fail->reported_len != 0) {
 		snprintf(buf, buflen,
-			 "%s carries a %u-byte fs-verity digest; LOTA takes "
+			 "%s%s carries a %u-byte fs-verity digest; LOTA takes "
 			 "SHA-256 (%d) or SHA-512 (%d)",
-			 soname, fail->reported_len,
+			 subject, tail, fail->reported_len,
 			 LOTA_VERITY_DIGEST_SHA256_SIZE,
 			 LOTA_VERITY_DIGEST_SHA512_SIZE);
 		return;
 	}
 
-	snprintf(buf, buflen, "%s: %s", soname, strerror(err));
+	snprintf(buf, buflen, "%s: %s", subject, strerror(err));
 }
 
 /* qsort comparator over the canonical module order */

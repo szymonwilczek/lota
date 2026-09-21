@@ -1395,7 +1395,7 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			char statement[MEASURE_REPORT_STATEMENT_MAX];
 			char held_clause[80];
 			uint64_t held = 0;
-			char reason[320];
+			char reason[LOTA_RT_REASON_MAX];
 
 			ret = lota_runtime_measure_pid((pid_t)runtime_pids[i],
 						       image_digests[i], &cov,
