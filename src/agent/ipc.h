@@ -323,6 +323,12 @@ void ipc_runtime_coverage_forget(void);
 void ipc_runtime_measure_stats(uint64_t *repeated, uint64_t *unremembered);
 
 /*
+ * ipc_token_answer_stats - Count token rounds left out of the journal
+ * @repeated: rounds that repeated a journalled answer
+ */
+void ipc_token_answer_stats(uint64_t *repeated);
+
+/*
  * ipc_set_profiles - Hand the IPC layer the publisher profiles
  * @ctx: Server context
  * @profiles: Targets owned by the attestation loop, borrowed for the run

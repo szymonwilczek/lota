@@ -704,6 +704,13 @@ static int run_daemon(const struct run_daemon_params *params)
 			  m_repeated, m_unremembered);
 	}
 
+	{
+		uint64_t t_repeated;
+
+		ipc_token_answer_stats(&t_repeated);
+		lota_info("Token answer reports: repeated=%lu", t_repeated);
+	}
+
 cleanup_bpf:
 	/*
 	 * Dirty-shutdown coverage.
