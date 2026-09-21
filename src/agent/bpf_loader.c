@@ -971,6 +971,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
+	ctx->exe_hash_slots_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1403,6 +1404,21 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 	if (err < 0)
 		goto err_close;
 
+	/* optional: without it bpf_loader_hash_file() returns -ENOSYS */
+	ctx->exe_hash_slots_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "exe_hash_slots");
+	if (ctx->exe_hash_slots_fd < 0) {
+		ctx->exe_hash_slots_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->exe_hash_slots_fd,
+					"exe_hash_slots map");
+		if (err < 0) {
+			lota_err("Failed to harden exe_hash_slots map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1650,6 +1666,7 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->guarded_files_fd = -1;
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
+	ctx->exe_hash_slots_fd = -1;
 }
 
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
@@ -1932,6 +1949,90 @@ int bpf_loader_verify_integrity_config(struct bpf_loader_ctx *ctx)
 	}
 
 	return 0;
+}
+
+/* Digest length of a hash_info algorithm id, 0 if LOTA takes none */
+static uint32_t exe_hash_digest_len(uint32_t algo)
+{
+	switch (algo) {
+	case LOTA_EXE_HASH_ALGO_SHA256:
+		return 32;
+	case LOTA_EXE_HASH_ALGO_SHA512:
+		return 64;
+	default:
+		return 0;
+	}
+}
+
+int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
+			 uint64_t expect_dev, uint64_t expect_ino,
+			 struct lota_verity_digest_key *out)
+{
+	struct lota_exe_hash_slot slot = { 0 };
+	struct stat st;
+	uint32_t tid;
+	uint32_t len;
+	int ret = 0;
+	int fd;
+
+	if (!ctx || !ctx->loaded || !path || !out)
+		return -EINVAL;
+
+	if (ctx->exe_hash_slots_fd < 0)
+		return -ENOSYS;
+
+	tid = (uint32_t)syscall(SYS_gettid);
+	slot.state = LOTA_EXE_HASH_ASKED;
+	if (bpf_map_update_elem(ctx->exe_hash_slots_fd, &tid, &slot, BPF_ANY) <
+	    0)
+		return -errno;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		ret = -errno;
+		goto out_delete;
+	}
+
+	/* the magic link may now point at another object */
+	if (fstat(fd, &st) < 0) {
+		ret = -errno;
+		goto out_close;
+	}
+	if ((uint64_t)st.st_dev != expect_dev ||
+	    (uint64_t)st.st_ino != expect_ino) {
+		ret = -ESTALE;
+		goto out_close;
+	}
+
+	if (bpf_map_lookup_elem(ctx->exe_hash_slots_fd, &tid, &slot) < 0) {
+		ret = -errno;
+		goto out_close;
+	}
+
+	if (slot.state != LOTA_EXE_HASH_ANSWERED) {
+		/* untouched: no program attached, or the open missed it */
+		ret = -ENXIO;
+		goto out_close;
+	}
+	if (slot.err != 0) {
+		ret = -(int)slot.err;
+		goto out_close;
+	}
+	len = exe_hash_digest_len(slot.algo);
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(len)) {
+		ret = -EPROTO;
+		goto out_close;
+	}
+
+	memset(out, 0, sizeof(*out));
+	out->len = len;
+	memcpy(out->digest, slot.digest, len);
+
+out_close:
+	close(fd);
+out_delete:
+	bpf_map_delete_elem(ctx->exe_hash_slots_fd, &tid);
+	return ret;
 }
 
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
