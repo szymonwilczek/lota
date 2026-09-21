@@ -35,21 +35,41 @@ static int tests_passed;
 		printf("FAIL (%s)\n", reason); \
 	} while (0)
 
-static void make_failure(struct lota_runtime_measure_failure *f,
-			 const char *soname, uint32_t reported_len, int err)
+static void make_failure_at(struct lota_runtime_measure_failure *f,
+			    const char *soname, const char *path, int role,
+			    uint32_t reported_len, int err)
 {
 	memset(f, 0, sizeof(*f));
 	if (soname)
 		snprintf(f->soname, sizeof(f->soname), "%s", soname);
+	if (path)
+		snprintf(f->path, sizeof(f->path), "%s", path);
+	f->role = role;
 	f->ino = 4242;
 	f->reported_len = reported_len;
 	f->err = err;
 }
 
+static void make_failure(struct lota_runtime_measure_failure *f,
+			 const char *soname, uint32_t reported_len, int err)
+{
+	char path[LOTA_RT_MAP_PATH_MAX];
+
+	if (!soname) {
+		make_failure_at(f, NULL, NULL, LOTA_RT_ROLE_UNKNOWN,
+				reported_len, err);
+		return;
+	}
+
+	snprintf(path, sizeof(path), "/usr/lib64/%s", soname);
+	make_failure_at(f, soname, path, LOTA_RT_ROLE_MAPPED_OBJECT,
+			reported_len, err);
+}
+
 int main(void)
 {
 	struct lota_runtime_measure_failure f;
-	char buf[256];
+	char buf[512];
 
 	printf("Runtime image measurement failure tests:\n");
 
@@ -97,6 +117,85 @@ int main(void)
 	make_failure(&f, "libcurl.so.4", 0, ENODATA);
 	lota_rt_failure_reason(&f, ENODATA, buf, sizeof(buf));
 	if (strstr(buf, "no fs-verity digest"))
+		PASS();
+	else
+		FAIL(buf);
+
+	/* The full path says which copy of a name needs fs-verity */
+	TEST("a failing object is named by path");
+	make_failure_at(&f, "ld-linux-x86-64.so.2",
+			"/usr/lib64/ld-linux-x86-64.so.2",
+			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "/usr/lib64/ld-linux-x86-64.so.2"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("two copies of one name read as different objects");
+	{
+		char other[256];
+
+		make_failure_at(&f, "ld-linux-x86-64.so.2",
+				"/usr/lib64/ld-linux-x86-64.so.2",
+				LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
+		lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+		make_failure_at(&f, "ld-linux-x86-64.so.2",
+				"/home/player/.steam/runtime/"
+				"ld-linux-x86-64.so.2",
+				LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
+		lota_rt_failure_reason(&f, -ENODATA, other, sizeof(other));
+		if (strcmp(buf, other) != 0)
+			PASS();
+		else
+			FAIL(buf);
+	}
+
+	/* The role says whether the token was refused or only marked partial */
+	TEST("the caller's own executable is named as such");
+	make_failure_at(&f, "cs2", "/games/csgo/game/bin/linuxsteamrt64/cs2",
+			LOTA_RT_ROLE_EXECUTABLE, 0, ENODATA);
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "own executable") &&
+	    strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("an object the process mapped is named as such");
+	make_failure_at(&f, "libsteam_api.so", "/games/csgo/libsteam_api.so",
+			LOTA_RT_ROLE_MAPPED_OBJECT, 0, ENODATA);
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "mapped") && !strstr(buf, "own executable"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("an unopened mapping claims neither role");
+	make_failure_at(&f, "libmystery.so", "/opt/x/libmystery.so",
+			LOTA_RT_ROLE_UNKNOWN, 0, EACCES);
+	lota_rt_failure_reason(&f, -EACCES, buf, sizeof(buf));
+	if (strstr(buf, "/opt/x/libmystery.so") &&
+	    !strstr(buf, "own executable") && !strstr(buf, "mapped"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("an unsupported digest length still names the path and the role");
+	make_failure_at(&f, "cs2", "/games/csgo/game/bin/linuxsteamrt64/cs2",
+			LOTA_RT_ROLE_EXECUTABLE, 48, EINVAL);
+	lota_rt_failure_reason(&f, -EINVAL, buf, sizeof(buf));
+	if (strstr(buf, "/games/csgo/game/bin/linuxsteamrt64/cs2") &&
+	    strstr(buf, "own executable") && strstr(buf, "48-byte"))
+		PASS();
+	else
+		FAIL(buf);
+
+	TEST("a failure with no path falls back to the object's name");
+	make_failure_at(&f, "libcurl.so.4", NULL, LOTA_RT_ROLE_UNKNOWN, 0,
+			ENODATA);
+	lota_rt_failure_reason(&f, -ENODATA, buf, sizeof(buf));
+	if (strstr(buf, "libcurl.so.4") && strstr(buf, "no fs-verity digest"))
 		PASS();
 	else
 		FAIL(buf);

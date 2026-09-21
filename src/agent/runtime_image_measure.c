@@ -80,7 +80,7 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	unsigned int maj, min;
 	unsigned long long ino;
 	char perms[5] = { 0 };
-	char path[LOTA_RUNTIME_IMAGE_SONAME_MAX + 64];
+	char path[LOTA_RT_MAP_PATH_MAX];
 	const char *p;
 	const char *soname;
 	int pos = 0;
@@ -124,6 +124,7 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out)
 	out->dev_minor = min;
 	out->ino = ino;
 	snprintf(out->soname, sizeof(out->soname), "%s", soname);
+	snprintf(out->path, sizeof(out->path), "%s", path);
 	return 1;
 }
 
@@ -598,8 +599,18 @@ int lota_runtime_measure_pid(pid_t pid,
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),
 					 "%s", entries[i].soname);
+				snprintf(fail->path, sizeof(fail->path), "%s",
+					 entries[i].path);
 				fail->ino = entries[i].ino;
 				fail->reported_len = reported;
+				/* never opened, so never compared */
+				if (opened.ino == 0)
+					fail->role = LOTA_RT_ROLE_UNKNOWN;
+				else
+					fail->role =
+						is_exe ?
+							LOTA_RT_ROLE_EXECUTABLE :
+							LOTA_RT_ROLE_MAPPED_OBJECT;
 				fail->err = ret;
 			}
 			/*
