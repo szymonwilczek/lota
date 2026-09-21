@@ -435,8 +435,17 @@ in the meantime.
 
 The boot parameters the installer added stay behind. They are standard kernel
 settings, they harm nothing on their own, and editing them out is a separate
-job you can leave alone. The per-publisher keys live under ``/var/lib/lota``
-and go with the package.
+job you can leave alone.
+
+So does the key material. The per-publisher keys under ``/var/lib/lota``
+belong to this PC rather than to the package, which is why a reinstall picks
+up where the last one left off instead of asking the chip for new ones.
+Removing them is a separate command::
+
+    sudo rm -rf /var/lib/lota
+
+That one is final. The next install starts from nothing, and a publisher who
+had recognised this PC sees a PC it has never met.
 
 Where to next
 =============
