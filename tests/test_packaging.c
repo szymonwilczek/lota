@@ -1660,6 +1660,9 @@ static void read_manifest(const char *dir, const char *file)
 			continue;
 		}
 		if (in_depends) {
+			/* comments and blank lines do not end the list */
+			if (*p == '#' || *p == '\0')
+				continue;
 			if (*p != '-') {
 				in_depends = false;
 			} else {
