@@ -705,6 +705,23 @@ check_build() {
     fi
 }
 
+# Unit tests:
+# CI runs them only after a push, so the gate runs them first.
+# Unconditional: they cover the tree, not the files a patch touched.
+check_unit_tests() {
+    local output
+
+    if output="$(env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
+        make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" test-unit 2>&1)"; then
+        pass "unit tests"
+        return
+    fi
+
+    printf '%s\n' "$output" | grep -E 'FAIL|Results:' | sed 's/^/  /' >&2
+    fail "unit tests" \
+         "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build test-unit and fix the failing assertion."
+}
+
 # Include hygiene:
 # Every header used directly, no transitive deps.
 # Heavy (a full bear-built compile database), so it only runs when the patch
@@ -1276,6 +1293,7 @@ main() {
     check_build
     check_lint_go "${changed_files[@]}"
     check_lint_go_coverage
+    check_unit_tests
     check_includes "${changed_files[@]}"
     check_el9_decls "${changed_files[@]}"
     check_license_boundary
