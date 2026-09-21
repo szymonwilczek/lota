@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #include "runtime_image_measure.h"
@@ -271,6 +272,7 @@ int lota_rt_measure_entry_verity(pid_t pid,
 	if (opened) {
 		opened->dev = 0;
 		opened->ino = 0;
+		opened->fs_magic = 0;
 	}
 
 	if (!entry || !out)
@@ -341,8 +343,14 @@ int lota_rt_measure_entry_verity(pid_t pid,
 		 * exists to avoid.
 		 */
 		if (opened) {
+			struct statfs sfs;
+
 			opened->dev = st.st_dev;
 			opened->ino = st.st_ino;
+
+			/* off the fd: the path may have moved since open */
+			if (fstatfs(fd, &sfs) == 0)
+				opened->fs_magic = (unsigned long)sfs.f_type;
 		}
 	}
 
@@ -511,6 +519,20 @@ static int rt_err_is_unmeasurable(int err)
 	return err == -ENODATA || err == -EOPNOTSUPP || err == -EINVAL;
 }
 
+enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
+						 unsigned long fs_magic)
+{
+	(void)role;
+	(void)fs_magic;
+
+	/* a kernel-enforced digest wins, whatever the role */
+	if (verity_present)
+		return LOTA_RT_ROAD_VERITY;
+
+	/* no other road: without fs-verity there is no digest */
+	return LOTA_RT_ROAD_NONE;
+}
+
 int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov)
 {
@@ -599,7 +621,9 @@ int lota_runtime_measure_pid(pid_t pid,
 			&mods[local_cov.measured];
 		uint32_t reported = 0;
 		struct lota_rt_open_identity opened = { 0 };
+		enum lota_rt_identity_road road;
 		int is_exe;
+		int role;
 
 		snprintf(slot->soname, sizeof(slot->soname), "%s",
 			 entries[i].soname);
@@ -616,6 +640,14 @@ int lota_runtime_measure_pid(pid_t pid,
 		 */
 		is_exe = opened.ino != 0 && opened.dev == exe_dev &&
 			 opened.ino == exe_ino;
+
+		/* not opened: is_exe is unknown, not false */
+		if (opened.ino == 0)
+			role = LOTA_RT_ROLE_UNKNOWN;
+		else
+			role = is_exe ? LOTA_RT_ROLE_EXECUTABLE :
+					LOTA_RT_ROLE_MAPPED_OBJECT;
+
 		if (ret != 0) {
 			if (fail) {
 				snprintf(fail->soname, sizeof(fail->soname),
@@ -624,14 +656,7 @@ int lota_runtime_measure_pid(pid_t pid,
 					 entries[i].path);
 				fail->ino = entries[i].ino;
 				fail->reported_len = reported;
-				/* never opened, so never compared */
-				if (opened.ino == 0)
-					fail->role = LOTA_RT_ROLE_UNKNOWN;
-				else
-					fail->role =
-						is_exe ?
-							LOTA_RT_ROLE_EXECUTABLE :
-							LOTA_RT_ROLE_MAPPED_OBJECT;
+				fail->role = role;
 				fail->err = ret;
 			}
 			/*
@@ -642,7 +667,10 @@ int lota_runtime_measure_pid(pid_t pid,
 			 */
 			if (!rt_err_is_unmeasurable(ret))
 				goto out;
-			if (is_exe) {
+
+			/* no verity digest; may another road measure it? */
+			road = lota_rt_identity_road(role, 0, opened.fs_magic);
+			if (road == LOTA_RT_ROAD_NONE && is_exe) {
 				ret = -ENODATA;
 				goto out;
 			}

@@ -72,7 +72,27 @@ int lota_rt_parse_maps_line(const char *line, struct lota_rt_map_entry *out);
 struct lota_rt_open_identity {
 	dev_t dev;
 	ino_t ino;
+	unsigned long fs_magic; /* fstatfs() f_type of the fd, 0 if unread */
 };
+
+/*
+ * How an object's digest may be produced. fs-verity wins wherever present;
+ * a content hash is sound only for the process's own executable, which
+ * cannot be written while it runs.
+ */
+enum lota_rt_identity_road {
+	LOTA_RT_ROAD_NONE = 0, /* no digest may be produced for this object */
+	LOTA_RT_ROAD_VERITY, /* the kernel holds an fs-verity digest */
+	LOTA_RT_ROAD_CONTENT_HASH, /* the kernel hashes the content on demand */
+};
+
+/*
+ * Which road may measure one object of a live process.
+ * role is an enum lota_rt_object_role; fs_magic is matched against an allowlist,
+ * so an unlisted filesystem gets no content hash.
+ */
+enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
+						 unsigned long fs_magic);
 
 /*
  * Does the opened mapping still describe the one that was enumerated?
