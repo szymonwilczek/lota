@@ -36,7 +36,8 @@
  *   -ERANGE  - tracer pid exceeds INT32_MAX.
  *
  * Exposed via hardening.c rather than hardening.h so the surface
- * stays internal; tests link it through LOTA_HARDENING_TESTING.
+ * stays internal; the test declares the prototype itself and links
+ * against this object.
  */
 int hardening_parse_tracer_pid_buf(const char *buf, long *out_tracer)
 {
