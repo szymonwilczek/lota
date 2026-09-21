@@ -64,8 +64,11 @@ only read::
 On a PC that is ready, they answer like this::
 
     UEFI
-    crw-------. 1 root root 252, 65536 /dev/tpmrm0
+    /dev/tpmrm0
     SecureBoot enabled
+
+The middle one repeats the path back when the chip is there. When it is not,
+it says ``ls: cannot access '/dev/tpmrm0': No such file or directory``.
 
 If any of the three answers differently, the PC is not ready *yet*. Every case
 is covered under :ref:`player-when-it-stops` below, with what to do about it.
