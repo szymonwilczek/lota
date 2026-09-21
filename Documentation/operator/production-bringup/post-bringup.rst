@@ -109,6 +109,14 @@ The most common failures, with the gate that produced them:
   Nothing has been spent: the refusal happens before the boot commitment, so
   the host comes up in the same boot once the enrollment is done.
 
+A refused token request is written when the connection's answer changes,
+not every round: as it first stands, when the reason changes, and when the
+connection is answered again, with the number of rounds the refusal held.
+Repeats are reported at shutdown as ``Token answer reports: repeated=``.
+
+A journal quiet after a refusal means the refusal still stands; the client
+gets the same error every round. A new connection writes its own line.
+
 The unit does not restart into any refusal above that stops the agent from
 starting: the agent exits 78 (``EX_CONFIG``) for a state only an operator can
 clear, and ``RestartPreventExitStatus=78`` leaves the unit failed with the
