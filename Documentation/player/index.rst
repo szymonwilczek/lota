@@ -109,8 +109,8 @@ laptop::
 
     sudo dnf install git make gcc clang llvm golang bpftool \
         libbpf-devel openssl-devel tpm2-tss-devel libseccomp-devel \
-        systemd-devel dbus-devel SDL2-devel libcurl-devel \
-        elfutils-libelf-devel zlib-devel selinux-policy-devel
+        systemd-devel dbus-devel elfutils-libelf-devel \
+        selinux-policy-devel
     git clone https://github.com/szymonwilczek/lota
     cd lota
     make all
