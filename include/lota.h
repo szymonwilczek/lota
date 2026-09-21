@@ -292,6 +292,22 @@ static inline int lota_signal_denied(int sig, unsigned int lota_mode,
 }
 
 /*
+ * Event for a signal aimed at a protected target, shared with the tests like
+ * the verdict above. @denied is lota_signal_denied()'s answer; a refusal is
+ * recorded for any signal.
+ * Returns an enum lota_event_type, or 0 for none.
+ */
+static inline int lota_signal_event(int sig, int denied)
+{
+	if (denied)
+		return LOTA_EVENT_KILL_BLOCKED;
+
+	(void)sig;
+
+	return LOTA_EVENT_KILL;
+}
+
+/*
  * fs-verity digest sizes LOTA policy enforcement accepts.
  *
  * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce

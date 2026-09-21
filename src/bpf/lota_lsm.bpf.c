@@ -1926,6 +1926,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	int target_is_agent;
 	int target_is_protected = 0;
 	int blocked;
+	int event_type;
 	int emit_event;
 	struct lota_exec_event *event = NULL;
 
@@ -1981,16 +1982,15 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	 * and a refusal that names the sender is what makes a supervisor
 	 * that cannot stop the agent diagnosable.
 	 */
-	emit_event = should_emit_event(lota_mode, blocked,
-				       blocked ? LOTA_EVENT_KILL_BLOCKED :
-						 LOTA_EVENT_KILL);
+	event_type = lota_signal_event(sig, blocked);
+
+	emit_event = should_emit_event(lota_mode, blocked, event_type);
 	if (emit_event)
 		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {
 		__builtin_memset(event, 0, sizeof(*event));
 		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = blocked ? LOTA_EVENT_KILL_BLOCKED :
-					      LOTA_EVENT_KILL;
+		event->event_type = (u32)event_type;
 		event->tgid = sender_tgid;
 		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
