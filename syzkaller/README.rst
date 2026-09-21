@@ -61,6 +61,8 @@ Every LSM program the harness attaches has a row naming the
 |                              | ``openat$lota_kmem`` and ``openat$lota_port`` take   |
 |                              | the refusal branch                                   |
 +------------------------------+------------------------------------------------------+
+| ``file_post_open``           | ``openat``; hashes only opens the agent asked about  |
++------------------------------+------------------------------------------------------+
 | ``kernel_read_file``         | ``finit_module`` on a file from ``openat$binfmt``    |
 +------------------------------+------------------------------------------------------+
 | ``kernel_load_data``         | ``init_module``, ``kexec_load``                      |
