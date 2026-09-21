@@ -479,7 +479,8 @@ struct bpf_extended_stats {
 	uint64_t bpf_syscall_blocked;
 	uint64_t mounts_blocked;
 	uint64_t kill_guard_blocked;
-	uint64_t events_yielded; /* dropped to leave ring room for quieter types */
+	uint64_t events_yielded; /* dropped to leave ring room */
+	uint64_t kill_probes; /* signal-0 probes at a protected task */
 };
 
 /*

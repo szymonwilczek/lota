@@ -248,8 +248,8 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 
 		kill_report_line(kill_line, sizeof(kill_line),
 				 event->event_type == LOTA_EVENT_KILL_BLOCKED,
-				 comm_safe, event->target_pid, 0, event->pid,
-				 event->uid);
+				 comm_safe, event->target_pid, event->signal,
+				 event->pid, event->uid);
 		lota_info("[%llu] %s", (unsigned long long)event->timestamp_ns,
 			  kill_line);
 		return 0;

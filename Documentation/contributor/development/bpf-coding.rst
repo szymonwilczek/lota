@@ -67,6 +67,13 @@ never reaches its share. Yields are counted in ``STAT_EVENTS_YIELDED``
 (``yielded=`` in the shutdown statistics); ``STAT_RINGBUF_DROPS`` counts detail
 lost to a full ring, which may belong to a type that was not the loud one.
 
+An event never worth a line is dropped before the reserve, not by the budget.
+``lota_task_kill`` asks ``lota_signal_event`` (``include/lota.h``): a permitted
+signal 0, a liveness probe a launcher sends over a thousand times a minute, is
+counted in ``STAT_KILL_PROBES`` (``kill_probes=``) instead of written to the
+ring. Such suppression belongs in a pure helper tested both ways: the probe is
+dropped and nothing else is.
+
 The budget arithmetic lives in ``include/lota_event_budget.h`` as pure helpers
 (``lota_event_budget_limit``, ``lota_event_budget_window_expired``,
 ``lota_event_budget_exhausted``, ``lota_event_ring_under_pressure``,

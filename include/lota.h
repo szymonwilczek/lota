@@ -294,7 +294,8 @@ static inline int lota_signal_denied(int sig, unsigned int lota_mode,
 /*
  * Event for a signal aimed at a protected target, shared with the tests like
  * the verdict above. @denied is lota_signal_denied()'s answer; a refusal is
- * recorded for any signal.
+ * recorded for any signal, a permitted probe (sig 0) never: launchers poll
+ * several times a second.
  * Returns an enum lota_event_type, or 0 for none.
  */
 static inline int lota_signal_event(int sig, int denied)
@@ -302,7 +303,8 @@ static inline int lota_signal_event(int sig, int denied)
 	if (denied)
 		return LOTA_EVENT_KILL_BLOCKED;
 
-	(void)sig;
+	if (sig == 0)
+		return 0;
 
 	return LOTA_EVENT_KILL;
 }
@@ -418,7 +420,7 @@ lota_verity_key_from_digest_buf(const void *buf,
  *   MODULE_LOAD:    pid, comm, filename
  *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
  *   PTRACE:         pid, uid, comm, target_pid
- *   KILL:           pid, uid, comm, target_pid
+ *   KILL:           pid, uid, comm, target_pid, signal
  *   SETUID:         pid, uid, comm, target_uid (new uid)
  *   *_BLOCKED:      same as base type
  */
@@ -434,6 +436,7 @@ struct lota_exec_event {
 		__u32 target_uid; /* setuid: new UID after transition */
 	};
 	__u32 flags; /* LOTA_EVENT_FLAG_* */
+	__u32 signal; /* kill: the signal number, which says what arrived */
 	__u8 hash[LOTA_HASH_SIZE]; /* inode metadata fingerprint (BPF) */
 	char comm[LOTA_MAX_COMM_LEN]; /* Process name */
 	char filename[LOTA_MAX_PATH_LEN]; /* Binary path / library path */

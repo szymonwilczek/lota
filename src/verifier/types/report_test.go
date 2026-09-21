@@ -679,13 +679,12 @@ func TestParseReport_ESRT_NotPresent(t *testing.T) {
 }
 
 // TestParseReport_EventSectionMatchesCLayout checks ExecEventSize against
-// struct lota_exec_event (include/lota.h), which has no static assert.
-// A short size lands the parser inside the event array, missing the event log
-// and ESRT.
+// struct lota_exec_event (include/lota.h). A short size lands the parser inside
+// the event array, missing the event log and ESRT.
 func TestParseReport_EventSectionMatchesCLayout(t *testing.T) {
 	// timestamp_ns, event_type, pid, tgid, uid, gid, target union,
-	// flags, hash, comm, filename
-	const cEventSize = 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 +
+	// flags, signal, hash, comm, filename
+	const cEventSize = 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 +
 		HashSize + 16 + MaxKernelPath
 
 	if ExecEventSize != cEventSize {

@@ -31,11 +31,9 @@ static inline void kill_report_line(char *out, size_t cap, int blocked,
 	if (!out || cap == 0)
 		return;
 
-	(void)sig;
-
-	snprintf(out, cap, "%s %s -> pid=%u (pid=%u, uid=%u)",
-		 blocked ? "KILL_BLOCKED" : "KILL", comm ? comm : "", target_pid,
-		 pid, uid);
+	snprintf(out, cap, "%s %s -> pid=%u sig=%u (pid=%u, uid=%u)",
+		 blocked ? "KILL_BLOCKED" : "KILL", comm ? comm : "",
+		 target_pid, sig, pid, uid);
 }
 
 #endif /* LOTA_AGENT_KILL_REPORT_H */
