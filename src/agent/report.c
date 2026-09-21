@@ -45,6 +45,9 @@ _Static_assert(sizeof(struct lota_attestation_report) == 5902,
 	       "types/report.go");
 _Static_assert(sizeof(struct lota_esrt) == 28,
 	       "lota_esrt size changed; update ESRTWireSize in types/report.go");
+_Static_assert(sizeof(struct lota_exec_event) == 340,
+	       "lota_exec_event size changed; update ExecEventSize in "
+	       "types/report.go");
 
 size_t calculate_report_size(uint32_t event_count, uint32_t event_log_size)
 {

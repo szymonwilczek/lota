@@ -42,13 +42,16 @@ it parses, so a length change on one side is a hang on the other rather than a
 parse error.
 
 Nothing links the C serializer and the Go parser at build time: the serializer
-``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Three
+``memcpy``\ s a packed struct, the parser walks hand-computed offsets. Four
 checks stand in for that missing link, and a layout change must satisfy all
-three:
+four:
 
 * ``src/agent/report.c`` pins ``sizeof`` for each wire struct with
   ``_Static_assert``, so a field added or removed on the C side fails the build
-  with the name of the constant to update.
+  with the name of the constant to update. A new wire struct gets one too.
+* ``tests/integration/test_report_wire_sizes.sh`` compares sizes compiled from
+  the agent's headers with the constants in ``types/report.go``, catching a
+  stale Go constant the asserts above cannot see.
 * ``TestParseReport_FieldOffsetsMatchCLayout`` (``types/report_test.go``)
   writes a distinct marker at each expected offset and requires the parsed
   report to expose it in the matching field -- a positive check, not a bounds
