@@ -124,14 +124,19 @@ with it, install::
         SIGNING_PUBKEY=$HOME/lota-enforcement.pub
     sudo make install SIGNING_PUBKEY=$HOME/lota-enforcement.pub
 
-The two commands say what they wrote::
+The two commands say what they wrote. ``make`` echoes the long command it is
+about to run first, and the ``INF:`` line is the agent noting that it locked
+itself down before touching a key::
 
+    lota-agent: INF: hardening: applied no_new_privs, dumpable=0
     Generated Ed25519 keypair:
       Private key: /home/you/lota-enforcement.key
       Public key:  /home/you/lota-enforcement.pub
 
+    lota-agent: INF: hardening: applied no_new_privs, dumpable=0
     Signed: build/lota_lsm.bpf.o
     Signature: build/lota_lsm.bpf.o.sig
+    Signed: build/lota_lsm.bpf.o.sig
 
 The private half is yours and stays on this PC. The public half is installed
 beside the component, and the agent checks the signature against it every time
