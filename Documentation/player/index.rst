@@ -301,13 +301,21 @@ Run this from your normal user account, **not** with ``sudo``::
 
 It checks everything on the way and then prints the exact line to use::
 
+    [...]
     === Steam Launch Options ===
 
-      Paste this string into the game's Properties ->
-      General -> Launch options:
+      For games launched through Steam's pressure-vessel container
+      (any Proton title and most native Linux titles on Steam),
+      the LOTA socket must be bind-mounted into the container, and
+      so must the directory the hook writes its status and token
+      into -- otherwise those files land inside the container and
+      nothing on this machine can read them.  The wrapper asks for
+      both itself, so the line to paste into the game's Properties
+      -> General -> Launch options is this one:
 
         LOTA_HOOK_LOG_LEVEL=info lota-proton-hook %command%
 
+    [...]
     [OK]   All checks passed.  LOTA Steam integration is ready.
 
 Copy it from your own terminal rather than from this page, because the check
