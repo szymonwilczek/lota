@@ -60,6 +60,8 @@ verifier and attestation CA services and the integrator SDK.
 Summary:        LOTA host attestation agent
 License:        MIT AND GPL-2.0-only
 Requires:       dracut
+# Steam helpers load liblota_wine_hook.so from -sdk
+Requires:       %{name}-sdk%{?_isa} = %{version}-%{release}
 %{?systemd_requires}
 
 %description agent
@@ -184,6 +186,8 @@ EOF
 %license LICENSE LICENSE.GPL-2.0-only
 %{_bindir}/lota-agent
 %{_bindir}/lota-install
+%{_bindir}/lota-proton-hook
+%{_bindir}/lota-steam-setup
 %dir %{_prefix}/lib/lota
 %{_prefix}/lib/lota/lota-pcr14-lock
 %{_prefix}/lib/lota/lota_lsm.bpf.o
@@ -230,8 +234,6 @@ EOF
 
 %files sdk-devel
 %license LICENSE
-%{_bindir}/lota-proton-hook
-%{_bindir}/lota-steam-setup
 %dir %{_includedir}/lota
 %{_includedir}/lota/lota_gaming.h
 %{_includedir}/lota/lota_wine_hook.h

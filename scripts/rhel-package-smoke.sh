@@ -99,9 +99,10 @@ smoke() {
 	echo "== enabling EPEL for the agent's runtime dependencies =="
 	dnf -y install epel-release
 
-	echo "== dnf install agent + verifier + attest-ca =="
+	echo "== dnf install agent + sdk + verifier + attest-ca =="
 	dnf -y install \
 		"$pkgdir"/lota-agent-*.rpm \
+		"$pkgdir"/lota-sdk-[0-9]*.rpm \
 		"$pkgdir"/lota-verifier-*.rpm \
 		"$pkgdir"/lota-attest-ca-*.rpm
 
@@ -125,7 +126,7 @@ smoke() {
 
 	echo "== rpm -V is clean =="
 	rc=0
-	for p in lota-agent lota-verifier lota-attest-ca; do
+	for p in lota-agent lota-sdk lota-verifier lota-attest-ca; do
 		verify_pkg "$p" || rc=1
 	done
 	test "$rc" -eq 0 || {
