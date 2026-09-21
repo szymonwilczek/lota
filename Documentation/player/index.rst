@@ -410,8 +410,9 @@ or::
 
     sudo lota-agent --shutdown
 
-It explains itself before doing anything, and does nothing if you answer
-``q``::
+It explains itself before doing anything. Pausing needs a ``y``: the capital
+``N`` in the prompt is the answer it takes if you press Enter, and ``q`` walks
+away the same way::
 
     [lota-install] Pausing stops the agent through its own graceful path
     ('lota-agent --shutdown'). systemd cannot stop the agent - the anti-tamper
@@ -420,7 +421,8 @@ It explains itself before doing anything, and does nothing if you answer
     (PCR 14) on purpose, so this boot can no longer attest. That is the
     security contract, not a fault: resuming therefore needs a reboot (see
     --resume).
-    [lota-install] Pause the agent now? [Enter to continue, q to quit]
+    [lota-install] Pause the agent now? [y/N, q to quit]
+    [lota-install] Left running. Nothing changed.
 
 Starting it again is ``sudo lota-install --resume``, which offers to reboot
 and defaults to not doing it. A paused PC boots and works normally; the agent
