@@ -73,6 +73,9 @@ struct lota_rt_open_identity {
 	dev_t dev;
 	ino_t ino;
 	unsigned long fs_magic; /* fstatfs() f_type of the fd, 0 if unread */
+	uint64_t size; /* with mtime, tells a replaced file from a cached one */
+	int64_t mtime_sec;
+	int64_t mtime_nsec;
 };
 
 /*
@@ -93,6 +96,17 @@ enum lota_rt_identity_road {
  */
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
 						 unsigned long fs_magic);
+
+/*
+ * Kernel hash of the content behind one mapping: path is its /proc magic
+ * link, dev/ino the identity the open must resolve to.
+ * Returns 0 or a negative errno. With none installed, only fs-verity measures.
+ */
+typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
+					 uint64_t ino,
+					 struct lota_verity_digest_key *out);
+
+void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn);
 
 /*
  * Does the opened mapping still describe the one that was enumerated?
@@ -184,6 +198,7 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 struct lota_runtime_measure_coverage {
 	uint32_t measured;
 	uint32_t unmeasurable;
+	uint32_t content_hashed; /* of measured: content hash, not fs-verity */
 };
 
 /*
