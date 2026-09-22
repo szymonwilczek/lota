@@ -2226,6 +2226,7 @@ test-unit: all $(TEST_BINS)
 	@tests/integration/test_steam_setup_no_session.sh
 	@tests/integration/test_proton_hook_disable.sh
 	@tests/integration/test_proton_hook_shares.sh
+	@tests/integration/test_proton_hook_abi.sh
 	@tests/integration/test_hook_container_report.sh
 	@tests/integration/test_report_wire_sizes.sh
 	@tests/integration/test_dev_bringup_idempotent.sh
