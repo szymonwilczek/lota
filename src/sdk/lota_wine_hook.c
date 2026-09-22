@@ -1143,6 +1143,12 @@ static void refresh_once(void)
 	}
 }
 
+/* lota_poll_events() refused, rather than timed out */
+static bool hook_poll_failed(int ret)
+{
+	return ret != LOTA_OK && ret != LOTA_ERR_TIMEOUT;
+}
+
 /* load-time only; the tests drive the connect and refresh path above */
 #ifndef LOTA_HOOK_TESTING
 
@@ -1237,7 +1243,7 @@ static void *refresh_thread_fn(void *arg)
 			subscribed = false;
 			/* avoid tight loop on persistent failure */
 			sleep(1);
-		} else if (ret != LOTA_OK && ret != LOTA_ERR_TIMEOUT) {
+		} else if (hook_poll_failed(ret)) {
 			LOG_DBG("poll error: %s", lota_strerror(ret));
 		}
 	}
