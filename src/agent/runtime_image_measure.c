@@ -38,6 +38,13 @@ static struct lota_rt_verity_cache rt_content_cache;
 /* installed by whoever loaded the BPF object */
 static lota_rt_content_hasher_fn rt_content_hasher;
 
+static lota_rt_write_guard_fn rt_write_guard_query;
+
+void lota_rt_set_write_guard_query(lota_rt_write_guard_fn fn)
+{
+	rt_write_guard_query = fn;
+}
+
 void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn)
 {
 	rt_content_hasher = fn;
@@ -573,14 +580,13 @@ enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
 						 unsigned long fs_magic,
 						 int write_guarded)
 {
-	(void)write_guarded;
-
 	/* a kernel-enforced digest wins, whatever the role */
 	if (verity_present)
 		return LOTA_RT_ROAD_VERITY;
 
-	/* a running executable is unwritable; a mapped library is not */
-	if (role != LOTA_RT_ROLE_EXECUTABLE)
+	/* a running executable is unwritable; a library only while guarded */
+	if (role != LOTA_RT_ROLE_EXECUTABLE &&
+	    !(role == LOTA_RT_ROLE_MAPPED_OBJECT && write_guarded))
 		return LOTA_RT_ROAD_NONE;
 
 	if (!rt_fs_may_be_content_hashed(fs_magic))
@@ -638,6 +644,30 @@ static int rt_content_hash_entry(pid_t pid,
 	return 0;
 }
 
+/* no guard query or no answer reads as unguarded */
+static int rt_entry_write_guarded(pid_t pid,
+				  const struct lota_rt_map_entry *entry,
+				  const struct lota_rt_open_identity *opened)
+{
+	char path[96];
+	int guarded = 0;
+	int n;
+
+	if (!rt_write_guard_query)
+		return 0;
+
+	n = snprintf(path, sizeof(path), "/proc/%d/map_files/%lx-%lx", (int)pid,
+		     entry->start, entry->end);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return 0;
+
+	if (rt_write_guard_query(path, (uint64_t)opened->dev,
+				 (uint64_t)opened->ino, &guarded) != 0)
+		return 0;
+
+	return guarded ? 1 : 0;
+}
+
 /*
  * Measure one mapping by whichever road may. Returns 0 or the verity read's
  * errno, so the caller still tells a coverage gap from a failure.
@@ -673,7 +703,9 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	if (!rt_err_is_unmeasurable(ret))
 		return ret;
 
-	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic, 0);
+	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic,
+				     rt_entry_write_guarded(pid, entry,
+							    &m->opened));
 	if (road != LOTA_RT_ROAD_CONTENT_HASH)
 		return ret;
 

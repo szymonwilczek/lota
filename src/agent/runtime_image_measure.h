@@ -110,6 +110,16 @@ typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
 void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn);
 
 /*
+ * Are write opens of the file behind one mapping refused? Arguments as for
+ * the hasher; 0 and guarded set, or a negative errno.
+ * Unset: no library is hashed.
+ */
+typedef int (*lota_rt_write_guard_fn)(const char *path, uint64_t dev,
+				      uint64_t ino, int *guarded);
+
+void lota_rt_set_write_guard_query(lota_rt_write_guard_fn fn);
+
+/*
  * Does the opened mapping still describe the one that was enumerated?
  *
  * enumerated and observed are both read from /proc/<pid>/maps -- the second

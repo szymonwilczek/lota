@@ -275,6 +275,19 @@ struct {
 } guarded_files SEC(".maps");
 
 /*
+ * Inodes any task has mapped executable; lota_file_open refuses their write
+ * opens, and only such a library may be content-hashed. Unlike the mmap
+ * verdicts, not scoped to protected tasks. Renaming over a file still works.
+ * A full map leaves the inode unguarded and unhashed. Name fits 16 bytes.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, LOTA_MAX_MAPPED_EXEC_GUARDS);
+	__type(key, struct trusted_lib_key);
+	__type(value, u32);
+} mapped_exec SEC(".maps");
+
+/*
  * fs-verity digest allowlist.
  * Key: digest length + digest bytes (SHA-512 only)
  * Value: 1 = allowed
@@ -594,6 +607,8 @@ static __always_inline int is_lota_managed_map(struct bpf_map *map)
 	if (__builtin_memcmp(name, "guarded_files", sizeof("guarded_files")) ==
 	    0)
 		return 1;
+	if (__builtin_memcmp(name, "mapped_exec", sizeof("mapped_exec")) == 0)
+		return 1;
 	if (__builtin_memcmp(name, "events", sizeof("events")) == 0)
 		return 1;
 	if (__builtin_memcmp(name, "stats", sizeof("stats")) == 0)
@@ -759,6 +774,59 @@ static __always_inline u32 guarded_file_kind(struct file *file)
 
 	kind = bpf_map_lookup_elem(&guarded_files, &key);
 	return kind ? *kind : 0;
+}
+
+/*
+ * Enforcement map key of a file. s_dev, not stat(2)'s st_dev:
+ * they differ on a filesystem with a device per subvolume.
+ */
+static __always_inline int file_inode_key(struct file *file,
+					  struct trusted_lib_key *key)
+{
+	struct super_block *sb;
+	struct inode *inode;
+
+	if (!file)
+		return 0;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode)
+		return 0;
+
+	sb = BPF_CORE_READ(inode, i_sb);
+	if (!sb)
+		return 0;
+
+	key->dev = (u64)BPF_CORE_READ(sb, s_dev);
+	key->ino = (u64)BPF_CORE_READ(inode, i_ino);
+	if (key->dev == 0 || key->ino == 0)
+		return 0;
+
+	return 1;
+}
+
+static __always_inline int is_mapped_exec_guarded(struct file *file)
+{
+	struct trusted_lib_key key = {};
+	u32 *guarded;
+
+	if (!file_inode_key(file, &key))
+		return 0;
+
+	guarded = bpf_map_lookup_elem(&mapped_exec, &key);
+	return (guarded && *guarded) ? 1 : 0;
+}
+
+/* every mode: enforce may be raised under a running process */
+static __always_inline void remember_mapped_exec(struct file *file)
+{
+	struct trusted_lib_key key = {};
+	u32 one = 1;
+
+	if (!file_inode_key(file, &key))
+		return;
+
+	bpf_map_update_elem(&mapped_exec, &key, &one, BPF_ANY);
 }
 
 static __always_inline int is_write_open_flags(int flags)
@@ -1072,6 +1140,14 @@ int BPF_PROG(lota_file_open, struct file *file, int ret)
 		return -EPERM;
 	}
 
+	/*
+	 * A mapped library is as unwritable as a running executable.
+	 * Ahead of strict_mmap and unconditional: its content hash stands on this.
+	 */
+	if (is_write_open_flags(BPF_CORE_READ(file, f_flags)) &&
+	    is_mapped_exec_guarded(file))
+		return -EPERM;
+
 	if (!get_config(LOTA_CFG_STRICT_MMAP))
 		return 0;
 
@@ -1097,6 +1173,7 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
 {
 	struct lota_exe_hash_slot *slot;
 	u32 tid;
+	u32 want;
 	long hashed;
 
 	if (!file)
@@ -1106,14 +1183,29 @@ int BPF_PROG(lota_file_post_open_measure, struct file *file, int mask)
 	slot = bpf_map_lookup_elem(&exe_hash_slots, &tid);
 	if (!slot)
 		return 0;
-	if (slot->state != LOTA_EXE_HASH_ASKED)
+	want = slot->state;
+	if (want != LOTA_EXE_HASH_ASKED && want != LOTA_EXE_HASH_ASKED_GUARD)
 		return 0;
 
 	/* user space writes this map: confirm the caller is the agent */
 	if (!sleepable_task_is_agent_or_admin()) {
 		slot->state = LOTA_EXE_HASH_ANSWERED;
 		slot->algo = 0;
+		slot->guard = 0;
 		slot->err = EPERM;
+		return 0;
+	}
+
+	/* lota_file_open refuses writes in enforce mode only */
+	slot->guard = (get_mode() == LOTA_MODE_ENFORCE &&
+		       is_mapped_exec_guarded(file)) ?
+			      1 :
+			      0;
+
+	if (want == LOTA_EXE_HASH_ASKED_GUARD) {
+		slot->algo = 0;
+		slot->err = 0;
+		slot->state = LOTA_EXE_HASH_ANSWERED;
 		return 0;
 	}
 
@@ -1648,6 +1740,12 @@ int BPF_PROG(lota_mmap_file, struct file *file, unsigned long reqprot,
 
 	inc_stat(STAT_MMAP_EXECS);
 
+	/*
+	 * Every task, before any verdict: the loader maps most libraries
+	 * before the process asks to be protected.
+	 */
+	remember_mapped_exec(file);
+
 	mode = get_mode();
 
 	/*
@@ -1812,6 +1910,9 @@ int BPF_PROG(lota_file_mprotect, struct vm_area_struct *vma,
 
 	inc_stat(STAT_MMAP_EXECS);
 	vm_flags = BPF_CORE_READ(vma, vm_flags);
+
+	/* mprotect(PROT_EXEC) maps code too */
+	remember_mapped_exec(file);
 
 	/*
 	 * mprotect(PROT_EXEC) on a file-backed VMA closes the W^X bypass

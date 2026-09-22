@@ -356,21 +356,24 @@ Active threats
          number, size and modification time, all read from the descriptor the
          measurement holds open; fs-verity makes the contents behind such an
          inode immutable, and any other file is a different key.
-       | An executable with no fs-verity digest is measured by content: the
-         kernel hashes it during the agent's own open, and the token sets
-         ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only the process's own
-         executable takes that road, and only on a local filesystem.
+       | An object with no fs-verity digest is hashed by the kernel during
+         the agent's own open of it, flagged by
+         ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
+         filesystem, and only for a file no writer may replace: the running
+         executable, or, in enforce mode, a library whose write opens LOTA
+         refuses while it is mapped.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
-       | A content hash records the bytes at one moment; fs-verity binds
-         every later page fault. The weaker road is reported apart, never as
-         full coverage.
-       | Mapped libraries stay off that road, since they remain writable, as
-         do filesystems served by userspace or a peer (FUSE, NFS, CIFS/SMB,
-         9P, Ceph), which can serve the hasher and the page fault different
-         bytes.
-       | An object with no digest and no road is reported as missing
-         coverage, never folded in.
+       | A content hash reads the bytes once; an fs-verity digest binds every
+         later page fault. It is the weaker road, so it has its own flag.
+       | An unguarded library gets no content hash, nor does any filesystem a
+         user or peer can serve (FUSE, NFS, CIFS/SMB, 9P, Ceph): it could hand
+         the hasher one image and the page fault another.
+       | Mappings are recorded for every task: the loader maps most libraries
+         before the process is protected. Only in-place rewrites are refused;
+         a package manager's write-and-rename is not.
+       | An object with no digest and no road left is absent from the
+         measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation
      - | BPF LSM hooks protect the agent and protected PIDs, including
          ``__ptrace_may_access`` where available. Both refuse a read and an

@@ -97,6 +97,22 @@ int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
 			 struct lota_verity_digest_key *out);
 
 /*
+ * bpf_loader_file_write_guarded - Is the kernel refusing writes to this file?
+ * @ctx: Loaded context
+ * @path: Path to open, as for bpf_loader_hash_file
+ * @expect_dev: st_dev the open must still resolve to
+ * @expect_ino: st_ino the open must still resolve to
+ * @guarded: Set to 1 when a write open of the file is refused, 0 otherwise
+ *
+ * Asked in the hook, off its inode: stat(2)'s st_dev need not be the map key.
+ *
+ * Returns: 0 on success, negative errno on failure.
+ */
+int bpf_loader_file_write_guarded(struct bpf_loader_ctx *ctx, const char *path,
+				  uint64_t expect_dev, uint64_t expect_ino,
+				  int *guarded);
+
+/*
  * Callback for ring buffer events
  */
 typedef int (*bpf_event_handler_t)(void *ctx, void *data, size_t len);

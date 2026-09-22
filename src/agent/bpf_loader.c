@@ -1964,26 +1964,24 @@ static uint32_t exe_hash_digest_len(uint32_t algo)
 	}
 }
 
-int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
-			 uint64_t expect_dev, uint64_t expect_ino,
-			 struct lota_verity_digest_key *out)
+/*
+ * Ask file_post_open about one file during this thread's open of it.
+ * want picks the question: hash its content, or only report its write guard.
+ */
+static int exe_hash_ask(struct bpf_loader_ctx *ctx, const char *path,
+			uint64_t expect_dev, uint64_t expect_ino, uint32_t want,
+			struct lota_exe_hash_slot *slot)
 {
-	struct lota_exe_hash_slot slot = { 0 };
 	struct stat st;
 	uint32_t tid;
-	uint32_t len;
 	int ret = 0;
 	int fd;
 
-	if (!ctx || !ctx->loaded || !path || !out)
-		return -EINVAL;
-
-	if (ctx->exe_hash_slots_fd < 0)
-		return -ENOSYS;
+	memset(slot, 0, sizeof(*slot));
 
 	tid = (uint32_t)syscall(SYS_gettid);
-	slot.state = LOTA_EXE_HASH_ASKED;
-	if (bpf_map_update_elem(ctx->exe_hash_slots_fd, &tid, &slot, BPF_ANY) <
+	slot->state = want;
+	if (bpf_map_update_elem(ctx->exe_hash_slots_fd, &tid, slot, BPF_ANY) <
 	    0)
 		return -errno;
 
@@ -2004,35 +2002,75 @@ int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
 		goto out_close;
 	}
 
-	if (bpf_map_lookup_elem(ctx->exe_hash_slots_fd, &tid, &slot) < 0) {
+	if (bpf_map_lookup_elem(ctx->exe_hash_slots_fd, &tid, slot) < 0) {
 		ret = -errno;
 		goto out_close;
 	}
 
-	if (slot.state != LOTA_EXE_HASH_ANSWERED) {
+	if (slot->state != LOTA_EXE_HASH_ANSWERED) {
 		/* untouched: no program attached, or the open missed it */
 		ret = -ENXIO;
 		goto out_close;
 	}
-	if (slot.err != 0) {
-		ret = -(int)slot.err;
-		goto out_close;
-	}
-	len = exe_hash_digest_len(slot.algo);
-	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(len)) {
-		ret = -EPROTO;
-		goto out_close;
-	}
-
-	memset(out, 0, sizeof(*out));
-	out->len = len;
-	memcpy(out->digest, slot.digest, len);
+	if (slot->err != 0)
+		ret = -(int)slot->err;
 
 out_close:
 	close(fd);
 out_delete:
 	bpf_map_delete_elem(ctx->exe_hash_slots_fd, &tid);
 	return ret;
+}
+
+int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
+			 uint64_t expect_dev, uint64_t expect_ino,
+			 struct lota_verity_digest_key *out)
+{
+	struct lota_exe_hash_slot slot;
+	uint32_t len;
+	int ret;
+
+	if (!ctx || !ctx->loaded || !path || !out)
+		return -EINVAL;
+
+	if (ctx->exe_hash_slots_fd < 0)
+		return -ENOSYS;
+
+	ret = exe_hash_ask(ctx, path, expect_dev, expect_ino,
+			   LOTA_EXE_HASH_ASKED, &slot);
+	if (ret != 0)
+		return ret;
+
+	len = exe_hash_digest_len(slot.algo);
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(len))
+		return -EPROTO;
+
+	memset(out, 0, sizeof(*out));
+	out->len = len;
+	memcpy(out->digest, slot.digest, len);
+	return 0;
+}
+
+int bpf_loader_file_write_guarded(struct bpf_loader_ctx *ctx, const char *path,
+				  uint64_t expect_dev, uint64_t expect_ino,
+				  int *guarded)
+{
+	struct lota_exe_hash_slot slot;
+	int ret;
+
+	if (!ctx || !ctx->loaded || !path || !guarded)
+		return -EINVAL;
+
+	if (ctx->exe_hash_slots_fd < 0)
+		return -ENOSYS;
+
+	ret = exe_hash_ask(ctx, path, expect_dev, expect_ino,
+			   LOTA_EXE_HASH_ASKED_GUARD, &slot);
+	if (ret != 0)
+		return ret;
+
+	*guarded = slot.guard ? 1 : 0;
+	return 0;
 }
 
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
