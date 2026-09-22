@@ -38,15 +38,30 @@ static inline size_t mapped_pins_find(const struct mapped_exec_pin *pins,
 
 /*
  * Move the pins this round reached to the front and return their count;
- * the caller unpins the rest and truncates. Releases nothing yet.
+ * the caller unpins the rest and truncates. Unordered: lookups scan it all.
  */
 static inline size_t mapped_pins_partition(struct mapped_exec_pin *pins,
 					   size_t count, uint64_t round)
 {
-	(void)pins;
-	(void)round;
+	struct mapped_exec_pin tmp;
+	size_t kept = 0;
+	size_t i;
 
-	return count;
+	if (!pins)
+		return 0;
+
+	for (i = 0; i < count; i++) {
+		if (pins[i].round != round)
+			continue;
+		if (i != kept) {
+			tmp = pins[kept];
+			pins[kept] = pins[i];
+			pins[i] = tmp;
+		}
+		kept++;
+	}
+
+	return kept;
 }
 
 #endif /* LOTA_MAPPED_PINS_H */

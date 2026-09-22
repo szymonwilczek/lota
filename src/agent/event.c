@@ -254,6 +254,13 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 			  kill_line);
 		return 0;
 	}
+	/* the writer saw only EPERM; name the pin */
+	case LOTA_EVENT_MAPPED_WRITE_BLOCKED:
+		lota_info(
+			"[%llu] MAPPED_WRITE_BLOCKED %s -> %s (pid=%u, uid=%u)",
+			(unsigned long long)event->timestamp_ns, comm_safe,
+			filename_safe, event->pid, event->uid);
+		return 0;
 	/* no signal, so no target pid: name the file instead */
 	case LOTA_EVENT_KILL_GUARD_BLOCKED:
 		lota_info("[%llu] KILL_BLOCKED %s -> %s (pid=%u, uid=%u)",

@@ -78,10 +78,11 @@ enum lota_event_type {
 	LOTA_EVENT_KILL, /* signal delivery to protected task observed */
 	LOTA_EVENT_MOUNT_BLOCKED, /* mount that would shadow a trusted file */
 	LOTA_EVENT_KILL_GUARD_BLOCKED, /* write that would kill a guarded task */
+	LOTA_EVENT_MAPPED_WRITE_BLOCKED, /* write to a pinned mapped library */
 };
 
 /* One past the last event type, so a per-type array covers every one */
-#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_KILL_GUARD_BLOCKED + 1)
+#define LOTA_EVENT_TYPE_COUNT (LOTA_EVENT_MAPPED_WRITE_BLOCKED + 1)
 
 /*
  * Event flags (struct lota_exec_event.flags).
@@ -471,8 +472,13 @@ struct lota_exec_event {
 
 #define LOTA_EXE_HASH_IDLE 0 /* nothing asked */
 #define LOTA_EXE_HASH_ASKED 1 /* the next open is hashed */
-#define LOTA_EXE_HASH_ANSWERED 2 /* err and guard set; algo, digest if hashed */
-#define LOTA_EXE_HASH_ASKED_GUARD 3 /* the next open reports guard only */
+#define LOTA_EXE_HASH_ANSWERED 2 /* err set; the rest per question */
+#define LOTA_EXE_HASH_ASKED_PIN 3 /* the next open is pinned, not read */
+
+/* Is the pinned file the one mapped? Anything but OK leaves it uncovered */
+#define LOTA_EXE_MAP_SEEN_OK 0
+#define LOTA_EXE_MAP_SEEN_MISSING 1 /* never recorded, or evicted */
+#define LOTA_EXE_MAP_SEEN_CHANGED 2 /* written since it was mapped */
 
 /* <linux/hash_info.h> ids; the algorithm fixes the digest length */
 #define LOTA_EXE_HASH_ALGO_SHA256 4
@@ -483,7 +489,11 @@ struct lota_exe_hash_slot {
 	__u32 state; /* LOTA_EXE_HASH_* */
 	__u32 algo; /* LOTA_EXE_HASH_ALGO_*, 0 on failure */
 	__u32 err; /* positive errno, 0 on success */
-	__u32 guard; /* 1: write opens refused while a protected process maps it */
+	__u32 guard; /* already pinned by the agent */
+	__u64 dev; /* kernel's key for the file, not stat's st_dev */
+	__u64 ino;
+	__u32 seen; /* LOTA_EXE_MAP_SEEN_* */
+	__u32 writers; /* write opens already granted; a pin cannot recall them */
 	__u8 digest[LOTA_VERITY_DIGEST_MAX_SIZE]; /* read during the open */
 };
 
@@ -491,10 +501,23 @@ struct lota_exe_hash_slot {
 #define LOTA_GUARD_CGROUP_KILL 1
 
 /*
- * Files ever mapped executable, refused write opens while the agent runs.
- * Counts objects, not policy: every library of every session lands here.
+ * Libraries the agent pins against writes while measuring a process.
+ * Only the agent writes the map, so the protected set bounds it.
  */
 #define LOTA_MAX_MAPPED_EXEC_GUARDS 16384
+
+/*
+ * Size and ctime of a file as mapped executable, to catch one swapped before
+ * the pin; utimensat cannot set ctime. Evictable: a loss costs a measurement.
+ */
+struct lota_mapped_seen {
+	__u64 size;
+	__u64 ctime_sec;
+	__u32 ctime_nsec;
+	__u32 pad;
+};
+
+#define LOTA_MAX_MAPPED_SEEN 65536
 
 /*
  * Kernel integrity baseline, as the agent's startup hardening gate read it.

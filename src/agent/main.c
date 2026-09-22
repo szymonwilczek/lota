@@ -118,12 +118,22 @@ static int agent_kernel_hash_file(const char *path, uint64_t dev, uint64_t ino,
 	return bpf_loader_hash_file(&g_agent.bpf_ctx, path, dev, ino, out);
 }
 
-/* Same hook, asked only whether write opens of the file are refused */
-static int agent_kernel_write_guarded(const char *path, uint64_t dev,
-				      uint64_t ino, int *guarded)
+/* Same hook, asked to pin the file */
+static int agent_kernel_pin_object(const char *path, uint64_t dev, uint64_t ino,
+				   int *pinned)
 {
-	return bpf_loader_file_write_guarded(&g_agent.bpf_ctx, path, dev, ino,
-					     guarded);
+	return bpf_loader_pin_mapped_object(&g_agent.bpf_ctx, path, dev, ino,
+					    pinned);
+}
+
+static void agent_kernel_pin_round_begin(void)
+{
+	bpf_loader_pin_round_begin(&g_agent.bpf_ctx);
+}
+
+static int agent_kernel_pin_sweep(size_t *released)
+{
+	return bpf_loader_pin_sweep(&g_agent.bpf_ctx, released);
 }
 
 static int run_daemon(const struct run_daemon_params *params)
@@ -617,7 +627,9 @@ static int run_daemon(const struct run_daemon_params *params)
 
 	/* only once attached: an unattached program answers no open */
 	lota_rt_set_content_hasher(agent_kernel_hash_file);
-	lota_rt_set_write_guard_query(agent_kernel_write_guarded);
+	lota_rt_set_pin_object(agent_kernel_pin_object,
+			       agent_kernel_pin_round_begin,
+			       agent_kernel_pin_sweep);
 
 	ret = bpf_loader_setup_ringbuf(&g_agent.bpf_ctx, handle_exec_event,
 				       NULL);
@@ -699,14 +711,16 @@ static int run_daemon(const struct run_daemon_params *params)
 			"mod_blocked=%lu mmap_exec=%lu mmap_blocked=%lu "
 			"ptrace=%lu ptrace_blocked=%lu setuid=%lu bpf_blocked=%lu "
 			"mount_blocked=%lu kill_guard_blocked=%lu "
-			"yielded=%lu kill_probes=%lu",
+			"yielded=%lu kill_probes=%lu "
+			"mapped_write_blocked=%lu mapped_pin_refused=%lu",
 			stats.total_execs, stats.events_sent, stats.errors,
 			stats.drops, stats.modules_blocked, stats.mmap_execs,
 			stats.mmap_blocked, stats.ptrace_attempts,
 			stats.ptrace_blocked, stats.setuid_events,
 			stats.bpf_syscall_blocked, stats.mounts_blocked,
 			stats.kill_guard_blocked, stats.events_yielded,
-			stats.kill_probes);
+			stats.kill_probes, stats.mapped_write_blocked,
+			stats.mapped_pin_refused);
 	}
 
 	{

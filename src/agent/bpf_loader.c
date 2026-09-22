@@ -64,6 +64,8 @@
 #define STAT_KILL_GUARD_BLOCKED 17
 #define STAT_EVENTS_YIELDED 18
 #define STAT_KILL_PROBES 19
+#define STAT_MAPPED_WRITE_BLOCKED 20
+#define STAT_MAPPED_PIN_REFUSED 21
 
 struct protected_pid_entry {
 	uint64_t start_time_ticks;
@@ -972,6 +974,7 @@ int bpf_loader_init(struct bpf_loader_ctx *ctx)
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
+	ctx->mapped_exec_fd = -1;
 
 	libbpf_set_print(libbpf_print_fn);
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -1419,6 +1422,20 @@ int bpf_loader_load(struct bpf_loader_ctx *ctx, const char *bpf_obj_path,
 		}
 	}
 
+	/* optional: without it no library is measured */
+	ctx->mapped_exec_fd =
+		bpf_object__find_map_fd_by_name(ctx->obj, "mapped_exec");
+	if (ctx->mapped_exec_fd < 0) {
+		ctx->mapped_exec_fd = -1;
+	} else {
+		err = harden_fd_cloexec(ctx->mapped_exec_fd, "mapped_exec map");
+		if (err < 0) {
+			lota_err("Failed to harden mapped_exec map fd: %s",
+				 strerror(-err));
+			goto err_close;
+		}
+	}
+
 	/* Get fs-verity allowlist map fd */
 	ctx->allow_verity_digest_fd =
 		bpf_object__find_map_fd_by_name(ctx->obj, "allow_verity");
@@ -1667,6 +1684,13 @@ void bpf_loader_cleanup(struct bpf_loader_ctx *ctx)
 	ctx->protected_pids_fd = -1;
 	ctx->allow_verity_digest_fd = -1;
 	ctx->exe_hash_slots_fd = -1;
+	ctx->mapped_exec_fd = -1;
+
+	/* the map took the pins with it */
+	free(ctx->pins);
+	ctx->pins = NULL;
+	ctx->pin_count = 0;
+	ctx->pin_cap = 0;
 }
 
 int bpf_loader_allow_verity_digest(struct bpf_loader_ctx *ctx,
@@ -2051,26 +2075,153 @@ int bpf_loader_hash_file(struct bpf_loader_ctx *ctx, const char *path,
 	return 0;
 }
 
-int bpf_loader_file_write_guarded(struct bpf_loader_ctx *ctx, const char *path,
-				  uint64_t expect_dev, uint64_t expect_ino,
-				  int *guarded)
+/* Record an inode as pinned this round, or restamp it */
+static int pin_record(struct bpf_loader_ctx *ctx, uint64_t dev, uint64_t ino)
+{
+	struct mapped_exec_pin *grown;
+	size_t at;
+	size_t cap;
+
+	at = mapped_pins_find(ctx->pins, ctx->pin_count, dev, ino);
+	if (at != ctx->pin_count) {
+		ctx->pins[at].round = ctx->pin_round;
+		return 0;
+	}
+
+	if (ctx->pin_count == ctx->pin_cap) {
+		cap = ctx->pin_cap ? ctx->pin_cap * 2 : 64;
+		if (cap > LOTA_MAX_MAPPED_EXEC_GUARDS)
+			cap = LOTA_MAX_MAPPED_EXEC_GUARDS;
+		if (cap == ctx->pin_cap)
+			return -ENOSPC;
+		grown = realloc(ctx->pins, cap * sizeof(*grown));
+		if (!grown)
+			return -ENOMEM;
+		ctx->pins = grown;
+		ctx->pin_cap = cap;
+	}
+
+	ctx->pins[ctx->pin_count].dev = dev;
+	ctx->pins[ctx->pin_count].ino = ino;
+	ctx->pins[ctx->pin_count].round = ctx->pin_round;
+	ctx->pin_count++;
+	return 0;
+}
+
+int bpf_loader_pin_mapped_object(struct bpf_loader_ctx *ctx, const char *path,
+				 uint64_t expect_dev, uint64_t expect_ino,
+				 int *guarded)
 {
 	struct lota_exe_hash_slot slot;
+	struct trusted_lib_key key = { 0 };
+	uint32_t one = 1;
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path || !guarded)
 		return -EINVAL;
 
-	if (ctx->exe_hash_slots_fd < 0)
+	*guarded = 0;
+
+	if (ctx->exe_hash_slots_fd < 0 || ctx->mapped_exec_fd < 0)
 		return -ENOSYS;
 
 	ret = exe_hash_ask(ctx, path, expect_dev, expect_ino,
-			   LOTA_EXE_HASH_ASKED_GUARD, &slot);
+			   LOTA_EXE_HASH_ASKED_PIN, &slot);
 	if (ret != 0)
 		return ret;
 
-	*guarded = slot.guard ? 1 : 0;
+	if (slot.dev == 0 || slot.ino == 0)
+		return -ENODATA;
+
+	/* still pinned from an earlier round: not written since */
+	if (slot.guard) {
+		ret = pin_record(ctx, slot.dev, slot.ino);
+		if (ret < 0)
+			return ret;
+		*guarded = 1;
+		return 0;
+	}
+
+	/* not provably the mapped bytes: leave unmeasured */
+	if (slot.seen != LOTA_EXE_MAP_SEEN_OK) {
+		lota_dbg("mapped object not pinned: %s (%s)", path,
+			 slot.seen == LOTA_EXE_MAP_SEEN_CHANGED ?
+				 "written since it was mapped" :
+				 "no record of it being mapped");
+		return 0;
+	}
+	if (slot.writers > 0) {
+		lota_dbg("mapped object not pinned: %s (%u writer%s)", path,
+			 slot.writers, slot.writers == 1 ? "" : "s");
+		return 0;
+	}
+
+	key.dev = slot.dev;
+	key.ino = slot.ino;
+	if (bpf_map_update_elem(ctx->mapped_exec_fd, &key, &one, BPF_ANY) < 0) {
+		ret = -errno;
+		lota_warn("Failed to pin mapped object %s: %s", path,
+			  strerror(-ret));
+		return ret;
+	}
+
+	ret = pin_record(ctx, slot.dev, slot.ino);
+	if (ret < 0) {
+		/* An unrecorded pin is one no sweep could ever release */
+		bpf_map_delete_elem(ctx->mapped_exec_fd, &key);
+		return ret;
+	}
+
+	*guarded = 1;
 	return 0;
+}
+
+void bpf_loader_pin_round_begin(struct bpf_loader_ctx *ctx)
+{
+	if (ctx)
+		ctx->pin_round++;
+}
+
+int bpf_loader_pin_sweep(struct bpf_loader_ctx *ctx, size_t *released)
+{
+	struct trusted_lib_key key = { 0 };
+	size_t write_at;
+	size_t kept = 0;
+	size_t gone = 0;
+	int ret = 0;
+
+	if (!ctx || !ctx->loaded)
+		return -EINVAL;
+
+	if (ctx->mapped_exec_fd < 0)
+		return -ENOSYS;
+
+	kept = mapped_pins_partition(ctx->pins, ctx->pin_count, ctx->pin_round);
+
+	/* compact; a pin the map would not drop stays */
+	write_at = kept;
+	for (size_t i = kept; i < ctx->pin_count; i++) {
+		key.dev = ctx->pins[i].dev;
+		key.ino = ctx->pins[i].ino;
+		if (bpf_map_delete_elem(ctx->mapped_exec_fd, &key) < 0 &&
+		    errno != ENOENT) {
+			/* Kept, so the next sweep tries again */
+			ret = -errno;
+			ctx->pins[write_at++] = ctx->pins[i];
+			continue;
+		}
+		gone++;
+	}
+
+	ctx->pin_count = write_at;
+	if (released)
+		*released = gone;
+	return ret;
+}
+
+size_t bpf_loader_pin_count(const struct bpf_loader_ctx *ctx)
+{
+	return ctx ? ctx->pin_count : 0;
 }
 
 int bpf_loader_protect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
@@ -2282,6 +2433,10 @@ int bpf_loader_get_extended_stats(struct bpf_loader_ctx *ctx,
 	read_stat(ctx->stats_fd, STAT_MOUNTS_BLOCKED, &stats->mounts_blocked);
 	read_stat(ctx->stats_fd, STAT_KILL_GUARD_BLOCKED,
 		  &stats->kill_guard_blocked);
+	read_stat(ctx->stats_fd, STAT_MAPPED_WRITE_BLOCKED,
+		  &stats->mapped_write_blocked);
+	read_stat(ctx->stats_fd, STAT_MAPPED_PIN_REFUSED,
+		  &stats->mapped_pin_refused);
 	read_stat(ctx->stats_fd, STAT_EVENTS_YIELDED, &stats->events_yielded);
 	read_stat(ctx->stats_fd, STAT_KILL_PROBES, &stats->kill_probes);
 

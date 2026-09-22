@@ -171,6 +171,17 @@ int lota_runtime_measure_pid(pid_t pid,
 	return -ENOTSUP;
 }
 
+void lota_rt_measure_round_begin(void)
+{
+}
+
+int lota_rt_measure_round_end(size_t *released)
+{
+	if (released)
+		*released = 0;
+	return 0;
+}
+
 int lota_runtime_coverage_pid(pid_t pid,
 			      struct lota_runtime_measure_coverage *cov)
 {

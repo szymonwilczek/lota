@@ -92,7 +92,7 @@ enum lota_rt_identity_road {
 /*
  * Which road may measure one object of a live process. role is an enum
  * lota_rt_object_role; a filesystem off the fs_magic allowlist gets no
- * content hash; write_guarded: write opens are refused while it is mapped.
+ * content hash; write_guarded: the agent pinned it against writes.
  */
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
 						 unsigned long fs_magic,
@@ -110,14 +110,26 @@ typedef int (*lota_rt_content_hasher_fn)(const char *path, uint64_t dev,
 void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn);
 
 /*
- * Are write opens of the file behind one mapping refused? Arguments as for
- * the hasher; 0 and guarded set, or a negative errno.
- * Unset: no library is hashed.
+ * Pin the file behind one mapping against writes; arguments as for the
+ * hasher. 0 and pinned set, or a negative errno. Unset: no library hashed.
  */
-typedef int (*lota_rt_write_guard_fn)(const char *path, uint64_t dev,
-				      uint64_t ino, int *guarded);
+typedef int (*lota_rt_pin_object_fn)(const char *path, uint64_t dev,
+				     uint64_t ino, int *pinned);
 
-void lota_rt_set_write_guard_query(lota_rt_write_guard_fn fn);
+/* Pin rounds: the sweep unpins what its round did not reach */
+typedef void (*lota_rt_pin_round_fn)(void);
+typedef int (*lota_rt_pin_sweep_fn)(size_t *released);
+
+void lota_rt_set_pin_object(lota_rt_pin_object_fn pin,
+			    lota_rt_pin_round_fn round_begin,
+			    lota_rt_pin_sweep_fn sweep);
+
+/*
+ * Bracket one measurement of the whole protected set,
+ * so a library two processes map stays pinned for both.
+ */
+void lota_rt_measure_round_begin(void);
+int lota_rt_measure_round_end(size_t *released);
 
 /*
  * Does the opened mapping still describe the one that was enumerated?

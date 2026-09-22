@@ -360,18 +360,26 @@ Active threats
          the agent's own open of it, flagged by
          ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. Only on a kernel-served
          filesystem, and only for a file no writer may replace: the running
-         executable, or, in enforce mode, a library whose write opens LOTA
-         refuses while it is mapped.
+         executable, or, in enforce mode, a library the agent has pinned. A
+         refused write to a pinned library is counted and sent on the event
+         stream, not left a bare ``EPERM``.
      - | Anonymous executable memory and JIT code are not measured as modules.
        | Intended bound is W^X plus policy enforcement.
        | A content hash reads the bytes once; an fs-verity digest binds every
          later page fault. It is the weaker road, so it has its own flag.
-       | An unguarded library gets no content hash, nor does any filesystem a
+       | An unpinned library gets no content hash, nor does any filesystem a
          user or peer can serve (FUSE, NFS, CIFS/SMB, 9P, Ceph): it could hand
          the hasher one image and the page fault another.
-       | Mappings are recorded for every task: the loader maps most libraries
-         before the process is protected. Only in-place rewrites are refused;
-         a package manager's write-and-rename is not.
+       | Pins cover the protected set and are released once a round no longer
+         reaches them, so a title's exit unpins its libraries. Only the agent
+         writes pins; an unprivileged process cannot fill the map.
+       | The loader maps libraries before the process is protected, so the
+         kernel records each executable mapping's size and ctime; the agent
+         will not measure an object that no longer matches, has no record, or
+         is still open for writing. Records evict under pressure: a lost one
+         costs a measurement, never a guard.
+       | Write-and-rename, as a package manager does, is untouched; a pin
+         refuses only in-place rewrites.
        | An object with no digest and no road left is absent from the
          measurement and reported as missing coverage, never folded in.
    * - ptrace or process mutation

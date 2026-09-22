@@ -38,11 +38,32 @@ static struct lota_rt_verity_cache rt_content_cache;
 /* installed by whoever loaded the BPF object */
 static lota_rt_content_hasher_fn rt_content_hasher;
 
-static lota_rt_write_guard_fn rt_write_guard_query;
+static lota_rt_pin_object_fn rt_pin_object;
+static lota_rt_pin_round_fn rt_pin_round_begin;
+static lota_rt_pin_sweep_fn rt_pin_sweep;
 
-void lota_rt_set_write_guard_query(lota_rt_write_guard_fn fn)
+void lota_rt_set_pin_object(lota_rt_pin_object_fn pin,
+			    lota_rt_pin_round_fn round_begin,
+			    lota_rt_pin_sweep_fn sweep)
 {
-	rt_write_guard_query = fn;
+	rt_pin_object = pin;
+	rt_pin_round_begin = round_begin;
+	rt_pin_sweep = sweep;
+}
+
+void lota_rt_measure_round_begin(void)
+{
+	if (rt_pin_round_begin)
+		rt_pin_round_begin();
+}
+
+int lota_rt_measure_round_end(size_t *released)
+{
+	if (released)
+		*released = 0;
+	if (!rt_pin_sweep)
+		return 0;
+	return rt_pin_sweep(released);
 }
 
 void lota_rt_set_content_hasher(lota_rt_content_hasher_fn fn)
@@ -644,16 +665,15 @@ static int rt_content_hash_entry(pid_t pid,
 	return 0;
 }
 
-/* no guard query or no answer reads as unguarded */
-static int rt_entry_write_guarded(pid_t pid,
-				  const struct lota_rt_map_entry *entry,
-				  const struct lota_rt_open_identity *opened)
+/* no pinner or no answer: unpinned, so unmeasured */
+static int rt_entry_pinned(pid_t pid, const struct lota_rt_map_entry *entry,
+			   const struct lota_rt_open_identity *opened)
 {
 	char path[96];
-	int guarded = 0;
+	int pinned = 0;
 	int n;
 
-	if (!rt_write_guard_query)
+	if (!rt_pin_object)
 		return 0;
 
 	n = snprintf(path, sizeof(path), "/proc/%d/map_files/%lx-%lx", (int)pid,
@@ -661,11 +681,11 @@ static int rt_entry_write_guarded(pid_t pid,
 	if (n < 0 || (size_t)n >= sizeof(path))
 		return 0;
 
-	if (rt_write_guard_query(path, (uint64_t)opened->dev,
-				 (uint64_t)opened->ino, &guarded) != 0)
+	if (rt_pin_object(path, (uint64_t)opened->dev, (uint64_t)opened->ino,
+			  &pinned) != 0)
 		return 0;
 
-	return guarded ? 1 : 0;
+	return pinned ? 1 : 0;
 }
 
 /*
@@ -703,9 +723,12 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	if (!rt_err_is_unmeasurable(ret))
 		return ret;
 
+	/* a running executable is unwritable already */
 	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic,
-				     rt_entry_write_guarded(pid, entry,
-							    &m->opened));
+				     m->role == LOTA_RT_ROLE_MAPPED_OBJECT ?
+					     rt_entry_pinned(pid, entry,
+							     &m->opened) :
+					     0);
 	if (road != LOTA_RT_ROAD_CONTENT_HASH)
 		return ret;
 
