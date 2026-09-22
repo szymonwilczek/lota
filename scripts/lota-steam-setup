@@ -82,6 +82,8 @@ Environment:
                     session sets it; an account without one has no
                     container socket and no token directory, which
                     the checks that read it report as such.
+  LOTA_AGENT_SOCKET The agent's socket, checked instead of
+                    /run/lota/lota.sock.
   LOTA_SETUP_DROPIN_DIR
                     Write the --install-systemd-dropin file under this
                     directory instead of /etc/systemd/system. For
@@ -109,8 +111,18 @@ check_xdg_runtime_dir() {
 
 check_agent_running() {
     if [[ -S "$PRIMARY_SOCKET" ]]; then
-        ok "LOTA agent socket: $PRIMARY_SOCKET"
-        return 0
+        # a socket this user cannot open is not a working one,
+        # and it looks identical to a working one from the outside
+        if [[ -r "$PRIMARY_SOCKET" && -w "$PRIMARY_SOCKET" ]]; then
+            ok "LOTA agent socket: $PRIMARY_SOCKET"
+            return 0
+        fi
+
+        warn "LOTA agent socket exists but this account cannot open it: $PRIMARY_SOCKET"
+        echo "  It is handed to the '$LOTA_GROUP' group:"
+        ls -l "$PRIMARY_SOCKET" 2>/dev/null | sed 's/^/    /'
+        echo "  Check that this user is in the '$LOTA_GROUP' group."
+        return 1
     fi
 
     warn "LOTA agent socket not found at $PRIMARY_SOCKET"
@@ -233,6 +245,17 @@ check_container_socket() {
     fi
 
     container_socket="${XDG_RUNTIME_DIR}/lota/${SOCKET_NAME}"
+
+    # the directory is the group's too: an outsider cannot see the socket,
+    # which is not it missing, and no register + reboot changes that
+    if [[ -d "${container_socket%/*}" && ! -x "${container_socket%/*}" ]]; then
+        warn "Cannot look inside ${container_socket%/*}, so the container socket cannot be checked"
+        echo "  It is handed to the '$LOTA_GROUP' group:"
+        ls -ld "${container_socket%/*}" 2>/dev/null | sed 's/^/    /'
+        echo "  Check that this user is in the '$LOTA_GROUP' group, then log"
+        echo "  out and back in."
+        return 1
+    fi
 
     if [[ -S "$container_socket" ]]; then
         # a socket this user cannot open is not a working one,
