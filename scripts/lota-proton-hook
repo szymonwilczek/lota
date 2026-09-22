@@ -24,6 +24,8 @@
 #                        and execs the command with LD_PRELOAD untouched
 #   LOTA_HOOK_ACTIVATE_PATH  Exe prefixes to hook; kept when set, else
 #                        the directories Steam names for the launch
+#   LOTA_HOOK_ACTIVATE_PROGRAM  Title dir as Wine sees it; kept when set,
+#                        else the one Steam installed the title in
 #   LOTA_HOOK_LOG_LEVEL  debug | info | warn | error | silent
 #   LOTA_HOOK_TOKEN_DIR  Custom output directory for status files
 #   LOTA_HOOK_REFRESH_SEC  Token refresh interval (default: 60)
@@ -124,6 +126,19 @@ if [[ -z "${LOTA_HOOK_ACTIVATE_PATH:-}" &&
     done
 
     export LOTA_HOOK_ACTIVATE_PATH="$lota_hook_pin"
+fi
+
+# Every process of a Proton prefix is the pinned Wine loader; the title is
+# told apart by its Windows program. A Steam library is a drive of its own,
+# so the path starts at the library root; outside one it is the host path.
+# A set value wins.
+if [[ -z "${LOTA_HOOK_ACTIVATE_PROGRAM:-}" &&
+	  -n "${STEAM_COMPAT_INSTALL_PATH:-}" ]]; then
+    lota_hook_title="${STEAM_COMPAT_INSTALL_PATH%/}/"
+    if [[ "$lota_hook_title" == */steamapps/common/* ]]; then
+        lota_hook_title="steamapps/common/${lota_hook_title##*/steamapps/common/}"
+    fi
+    export LOTA_HOOK_ACTIVATE_PROGRAM="$lota_hook_title"
 fi
 
 # pressure-vessel binds only paths in PRESSURE_VESSEL_FILESYSTEMS_RW.
