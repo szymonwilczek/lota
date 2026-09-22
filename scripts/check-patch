@@ -821,6 +821,42 @@ check_el9_decls() {
     fi
 }
 
+# Player build:
+# the player page's build commands must install in a clean Fedora.
+# Spawns a container, so it runs only when the patch touches the page
+# or the build and podman is there.
+check_player_build() {
+    local path
+    local touches=0
+
+    for path in "$@"; do
+        case "$path" in
+            Documentation/player/* | Makefile | scripts/check-player-build.sh)
+                touches=1
+                break
+                ;;
+        esac
+    done
+
+    if ((touches == 0)); then
+        pass "player-build"
+        return
+    fi
+
+    if ! command -v podman >/dev/null 2>&1; then
+        skip "player-build" \
+             "install podman to run the player page's build in a clean Fedora."
+        return
+    fi
+
+    if scripts/check-player-build.sh; then
+        pass "player-build"
+    else
+        fail "player-build" \
+             "name the package the failing step needs on the player page."
+    fi
+}
+
 # Stack frames:
 # no function in a shipped binary may hold more than the ceiling in an automatic.
 # Only runs when the patch touches C.
@@ -1296,6 +1332,7 @@ main() {
     check_unit_tests
     check_includes "${changed_files[@]}"
     check_el9_decls "${changed_files[@]}"
+    check_player_build "${changed_files[@]}"
     check_license_boundary
     check_test_build_dir
     check_doc_diagnostics
