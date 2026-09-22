@@ -51,6 +51,7 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
+#include "watchdog_pace.h"
 #include "iommu_types.h"
 
 /*
@@ -1746,6 +1747,21 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		sdnotify_status("Attestation incomplete");
 }
 
+/*
+ * Ping the watchdog if one is owed. Called on every pass through both loops:
+ * the sleep has five ways out, not only its expiry.
+ */
+static void watchdog_keepalive(struct watchdog_pace *pace)
+{
+	uint64_t now = monotonic_ms();
+
+	if (!watchdog_pace_due(pace, now))
+		return;
+
+	sdnotify_watchdog_ping();
+	watchdog_pace_mark(pace, now);
+}
+
 /* Who this host reports to, said once at startup and again after a reload,
  * because a list that changed under the operator is a list worth restating */
 static void announce_targets(const struct attest_target *targets, size_t count)
@@ -1819,8 +1835,8 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	struct attest_peer peer;
 	size_t target_count = 0;
 	uint32_t status_flags = 0;
+	struct watchdog_pace pace;
 	uint64_t wd_usec = 0;
-	bool wd_enabled;
 	int key_present;
 	int ret;
 
@@ -1858,7 +1874,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		return 1;
 	}
 
-	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
+	/* 0 when systemd is not watching */
+	if (!sdnotify_watchdog_enabled(&wd_usec))
+		wd_usec = 0;
+	watchdog_pace_init(&pace, wd_usec / 1000, monotonic_ms());
 
 	/*
 	 * No IPC server here.
@@ -1976,6 +1995,9 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		uint64_t now_ms = monotonic_ms();
 		uint64_t wake_ms = 0;
 
+		/* before the round: nothing pings inside it */
+		watchdog_keepalive(&pace);
+
 		/*
 		 * A publisher registered while this host runs -- which is what
 		 * a game's installer does -- is reported to from here on,
@@ -2066,9 +2088,12 @@ static int continuous_attest_run(const struct lota_config *cfg,
 						      0));
 
 		while (g_agent.running) {
-			uint64_t current_ms = monotonic_ms();
+			uint64_t current_ms;
 			bool asked = false;
 			int timeout_ms;
+
+			watchdog_keepalive(&pace);
+			current_ms = monotonic_ms();
 
 			if (current_ms >= wake_ms)
 				break;
@@ -2097,14 +2122,8 @@ static int continuous_attest_run(const struct lota_config *cfg,
 			if (asked)
 				break;
 
-			timeout_ms = (int)(wake_ms - current_ms);
-
-			if (wd_enabled && wd_usec > 0) {
-				int wd_timeout_ms = (int)(wd_usec / 2000);
-
-				if (timeout_ms > wd_timeout_ms)
-					timeout_ms = wd_timeout_ms;
-			}
+			timeout_ms = (int)watchdog_pace_sleep_ms(
+				&pace, current_ms, wake_ms - current_ms);
 
 			/*
 			 * Sleep on the socket owner's connection so a session
@@ -2137,8 +2156,6 @@ static int continuous_attest_run(const struct lota_config *cfg,
 					nanosleep(&req, NULL);
 				}
 			}
-			if (wd_enabled)
-				sdnotify_watchdog_ping();
 		}
 	}
 

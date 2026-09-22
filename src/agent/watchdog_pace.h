@@ -45,10 +45,12 @@ static inline bool watchdog_pace_due(const struct watchdog_pace *pace,
 {
 	if (!watchdog_pace_armed(pace))
 		return false;
-	if (now_ms < pace->last_ping_ms)
-		return false;
 
-	return now_ms - pace->last_ping_ms >= pace->deadline_ms;
+	/* clock went backwards: the deadline still runs, so ping */
+	if (now_ms < pace->last_ping_ms)
+		return true;
+
+	return now_ms - pace->last_ping_ms >= pace->deadline_ms / 2;
 }
 
 /* wanted_ms, cut short to when the next ping is owed */
@@ -56,10 +58,18 @@ static inline uint64_t watchdog_pace_sleep_ms(const struct watchdog_pace *pace,
 					      uint64_t now_ms,
 					      uint64_t wanted_ms)
 {
-	(void)pace;
-	(void)now_ms;
+	uint64_t target;
+	uint64_t left;
 
-	return wanted_ms;
+	if (!watchdog_pace_armed(pace))
+		return wanted_ms;
+	if (watchdog_pace_due(pace, now_ms))
+		return 0;
+
+	target = pace->last_ping_ms + pace->deadline_ms / 2;
+	left = target - now_ms;
+
+	return left < wanted_ms ? left : wanted_ms;
 }
 
 #endif /* LOTA_WATCHDOG_PACE_H */
