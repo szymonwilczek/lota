@@ -18,6 +18,8 @@
 #
 # Environment:
 #   LOTA_HOOK_LIB_PATH   Override path to liblota_wine_hook.so
+#   LOTA_HOOK_LIB_ROOTS  Colon-separated prefixes holding lib64/ and lib/
+#                        (default /usr:/usr/local)
 #   LOTA_HOOK_DISABLE    Set to 1 (or true) to disable: the wrapper warns
 #                        and execs the command with LD_PRELOAD untouched
 #   LOTA_HOOK_LOG_LEVEL  debug | info | warn | error | silent
@@ -39,21 +41,59 @@ esac
 
 LOTA_HOOK_LIB="${LOTA_HOOK_LIB_PATH:-}"
 
-# also the soname: the bare .so is a -devel symlink
-if [[ -z "$LOTA_HOOK_LIB" ]]; then
-    for dir in /usr/lib64 /usr/lib /usr/local/lib64 /usr/local/lib; do
-        for candidate in \
-            "$dir/liblota_wine_hook.so" \
-                "$dir"/liblota_wine_hook.so.[0-9]*; do
-            if [[ -f "$candidate" ]]; then
-                LOTA_HOOK_LIB="$candidate"
-                break 2
-            fi
+# packaged and source-install prefixes; tests override them
+IFS=: read -r -a lota_hook_roots <<<"${LOTA_HOOK_LIB_ROOTS:-/usr:/usr/local}"
+
+# the soname too: the bare .so is a -devel symlink;
+# an unmatched glob fails the caller's -f
+hook_candidates() {
+    lota_hook_cands=(
+        "$1/liblota_wine_hook.so"
+        "$1"/liblota_wine_hook.so.[0-9]*
+    )
+}
+
+# <root>/$LIB/<name> when lib64/ and lib/ carry one name; else hook_single()
+hook_pair() {
+    local root candidate name
+
+    for root in "${lota_hook_roots[@]}"; do
+        hook_candidates "$root/lib64"
+        for candidate in "${lota_hook_cands[@]}"; do
+            [[ -f "$candidate" ]] || continue
+            name=${candidate##*/}
+            [[ -f "$root/lib/$name" ]] || continue
+            printf '%s/$LIB/%s\n' "$root" "$name"
+            return 0
         done
     done
+    return 1
+}
+
+hook_single() {
+    local root dir candidate
+
+    for root in "${lota_hook_roots[@]}"; do
+        for dir in "$root/lib64" "$root/lib"; do
+            hook_candidates "$dir"
+            for candidate in "${lota_hook_cands[@]}"; do
+                if [[ -f "$candidate" ]]; then
+                    printf '%s\n' "$candidate"
+                    return 0
+                fi
+            done
+        done
+    done
+    return 1
+}
+
+if [[ -z "$LOTA_HOOK_LIB" ]]; then
+    LOTA_HOOK_LIB=$(hook_pair || hook_single || true)
 fi
 
-if [[ -z "$LOTA_HOOK_LIB" || ! -f "$LOTA_HOOK_LIB" ]]; then
+# a $LIB path cannot be stat'ed; hook_pair() checked both halves
+if [[ -z "$LOTA_HOOK_LIB" ||
+	  ( "$LOTA_HOOK_LIB" != *'$LIB'* && ! -f "$LOTA_HOOK_LIB" ) ]]; then
     echo "lota-proton-hook: hook library not found" >&2
     echo "lota-proton-hook: continuing without LOTA integration" >&2
     exec "$@"
