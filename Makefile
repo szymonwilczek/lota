@@ -268,7 +268,7 @@ WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
 
 # The hook's 32-bit half, x86_64 only: Steam's launch chain mixes word sizes
 # and lota-proton-hook names the hook through ld.so's $$LIB token.
-# auto builds it when -m32 links; install requires it.
+# auto builds it when -m32 links, libatomic included; install requires it.
 LOTA_HOOK32 ?= auto
 ifeq ($(ARCH),x86_64)
 ifeq ($(LOTA_HOOK32),auto)
@@ -279,9 +279,10 @@ else
 LOTA_HOOK32 := 0
 endif
 
-# names the package, rather than a crt1.o link error
+# names the packages, rather than a crt1.o or libatomic link error
 HOOK32_MISSING := the 32-bit half of the Wine hook needs a multilib toolchain \
-(glibc-devel.i686 on Fedora/RHEL, gcc-multilib on Debian/Ubuntu)
+(glibc-devel.i686 and libatomic.i686 on Fedora/RHEL, gcc-multilib on \
+Debian/Ubuntu)
 
 ifeq ($(LOTA_HOOK32),1)
 WINE_HOOK_LIB32 := $(BUILD_DIR)/lib32/liblota_wine_hook.so

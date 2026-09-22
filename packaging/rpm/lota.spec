@@ -47,9 +47,10 @@ BuildRequires:  systemd-rpm-macros
 BuildRequires:  dbus-devel
 BuildRequires:  elfutils-libelf-devel
 BuildRequires:  selinux-policy-devel
-# the Wine hook's 32-bit half, which Steam's 32-bit launch processes load
+# the Wine hook's 32-bit half; gcc links libatomic by default
 %ifarch x86_64
 BuildRequires:  glibc-devel(x86-32)
+BuildRequires:  libatomic(x86-32)
 %endif
 
 %description
