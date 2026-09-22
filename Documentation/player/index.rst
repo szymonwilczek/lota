@@ -182,7 +182,9 @@ It prints every step and what it found::
     [lota-install] stage 13/13: Self-check & summary
     [lota-install]   already satisfied: Self-check & summary - Ready: floor
         satisfied, agent binary immutable, service running, and no publisher
-        named yet - the certificate arrives when a title first asks.
+        named yet - the certificate arrives when a title first asks. The
+        attestation round-trip runs during an install; this report performs
+        nothing.
 
     0 of 13 stages need work.
 
