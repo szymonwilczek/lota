@@ -110,10 +110,15 @@ laptop::
     sudo dnf install git make gcc clang llvm golang bpftool \
         libbpf-devel openssl-devel tpm2-tss-devel libseccomp-devel \
         systemd-devel dbus-devel elfutils-libelf-devel \
-        selinux-policy-devel
+        selinux-policy-devel glibc-devel.i686
     git clone https://github.com/szymonwilczek/lota
     cd lota
     make all
+
+``glibc-devel.i686`` builds a second, 32-bit copy of the LOTA library for the
+parts of Steam that start a game. Without it the build still works, but the
+install stops and says so: a game started without that copy leaves an error
+in the Steam log on every launch.
 
 LOTA ships a kernel component that it refuses to load unless somebody signed
 it, and building it yourself makes you that somebody. Generate a key, sign

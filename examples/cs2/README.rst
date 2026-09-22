@@ -37,8 +37,11 @@ Prerequisites
       ls -l /run/lota/lota.sock
 
 2. **Built and installed artefacts.** ``sudo make install`` deploys the hook
-   library to ``/usr/lib64/liblota_wine_hook.so`` and the wrapper scripts to
-   ``/usr/bin/lota-{proton-hook,steam-setup}``.
+   library to ``/usr/lib64/liblota_wine_hook.so`` and, on x86_64, its 32-bit
+   half to ``/usr/lib/liblota_wine_hook.so.*``, which Steam's 32-bit launch
+   processes load; the wrapper scripts go to
+   ``/usr/bin/lota-{proton-hook,steam-setup}``. The 32-bit half needs
+   ``glibc-devel.i686``; ``make install`` refuses without it.
 
 3. **Steam Runtime is the host's Steam**, not a Flatpak/Snap copy. The Flatpak
    Steam sandbox blocks ``LD_PRELOAD`` paths outside the container, so the hook

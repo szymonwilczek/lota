@@ -45,6 +45,7 @@ jobs:
             libbpf-devel elfutils-libelf-devel zlib-devel \
             tpm2-tss-devel openssl-devel systemd-devel libseccomp-devel \
             dbus-devel golang selinux-policy-devel \
+            glibc-devel.i686 libatomic.i686 \
             rpm-build rpmlint createrepo_c
 
       - name: Checkout

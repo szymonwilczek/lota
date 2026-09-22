@@ -266,6 +266,29 @@ WINE_HOOK_SRCS := $(SDK_DIR)/lota_wine_hook.c
 WINE_HOOK_OBJS := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook/%.o,\
 	$(WINE_HOOK_SRCS) $(SDK_SRCS))
 
+# The hook's 32-bit half, x86_64 only: Steam's launch chain mixes word sizes
+# and lota-proton-hook names the hook through ld.so's $$LIB token.
+# auto builds it when -m32 links; install requires it.
+LOTA_HOOK32 ?= auto
+ifeq ($(ARCH),x86_64)
+ifeq ($(LOTA_HOOK32),auto)
+LOTA_HOOK32 := $(shell echo 'int main(void){return 0;}' | \
+	$(CC) -m32 -x c -o /dev/null - >/dev/null 2>&1 && echo 1 || echo 0)
+endif
+else
+LOTA_HOOK32 := 0
+endif
+
+# names the package, rather than a crt1.o link error
+HOOK32_MISSING := the 32-bit half of the Wine hook needs a multilib toolchain \
+(glibc-devel.i686 on Fedora/RHEL, gcc-multilib on Debian/Ubuntu)
+
+ifeq ($(LOTA_HOOK32),1)
+WINE_HOOK_LIB32 := $(BUILD_DIR)/lib32/liblota_wine_hook.so
+WINE_HOOK_OBJS32 := $(patsubst $(SDK_DIR)/%.c,$(BUILD_DIR)/hook32/%.o,\
+	$(WINE_HOOK_SRCS) $(SDK_SRCS))
+endif
+
 # Anti-cheat compatibility layer
 ANTICHEAT_LIB := $(BUILD_DIR)/liblota_anticheat.so
 ANTICHEAT_SRCS := $(SDK_DIR)/lota_anticheat.c
@@ -287,7 +310,12 @@ PKGCONFIG_FILES := $(patsubst packaging/pkgconfig/%.pc.in,$(PKGCONFIG_DIR)/%.pc,
 
 # Default target
 .PHONY: all
-all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
+all: $(AGENT_BIN) $(INITRAMFS_LOCK_BIN) $(INSTALLER_BIN) $(BPF_OBJ) $(VERIFIER_BIN) $(ATTESTCA_BIN) $(SDK_LIB) $(SERVER_SDK_LIB) $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32) $(ANTICHEAT_LIB) $(PKGCONFIG_FILES)
+ifeq ($(ARCH),x86_64)
+ifneq ($(LOTA_HOOK32),1)
+	@echo "note: $(HOOK32_MISSING); this tree cannot be installed as it is"
+endif
+endif
 
 # build directories
 $(BUILD_DIR):
@@ -355,6 +383,13 @@ $(BUILD_DIR)/hook/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(DEPFLAGS) -fPIC -fvisibility=hidden -c -o $@ $<
 
+# the hook links only libc, so -m32 is the whole difference
+$(BUILD_DIR)/hook32/%.o: $(SDK_DIR)/%.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) -m32 $(CFLAGS) $(DEPFLAGS) -fPIC -fvisibility=hidden \
+		-c -o $@ $<
+
 # build identity (both SDKs report it; see lota_sdk_version)
 $(BUILD_DIR)/agent/dbus.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/agent/dbus.o: $(VERSION_FILE)
@@ -364,6 +399,8 @@ $(BUILD_DIR)/sdk/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/sdk/lota_gaming.o: $(VERSION_FILE)
 $(BUILD_DIR)/hook/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
 $(BUILD_DIR)/hook/lota_gaming.o: $(VERSION_FILE)
+$(BUILD_DIR)/hook32/lota_gaming.o: CFLAGS += $(SDK_VERSION_CFLAGS)
+$(BUILD_DIR)/hook32/lota_gaming.o: $(VERSION_FILE)
 
 # build SDK shared library (versioned: real file + soname/linker symlinks)
 $(SDK_LIB): $(SDK_OBJS) $(call SDK_VERSION_SCRIPT,$(SDK_LIB)) Makefile | $(BUILD_DIR)
@@ -444,6 +481,17 @@ $(WINE_HOOK_LIB): $(WINE_HOOK_OBJS) Makefile | $(BUILD_DIR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
 	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
 
+# same soname: $$LIB picks the directory, not the name
+$(WINE_HOOK_LIB32): $(WINE_HOOK_OBJS32) Makefile | $(BUILD_DIR)
+	$(QUIET_LD)
+	$(Q)mkdir -p $(dir $@)
+	$(Q)rm -f $@ $@.*
+	$(Q)$(CC) -m32 -shared -Wl,-soname,$(notdir $@).$(LOTA_ABI_MAJOR) \
+		$(HARDENING_LDFLAGS) -o $@.$(LOTA_ABI_VERSION) \
+		$(WINE_HOOK_OBJS32) -lpthread
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@.$(LOTA_ABI_MAJOR)
+	$(Q)ln -sf $(notdir $@).$(LOTA_ABI_VERSION) $@
+
 # build anti-cheat compatibility layer (includes gaming + server SDK; versioned)
 $(ANTICHEAT_LIB): $(ANTICHEAT_OBJS) $(SDK_OBJS) $(SERVER_SDK_OBJS) \
 		$(call SDK_VERSION_SCRIPT,$(ANTICHEAT_LIB)) Makefile | $(BUILD_DIR)
@@ -497,7 +545,7 @@ sdk: $(SDK_LIB) $(SDK_STATIC)
 
 server-sdk: $(SERVER_SDK_LIB) $(SERVER_SDK_STATIC)
 
-wine-hook: $(WINE_HOOK_LIB)
+wine-hook: $(WINE_HOOK_LIB) $(WINE_HOOK_LIB32)
 
 anticheat: $(ANTICHEAT_LIB)
 
@@ -1243,10 +1291,20 @@ coccicheck:
 	fi; \
 	echo "coccicheck: clean"
 
+# x86_64 installs need the 32-bit Wine hook, or Steam logs a loader error
+.PHONY: check-hook32
+check-hook32:
+ifeq ($(ARCH),x86_64)
+ifneq ($(LOTA_HOOK32),1)
+	@echo "$@: $(HOOK32_MISSING)" >&2
+	@false
+endif
+endif
+
 # Install to system (requires root)
 # selinux-pp is required, not guarded: without the module lota-install's
 # SELinux stage has nothing to load.
-install: check-version-tag all selinux-pp
+install: check-version-tag check-hook32 all selinux-pp
 	install -d $(DESTDIR)/usr/bin
 	install -d $(DESTDIR)/usr/lib/lota
 	install -d $(DESTDIR)/usr/lib/dracut/modules.d/90lota
@@ -1285,6 +1343,14 @@ install: check-version-tag all selinux-pp
 			$(DESTDIR)/usr/lib64/$$l.so.$(LOTA_ABI_MAJOR); \
 		ln -sf $$l.so.$(LOTA_ABI_VERSION) $(DESTDIR)/usr/lib64/$$l.so; \
 	done
+ifeq ($(LOTA_HOOK32),1)
+	@# no linker symlink: the loader opens it by soname, nothing links it
+	install -d $(DESTDIR)/usr/lib
+	install -m 755 $(BUILD_DIR)/lib32/liblota_wine_hook.so.$(LOTA_ABI_VERSION) \
+		$(DESTDIR)/usr/lib/
+	ln -sf liblota_wine_hook.so.$(LOTA_ABI_VERSION) \
+		$(DESTDIR)/usr/lib/liblota_wine_hook.so.$(LOTA_ABI_MAJOR)
+endif
 	install -m 755 scripts/lota-proton-hook $(DESTDIR)/usr/bin/
 	install -m 755 scripts/lota-steam-setup $(DESTDIR)/usr/bin/
 	install -d $(DESTDIR)/usr/share/lota/ima
