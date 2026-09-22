@@ -22,6 +22,8 @@
 #                        (default /usr:/usr/local)
 #   LOTA_HOOK_DISABLE    Set to 1 (or true) to disable: the wrapper warns
 #                        and execs the command with LD_PRELOAD untouched
+#   LOTA_HOOK_ACTIVATE_PATH  Exe prefixes to hook; kept when set, else
+#                        the directories Steam names for the launch
 #   LOTA_HOOK_LOG_LEVEL  debug | info | warn | error | silent
 #   LOTA_HOOK_TOKEN_DIR  Custom output directory for status files
 #   LOTA_HOOK_REFRESH_SEC  Token refresh interval (default: 60)
@@ -103,6 +105,25 @@ if [[ -n "${LD_PRELOAD:-}" ]]; then
     export LD_PRELOAD="${LOTA_HOOK_LIB}:${LD_PRELOAD}"
 else
     export LD_PRELOAD="${LOTA_HOOK_LIB}"
+fi
+
+# LD_PRELOAD also reaches Steam's helpers, outside the FHS skip list;
+# the reaper outlives the title and would keep the 32-bit libc write-pinned.
+# Pin the hook to the title and its compatibility tools, as Steam names them.
+# A preset pin wins; no install path, no pin.
+if [[ -z "${LOTA_HOOK_ACTIVATE_PATH:-}" &&
+	  -n "${STEAM_COMPAT_INSTALL_PATH:-}" ]]; then
+    # trailing slash: a prefix must not match a sibling directory
+    lota_hook_pin="${STEAM_COMPAT_INSTALL_PATH%/}/"
+
+    # colon list in, comma list out; an empty element matches everything
+    IFS=: read -r -a lota_hook_tools <<<"${STEAM_COMPAT_TOOL_PATHS:-}"
+    for lota_hook_tool in "${lota_hook_tools[@]}"; do
+        [[ -n "$lota_hook_tool" ]] || continue
+        lota_hook_pin="${lota_hook_pin},${lota_hook_tool%/}/"
+    done
+
+    export LOTA_HOOK_ACTIVATE_PATH="$lota_hook_pin"
 fi
 
 # pressure-vessel binds only paths in PRESSURE_VESSEL_FILESYSTEMS_RW.

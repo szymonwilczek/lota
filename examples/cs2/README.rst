@@ -327,15 +327,24 @@ reads the marker and treats the session as OFFLINE rather than UNTRUSTED: those
 two states have distinct meanings ("hook lost the agent" vs "agent says no")
 and the marker is what lets a downstream verifier act on them separately.
 
-The ``lota-proton-hook`` wrapper attaches the hook only to processes whose
-executable lives outside the FHS system paths (``/usr/``, ``/bin``, ``/sbin``,
-``/lib``, ``/lib64``). Steam-tree binaries (the ``reaper``, ``cs2``, Proton
-helpers) activate the hook; the launcher shell, ``basename``, ``dirname``,
-``ldconfig``, and the rest of the POSIX utility chain that Steam Runtime calls
-out to do not. The filter is overridable through
-``LOTA_HOOK_ACTIVATE_PATH=<prefix-list>`` (positive pin) or
-``LOTA_HOOK_SKIP_PATH=<prefix-list>`` (extend the skip set for distros that
-keep utilities outside FHS, e.g. ``/nix/store/``).
+The hook attaches only to processes whose executable lives outside the FHS
+system paths (``/usr/``, ``/bin``, ``/sbin``, ``/lib``, ``/lib64``), which
+keeps it out of the launcher shell and the POSIX utilities Steam Runtime
+calls out to.
+
+Steam's client helpers live outside those paths too, so ``lota-proton-hook``
+pins the hook (``LOTA_HOOK_ACTIVATE_PATH``) to the directories Steam names
+for the launch: the title's install directory (``STEAM_COMPAT_INSTALL_PATH``)
+and its compatibility tools (``STEAM_COMPAT_TOOL_PATHS``: Proton, the
+container runtime). ``cs2`` and Proton run from them; ``reaper`` and the
+launch wrapper do not. A hooked process write-pins every library it maps,
+and ``reaper`` outlives the title, so hooking it would leave the C library
+unwritable after the game exits.
+
+A ``LOTA_HOOK_ACTIVATE_PATH=<prefix-list>`` set before the wrapper runs is
+kept. Without a pin, as outside Steam, the FHS rule applies, and
+``LOTA_HOOK_SKIP_PATH=<prefix-list>`` extends it for distros that keep
+utilities outside FHS, e.g. ``/nix/store/``.
 
 Which publisher the title attests for
 -------------------------------------
@@ -394,7 +403,9 @@ The hook honours a small set of environment variables, all documented in
 +-----------------------------+-----------------------------------------------+
 | ``LOTA_HOOK_SOCKET``        | override the agent socket path                |
 +-----------------------------+-----------------------------------------------+
-| ``LOTA_HOOK_ACTIVATE_PATH`` | positive ``/proc/self/exe`` prefix pin        |
+| ``LOTA_HOOK_ACTIVATE_PATH`` | positive ``/proc/self/exe`` prefix pin; the   |
+|                             | wrapper writes one from the launch when a     |
+|                             | player has not                                |
 +-----------------------------+-----------------------------------------------+
 | ``LOTA_HOOK_SKIP_PATH``     | extend the FHS system-path skip list          |
 +-----------------------------+-----------------------------------------------+

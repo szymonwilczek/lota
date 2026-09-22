@@ -29,7 +29,10 @@ extern "C" {
 /* set to "1" or "true" to disable the hook entirely. */
 #define LOTA_HOOK_ENV_DISABLE "LOTA_HOOK_DISABLE"
 
-/* comma-separated exe prefixes to hook; only these, the skip list unused */
+/*
+ * comma-separated exe prefixes to hook instead of the skip lists;
+ * lota-proton-hook sets it from the Steam launch unless already set
+ */
 #define LOTA_HOOK_ENV_ACTIVATE_PATH "LOTA_HOOK_ACTIVATE_PATH"
 
 /* comma-separated exe prefixes to skip, on top of the system paths */
