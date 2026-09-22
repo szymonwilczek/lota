@@ -76,18 +76,27 @@ struct lota_rt_open_identity {
 	uint64_t size; /* with mtime, tells a replaced file from a cached one */
 	int64_t mtime_sec;
 	int64_t mtime_nsec;
+	/* 0 once nothing links it anywhere */
+	unsigned long nlink;
 };
 
 /*
  * How an object's digest may be produced. fs-verity wins wherever present;
- * a content hash is sound only for the process's own executable, which
- * cannot be written while it runs.
+ * a content hash is sound only for what cannot be written: the running
+ * executable or a write-guarded library.
  */
 enum lota_rt_identity_road {
 	LOTA_RT_ROAD_NONE = 0, /* no digest may be produced for this object */
 	LOTA_RT_ROAD_VERITY, /* the kernel holds an fs-verity digest */
 	LOTA_RT_ROAD_CONTENT_HASH, /* the kernel hashes the content on demand */
 };
+
+/*
+ * Whether an object is memory with no file behind it: an unlinked tmpfs or
+ * hugetlbfs object, such as a memfd. No road may answer for it;
+ * it is a coverage gap. An unlinked file on disk is still a file.
+ */
+int lota_rt_object_has_no_file(unsigned long fs_magic, unsigned long nlink);
 
 /*
  * Which road may measure one object of a live process. role is an enum
@@ -197,6 +206,7 @@ struct lota_runtime_measure_failure {
 	int role;
 	int err;
 	int road_err; /* content road's refusal, 0 if that road was closed */
+	int no_file; /* memory with no file behind it */
 };
 
 #define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
