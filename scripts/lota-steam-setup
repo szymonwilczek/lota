@@ -23,7 +23,8 @@ set -euo pipefail
 
 LOTA_GROUP="lota"
 SOCKET_NAME="lota.sock"
-PRIMARY_SOCKET="/run/lota/${SOCKET_NAME}"
+# LOTA_AGENT_SOCKET: for a host that keeps the socket elsewhere, and tests
+PRIMARY_SOCKET="${LOTA_AGENT_SOCKET:-/run/lota/${SOCKET_NAME}}"
 HOOK_LIB="liblota_wine_hook.so"
 # Mirrors LOTA_HOOK_TOKEN_DIR_NAME in include/lota_wine_hook.h
 HOOK_TOKEN_DIR_NAME="lota-hook"
