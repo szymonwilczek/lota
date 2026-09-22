@@ -1143,10 +1143,10 @@ static void refresh_once(void)
 	}
 }
 
-/* lota_poll_events() refused, rather than timed out */
+/* lota_poll_events() returns a count of events, or a negative refusal */
 static bool hook_poll_failed(int ret)
 {
-	return ret != LOTA_OK && ret != LOTA_ERR_TIMEOUT;
+	return ret < 0;
 }
 
 /* load-time only; the tests drive the connect and refresh path above */
