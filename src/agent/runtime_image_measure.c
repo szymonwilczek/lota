@@ -570,8 +570,11 @@ static int rt_fs_may_be_content_hashed(unsigned long fs_magic)
 }
 
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
-						 unsigned long fs_magic)
+						 unsigned long fs_magic,
+						 int write_guarded)
 {
+	(void)write_guarded;
+
 	/* a kernel-enforced digest wins, whatever the role */
 	if (verity_present)
 		return LOTA_RT_ROAD_VERITY;
@@ -670,7 +673,7 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	if (!rt_err_is_unmeasurable(ret))
 		return ret;
 
-	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic);
+	road = lota_rt_identity_road(m->role, 0, m->opened.fs_magic, 0);
 	if (road != LOTA_RT_ROAD_CONTENT_HASH)
 		return ret;
 

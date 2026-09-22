@@ -90,12 +90,13 @@ enum lota_rt_identity_road {
 };
 
 /*
- * Which road may measure one object of a live process.
- * role is an enum lota_rt_object_role; fs_magic is matched against an allowlist,
- * so an unlisted filesystem gets no content hash.
+ * Which road may measure one object of a live process. role is an enum
+ * lota_rt_object_role; a filesystem off the fs_magic allowlist gets no
+ * content hash; write_guarded: write opens are refused while it is mapped.
  */
 enum lota_rt_identity_road lota_rt_identity_road(int role, int verity_present,
-						 unsigned long fs_magic);
+						 unsigned long fs_magic,
+						 int write_guarded);
 
 /*
  * Kernel hash of the content behind one mapping: path is its /proc magic
