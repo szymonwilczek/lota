@@ -26,7 +26,8 @@ GATE=scripts/check-package-manifests.sh
 AGENT_YAML=packaging/nfpm/lota-agent.yaml
 DEVEL_YAML=packaging/nfpm/lota-sdk-devel.yaml
 
-for f in "$GATE" "$AGENT_YAML" "$DEVEL_YAML" Makefile VERSION; do
+for f in "$GATE" "$AGENT_YAML" "$DEVEL_YAML" Makefile VERSION \
+    Documentation/conf.py; do
     if [[ ! -e "$REPO_DIR/$f" ]]; then
 	echo "[package-manifest-lists] missing file: $f" >&2
 	exit 2
@@ -52,8 +53,9 @@ check() {
 # Fresh copy of everything the gate reads; cases share nothing
 fixture() {
     rm -rf "$WORK_DIR/tree"
-    mkdir -p "$WORK_DIR/tree/scripts"
+    mkdir -p "$WORK_DIR/tree/scripts" "$WORK_DIR/tree/Documentation"
     cp -a "$REPO_DIR/packaging" "$WORK_DIR/tree/packaging"
+    cp -a "$REPO_DIR/Documentation/conf.py" "$WORK_DIR/tree/Documentation/"
     cp -a "$REPO_DIR/Makefile" "$REPO_DIR/VERSION" "$WORK_DIR/tree/"
     cp -a "$REPO_DIR/$GATE" "$WORK_DIR/tree/$GATE"
 }
