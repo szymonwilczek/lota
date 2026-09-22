@@ -310,6 +310,11 @@ Worth being precise about, because it decides what you can build on it:
   guarantees either way is that the producer's own executable was measured,
   and that nothing unmeasured was folded in as if it had been.
 
+* Which road measured that executable. Without fs-verity, as for a store
+  install, the kernel hashes its content while it runs and cannot be
+  written, and the token carries ``LOTA_FLAG_IMAGE_CONTENT_HASHED``.
+  Refusing that flag demands fs-verity, at the cost of every such install.
+
 * Whether a protected process was ended on that host since it booted. A
   protected process takes no signal except through the agent, and the agent
   relays a termination only for the process's owner or root -- so a player can

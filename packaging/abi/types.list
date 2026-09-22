@@ -91,6 +91,7 @@ macro LOTA_FLAG_TOKEN_ONLY                     = 256
 macro LOTA_FLAG_IMAGE_FULLY_MEASURED           = 512
 macro LOTA_FLAG_PROTECTED_TERMINATED           = 1024
 macro LOTA_FLAG_KERNEL_APPRAISAL               = 2048
+macro LOTA_FLAG_IMAGE_CONTENT_HASHED           = 4096
 macro LOTA_EVENT_STATUS                        = 1
 macro LOTA_EVENT_ATTEST                        = 2
 macro LOTA_EVENT_MODE                          = 4

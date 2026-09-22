@@ -453,19 +453,21 @@ decides how much of a process's code the measurement can account for.
    * - A title's own binaries
      - Full, on any verity-capable filesystem. Whoever ships the title
        enables it, with ``lota-install --verity-manifest`` or the
-       equivalent in their own packaging. The agent refuses a token when
-       **the requesting process's own** executable carries no digest, and
-       says so with ``LOTA_ERR_UNMEASURABLE_SELF``. Another protected
-       process being unmeasurable never refuses this caller: any local
-       program may ask to be protected, so one program's packaging would
-       otherwise stop token issuance for every title on the machine. It is
-       reported through the coverage flag instead.
+       equivalent in their own packaging. A store install nothing measured
+       takes the second road: the kernel hashes that executable's content
+       and the token sets ``LOTA_FLAG_IMAGE_CONTENT_HASHED``. With no digest
+       and a filesystem the host does not serve itself (FUSE, a network
+       mount), the agent refuses the token with
+       ``LOTA_ERR_UNMEASURABLE_SELF``. Another protected process being
+       unmeasurable never refuses this caller, since any local program may
+       ask for protection; it clears the coverage flag instead.
    * - Distribution libraries on a package-managed host
      - **None, today.** Fedora ships ``libc``, ``libcurl`` and the rest
        without fs-verity, so those objects are absent from the fold and the
        token reports partial coverage
-       (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear). Enabling verity on them
-       by hand lasts until the next update of the owning package, which
+       (``LOTA_FLAG_IMAGE_FULLY_MEASURED`` clear). They are never
+       content-hashed, as a mapped library stays writable. Enabling verity
+       on them by hand lasts until the next update of the owning package, which
        replaces the inode and the digest with it. Whether partial coverage
        is acceptable is the relying party's policy.
    * - Image-based and composed filesystems
@@ -478,7 +480,9 @@ decides how much of a process's code the measurement can account for.
 
 A relying party that requires full coverage asks for
 ``LOTA_FLAG_IMAGE_FULLY_MEASURED`` and, on a package-managed host, will not
-get it. That is a statement about the platform, not about the machine
+get it. One that requires fs-verity for the title's own executable refuses
+``LOTA_FLAG_IMAGE_CONTENT_HASHED`` and loses every unmeasured store install.
+Both are statements about the platform, not about the machine
 concealing anything: an unmeasurable object is reported as unmeasured and is
 never folded in as though it had been measured.
 
