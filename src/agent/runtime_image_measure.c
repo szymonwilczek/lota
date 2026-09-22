@@ -460,6 +460,17 @@ void lota_rt_failure_reason(const struct lota_runtime_measure_failure *fail,
 	 * so both name the object and the action that fixes it;
 	 * anything else is ordinary errno against a named object.
 	 */
+	if (err == ENODATA && fail->road_err != 0) {
+		/* content road refused too: name its error, not fs-verity */
+		snprintf(buf, buflen,
+			 "%s%s carries no fs-verity digest and the kernel "
+			 "would not hash its content either: %s",
+			 subject, tail,
+			 strerror(fail->road_err < 0 ? -fail->road_err :
+						       fail->road_err));
+		return;
+	}
+
 	if (err == ENODATA) {
 		snprintf(buf, buflen,
 			 "%s%s carries no fs-verity digest (enable fs-verity "
@@ -583,6 +594,7 @@ struct rt_object_measure {
 	int role;
 	int is_exe;
 	int content_hashed; /* digest is a content hash, not fs-verity */
+	int road_err; /* why the content road refused, 0 if it was not open */
 };
 
 /* Kernel hash of one mapping, cached by the identity the verity read took */
@@ -662,7 +674,8 @@ static int rt_measure_object(pid_t pid, const struct lota_rt_map_entry *entry,
 	if (road != LOTA_RT_ROAD_CONTENT_HASH)
 		return ret;
 
-	if (rt_content_hash_entry(pid, entry, &m->opened, &m->digest) != 0)
+	m->road_err = rt_content_hash_entry(pid, entry, &m->opened, &m->digest);
+	if (m->road_err != 0)
 		return ret;
 
 	m->content_hashed = 1;
@@ -780,6 +793,7 @@ int lota_runtime_measure_pid(pid_t pid,
 				fail->reported_len = m.reported_len;
 				fail->role = m.role;
 				fail->err = ret;
+				fail->road_err = m.road_err;
 			}
 			/*
 			 * object with no digest is coverage the relying party

@@ -173,6 +173,7 @@ struct lota_runtime_measure_failure {
 	uint32_t reported_len;
 	int role;
 	int err;
+	int road_err; /* content road's refusal, 0 if that road was closed */
 };
 
 #define LOTA_RT_REASON_MAX 512 /* longest lota_rt_failure_reason() sentence */
