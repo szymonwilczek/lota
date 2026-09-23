@@ -107,6 +107,19 @@ The unit arms a 60 s systemd watchdog: the attest loop pings it on a cadence
 independent of ``attest_interval``, so a loop wedged on the TPM or a stalled
 TLS socket misses the deadline and systemd restarts it.
 
+A round that fails names the stage it failed at in the journal -- setting up
+TLS, reaching the verifier, building or sending the report, or the verdict
+itself -- alongside the failure count and the backoff:
+
+.. code-block:: text
+
+   Attestation round failed at connecting to the verifier: Connection refused
+   Attestation FAILED for verifier.example:9443 (attempt 1, backoff 10s)
+
+The stage is what separates a host that cannot reach its verifier from one the
+verifier is refusing, and it is reported whether or not anything is reading the
+loop's progress output.
+
 Which unit a title talks to
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
