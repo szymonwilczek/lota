@@ -190,7 +190,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic, begin.Token)
+	challenge, err := s.svc.Begin(begin.EKCertDER, begin.AIKPublic, begin.Token, begin.EKChainDER)
 	if err != nil {
 		status := beginStatus(err)
 		s.log.Warn("enroll begin rejected", "remote", remote, "status", status, "error", err)

@@ -83,7 +83,7 @@ func TestVerifyEKCertificateRejectsROCAWeakEK(t *testing.T) {
 		t.Fatalf("ROCA EK cert: %v", err)
 	}
 
-	_, err = is.VerifyEKCertificate(ekDER, time.Now())
+	_, err = is.VerifyEKCertificate(ekDER, nil, time.Now())
 	if !errors.Is(err, ErrEKWeakKey) {
 		t.Fatalf("expected ErrEKWeakKey, got %v", err)
 	}

@@ -79,6 +79,34 @@ struct enroll_result {
 };
 
 /*
+ * One certificate inside a chain the platform hands over:
+ * a view into the caller's buffer, so a chain costs no second allocation
+ */
+struct enroll_cert_ref {
+	const uint8_t *der;
+	size_t len;
+};
+
+/*
+ * Split a concatenated DER certificate blob into its elements.
+ *
+ * TPM stores its manufacturer intermediates as one NV blob with the certificates
+ * laid end to end and no framing of its own, so the elements are found by walking
+ * the ASN.1 SEQUENCE headers.
+ *
+ * The blob is vendor data the host does not control, so the walk is lenient:
+ * it ends at the first bytes that do not begin a certificate this wire can carry,
+ * which is what turns trailing NV padding into the end of the list instead of
+ * a failed read. A blob that yields nothing is not an error -- the enrollment
+ * proceeds on the leaf alone.
+ *
+ * Returns 0 and the element count, or -EINVAL on a NULL argument.
+ */
+int enroll_split_cert_chain(const uint8_t *blob, size_t len,
+			    struct enroll_cert_ref *out, size_t out_max,
+			    size_t *out_count);
+
+/*
  * Wire codec. Encoders return the body length written or negative errno;
  * decoders return 0 or negative errno. The encoded body excludes the
  * outer u32 frame length, which the transport adds.
@@ -87,11 +115,20 @@ struct enroll_result {
  * NULL or empty means none.
  * Token-less begin is version-1 frame an old CA accepts;
  * Token upgrades the frame to version 2.
+ *
+ * ek_chain carries the manufacturer intermediates between the leaf and a root
+ * the CA pins, for a platform that stores them on the chip; it upgrades the frame
+ * to version 3 and is what lets a leaf several levels below its root be verified
+ * at all.
+ * NULL or empty leaves the frame at the version the token selects,
+ * so a host with nothing to present speaks to a CA that predates the field.
  */
 ssize_t enroll_encode_begin(uint8_t *out, size_t out_max,
 			    const uint8_t *ek_cert, size_t ek_cert_len,
 			    const uint8_t *aik_public, size_t aik_public_len,
-			    const uint8_t *token, size_t token_len);
+			    const uint8_t *token, size_t token_len,
+			    const struct enroll_cert_ref *ek_chain,
+			    size_t ek_chain_len);
 
 /*
  * Read an enrollment token from a file into out (NUL-terminated).

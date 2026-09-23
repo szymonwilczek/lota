@@ -131,6 +131,10 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	size_t aik_len = 0;
 	uint8_t *body = NULL;
 	uint8_t *rbuf = NULL;
+	uint8_t *ek_chain_blob = NULL;
+	size_t ek_chain_blob_len = 0;
+	struct enroll_cert_ref ek_chain[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t ek_chain_len = 0;
 	uint8_t secret[LOTA_ENROLL_MAX_SECRET];
 	size_t secret_len = 0;
 	size_t rlen = 0;
@@ -146,7 +150,8 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	body = malloc(LOTA_ENROLL_MAX_FRAME);
 	rbuf = malloc(LOTA_ENROLL_MAX_FRAME);
-	if (!body || !rbuf) {
+	ek_chain_blob = malloc(LOTA_ENROLL_MAX_EK_CHAIN_BYTES);
+	if (!body || !rbuf || !ek_chain_blob) {
 		fprintf(stderr, "Failed to allocate the enrollment buffers\n");
 		ret = -ENOMEM;
 		goto out;
@@ -160,6 +165,25 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 			strerror(-ret));
 		goto out;
 	}
+
+	/*
+	 * Manufacturer intermediates, where the platform keeps them.
+	 * A TPM whose EK certificate is issued directly by a published root
+	 * stores none, and one that does store them is the only party that
+	 * has them -- so this is presented when it exists and passed over
+	 * when it does not.
+	 */
+	ret = tpm_get_ek_cert_chain(tpm, ek_chain_blob,
+				    LOTA_ENROLL_MAX_EK_CHAIN_BYTES,
+				    &ek_chain_blob_len);
+	if (ret == 0)
+		enroll_split_cert_chain(ek_chain_blob, ek_chain_blob_len,
+					ek_chain,
+					LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+					&ek_chain_len);
+	printf("EK certificate chain: %zu manufacturer intermediate(s) from the TPM\n",
+	       ek_chain_len);
+
 	ret = tpm_get_aik_tpmt_public(tpm, aik_pub, sizeof(aik_pub), &aik_len);
 	if (ret < 0) {
 		fprintf(stderr, "AIK public area unavailable: %s\n",
@@ -188,7 +212,9 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	blen = enroll_encode_begin(body, LOTA_ENROLL_MAX_FRAME, ek_cert, ek_len,
 				   aik_pub, aik_len, (const uint8_t *)token,
-				   token ? strlen(token) : 0);
+				   token ? strlen(token) : 0,
+				   ek_chain_len ? ek_chain : NULL,
+				   ek_chain_len);
 	if (blen < 0) {
 		ret = (int)blen;
 		fprintf(stderr, "Failed to encode the enrollment request: %s\n",
@@ -303,6 +329,7 @@ out:
 		OPENSSL_cleanse(body, LOTA_ENROLL_MAX_FRAME);
 	free(body);
 	free(rbuf);
+	free(ek_chain_blob);
 	if (net_inited)
 		net_context_cleanup(&net);
 	return ret;

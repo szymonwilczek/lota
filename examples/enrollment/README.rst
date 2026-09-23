@@ -61,6 +61,18 @@ is the local swtpm CA issuer certificate; for real hardware it is your vendor's
 root bundle. A ``VERIFY_OK`` at the end means the AIK was activation-bound to
 the EK and the verifier trusted it through the certificate chain alone.
 
+swTPM mints an EK one level under a root the demo itself generates, so the
+request it sends carries the leaf and nothing else. Real hardware is rarely
+that shallow: a firmware TPM puts its EK several levels below the vendor root
+and stores the certificates nearest the leaf in its own NV. The agent presents
+those with the request and reports how many it found::
+
+   EK certificate chain: 3 manufacturer intermediate(s) from the TPM
+
+A zero there is normal for swTPM and for a TPM whose EK is issued directly by a
+published root. Where the count is not zero, it is the part of the path the
+operator's bundle does not have to carry.
+
 This demo passes a single ``-ek-root`` because swTPM mints one local CA. A
 production fleet instead trusts a pin-enforced multi-vendor bundle. The bundle
 ships empty: the supported hardware set is every TPM whose EK certificate

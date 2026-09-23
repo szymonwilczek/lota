@@ -167,10 +167,13 @@ func NewService(issuer *ca.Issuer, pseudonymKey []byte, opts ...Option) (*Servic
 // Challenge must be activated by the agent and handed back to Complete.
 // Token is the optional enrollment token from the begin request;
 // nil or empty means the device presented none.
-func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte) (*Challenge, error) {
+// ekChainDER holds the manufacturer intermediates the device presented with
+// its leaf, for a platform that stores them on the chip; they complete a path
+// to a pinned root and never anchor one.
+func (s *Service) Begin(ekCertDER, aikTPMTPublic, token []byte, ekChainDER [][]byte) (*Challenge, error) {
 	now := s.now()
 
-	ekCert, err := s.issuer.VerifyEKCertificate(ekCertDER, now)
+	ekCert, err := s.issuer.VerifyEKCertificate(ekCertDER, ekChainDER, now)
 	if err != nil {
 		return nil, fmt.Errorf("EK verification: %w", err)
 	}

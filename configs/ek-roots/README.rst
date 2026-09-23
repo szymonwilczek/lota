@@ -125,15 +125,26 @@ Intermediate CAs
 ----------------
 
 Real manufacturer EK PKIs are commonly three-level: the EK leaf is issued by an
-intermediate CA which in turn chains to the self-signed root. The enroll wire
-carries only the leaf (a TPM NV index holds a single certificate, so the agent
-has nothing else to send), which means the CA can only build that chain from
-material the operator loaded: **the bundle must include every intermediate that
-issues your fleet's EK certificates**, pinned in the manifest exactly like a
-root. Loaded intermediates serve both as path material (a leaf issued by a
-bundled intermediate verifies up to the bundled root) and as trust anchors in
-their own right -- pinning only the intermediate is a deliberate narrowing that
-trusts one manufacturer branch instead of everything under the root.
+intermediate CA which in turn chains to the self-signed root. A firmware TPM
+goes deeper -- an Intel PTT EK leaf sits six levels below the OnDie root -- and
+keeps the certificates nearest the leaf in its own NV, published nowhere else.
+
+The path is therefore built from two sources. The device presents whatever its
+TPM stores at NV index ``0x01c00100`` with the enrollment request, and the CA
+uses those certificates as path material only: they can complete a route to a
+root the operator pinned, and they can never become an anchor, so a host that
+presents its own self-signed root is refused exactly as one presenting nothing.
+Everything else has to come from the bundle: **the bundle must include every
+intermediate on the path that the device does not carry**, pinned in the
+manifest exactly like a root. Both halves are load-bearing -- a platform whose
+on-chip certificates cover only part of the gap still needs the rest pinned.
+
+Bundled intermediates serve both as path material (a leaf issued by a bundled
+intermediate verifies up to the bundled root) and as trust anchors in their own
+right -- pinning only the intermediate is a deliberate narrowing that trusts one
+manufacturer branch instead of everything under the root. Pinning an
+intermediate the device also presents is harmless and costs one fetch less at
+enrollment time.
 
 Because a bundled intermediate is itself an anchor, its own revocation by the
 parent root is not evaluated during EK verification: the CA checks EK leaves
@@ -144,8 +155,10 @@ revokes that intermediate, exactly as you would retire a compromised root.
 
 The AIA walk that finds the root passes through each intermediate on the way
 (``lota-ek-root-pin.sh`` follows the same chain); record a manifest line for
-every CA certificate on the path, not just the final self-signed one. A missing
-intermediate surfaces as an ``ErrEKChain`` rejection on genuine hardware. The
+every CA certificate on the path that the device does not present itself. A
+missing intermediate surfaces as an ``ErrEKChain`` rejection on genuine
+hardware; ``lota-agent --enroll`` reports how many intermediates the TPM
+supplied, which is what tells the two halves of the path apart. The
 manufacturer CRL feed (below) has the same dependency: CRLs covering EK leaves
 are signed by the issuing intermediate, so the feed loads only when that
 intermediate is bundled.
