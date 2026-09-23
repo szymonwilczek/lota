@@ -1,0 +1,60 @@
+# Sparse findings that are wrong, exempted one file at a time.
+#
+# Format:
+#   path-suffix|warning-text|reason
+#
+# path-suffix matches the tail of the path sparse prints, so a header
+# reached through a relative include (tests/../src/agent/foo.h) matches the
+# same entry as the header itself.
+#
+# warning-text is matched literally against the start of sparse's message.
+#
+# This file is not a backlog. An entry belongs here only when sparse reports
+# something the source does not do, and nothing in the source can be changed
+# to say it more clearly. Anything a code change can fix is a code change.
+#
+# Constant folding through inlined calls and macro expansions
+# -----------------------------------------------------------
+# Sparse reports the specialised result as if the source had written it.
+# GCC raises the genuine cases of this class under -Wall, which is -Werror
+# here, so the class is still covered.
+
+src/agent/terminate_policy.h|self-comparison|target_pid and agent_pid are distinct members of struct terminate_request. The self-kill test hands the function a request where they hold the same value, and sparse reports the specialised inline body.
+
+fuzz/bpf_oracle/reference.h|self-comparison|The reference restates the shebang code points as 0x23 0x21 while the mirror uses '#' and '!', on purpose, so a char-encoding assumption in either would diverge. Sparse inlines both and concludes they are one expression, which is the property the oracle exists to test.
+
+fuzz/bpf_oracle/fuzz_devt.c|self-comparison|The decode-encode roundtrip asserts LOTA_DEVT_MAJOR(LOTA_DEVT_MKDEV(maj, min)) == maj. Sparse expands both macros and folds the identity away; the assertion still fails if either macro is changed without the other, which is what it is for.
+
+# The variable-length ioctl argument
+# ----------------------------------
+# A struct ending in a flexible array, backed by a union whose other member
+# is a byte buffer large enough for the payload, is how a caller sizes an ioctl
+# argument the kernel writes into. The struct must be the last union member
+# or clang -Werror rejects it, and sizeof on it is well defined by C -- it excludes
+# the flexible array, which is exactly the base size wanted.
+# Both warnings stay on everywhere else, so a flexible array nested somewhere
+# it does not belong still fails.
+
+src/agent/hash_verify.c|using sizeof on a flexible structure|sizeof(struct fsverity_digest) is the header size FS_IOC_MEASURE_VERITY writes before the digest bytes, and sizeof of the union around it is the whole allocation. Both are the intended quantities.
+src/agent/hash_verify.c|nested flexible array|struct fsverity_digest is the last member of a union whose other member sizes the buffer. Its flexible array is at the end of the object, which is the shape the ioctl requires.
+src/agent/bpf_loader.c|using sizeof on a flexible structure|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, in the two places the loader measures an object itself.
+src/agent/bpf_loader.c|nested flexible array|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, in the two places the loader measures an object itself.
+src/agent/runtime_image_measure.c|using sizeof on a flexible structure|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, once per object of the runtime image being measured.
+src/agent/runtime_image_measure.c|nested flexible array|The same FS_IOC_MEASURE_VERITY union as hash_verify.c, once per object of the runtime image being measured.
+installer/probe.c|using sizeof on a flexible structure|sizeof(*d) is the struct fsverity_digest header FS_IOC_MEASURE_VERITY writes before the digest, and the byte buffer around it adds room for the digest itself.
+
+# Whole-struct zeroing above sparse's 100 KB copy limit
+# -----------------------------------------------------
+# memset(x, 0, sizeof(*x)) over an entire struct is the safe form, and the limit
+# exists to catch a byte count that came out wrong.
+# Neither of these did: they are the true size of the object being cleared.
+# The limit stays at its default for every other file.
+#
+# struct lota_config really is 1.3 MB, 1 MB of it the fs-verity allow-list,
+# and src/agent/main.c, src/agent/reload.c and src/agent/enroll_client.c each
+# put one on the stack.
+# That is worth revisiting on its own terms; it is a question about the config
+# layout, not about this memset.
+
+src/agent/config.c|memset with byte count|Clears the whole struct lota_config before config_init fills in the defaults.
+installer/tui.c|memset with byte count|Clears the whole struct tui, 152 KB of stage rows, before the installer binds its sink.

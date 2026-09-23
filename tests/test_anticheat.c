@@ -228,7 +228,7 @@ static int rt_path_collect_cb(const char *path, void *user)
 
 static int expected_runtime_measure_test(uint8_t out[32])
 {
-	struct rt_path_collect c = { 0 };
+	struct rt_path_collect c = {};
 	const char **vec;
 	int ret;
 

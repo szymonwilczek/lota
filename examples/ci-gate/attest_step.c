@@ -183,7 +183,7 @@ static CURL *new_handle(const struct options *opts, const char *url,
 		return NULL;
 
 	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, collect);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &collect);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, opts->timeout_sec);
 	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
@@ -200,7 +200,7 @@ static int fetch_nonce(const struct options *opts, uint8_t nonce[32],
 		       char **nonce_b64)
 {
 	char url[512];
-	struct buffer resp = { 0 };
+	struct buffer resp = {};
 	long status = 0;
 	int rc = -1;
 
@@ -260,7 +260,7 @@ static int present_token(const struct options *opts, const char *nonce_b64,
 			 const char *token_b64, char **secret_b64)
 {
 	char url[512];
-	struct buffer resp = { 0 };
+	struct buffer resp = {};
 	long status = 0;
 	int rc = EXIT_TRANSPORT;
 	char *body = NULL;
