@@ -328,8 +328,38 @@ func algDigestSize(algID uint16) int {
 	}
 }
 
+// startupLocalitySignature marks the EV_NO_ACTION record firmware writes to
+// state the locality it started the TPM at.
+// The record is the signature, its NUL terminator, then one byte of locality.
+var startupLocalitySignature = []byte("StartupLocality\x00")
+
+// startupLocality returns the locality an EV_NO_ACTION entry declares.
+//
+// Firmware data the verifier does not control, so a record that is not this
+// one, or is too short to hold the byte, reports nothing.
+func startupLocality(entry *EventLogEntry) (byte, bool) {
+	if entry.EventType != EvNoAction {
+		return 0, false
+	}
+	if len(entry.EventData) != len(startupLocalitySignature)+1 {
+		return 0, false
+	}
+	if !bytes.Equal(entry.EventData[:len(startupLocalitySignature)], startupLocalitySignature) {
+		return 0, false
+	}
+	return entry.EventData[len(startupLocalitySignature)], true
+}
+
 // replays the event log to reconstruct PCR values
-// starts from all-zero PCRs and applies each extend operation
+//
+// PCRs start at zero, except where the log records that firmware started the
+// TPM above locality 0: a measured static root of trust (Intel Boot Guard and
+// equivalents) starts it at locality 3, and PCR 0 then begins at 31 zero bytes
+// followed by the locality. Honouring that costs nothing in trust -- the
+// replay still has to reproduce the quote-signed PCR values.
+//
+// EV_NO_ACTION entries are informational: the spec-ID header, the locality
+// record, vendor notes. The TPM never extended them, so neither does this.
 func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 	if parsed == nil {
 		return nil, errors.New("nil event log")
@@ -338,6 +368,15 @@ func ReplayEventLog(parsed *ParsedEventLog) (*ReplayResult, error) {
 	result := &ReplayResult{}
 	for _, entry := range parsed.Entries {
 		if entry.PCRIndex >= types.PCRCount {
+			continue
+		}
+
+		if entry.EventType == EvNoAction {
+			if locality, ok := startupLocality(&entry); ok &&
+				result.ExtendCounts[0] == 0 {
+				result.PCRValues[0] = [types.HashSize]byte{}
+				result.PCRValues[0][types.HashSize-1] = locality
+			}
 			continue
 		}
 

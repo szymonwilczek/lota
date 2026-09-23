@@ -183,6 +183,12 @@ Active threats
      - | The verifier reads the firmware-measured ``SecureBoot`` variable from the
          event log (PCR 7) and accepts it only when the log replay reproduces the
          TPM-quoted PCR, so the value cannot be fabricated or stripped.
+       | The replay follows what the TPM did:
+         ``EV_NO_ACTION`` records are informational and are not extended, and
+         where the log records that firmware started the TPM above locality 0 --
+         a measured static root of trust does -- PCR 0 begins at that locality.
+         A log that misdescribes either still has to reproduce the quote-signed
+         PCR values, so neither is a place to hide.
        | The agent-reported Secure Boot flag is telemetry only.
      - | Kernels signed for Secure Boot (including operator/MOK-signed) pass.
        | Control rejects unsigned boots, not signed-but-malicious kernels.
