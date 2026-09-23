@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -231,6 +232,28 @@ void config_init(struct lota_config *cfg)
 	cfg->profile_count = 0;
 
 	set_str(cfg->log_level, sizeof(cfg->log_level), "info");
+}
+
+/*
+ * calloc not malloc: config_init zeroes the struct anyway, but the allocation
+ * is over a megabyte and the kernel hands back zeroed pages for one that size,
+ * so the memset walks pages that are already clean instead of pages full of
+ * whatever the allocator last held.
+ */
+struct lota_config *config_new(void)
+{
+	struct lota_config *cfg = calloc(1, sizeof(*cfg));
+
+	if (!cfg)
+		return NULL;
+
+	config_init(cfg);
+	return cfg;
+}
+
+void config_free(struct lota_config *cfg)
+{
+	free(cfg);
 }
 
 /*

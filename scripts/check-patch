@@ -46,6 +46,8 @@ Checks:
     missing),
   - Coccinelle semantic-patch rules when C changes (blocking; skipped if
     spatch is missing),
+  - stack-frame ceiling over the shipped C sources when C changes
+    (blocking),
   - BPF mirror drift guard when src/bpf/lota_lsm.bpf.c or fuzz/bpf_oracle
     changes (blocking).
 USAGE
@@ -622,6 +624,26 @@ check_includes() {
 	fi
 }
 
+# Stack frames:
+# no function in a shipped binary may hold more than the ceiling in an automatic.
+# Only runs when the patch touches C.
+check_stack_frames() {
+	local output
+
+	if ! patch_touches_c "$@"; then
+		pass "stack-frames"
+		return
+	fi
+
+	if output="$(scripts/check-stack-frames.sh 2>&1)"; then
+		pass "stack-frames"
+	else
+		printf '%s\n' "$output" | sed 's/^/  /' >&2
+		fail "stack-frames" \
+			"move the object to the heap; see config_new() in src/agent/config.c."
+	fi
+}
+
 # License boundary:
 # MIT files must not depend on GPL-2.0-only ones,
 # and every source file must name its license
@@ -825,6 +847,7 @@ main() {
 	check_build
 	check_includes "${changed_files[@]}"
 	check_license_boundary
+	check_stack_frames "${changed_files[@]}"
 	check_abi
 	check_sparse "${changed_files[@]}"
 	check_smatch "${changed_files[@]}"
