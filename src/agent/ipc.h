@@ -342,6 +342,21 @@ void ipc_set_tpm(struct ipc_context *ctx, struct tpm_context *tpm,
 int ipc_add_listener(struct ipc_context *ctx, const char *socket_path);
 
 /*
+ * ipc_remove_listener - Drop an extra listener socket.
+ * @ctx: Initialized IPC context.
+ * @socket_path: Path the listener was added under.
+ *
+ * Unregisters the socket from the epoll set, closes it and unlinks the path,
+ * freeing the slot for another listener. A per-user socket outlives the login
+ * it was created for -- the runtime directory goes with the session
+ * and the socket file with it, leaving a listener nothing can connect to
+ * and a slot that cannot be reused.
+ *
+ * Returns: 0 on success, -ENOENT when no listener holds that path.
+ */
+int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path);
+
+/*
  * ipc_is_listener - Check if an fd is any listener socket.
  * @ctx: Server context.
  * @fd:  File descriptor to check.

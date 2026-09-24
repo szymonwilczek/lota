@@ -3162,12 +3162,34 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 		close(fd);
 		return ret;
 	}
+
+	/*
+	 * The socket is bound 0660, so its group is what lets a title connect
+	 * at all. A socket nobody but root can open is not a listener a caller
+	 * can use, so a failure here refuses.
+	 * The daemon needs CAP_CHOWN for this; without it the chown returns
+	 * EPERM and the message says so.
+	 */
 	{
 		struct group *grp = getgrnam(LOTA_GROUP_NAME);
-		if (grp) {
-			if (chown(socket_path, 0, grp->gr_gid) < 0)
-				lota_warn("chown(%s) failed: %s", socket_path,
-					  strerror(errno));
+
+		if (!grp) {
+			lota_err(
+				"no '%s' group: %s would be reachable by root alone",
+				LOTA_GROUP_NAME, socket_path);
+			close(fd);
+			unlink(socket_path);
+			return -ENOENT;
+		}
+
+		if (chown(socket_path, 0, grp->gr_gid) < 0) {
+			ret = -errno;
+			lota_err(
+				"chown(%s) failed: %s -- the socket would be reachable by root alone",
+				socket_path, strerror(-ret));
+			close(fd);
+			unlink(socket_path);
+			return ret;
 		}
 	}
 
@@ -3194,6 +3216,33 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 
 	lota_info("IPC extra listener on %s", socket_path);
 	return 0;
+}
+
+int ipc_remove_listener(struct ipc_context *ctx, const char *socket_path)
+{
+	if (!ctx || !socket_path || !socket_path[0])
+		return -EINVAL;
+
+	for (int i = 0; i < IPC_MAX_EXTRA_LISTENERS; i++) {
+		if (ctx->extra[i].fd < 0 ||
+		    strcmp(ctx->extra[i].path, socket_path) != 0)
+			continue;
+
+		if (ctx->epoll_fd >= 0)
+			epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL,
+				  ctx->extra[i].fd, NULL);
+		close(ctx->extra[i].fd);
+		ctx->extra[i].fd = -1;
+		unlink(ctx->extra[i].path);
+		ctx->extra[i].path[0] = '\0';
+		if (ctx->extra_count > 0)
+			ctx->extra_count--;
+
+		lota_info("IPC extra listener %s removed", socket_path);
+		return 0;
+	}
+
+	return -ENOENT;
 }
 
 int ipc_is_listener(struct ipc_context *ctx, int fd)

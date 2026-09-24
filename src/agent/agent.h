@@ -17,6 +17,7 @@
 
 #include "../../include/lota.h"
 #include "bpf_loader.h"
+#include "container_watch.h"
 #include "dbus.h"
 #include "hash_verify.h"
 #include "ipc.h"
@@ -64,6 +65,11 @@ struct agent_globals {
 	struct ipc_context ipc_ctx;
 	struct hash_verify_ctx hash_ctx;
 	struct dbus_context *dbus_ctx;
+	/*
+	 * Per-UID container listeners follow logins,
+	 * which happen after the daemon starts, so the tracking lives here.
+	 */
+	struct container_watch container_watch;
 	int mode;
 
 	/*

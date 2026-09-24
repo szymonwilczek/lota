@@ -70,6 +70,11 @@ The agent requires elevated privileges for hardware attestation:
 - **BPF Operations**: Load LSM programs for execution monitoring
 - **System State**: Read kernel, firmware, and security status
 - **Network**: Connect to verifier servers for attestation
+- **chown** (``lota_gaming`` only): hand the per-user container socket and
+  its directory to the ``lota`` group, which is what lets a title open
+  them. SELinux checks this as a capability of its own, so a host with
+  ``CAP_CHOWN`` in the unit's bounding set but without the rule still
+  fails the change with ``EPERM``
 
 Installation
 ------------
@@ -157,6 +162,31 @@ Modify Tunables
 
 Gaming Integration
 ------------------
+
+The per-user container socket
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A title inside a Proton container reaches the agent through
+``/run/user/<uid>/lota/lota.sock``. The agent creates that directory and
+binds the socket itself, and it watches ``/run/user`` so it can do so when
+the user logs in, which on any host that boots normally is after the agent
+started. Everything on that path is ``user_tmp_t``, so ``lota_gaming``
+grants ``lota_agent_t`` three accesses it has nowhere else: manage user
+temporary directories, manage user temporary sockets, and watch user
+temporary directories.
+
+Without the module the agent is refused at the ``mkdir``, at the ``bind``
+and at the ``inotify`` watch in turn, each as a plain ``EACCES`` with
+nothing in the audit log to attribute it, and the only visible symptom is a
+socket that never appears:
+
+.. code:: bash
+
+   # what the agent is allowed under the player's runtime directory
+   sudo sesearch -A -s lota_agent_t -t user_tmp_t
+
+A host that runs no titles does not need this module, and an agent without
+it keeps every other function.
 
 Steam
 ~~~~~

@@ -202,11 +202,17 @@ needs to see the socket at all.
 
 A title running inside a Proton container reaches the agent through a
 per-user socket, and ``lota-steam-setup --register-uid`` records the account
-that needs one. The agent builds its listeners when it starts, so that
-setting takes effect at the **next boot**: the command says so before it
-edits anything, and the socket does not appear until then. Nothing stops the
-running agent to force it -- stopping the agent spends this boot's
-attestation and would cost a reboot regardless.
+that needs one. The agent reads that setting when it starts, so it takes
+effect at the **next boot**: the command says so before it edits anything.
+Nothing stops the running agent to force it -- stopping the agent spends this
+boot's attestation and would cost a reboot regardless.
+
+After that boot the socket follows the login rather than the agent: it is
+created when the registered account logs in and released when its last
+session ends. ``lota-steam-setup --verify``, run from that account, is the
+check -- it reports the socket as ready only when this account can open it,
+and prints the ownership when it cannot, which is the case an account
+outside the ``lota`` group lands in.
 
 It is the only step in this document that asks anyone to type something, and
 it stays until Steam supports a compatibility-tool layer that composes with
