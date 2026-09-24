@@ -1931,6 +1931,27 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 	return 0;
 }
 
+int bpf_loader_probe_trusted_lib(const char *path)
+{
+	struct trusted_lib_key key = { 0 };
+	struct stat st = { 0 };
+	int ret;
+
+	if (!path)
+		return -EINVAL;
+
+	ret = stat_regular_file_nofollow(path, &st);
+	if (ret < 0)
+		return ret;
+
+	key.dev = lota_devt_from_st(st.st_dev);
+	key.ino = (uint64_t)st.st_ino;
+	if (key.dev == 0 || key.ino == 0)
+		return -EINVAL;
+
+	return 0;
+}
+
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = { 0 };
