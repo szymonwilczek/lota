@@ -79,6 +79,9 @@ enum lota_server_error {
 	LOTA_SERVER_ERR_CRYPTO = -8, /* OpenSSL internal error */
 	LOTA_SERVER_ERR_BUFFER = -9, /* Buffer too small */
 	LOTA_SERVER_ERR_FUTURE = -10, /* valid_until too far in the future */
+	LOTA_SERVER_ERR_RUNTIME_IMAGE =
+		-11, /* the runtime image measurement does not
+			reconcile with the one the TPM signed */
 };
 
 /*
@@ -136,6 +139,10 @@ struct lota_server_claims {
  *          LOTA_SERVER_ERR_EXPIRED if now > valid_until.
  *          LOTA_SERVER_ERR_FUTURE if valid_until is too far ahead.
  *          LOTA_SERVER_ERR_NONCE_FAIL if either nonce check fails.
+ *          LOTA_SERVER_ERR_RUNTIME_IMAGE if the runtime-protect digest
+ *          recomputed from the token's pid list and image digests differs
+ *          from the one inside the TPM signature -- the signal that a
+ *          protected process's code did not reconcile.
  *          Other negative error codes on verification failure.
  */
 int lota_server_verify_token(const uint8_t *token_data, size_t token_len,
