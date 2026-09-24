@@ -522,6 +522,13 @@ int self_measure(struct tpm_context *ctx)
 					"build and reboot; the register is not "
 					"rewritable while the host is up.");
 				break;
+			case TPM_PCR14_SPENT_BY_SHUTDOWN:
+				lota_err(
+					"The agent is paused on this host: its "
+					"boot commitment was spent by a "
+					"shutdown requested here. Reboot to "
+					"attest again.");
+				break;
 			case TPM_PCR14_LOCK_MISSING:
 				lota_err(
 					"PCR 14 never received the initramfs lock "
