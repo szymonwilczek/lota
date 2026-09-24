@@ -1171,6 +1171,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_protect_pids \
 	$(TEST_BIN_DIR)/test_terminate_policy \
 	$(TEST_BIN_DIR)/test_runtime_image_collect \
+	$(TEST_BIN_DIR)/test_runtime_mapping_identity \
 	$(TEST_BIN_DIR)/test_runtime_measure_pid \
 	$(TEST_BIN_DIR)/test_seal_blob \
 	$(TEST_BIN_DIR)/test_seal_envelope \
@@ -1408,6 +1409,10 @@ $(TEST_BIN_DIR)/test_runtime_image_collect: tests/test_runtime_image_collect.c $
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
+$(TEST_BIN_DIR)/test_runtime_mapping_identity: tests/test_runtime_mapping_identity.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
 $(TEST_BIN_DIR)/test_runtime_measure_pid: tests/test_runtime_measure_pid.c $(AGENT_DIR)/runtime_image_measure.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1528,6 +1533,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_protect_pids
 	@$(BUILD_DIR)/test_terminate_policy
 	@$(BUILD_DIR)/test_runtime_image_collect
+	@$(BUILD_DIR)/test_runtime_mapping_identity
 	@$(BUILD_DIR)/test_runtime_measure_pid
 	@$(BUILD_DIR)/test_seal_blob
 	@$(BUILD_DIR)/test_seal_envelope
