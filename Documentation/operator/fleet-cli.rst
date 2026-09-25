@@ -127,6 +127,19 @@ Revoke a compromised host and confirm::
        -note "IR ticket 8841"
    lota-fleet --key-file /etc/lota/fleet-reader.key revocations
 
+The revoked host says so itself. Its next round fails at the verifier's
+verdict, and ``journalctl -u lota-attest`` on the machine reads::
+
+   Attestation round failed at the verifier's verdict: FAIL - This host's
+   attestation key was revoked by the publisher's administrator;
+   re-enrollment is their decision, not this machine's
+
+A banned hardware ID reads the same way, naming the ban. Both are worth
+knowing before a support call: the machine is obeying an administrative
+decision, and nothing done locally to it changes the answer.
+The reason recorded with the revocation (``compromised`` above)
+stays on the verifier -- the host is told the state, not the case for it.
+
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
