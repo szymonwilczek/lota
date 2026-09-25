@@ -167,6 +167,15 @@ selects the profile:
 
     sudo lota-agent --reenroll --ca-cert tls.crt
 
+It is also the command that moves a host onto per-publisher keys. An AIK
+created before the publisher's identity entered the TPM creation template is
+one key shared by every publisher enrolled on that host, and a TPM key cannot
+be rewritten in place, so the agent refuses such a record instead of carrying
+it forward and says which publisher it belongs to. Re-enrolling that profile
+creates its own key; the device pseudonym is derived from the key and moves
+with it, so the publisher sees a device it has not met before and its verifier
+re-establishes the baseline.
+
 Point every verifier at the CA root:
 
 .. code-block:: sh

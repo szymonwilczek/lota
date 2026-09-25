@@ -58,6 +58,16 @@ struct agent_globals g_agent = {
 
 static volatile sig_atomic_t g_reload = 0;
 
+/*
+ * Exit status for a state only an operator can clear: the host is configured
+ * in a way the agent refuses, and starting it again changes nothing.
+ * The packaged unit lists it in RestartPreventExitStatus, so systemd leaves
+ * the unit failed with the reason in the journal.
+ *
+ * 78 is sysexits.h EX_CONFIG, which is what this is.
+ */
+#define LOTA_EXIT_OPERATOR_ACTION 78
+
 struct run_daemon_params {
 	const char *bpf_path;
 	const char *bpf_pubkey_path;
@@ -429,6 +439,26 @@ static int run_daemon(const struct run_daemon_params *params)
 			goto cleanup_tpm;
 		}
 
+		/*
+		 * The record predates per-publisher key derivation,
+		 * so the key it names is the one every publisher enrolled here
+		 * holds.
+		 * The daemon does not replace it: doing so would invalidate
+		 * the certificate that names it and leave the host unable to
+		 * attest without saying why.
+		 */
+		if (tpm_aik_key_is_shared(&g_agent.tpm_ctx)) {
+			lota_err("This publisher's attestation key was created "
+				 "before each publisher got a key of its own, "
+				 "so it is byte for byte the key every other "
+				 "publisher enrolled here holds. Run "
+				 "lota-agent --reenroll --ca-cert <their "
+				 "anchor> to replace it; the device pseudonym "
+				 "is derived from the key and moves with it.");
+			ret = -ENOTSUP;
+			goto cleanup_tpm;
+		}
+
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
 		if (ret < 0) {
@@ -769,6 +799,14 @@ int main(int argc, char *argv[])
 		.cfg = cfg,
 	};
 	rc = run_daemon(&run_params);
+	/*
+	 * -ENOTSUP is the daemon's "this host is configured in a way I refuse":
+	 * a legacy firmware interface, or a publisher key that predates
+	 * per-publisher derivation.
+	 * Both need someone to act; neither is fixed by trying again.
+	 */
+	if (rc == -ENOTSUP)
+		rc = LOTA_EXIT_OPERATOR_ACTION;
 
 out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);

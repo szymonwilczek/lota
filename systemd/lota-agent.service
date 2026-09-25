@@ -62,6 +62,12 @@ ExecReload=/bin/kill -HUP $MAINPID
 WatchdogSec=60s
 Restart=on-failure
 RestartSec=5s
+#
+# Exit 78 (EX_CONFIG) is the agent's "this host is configured in a way I refuse,
+# and starting me again changes nothing": a legacy firmware interface,
+# or a publisher whose attestation key predates per-publisher derivation and has
+# to be re-enrolled. The unit stops and stays failed with that line in the journal.
+RestartPreventExitStatus=78
 
 # as root (for TPM and BPF)
 User=root

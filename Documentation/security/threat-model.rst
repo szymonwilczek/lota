@@ -75,6 +75,35 @@ as path material only. A supplied certificate can complete a route to a root
 the operator pinned; it can never become one, so a host that presents its own
 self-signed root is refused exactly as a host presenting nothing is.
 
+One key per publisher, and it is the template that makes it so. A TPM primary
+is derived from the hierarchy seed and the creation template, so two profiles
+that present the same template receive the same key however many persistent
+handles they occupy -- and the per-profile ``userAuth`` takes no part in that
+derivation. The agent therefore puts the publisher's own identity, the SHA-256
+of its CA anchor's SubjectPublicKeyInfo, into the template's ``unique`` field.
+Distinct per publisher, reproduced exactly when that publisher re-enrols, and
+absent on a host that answers to nobody, whose key is unchanged.
+
+A key created before that was shared with every other publisher on the host,
+and no upgrade can rewrite a TPM key in place. The AIK metadata record carries
+the distinction (version 2), and a version-1 record is refused with that sentence;
+re-enrolling the profile replaces the key and the device pseudonym moves with it.
+
+What that separation does not cover is the evidence. Two publishers who each
+run a verifier receive the same firmware and Secure Boot measurements and the
+same event log, and the log names the disk this host boots from, so comparing
+what they each legitimately received tells them it is one machine. Identity is
+unlinkable; evidence is not, and the product says so where a player can act on
+it -- at the consent prompt, in ``--list-publishers`` and in the player
+documentation.
+
+The fork the design already had is the answer to it. A publisher whose titles
+only check tokens receives no report, no PCR values and no event log, so for
+them the separation is complete; a publisher who runs a verifier trades that
+away for a verifier's judgement. Nothing in the protocol can give two verifiers
+a per-publisher view of PCR 14 while both still verify it, so this is a
+disclosure to state plainly.
+
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
 public key at all, so an AIK cannot become trusted by being seen first. The

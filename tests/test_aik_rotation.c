@@ -117,6 +117,51 @@ static void make_ctx(struct tpm_context *ctx)
 		 "%s/aik_meta.dat", tmp_dir);
 }
 
+/*
+ * The record says how the key it describes was derived, and that answer
+ * decides whether the daemon will attest with the key at all.
+ * A field the writer forgets is not a missing feature here: every byte
+ * of the struct reaches the disk, so an unassigned one reads back as
+ * a derivation nobody chose.
+ */
+static void test_metadata_key_derivation_round_trip(void)
+{
+	struct tpm_context ctx;
+	struct tpm_context ctx2;
+
+	TEST("the key-derivation marker survives save -> load");
+	make_ctx(&ctx);
+	make_ctx(&ctx2);
+
+	ctx.aik_meta.magic = TPM_AIK_META_MAGIC;
+	ctx.aik_meta.version = TPM_AIK_META_VERSION;
+	ctx.aik_meta.generation = 7;
+	ctx.aik_meta.key_derivation = TPM_AIK_KEY_DERIVATION_PER_PUBLISHER;
+	ctx.aik_meta_loaded = true;
+
+	if (tpm_aik_save_metadata(&ctx) != 0) {
+		FAIL("save returned error");
+		return;
+	}
+	if (tpm_aik_load_metadata(&ctx2) != 0) {
+		FAIL("load returned error");
+		return;
+	}
+	if (ctx2.aik_meta.key_derivation !=
+	    TPM_AIK_KEY_DERIVATION_PER_PUBLISHER) {
+		FAIL("the marker did not survive the round-trip");
+		return;
+	}
+
+	/* and a key with no publisher stays marked as such */
+	snprintf(ctx2.aik_profile_id, sizeof(ctx2.aik_profile_id), "%s", "");
+	if (tpm_aik_key_is_shared(&ctx2)) {
+		FAIL("a host with no publisher was called shared");
+		return;
+	}
+	PASS();
+}
+
 static void test_metadata_save_load(void)
 {
 	struct tpm_context ctx;
@@ -1432,6 +1477,61 @@ static void test_call_with_backoff_gives_up_without_leak(void)
 	PASS();
 }
 
+/*
+ * Each publisher is promised its own attestation key.
+ * A TPM primary is derived from the hierarchy seed and the creation template,
+ * so the template is the only place that promise can be kept:
+ * two profiles whose template is identical get one key at two handles,
+ * which is what a publisher can see by comparing the certificate it already holds.
+ */
+static void test_aik_unique_separates_publishers(void)
+{
+	const char *id_a =
+		"ea34ead0000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+	const char *id_b =
+		"1feba674000000000000000000000000000000000000000000000000"
+		"3ceacdd1";
+	uint8_t a[LOTA_HASH_SIZE];
+	uint8_t b[LOTA_HASH_SIZE];
+	uint8_t again[LOTA_HASH_SIZE];
+	uint16_t len_a = 0, len_b = 0, len_again = 0;
+
+	TEST("the AIK creation input differs per publisher profile");
+
+	if (tpm_aik_profile_unique(id_a, a, &len_a) != 0 ||
+	    tpm_aik_profile_unique(id_b, b, &len_b) != 0) {
+		FAIL("the helper refused a well-formed profile identity");
+		return;
+	}
+
+	if (len_a == 0 || len_b == 0) {
+		FAIL("a bound publisher contributes nothing to the key");
+		return;
+	}
+	if (len_a == len_b && memcmp(a, b, len_a) == 0) {
+		FAIL("two publishers share one creation input, so one key");
+		return;
+	}
+
+	/* re-enrolment has to reproduce the same key, not a new one */
+	if (tpm_aik_profile_unique(id_a, again, &len_again) != 0 ||
+	    len_again != len_a || memcmp(a, again, len_a) != 0) {
+		FAIL("the same publisher did not reproduce its own input");
+		return;
+	}
+
+	/* a host with no publisher keeps the profile-less derivation */
+	uint8_t none[LOTA_HASH_SIZE];
+	uint16_t len_none = 1;
+
+	if (tpm_aik_profile_unique("", none, &len_none) != 0 || len_none != 0) {
+		FAIL("a host with no publisher must contribute nothing");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("\n=== AIK Rotation Tests ===\n\n");
@@ -1439,6 +1539,7 @@ int main(void)
 	setup_tmp_dir();
 
 	test_metadata_save_load();
+	test_metadata_key_derivation_round_trip();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
@@ -1471,6 +1572,7 @@ int main(void)
 	test_clock_state_save_load_round_trip();
 	test_clock_state_legacy_reserved_maps_to_no_lock();
 	test_initramfs_lock_digest_matches_reference();
+	test_aik_unique_separates_publishers();
 	test_clock_state_load_missing_is_enoent();
 	test_clock_state_load_rejects_corrupt();
 	test_call_with_backoff_no_leak_on_retry();
