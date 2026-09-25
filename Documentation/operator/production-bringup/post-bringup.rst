@@ -249,7 +249,12 @@ readability constraint as the top-level ``ca_cert`` above.
 ``verifier = none`` is how a profile says that publisher runs no verifier and
 checks the tokens their titles fetch in their own backend. Nothing is reported
 to them and this host holds no verdict of theirs, so their titles read the
-token rather than the attested bit; the profile still enrolls, holds its own
+token, not the attested bit. Issuance follows that: the attested gate
+applies to a publisher who runs a verifier, and a token-only publisher's gate
+is that the host can quote at all -- enrolled, AIK loaded, TPM not locked out.
+The token carries ``LOTA_STATUS_TOKEN_ONLY`` so the backend knows the attested
+bit is not a verdict of theirs, and a freshness window the agent bounds itself
+(the default cadence, since there is no round to take one from); the profile still enrolls, holds its own
 AIK and renews that key's certificate, which is what the publisher's backend
 chains a token to. It has to be said rather than left out -- an omitted
 ``verifier`` stays a refused config, so a typo cannot turn a publisher who

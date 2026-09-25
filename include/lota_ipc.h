@@ -92,6 +92,11 @@ enum lota_ipc_result {
 	LOTA_IPC_ERR_NOT_PROTECTED = 0x0D,
 	/* PID 0, PID 1 or the agent: not a process this verb speaks for */
 	LOTA_IPC_ERR_TARGET_REFUSED = 0x0E,
+	/* the caller's own executable carries no measurable identity,
+	 * so its token cannot be issued.
+	 * another protected process being unmeasurable never produces this:
+	 * that is reported through LOTA_STATUS_IMAGE_FULLY_MEASURED instead */
+	LOTA_IPC_ERR_UNMEASURABLE_SELF = 0x0F,
 	LOTA_IPC_NOTIFY = 0x80,
 };
 
@@ -116,9 +121,11 @@ enum lota_ipc_result {
 
 #define LOTA_STATUS_TOKEN_ONLY \
 	(1                     \
-	 << 8) /* the publisher this connection named runs no verifier here,  \
-		  so ATTESTED carries no verdict of theirs and the token is   \
-		  the evidence */
+	 << 8) /* the publisher this connection named runs no verifier here, \
+		  so ATTESTED carries no verdict of theirs and the token is  \
+		  the evidence. Such a token is issued without an attested   \
+		  verdict, which cannot exist for them, and carries a        \
+		  freshness window the agent bounds itself */
 
 #define LOTA_STATUS_IMAGE_FULLY_MEASURED \
 	(1                               \
