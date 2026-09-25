@@ -732,10 +732,20 @@ int do_add_publisher(const char *config_path, const char *name,
 	snprintf(p.ca, sizeof(p.ca), "%s", ca_server);
 	p.ca_port = ca_port > 0 ? ca_port : LOTA_DEFAULT_CA_PORT;
 	snprintf(p.ca_cert, sizeof(p.ca_cert), "%s", ca_cert);
-	if (verifier && verifier[0])
+	/*
+	 * No verifier named is the publisher who runs none, not one to be
+	 * guessed at: their backend checks the tokens their titles fetch
+	 * and nothing is reported from this machine.
+	 * The port goes with the verifier, since a port for a verifier
+	 * declared absent is a contradiction the parser refuses.
+	 */
+	p.token_only = !(verifier && verifier[0]);
+	if (!p.token_only) {
 		snprintf(p.verifier, sizeof(p.verifier), "%s", verifier);
-	p.verifier_port = verifier_port > 0 ? verifier_port :
-					      LOTA_DEFAULT_VERIFIER_PORT;
+		p.verifier_port = verifier_port > 0 ?
+					  verifier_port :
+					  LOTA_DEFAULT_VERIFIER_PORT;
+	}
 	p.attest_interval = interval;
 	p.session_gated = session_gated;
 
@@ -746,6 +756,17 @@ int do_add_publisher(const char *config_path, const char *name,
 		printf("Publisher %s added to %s as \"%s\".\n", paths.id,
 		       config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
 		       p.name);
+		/* Which of the two arrangements was written,
+		 * since the difference is whether anything leaves this machine */
+		if (p.token_only)
+			printf("They run no verifier, so nothing is reported "
+			       "from this machine: their\nbackend checks the "
+			       "tokens their titles fetch. Name one with "
+			       "--server\nif that is wrong.\n");
+		else
+			printf("Reports go to %s:%d, signed with the key this "
+			       "publisher holds here.\n",
+			       p.verifier, p.verifier_port);
 		printf("Nothing enrols with them until somebody at this "
 		       "machine agrees:\n");
 		printf("  lota-agent --allow-publisher %s\n", paths.id);

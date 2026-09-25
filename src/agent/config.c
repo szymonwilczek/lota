@@ -1206,19 +1206,34 @@ static int profile_section_scan(const char *text, const char *name,
 static int profile_section_render(const struct lota_profile *p, char *buf,
 				  size_t cap)
 {
+	/* Publisher who runs none, said the way validate_profiles() requires:
+	 * the key is present and the port is absent, because the parser refuses
+	 * a port for a verifier declared absent */
+	bool no_verifier = p->token_only || p->verifier[0] == '\0';
 	int n;
 
-	n = snprintf(buf, cap,
-		     "\n[profile \"%s\"]\n"
-		     "ca = %s\n"
-		     "ca_port = %d\n"
-		     "ca_cert = %s\n"
-		     "verifier = %s\n"
-		     "verifier_port = %d\n"
-		     "reporting = %s\n",
-		     p->name, p->ca, p->ca_port, p->ca_cert,
-		     p->verifier[0] ? p->verifier : "none", p->verifier_port,
-		     p->session_gated ? "session" : "continuous");
+	if (no_verifier)
+		n = snprintf(buf, cap,
+			     "\n[profile \"%s\"]\n"
+			     "ca = %s\n"
+			     "ca_port = %d\n"
+			     "ca_cert = %s\n"
+			     "verifier = none\n"
+			     "reporting = %s\n",
+			     p->name, p->ca, p->ca_port, p->ca_cert,
+			     p->session_gated ? "session" : "continuous");
+	else
+		n = snprintf(buf, cap,
+			     "\n[profile \"%s\"]\n"
+			     "ca = %s\n"
+			     "ca_port = %d\n"
+			     "ca_cert = %s\n"
+			     "verifier = %s\n"
+			     "verifier_port = %d\n"
+			     "reporting = %s\n",
+			     p->name, p->ca, p->ca_port, p->ca_cert,
+			     p->verifier, p->verifier_port,
+			     p->session_gated ? "session" : "continuous");
 	if (n < 0 || (size_t)n >= cap)
 		return -EOVERFLOW;
 

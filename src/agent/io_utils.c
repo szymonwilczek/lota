@@ -77,9 +77,15 @@ int lota_read_file_bounded(const char *path, void *buf, size_t max,
 		close(fd);
 		return ret;
 	}
-	if (st.st_size <= 0 || (uintmax_t)st.st_size > (uintmax_t)max) {
+	if ((uintmax_t)st.st_size > (uintmax_t)max) {
 		close(fd);
 		return -EMSGSIZE;
+	}
+	/* nothing to hand back is what every caller reads as absent,
+	 * and it is not the "larger than the bound" -EMSGSIZE reports */
+	if (st.st_size <= 0) {
+		close(fd);
+		return 0;
 	}
 
 	ret = lota_read_full(fd, buf, (size_t)st.st_size);

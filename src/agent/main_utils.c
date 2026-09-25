@@ -137,8 +137,9 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	       "their\n");
 	printf("                    attestation CA; --ca-cert gives their "
 	       "trust\n");
-	printf("                    anchor, --server/--port their verifier, "
-	       "and\n");
+	printf("                    anchor, --server/--port their verifier "
+	       "(omit them\n");
+	printf("                    for a publisher who runs none), and\n");
 	printf("                    --publisher-name the label. Records no "
 	       "consent:\n");
 	printf("                    somebody at this machine still has to "

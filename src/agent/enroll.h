@@ -232,6 +232,9 @@ int do_allow_publisher(const char *profile_id);
 /*
  * Write a publisher's [profile] section into lota.conf.
  * Records no consent -- that stays a separate act by the person at the machine.
+ *
+ * @verifier NULL or empty writes the publisher who runs none, so the caller
+ * has to pass what was named rather than a default standing in for it.
  */
 int do_add_publisher(const char *config_path, const char *name,
 		     const char *ca_server, int ca_port, const char *ca_cert,
