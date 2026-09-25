@@ -870,12 +870,9 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	/*
-	 * Self-measurement extends PCR14 with clockInfo captured through
-	 * the AIK signing path (see tpm_read_signed_clockinfo). AIK must
-	 * therefore be provisioned before this call or the agent will fall
-	 * back to Esys_ReadClock and produce a PCR14 value the verifier
-	 * cannot rederive on simulators that diverge between ReadClock and
-	 * Quote.clockInfo.
+	 * Self-measurement extends PCR14 with a commitment over the agent
+	 * binary alone: no key takes part, so the order below is about
+	 * the quote that follows rather than about the register.
 	 */
 	printf("Performing self-measurement...\n");
 	ret = self_measure(&g_agent.tpm_ctx);
@@ -1511,12 +1508,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	}
 
 	/*
-	 * Self-measurement extends PCR14 using clockInfo captured through
-	 * the AIK signing path (tpm_read_signed_clockinfo). Provision AIK
-	 * first so the signed-clock path is available; without it the
-	 * fallback to Esys_ReadClock can produce a PCR14 value the
-	 * verifier cannot rederive on simulators whose ReadClock and
-	 * Quote.clockInfo disagree.
+	 * Self-measurement extends PCR14 with a commitment over the agent
+	 * binary alone, so it needs no key and no counters.
+	 * The AIK is provisioned first because everything after it does:
+	 * the quote this round sends is signed with the publisher's key.
 	 */
 	lota_info("Performing self-measurement");
 	ret = self_measure(&g_agent.tpm_ctx);

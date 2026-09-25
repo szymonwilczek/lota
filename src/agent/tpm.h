@@ -1273,15 +1273,6 @@ int tpm_test_call_with_backoff_array(struct tpm_context *ctx,
 				     uint32_t *out_rc, void **slots[],
 				     size_t out_slot_count);
 
-/*
- * Parse the TPMS_ATTEST blob produced by the signed-clock probe and
- * return clockInfo.resetCount/restartCount. Exposed for unit tests so
- * the parsing layer can be exercised without driving a live TPM.
- */
-int tpm_test_parse_signed_clockinfo(const uint8_t *attest_buf,
-				    size_t attest_len,
-				    uint32_t *reset_count_out,
-				    uint32_t *restart_count_out);
 #endif
 
 #endif /* LOTA_TPM_H */
