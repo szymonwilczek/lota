@@ -100,7 +100,7 @@ func fixtureAgentHashSeed(seed byte) [types.HashSize]byte {
 // fixturePCR14Seed is the PCR14 a report carrying the seeded agent hash must present:
 // the register content is derived from the agent hash, so the two move together.
 func fixturePCR14Seed(seed byte) [types.HashSize]byte {
-	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed), 0, 0)
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHashSeed(seed))
 }
 
 // fixturePCR14 is the only PCR14 a fixture report can carry and still verify:
@@ -108,7 +108,7 @@ func fixturePCR14Seed(seed byte) [types.HashSize]byte {
 // the fixture event log replays to (0^32, it holds no PCR14 events)
 // and the zero reset/restart counters in the fixture TPMS_ATTEST ClockInfo
 func fixturePCR14() [types.HashSize]byte {
-	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHash(), 0, 0)
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, fixtureAgentHash())
 }
 
 func createValidReport(t *testing.T, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {

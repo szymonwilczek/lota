@@ -93,17 +93,11 @@ static int build_committed_boot(struct scenario *s, uint32_t observed_restart)
 	/* a lock value that is nothing else in the scenario */
 	fill(s->lock_value, 0x40);
 
-	/* what the agent actually extended, at RESTART_AT_EXTEND */
-	ret = tpm_derive_locked_pcr14(s->self_hash, k_baseline, RESET_COUNT,
-				      RESTART_AT_EXTEND, s->current);
+	/* What the agent extended, and what this instance derives now */
+	ret = tpm_derive_locked_pcr14(s->self_hash, k_baseline, s->current);
 	if (ret < 0)
 		return ret;
-
-	/* what this instance derives from the counters it just read */
-	ret = tpm_derive_locked_pcr14(s->self_hash, k_baseline, RESET_COUNT,
-				      observed_restart, s->expected_locked);
-	if (ret < 0)
-		return ret;
+	memcpy(s->expected_locked, s->current, LOTA_HASH_SIZE);
 
 	s->prev.reset_count = RESET_COUNT;
 	s->prev.restart_count = RESTART_AT_EXTEND;
@@ -135,36 +129,8 @@ static void test_warm_restart_is_committed(void)
 	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
 		FAIL("failed to derive the register value");
 
-	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_ALREADY_COMMITTED)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a warm restart must read as already committed");
-	PASS();
-}
-
-/*
- * After an S3 resume the TPM has restored PCR14 byte for byte
- * and moved restartCount on.
- * Nothing extended the register, so nothing may be reported as having
- * extended it.
- */
-static void test_resume_is_not_a_foreign_extend(void)
-{
-	struct scenario s;
-
-	TEST("a TPM resume is not another writer extending PCR14");
-
-	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
-		FAIL("failed to derive the register value");
-
-	if (memcmp(s.current, s.expected_locked, LOTA_HASH_SIZE) == 0)
-		FAIL("the scenario is void: restartCount did not move the "
-		     "derived value");
-
-	uint32_t drift = 0;
-
-	if (tpm_classify_pcr14(&s.obs, &drift) != TPM_PCR14_RESUMED)
-		FAIL("a resume was not recognised as a TPM restart");
-	if (drift != 1)
-		FAIL("expected a drift of one restart, got %u", drift);
 	PASS();
 }
 
@@ -186,7 +152,7 @@ static void test_foreign_extend_is_still_refused(void)
 	/* somebody extended PCR14; the snapshot still holds our value */
 	fill(s.current, 0x77);
 
-	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_MUTATED_IN_SESSION)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("a foreign extend must read as a mutation");
 	PASS();
 }
@@ -205,12 +171,19 @@ static void test_resume_does_not_license_a_new_binary(void)
 	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
 		FAIL("failed to derive the register value");
 
-	/* different binary is running now */
+	/*
+	 * Different binary is running now, so what this instance derives is not
+	 * what the register holds -- the register still carries the commitment
+	 * of the binary that extended it
+	 */
 	fill(s.self_hash, 0xB0);
+	if (tpm_derive_locked_pcr14(s.self_hash, k_baseline,
+				    s.expected_locked) < 0)
+		FAIL("failed to derive the register value");
 
-	enum tpm_pcr14_state got = tpm_classify_pcr14(&s.obs, NULL);
+	enum tpm_pcr14_state got = tpm_classify_pcr14(&s.obs);
 
-	if (got == TPM_PCR14_ALREADY_COMMITTED || got == TPM_PCR14_RESUMED)
+	if (got == TPM_PCR14_ALREADY_COMMITTED)
 		FAIL("a resume must not accept a different agent binary");
 	if (got != TPM_PCR14_BINARY_CHANGED)
 		FAIL("a changed binary must be named as such");
@@ -232,17 +205,17 @@ static void test_reset_count_advance_is_not_a_resume(void)
 		FAIL("failed to derive the register value");
 
 	/*
-	 * register carries a commitment from the previous boot while
-	 * the TPM reports a resetCount one higher, so it was written before
-	 * this boot's agent ever ran
+	 * Snapshot was written before the most recent hardware reset,
+	 * so whatever the register carries now was extended before this
+	 * boot's agent ran.
+	 * Give it a value that is nothing this agent would have written,
+	 * which is the case the counters used to produce on their own.
 	 */
-	if (tpm_derive_locked_pcr14(s.self_hash, k_baseline, RESET_COUNT - 1,
-				    RESTART_AT_EXTEND, s.current) < 0)
-		FAIL("failed to derive the stale register value");
+	fill(s.current, 0x21);
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 	s.prev.reset_count = RESET_COUNT - 1;
 
-	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_TAMPERED_BEFORE_START)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_TAMPERED_BEFORE_START)
 		FAIL("an advanced resetCount must read as pre-start tamper");
 	PASS();
 }
@@ -267,16 +240,96 @@ static void test_forged_snapshot_cannot_fake_a_resume(void)
 	/* ... and wrote a snapshot that claims it is what we committed */
 	memcpy(s.prev.pcr14, s.current, LOTA_HASH_SIZE);
 
-	if (tpm_classify_pcr14(&s.obs, NULL) != TPM_PCR14_MUTATED_IN_SESSION)
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_MUTATED_IN_SESSION)
 		FAIL("a forged snapshot was allowed to explain the register");
+	PASS();
+}
+
+/*
+ * The commitment names the agent binary, and nothing else.
+ * Binding it to the TPM's clock counters made the register different for every
+ * publisher's AIK -- each key sees its own obfuscated counters -- so one PCR 14
+ * could only ever be verified by one of them.
+ */
+static void test_commitment_does_not_bind_the_clock_counters(void)
+{
+	uint8_t self_hash[LOTA_HASH_SIZE];
+	uint8_t a[LOTA_HASH_SIZE];
+	uint8_t b[LOTA_HASH_SIZE];
+	uint8_t c[LOTA_HASH_SIZE];
+
+	TEST("the commitment does not bind the TPM clock counters");
+
+	fill(self_hash, 0xA0);
+
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, a) < 0)
+		FAIL("failed to derive the register value");
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, b) < 0)
+		FAIL("failed to derive the register value");
+
+	if (memcmp(a, b, LOTA_HASH_SIZE) != 0)
+		FAIL("the derivation is not stable for one binary");
+
+	/* binary is the only input that may move it */
+	fill(self_hash, 0xB0);
+	if (tpm_derive_locked_pcr14(self_hash, k_baseline, c) < 0)
+		FAIL("failed to derive the register value");
+	if (memcmp(a, c, LOTA_HASH_SIZE) == 0)
+		FAIL("a different agent binary produced the same value");
+	PASS();
+}
+
+/*
+ * With the counters gone a resume needs no candidate scan:
+ * the register still holds exactly what this agent extended,
+ * so it reads as committed.
+ */
+static void test_resume_reads_as_committed(void)
+{
+	struct scenario s;
+
+	TEST("a resume reads as committed without a candidate scan");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND + 1) < 0)
+		FAIL("failed to derive the register value");
+
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_ALREADY_COMMITTED)
+		FAIL("a resume must read as already committed");
+	PASS();
+}
+
+/*
+ * What the counters used to catch implicitly, kept explicitly:
+ * a cold boot has happened since the snapshot was written, so a register
+ * that already carries this binary's commitment was extended by somebody
+ * who ran before the agent did.
+ * On an honest cold boot the register holds the initramfs lock value at
+ * this point and nothing else.
+ */
+static void test_commitment_present_after_a_cold_boot_is_refused(void)
+{
+	struct scenario s;
+
+	TEST("a commitment already present after a cold boot is refused");
+
+	if (build_committed_boot(&s, RESTART_AT_EXTEND) < 0)
+		FAIL("failed to derive the register value");
+
+	/* snapshot was written before the most recent hardware reset */
+	s.prev.reset_count = RESET_COUNT - 1;
+
+	if (tpm_classify_pcr14(&s.obs) != TPM_PCR14_TAMPERED_BEFORE_START)
+		FAIL("a commitment extended before the agent ran was accepted");
 	PASS();
 }
 
 int main(void)
 {
 	test_warm_restart_is_committed();
+	test_commitment_does_not_bind_the_clock_counters();
+	test_resume_reads_as_committed();
+	test_commitment_present_after_a_cold_boot_is_refused();
 	test_forged_snapshot_cannot_fake_a_resume();
-	test_resume_is_not_a_foreign_extend();
 	test_foreign_extend_is_still_refused();
 	test_resume_does_not_license_a_new_binary();
 	test_reset_count_advance_is_not_a_resume();

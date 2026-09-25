@@ -158,12 +158,11 @@ device-add. After ``make install``:
 5. AIK + PCR14 reset
 ====================
 
-The initramfs helper first pins PCR14 with a counter-stable LOTA lock, then the
-agent binds PCR14 against ``(self_hash, resetCount, restartCount)`` once per
-boot. The counters are obtained through a TPM2_Quote with an empty PCR selection
-so the value extended into PCR14 matches the clockInfo carried by the later
-attestation quote even on TPM 2.0 simulators (swtpm) whose ``Esys_ReadClock``
-and ``Quote.clockInfo`` disagree.
+The initramfs helper first pins PCR14 with the LOTA lock, then the agent binds
+PCR14 against its own ``self_hash`` once per boot. The TPM's clock counters
+take no part in either digest: a TPM obfuscates them per signing key, so a
+commitment that folded them in could only ever be rederived by one
+publisher's AIK, and they are in every token the agent hands out anyway.
 
 PCR14 is not pristine on every platform. On UEFI Secure Boot, shim measures
 the MOK state (``MokList``, ``SbatLevel``, ``MokListRT``) into PCR14 before the
