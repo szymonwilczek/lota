@@ -131,17 +131,35 @@ own before the TTL, default 24h, expires):
 .. code-block:: sh
 
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert tls.crt
+        --ca-cert ca.crt
     # stores the issued certificate and the CA endpoint in the publisher
     # profile the trust anchor names, under /var/lib/lota/profiles/
 
-``--ca-cert`` is required. Beyond verifying the TLS peer, the trust anchor is
-what names the publisher: the profile directory is the SHA-256 of the anchor's
+``--ca-cert`` is required, and it must be the **CA anchor** -- the certificate
+whose key signs AIK certificates -- not the listener certificate the CA serves
+TLS with. Beyond verifying the TLS peer, the trust anchor is what names the
+publisher: the profile directory is the SHA-256 of the anchor's
 SubjectPublicKeyInfo, so a host answering to several publishers keeps one AIK,
 one certificate and one enrollment record per publisher and no publisher can
 correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
+
+The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
+warn when the file named is not a CA certificate, naming what a re-key of it
+would cost; an anchor produces no such line. It is a warning rather than a
+refusal, because a self-signed leaf is a legitimate pin for a deployment that
+wants one and nothing in the file says which was meant.
+
+Naming the listener certificate here instead is the mistake with the quietest
+consequences. It is the one certificate in a deployment that is rotated on a
+schedule, and a rotation that generates a new key changes the SPKI: every host
+of that publisher becomes a new device at once. Each one enrolls again,
+provisions another AIK in another TPM persistent slot, and needs consent again,
+while its previous enrollment record and certificate sit in a profile directory
+nothing reads. Nothing reports that this has happened -- the hosts look new,
+because to that publisher they are. Issue the listener from the CA and pass the
+CA, which is what :ghsrc:`examples/enrollment/gen-ca.sh` generates.
 
 The AIK is part of the profile, not shared across it. Each publisher's
 enrollment provisions its own key, in its own TPM persistent slot, with its own
@@ -165,7 +183,7 @@ selects the profile:
 
 .. code-block:: sh
 
-    sudo lota-agent --reenroll --ca-cert tls.crt
+    sudo lota-agent --reenroll --ca-cert ca.crt
 
 It is also the command that moves a host onto per-publisher keys. An AIK
 created before the publisher's identity entered the TPM creation template is
@@ -376,7 +394,7 @@ at it:
     sudo install -m 600 /dev/null /etc/lota/enroll.token
     printf %s "$TOKEN" | sudo tee /etc/lota/enroll.token >/dev/null
     sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 \
-        --ca-cert /etc/lota/ca-tls.crt \
+        --ca-cert /etc/lota/ca.crt \
         --enroll-token-file /etc/lota/enroll.token
 
 The token must be 1 to 128 printable, non-whitespace ASCII characters; a
