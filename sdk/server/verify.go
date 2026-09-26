@@ -106,6 +106,7 @@ var (
 	ErrBadMagic     = errors.New("lota: invalid TPM magic in TPMS_ATTEST")
 	ErrNoSignature  = errors.New("lota: token contains no signature")
 	ErrNoAttestData = errors.New("lota: token contains no attestation data")
+	ErrRuntimeImage = errors.New("lota: runtime image measurement does not match the quote")
 )
 
 // represents the verified claims extracted from a LOTA attestation token
@@ -228,7 +229,7 @@ func VerifyToken(tokenData []byte, aikPub *rsa.PublicKey, expectedNonce []byte) 
 		runtimeDigest = computeRuntimeProtectDigest(protectedPIDs)
 	}
 	if subtle.ConstantTimeCompare(runtimeDigest[:], hdr.runtimeProtectDigest[:]) != 1 {
-		return nil, fmt.Errorf("%w: runtime protected PID digest mismatch", ErrNonceFail)
+		return nil, fmt.Errorf("%w: recomputed from the token's own pid list and image digests", ErrRuntimeImage)
 	}
 
 	// verify RSA signature over attest_data
