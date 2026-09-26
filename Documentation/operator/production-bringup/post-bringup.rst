@@ -142,8 +142,8 @@ So the two supported paths are:
    therefore schedule them alongside a regular maintenance reboot.
 
 A configuration change that only the daemon's own state depends on does not
-need either path: ``systemctl reload lota-agent`` picks up a newly added
-publisher without stopping anything. Settings the agent reads once at startup,
+need either path: ``systemctl try-reload-or-restart lota-agent lota-attest``
+picks up a newly added publisher without stopping anything. Settings the agent reads once at startup,
 such as ``container_listener_uid``, take effect at the next boot instead.
 
 The socket that setting asks for is a separate matter from the setting itself.
@@ -305,14 +305,25 @@ the machine runs the ``--allow-publisher`` command it prints. That separation
 is deliberate: an installer must not be able to agree, on the player's behalf,
 to a publisher holding an attestation key on their hardware.
 
-**A running agent has to be told.** The daemon answers titles from the
-publisher list it read when it started, so one added since is unknown to it and
-a title naming it is refused with ``LOTA_ERR_UNKNOWN_PROFILE``. ``systemctl
-reload lota-agent`` (SIGHUP) re-reads ``lota.conf`` and hands the new list to
-the socket, with no effect on enforcement, PCR 14 or any existing enrollment --
-the command ``--add-publisher`` prints alongside the consent line. A rebuild
-that fails leaves the previous list in place rather than answering no title at
-all.
+**A running host has to be told, and two units read this file.** The daemon
+answers titles from the publisher list it read when it started, so one added
+since is unknown to it and a title naming it is refused with
+``LOTA_ERR_UNKNOWN_PROFILE``. The attestation loop builds its target list the
+same way, so a publisher it has not been told about is never reported to --
+which shows up as a verifier that simply never hears from the host. One command
+covers both::
+
+   sudo systemctl try-reload-or-restart lota-agent lota-attest
+
+Both take SIGHUP: the daemon re-reads ``lota.conf`` and hands the new list to
+the socket, and the loop rebuilds its targets between rounds, reporting to the
+new publisher immediately in case a title of theirs is already running. Neither
+touches enforcement, PCR 14 or any existing enrollment, and a publisher that
+was already there keeps its cadence, its session state and its failure backoff.
+``try-`` is what makes it one command on every host: a unit that is not running
+-- the loop stays inactive until the first enrollment -- is skipped. It is the
+command ``--add-publisher`` prints alongside the consent line. A rebuild that
+fails leaves the previous list in place.
 
 Every key below a section header belongs to that section, so the top-level keys
 go above the first profile and nothing top-level may follow one.

@@ -140,11 +140,16 @@ int do_attest(const char *server, int port, const char *ca_cert,
  * With no profiles (or no config) the single server/port/ca_cert the caller
  * resolved is the only target.
  * @interval_sec is the cadence a profile that states none inherits.
+ *
+ * @config_path is where that list is re-read from on SIGHUP, so a publisher
+ * a game's installer registers while the host runs is reported to without
+ * a restart. NULL means the default file, which is what the packaged unit
+ * leaves it as.
  */
-int do_continuous_attest(const struct lota_config *cfg, const char *server,
-			 int port, const char *ca_cert, int skip_verify,
-			 const uint8_t *pin_sha256, int interval_sec,
-			 uint32_t aik_ttl);
+int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
+			 const char *server, int port, const char *ca_cert,
+			 int skip_verify, const uint8_t *pin_sha256,
+			 int interval_sec, uint32_t aik_ttl);
 
 /*
  * Publish the current AIK rotation state (generation, provisioned time,

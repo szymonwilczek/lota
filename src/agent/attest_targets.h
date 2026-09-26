@@ -122,6 +122,32 @@ static inline bool attest_target_reports(const struct attest_target *t)
 }
 
 /*
+ * Re-read @config_path and rebuild the list while the loop is running.
+ *
+ * A publisher registered by a game's installer has to be reported to without
+ * a restart, and a publisher that is still configured has to come through
+ * the rebuild as the loop left it: same schedule, same failure state,
+ * same session count, since those live in this list and nowhere else.
+ *
+ * A config that does not load leaves the list untouched -- reporting from
+ * the previous list beats reporting to nobody -- and is returned as a negative
+ * errno.
+ * A file that loads and names no publisher at all empties the list, which is
+ * a state an operator can legitimately configure.
+ *
+ * The loaded configuration is this call's own: nothing outside the target list
+ * survives it, because nothing else in the loop reads the config after
+ * the list is built.
+ *
+ * The single-verifier arguments are the CLI's and do not change across
+ * a reload; they are passed through to attest_targets_build()
+ */
+int attest_targets_reload(const char *config_path, const char *server, int port,
+			  const char *ca_cert, int interval_sec,
+			  struct attest_target *targets, size_t max,
+			  size_t *count);
+
+/*
  * Build the target list.
  *
  * Configured profile list is the target list:

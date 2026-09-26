@@ -237,6 +237,20 @@ void pidfile_remove(const char *path, int fd)
 		close(fd);
 }
 
+bool daemon_reload_pending(void)
+{
+	return g_daemon_reload && *g_daemon_reload != 0;
+}
+
+bool daemon_reload_taken(void)
+{
+	if (!g_daemon_reload || *g_daemon_reload == 0)
+		return false;
+
+	*g_daemon_reload = 0;
+	return true;
+}
+
 int daemon_install_signals(volatile sig_atomic_t *running,
 			   volatile sig_atomic_t *reload)
 {
