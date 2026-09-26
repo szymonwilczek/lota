@@ -154,6 +154,54 @@ of which five are resident on an installed host before any publisher enrolls.
 platform the build's own maximum is what a host meets first. A firmware TPM with
 a smaller pool, or one shared with other software, meets the TPM's limit instead.
 
+What a token costs on a firmware TPM
+------------------------------------
+
+Every token is a fresh ``TPM2_Quote``, and a quote is a blocking operation on a
+device the whole machine shares. Measured on the validation host -- an Intel
+PTT (CSME Tiger Lake) firmware TPM, agent running with three publishers
+enrolled, CPU governor ``powersave``, on AC:
+
+.. list-table::
+   :header-rows: 1
+
+   * - What
+     - Cost
+     - How
+   * - ``lota_get_token()`` end to end
+     - **48 ms median** (45 min, 49 max)
+     - 12 requests a second apart through the gaming SDK against the running
+       daemon, with a session open; includes the IPC round trip, the runtime
+       measurement of the calling process, the quote and serialisation
+   * - Bare ``tpm2_quote`` over 4 PCRs
+     - **26 ms** per invocation
+     - 20 and 30 repetitions in one root shell; adding ``sudo`` per invocation
+       costs about 16 ms more
+   * - Four concurrent quote streams
+     - 60 quotes in **884 ms**
+     - four workers of 15 ``tpm2_quote`` invocations each, run at once
+
+Take that as the order of magnitude for this class of device, not as a
+guarantee: the same host has also measured ~171 ms of TPM work per quote, with
+a flat ceiling of about 6 quotes per second regardless of concurrency, and the
+difference is unexplained. Size against the slower figure if a design depends
+on throughput, and measure your own hardware before committing to a cadence.
+
+Two consequences hold under either figure:
+
+* **A token request is a blocking TPM operation of tens of milliseconds.** It
+  does not belong on a frame loop or any latency-sensitive path. Fetch tokens
+  on a heartbeat -- the reference integration uses 5 seconds -- and reuse the
+  one you hold until it nears expiry.
+* **The per-uid token limit is a meaningful share of the device.** The limit is
+  60 requests per 60 seconds, which is one quote a second: between 3% and 17%
+  of this TPM's throughput depending on which figure above applies. The
+  per-session limit of 20 per 60 seconds exists so one title cannot spend the
+  whole uid allowance; both are documented under the IPC rate limits.
+
+A discrete TPM is not automatically faster. Nothing here is a floor: measure
+the hardware a deployment actually ships on.
+
 Suspend and resume
 ------------------
 
