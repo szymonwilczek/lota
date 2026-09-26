@@ -133,8 +133,10 @@ What the stages do
    (ext4/btrfs/f2fs). On filesystems without verity (XFS, ZFS) it instead
    accepts a signed ``security.ima`` xattr enforced by IMA appraisal, which
    gives the same guarantee.
-#. **Initramfs PCR14 lock** -- regenerates the initramfs so the PCR14 lock
-   helper runs before any regular userspace. Requires a reboot.
+#. **Initramfs PCR14 lock** -- regenerates the initramfs of every installed
+   kernel so the PCR14 lock helper runs before any regular userspace, whichever
+   kernel is selected at boot. It reports work to do while any installed kernel
+   is missing the helper. Requires a reboot.
 #. **Kernel integrity floor** -- appends ``ima=on ima_appraise=fix`` (plus
    ``module.sig_enforce=1`` / ``lockdown=integrity`` where the running kernel
    lacks them) to the boot entries via grubby. The floor pins the appraisal
@@ -144,7 +146,10 @@ What the stages do
    udev so ``/dev/tpm*`` carries the LOTA-only label.
 #. **Reboot checkpoint** -- stops with exit 10 until the boot-chain changes are
    live and PCR 14 carries this boot's initramfs lock. PCR 14 only resets on a
-   hardware reset, so this cannot be skipped.
+   hardware reset, so this cannot be skipped. On a Secure Boot machine PCR 14 is
+   already non-zero before any of this -- shim measures the MOK variables into
+   it -- and the checkpoint says so rather than reporting state from an earlier
+   install.
 #. **Agent service** -- enables and starts ``lota-agent.service`` and its
    socket.
 #. **Enrollment** -- the TPM proves itself to a publisher's attestation CA
