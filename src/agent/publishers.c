@@ -104,6 +104,20 @@ int publishers_list(const char *base_dir, struct publisher_entry *out,
 	return 0;
 }
 
+size_t publishers_keys_held(const struct publisher_entry *list, size_t count)
+{
+	size_t held = 0;
+
+	if (!list)
+		return 0;
+
+	for (size_t i = 0; i < count; i++)
+		if (list[i].has_aik_handle)
+			held++;
+
+	return held;
+}
+
 int publishers_forget(const struct profile_paths *paths)
 {
 	static const char *const leaves[] = {

@@ -126,8 +126,47 @@ an integration:
      - The demo trusts one key from a file. Yours comes from enrolment
        records -- see ``examples/enrollment/README.rst`` -- so the
        backend knows which TPM belongs to which account.
+   * - Publisher selection
+     - ``--publisher <hex>`` in the demo; ``publisher_profile`` in
+       ``struct lota_ac_config`` for you, and not optional. Naming the
+       publisher is what opens a session for them, and a session-gated
+       host -- the consumer default -- reports only while one is open.
+       A producer that names nobody is never attested for anybody and
+       every beat reads ``NOT_ATTESTED``. The id is the hex SHA-256 of
+       your CA anchor's SubjectPublicKeyInfo, which your installer
+       already knows because ``--add-publisher`` prints it.
    * - Verdict handling
      - The demo prints. Yours is your anti-cheat policy.
+
+Telling your bug from the player's state
+========================================
+
+``lota_ac_init()`` returns ``NULL`` and ``lota_ac_heartbeat()`` returns a
+negative errno for a dozen unrelated reasons, and the errno alone does not
+separate them: ten distinct refusals in the heartbeat path share
+``-EIO``. ``lota_ac_last_error()`` names the one that happened, on the
+calling thread, and ``lota_ac_strerror()`` renders it.
+
+.. code:: c
+
+   struct lota_ac_session *s = lota_ac_init(&cfg);
+   if (!s)
+           log("cannot start: %s", lota_ac_strerror(lota_ac_last_error()));
+
+The split to build on is which side the cause is on. ``CONFIG_SIZE``,
+``GAME_ID``, ``PROVIDER`` and ``INVALID_ARG`` are your code: they cannot be
+fixed by anything the player does, and a shipped build should never produce
+them. ``NO_AGENT``, ``CONSENT_REQUIRED``, ``UNKNOWN_PROFILE``,
+``NOT_ATTESTED`` and ``TOKEN_DIR`` are the state of that machine, and each
+has a different thing to tell the player -- install the agent, agree to your
+publisher, wait for the first verdict. ``RATE_LIMITED`` is neither: it means
+the producer is beating faster than the agent issues tokens, and the fix is
+the interval.
+
+A session whose agent is unreachable is **returned**, not refused, in
+``LOTA_AC_STATE_ERROR``: the title has something to show and can beat again
+once the host is ready. ``lota_ac_last_error()`` names that case too, so
+"not ready yet" is never mistaken for a configuration the library rejected.
 
 What the token actually proves
 ==============================

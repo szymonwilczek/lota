@@ -47,6 +47,17 @@ struct demo_options {
 	const char *server_url;
 	const char *game_id;
 	const char *socket_path;
+	/*
+	 * The publisher this producer plays for, as the hex SHA-256 of their
+	 * CA anchor's SubjectPublicKeyInfo.
+	 *
+	 * Naming it is what opens a session for that publisher,
+	 * and a session-gated host reports only while one is open
+	 * -- so a producer that names nobody is never attested for anybody.
+	 * A shipped producer knows its own publisher; this is a flag here
+	 * because the demo does not know which machine it is run on.
+	 */
+	const char *publisher_profile;
 	const char *tamper_marker;
 	const char *ca_cert; /* provisioning CA that signs the server cert */
 	const char *client_cert; /* producer mTLS certificate */
@@ -76,6 +87,7 @@ static void print_usage(const char *argv0)
 {
 	fprintf(stderr,
 		"Usage: %s [--server URL] [--game-id ID] [--socket PATH]\n"
+		"          [--publisher HEX]\n"
 		"          [--provider eac|battleye] [--interval SEC] [--once]\n"
 		"          [--tamper-marker PATH] [--print-runtime-objects]\n"
 		"          [--require-full-image] [--protect-self]\n"
@@ -90,6 +102,13 @@ static void print_usage(const char *argv0)
 		"For a mutual-TLS server (https:// URL) pass --ca-cert to verify\n"
 		"the server against the provisioning CA and --client-cert /\n"
 		"--client-key to present the producer's certificate."
+		"\n"
+		"--publisher names the publisher this producer plays for, as\n"
+		"the hex SHA-256 of their CA anchor's public key (the id\n"
+		"'lota-agent --list-publishers' prints). Naming it opens a\n"
+		"session for that publisher; a session-gated host reports only\n"
+		"while one is open, so a producer that names nobody is never\n"
+		"attested for anybody.\n"
 		"\n"
 		"--print-runtime-objects prints, one path per line, the\n"
 		"file-backed objects (main binary + shared libraries) this\n"
@@ -163,6 +182,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 	opt->server_url = DEMO_DEFAULT_URL;
 	opt->game_id = DEMO_DEFAULT_GAME_ID;
 	opt->socket_path = NULL;
+	opt->publisher_profile = NULL;
 	opt->tamper_marker = NULL;
 	opt->ca_cert = NULL;
 	opt->client_cert = NULL;
@@ -198,13 +218,14 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "protect-self", no_argument, NULL, 'P' },
 		{ "ca-cert", required_argument, NULL, 'A' },
 		{ "client-cert", required_argument, NULL, 'E' },
+		{ "publisher", required_argument, NULL, 'u' },
 		{ "client-key", required_argument, NULL, 'K' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 },
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "s:g:S:p:i:1T:OFPA:E:K:h",
+	while ((c = getopt_long(argc, argv, "s:g:S:u:p:i:1T:OFPA:E:K:h",
 				long_opts, NULL)) != -1) {
 		switch (c) {
 		case 's':
@@ -215,6 +236,9 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 			break;
 		case 'S':
 			opt->socket_path = optarg;
+			break;
+		case 'u':
+			opt->publisher_profile = optarg;
 			break;
 		case 'p':
 			if (parse_provider(optarg, &opt->provider) != 0) {
@@ -419,8 +443,8 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 	size_t written = 0;
 	int rc = lota_ac_heartbeat(session, buf, sizeof(buf), &written);
 	if (rc != 0) {
-		fprintf(stderr, "demo_anticheat: lota_ac_heartbeat: %s\n",
-			strerror(-rc));
+		fprintf(stderr, "demo_anticheat: lota_ac_heartbeat: %s (%s)\n",
+			lota_ac_strerror(lota_ac_last_error()), strerror(-rc));
 		*out_verdict = DEMO_EXIT_TRANSPORT;
 		return rc;
 	}
@@ -515,6 +539,7 @@ int main(int argc, char **argv)
 		.game_id = opt.game_id,
 		.direct = 1,
 		.socket_path = opt.socket_path,
+		.publisher_profile = opt.publisher_profile,
 		.required_flags = opt.require_full_image ?
 					  LOTA_FLAG_IMAGE_FULLY_MEASURED :
 					  0,
@@ -533,6 +558,7 @@ int main(int argc, char **argv)
 			.struct_size = sizeof(popts),
 			.timeout_ms = 8000,
 			.socket_path = opt.socket_path,
+			.publisher_profile = opt.publisher_profile,
 		};
 
 		protect_client = lota_connect_opts(&popts);
@@ -561,11 +587,8 @@ int main(int argc, char **argv)
 
 	struct lota_ac_session *session = lota_ac_init(&cfg);
 	if (!session) {
-		fprintf(stderr,
-			"demo_anticheat: lota_ac_init failed (agent socket "
-			"unreachable at %s)\n",
-			opt.socket_path ? opt.socket_path :
-					  "/run/lota/lota.sock");
+		fprintf(stderr, "demo_anticheat: lota_ac_init failed: %s\n",
+			lota_ac_strerror(lota_ac_last_error()));
 		if (protect_client)
 			lota_disconnect(protect_client);
 		curl_global_cleanup();
