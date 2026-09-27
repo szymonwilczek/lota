@@ -156,7 +156,7 @@ static int run_default(void)
 {
 	uint8_t live[LOTA_AC_RUNTIME_MEASURE_SIZE];
 	uint8_t set[LOTA_AC_RUNTIME_MEASURE_SIZE];
-	struct obj_table t = { 0 };
+	struct obj_table t = {};
 	const char **vec = NULL;
 	int rc;
 	int ret = 1;

@@ -44,10 +44,25 @@ target that passes a reduced flag set (includes, ``_GNU_SOURCE`` and the
 ``pkg-config`` dependency flags), because the hardening, machine, and sanitizer
 flags in ``CFLAGS`` confuse the parsers:
 
-* ``make sparse`` runs the Sparse semantic checker. It is **advisory**: it
-  prints findings and exits zero. Set ``SPARSE_STRICT=1`` to fail on any
-  finding.
-* ``make smatch`` runs the Smatch flow analyzer, also advisory, with
+* ``make sparse`` runs the Sparse semantic checker. It is **blocking**: any
+  finding fails the target. Only findings in tracked files count -- Sparse
+  does not know several glibc and gcc attributes and reports the C library by
+  the hundred, which says nothing about this tree and differs per
+  distribution. Sparse also gets the defines the sources are really built
+  with (``LOTA_INTERNAL_TESTS``, the build-identity string, the benchmark and
+  staged-SDK include roots); without them it walks a translation unit no build
+  produces. One warning is switched off tree-wide:
+  declaration-after-statement, a style rule rather than a defect class.
+  Everything else stays on. Where Sparse is wrong,
+  ``scripts/sparse-exemptions.txt`` drops that one message in that one file,
+  with the reason written out, so the same finding anywhere else still fails
+  the gate. It is not a backlog: an entry is only justified when Sparse
+  reports something the source does not do and no code change can say it more
+  clearly. The current entries cover constants folded through an inlined call
+  or macro and reported as if the source wrote the specialised result, the
+  flexible-array union that sizes a variable-length ioctl argument, and two
+  whole-struct ``memset`` calls above Sparse's 100 KB copy limit.
+* ``make smatch`` runs the Smatch flow analyzer, advisory, with
   ``SMATCH_STRICT=1`` for the strict mode. Smatch has no distribution package;
   build it from ``https://repo.or.cz/smatch.git`` and put it on ``PATH`` (or
   pass ``SMATCH=/path/to/smatch``), otherwise the target skips.
@@ -59,9 +74,9 @@ Install the front ends with ``dnf install sparse coccinelle`` on Fedora or
 ``apt-get install sparse coccinelle`` on Debian and Ubuntu, and build Smatch
 from source. ``scripts/check-patch`` runs all three when the patch touches C
 and skips each one whose tool is absent, so the gate stays usable without them.
-The advisory status for Sparse and Smatch is deliberate -- the first pass over
-the tree carries a backlog -- and the ``*_STRICT`` switches are the ratchet to
-flip once it is burned down. The same three checks run in CI under the
+Smatch stays advisory because it has no distribution package, so most
+contributors and the ``check-patch`` run skip it; ``SMATCH_STRICT=1`` is the
+ratchet for anyone who has built it. The same three checks run in CI under the
 ``C static analysis`` workflow.
 
 Use ``scripts/format-patch [<base> [<head>]]`` only to normalize local commit

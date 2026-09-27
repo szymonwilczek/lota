@@ -875,17 +875,51 @@ SPATCH ?= spatch
 CHECK_PKG_CFLAGS := $(foreach p,libsystemd libseccomp dbus-1 sdl2 libcurl libbpf openssl tss2-esys tss2-mu tss2-tctildr,$(shell pkg-config --cflags $(p) 2>/dev/null))
 CHECK_CPPFLAGS := -I$(INC_DIR) -I$(SRC_DIR) -D_GNU_SOURCE $(CHECK_PKG_CFLAGS)
 
-# sparse over every project C source (advisory: reports, exits 0)
-# Set SPARSE_STRICT=1 to fail on any finding
+# sparse over every project C source.
+# Blocking: Any finding fails.
+#
+# Only findings in tracked files count. sparse 0.6.x does not know several
+# glibc and gcc attributes (__access__, __transparent_union__), so a run
+# reports the C library by the hundred; those lines say nothing about this
+# tree and differ per distribution, which would make the gate unportable.
+#
+# The flag set mirrors what each group is really compiled with.
+# Tests link the agent's own objects behind LOTA_INTERNAL_TESTS, the SDK
+# carries the build-identity define, and the benchmarks have their own
+# include root;
+# without them sparse walks a translation unit no build ever produces and
+# reports undefined identifiers that do not exist.
+# The reference integrations include <lota/...> the way an integrator does,
+# so a symlink gives them the installed layout without staging the SDK first.
+#
+# One warning -Wsparse-all turns on is switched off tree-wide.
+# declaration-after-statement is a style rule, not a defect class.
+# Nothing else is switched off. Where sparse is wrong it is exempted by file,
+# not by class, so a finding elsewhere in the tree still fails.
+SPARSE_INC_DIR := $(BUILD_DIR)/sparse-include
+SPARSE_CPPFLAGS := $(CHECK_CPPFLAGS) -I$(SPARSE_INC_DIR) -Ibenchmarks/include \
+	-DLOTA_INTERNAL_TESTS $(SDK_VERSION_CFLAGS)
+SPARSE_FLAGS := -D__CHECKER__ -Wsparse-all -Wno-declaration-after-statement
+SPARSE_EXEMPTIONS := scripts/sparse-exemptions.txt
+
 sparse:
 	@command -v $(SPARSE) >/dev/null 2>&1 || { \
 		echo "sparse: $(SPARSE) not found (install 'sparse'); skipping" >&2; \
 		exit 0; }
-	@echo "sparse: checking C sources (advisory)"; \
+	$(Q)mkdir -p $(SPARSE_INC_DIR)
+	$(Q)ln -sfn $(abspath $(INC_DIR)) $(SPARSE_INC_DIR)/lota
+	$(Q)awk -F'|' '/^[^#]/ && NF >= 2 { \
+		gsub(/\./, "\\.", $$1); \
+		printf "(^|/)%s:[0-9]+:[0-9]+: (warning|error): %s\n", $$1, $$2; \
+	}' $(SPARSE_EXEMPTIONS) > $(SPARSE_INC_DIR)/exempt.ere
+	@echo "sparse: checking C sources"; \
 	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
 	n=0; \
 	for f in $$srcs; do \
-		out=$$($(SPARSE) $(CHECK_CPPFLAGS) -D__CHECKER__ -Wsparse-all $$f 2>&1) || true; \
+		out=$$($(SPARSE) $(SPARSE_CPPFLAGS) $(SPARSE_FLAGS) $$f 2>&1 \
+			| grep -vE '^/usr/|note: in included file' \
+			| grep -E ':[0-9]+:[0-9]+: (warning|error)' \
+			| grep -vE -f $(SPARSE_INC_DIR)/exempt.ere) || true; \
 		if [ -n "$$out" ]; then \
 			echo "== $$f =="; \
 			echo "$$out"; \
@@ -893,8 +927,8 @@ sparse:
 		fi; \
 	done; \
 	echo "sparse: $$n file(s) with findings"; \
-	if [ -n "$$SPARSE_STRICT" ] && [ "$$n" -gt 0 ]; then \
-		echo "sparse: SPARSE_STRICT set -- failing" >&2; exit 1; \
+	if [ "$$n" -gt 0 ]; then \
+		echo "sparse: findings above must be fixed" >&2; exit 1; \
 	fi
 
 # smatch over every project C source (advisory: reports, exits 0)
@@ -1786,7 +1820,7 @@ help:
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
-	@echo "  sparse           sparse semantic check over C sources (advisory)"
+	@echo "  sparse           sparse semantic check over C sources"
 	@echo "  smatch           smatch flow analysis over C sources (advisory)"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
 	@echo "  helm-lint        Lint the verifier Helm chart"

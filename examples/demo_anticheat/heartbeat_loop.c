@@ -200,7 +200,7 @@ static int parse_args(int argc, char **argv, struct demo_options *opt)
 		{ "client-cert", required_argument, NULL, 'E' },
 		{ "client-key", required_argument, NULL, 'K' },
 		{ "help", no_argument, NULL, 'h' },
-		{ 0, 0, 0, 0 },
+		{ NULL, 0, NULL, 0 },
 	};
 
 	int c;
@@ -374,7 +374,7 @@ static int post_heartbeat(CURL *curl, const char *url, const uint8_t *body,
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_writer);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &response_writer);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -449,7 +449,7 @@ static int send_one_heartbeat(struct lota_ac_session *session, CURL *curl,
 			opt->tamper_marker, written - 1);
 	}
 
-	struct response_buf resp = { 0 };
+	struct response_buf resp = {};
 	long http_status = 0;
 	double latency_ms = 0.0;
 	rc = post_heartbeat(curl, opt->server_url, buf, written, &resp,

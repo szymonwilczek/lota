@@ -29,7 +29,7 @@ static int g_failures;
 
 int main(void)
 {
-	struct attest_target targets[3] = { 0 };
+	struct attest_target targets[3] = {};
 	struct attest_aggregate agg;
 
 	printf("=== attestation aggregate tests ===\n\n");
