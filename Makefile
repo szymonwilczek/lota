@@ -903,9 +903,23 @@ CHECK_CPPFLAGS := -I$(INC_DIR) -I$(SRC_DIR) -D_GNU_SOURCE $(CHECK_PKG_CFLAGS)
 # The corrected flag set is shared by sparse and smatch: smatch is built from
 # sparse and parses with the same front end, so a translation unit either
 # checker cannot assemble is one neither can analyse.
+#
+# Two defines stand in for things the checkers' front end cannot do,
+# and without them a source is not analysed at all:
+#
+#   CURL_DISABLE_TYPECHECK -- curl_easy_setopt is a macro from
+#     <curl/typecheck-gcc.h> that expands into a deeply nested expression.
+#     smatch segfaults walking it, taking every file that calls the macro
+#     with it. Only the checkers lose it.
+#   __glibc_has_open_how -- glibc's <fcntl.h> decides whether to define
+#     struct open_how by asking __has_include("linux/openat2.h"). Neither
+#     sparse nor smatch resolves that quoted form, so glibc defines its own
+#     copy and the kernel header a source includes for openat2(2) then
+#     collides with it.
 CHECKER_INC_DIR := $(BUILD_DIR)/checker-include
-CHECKER_CPPFLAGS := $(CHECK_CPPFLAGS) -DCURL_DISABLE_TYPECHECK -I$(CHECKER_INC_DIR) -Ibenchmarks/include \
-	-DLOTA_INTERNAL_TESTS $(SDK_VERSION_CFLAGS)
+CHECKER_CPPFLAGS := $(CHECK_CPPFLAGS) -I$(CHECKER_INC_DIR) -Ibenchmarks/include \
+	-DLOTA_INTERNAL_TESTS $(SDK_VERSION_CFLAGS) \
+	-DCURL_DISABLE_TYPECHECK -D__glibc_has_open_how=1
 SPARSE_FLAGS := -D__CHECKER__ -Wsparse-all -Wno-declaration-after-statement
 SPARSE_EXEMPTIONS := scripts/sparse-exemptions.txt
 
@@ -921,18 +935,26 @@ sparse:
 	}' $(SPARSE_EXEMPTIONS) > $(CHECKER_INC_DIR)/exempt.ere
 	@echo "sparse: checking C sources"; \
 	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	raw=$$(mktemp); \
 	n=0; \
 	for f in $$srcs; do \
-		out=$$($(SPARSE) $(CHECKER_CPPFLAGS) $(SPARSE_FLAGS) $$f 2>&1 \
-			| grep -vE '^/usr/|note: in included file' \
+		if $(SPARSE) $(CHECKER_CPPFLAGS) $(SPARSE_FLAGS) $$f >$$raw 2>&1; \
+		then rc=0; else rc=$$?; fi; \
+		out=$$(grep -vE '^/usr/|note: in included file' $$raw \
 			| grep -E ':[0-9]+:[0-9]+: (warning|error)' \
 			| grep -vE -f $(CHECKER_INC_DIR)/exempt.ere) || true; \
-		if [ -n "$$out" ]; then \
+		if [ $$rc -ne 0 ]; then \
+			echo "== $$f =="; \
+			echo "sparse exited $$rc; this file was not analysed"; \
+			[ -n "$$out" ] && echo "$$out"; \
+			n=$$((n + 1)); \
+		elif [ -n "$$out" ]; then \
 			echo "== $$f =="; \
 			echo "$$out"; \
 			n=$$((n + 1)); \
 		fi; \
 	done; \
+	rm -f $$raw; \
 	echo "sparse: $$n file(s) with findings"; \
 	if [ "$$n" -gt 0 ]; then \
 		echo "sparse: findings above must be fixed" >&2; exit 1; \
@@ -968,17 +990,29 @@ smatch:
 	$(Q)ln -sfn $(abspath $(INC_DIR)) $(CHECKER_INC_DIR)/lota
 	@echo "smatch: checking C sources"; \
 	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
+	raw=$$(mktemp); \
 	n=0; \
 	for f in $$srcs; do \
-		out=$$($(SMATCH) $(CHECKER_CPPFLAGS) $$f 2>&1 \
-			| grep -v '^/usr/' \
-			| grep -E '$(SMATCH_FINDING_RE)|$(SMATCH_PARSE_RE)') || true; \
-		if [ -n "$$out" ]; then \
+		if $(SMATCH) $(CHECKER_CPPFLAGS) $$f >$$raw 2>&1; then \
+			rc=0; \
+		else \
+			rc=$$?; \
+		fi; \
+		out=$$(grep -v '^/usr/' $$raw \
+			| grep -E '$(SMATCH_FINDING_RE)|$(SMATCH_PARSE_RE)') \
+			|| true; \
+		if [ $$rc -ne 0 ]; then \
+			echo "== $$f =="; \
+			echo "smatch exited $$rc; this file was not analysed"; \
+			[ -n "$$out" ] && echo "$$out"; \
+			n=$$((n + 1)); \
+		elif [ -n "$$out" ]; then \
 			echo "== $$f =="; \
 			echo "$$out"; \
 			n=$$((n + 1)); \
 		fi; \
 	done; \
+	rm -f $$raw; \
 	echo "smatch: $$n file(s) with findings"; \
 	if [ "$$n" -gt 0 ]; then \
 		echo "smatch: findings above must be fixed" >&2; exit 1; \
