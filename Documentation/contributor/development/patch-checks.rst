@@ -25,10 +25,12 @@ Set ``commit.gpgsign true`` with a configured signing key, or commit with
 signed commits and GitHub marks them verified.
 
 Commit body headings must use standalone ``Problem:`` and ``Solution:`` lines,
-with the explanatory text starting on the next line. Body text is wrapped to 75
-columns, with a two-column tolerance when the final word reaches column 76 or
-77. The DCO ``Signed-off-by`` trailer must be separated from the description by
-one blank line.
+with the explanatory text starting on the next line. **The version bump is the
+one exception**: the release tag sits on it, and ``release.yml`` publishes its
+description as the release notes, so its body is addressed to whoever reads the
+release page. Body text is wrapped to 75 columns, with a two-column tolerance
+when the final word reaches column 76 or 77. The DCO ``Signed-off-by`` trailer
+must be separated from the description by one blank line.
 
 The local hotpath check delegates to ``scripts/check-pr-quality.sh``, using the
 same ``.github/pr-quality-hotpaths.txt`` manifest as the ``PR quality``
