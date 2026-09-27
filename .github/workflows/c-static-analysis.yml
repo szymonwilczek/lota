@@ -55,6 +55,9 @@ jobs:
       - name: Run sparse
         run: make sparse
 
+      - name: Run the stack-frame ceiling
+        run: make check-stack-frames
+
   coccinelle:
     name: coccinelle
     runs-on: ubuntu-24.04

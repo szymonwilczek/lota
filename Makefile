@@ -439,7 +439,7 @@ $(INC_DIR)/vmlinux.h:
 	$(Q)bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 # Phony targets
-.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
+.PHONY: help all bpf agent initramfs-lock installer verifier attest-ca fleet-cli loadgen packages container-images container-image-verifier container-image-attest-ca helm-lint helm-template observability-lint srpm rpm-sign dnf-repo sdk server-sdk wine-hook anticheat pkgconfig sdk-stage clean htmldocs docs-lint docs-linkcheck docs-serve cleandocs install check-version-tag check-includes check-license-boundary check-stack-frames check-package-manifests lint lint-c lint-go sparse smatch coccicheck reproducible-build test test-unit test-bins test-hardware test-sdk sanitizer-build valgrind-unit valgrind-smoke fuzz-agent fuzz-config fuzz-enroll fuzz-seal-envelope fuzz-tpm-attest fuzz-policy-sign fuzz-server-sdk fuzz-tpm-resp fuzz-bpf-devt fuzz-bpf-open-flags fuzz-bpf-kmem-device fuzz-bpf-event-budget fuzz-bpf-inaccessible-exec fuzz-bpf-shebang fuzz-bpf-all fuzz-all syzkaller-fuzz-loader examples examples-clean sign-bpf check-abi abi-baseline
 
 bpf: $(BPF_OBJ)
 
@@ -815,6 +815,9 @@ check-includes:
 check-license-boundary:
 	@scripts/check-license-boundary.sh
 
+check-stack-frames:
+	@scripts/check-stack-frames.sh
+
 # Public API/ABI gate
 # Compares the SDK's exported symbols, sonames and installed header set against
 # the baseline in packaging/abi/, and compiles every public header against the installed set alone.
@@ -1064,6 +1067,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
 	$(TEST_BIN_DIR)/test_config \
+	$(TEST_BIN_DIR)/test_config_alloc \
 	$(TEST_BIN_DIR)/test_config_add_profile \
 	$(TEST_BIN_DIR)/test_subscribe \
 	$(TEST_BIN_DIR)/test_policy_sign \
@@ -1177,6 +1181,10 @@ $(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AG
 $(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_config_alloc: tests/test_config_alloc.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^
 
 $(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1409,6 +1417,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_signal_shutdown
 	@$(BUILD_DIR)/test_daemon_loop
 	@$(BUILD_DIR)/test_config
+	@$(BUILD_DIR)/test_config_alloc
 	@$(BUILD_DIR)/test_config_add_profile
 	@$(BUILD_DIR)/test_subscribe
 	@$(BUILD_DIR)/test_policy_sign
@@ -1522,7 +1531,8 @@ VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 VALGRIND_UNIT_BINS := \
 	test_hash_verify test_dbus test_systemd test_packaging \
 	test_steam_runtime test_wine_hook test_daemon test_signal_shutdown \
-	test_daemon_loop test_config test_subscribe test_policy_sign \
+	test_daemon_loop test_config test_config_alloc test_subscribe \
+	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_event_budget \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
@@ -1817,6 +1827,7 @@ help:
 	@echo "  valgrind-smoke   Run CLI smoke paths under valgrind memcheck"
 	@echo "  check-includes   Fail on transitive (unused-direct) #includes"
 	@echo "  check-abi        Fail on drift in the public SDK symbols and headers"
+	@echo "  check-stack-frames  Fail on an oversized stack frame in a shipped binary"
 	@echo "  abi-baseline     Rewrite packaging/abi after a deliberate API change"
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"

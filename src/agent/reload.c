@@ -395,9 +395,22 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 			      int *trust_lib_count)
 {
 	int old_trust_lib_count = *trust_lib_count;
-	char old_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 	bool trust_reload_failed = false;
 	int applied_libs = 0;
+
+	/*
+	 * Rollback snapshot is 256 KB, so it is allocated not held in this frame.
+	 * Without it there is no way back to the working set, so a failed allocation
+	 * leaves the current set alone instead of starting a change it could not undo.
+	 */
+	char (*old_trust_libs)[PATH_MAX] =
+		calloc(LOTA_CONFIG_MAX_LIBS, sizeof(*old_trust_libs));
+
+	if (!old_trust_libs) {
+		lota_err("Failed to allocate the trusted-library rollback "
+			 "snapshot; keeping the current set");
+		return;
+	}
 
 	for (int k = 0; k < old_trust_lib_count; k++) {
 		copy_path(old_trust_libs[k], trust_libs[k]);
@@ -450,10 +463,12 @@ static void reload_trust_libs(const struct lota_config *new_cfg,
 		*trust_lib_count = restored_libs;
 		lota_warn(
 			"Keeping previous trusted library set after reload errors");
+		free(old_trust_libs);
 		return;
 	}
 
 	*trust_lib_count = applied_libs;
+	free(old_trust_libs);
 }
 
 static void sync_config_snapshot(
@@ -527,7 +542,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			char trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX],
 			int *trust_lib_count)
 {
-	struct lota_config new_cfg;
+	struct lota_config *new_cfg = NULL;
 	const char *cfg_path = (config_path && config_path[0]) ?
 				       config_path :
 				       LOTA_CONFIG_DEFAULT_PATH;
@@ -555,17 +570,31 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 		return open_err;
 	}
 
-	config_init(&new_cfg);
-	int reload_ret = config_load_from_fd(&new_cfg, cfg_fd, cfg_path);
+	/*
+	 * Allocated, not declared: this function holds a whole second config
+	 * alongside the caller's for the length of the reload, and the struct
+	 * is over a megabyte.
+	 * Taken after the open succeeds so the paths above keep their plain returns.
+	 */
+	new_cfg = config_new();
+	if (!new_cfg) {
+		lota_err("Failed to allocate config for reload");
+		close(cfg_fd);
+		sdnotify_ready();
+		return -ENOMEM;
+	}
+
+	int reload_ret = config_load_from_fd(new_cfg, cfg_fd, cfg_path);
 
 	if (reload_ret < 0) {
 		lota_err("Failed to reload config: %s", strerror(-reload_ret));
 		close(cfg_fd);
+		config_free(new_cfg);
 		sdnotify_ready();
 		return reload_ret;
 	}
 
-	int new_mode = parse_mode(new_cfg.mode);
+	int new_mode = parse_mode(new_cfg->mode);
 	if (*mode == LOTA_MODE_ENFORCE && (new_mode == LOTA_MODE_MONITOR ||
 					   new_mode == LOTA_MODE_MAINTENANCE)) {
 		int auth_ret = verify_reload_downgrade_authorization_fd(
@@ -574,6 +603,7 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 			lota_err("Unauthorized ENFORCE mode downgrade request "
 				 "ignored");
 			close(cfg_fd);
+			config_free(new_cfg);
 			sdnotify_ready();
 			return auth_ret;
 		}
@@ -592,35 +622,35 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 		}
 	}
 
-	apply_runtime_flags_transactional(&new_cfg, strict_mmap, strict_exec,
+	apply_runtime_flags_transactional(new_cfg, strict_mmap, strict_exec,
 					  block_ptrace, strict_modules,
 					  block_anon_exec);
 
-	if (new_cfg.log_level[0] &&
-	    strcmp(new_cfg.log_level, cfg->log_level) != 0) {
+	if (new_cfg->log_level[0] &&
+	    strcmp(new_cfg->log_level, cfg->log_level) != 0) {
 		int lvl = LOG_DEBUG;
-		if (strcmp(new_cfg.log_level, "error") == 0)
+		if (strcmp(new_cfg->log_level, "error") == 0)
 			lvl = LOG_ERR;
-		else if (strcmp(new_cfg.log_level, "warn") == 0)
+		else if (strcmp(new_cfg->log_level, "warn") == 0)
 			lvl = LOG_WARNING;
-		else if (strcmp(new_cfg.log_level, "info") == 0)
+		else if (strcmp(new_cfg->log_level, "info") == 0)
 			lvl = LOG_INFO;
 		journal_set_level(lvl);
-		lota_info("Log level changed to %s", new_cfg.log_level);
+		lota_info("Log level changed to %s", new_cfg->log_level);
 	}
 
-	reload_protected_pids(&new_cfg, protect_pids, protect_pid_count);
+	reload_protected_pids(new_cfg, protect_pids, protect_pid_count);
 	lota_info("Protected PIDs reloaded (%d entries)", *protect_pid_count);
 
-	reload_trust_libs(&new_cfg, trust_libs, trust_lib_count);
+	reload_trust_libs(new_cfg, trust_libs, trust_lib_count);
 	lota_info("Trusted libs reloaded (%d entries)", *trust_lib_count);
 
-	if (new_cfg.allow_verity_count != cfg->allow_verity_count) {
+	if (new_cfg->allow_verity_count != cfg->allow_verity_count) {
 		lota_warn("allow_verity changes require restart; keeping "
 			  "previous allowlist");
 	} else {
-		for (int i = 0; i < new_cfg.allow_verity_count; i++) {
-			if (strcmp(new_cfg.allow_verity[i],
+		for (int i = 0; i < new_cfg->allow_verity_count; i++) {
+			if (strcmp(new_cfg->allow_verity[i],
 				   cfg->allow_verity[i]) != 0) {
 				lota_warn(
 					"allow_verity changes require restart; "
@@ -630,10 +660,12 @@ int agent_reload_config(const char *config_path, struct lota_config *cfg,
 		}
 	}
 
-	sync_config_snapshot(cfg, &new_cfg, *mode, *strict_mmap, *strict_exec,
+	sync_config_snapshot(cfg, new_cfg, *mode, *strict_mmap, *strict_exec,
 			     *block_ptrace, *strict_modules, *block_anon_exec,
 			     *protect_pids, *protect_pid_count, trust_libs,
 			     *trust_lib_count);
+
+	config_free(new_cfg);
 
 	sdnotify_ready();
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(*mode));

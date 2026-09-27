@@ -630,18 +630,23 @@ int do_add_publisher(const char *config_path, const char *name,
 	 * that against what the file configures before adding anything.
 	 */
 	{
-		struct lota_config existing;
+		struct lota_config *existing = config_new();
+		bool already_configured = false;
 		int i;
 
-		config_init(&existing);
-		if (config_load(&existing,
+		if (!existing) {
+			fprintf(stderr, "Failed to allocate configuration\n");
+			return 1;
+		}
+
+		if (config_load(existing,
 				config_path ? config_path :
 					      LOTA_CONFIG_DEFAULT_PATH) == 0) {
-			for (i = 0; i < existing.profile_count; i++) {
+			for (i = 0; i < existing->profile_count; i++) {
 				struct profile_paths other;
 
 				if (profile_paths_from_anchor(
-					    existing.profiles[i].ca_cert,
+					    existing->profiles[i].ca_cert,
 					    &other) < 0)
 					continue;
 				if (strcmp(other.id, paths.id) != 0)
@@ -649,10 +654,15 @@ int do_add_publisher(const char *config_path, const char *name,
 
 				printf("Publisher %s is already configured as "
 				       "\"%s\"; nothing to do.\n",
-				       paths.id, existing.profiles[i].name);
-				return 0;
+				       paths.id, existing->profiles[i].name);
+				already_configured = true;
+				break;
 			}
 		}
+
+		config_free(existing);
+		if (already_configured)
+			return 0;
 	}
 
 	memset(&p, 0, sizeof(p));

@@ -600,7 +600,8 @@ cleanup_epoll:
 int main(int argc, char *argv[])
 {
 	struct cli_options opts;
-	struct lota_config cfg;
+	struct lota_config *cfg;
+	int pid_fd = -1;
 	int rc;
 
 	if (daemon_install_signals(&g_agent.running, &g_reload) < 0) {
@@ -618,21 +619,31 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	config_init(&cfg);
+	/*
+	 * The config is over a megabyte, so it is allocated, not held in this frame.
+	 * Every exit below runs through the cleanup at the bottom.
+	 */
+	cfg = config_new();
+	if (!cfg) {
+		fprintf(stderr, "Failed to allocate configuration\n");
+		return 1;
+	}
 
-	rc = cli_parse(argc, argv, &opts, &cfg);
-	if (rc == -1)
-		return 0; /* --help */
+	rc = cli_parse(argc, argv, &opts, cfg);
+	if (rc == -1) {
+		rc = 0; /* --help */
+		goto out;
+	}
 	if (rc != 0)
-		return rc;
+		goto out;
 
 	rc = cli_finalize_pin(&opts);
 	if (rc != 0)
-		return rc;
+		goto out;
 
-	rc = diagnostics_dispatch(&opts, &cfg);
+	rc = diagnostics_dispatch(&opts, cfg);
 	if (rc >= 0)
-		return rc;
+		goto out;
 
 	/*
 	 * Mode downgrade guard.
@@ -656,7 +667,8 @@ int main(int argc, char *argv[])
 			"the\n"
 			"downgrade explicitly.\n",
 			mode_to_string(g_agent.mode));
-		return 1;
+		rc = 1;
+		goto out;
 	}
 
 	if (opts.daemon_flag) {
@@ -664,15 +676,17 @@ int main(int argc, char *argv[])
 		if (dret < 0) {
 			fprintf(stderr, "Failed to daemonize: %s\n",
 				strerror(-dret));
-			return 1;
+			rc = 1;
+			goto out;
 		}
 	}
 
-	int pid_fd = pidfile_create(opts.pid_file_path);
+	pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
 		fprintf(stderr,
 			"Another instance is already running (PID file locked)\n");
-		return 1;
+		rc = 1;
+		goto out;
 	}
 	if (pid_fd < 0) {
 		fprintf(stderr, "Warning: Failed to create PID file: %s\n",
@@ -690,8 +704,8 @@ int main(int argc, char *argv[])
 			"\n"
 			"or names one with policy_pubkey / "
 			"--policy-pubkey PATH.\n");
-		pidfile_remove(opts.pid_file_path, pid_fd);
-		return 1;
+		rc = 1;
+		goto out_pidfile;
 	}
 
 	struct run_daemon_params run_params = {
@@ -705,9 +719,13 @@ int main(int argc, char *argv[])
 		.block_anon_exec = opts.block_anon_exec,
 		.allow_mutable_rootfs = opts.insecure_allow_mutable_rootfs != 0,
 		.config_path = opts.config_path,
-		.cfg = &cfg,
+		.cfg = cfg,
 	};
 	rc = run_daemon(&run_params);
+
+out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);
+out:
+	config_free(cfg);
 	return rc;
 }
