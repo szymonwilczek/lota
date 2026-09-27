@@ -898,9 +898,13 @@ CHECK_CPPFLAGS := -I$(INC_DIR) -I$(SRC_DIR) -D_GNU_SOURCE $(CHECK_PKG_CFLAGS)
 # One warning -Wsparse-all turns on is switched off tree-wide.
 # declaration-after-statement is a style rule, not a defect class.
 # Nothing else is switched off. Where sparse is wrong it is exempted by file,
-# not by class, so a finding elsewhere in the tree still fails.
-SPARSE_INC_DIR := $(BUILD_DIR)/sparse-include
-SPARSE_CPPFLAGS := $(CHECK_CPPFLAGS) -I$(SPARSE_INC_DIR) -Ibenchmarks/include \
+# not by class, so a real finding elsewhere in the tree still fails.
+#
+# The corrected flag set is shared by sparse and smatch: smatch is built from
+# sparse and parses with the same front end, so a translation unit either
+# checker cannot assemble is one neither can analyse.
+CHECKER_INC_DIR := $(BUILD_DIR)/checker-include
+CHECKER_CPPFLAGS := $(CHECK_CPPFLAGS) -DCURL_DISABLE_TYPECHECK -I$(CHECKER_INC_DIR) -Ibenchmarks/include \
 	-DLOTA_INTERNAL_TESTS $(SDK_VERSION_CFLAGS)
 SPARSE_FLAGS := -D__CHECKER__ -Wsparse-all -Wno-declaration-after-statement
 SPARSE_EXEMPTIONS := scripts/sparse-exemptions.txt
@@ -909,20 +913,20 @@ sparse:
 	@command -v $(SPARSE) >/dev/null 2>&1 || { \
 		echo "sparse: $(SPARSE) not found (install 'sparse'); skipping" >&2; \
 		exit 0; }
-	$(Q)mkdir -p $(SPARSE_INC_DIR)
-	$(Q)ln -sfn $(abspath $(INC_DIR)) $(SPARSE_INC_DIR)/lota
+	$(Q)mkdir -p $(CHECKER_INC_DIR)
+	$(Q)ln -sfn $(abspath $(INC_DIR)) $(CHECKER_INC_DIR)/lota
 	$(Q)awk -F'|' '/^[^#]/ && NF >= 2 { \
 		gsub(/\./, "\\.", $$1); \
 		printf "(^|/)%s:[0-9]+:[0-9]+: (warning|error): %s\n", $$1, $$2; \
-	}' $(SPARSE_EXEMPTIONS) > $(SPARSE_INC_DIR)/exempt.ere
+	}' $(SPARSE_EXEMPTIONS) > $(CHECKER_INC_DIR)/exempt.ere
 	@echo "sparse: checking C sources"; \
 	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
 	n=0; \
 	for f in $$srcs; do \
-		out=$$($(SPARSE) $(SPARSE_CPPFLAGS) $(SPARSE_FLAGS) $$f 2>&1 \
+		out=$$($(SPARSE) $(CHECKER_CPPFLAGS) $(SPARSE_FLAGS) $$f 2>&1 \
 			| grep -vE '^/usr/|note: in included file' \
 			| grep -E ':[0-9]+:[0-9]+: (warning|error)' \
-			| grep -vE -f $(SPARSE_INC_DIR)/exempt.ere) || true; \
+			| grep -vE -f $(CHECKER_INC_DIR)/exempt.ere) || true; \
 		if [ -n "$$out" ]; then \
 			echo "== $$f =="; \
 			echo "$$out"; \
@@ -934,18 +938,41 @@ sparse:
 		echo "sparse: findings above must be fixed" >&2; exit 1; \
 	fi
 
-# smatch over every project C source (advisory: reports, exits 0)
-# Set SMATCH_STRICT=1 to fail on any finding.
-# build it from https://repo.or.cz/smatch.git and put it on PATH
+# smatch over every project C source.
+# Blocking: Any finding fails.
+#
+# smatch has no distribution package, so the target skips when the binary is
+# absent -- but when it runs, it decides.
+# CI always runs it: the smatch job in c-static-analysis.yml builds SMATCH_REV
+# from source and caches it. Build the same revision locally to match:
+#
+#     git clone https://repo.or.cz/smatch.git && make -C smatch
+#     make smatch SMATCH=$PWD/smatch/smatch
+#
+# Two shapes of output count, and they are not the same thing.
+# smatch's own findings are "file.c:LINE func() warn:" -- no column,
+# and "warn" rather than "warning", which is why the sparse filter does not
+# match them. Front-end errors are "file.c:LINE:COL: error:" and mean smatch
+# failed to assemble the translation unit, so the file was never analysed.
+#
+# Findings inside system headers are dropped for the same reason as sparse:
+# they describe the C library and vary per distribution.
+SMATCH_FINDING_RE := ^[^ ]+:[0-9]+ .*\(\) (warn|error|info|warning):
+SMATCH_PARSE_RE := :[0-9]+:[0-9]+: (error|warning):
+
 smatch:
 	@command -v $(SMATCH) >/dev/null 2>&1 || { \
-		echo "smatch: $(SMATCH) not found; build from https://repo.or.cz/smatch.git and add to PATH; skipping" >&2; \
+		echo "smatch: $(SMATCH) not found; build it from https://repo.or.cz/smatch.git and pass SMATCH=/path/to/smatch; skipping" >&2; \
 		exit 0; }
-	@echo "smatch: checking C sources (advisory)"; \
+	$(Q)mkdir -p $(CHECKER_INC_DIR)
+	$(Q)ln -sfn $(abspath $(INC_DIR)) $(CHECKER_INC_DIR)/lota
+	@echo "smatch: checking C sources"; \
 	srcs=$$(git ls-files '*.c' | grep -v '^src/bpf/'); \
 	n=0; \
 	for f in $$srcs; do \
-		out=$$($(SMATCH) $(CHECK_CPPFLAGS) $$f 2>&1) || true; \
+		out=$$($(SMATCH) $(CHECKER_CPPFLAGS) $$f 2>&1 \
+			| grep -v '^/usr/' \
+			| grep -E '$(SMATCH_FINDING_RE)|$(SMATCH_PARSE_RE)') || true; \
 		if [ -n "$$out" ]; then \
 			echo "== $$f =="; \
 			echo "$$out"; \
@@ -953,8 +980,8 @@ smatch:
 		fi; \
 	done; \
 	echo "smatch: $$n file(s) with findings"; \
-	if [ -n "$$SMATCH_STRICT" ] && [ "$$n" -gt 0 ]; then \
-		echo "smatch: SMATCH_STRICT set -- failing" >&2; exit 1; \
+	if [ "$$n" -gt 0 ]; then \
+		echo "smatch: findings above must be fixed" >&2; exit 1; \
 	fi
 
 # Coccinelle semantic-patch rules in scripts/coccinelle/ over the C sources.
@@ -1832,7 +1859,7 @@ help:
 	@echo "  sdk-stage        Lay out the installed SDK prefix under build/stage"
 	@echo "  lint             clang-format (C) + golangci-lint (Go) checks"
 	@echo "  sparse           sparse semantic check over C sources"
-	@echo "  smatch           smatch flow analysis over C sources (advisory)"
+	@echo "  smatch           smatch flow analysis over C sources"
 	@echo "  coccicheck       Coccinelle semantic-patch rules over C sources"
 	@echo "  helm-lint        Lint the verifier Helm chart"
 	@echo "  helm-template    Render the Helm chart and schema-check with kubeconform"

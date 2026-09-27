@@ -179,9 +179,14 @@ int main(int argc, char *argv[])
 		pid_t p = fork();
 
 		if (p == 0) {
-			while (1)
+			/*
+			 * pause() only returns when a handler runs, and this
+			 * child installs none, so the loop is the child's whole
+			 * life.
+			 * it is reaped by the parent's kill()
+			 */
+			for (;;)
 				pause();
-			_exit(0);
 		}
 		if (p > 0)
 			victims[nvictims++] = p;

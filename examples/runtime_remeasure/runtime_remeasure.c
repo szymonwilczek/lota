@@ -263,6 +263,22 @@ static int run_manifest(const char *manifest)
 	while (fgets(line, sizeof(line), f)) {
 		char *s = line;
 		size_t n;
+
+		/*
+		 * A line longer than the buffer comes back in pieces,
+		 * and each piece would be taken for a path of its own
+		 * -- so one unreadable entry would silently become two
+		 * measured objects that were never in the manifest.
+		 * Refuse the file instead.
+		 */
+		n = strlen(line);
+		if (n > 0 && line[n - 1] != '\n' && !feof(f)) {
+			fprintf(stderr,
+				"manifest %s: line exceeds %d characters\n",
+				manifest, LOTA_AC_RUNTIME_PATH_MAX - 1);
+			goto out;
+		}
+
 		while (*s == ' ' || *s == '\t')
 			s++;
 		n = strlen(s);
@@ -273,6 +289,11 @@ static int run_manifest(const char *manifest)
 			continue;
 		if (count >= RM_MAX_OBJS) {
 			fprintf(stderr, "manifest has too many entries\n");
+			goto out;
+		}
+		if (n >= LOTA_AC_RUNTIME_PATH_MAX) {
+			fprintf(stderr, "manifest %s: path too long\n",
+				manifest);
 			goto out;
 		}
 		snprintf(paths[count], LOTA_AC_RUNTIME_PATH_MAX, "%s", s);
