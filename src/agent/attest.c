@@ -1372,15 +1372,20 @@ static void publish_aggregate_status(const struct attest_target *targets,
 }
 
 /*
- * Continuous attestation loop.
- * Re-attests every target on its own interval, with exponential backoff on failure.
+ * The loop itself.
+ * @targets is the caller's array, LOTA_CONFIG_MAX_PROFILES long;
+ * do_continuous_attest owns it so that every exit below can keep the cleanup
+ * it already had.
+ * The list never outlives this call -- everything it is handed to reads it
+ * synchronously -- so it is the wrapper's to free.
  */
-int do_continuous_attest(const struct lota_config *cfg, const char *server,
-			 int port, const char *ca_cert, int skip_verify,
-			 const uint8_t *pin_sha256, int interval_sec,
-			 uint32_t aik_ttl)
+static int continuous_attest_run(const struct lota_config *cfg,
+				 const char *server, int port,
+				 const char *ca_cert, int skip_verify,
+				 const uint8_t *pin_sha256, int interval_sec,
+				 uint32_t aik_ttl,
+				 struct attest_target *targets)
 {
-	struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
 	struct attest_peer peer;
 	size_t target_count = 0;
 	uint32_t status_flags = 0;
@@ -1393,8 +1398,7 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	attest_peer_init(&peer);
 
 	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
-				   targets,
-				   sizeof(targets) / sizeof(targets[0]),
+				   targets, LOTA_CONFIG_MAX_PROFILES,
 				   &target_count);
 	if (ret < 0) {
 		lota_err("Cannot build the attestation target list: %s",
@@ -1712,4 +1716,34 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 	tpm_cleanup(&g_agent.tpm_ctx);
 	net_cleanup();
 	return 0;
+}
+
+/*
+ * Continuous attestation loop.
+ * Re-attests every target on its own interval, with exponential backoff on failure.
+ *
+ * The target list is 8 entries of 29648 bytes, so it is allocated, not held
+ * in a frame.
+ * It lives here, outside the loop, because the loop has 9 exits with 3 different
+ * amounts of unwinding behind them.
+ * 1 owner, 1 free, and the loop keeps the cleanup it already had.
+ */
+int do_continuous_attest(const struct lota_config *cfg, const char *server,
+			 int port, const char *ca_cert, int skip_verify,
+			 const uint8_t *pin_sha256, int interval_sec,
+			 uint32_t aik_ttl)
+{
+	struct attest_target *targets;
+	int ret;
+
+	targets = calloc(LOTA_CONFIG_MAX_PROFILES, sizeof(*targets));
+	if (!targets) {
+		lota_err("Cannot allocate the attestation target list");
+		return 1;
+	}
+
+	ret = continuous_attest_run(cfg, server, port, ca_cert, skip_verify,
+				    pin_sha256, interval_sec, aik_ttl, targets);
+	free(targets);
+	return ret;
 }

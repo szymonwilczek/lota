@@ -1243,17 +1243,23 @@ int tui_run(struct install_ctx *ctx)
 		.tick = snk_tick,
 		.abort = snk_abort,
 	};
-	struct tui t;
+	struct tui *t;
 	struct ui_sink bound = sink;
 	int code;
 
-	memset(&t, 0, sizeof(t));
-	t.ctx = ctx;
-	t.n = install_stage_count;
-	if (t.n > TUI_MAX_STAGES)
-		t.n = TUI_MAX_STAGES;
+	t = calloc(1, sizeof(*t));
+	if (!t) {
+		fprintf(stderr, "lota-install: Out of memory starting the "
+				"interactive view. Falling back to --plain\n");
+		return -1;
+	}
 
-	bound.ud = &t;
+	t->ctx = ctx;
+	t->n = install_stage_count;
+	if (t->n > TUI_MAX_STAGES)
+		t->n = TUI_MAX_STAGES;
+
+	bound.ud = t;
 
 	/* initial probe runs before the screen takeover and logs to
 	 * the normal terminal:
@@ -1265,10 +1271,10 @@ int tui_run(struct install_ctx *ctx)
 	{
 		int i;
 
-		for (i = 0; i < t.n; i++) {
-			probe_stage(&t, i);
+		for (i = 0; i < t->n; i++) {
+			probe_stage(t, i);
 			printf("  %-52s %s\n", install_stages[i].title,
-			       state_word(t.st[i]));
+			       state_word(t->st[i]));
 			fflush(stdout);
 		}
 	}
@@ -1278,82 +1284,84 @@ int tui_run(struct install_ctx *ctx)
 		ctx->ui.sink = NULL;
 		fprintf(stderr, "lota-install: Cannot switch the terminal "
 				"to raw mode. Falling back to --plain\n");
+		free(t);
 		return -1; /* caller falls back to the plain flow */
 	}
-	grid_resize(&t);
+	grid_resize(t);
 
 	/* mirror the probe results into the Output pane for reference */
 	{
 		char buf[OUT_CAP];
 		int i;
 
-		for (i = 0; i < t.n; i++) {
+		for (i = 0; i < t->n; i++) {
 			snprintf(buf, sizeof(buf), "probe: %s - %s",
-				 install_stages[i].title, state_word(t.st[i]));
-			out_push(&t, buf);
+				 install_stages[i].title, state_word(t->st[i]));
+			out_push(t, buf);
 		}
 	}
-	t.sel = first_unmet(&t) >= 0 ? first_unmet(&t) : t.n;
+	t->sel = first_unmet(t) >= 0 ? first_unmet(t) : t->n;
 
-	while (!t.quit) {
+	while (!t->quit) {
 		char ch = 0;
 		enum tui_key k;
 
-		render(&t);
+		render(t);
 		k = read_key(250, &ch);
 		if (k == K_NONE)
 			continue;
-		t.flash[0] = '\0';
+		t->flash[0] = '\0';
 
 		switch (k) {
 		case K_CTRL_C:
-			t.quit = 1;
+			t->quit = 1;
 			break;
 		case K_UP:
-			if (t.mode == M_NAV && t.sel > 0)
-				t.sel--;
+			if (t->mode == M_NAV && t->sel > 0)
+				t->sel--;
 			break;
 		case K_DOWN:
-			if (t.mode == M_NAV && t.sel < t.n)
-				t.sel++;
+			if (t->mode == M_NAV && t->sel < t->n)
+				t->sel++;
 			break;
 		case K_PGUP:
-			if (t.scroll < t.out_n - 1)
-				t.scroll += 5;
+			if (t->scroll < t->out_n - 1)
+				t->scroll += 5;
 			break;
 		case K_PGDN:
-			t.scroll -= 5;
-			if (t.scroll < 0)
-				t.scroll = 0;
+			t->scroll -= 5;
+			if (t->scroll < 0)
+				t->scroll = 0;
 			break;
 		case K_ENTER:
-			if (t.mode == M_NAV) {
-				activate_selected(&t);
-			} else if (t.mode == M_CONFIRM) {
-				t.mode = M_NAV;
-				if (do_apply(&t, t.sel))
-					advance(&t);
+			if (t->mode == M_NAV) {
+				activate_selected(t);
+			} else if (t->mode == M_CONFIRM) {
+				t->mode = M_NAV;
+				if (do_apply(t, t->sel))
+					advance(t);
 			}
 			break;
 		case K_ESC:
-			if (t.mode == M_CONFIRM || t.mode == M_BARRIER) {
-				t.mode = M_NAV;
-				t.auto_run = 0;
+			if (t->mode == M_CONFIRM || t->mode == M_BARRIER) {
+				t->mode = M_NAV;
+				t->auto_run = 0;
 			}
 			break;
 		case K_CHAR:
-			handle_char(&t, ch);
+			handle_char(t, ch);
 			break;
 		case K_NONE:
 			break;
 		}
 	}
 
-	code = quit_code(&t);
+	code = quit_code(t);
 	ctx->ui.sink = NULL;
 	term_restore();
-	free(t.grid);
-	free(t.fb);
+	free(t->grid);
+	free(t->fb);
+	free(t);
 
 	/* persist the outcome on the normal screen */
 	if (code == EXIT_INSTALL_REBOOT) {

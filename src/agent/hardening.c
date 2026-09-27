@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <unistd.h>
@@ -104,15 +105,23 @@ int hardening_refuse_if_traced(void)
 	 * unheard of, and partial truncation past the TracerPid: line
 	 * cannot hide a tracer because that field appears near the top.
 	 */
-	char buf[32 * 1024];
+	const size_t cap = 32 * 1024;
+	char *buf = malloc(cap);
 	size_t off = 0;
-	while (off < sizeof(buf) - 1) {
-		ssize_t n = read(fd, buf + off, sizeof(buf) - 1 - off);
+
+	if (!buf) {
+		close(fd);
+		return -ENOMEM;
+	}
+
+	while (off < cap - 1) {
+		ssize_t n = read(fd, buf + off, cap - 1 - off);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
 			int err = -errno;
 			close(fd);
+			free(buf);
 			return err;
 		}
 		if (n == 0)
@@ -121,12 +130,15 @@ int hardening_refuse_if_traced(void)
 	}
 	close(fd);
 
-	if (off == 0)
+	if (off == 0) {
+		free(buf);
 		return -EIO;
+	}
 	buf[off] = '\0';
 
 	long tracer = 0;
 	int ret = hardening_parse_tracer_pid_buf(buf, &tracer);
+	free(buf);
 	if (ret == -EPERM)
 		lota_err("hardening: refusing to start under tracer pid %ld",
 			 tracer);

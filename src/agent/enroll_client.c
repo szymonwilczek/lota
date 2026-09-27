@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <openssl/crypto.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
@@ -128,8 +129,8 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	size_t ek_len = 0;
 	uint8_t aik_pub[LOTA_ENROLL_MAX_AIK_PUBLIC];
 	size_t aik_len = 0;
-	uint8_t body[LOTA_ENROLL_MAX_FRAME];
-	uint8_t rbuf[LOTA_ENROLL_MAX_FRAME];
+	uint8_t *body = NULL;
+	uint8_t *rbuf = NULL;
 	uint8_t secret[LOTA_ENROLL_MAX_SECRET];
 	size_t secret_len = 0;
 	size_t rlen = 0;
@@ -143,19 +144,27 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 	memset(secret, 0, sizeof(secret));
 
+	body = malloc(LOTA_ENROLL_MAX_FRAME);
+	rbuf = malloc(LOTA_ENROLL_MAX_FRAME);
+	if (!body || !rbuf) {
+		fprintf(stderr, "Failed to allocate the enrollment buffers\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	ret = tpm_get_ek_cert(tpm, ek_cert, sizeof(ek_cert), &ek_len);
 	if (ret < 0) {
 		fprintf(stderr,
 			"EK certificate unavailable; the CA cannot anchor "
 			"this TPM: %s\n",
 			strerror(-ret));
-		return ret;
+		goto out;
 	}
 	ret = tpm_get_aik_tpmt_public(tpm, aik_pub, sizeof(aik_pub), &aik_len);
 	if (ret < 0) {
 		fprintf(stderr, "AIK public area unavailable: %s\n",
 			strerror(-ret));
-		return ret;
+		goto out;
 	}
 
 	memset(&net, 0, sizeof(net));
@@ -177,8 +186,8 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	blen = enroll_encode_begin(body, sizeof(body), ek_cert, ek_len, aik_pub,
-				   aik_len, (const uint8_t *)token,
+	blen = enroll_encode_begin(body, LOTA_ENROLL_MAX_FRAME, ek_cert, ek_len,
+				   aik_pub, aik_len, (const uint8_t *)token,
 				   token ? strlen(token) : 0);
 	if (blen < 0) {
 		ret = (int)blen;
@@ -194,7 +203,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
+	ret = recv_frame(&net, rbuf, LOTA_ENROLL_MAX_FRAME, &rlen);
 	if (ret < 0) {
 		fprintf(stderr,
 			"No challenge received from the CA (connection "
@@ -235,8 +244,8 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	blen = enroll_encode_complete(body, sizeof(body), ch.session_id, secret,
-				      secret_len);
+	blen = enroll_encode_complete(body, LOTA_ENROLL_MAX_FRAME,
+				      ch.session_id, secret, secret_len);
 	OPENSSL_cleanse(secret, sizeof(secret));
 	if (blen < 0) {
 		ret = (int)blen;
@@ -253,7 +262,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 
-	ret = recv_frame(&net, rbuf, sizeof(rbuf), &rlen);
+	ret = recv_frame(&net, rbuf, LOTA_ENROLL_MAX_FRAME, &rlen);
 	if (ret < 0) {
 		fprintf(stderr,
 			"No completion response from the CA (connection "
@@ -290,6 +299,10 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 
 out:
 	OPENSSL_cleanse(secret, sizeof(secret));
+	if (body)
+		OPENSSL_cleanse(body, LOTA_ENROLL_MAX_FRAME);
+	free(body);
+	free(rbuf);
 	if (net_inited)
 		net_context_cleanup(&net);
 	return ret;
@@ -631,11 +644,14 @@ int do_add_publisher(const char *config_path, const char *name,
 	 */
 	{
 		struct lota_config *existing = config_new();
+		struct profile_paths *other = malloc(sizeof(*other));
 		bool already_configured = false;
 		int i;
 
-		if (!existing) {
+		if (!existing || !other) {
 			fprintf(stderr, "Failed to allocate configuration\n");
+			config_free(existing);
+			free(other);
 			return 1;
 		}
 
@@ -643,13 +659,11 @@ int do_add_publisher(const char *config_path, const char *name,
 				config_path ? config_path :
 					      LOTA_CONFIG_DEFAULT_PATH) == 0) {
 			for (i = 0; i < existing->profile_count; i++) {
-				struct profile_paths other;
-
 				if (profile_paths_from_anchor(
 					    existing->profiles[i].ca_cert,
-					    &other) < 0)
+					    other) < 0)
 					continue;
-				if (strcmp(other.id, paths.id) != 0)
+				if (strcmp(other->id, paths.id) != 0)
 					continue;
 
 				printf("Publisher %s is already configured as "
@@ -661,6 +675,7 @@ int do_add_publisher(const char *config_path, const char *name,
 		}
 
 		config_free(existing);
+		free(other);
 		if (already_configured)
 			return 0;
 	}
