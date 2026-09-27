@@ -448,6 +448,22 @@ static void run_kill_case(const char *name, int (*body)(void))
 		return;
 	}
 	if (pid == 0) {
+		/*
+		 * This child is meant to die on SIGSYS, so its core dump
+		 * carries no information -- but the kernel still writes one,
+		 * and on a systemd host core_pattern is a pipe into
+		 * systemd-coredump, which stores it and reports a service
+		 * failure.
+		 *
+		 * RLIMIT_CORE does not help. The kernel ignores it when
+		 * core_pattern is a pipe, so the limit has to be expressed as
+		 * "this process is not dumpable" instead, which suppresses the
+		 * dump whatever the pattern is.
+		 *
+		 * It changes nothing about the syscall being tested
+		 * or the signal it earns.
+		 */
+		prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 		body();
 		_exit(77); /* sentinel: reached only when seccomp did NOT kill */
 	}
