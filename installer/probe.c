@@ -986,3 +986,121 @@ enum stage_state probe_agent_service_stage(const struct probe_service_state *s,
 	snprintf(note, cap, "lota-agent.service is ACTIVE and enabled.");
 	return STAGE_DONE;
 }
+
+/*
+ * Kernels installed on this host.
+ *
+ * /lib/modules is the register of what is installed -- the package manager
+ * creates a tree per kernel and removes it with the kernel -- and /boot holds
+ * the image each one boots with.
+ * A tree with no image cannot be locked (a half-removed kernel), and an image
+ * with no tree is the rescue entry, which dracut does not regenerate,
+ * so neither is a kernel this stage can act on.
+ */
+int probe_installed_kernels_at(const char *modules_dir, const char *boot_dir,
+			       struct probe_kernel_image *out, size_t max,
+			       size_t *count)
+{
+	DIR *d;
+	struct dirent *de;
+	size_t n = 0;
+
+	if (!modules_dir || !boot_dir || !out || !count)
+		return -EINVAL;
+
+	*count = 0;
+
+	d = opendir(modules_dir);
+	if (!d)
+		return 0; /* no modules tree: nothing installed to lock */
+
+	while (n < max && (de = readdir(d)) != NULL) {
+		char image[PROBE_KERNEL_IMAGE_MAX];
+
+		if (de->d_name[0] == '.')
+			continue;
+		if (strlen(de->d_name) >= PROBE_KERNEL_RELEASE_MAX)
+			continue;
+
+		if (snprintf(image, sizeof(image), "%s/initramfs-%s.img",
+			     boot_dir, de->d_name) >= (int)sizeof(image))
+			continue;
+		if (access(image, F_OK) != 0)
+			continue;
+
+		snprintf(out[n].release, sizeof(out[n].release), "%s",
+			 de->d_name);
+		snprintf(out[n].image, sizeof(out[n].image), "%s", image);
+		n++;
+	}
+
+	closedir(d);
+	*count = n;
+	return 0;
+}
+
+int probe_installed_kernels(struct probe_kernel_image *out, size_t max,
+			    size_t *count)
+{
+	return probe_installed_kernels_at("/lib/modules", "/boot", out, max,
+					  count);
+}
+
+int probe_pcr14_lock_ran_at(const char *baseline_path)
+{
+	if (!baseline_path)
+		return 0;
+	return access(baseline_path, F_OK) == 0;
+}
+
+int probe_pcr14_lock_ran(void)
+{
+	return probe_pcr14_lock_ran_at(PCR14_BASELINE_PATH);
+}
+
+/*
+ * Verdict for the reboot barrier.
+ *
+ * A register the installer cannot derive means one of two things, and they need
+ * the same reboot but not the same sentence: either an agent ran earlier this
+ * boot and left its commitment, or the platform extended PCR 14 before LOTA
+ * was ever installed -- which every Secure Boot host does, because shim measures
+ * the MOK variables there.
+ * Whether the lock ran this boot is what tells them apart.
+ */
+enum stage_state probe_pcr14_barrier_stage(int pcr_state, int lock_ran,
+					   int agent_active, char *note,
+					   size_t cap)
+{
+	switch (pcr_state) {
+	case PROBE_PCR14_LOCK_ONLY:
+		snprintf(note, cap,
+			 "PCR14 carries the initramfs lock from this boot.");
+		return STAGE_DONE;
+	case PROBE_PCR14_OTHER:
+		if (agent_active) {
+			snprintf(note, cap,
+				 "PCR14 carries this boot's agent commitment.");
+			return STAGE_DONE;
+		}
+		if (!lock_ran) {
+			snprintf(note, cap,
+				 "PCR14 was extended by the platform before "
+				 "LOTA ran (on a Secure Boot host, shim's MOK "
+				 "measurement) and the initramfs lock has not "
+				 "run this boot. A reboot puts the lock in "
+				 "place; nothing here is left over from an "
+				 "earlier install.");
+			return STAGE_REBOOT;
+		}
+		snprintf(note, cap,
+			 "PCR14 holds a stale value from an earlier agent run. "
+			 "PCR14 only resets on a hardware reset.");
+		return STAGE_REBOOT;
+	default:
+		snprintf(note, cap,
+			 "The initramfs PCR14 lock has not run during this "
+			 "boot.");
+		return STAGE_REBOOT;
+	}
+}

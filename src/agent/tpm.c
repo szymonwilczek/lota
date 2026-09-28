@@ -2299,15 +2299,24 @@ static bool firmware_is_uefi(const struct tpm_context *ctx)
  * baseline is legitimately 0^32; absent file leaves out zeroed and the derivations
  * below then fail to match the live register, which fails closed.
  *
+ * @present, when given, receives whether a usable handoff was there at all
+ * -- which is the only evidence the agent has that the lock helper ran this
+ * boot, and what tells a host that needs its initramfs rebuilt from one that
+ * was tampered with.
+ * A handoff too short or too long to be a digest counts as absent, the same
+ * way its value does.
+ *
  * The baseline is not trust input: tampered file only makes the agent's own
  * self-check derivations miss the real PCR14 and fail closed.
  * The verifier independently reconstructs the baseline from the signed event log.
  *
  * Returns: 0 on success or when no baseline file exists (out zeroed).
  */
-static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
+static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE], int *present)
 {
 	memset(out, 0, LOTA_HASH_SIZE);
+	if (present)
+		*present = 0;
 
 	int fd = open(LOTA_PCR14_BASELINE_PATH,
 		      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
@@ -2343,6 +2352,8 @@ static int read_pcr14_baseline(uint8_t out[LOTA_HASH_SIZE])
 	}
 
 	memcpy(out, buf, LOTA_HASH_SIZE);
+	if (present)
+		*present = 1;
 	return 0;
 }
 
@@ -2498,6 +2509,18 @@ enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
 	if (memcmp(obs->current, obs->baseline, LOTA_HASH_SIZE) == 0)
 		return TPM_PCR14_LOCK_MISSING;
 
+	/*
+	 * No lock ran this boot, so nothing in PCR14 is ours, whatever it holds.
+	 * On a shim host it holds the MOK measurement and the comparison above
+	 * cannot see it, because the baseline it would need is written by
+	 * the helper that did not run.
+	 *
+	 * Placed after both accepting branches, so this can only choose which
+	 * refusal is reported -- never grant one.
+	 */
+	if (!obs->lock_ran)
+		return TPM_PCR14_LOCK_MISSING;
+
 	if (!obs->prev)
 		return TPM_PCR14_UNATTRIBUTABLE;
 
@@ -2605,7 +2628,9 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 	 * is not pristine
 	 */
 	uint8_t baseline[LOTA_HASH_SIZE];
-	ret = read_pcr14_baseline(baseline);
+	int lock_ran = 0;
+
+	ret = read_pcr14_baseline(baseline, &lock_ran);
 	if (ret < 0)
 		return ret;
 
@@ -2658,6 +2683,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		.reset_count = reset_count,
 		.restart_count = restart_count,
 		.prev = have_prev ? &prev : NULL,
+		.lock_ran = lock_ran,
 	};
 
 	ctx->boot_commitment_state = tpm_classify_pcr14(&obs);
@@ -2703,10 +2729,13 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		 * Fail closed and name the missing piece.
 		 */
 		fprintf(stderr,
-			"PCR14 holds the firmware baseline unchanged: the "
-			"initramfs lock helper did not run this boot. Install "
-			"the 90lota dracut module, rebuild the initramfs "
-			"(dracut -f --add lota) and cold reboot; the boot "
+			"The initramfs lock helper did not run this boot, so "
+			"PCR14 holds whatever the platform put there and no "
+			"LOTA commitment. On a Secure Boot host that is shim's "
+			"MOK measurement, which is why the register is not "
+			"empty. Rebuild the initramfs of the kernel you booted "
+			"(dracut -f --add lota, or dracut -f --regenerate-all "
+			"for every installed kernel) and cold reboot; the boot "
 			"commitment must chain onto the initramfs lock\n");
 		return -EBADMSG;
 

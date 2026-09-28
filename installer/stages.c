@@ -387,9 +387,10 @@ static int st_verity_apply(struct install_ctx *ctx)
 /* lsinitrd lists every file in the image, so the capture buffer is 64 KB */
 #define INITRD_LIST_CAP 65536
 
-static int initrd_has_lock_module(void)
+/* @image NULL asks about the running kernel's own image */
+static int initrd_has_lock_module(const char *image)
 {
-	const char *const argv[] = { "lsinitrd", NULL };
+	const char *const argv[] = { "lsinitrd", image, NULL };
 	char *out = malloc(INITRD_LIST_CAP);
 	int rc;
 
@@ -407,35 +408,99 @@ static int initrd_has_lock_module(void)
 	return rc;
 }
 
+/*
+ * The stage is satisfied only when every installed kernel carries the lock.
+ *
+ * Stage 6 arms the cmdline on every boot entry, so a lock missing from any
+ * image leaves those entries booting unlocked.
+ * The kernels a player falls back to are exactly the older ones.
+ */
 static enum stage_state st_initrd_probe(struct install_ctx *ctx, char *note,
 					size_t cap)
 {
-	int has = initrd_has_lock_module();
+	struct probe_kernel_image kernels[PROBE_MAX_KERNELS];
+	size_t count = 0;
+	size_t missing = 0;
+	char missing_names[256] = { 0 };
+	size_t used = 0;
 
 	(void)ctx;
 
-	if (has < 0) {
+	if (probe_installed_kernels(kernels, PROBE_MAX_KERNELS, &count) < 0 ||
+	    count == 0) {
+		/*
+		 * Nothing enumerable (no /lib/modules, or no image beside
+		 * any tree): fall back to the running kernel, which is
+		 * the one question that can always be asked.
+		 */
+		int has = initrd_has_lock_module(NULL);
+
+		if (has < 0) {
+			snprintf(note, cap,
+				 "lsinitrd failed. Cannot inspect the "
+				 "current initramfs.");
+			return STAGE_ERROR;
+		}
+		if (has) {
+			snprintf(note, cap,
+				 "lota-pcr14-lock is inside the current "
+				 "kernel's initramfs.");
+			return STAGE_DONE;
+		}
 		snprintf(note, cap,
-			 "lsinitrd failed. Cannot inspect the "
-			 "current initramfs.");
-		return STAGE_ERROR;
+			 "Current initramfs does not contain the "
+			 "PCR14 lock helper.");
+		return STAGE_PENDING;
 	}
-	if (has) {
+
+	for (size_t i = 0; i < count; i++) {
+		int has = initrd_has_lock_module(kernels[i].image);
+
+		if (has < 0) {
+			snprintf(note, cap,
+				 "lsinitrd failed on %s. Cannot inspect that "
+				 "kernel's initramfs.",
+				 kernels[i].image);
+			return STAGE_ERROR;
+		}
+		if (has)
+			continue;
+
+		missing++;
+		if (used < sizeof(missing_names) - 1)
+			used += (size_t)snprintf(missing_names + used,
+						 sizeof(missing_names) - used,
+						 "%s%s", used ? ", " : "",
+						 kernels[i].release);
+	}
+
+	if (missing == 0) {
 		snprintf(note, cap,
-			 "lota-pcr14-lock is inside the current "
-			 "kernel's initramfs.");
+			 "lota-pcr14-lock is inside the initramfs of all %zu "
+			 "installed kernel(s).",
+			 count);
 		return STAGE_DONE;
 	}
+
 	snprintf(note, cap,
-		 "Current initramfs does not contain the "
-		 "PCR14 lock helper.");
+		 "%zu of %zu installed kernel(s) have no PCR14 lock helper in "
+		 "their initramfs: %s. Booting one of them leaves this machine "
+		 "with no boot commitment.",
+		 missing, count, missing_names);
 	return STAGE_PENDING;
 }
 
 static int st_initrd_apply(struct install_ctx *ctx)
 {
-	const char *const argv[] = { "dracut", "-f", NULL };
-	int rc = run_cmd(&ctx->ui, "Regenerating the initramfs (dracut -f)",
+	/*
+	 * --regenerate-all, to match stage 6's --update-kernel=ALL.
+	 * It costs one dracut run per installed kernel, which is the price of
+	 * the machine being installed.
+	 */
+	const char *const argv[] = { "dracut", "-f", "--regenerate-all", NULL };
+	int rc = run_cmd(&ctx->ui,
+			 "Regenerating every kernel's initramfs "
+			 "(dracut -f --regenerate-all)",
 			 argv);
 
 	if (rc != 0)
@@ -777,34 +842,14 @@ static enum stage_state st_barrier_probe(struct install_ctx *ctx, char *note,
 	}
 
 	pcr = probe_pcr14_state();
-	switch (pcr) {
-	case PROBE_PCR14_LOCK_ONLY:
-		snprintf(note, cap,
-			 "PCR14 carries the initramfs lock from "
-			 "this boot.");
-		return STAGE_DONE;
-	case PROBE_PCR14_OTHER:
-		if (agent_service_active()) {
-			snprintf(note, cap,
-				 "PCR14 carries this boot's agent "
-				 "commitment.");
-			return STAGE_DONE;
-		}
-		snprintf(note, cap,
-			 "PCR14 holds a stale value from an "
-			 "earlier agent run. PCR14 only resets on "
-			 "a hardware reset.");
-		return STAGE_REBOOT;
-	case PROBE_PCR14_ZERO:
-		snprintf(note, cap,
-			 "The initramfs PCR14 lock has not run "
-			 "during this boot.");
-		return STAGE_REBOOT;
-	default:
+	if (pcr < 0) {
 		snprintf(note, cap, "Cannot read PCR14 from sysfs (%s).",
 			 strerror(-pcr));
 		return STAGE_ERROR;
 	}
+
+	return probe_pcr14_barrier_stage(pcr, probe_pcr14_lock_ran(),
+					 agent_service_active(), note, cap);
 }
 
 /* stage 9: agent service */
@@ -1213,10 +1258,14 @@ const struct stage install_stages[] = {
 			"LOTA pins TPM PCR 14 very early in boot (inside the "
 			"initramfs, before any regular userspace runs) so nothing "
 			"can pre-poison the agent's measurement slot."
-			"This step regenerates the initramfs with dracut to include "
-			"the lock helper. It rewrites /boot/initramfs-*.img - the standard "
-			"file every kernel update also rewrites - and requires a reboot to "
-			"take effect.",
+			"This step regenerates the initramfs of every installed kernel "
+			"with dracut to include the lock helper, matching the next "
+			"step's scope: a kernel you can select in the boot menu and that "
+			"has no lock boots a machine with no commitment. It rewrites "
+			"/boot/initramfs-*.img - the standard file every kernel update "
+			"also rewrites - and requires a reboot to take effect. A kernel "
+			"installed later picks the helper up from the packaged dracut "
+			"module on its own.",
 		.probe = st_initrd_probe,
 		.apply = st_initrd_apply,
 		.boot_path = 1,
