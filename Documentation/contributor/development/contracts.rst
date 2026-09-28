@@ -355,6 +355,13 @@ ceiling must cover at least two sessions, and the session budget must stay
 the tighter of the two. Changing either constant without the other fails the
 build rather than starving a title at runtime.
 
+At the uid ceiling of one token a second, tokens occupy the TPM about 5% of
+the time at the 48 ms per token measured on the validation host, and about
+17% at the ~171 ms per quote also recorded there. The reference 5-second
+heartbeat costs about 1%. The limits are sized against the slower figure.
+:doc:`../../operator/platform-support` carries both measurements and the
+method.
+
 Attestation token quote binding
 ===============================
 
