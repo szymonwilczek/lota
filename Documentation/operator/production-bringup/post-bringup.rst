@@ -41,6 +41,30 @@ The most common failures, with the gate that produced them:
   ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
   the dracut module is installed and the initramfs was rebuilt (see
   :doc:`manual-reference`, section 5), then cold reboot.
+* ``Startup policy refused before the boot commitment was spent``. A path or
+  PID named by the enforcement policy could not be resolved -- most often a
+  ``--trust-lib`` or ``--allow-verity`` path the unit's sandbox hides, since
+  ``ProtectSystem=strict`` and ``PrivateTmp=yes`` mean the agent does not see
+  ``/tmp`` or ``/var/tmp`` the way the shell that wrote the drop-in does. The
+  message names the path. Nothing has been spent: PCR 14 still holds the
+  initramfs lock value, so correcting the policy and starting the unit again
+  brings the host up in the same boot, with no reboot needed.
+* ``This is not the lota-agent build PCR 14 committed to when the host
+  booted``. The binary being run is not the one the register commits to, which
+  is the expected answer after replacing the binary without rebooting, or when
+  running a second build by hand. Install the build and cold reboot; PCR 14 is
+  not rewritable while the host is up. This is a refusal by design, not a TPM
+  fault.
+* ``PCR14 no longer holds the value lota-agent extended in this boot session``.
+  Something outside the agent extended PCR 14. Cold reboot, then audit what
+  reached ``/dev/tpmrm0``.
+
+Counters printed by these messages come from ``TPM2_ReadClock`` and are the
+values ``tpm2_readclock`` reports, so they can be checked against the machine.
+The counters bound into the boot commitment itself are read from an
+AIK-signed quote instead, and a TPM deliberately offsets ``clock``,
+``resetCount`` and ``restartCount`` in a signed attestation by a per-key
+amount, so those will not match ``tpm2_readclock`` and are not meant to.
 
 Threat model implications of the dev path
 =========================================

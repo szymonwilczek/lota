@@ -131,6 +131,35 @@ divergences from hardware (persistent state across guest reboots, and a quote
 clock quirk) and the operator workarounds are covered under
 :doc:`production-bringup/post-bringup`.
 
+Suspend and resume
+------------------
+
+A host may suspend and resume without losing its attestation. A suspend
+shallow enough to keep the TPM powered (``s2idle``) leaves the TPM
+untouched. A deeper suspend (``deep`` / S3) restarts the TPM, which saves
+and restores its state: every PCR comes back byte for byte, ``resetCount``
+does not move, and ``restartCount`` is incremented to record the restart.
+
+The agent's boot commitment binds ``restartCount``, so after a resume the
+value in PCR 14 was computed with the count that was in effect when the
+commitment was extended, not the one the next quote carries. Both sides
+account for that. The agent recognises the register as its own by deriving
+what it would hold for the preceding counts, and reports the resume in the
+journal::
+
+    PCR14 boot-commitment: the TPM was restarted 1 suspend/resume cycle(s)
+    after the commitment was extended; PCR14 is unchanged and the
+    commitment still stands
+
+The verifier performs the mirror of that scan when it re-derives the
+commitment, bounded by ``--max-restart-count-skew`` (default 64). A host
+that suspends more times than the skew allows in a single boot is refused
+until it reboots; raising the flag widens the window.
+
+Neither side iterates ``resetCount``. A cold boot therefore always requires
+a fresh commitment, and a register another writer extended is still refused
+after a resume exactly as it is before one.
+
 Runtime measurement coverage
 ============================
 

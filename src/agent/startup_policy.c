@@ -472,6 +472,58 @@ out:
 	return ret;
 }
 
+int agent_validate_startup_policy(const struct agent_startup_policy *policy)
+{
+	int ret;
+
+	if (!policy)
+		return -EINVAL;
+
+	ret = validate_protected_pid_capacity(policy);
+	if (ret < 0)
+		return ret;
+
+	ret = bpf_loader_verify_kernel_runtime_hardening(
+		policy->allow_mutable_rootfs);
+	if (ret < 0) {
+		lota_err(
+			"Kernel anti-tamper prerequisites are not satisfied: %s",
+			strerror(-ret));
+		return ret;
+	}
+
+	if (policy->allow_verity_count == 0 &&
+	    (policy->strict_exec || policy->strict_modules)) {
+		lota_err(
+			"Strict exec/modules requested but no allow_verity entries are configured");
+		return -EINVAL;
+	}
+
+	for (int i = 0; i < policy->allow_verity_count; i++) {
+		struct lota_verity_digest_key d;
+
+		ret = bpf_loader_measure_verity_digest(policy->allow_verity[i],
+						       &d);
+		OPENSSL_cleanse(&d, sizeof(d));
+		if (ret < 0) {
+			lota_err("Cannot measure fs-verity path %s: %s",
+				 policy->allow_verity[i], strerror(-ret));
+			return ret;
+		}
+	}
+
+	for (int i = 0; i < policy->trust_lib_count; i++) {
+		ret = bpf_loader_probe_trusted_lib(policy->trust_libs[i]);
+		if (ret < 0) {
+			lota_err("Cannot trust lib %s: %s",
+				 policy->trust_libs[i], strerror(-ret));
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 int agent_apply_startup_policy(const struct agent_startup_policy *policy)
 {
 	int ret;
