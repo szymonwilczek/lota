@@ -97,7 +97,8 @@ int main(void)
 		struct lota_verity_digest_key v;
 		memset(&e, 0, sizeof(e));
 		strcpy(e.soname, "none");
-		if (lota_rt_measure_entry_verity(getpid(), &e, &v, NULL) < 0)
+		if (lota_rt_measure_entry_verity(getpid(), &e, &v, NULL, NULL) <
+		    0)
 			PASS();
 		else
 			FAIL("accepted unbacked range");
