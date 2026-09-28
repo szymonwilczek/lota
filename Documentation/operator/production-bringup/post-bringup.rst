@@ -83,10 +83,13 @@ journal.
 
 Counters printed by these messages come from ``TPM2_ReadClock`` and are the
 values ``tpm2_readclock`` reports, so they can be checked against the machine.
-Counters carried by a quote will not match them, and are not meant to: a TPM
-offsets ``clock``, ``resetCount`` and ``restartCount`` in a signed attestation
-by a per-key amount. Nothing binds either reading into PCR 14 -- the boot
-commitment names the agent binary alone -- so the counters are diagnostic
+That is also where the agent takes the counters it records for itself, the
+ones that tell a restart within a boot from a hardware reset. Counters carried
+by a quote will not match them, and are not meant to: a TPM offsets ``clock``,
+``resetCount`` and ``restartCount`` in a signed attestation by an amount unique
+to the signing key, so with per-publisher keys there is no single quoted
+reading to compare against. Nothing binds either reading into PCR 14 -- the
+boot commitment names the agent binary alone -- so the counters are diagnostic
 here, not evidence.
 
 Threat model implications of the dev path
