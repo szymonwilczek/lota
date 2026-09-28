@@ -34,6 +34,7 @@
 #include "attest_peer.h"
 #include "attest_targets.h"
 #include "bpf_loader.h"
+#include "daemon.h"
 #include "enroll.h"
 #include "esrt.h"
 #include "hardening.h"
@@ -1371,42 +1372,11 @@ static void publish_aggregate_status(const struct attest_target *targets,
 		sdnotify_status("Attestation incomplete");
 }
 
-/*
- * The loop itself.
- * @targets is the caller's array, LOTA_CONFIG_MAX_PROFILES long;
- * do_continuous_attest owns it so that every exit below can keep the cleanup
- * it already had.
- * The list never outlives this call -- everything it is handed to reads it
- * synchronously -- so it is the wrapper's to free.
- */
-static int continuous_attest_run(const struct lota_config *cfg,
-				 const char *server, int port,
-				 const char *ca_cert, int skip_verify,
-				 const uint8_t *pin_sha256, int interval_sec,
-				 uint32_t aik_ttl,
-				 struct attest_target *targets)
+/* Who this host reports to, said once at startup and again after a reload,
+ * because a list that changed under the operator is a list worth restating */
+static void announce_targets(const struct attest_target *targets, size_t count)
 {
-	struct attest_peer peer;
-	size_t target_count = 0;
-	uint32_t status_flags = 0;
-	uint64_t wd_usec = 0;
-	bool wd_enabled;
-	int ret;
-
-	lota_info("Continuous attestation starting");
-
-	attest_peer_init(&peer);
-
-	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
-				   targets, LOTA_CONFIG_MAX_PROFILES,
-				   &target_count);
-	if (ret < 0) {
-		lota_err("Cannot build the attestation target list: %s",
-			 strerror(-ret));
-		return 1;
-	}
-
-	for (size_t i = 0; i < target_count; i++) {
+	for (size_t i = 0; i < count; i++) {
 		if (targets[i].token_only)
 			lota_info("Target %zu: %s -- nothing is reported to "
 				  "them; their backend verifies the tokens "
@@ -1441,10 +1411,80 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	 * One that names none gets the first profile's token and the host-wide
 	 * verdict, which is every publisher agreeing.
 	 */
-	if (target_count > 1)
+	if (count > 1)
 		lota_info("A title that does not select a publisher is "
 			  "answered for %s:%d and with the host-wide verdict",
 			  targets[0].server, targets[0].port);
+}
+
+/*
+ * Whether each publisher's AIK certificate can be renewed without an operator.
+ *
+ * It is short-lived and would otherwise lapse a day after install.
+ * Enabled per publisher, whenever that profile recorded a CA endpoint at enroll
+ * time; manual --reenroll stays the fallback when no endpoint is on disk.
+ * Re-run after a reload, since a publisher added since has none of this resolved.
+ */
+static void resolve_auto_renew(struct attest_target *targets, size_t count)
+{
+	for (size_t i = 0; i < count; i++) {
+		struct enroll_state est;
+		bool was = targets[i].auto_renew;
+
+		targets[i].auto_renew =
+			targets[i].has_profile &&
+			enroll_state_load_path(targets[i].paths.enroll_state,
+					       &est) == 0;
+		if (targets[i].auto_renew == was && was)
+			continue;
+		if (targets[i].auto_renew)
+			lota_info("AIK certificate auto-renewal enabled for %s",
+				  targets[i].label);
+		else
+			lota_info(
+				"AIK certificate auto-renewal off for %s: no "
+				"recorded CA endpoint (run --enroll to record "
+				"one)",
+				targets[i].label);
+	}
+}
+
+/*
+ * The loop itself.
+ * @targets is the caller's array, LOTA_CONFIG_MAX_PROFILES long;
+ * do_continuous_attest owns it so that every exit below can keep the cleanup
+ * it already had.
+ * The list never outlives this call -- everything it is handed to reads it
+ * synchronously -- so it is the wrapper's to free.
+ */
+static int continuous_attest_run(const struct lota_config *cfg,
+				 const char *config_path, const char *server,
+				 int port, const char *ca_cert, int skip_verify,
+				 const uint8_t *pin_sha256, int interval_sec,
+				 uint32_t aik_ttl,
+				 struct attest_target *targets)
+{
+	struct attest_peer peer;
+	size_t target_count = 0;
+	uint32_t status_flags = 0;
+	uint64_t wd_usec = 0;
+	bool wd_enabled;
+	int ret;
+
+	lota_info("Continuous attestation starting");
+
+	attest_peer_init(&peer);
+
+	ret = attest_targets_build(cfg, server, port, ca_cert, interval_sec,
+				   targets, LOTA_CONFIG_MAX_PROFILES,
+				   &target_count);
+	if (ret < 0) {
+		lota_err("Cannot build the attestation target list: %s",
+			 strerror(-ret));
+		return 1;
+	}
+
+	announce_targets(targets, target_count);
 
 	/*
 	 * Long-running attestation loop: install tracer refusal and the
@@ -1561,23 +1601,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	 * at enroll time.
 	 * Manual --reenroll stays the fallback when no endpoint is on disk.
 	 */
-	for (size_t i = 0; i < target_count; i++) {
-		struct enroll_state est;
-
-		targets[i].auto_renew =
-			targets[i].has_profile &&
-			enroll_state_load_path(targets[i].paths.enroll_state,
-					       &est) == 0;
-		if (targets[i].auto_renew)
-			lota_info("AIK certificate auto-renewal enabled for %s",
-				  targets[i].label);
-		else
-			lota_info(
-				"AIK certificate auto-renewal off for %s: no "
-				"recorded CA endpoint (run --enroll to record "
-				"one)",
-				targets[i].label);
-	}
+	resolve_auto_renew(targets, target_count);
 
 	sdnotify_ready();
 	lota_info("Starting attestation loop");
@@ -1585,6 +1609,45 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	while (g_agent.running) {
 		uint64_t now_ms = monotonic_ms();
 		uint64_t wake_ms = 0;
+
+		/*
+		 * A publisher registered while this host runs -- which is what
+		 * a game's installer does -- is reported to from here on,
+		 * without the restart that would spend a boot's PCR 14 commitment
+		 * to pick it up.
+		 */
+		if (daemon_reload_taken()) {
+			size_t before = target_count;
+			int rret = attest_targets_reload(
+				config_path, server, port, ca_cert,
+				interval_sec, targets, LOTA_CONFIG_MAX_PROFILES,
+				&target_count);
+
+			if (rret < 0) {
+				lota_warn("Reload failed (%s); still reporting "
+					  "to the %zu publisher(s) this loop "
+					  "started with",
+					  strerror(-rret), before);
+			} else {
+				lota_info("Publisher list reloaded: %zu "
+					  "target(s)",
+					  target_count);
+				announce_targets(targets, target_count);
+				resolve_auto_renew(targets, target_count);
+				/*
+				 * A token is answered with the first publisher's
+				 * AIK, and the reload may have changed which
+				 * publisher that is.
+				 */
+				if (target_count > 0 &&
+				    targets[0].has_profile &&
+				    bind_target(&targets[0]) < 0)
+					lota_warn("Tokens will keep the "
+						  "previous publisher's AIK "
+						  "until the next round");
+			}
+			now_ms = monotonic_ms();
+		}
 
 		/*
 		 * Every target that has come due, then the earliest deadline left.
@@ -1642,6 +1705,11 @@ static int continuous_attest_run(const struct lota_config *cfg,
 			int timeout_ms;
 
 			if (current_ms >= wake_ms)
+				break;
+
+			/* a reload waits at most until the next pass,
+			 * not until the next round */
+			if (daemon_reload_pending())
 				break;
 
 			/*
@@ -1726,10 +1794,10 @@ static int continuous_attest_run(const struct lota_config *cfg,
  * amounts of unwinding behind them.
  * 1 owner, 1 free, and the loop keeps the cleanup it already had.
  */
-int do_continuous_attest(const struct lota_config *cfg, const char *server,
-			 int port, const char *ca_cert, int skip_verify,
-			 const uint8_t *pin_sha256, int interval_sec,
-			 uint32_t aik_ttl)
+int do_continuous_attest(const struct lota_config *cfg, const char *config_path,
+			 const char *server, int port, const char *ca_cert,
+			 int skip_verify, const uint8_t *pin_sha256,
+			 int interval_sec, uint32_t aik_ttl)
 {
 	struct attest_target *targets;
 	int ret;
@@ -1740,8 +1808,16 @@ int do_continuous_attest(const struct lota_config *cfg, const char *server,
 		return 1;
 	}
 
-	ret = continuous_attest_run(cfg, server, port, ca_cert, skip_verify,
-				    pin_sha256, interval_sec, aik_ttl, targets);
+	/*
+	 * The packaged unit runs `lota-agent --attest` with no --config,
+	 * so the path is only ever explicit when an operator names one.
+	 * Resolve it here: a reload has to know which file to re-read,
+	 * and "the default one" is an answer the loop cannot act on.
+	 */
+	ret = continuous_attest_run(
+		cfg, config_path ? config_path : LOTA_CONFIG_DEFAULT_PATH,
+		server, port, ca_cert, skip_verify, pin_sha256, interval_sec,
+		aik_ttl, targets);
 	free(targets);
 	return ret;
 }
