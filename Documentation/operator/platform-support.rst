@@ -140,25 +140,17 @@ untouched. A deeper suspend (``deep`` / S3) restarts the TPM, which saves
 and restores its state: every PCR comes back byte for byte, ``resetCount``
 does not move, and ``restartCount`` is incremented to record the restart.
 
-The agent's boot commitment binds ``restartCount``, so after a resume the
-value in PCR 14 was computed with the count that was in effect when the
-commitment was extended, not the one the next quote carries. Both sides
-account for that. The agent recognises the register as its own by deriving
-what it would hold for the preceding counts, and reports the resume in the
-journal::
+The agent's boot commitment binds the agent binary and the platform baseline,
+neither of which a suspend touches, so a resume needs no special handling on
+either side: the register still holds what the running binary derives, and
+the verifier still matches it. There is no skew window to configure and no
+candidate scan to bound.
 
-    PCR14 boot-commitment: the TPM was restarted 1 suspend/resume cycle(s)
-    after the commitment was extended; PCR14 is unchanged and the
-    commitment still stands
-
-The verifier performs the mirror of that scan when it re-derives the
-commitment, bounded by ``--max-restart-count-skew`` (default 64). A host
-that suspends more times than the skew allows in a single boot is refused
-until it reboots; raising the flag widens the window.
-
-Neither side iterates ``resetCount``. A cold boot therefore always requires
-a fresh commitment, and a register another writer extended is still refused
-after a resume exactly as it is before one.
+A cold boot is the case that does move it. The hardware reset clears PCR 14,
+the initramfs helper leaves the lock value, and the agent extends next; a
+commitment already present at that point was written by something that ran
+before the agent, which the agent refuses by name. A register another writer
+extended is refused after a resume exactly as it is before one.
 
 Runtime measurement coverage
 ============================

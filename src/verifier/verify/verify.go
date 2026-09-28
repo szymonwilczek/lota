@@ -131,7 +131,6 @@ type Verifier struct {
 	requireEventLog       bool
 	requireBootEnrollment bool
 	selfServiceReanchor   *bool
-	maxRestartCountSkew   uint32
 }
 
 type sessionTokenRecord struct {
@@ -246,26 +245,6 @@ type VerifierConfig struct {
 	// anchor before anything moves (see reanchorDecision).
 	EnableSelfServiceReanchor *bool
 
-	// MaxRestartCountSkew bounds how many TPM2_Startup(STATE) cycles
-	// the verifier tolerates when matching the PCR14 boot-commitment
-	// digest. The agent extends PCR14 once at startup with the
-	// restartCount in effect at that moment; the quote's ClockInfo
-	// reports the current restartCount, which advances on every
-	// suspend/resume. Without a window any laptop that suspends
-	// between attestations drops offline with integrity_mismatch.
-	// 0 = exact match only.
-	//
-	// The default of 64 covers around sixty suspend/resume cycles
-	// between two attestations - well past any realistic operator
-	// cadence on a laptop fleet (continuous attestation at a few-
-	// minute interval, or operator-driven probes after a workstation
-	// returns from sleep). Keeping the window narrow shrinks the
-	// brute-force surface the matcher exposes to a caller that
-	// controls PCR14 contents but not the agent_hash baseline: every
-	// additional unit of skew is one extra SHA-256 candidate the
-	// matcher tries before giving up.
-	MaxRestartCountSkew uint32
-
 	// if true, allow policies that define no measurement allowlists
 	// (no PCR values and no kernel/agent hash allowlists)
 	// This is insecure and should be enabled only explicitly!
@@ -285,7 +264,6 @@ func DefaultConfig() VerifierConfig {
 		SessionTokenLife:      1 * time.Hour,
 		RequireEventLog:       true,
 		RequireBootEnrollment: true,
-		MaxRestartCountSkew:   64,
 		AllowPermissivePolicy: false,
 	}
 }
@@ -330,7 +308,6 @@ func NewVerifier(cfg VerifierConfig, aikStore store.AIKStore) *Verifier {
 		requireEventLog:       cfg.RequireEventLog,
 		requireBootEnrollment: cfg.RequireBootEnrollment,
 		selfServiceReanchor:   cfg.EnableSelfServiceReanchor,
-		maxRestartCountSkew:   cfg.MaxRestartCountSkew,
 		startTime:             time.Now(),
 		sessionTokenStore:     cfg.SessionTokenStore,
 	}
@@ -795,29 +772,18 @@ func (v *Verifier) VerifyReport(challengeID string, reportData []byte) (_ *types
 	if bootFacts != nil {
 		pcr14Baseline = PCR14BaselineFromEventLog(bootFacts.Parsed)
 	}
-	expected, restartDrift, matched := MatchLockedBootCommitmentPCR14(
-		pcr14Baseline,
-		report.System.AgentHash,
-		parsedAttest.ClockInfo.ResetCount,
-		parsedAttest.ClockInfo.RestartCount,
-		pcr14, v.maxRestartCountSkew)
+	expected, _, matched := MatchLockedBootCommitmentPCR14(
+		pcr14Baseline, report.System.AgentHash, pcr14)
 	if !matched {
 		logging.Security(clog, "PCR14 boot-commitment derivation mismatch",
 			"actual_pcr14", pcr14Hex,
 			"expected_pcr14", FormatPCR14(expected),
 			"reset_count", parsedAttest.ClockInfo.ResetCount,
 			"restart_count", parsedAttest.ClockInfo.RestartCount,
-			"max_restart_skew", v.maxRestartCountSkew,
 			"hint", "rebuild initramfs with the current lota-pcr14-lock helper, cold reboot, and run the same agent binary that extended PCR14")
 		v.metrics.Rejections.Inc("integrity_mismatch")
 		result.Result = types.VerifyIntegrityMismatch
 		return result, errors.New("FAIL_INTEGRITY_MISMATCH: PCR14 does not match boot-commitment derivation")
-	}
-	if restartDrift > 0 {
-		clog.Info("PCR14 boot-commitment matched within restart_count skew window",
-			"restart_drift", restartDrift,
-			"quote_restart_count", parsedAttest.ClockInfo.RestartCount,
-			"max_restart_skew", v.maxRestartCountSkew)
 	}
 
 	// mask gate above rejected a report without PCR0/1/7 and the store gate

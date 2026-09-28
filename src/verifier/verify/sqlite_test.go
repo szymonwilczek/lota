@@ -858,7 +858,7 @@ func init() {
 // leaves in the system measurement.
 func sqliteFixturePCR14() [types.HashSize]byte {
 	var agentHash [types.HashSize]byte
-	return DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash, 0, 0)
+	return DeriveLockedBootCommitmentPCR14(zeroBaseline, agentHash)
 }
 
 func createSQLiteTestReport(t testing.TB, clientID string, nonce [32]byte, pcr14 [32]byte) []byte {

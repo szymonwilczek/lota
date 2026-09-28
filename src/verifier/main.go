@@ -45,7 +45,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"math"
 	"math/big"
 	"net"
 	"os"
@@ -97,7 +96,6 @@ var (
 	requireEventLog     = flag.Bool("require-event-log", true, "Require attestation reports to include a TPM event log (mandatory)")
 	requireCert         = flag.Bool("require-cert", true, "Require Privacy CA trust anchors at startup: refuses to start without --aik-ca-cert and selects the certificate-verifying AIK store. Reports without a CA-issued AIK certificate are always rejected at verification; disabling this only skips the startup validation (INSECURE: a deployment without a certificate-verifying AIK store cannot attest any client)")
 	allowTOFUBoot       = flag.Bool("allow-tofu-boot-baseline", false, "INSECURE: allow TOFU first-use of the per-client PCR0/PCR1/PCR7 boot baseline regardless of policy or event-log state. With the default (false), a first-attestation client must be covered by a signed policy that pins PCR0/PCR1/PCR7, be pre-enrolled in the baseline store, or pass the event-log Secure Boot gate of a policy with require_secureboot (the diverse-fleet path); otherwise the report is refused so a host that boots on already-compromised firmware cannot self-pin its tampered baseline.")
-	maxRestartSkew      = flag.Uint("max-restart-count-skew", 64, "Maximum restart_count drift (TPM2_Startup STATE cycles, i.e. suspend/resume) tolerated when matching the PCR14 boot-commitment digest against the quote ClockInfo. 0 = exact match required. The default of 64 covers laptop suspend/resume cadences past any realistic operator interval; raising it grows the matcher's brute-force surface linearly without buying additional uptime.")
 	selfServiceReanchor = flag.Bool("enable-self-service-reanchor", false, "Override every policy's `profile` and force self-service re-anchor on or off. Left unset, each policy decides: profile: consumer enables it, enterprise (and unset) leaves it off. When on, a firmware/Secure Boot PCR drift re-pins the per-device boot baseline automatically if it preserves the Secure Boot root of trust (PK/KEK/db unchanged, dbx append-only, Secure Boot on, firmware version not rolled back), instead of rejecting until an operator clears the row. Only ever takes effect under a policy with require_secureboot.")
 	allowPermissive     = flag.Bool("allow-permissive-policy", false, "INSECURE: allow starting with a permissive PCR policy (no PCR values and no kernel/agent hash allowlists)")
 	allowUnpinnedAgent  = flag.Bool("allow-unpinned-agent", false, "INSECURE: allow a diverse-fleet policy (require_secureboot, no raw PCR pins) with empty agent_hashes. The agent self-hash is then TOFU, so a modified non-enforcing agent can pin its own hash and attest while doing no enforcement. Pin the official agent hash (from the signed release) in agent_hashes instead.")
@@ -256,13 +254,6 @@ func main() {
 	})
 	if verifierCfg.EnableSelfServiceReanchor == nil {
 		logger.Info("self-service re-anchor follows each policy's profile: consumer enables it, enterprise and unset leave it off")
-	}
-	if skew := *maxRestartSkew; skew <= math.MaxUint32 {
-		verifierCfg.MaxRestartCountSkew = uint32(skew)
-	} else {
-		logger.Error("--max-restart-count-skew exceeds uint32 range",
-			"value", skew, "max", uint64(math.MaxUint32))
-		os.Exit(1)
 	}
 	verifierCfg.AllowPermissivePolicy = *allowPermissive
 	verifierCfg.AllowUnpinnedAgent = *allowUnpinnedAgent
