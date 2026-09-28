@@ -42,6 +42,7 @@
 #include "io_utils.h"
 #include "ipc.h"
 #include "journal.h"
+#include "kernel_measure.h"
 #include "net.h"
 #include "policy.h"
 #include "quote.h"
@@ -51,36 +52,25 @@
 #include "iommu_types.h"
 
 /*
- * Select a boot measurement PCR that best represents the booted kernel path.
- * Priority reflects common Linux boot flows:
- *   - PCR 11: UKI / systemd-stub
- *   - PCR 9:  initrd + kernel-related GRUB measurements
- *   - PCR 8:  GRUB command line / boot config flow
- *   - PCR 4:  boot manager/loader stage
+ * Read one PCR for kernel_measurement_select(), which decides which register
+ * actually carries the booted kernel.
  */
+static int read_pcr_for_kernel_measurement(void *ctx, int pcr,
+					   uint8_t out[LOTA_HASH_SIZE])
+{
+	return tpm_read_pcr((struct tpm_context *)ctx, pcr, TPM2_ALG_SHA256,
+			    out);
+}
+
 static int read_kernel_measurement_digest(struct tpm_context *ctx,
 					  uint8_t out_hash[LOTA_HASH_SIZE],
 					  int *selected_pcr)
 {
-	static const int candidates[] = { 11, 9, 8, 4 };
-
-	if (!ctx || !out_hash)
+	if (!ctx)
 		return -EINVAL;
 
-	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]);
-	     i++) {
-		int ret = tpm_read_pcr(ctx, candidates[i], TPM2_ALG_SHA256,
-				       out_hash);
-		if (ret == 0) {
-			if (selected_pcr)
-				*selected_pcr = candidates[i];
-			return 0;
-		}
-	}
-
-	if (selected_pcr)
-		*selected_pcr = -1;
-	return -ENOENT;
+	return kernel_measurement_select(read_pcr_for_kernel_measurement, ctx,
+					 out_hash, selected_pcr);
 }
 
 static uint32_t rand_u32_best_effort(void)

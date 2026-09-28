@@ -907,13 +907,14 @@ func TestIntegration_ChallengePCRMask(t *testing.T) {
 		t.Fatalf("Failed to generate challenge: %v", err)
 	}
 
-	// should request PCRs 0, 1, 7, 14
-	expectedMask := uint32((1 << 0) | (1 << 1) | (1 << 7) | (1 << 14))
+	// should request PCRs 0, 1, 7, 14 for the boot baseline,
+	// and 9 for the kernel image measurement the verifier records per attestation
+	expectedMask := uint32((1 << 0) | (1 << 1) | (1 << 7) | (1 << 9) | (1 << 14))
 	if challenge.PCRMask != expectedMask {
 		t.Errorf("PCR mask: got 0x%08X, want 0x%08X", challenge.PCRMask, expectedMask)
 	}
 
-	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,14)", challenge.PCRMask)
+	t.Logf("✓ Challenge PCR mask correct: 0x%08X (PCR 0,1,7,9,14)", challenge.PCRMask)
 }
 
 // TestVerify_RejectsMissingBootPCRs asserts that the verifier refuses any attestation

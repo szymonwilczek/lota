@@ -203,6 +203,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/tpm.c \
               $(AGENT_DIR)/seal_envelope.c \
               $(AGENT_DIR)/iommu.c \
+              $(AGENT_DIR)/kernel_measure.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
               $(AGENT_DIR)/ipc.c \
@@ -1164,6 +1165,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_io_read_file \
 	$(TEST_BIN_DIR)/test_devt \
 	$(TEST_BIN_DIR)/test_sb_dev \
+	$(TEST_BIN_DIR)/test_kernel_measure \
 	$(TEST_BIN_DIR)/test_bpf_mount_hooks \
 	$(TEST_BIN_DIR)/test_path_sanitize \
 	$(TEST_BIN_DIR)/test_event_budget \
@@ -1384,6 +1386,10 @@ $(TEST_BIN_DIR)/test_bpf_mount_hooks: tests/test_bpf_mount_hooks.c $(BPF_OBJ) | 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -DBPF_OBJ_PATH='"$(BPF_OBJ)"' -o $@ $< -lelf
 
+$(TEST_BIN_DIR)/test_kernel_measure: tests/test_kernel_measure.c $(AGENT_DIR)/kernel_measure.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
 $(TEST_BIN_DIR)/test_path_sanitize: tests/test_path_sanitize.c $(AGENT_DIR)/path_validate.h | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
@@ -1599,6 +1605,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_io_read_file
 	@$(BUILD_DIR)/test_devt
 	@$(BUILD_DIR)/test_sb_dev
+	@$(BUILD_DIR)/test_kernel_measure
 	@$(BUILD_DIR)/test_bpf_mount_hooks
 	@$(BUILD_DIR)/test_path_sanitize
 	@$(BUILD_DIR)/test_event_budget
@@ -1721,7 +1728,7 @@ VALGRIND_UNIT_BINS := \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \
-	test_installer_probe test_devt test_sb_dev test_event_budget \
+	test_installer_probe test_devt test_sb_dev test_kernel_measure test_event_budget \
 	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
