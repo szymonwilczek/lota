@@ -36,7 +36,6 @@ struct bpf_loader_ctx {
 	int integrity_fd; /* 'integrity_config' map fd */
 	int task_auth_fd; /* 'lota_task_auth' map fd */
 	int trusted_libs_fd; /* 'trusted_libs' map fd */
-	int trusted_lib_mnt_fd; /* 'trusted_lib_mnt' map fd */
 	int protected_pids_fd; /* Protected PIDs map fd */
 	int allow_verity_digest_fd; /* 'allow_verity_digest' map fd */
 	bool loaded; /* BPF object loaded into the kernel and maps resolved */
