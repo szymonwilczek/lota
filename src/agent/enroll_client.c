@@ -424,7 +424,16 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 	}
 
 	printf("Checking AIK...\n");
+
+	/* this is the command that comes back with a certificate */
+	if (tpm_aik_load_metadata(&g_agent.tpm_ctx) == 0 &&
+	    tpm_aik_key_is_shared(&g_agent.tpm_ctx))
+		printf("Replacing the attestation key this publisher shares "
+		       "with every other one enrolled here.\n");
+
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, true);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
+	tpm_aik_allow_shared_key_replace(&g_agent.tpm_ctx, false);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
@@ -613,7 +622,12 @@ int do_allow_publisher(const char *profile_id)
 
 	printf("Publisher %s may now enroll with this machine.\n", paths.id);
 	printf("They will hold one attestation key here, unlinkable to the "
-	       "one any other publisher holds.\n");
+	       "one any other\npublisher holds.\n");
+	printf("If they run a verifier, they also receive this host's boot "
+	       "evidence, which\nis the same evidence every other such "
+	       "publisher receives -- comparing it\ntells them they are "
+	       "looking at one machine. Take it back at any time with:\n");
+	printf("  lota-agent --forget-publisher %s\n", paths.id);
 	return 0;
 }
 
@@ -822,10 +836,17 @@ int do_list_publishers(void)
 		print_publisher(&entries[i]);
 		printf("\n");
 	}
-	printf("Each holds its own attestation key, so none of them can tell "
-	       "from the evidence\nthat this is the same machine another one "
-	       "sees. What every report contains is\nthe same for all of "
-	       "them and is listed in the operator documentation.\n");
+	printf("Each holds its own attestation key, so none of them can name "
+	       "this machine\nfrom the certificate it was issued, and nothing "
+	       "ties one publisher's\nidentity for this machine to another's."
+	       "\n\n");
+	printf("A publisher who runs a verifier receives more than that: the "
+	       "boot evidence,\nincluding the firmware measurements and the "
+	       "event log, which names this\nhost's disk. Two such publishers "
+	       "who compare what they each received can\ntell they are looking "
+	       "at one machine. A publisher whose titles only check\ntokens "
+	       "receives none of it. What a report contains is listed in the "
+	       "operator\ndocumentation.\n");
 	printf("\nTake one back with: lota-agent --forget-publisher <id>\n");
 	return 0;
 }
@@ -841,6 +862,22 @@ int do_forget_publisher(const char *profile_id)
 	if (ret < 0) {
 		fprintf(stderr, "ERROR: '%s' is not a publisher identity.\n",
 			profile_id ? profile_id : "");
+		return 1;
+	}
+
+	/*
+	 * A publisher this machine never answered to has nothing to take back,
+	 * and reporting one forgotten would tell somebody checking that they
+	 * had removed a publisher they had not.
+	 * The directory is the record of the relationship, so its absence is
+	 * the answer.
+	 */
+	if (access(paths.dir, F_OK) != 0) {
+		fprintf(stderr,
+			"This machine does not answer to publisher %s, so "
+			"there is nothing to take back.\nSee lota-agent "
+			"--list-publishers for the ones it does.\n",
+			paths.id);
 		return 1;
 	}
 

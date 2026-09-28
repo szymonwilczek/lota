@@ -158,6 +158,19 @@ What the stages do
    the profile, and ``lota-agent --reenroll --ca-cert ...`` stays as a manual
    fallback.
 
+   Each publisher's key is derived from that publisher's identity, so the
+   certificates they hold carry different public keys and no two of them can
+   name this machine from what their own CA issued. That is the whole of the
+   guarantee, and it is worth being precise about the rest: a publisher who
+   runs a **verifier** also receives this host's boot evidence -- the firmware
+   and Secure Boot measurements, and the event log, which names the disk the
+   host boots from. Two publishers who both run verifiers can compare what
+   they each legitimately received and conclude it is one machine. A publisher
+   whose titles only check tokens receives none of that, and for them the
+   separation is complete. Choosing between the two is the privacy decision
+   in this design; ``lota-agent --list-publishers`` says which of them this
+   machine answers to and ``--forget-publisher`` takes one back.
+
 Run ends with a self-check (integrity floor, fs-verity, service, certificate,
 and -- when ``--verifier`` is given -- a full attestation round-trip) and a
 plain-language summary of exactly what telemetry leaves the machine.
