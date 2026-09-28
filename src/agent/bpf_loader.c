@@ -28,11 +28,11 @@
 #include <linux/openat2.h>
 
 #include "../../include/lota.h"
-#include "../../include/lota_devt.h"
 #include "../../include/lota_ima_xattr.h"
 #include "bpf_loader.h"
 #include "journal.h"
 #include "policy_sign.h"
+#include "sb_dev.h"
 
 #ifndef EAUTH
 #define EAUTH 80
@@ -1630,7 +1630,8 @@ int bpf_loader_unprotect_pid(struct bpf_loader_ctx *ctx, uint32_t pid)
 	return 0;
 }
 
-static int stat_regular_file_nofollow(const char *path, struct stat *st)
+static int stat_regular_file_nofollow(const char *path, struct stat *st,
+				      unsigned long long *sb_dev)
 {
 	int fd = -1;
 	int ret = 0;
@@ -1651,6 +1652,14 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st)
 		return ret;
 	}
 
+	if (sb_dev) {
+		ret = sb_dev_from_fd(fd, sb_dev);
+		if (ret < 0) {
+			close(fd);
+			return ret;
+		}
+	}
+
 	close(fd);
 	if (!S_ISREG(st->st_mode))
 		return -EINVAL;
@@ -1658,7 +1667,8 @@ static int stat_regular_file_nofollow(const char *path, struct stat *st)
 	return 0;
 }
 
-static int stat_dir_nofollow(const char *path, struct stat *st)
+static int stat_dir_nofollow(const char *path, struct stat *st,
+			     unsigned long long *sb_dev)
 {
 	int fd = -1;
 	int ret = 0;
@@ -1747,8 +1757,73 @@ static int stat_dir_nofollow(const char *path, struct stat *st)
 		return ret;
 	}
 
+	if (sb_dev) {
+		ret = sb_dev_from_fd(fd, sb_dev);
+		if (ret < 0) {
+			close(fd);
+			return ret;
+		}
+	}
+
 	close(fd);
 	if (!S_ISDIR(st->st_mode))
+		return -EINVAL;
+
+	return 0;
+}
+
+/*
+ * BPF side looks these keys up with inode->i_sb->s_dev, so the loader has to
+ * write that device and not the one stat(2) reports: on btrfs a subvolume has
+ * its own anonymous device, and a key built from stat(2) is a key no hook can
+ * find. A path whose superblock device cannot be resolved is refused -- arming
+ * a lookup that can never hit is what left the hooks inert.
+ */
+static int trusted_lib_key_for_file(const char *path,
+				    struct trusted_lib_key *key)
+{
+	unsigned long long sb_dev = 0;
+	struct stat st = { 0 };
+	int ret;
+
+	ret = stat_regular_file_nofollow(path, &st, &sb_dev);
+	if (ret < 0) {
+		if (ret == -ENOTSUP || ret == -ENODEV)
+			lota_err(
+				"Cannot read the superblock device of %s: %s; "
+				"the kernel would never match a trusted-library key for it",
+				path, strerror(-ret));
+		return ret;
+	}
+
+	key->dev = sb_dev;
+	key->ino = (uint64_t)st.st_ino;
+	if (key->dev == 0 || key->ino == 0)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int trusted_lib_key_for_dir(const char *path,
+				   struct trusted_lib_key *key)
+{
+	unsigned long long sb_dev = 0;
+	struct stat st = { 0 };
+	int ret;
+
+	ret = stat_dir_nofollow(path, &st, &sb_dev);
+	if (ret < 0) {
+		if (ret == -ENOTSUP || ret == -ENODEV)
+			lota_err(
+				"Cannot read the superblock device of %s: %s; "
+				"the kernel would never match a trusted-mountpoint key for it",
+				path, strerror(-ret));
+		return ret;
+	}
+
+	key->dev = sb_dev;
+	key->ino = (uint64_t)st.st_ino;
+	if (key->dev == 0 || key->ino == 0)
 		return -EINVAL;
 
 	return 0;
@@ -1758,7 +1833,6 @@ static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
 					 const char *dir_path, int add)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
 	uint32_t refcnt = 0;
 	int ret;
 
@@ -1768,14 +1842,9 @@ static int update_trusted_mountpoint_ref(struct bpf_loader_ctx *ctx,
 	if (ctx->trusted_lib_mnt_fd < 0)
 		return 0;
 
-	ret = stat_dir_nofollow(dir_path, &st);
+	ret = trusted_lib_key_for_dir(dir_path, &key);
 	if (ret < 0)
 		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
 
 	if (bpf_map_lookup_elem(ctx->trusted_lib_mnt_fd, &key, &refcnt) < 0) {
 		if (errno != ENOENT)
@@ -1934,28 +2003,16 @@ static int update_trusted_parent_mountpoints(struct bpf_loader_ctx *ctx,
 int bpf_loader_probe_trusted_lib(const char *path)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
-	int ret;
 
 	if (!path)
 		return -EINVAL;
 
-	ret = stat_regular_file_nofollow(path, &st);
-	if (ret < 0)
-		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
-
-	return 0;
+	return trusted_lib_key_for_file(path, &key);
 }
 
 int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
 	uint32_t value = 1;
 	int ret;
 
@@ -1965,14 +2022,9 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ctx->trusted_libs_fd < 0)
 		return -ENOTSUP;
 
-	ret = stat_regular_file_nofollow(path, &st);
+	ret = trusted_lib_key_for_file(path, &key);
 	if (ret < 0)
 		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
 
 	if (bpf_map_update_elem(ctx->trusted_libs_fd, &key, &value, BPF_ANY) <
 	    0)
@@ -1990,7 +2042,6 @@ int bpf_loader_trust_lib(struct bpf_loader_ctx *ctx, const char *path)
 int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 {
 	struct trusted_lib_key key = { 0 };
-	struct stat st = { 0 };
 	int ret;
 
 	if (!ctx || !ctx->loaded || !path)
@@ -1999,14 +2050,9 @@ int bpf_loader_untrust_lib(struct bpf_loader_ctx *ctx, const char *path)
 	if (ctx->trusted_libs_fd < 0)
 		return -ENOTSUP;
 
-	ret = stat_regular_file_nofollow(path, &st);
+	ret = trusted_lib_key_for_file(path, &key);
 	if (ret < 0)
 		return ret;
-
-	key.dev = lota_devt_from_st(st.st_dev);
-	key.ino = (uint64_t)st.st_ino;
-	if (key.dev == 0 || key.ino == 0)
-		return -EINVAL;
 
 	if (bpf_map_delete_elem(ctx->trusted_libs_fd, &key) < 0 &&
 	    errno != ENOENT)

@@ -58,3 +58,13 @@ installer/probe.c|using sizeof on a flexible structure|sizeof(*d) is the struct 
 
 src/agent/config.c|memset with byte count|Clears the whole struct lota_config before config_init fills in the defaults.
 installer/tui.c|memset with byte count|Clears the whole struct tui, 152 KB of stage rows, before the installer binds its sink.
+
+# A statx member older C library headers do not declare
+# -----------------------------------------------------
+# glibc's <sys/stat.h> takes struct statx from <linux/stat.h> when
+# __has_include finds that header. Sparse has no __has_include, so it reads
+# glibc's fallback copy instead, which in older releases ends in padding where
+# the kernel has stx_mnt_id. The compiler reads the kernel header.
+
+tests/test_sb_dev.c|no member 'stx_mnt_id' in struct statx|The test's oracle reads the mount id statx(2) fills in for STATX_MNT_ID; the kernel's struct statx declares it.
+src/agent/sb_dev.c|no member 'stx_mnt_id' in struct statx|sb_dev_from_fd() looks the file's mount up in mountinfo by the id statx(2) fills in for STATX_MNT_ID; the kernel's struct statx declares it.
