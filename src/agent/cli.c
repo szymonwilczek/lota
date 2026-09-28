@@ -30,6 +30,7 @@ static uint32_t *g_protect_pids = NULL;
 static int g_protect_pid_count = 0;
 static char g_trust_libs[LOTA_CONFIG_MAX_LIBS][PATH_MAX];
 static int g_trust_lib_count;
+static uint32_t g_cli_switch_mask;
 static char (*g_cli_trust_libs)[PATH_MAX];
 static int g_cli_trust_lib_count;
 static uint32_t *g_cli_protect_pids;
@@ -56,6 +57,11 @@ int *cli_runtime_trust_lib_count(void)
 
 const char (*cli_startup_trust_libs(void))
 	[PATH_MAX] { return (const char (*)[PATH_MAX])g_cli_trust_libs; }
+
+uint32_t cli_startup_switch_mask(void)
+{
+	return g_cli_switch_mask;
+}
 
 int cli_startup_trust_lib_count(void)
 {
@@ -494,18 +500,23 @@ int cli_parse(int argc, char **argv, struct cli_options *opts,
 		}
 		case 'M':
 			opts->strict_mmap = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_MMAP;
 			break;
 		case 'Y':
 			opts->strict_exec = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_EXEC;
 			break;
 		case 'P':
 			opts->block_ptrace = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_BLOCK_PTRACE;
 			break;
 		case 'J':
 			opts->strict_modules = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_STRICT_MODULES;
 			break;
 		case 'X':
 			opts->block_anon_exec = true;
+			g_cli_switch_mask |= LOTA_CLI_SWITCH_BLOCK_ANON_EXEC;
 			break;
 		case 'R': {
 			uint32_t v;
