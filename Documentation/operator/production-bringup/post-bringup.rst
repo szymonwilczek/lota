@@ -249,6 +249,18 @@ same ports as the top-level keys. A profile missing the CA, the anchor or the
 verifier is refused at load, and every anchor has to satisfy the same
 readability constraint as the top-level ``ca_cert`` above.
 
+**Every port named here has to carry the SELinux label on an enforcing host.**
+The confined agent may connect only to ports labelled ``lota_port_t``;
+``lota-install`` labels the endpoints it was given, and one added afterwards --
+a second publisher, a verifier moved to another port -- needs::
+
+   sudo semanage port -a -t lota_port_t -p tcp <port>
+
+Without it every round fails with ``Permission denied`` against a server that
+is running and that a shell on the same host can reach. The agent names the
+port and this command when it happens; see :ghsrc:`selinux/README.rst` for why
+the labels are assigned one port at a time.
+
 ``verifier = none`` is how a profile says that publisher runs no verifier and
 checks the tokens their titles fetch in their own backend. Nothing is reported
 to them and this host holds no verdict of theirs, so their titles read the
