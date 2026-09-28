@@ -25,6 +25,7 @@
 #include <openssl/pem.h>
 #include <openssl/types.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include "../src/agent/profile.h"
 #include "../src/agent/publishers.h"
@@ -81,6 +82,33 @@ static X509 *mint_cert(EVP_PKEY *pkey, const char *cn, long serial)
 				   (const unsigned char *)cn, -1, -1, 0);
 	X509_set_issuer_name(x, name);
 
+	if (!X509_sign(x, pkey, EVP_sha256())) {
+		X509_free(x);
+		return NULL;
+	}
+	return x;
+}
+
+/* Self-signed certificate carrying basicConstraints CA:TRUE,
+ * which is what a publisher's trust anchor is and a listener certificate is not */
+static X509 *mint_ca_cert(EVP_PKEY *pkey, const char *cn, long serial)
+{
+	X509_EXTENSION *ext;
+	X509 *x = mint_cert(pkey, cn, serial);
+
+	if (!x)
+		return NULL;
+
+	ext = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints,
+				  "critical,CA:TRUE");
+	if (!ext || !X509_add_ext(x, ext, -1)) {
+		X509_EXTENSION_free(ext);
+		X509_free(x);
+		return NULL;
+	}
+	X509_EXTENSION_free(ext);
+
+	/* the signature covers the extensions, so re-sign after adding one */
 	if (!X509_sign(x, pkey, EVP_sha256())) {
 		X509_free(x);
 		return NULL;
@@ -591,6 +619,61 @@ out:
 }
 
 /*
+ * A publisher's identity may not be pinned to a certificate that is meant to
+ * rotate.
+ *
+ * The agent takes one --ca-cert and uses it for two things: verifying the CA
+ * server's TLS chain, and naming the publisher. A CA anchor serves both.
+ * A TLS listener certificate serves the first and is rotated on a schedule
+ * -- so naming it moves every host of that publisher onto a new profile,
+ * a new AIK and a fresh consent prompt on the day the certificate is re-keyed,
+ * with nothing reporting it.
+ *
+ * The anchor cannot be refused outright: a self-signed leaf is a legitimate pin
+ * for a deployment that wants one. What the agent can do is know the difference,
+ * which is what this pins.
+ */
+static void test_anchor_is_ca(void)
+{
+	EVP_PKEY *key = EVP_EC_gen("P-256");
+	X509 *ca = NULL;
+	X509 *leaf = NULL;
+	char ca_path[256];
+	char leaf_path[256];
+
+	snprintf(ca_path, sizeof(ca_path), "/tmp/lota-anchor-ca.%d.pem",
+		 (int)getpid());
+	snprintf(leaf_path, sizeof(leaf_path), "/tmp/lota-anchor-leaf.%d.pem",
+		 (int)getpid());
+
+	if (!key) {
+		CHECK(0, "key generation");
+		return;
+	}
+	ca = mint_ca_cert(key, "publisher anchor", 1);
+	leaf = mint_cert(key, "lota-attest-ca listener", 2);
+	if (!ca || !leaf || write_cert_pem(ca_path, ca) != 0 ||
+	    write_cert_pem(leaf_path, leaf) != 0) {
+		CHECK(0, "certificate fixtures");
+		goto out;
+	}
+
+	CHECK(profile_anchor_is_ca(ca_path) == 1,
+	      "a CA anchor is recognised as one");
+	CHECK(profile_anchor_is_ca(leaf_path) == 0,
+	      "a listener certificate is not a CA anchor");
+	CHECK(profile_anchor_is_ca("/nonexistent/anchor.pem") < 0,
+	      "an anchor that cannot be read is an error, not an answer");
+
+out:
+	unlink(ca_path);
+	unlink(leaf_path);
+	X509_free(ca);
+	X509_free(leaf);
+	EVP_PKEY_free(key);
+}
+
+/*
  * The inventory is what a player checks and what revocation acts on,
  * so what matters is that a half-finished profile is still listed
  * -- "agreed to, not enrolled" is the state between accepting and title running,
@@ -724,6 +807,7 @@ int main(void)
 	test_handle_record_first_use();
 	test_handle_candidates();
 	test_consent_record();
+	test_anchor_is_ca();
 	test_publisher_inventory();
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");

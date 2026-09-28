@@ -37,7 +37,7 @@ Running it
 .. code-block:: sh
 
     sudo lota-install \
-        --ca-server ca.example --ca-port 8444 --ca-cert /path/to/ca-tls.crt \
+        --ca-server ca.example --ca-port 8444 --ca-cert /path/to/ca.crt \
         --verifier verifier.example
 
 CA/verifier endpoints and the trust material paths come from the operator's

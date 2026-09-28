@@ -55,7 +55,7 @@ recovery. Rotate and re-seal deliberately, then re-enroll:
 .. code-block:: sh
 
     sudo lota-agent --reprovision-aik
-    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert tls.crt
+    sudo lota-agent --enroll --ca-server ca.example --ca-port 8444 --ca-cert ca.crt
 
 Anti-rollback: what sealing binds, and what it does not
 =======================================================

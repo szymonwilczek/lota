@@ -566,10 +566,32 @@ static int resolve_profile(const char *ca_cert, struct profile_paths *paths)
 	}
 
 	ret = profile_paths_from_anchor(ca_cert, paths);
-	if (ret < 0)
+	if (ret < 0) {
 		fprintf(stderr, "Failed to read the CA trust anchor %s: %s\n",
 			ca_cert, strerror(-ret));
-	return ret;
+		return ret;
+	}
+
+	/*
+	 * The anchor is also this publisher's identity, so naming a certificate
+	 * that is meant to rotate spends the identity with it.
+	 * Not refused: a self-signed leaf is a legitimate pin, and nothing in
+	 * the file says whether that is what somebody meant.
+	 * Said once, where the decision is being made.
+	 */
+	if (profile_anchor_is_ca(ca_cert) == 0)
+		fprintf(stderr,
+			"Warning: %s is not a CA certificate, so this "
+			"publisher's identity on this host is pinned to it.\n"
+			"If it is the server's TLS certificate, re-issuing it "
+			"with a new key makes this host a new device to that "
+			"publisher: a new profile, a new attestation key in a "
+			"new TPM slot, and consent asked again.\n"
+			"Name the CA certificate that signs it instead, if "
+			"there is one.\n",
+			ca_cert);
+
+	return 0;
 }
 
 int do_enroll(const char *server, int port, const char *ca_cert,
@@ -765,6 +787,17 @@ int do_add_publisher(const char *config_path, const char *name,
 			ca_cert, strerror(-ret));
 		return 1;
 	}
+
+	/* Same warning as the enrollment path: this is the other place
+	 * a publisher's identity is chosen from a file somebody named. */
+	if (profile_anchor_is_ca(ca_cert) == 0)
+		fprintf(stderr,
+			"Warning: %s is not a CA certificate, so this "
+			"publisher's identity on this host is pinned to it. "
+			"If it is the server's TLS certificate, re-issuing it "
+			"with a new key makes this host a new device to that "
+			"publisher.\n",
+			ca_cert);
 
 	/*
 	 * Text-level check in the writer compares anchor paths, which misses
