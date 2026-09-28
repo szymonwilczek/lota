@@ -402,6 +402,20 @@ type AgentHashRepinState struct {
 //     ErrAgentHashRepinRateLimited when now is still inside AgentHashRepinMinInterval,
 //     so concurrent attestations for one client cannot race the cheap-path gate
 //     in agentHashDecision.
+//
+// KernelHashRecorder is optionally implemented by baseline stores that keep
+// the kernel hash a client last reported.
+//
+// Advisory: gates nothing and no policy pins it. It is folded into the digest
+// the TPM signs, so a stored value is attested and shows whether a device's
+// kernel changed. A store without the capability omits it.
+type KernelHashRecorder interface {
+	// RecordKernelHash stores the reported hash and returns the one it replaced.
+	// had is false for a client with no baseline row: a first attestation
+	// is not a change.
+	RecordKernelHash(clientID string, kernelHash [types.HashSize]byte) (prev [types.HashSize]byte, had bool, err error)
+}
+
 type AgentHashRepinStorer interface {
 	GetAgentHashRepinState(clientID string) AgentHashRepinState
 	ArchiveAndRepinAgentHash(clientID string,
@@ -415,6 +429,7 @@ type BaselineStore struct {
 	bootBaselines map[string]*BootBaseline   // clientID -> PCR0/1/7 baseline
 	reanchor      map[string]*ReanchorState  // clientID -> re-anchor state
 	tenants       map[string]string          // clientID -> CA-assigned tenant
+	kernelHashes  map[string][types.HashSize]byte
 }
 
 // creates a new baseline store
@@ -424,6 +439,7 @@ func NewBaselineStore() *BaselineStore {
 		bootBaselines: make(map[string]*BootBaseline),
 		reanchor:      make(map[string]*ReanchorState),
 		tenants:       make(map[string]string),
+		kernelHashes:  make(map[string][types.HashSize]byte),
 	}
 }
 
@@ -909,4 +925,22 @@ func (s *BaselineStore) CheckAndUpdateAttestation(clientID string,
 	}
 
 	return outcome
+}
+
+// RecordKernelHash implements KernelHashRecorder for the in-memory store.
+// A client with no PCR14 baseline is not tracked: there is nothing this
+// process has agreed to remember about it yet.
+func (s *BaselineStore) RecordKernelHash(clientID string,
+	kernelHash [types.HashSize]byte,
+) (prev [types.HashSize]byte, had bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, known := s.baselines[clientID]; !known {
+		return prev, false, nil
+	}
+
+	prev, had = s.kernelHashes[clientID]
+	s.kernelHashes[clientID] = kernelHash
+	return prev, had, nil
 }

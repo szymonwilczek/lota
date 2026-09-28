@@ -1020,3 +1020,49 @@ func (s *SQLiteBaselineStore) AcknowledgeLFAReview(clientID string) error {
 		"UPDATE baselines SET lfa_review_pending = 0 WHERE client_id = ?", clientID)
 	return err
 }
+
+// RecordKernelHash stores the kernel hash a client reported and returns
+// the one it replaced.
+//
+// The value gates nothing -- it is a hash of a file the agent read, which is
+// why no policy has to pin it -- but it rides in the digest the TPM signs,
+// so what is stored here is attested.
+// Keeping it is what lets an operator answer whether a device's kernel changed.
+//
+// A client with no baseline row has nothing to compare against and reports
+// had=false: that is a first attestation, not a change.
+func (s *SQLiteBaselineStore) RecordKernelHash(clientID string,
+	kernelHash [types.HashSize]byte,
+) (prev [types.HashSize]byte, had bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var stored []byte
+	if err := s.db.QueryRow(
+		`SELECT kernel_hash FROM baselines WHERE client_id = ?`,
+		clientID,
+	).Scan(&stored); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return prev, false, nil
+		}
+		return prev, false, err
+	}
+
+	if len(stored) == types.HashSize {
+		copy(prev[:], stored)
+		had = true
+	}
+
+	if had && prev == kernelHash {
+		return prev, had, nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE baselines SET kernel_hash = ? WHERE client_id = ?`,
+		kernelHash[:], clientID,
+	); err != nil {
+		return prev, had, err
+	}
+
+	return prev, had, nil
+}
