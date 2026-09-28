@@ -216,6 +216,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/config.c \
               $(AGENT_DIR)/steam_runtime.c \
               $(AGENT_DIR)/container_watch.c \
+              $(AGENT_DIR)/token_gate.c \
               $(AGENT_DIR)/dbus.c \
               $(AGENT_DIR)/sdnotify.c \
               $(AGENT_DIR)/journal.c \
@@ -1125,6 +1126,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_packaging \
 	$(TEST_BIN_DIR)/test_steam_runtime \
 	$(TEST_BIN_DIR)/test_container_watch \
+	$(TEST_BIN_DIR)/test_token_gate \
 	$(TEST_BIN_DIR)/test_wine_hook \
 	$(TEST_BIN_DIR)/test_daemon \
 	$(TEST_BIN_DIR)/test_signal_shutdown \
@@ -1231,6 +1233,10 @@ $(TEST_BIN_DIR)/test_steam_runtime: tests/test_steam_runtime.c $(AGENT_DIR)/stea
 	$(Q)$(CC) $(CFLAGS) -DLOTA_GROUP_NAME='"root"' -o $@ $^ -lsystemd
 
 $(TEST_BIN_DIR)/test_container_watch: tests/test_container_watch.c $(AGENT_DIR)/container_watch.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_token_gate: tests/test_token_gate.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1507,6 +1513,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_packaging
 	@$(BUILD_DIR)/test_steam_runtime
 	@$(BUILD_DIR)/test_container_watch
+	@$(BUILD_DIR)/test_token_gate
 	@$(BUILD_DIR)/test_wine_hook
 	@$(BUILD_DIR)/test_daemon
 	@$(BUILD_DIR)/test_signal_shutdown
@@ -1630,7 +1637,7 @@ VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 	--errors-for-leak-kinds=definite,indirect --track-origins=yes -q
 VALGRIND_UNIT_BINS := \
 	test_hash_verify test_dbus test_systemd test_packaging \
-	test_steam_runtime test_container_watch test_wine_hook \
+	test_steam_runtime test_container_watch test_token_gate test_wine_hook \
 	test_daemon test_signal_shutdown \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \

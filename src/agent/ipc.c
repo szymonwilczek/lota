@@ -37,6 +37,8 @@
 #include "dbus.h"
 #include "journal.h"
 #include "quote.h"
+#include "attest.h"
+#include "token_gate.h"
 #include "tpm.h"
 #include "agent.h"
 #include "runtime_image_measure.h"
@@ -1013,7 +1015,8 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 
 	client_attestation_view(ctx, client, &view_flags, &view_valid_until);
 
-	if (!(view_flags & LOTA_STATUS_ATTESTED)) {
+	if (token_gate_needs_attested(view_flags) &&
+	    !(view_flags & LOTA_STATUS_ATTESTED)) {
 		fail = true;
 		fail_code = LOTA_IPC_ERR_NOT_ATTESTED;
 		goto out;
@@ -1066,6 +1069,16 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 	 * not the host's aggregate,
 	 * so a relying party reads its own answer */
 	token->valid_until = view_valid_until;
+
+	/*
+	 * A publisher who runs no verifier has no round to take a window from,
+	 * and a zero one reads as expired to every relying party.
+	 * The agent bounds its own freshness instead; the status word still
+	 * answers zero, because that is a verdict window and there is no verdict.
+	 */
+	if (view_flags & LOTA_STATUS_TOKEN_ONLY)
+		token->valid_until =
+			(uint64_t)time(NULL) + TOKEN_ONLY_VALIDITY_SEC;
 	token->flags = view_flags;
 	token->pcr_mask = ctx->quote_pcr_mask;
 
@@ -1174,12 +1187,46 @@ static void handle_get_token(struct ipc_context *ctx, struct ipc_client *client,
 			if (ret < 0) {
 				lota_rt_failure_reason(&mfail, ret, reason,
 						       sizeof(reason));
-				lota_err("runtime image measurement failed for "
-					 "pid=%u: %s",
-					 runtime_pids[i], reason);
-				fail = true;
-				fail_code = LOTA_IPC_ERR_INTERNAL;
-				goto out;
+
+				/*
+				 * Only the caller's own executable decides
+				 * the caller's token.
+				 * Any local program may protect itself,
+				 * so folding somebody else's unmeasurable
+				 * binary into this refusal stops every title
+				 * on the machine until that program exits.
+				 */
+				if (token_gate_failure_is_fatal(
+					    (pid_t)runtime_pids[i],
+					    client->peer_pid)) {
+					lota_err(
+						"runtime image measurement failed for "
+						"the requesting pid=%u: %s",
+						runtime_pids[i], reason);
+					fail = true;
+					fail_code =
+						LOTA_IPC_ERR_UNMEASURABLE_SELF;
+					goto out;
+				}
+
+				/*
+				 * Absent from the fold:
+				 * the digest stays a zero for that process,
+				 * the coverage flag carries the gap,
+				 * and a publisher who requires full coverage
+				 * refuses the token on that flag.
+				 */
+				memset(image_digests[i], 0,
+				       sizeof(image_digests[i]));
+				lota_warn(
+					"runtime image measurement failed for pid=%u, "
+					"which is not the caller (pid=%d): the token "
+					"reports partial coverage rather than "
+					"refusing every title on this host: %s",
+					runtime_pids[i], client->peer_pid,
+					reason);
+				image_fully_measured = false;
+				continue;
 			}
 			if (cov.unmeasurable > 0) {
 				lota_rt_failure_reason(&mfail, mfail.err,
