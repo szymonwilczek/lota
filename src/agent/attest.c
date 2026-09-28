@@ -1181,7 +1181,8 @@ static void renew_target_cert_if_due(struct attest_target *t)
 	lota_info("AIK certificate renewal due for %s (%lld s left of %lld s)",
 		  t->label, (long long)remaining, (long long)total);
 
-	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths);
+	ret = enroll_renew_cert(&g_agent.tpm_ctx, &t->paths,
+				t->ca_cert[0] ? t->ca_cert : NULL);
 	if (ret == 0) {
 		t->renew_backoff = 0;
 		lota_info("AIK certificate renewed for %s", t->label);

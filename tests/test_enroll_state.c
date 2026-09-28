@@ -182,8 +182,46 @@ static void test_null_args(void)
 	      "load NULL out");
 }
 
+/*
+ * A renewal has two candidate anchors:
+ * The one this profile is configured with, and the one recorded when it enrolled.
+ * They name the same publisher -- the profile is derived from the anchor -- but
+ * only the configured one is guaranteed to still be readable by the daemon,
+ * which runs with its own /tmp and /var/tmp.
+ * Preferring the recorded path lets an enrollment driven from a staging directory
+ * make every later renewal fail.
+ */
+static void test_renew_anchor_prefers_the_configured_one(void)
+{
+	const char *chosen = NULL;
+
+	CHECK(enroll_renew_anchor("/etc/lota/publisher-ca.crt",
+				  "/var/tmp/rig/ca.crt", &chosen) == 0 &&
+		      strcmp(chosen, "/etc/lota/publisher-ca.crt") == 0,
+	      "configured anchor wins over the recorded one");
+
+	chosen = NULL;
+	CHECK(enroll_renew_anchor(NULL, "/var/tmp/rig/ca.crt", &chosen) == 0 &&
+		      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0,
+	      "recorded anchor carries a target with none configured");
+
+	chosen = NULL;
+	CHECK(enroll_renew_anchor("", "/var/tmp/rig/ca.crt", &chosen) == 0 &&
+		      strcmp(chosen, "/var/tmp/rig/ca.crt") == 0,
+	      "empty configured anchor is not an anchor");
+
+	chosen = NULL;
+	CHECK(enroll_renew_anchor("", "", &chosen) == -ENOENT && !chosen,
+	      "no anchor at all is reported, not guessed");
+
+	CHECK(enroll_renew_anchor("/etc/lota/publisher-ca.crt",
+				  "/var/tmp/rig/ca.crt", NULL) == -EINVAL,
+	      "NULL output is refused");
+}
+
 int main(void)
 {
+	test_renew_anchor_prefers_the_configured_one();
 	test_roundtrip();
 	test_rejects_v1_record();
 	test_missing_is_enoent();

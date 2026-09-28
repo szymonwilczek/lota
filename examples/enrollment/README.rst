@@ -126,3 +126,13 @@ Notes for production
   publisher profile, so a refresh is a single ``lota-agent --reenroll
   --ca-cert ...`` naming the same trust anchor -- the same guided path the
   agent points operators to after an AIK rotation.
+- The daemon's own renewal reuses that recorded **endpoint**, but presents the
+  trust anchor the profile is **configured** with, falling back to the
+  recorded path only for a target that has none. The two name the same
+  publisher, since the profile is derived from the anchor; the difference is
+  that the daemon runs sandboxed with its own ``/tmp`` and ``/var/tmp``, so an
+  anchor kept in a staging directory is readable when an operator enrolls by
+  hand and gone when the daemon later renews. Keep the anchor somewhere the
+  daemon can read for the life of the profile -- ``/etc/lota`` is the obvious
+  place -- and give ``--ca-cert`` that path rather than a build or unpack
+  directory.
