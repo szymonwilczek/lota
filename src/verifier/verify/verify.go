@@ -1335,8 +1335,30 @@ func (v *Verifier) tryAgentHashRepin(clog *slog.Logger, clientID, tenant string,
 	}
 
 	now := time.Now()
-	if agentHashDecision(report.System.AgentHash, policy.AgentHashes,
-		st.LastRepinAt, now) != AgentHashRepin {
+	verdict, refusal := agentHashDecision(report.System.AgentHash,
+		policy.AgentHashes, st.LastRepinAt, now)
+
+	if verdict != AgentHashRepin {
+		/*
+		 * The other two refusals are already named: an unlisted build is
+		 * refused by the policy gate before this path runs, and an empty
+		 * allow-list is the enterprise profile, where the pin standing is
+		 * the whole arrangement.
+		 * This one had no voice at all, and it is the one that looks exactly
+		 * like tampering while being an update arriving early.
+		 */
+		if refusal == AgentHashTooSoon {
+			logging.Security(clog,
+				"agent_hash re-pin refused by the per-client interval, not by the allow-list",
+				"reported_agent_hash",
+				hex.EncodeToString(report.System.AgentHash[:]),
+				"last_repin_at", st.LastRepinAt.UTC().Format(time.RFC3339),
+				"interval_elapses_at",
+				st.LastRepinAt.Add(AgentHashRepinMinInterval).UTC().Format(time.RFC3339),
+				"note",
+				"the reported build is on this policy's allow-list; wait for the interval or re-anchor this client")
+			v.metrics.Reanchors.Inc("agent_hash_escalate")
+		}
 		return false
 	}
 

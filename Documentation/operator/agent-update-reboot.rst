@@ -51,6 +51,23 @@ Pinning both hashes is what creates the grace window in which old and new agents
 both attest. How wide that window is depends on the deployment (see
 `Grace window`_).
 
+One device may move its own baseline at most once a day
+-------------------------------------------------------
+
+Self-service re-pinning carries a per-client interval of 24 hours, so that a
+client flipping between blessed builds faster than a distribution ships them is
+visible. A second update reaching a host inside that window is refused even though
+its hash is listed, and the verifier says which refusal it is::
+
+    agent_hash re-pin refused by the per-client interval, not by the allow-list
+      reported_agent_hash=... last_repin_at=... interval_elapses_at=...
+
+Wait for the stated time, or re-anchor the device
+(``lota-fleet reanchor <client-id> -actor <you>``) to accept it now. A refusal
+that instead reads ``agent hash not in allowed list`` is the other case
+entirely: that build is not in the policy, and re-anchoring it would accept a
+binary nobody blessed.
+
 Per-host update
 ===============
 

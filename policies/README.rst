@@ -341,6 +341,15 @@ When software is updated:
    policy does not list - a listed build needs no operator action. A client
    re-pins at most once per 24 hours, so a host that has just re-pinned and
    then changes again within that window is refused until the window elapses.
+   That refusal names itself, and is not the same event as an unlisted build::
+
+       agent_hash re-pin refused by the per-client interval, not by the allow-list
+         reported_agent_hash=... last_repin_at=... interval_elapses_at=...
+
+   Wait for the stated time, or re-anchor that client to accept the build now.
+   A refusal reading ``agent hash not in allowed list`` is the other case: the
+   build is not in the policy, and re-anchoring would accept a binary nobody
+   listed.
 
 .. code:: bash
 
