@@ -229,6 +229,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/aik_cert.c \
               $(AGENT_DIR)/attest_targets.c \
               $(AGENT_DIR)/attest_peer.c \
+              $(AGENT_DIR)/attest_stage.c \
               $(AGENT_DIR)/attest.c
 
 AGENT_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(AGENT_SRCS))
@@ -1140,6 +1141,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_enroll_state \
 	$(TEST_BIN_DIR)/test_profile_id \
 	$(TEST_BIN_DIR)/test_attest_targets \
+	$(TEST_BIN_DIR)/test_attest_stage \
 	$(TEST_BIN_DIR)/test_attest_aggregate \
 	$(TEST_BIN_DIR)/test_status_flags \
 	$(TEST_BIN_DIR)/test_publisher_profile \
@@ -1298,6 +1300,10 @@ $(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c 
 $(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest_stage.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1490,6 +1496,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_enroll_state
 	@$(BUILD_DIR)/test_profile_id
 	@$(BUILD_DIR)/test_attest_targets
+	@$(BUILD_DIR)/test_attest_stage
 	@$(BUILD_DIR)/test_attest_aggregate
 	@$(BUILD_DIR)/test_status_flags
 	@$(BUILD_DIR)/test_publisher_profile
