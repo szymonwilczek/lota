@@ -129,6 +129,17 @@ int profile_aik_handle_load(const struct profile_paths *paths, uint32_t *out);
 int profile_aik_handle_save(const struct profile_paths *paths, uint32_t handle);
 
 /*
+ * Drop the handle record of a profile whose key never reached the TPM.
+ *
+ * The record is written when the profile is bound, before the key exists,
+ * and everything that counts keys reads it. Caller must first confirm with
+ * the TPM that nothing lives at the handle.
+ *
+ * Returns 0, also when no record exists, or a negative errno.
+ */
+int profile_aik_handle_forget(const struct profile_paths *paths);
+
+/*
  * Handles in [base, base + count) that no profile under @base_dir has recorded,
  * lowest first, so caller can take the first one its TPM has no object at.
  *

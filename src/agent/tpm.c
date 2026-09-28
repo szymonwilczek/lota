@@ -71,6 +71,21 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 static int mkdirs(const char *path, mode_t mode);
 static int tpm_aik_save_new_key_metadata(struct tpm_context *ctx);
 
+/*
+ * Detach an ESYS handle, unless there is nothing to detach.
+ *
+ * Esys_EvictControl hands back ESYS_TR_NONE when the call removed a persistent
+ * object, and closing that is an error the TSS library reports itself, on stderr,
+ * in its own words.
+ */
+static void tpm_tr_close(struct tpm_context *ctx, ESYS_TR *handle)
+{
+	if (!ctx || !ctx->esys_ctx || !handle || *handle == ESYS_TR_NONE)
+		return;
+
+	Esys_TR_Close(ctx->esys_ctx, handle);
+}
+
 static void secure_bzero(void *ptr, size_t len)
 {
 	if (!ptr || len == 0)
@@ -232,6 +247,16 @@ static int tss2_rc_to_errno(TSS2_RC rc)
 	case TPM2_RC_VALUE:
 	case TPM2_RC_SIZE:
 		return -EINVAL;
+	case TPM2_RC_NV_SPACE:
+		/*
+		 * The TPM's non-volatile memory is full, which is what making
+		 * one more key persistent runs into.
+		 * It is a full machine, not a broken one, and -EIO
+		 * -- "Input/output error" -- read to a player like failing
+		 * hardware.
+		 * Callers that can free a slot say so on this code.
+		 */
+		return -ENOSPC;
 	case TPM2_RC_POLICY_FAIL:
 	case TPM2_RC_PCR_CHANGED:
 		/*
@@ -1057,6 +1082,75 @@ static int tpm_handle_in_use(struct tpm_context *ctx, uint32_t handle)
 	}
 	Esys_Free(capability_data);
 	return found;
+}
+
+static int tpm_read_property(struct tpm_context *ctx, TPM2_PT property,
+			     uint32_t *out)
+{
+	TPMS_CAPABILITY_DATA *capability_data = NULL;
+	TPMI_YES_NO more_data = TPM2_NO;
+	TSS2_RC rc;
+	int ret;
+
+	{
+		struct esys_get_capability_args args = {
+			.esys_ctx = ctx->esys_ctx,
+			.capability = TPM2_CAP_TPM_PROPERTIES,
+			.property = property,
+			.property_count = 1,
+			.more_data_out = &more_data,
+			.capability_data_out = &capability_data,
+		};
+		ret = tpm_call_with_backoff(ctx, esys_get_capability_thunk,
+					    &args, &rc, 1,
+					    (void **)&capability_data);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!capability_data ||
+	    capability_data->capability != TPM2_CAP_TPM_PROPERTIES ||
+	    capability_data->data.tpmProperties.count < 1 ||
+	    capability_data->data.tpmProperties.tpmProperty[0].property !=
+		    property) {
+		Esys_Free(capability_data);
+		return -ENOTSUP;
+	}
+
+	*out = capability_data->data.tpmProperties.tpmProperty[0].value;
+	Esys_Free(capability_data);
+	return 0;
+}
+
+int tpm_handle_holds_object(struct tpm_context *ctx, uint32_t handle)
+{
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || handle == 0)
+		return -EINVAL;
+
+	return tpm_handle_in_use(ctx, handle);
+}
+
+int tpm_persistent_slots(struct tpm_context *ctx, uint32_t *used,
+			 uint32_t *total)
+{
+	uint32_t in_use = 0;
+	uint32_t available = 0;
+	int ret;
+
+	if (!ctx || !ctx->esys_ctx || !ctx->initialized || !used || !total)
+		return -EINVAL;
+
+	ret = tpm_read_property(ctx, TPM2_PT_HR_PERSISTENT, &in_use);
+	if (ret < 0)
+		return ret;
+
+	ret = tpm_read_property(ctx, TPM2_PT_HR_PERSISTENT_AVAIL, &available);
+	if (ret < 0)
+		return ret;
+
+	*used = in_use;
+	*total = in_use + available;
+	return 0;
 }
 
 /*
@@ -3854,7 +3948,7 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 					       &persistent_handle));
 			if (rc != TSS2_RC_SUCCESS)
 				return tss2_rc_to_errno(rc);
-			Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
+			tpm_tr_close(ctx, &persistent_handle);
 		}
 	}
 
@@ -3871,7 +3965,7 @@ static int tpm_aik_reprovision_with_auth(struct tpm_context *ctx,
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
-	Esys_TR_Close(ctx->esys_ctx, &persistent_handle);
+	tpm_tr_close(ctx, &persistent_handle);
 
 	ret = tpm_aik_save_auth(ctx, new_auth);
 	if (ret < 0) {
@@ -4518,7 +4612,7 @@ static void seal_release_primary(struct tpm_context *ctx, ESYS_TR handle,
 	if (handle == ESYS_TR_NONE)
 		return;
 	if (persistent)
-		Esys_TR_Close(ctx->esys_ctx, &handle);
+		tpm_tr_close(ctx, &handle);
 	else
 		Esys_FlushContext(ctx->esys_ctx, handle);
 }
@@ -5098,7 +5192,7 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 	if (ret < 0)
 		return ret;
 	if (ret == 1) {
-		Esys_TR_Close(ctx->esys_ctx, &existing);
+		tpm_tr_close(ctx, &existing);
 		if (already)
 			*already = true;
 		return 0;
@@ -5117,7 +5211,7 @@ int tpm_seal_persist_primary(struct tpm_context *ctx, bool *already)
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
-	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	tpm_tr_close(ctx, &persistent);
 	return 0;
 }
 
@@ -5152,7 +5246,7 @@ int tpm_evict_profile_aik(struct tpm_context *ctx, uint32_t handle)
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
-	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	tpm_tr_close(ctx, &persistent);
 	return 0;
 }
 
@@ -5180,8 +5274,7 @@ int tpm_seal_evict_primary(struct tpm_context *ctx)
 	if (rc != TSS2_RC_SUCCESS)
 		return tss2_rc_to_errno(rc);
 
-	/* eviction returns ESYS_TR_NONE; close detaches the ESYS metadata */
-	Esys_TR_Close(ctx->esys_ctx, &persistent);
+	tpm_tr_close(ctx, &persistent);
 	return 0;
 }
 

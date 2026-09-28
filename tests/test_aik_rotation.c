@@ -875,6 +875,28 @@ static void test_rc_value_and_handle(void)
 	PASS();
 }
 
+/*
+ * A TPM with no room for another persistent object is a full machine,
+ * not a broken one.
+ * Reported as -EIO it printed "Input/output error" to a player adding
+ * a publisher, which names failing hardware and nothing they can act on.
+ */
+static void test_rc_nv_space(void)
+{
+	TEST("tpm_test_rc_to_errno: NV_SPACE -> ENOSPC");
+
+	if (tpm_test_rc_to_errno(TPM2_RC_NV_SPACE) != -ENOSPC) {
+		FAIL("NV_SPACE != -ENOSPC");
+		return;
+	}
+	if (tpm_test_rc_is_transient(TPM2_RC_NV_SPACE)) {
+		FAIL("a full TPM must not be retried as transient");
+		return;
+	}
+
+	PASS();
+}
+
 static void test_rc_tcti_layer(void)
 {
 	TEST("tpm_test_rc_to_errno: TCTI layer codes");
@@ -1565,6 +1587,7 @@ int main(void)
 	test_rc_transient_codes();
 	test_rc_auth_fail_with_session_bits();
 	test_rc_value_and_handle();
+	test_rc_nv_space();
 	test_rc_tcti_layer();
 	test_lockout_flag_lifecycle();
 	test_self_hash_pin_round_trip();

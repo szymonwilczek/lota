@@ -131,6 +131,29 @@ divergences from hardware (persistent state across guest reboots, and a quote
 clock quirk) and the operator workarounds are covered under
 :doc:`production-bringup/post-bringup`.
 
+How many publishers a TPM has room for
+--------------------------------------
+
+Each publisher this host answers to holds its own attestation key, and each
+key occupies one TPM persistent object. That capacity, not any LOTA constant,
+is the real ceiling on publishers: a discrete TPM is generous with it, a
+firmware TPM is not, and any other software on the machine that persists keys
+takes from the same pool.
+
+The agent reports both halves. ``lota-agent --list-publishers`` prints the keys
+this machine holds, what the TPM answers for persistent objects
+(``TPM2_PT_HR_PERSISTENT`` and its ``_AVAIL`` estimate) and the maximum this
+build will hand out. Provisioning a key into a full TPM is refused with the
+count and the two verbs that free a slot -- ``--list-publishers`` and
+``--forget-publisher`` -- rather than an I/O error, because the machine is full,
+not broken and the space is reclaimable.
+
+A measured example: an Intel PTT firmware TPM holds 21 persistent objects in total,
+of which five are resident on an installed host before any publisher enrolls.
+16 publisher keys fit, which is above the eight this build hands out, so on that
+platform the build's own maximum is what a host meets first. A firmware TPM with
+a smaller pool, or one shared with other software, meets the TPM's limit instead.
+
 Suspend and resume
 ------------------
 
