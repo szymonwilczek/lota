@@ -1147,6 +1147,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_startup_hint \
 	$(TEST_BIN_DIR)/test_ipc_notify \
 	$(TEST_BIN_DIR)/test_ipc_reload_binding \
+	$(TEST_BIN_DIR)/test_reload_enforcement_state \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
@@ -1500,6 +1501,14 @@ $(TEST_BIN_DIR)/test_ipc_reload_binding: tests/test_ipc_reload_binding.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
 
+$(TEST_BIN_DIR)/test_reload_enforcement_state: \
+		tests/test_reload_enforcement_state.c $(AGENT_DIR)/reload.c \
+		$(AGENT_DIR)/config.c $(AGENT_DIR)/journal.c \
+		$(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/io_utils.c \
+		| $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
+
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1565,6 +1574,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_startup_hint
 	@$(BUILD_DIR)/test_ipc_notify
 	@$(BUILD_DIR)/test_ipc_reload_binding
+	@$(BUILD_DIR)/test_reload_enforcement_state
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state
