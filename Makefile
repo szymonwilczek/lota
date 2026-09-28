@@ -1564,6 +1564,11 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_bpf_loader_load_source
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
+	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
+		tests/integration/test_add_publisher_profile.sh; \
+	else \
+		echo "SKIP: test_add_publisher_profile.sh (no agent binary or openssl)"; \
+	fi
 	@if [ -S /run/lota/lota.sock ]; then \
 		$(BUILD_DIR)/test_sdk_ipc; \
 		$(BUILD_DIR)/test_ipc_client status; \

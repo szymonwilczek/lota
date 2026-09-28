@@ -273,6 +273,15 @@ the publisher it ships for::
         --server verifier.studio.example --port 8443 \
         --publisher-name studio
 
+``--server`` is what names that publisher's verifier, and leaving it out is how
+the token-only publisher is written: the section gets ``verifier = none`` and no
+port, and nothing is reported to them from this machine. The command says which
+of the two it wrote, since the difference is whether any evidence leaves the
+host::
+
+    sudo lota-agent --add-publisher ca.studio.example --ca-port 8444 \
+        --ca-cert /etc/lota/studio.pem --publisher-name studio
+
 The rest of the file is copied through untouched and the section is appended,
 so whatever the operator put there survives. A publisher is its trust anchor
 rather than its label: adding the same anchor again is a no-op whichever name
