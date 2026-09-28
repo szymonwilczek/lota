@@ -41,6 +41,14 @@ The most common failures, with the gate that produced them:
   ``/run/lota/pcr14_baseline`` the agent cannot anchor its derivation. Confirm
   the dracut module is installed and the initramfs was rebuilt (see
   :doc:`manual-reference`, section 5), then cold reboot.
+* ``The agent is paused on this host``. Its boot commitment was spent by a
+  shutdown requested here -- ``lota-agent --shutdown``, ``lota-install
+  --pause``, or a ``systemctl stop`` that ran the unit's ``ExecStop``. PCR 14
+  cannot be re-extended once poisoned, which is what makes a pause visible to
+  every relying party. Reboot to attest again.
+  ``lota-steam-setup --register-uid`` deliberately does **not** stop the agent
+  for this reason: its setting takes effect at the next boot, and the command
+  says so before it edits the configuration.
 * ``Startup policy refused before the boot commitment was spent``. A path or
   PID named by the enforcement policy could not be resolved -- most often a
   ``--trust-lib`` or ``--allow-verity`` path the unit's sandbox hides, since
@@ -92,25 +100,33 @@ prevents a local-root attacker from killing the agent out of band, dropping the
 BPF coverage, and swapping a tampered binary into place before the next
 attestation.
 
-The trade-off is that ``systemctl restart lota-agent`` does **not** work the way
-it does for other units. After the stop request, the old process keeps running,
-refuses to release ``/run/lota/lota.sock`` and the BPF maps, and the next
-``ExecStart=`` fails with ``-EPERM`` when libbpf tries to recreate the same map
-names. The unit then loops on ``Restart=on-failure`` while the original PID
-stays alive forever.
+The trade-off is that ``systemctl restart lota-agent`` does **not** bring the
+host back the way it does for other units. Stopping works: ``ExecStop`` is
+``/usr/bin/lota-agent --shutdown``, which sends a privileged IPC command that
+exits the daemon loop cleanly, and a caller running as the agent's own uid is
+authorised on a default install. What does not work is the *start* half.
 
-Two supported paths exist:
+Stopping the agent poisons PCR 14, deliberately. The boot commitment cannot be
+re-extended once spent, so an agent started again in the same boot refuses at
+self-measurement and says the host is paused. That is the property that makes
+a pause visible to every relying party.
 
-#. **Graceful via IPC.** ``ExecStop=/usr/bin/lota-agent --shutdown`` sends a
-   privileged IPC command to the running agent; the handler sets
-   ``g_agent.running = 0``, which exits the daemon loop cleanly. As long as the
-   IPC socket is reachable and the agent is not wedged in a syscall, this is the
-   canonical update path and does not require a reboot.
+So the two supported paths are:
+
+#. **Stop now, resume at a reboot.** ``systemctl stop lota-agent``,
+   ``lota-agent --shutdown`` and ``lota-install --pause`` all take the same
+   route and all end enforcement immediately. Attestation resumes at the next
+   boot and not before. This is the intended way to pause a host.
 #. **Cold reboot.** If the IPC path is unreachable (agent hang, socket gone,
    kernel deadlock) the only remaining recovery is to reboot the host. There is
    no kill-bypass for PID 1 and there never will be: every grace window would be
    an attack surface for an init-domain compromise. Operators planning updates
    therefore schedule them alongside a regular maintenance reboot.
+
+A configuration change that only the daemon's own state depends on does not
+need either path: ``systemctl reload lota-agent`` picks up a newly added
+publisher without stopping anything. Settings the agent reads once at startup,
+such as ``container_listener_uid``, take effect at the next boot instead.
 
 Continuous attestation
 ----------------------

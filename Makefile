@@ -1137,6 +1137,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_aik_rotation \
 	$(TEST_BIN_DIR)/test_signed_clockinfo \
 	$(TEST_BIN_DIR)/test_pcr14_verdict \
+	$(TEST_BIN_DIR)/test_ipc_privilege \
 	$(TEST_BIN_DIR)/test_credential_activation \
 	$(TEST_BIN_DIR)/test_enroll_wire \
 	$(TEST_BIN_DIR)/test_enroll_state \
@@ -1447,6 +1448,11 @@ $(TEST_BIN_DIR)/test_flag_names: tests/test_flag_names.c $(SDK_LIB) | $(BUILD_DI
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
+$(TEST_BIN_DIR)/test_ipc_privilege: tests/test_ipc_privilege.c \
+		$(AGENT_DIR)/ipc_privilege.h | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
 $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -1507,6 +1513,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_aik_rotation
 	@$(BUILD_DIR)/test_signed_clockinfo
 	@$(BUILD_DIR)/test_pcr14_verdict
+	@$(BUILD_DIR)/test_ipc_privilege
 	@$(BUILD_DIR)/test_credential_activation
 	@$(BUILD_DIR)/test_enroll_wire
 	@$(BUILD_DIR)/test_enroll_state

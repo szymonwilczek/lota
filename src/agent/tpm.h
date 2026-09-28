@@ -209,6 +209,16 @@ const char *tpm_strerror(int err);
 #define LOTA_CLOCK_STATE_FLAG_INITRAMFS_LOCK (1U << 0)
 
 /*
+ * Set on the snapshot the agent writes as it poisons PCR14 during
+ * an operator-requested shutdown.
+ * Next start reads it to tell its own deliberate act apart from a writer it
+ * did not authorise.
+ * It changes only which refusal is reported: a spent commitment is refused
+ * either way, so a forged flag buys nothing.
+ */
+#define LOTA_CLOCK_STATE_FLAG_SHUTDOWN_POISON (1U << 1)
+
+/*
  * PCR14 boot-commitment snapshot persisted across agent restarts.
  *
  * Layout is fixed and version-tagged:
@@ -279,6 +289,12 @@ enum tpm_pcr14_state {
 	TPM_PCR14_RESUMED,
 	/* Register still holds the bare baseline: the lock never ran */
 	TPM_PCR14_LOCK_MISSING,
+	/*
+	 * This host spent its own commitment: the agent poisoned PCR14
+	 * during an operator-requested shutdown earlier in this boot.
+	 * Refused like any spent commitment; a reboot restores it.
+	 */
+	TPM_PCR14_SPENT_BY_SHUTDOWN,
 	/*
 	 * PCR14 carries this agent's own commitment but a different
 	 * binary is running now.
