@@ -217,11 +217,20 @@ struct ipc_client {
 
 	/*
 	 * The publisher this connection speaks for, set by SET_PROFILE.
-	 * Borrowed from ctx->profiles, which the attestation loop owns for
-	 * longer than any connection lives.
+	 * Borrowed from ctx->profiles, which the attestation loop rebuilds
+	 * under a running connection whenever the list is reloaded.
 	 * Not const: binding and unbinding maintain that publisher's session count.
 	 */
 	struct attest_target *profile;
+
+	/*
+	 * The same publisher, named.
+	 * A title sends SET_PROFILE once, at connect time, so the pointer above
+	 * is the only thing a reload could restore it from -- and that pointer
+	 * is into the list being replaced. The identity outlives the list.
+	 * Empty when this connection named no publisher.
+	 */
+	char profile_id[LOTA_PROFILE_ID_LEN];
 
 	/*
 	 * This connection is the agent's own attestation loop, established by
@@ -655,6 +664,7 @@ static void client_destroy(struct ipc_context *ctx, struct ipc_client *client)
 		client->profile = NULL;
 		ctx->profiles_changed = true;
 	}
+	client->profile_id[0] = '\0';
 
 	while (*pp) {
 		if (*pp == client) {
@@ -1480,6 +1490,8 @@ static void handle_set_profile(struct ipc_context *ctx,
 		}
 
 		client->profile = &ctx->profiles[i];
+		snprintf(client->profile_id, sizeof(client->profile_id), "%s",
+			 ctx->profiles[i].paths.id);
 		ctx->profiles[i].sessions++;
 		ctx->profiles[i].session_changed = true;
 		ctx->profiles_changed = true;
@@ -3168,15 +3180,56 @@ void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
 	ctx->profile_count = profiles ? count : 0;
 
 	/*
-	 * connection outlives reload of this list only in theory today
-	 * (the loop sets it once), but client holding a pointer into a list that
-	 * has gone away would be use-after-free, so drop the bindings rather than
-	 * trusting the caller never re-registers
+	 * Every binding points into the list being replaced, so all of them
+	 * are dropped first: keeping one would be a use-after-free the moment
+	 * the caller frees what it rebuilt. Session counts go with them,
+	 * and are rebuilt below from the connections that survive.
 	 */
 	for (struct ipc_client *c = ctx->client_list; c; c = c->next)
 		c->profile = NULL;
 	for (size_t i = 0; i < ctx->profile_count; i++)
 		ctx->profiles[i].sessions = 0;
+
+	/*
+	 * A title sends SET_PROFILE once and is playing by the time the list is
+	 * reloaded, so nothing re-binds it: the connection is re-resolved here
+	 * by the publisher it named, or it is left unbound because that
+	 * publisher is no longer configured -- which is a change somebody made
+	 * on this machine, and is said out loud.
+	 */
+	for (struct ipc_client *c = ctx->client_list; c; c = c->next) {
+		if (!c->profile_id[0])
+			continue;
+
+		for (size_t i = 0; i < ctx->profile_count; i++) {
+			if (!ctx->profiles[i].has_profile)
+				continue;
+			if (strcmp(ctx->profiles[i].paths.id, c->profile_id) !=
+			    0)
+				continue;
+
+			c->profile = &ctx->profiles[i];
+			ctx->profiles[i].sessions++;
+			break;
+		}
+
+		if (!c->profile) {
+			lota_info(
+				"connection pid=%d named publisher %s, which the "
+				"reloaded configuration no longer holds; it is "
+				"unbound and nothing is reported for them",
+				c->peer_pid, c->profile_id);
+			c->profile_id[0] = '\0';
+		}
+	}
+
+	/*
+	 * The loop learns the session counts on its next sync,
+	 * and the counts it is holding are the ones from before the rebuild.
+	 */
+	for (size_t i = 0; i < ctx->profile_count; i++)
+		ctx->profiles[i].session_changed = true;
+	ctx->profiles_changed = true;
 }
 
 /*
