@@ -252,12 +252,43 @@ func (is *Issuer) ReloadEKCRLs() error {
 // Startup logging only.
 func (is *Issuer) EKCRLCount() int { return is.ekCRLs.Load().Size() }
 
+// pathMaterial returns the intermediate pool one verification runs against:
+// the operator's bundled intermediates plus whatever the device supplied.
+//
+// Trust is unaffected by what a device sends. Only is.ekRoots anchors a chain,
+// so a supplied certificate can at most complete a route that already
+// terminates at a pinned root.
+// Elements that do not parse are dropped, because the chain is unauthenticated
+// input and a device whose path is complete without them has done nothing wrong.
+func (is *Issuer) pathMaterial(chainDER [][]byte) *x509.CertPool {
+	if len(chainDER) == 0 {
+		return is.ekIntermediates
+	}
+	pool := is.ekIntermediates.Clone()
+	for _, der := range chainDER {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			continue
+		}
+		pool.AddCert(cert)
+	}
+	return pool
+}
+
 // VerifyEKCertificate confirms an EK certificate chains to a trusted
 // manufacturer root, is not listed in a configured manufacturer CRL,
 // is time-valid, carries the TCG EK OID, and holds an RSA key large
 // enough to wrap an activation seed. It returns the parsed certificate
 // so the caller can bind the credential to its public key.
-func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certificate, error) {
+//
+// chainDER holds the manufacturer intermediates the device presented with its
+// leaf, for a platform that stores them on the chip and publishes them
+// nowhere. They are path material only: they may complete a route to a root
+// the operator pinned, and they can never become an anchor, so a device that
+// supplies its own self-signed root is refused exactly as one supplying
+// nothing is. A nil chain is the discrete-TPM case and verifies against the
+// bundle alone.
+func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Time) (*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEKParse, err)
@@ -285,7 +316,7 @@ func (is *Issuer) VerifyEKCertificate(der []byte, now time.Time) (*x509.Certific
 	// EKU, so verify with ExtKeyUsageAny
 	if _, err := cert.Verify(x509.VerifyOptions{
 		Roots:         is.ekRoots,
-		Intermediates: is.ekIntermediates,
+		Intermediates: is.pathMaterial(chainDER),
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {

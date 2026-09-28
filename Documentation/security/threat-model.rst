@@ -66,6 +66,15 @@ CA and stops there: the attestation report carries no EK certificate field at
 all, so an attestation cannot be linked back to the hardware even by the party
 verifying it.
 
+The enrollment request also carries the manufacturer intermediates the device
+read out of its own TPM, because a firmware TPM stores certificates that exist
+nowhere else. They arrive from a peer that has proved nothing yet, and the CA
+treats them accordingly: the frame bounds their count and size before a single
+one is allocated, an element that does not parse is dropped, and they are used
+as path material only. A supplied certificate can complete a route to a root
+the operator pinned; it can never become one, so a host that presents its own
+self-signed root is refused exactly as a host presenting nothing is.
+
 That is the only AIK trust model. A report with no AIK certificate is rejected
 at verification, and the certificate-backed AIK store refuses to record a bare
 public key at all, so an AIK cannot become trusted by being seen first. The

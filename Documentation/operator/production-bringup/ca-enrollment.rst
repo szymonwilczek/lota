@@ -113,6 +113,13 @@ then materialize the bundle:
 does not vouch for it, so confirm the pin against the vendor before the line
 enters ``sources``.
 
+The bundle does not have to cover the whole path. A TPM that stores
+manufacturer intermediates of its own presents them with the enrollment
+request, and the CA uses them to complete a route to a pinned root -- never to
+anchor one. What the bundle must carry is every certificate on the path the
+device does not: on Intel PTT that is the root and the two OnDie intermediates
+below it, with the three nearest the leaf coming off the chip.
+
 See :ghsrc:`configs/ek-roots/README.rst` for the full flow.
 
 Enrolling a host

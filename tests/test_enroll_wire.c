@@ -38,7 +38,7 @@ static void test_encode_begin_layout(void)
 	const uint8_t aik[] = { 0xCC };
 	uint8_t out[64];
 	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-					sizeof(aik), NULL, 0);
+					sizeof(aik), NULL, 0, NULL, 0);
 
 	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00,
 				 0x02, 0xAA, 0xBB, 0x00, 0x01, 0xCC };
@@ -55,22 +55,22 @@ static void test_encode_begin_bounds(void)
 	const uint8_t aik[1] = { 0 };
 
 	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-				  sizeof(aik), NULL, 0) == -ENOSPC,
+				  sizeof(aik), NULL, 0, NULL, 0) == -ENOSPC,
 	      "encode_begin rejects an undersized buffer");
 
 	uint8_t big_out[8192];
 	uint8_t big_ek[LOTA_ENROLL_MAX_EK_CERT + 1];
 	memset(big_ek, 0, sizeof(big_ek));
 	CHECK(enroll_encode_begin(big_out, sizeof(big_out), big_ek,
-				  sizeof(big_ek), aik, sizeof(aik), NULL,
-				  0) == -EMSGSIZE,
+				  sizeof(big_ek), aik, sizeof(aik), NULL, 0,
+				  NULL, 0) == -EMSGSIZE,
 	      "encode_begin rejects an oversized EK certificate");
 
 	uint8_t big_token[LOTA_ENROLL_MAX_TOKEN + 1];
 	memset(big_token, 't', sizeof(big_token));
 	CHECK(enroll_encode_begin(big_out, sizeof(big_out), ek, sizeof(ek), aik,
-				  sizeof(aik), big_token,
-				  sizeof(big_token)) == -EMSGSIZE,
+				  sizeof(aik), big_token, sizeof(big_token),
+				  NULL, 0) == -EMSGSIZE,
 	      "encode_begin rejects an oversized token");
 }
 
@@ -81,7 +81,8 @@ static void test_encode_begin_token_layout(void)
 	const uint8_t token[] = { 't', 'k' };
 	uint8_t out[64];
 	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
-					sizeof(aik), token, sizeof(token));
+					sizeof(aik), token, sizeof(token), NULL,
+					0);
 
 	/* version 2, token appended; pinned against the Go wire tests */
 	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x02,
@@ -175,6 +176,14 @@ static void test_decode_rejects_malformed(void)
 	CHECK(enroll_decode_challenge(v2_reply, sizeof(v2_reply), &ch) == 0,
 	      "decode accepts a version-2 reply");
 
+	/* and a version-3 begin with version-3 replies */
+	uint8_t v3_reply[sizeof(v2_reply)];
+
+	memcpy(v3_reply, v2_reply, sizeof(v2_reply));
+	v3_reply[5] = 0x03;
+	CHECK(enroll_decode_challenge(v3_reply, sizeof(v3_reply), &ch) == 0,
+	      "decode accepts a version-3 reply");
+
 	const uint8_t truncated[] = { 0x4C, 0x43, 0x41, 0x45, 0x00, 0x01, 0x00 };
 	CHECK(enroll_decode_challenge(truncated, sizeof(truncated), &ch) < 0,
 	      "decode rejects truncated frame");
@@ -185,6 +194,202 @@ static void test_decode_rejects_malformed(void)
 	CHECK(enroll_decode_challenge(oversize, sizeof(oversize), &ch) ==
 		      -EMSGSIZE,
 	      "decode rejects an oversized field length");
+}
+
+/*
+ * Version 3 is the frame that carries the manufacturer intermediates.
+ * It is additive over version 2: the token field stays where it was and may be
+ * empty, and the chain follows as a count and one length-prefixed certificate
+ * per element.
+ * Layout is pinned byte for byte against the Go wire, which is the only thing
+ * keeping the two implementations in step.
+ */
+static void test_encode_begin_chain_layout(void)
+{
+	const uint8_t ek[] = { 0xAA, 0xBB };
+	const uint8_t aik[] = { 0xCC };
+	const uint8_t c0[] = { 0x30, 0x01, 0xDD };
+	const uint8_t c1[] = { 0x30, 0x01, 0xEE };
+	const struct enroll_cert_ref chain[] = { { c0, sizeof(c0) },
+						 { c1, sizeof(c1) } };
+	uint8_t out[64];
+	ssize_t n = enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+					sizeof(aik), NULL, 0, chain, 2);
+
+	const uint8_t want[] = { 0x4C, 0x43, 0x41, 0x45, 0x00,
+				 0x03, 0x00, 0x02, 0xAA, 0xBB, /* EK leaf */
+				 0x00, 0x01, 0xCC, /* AIK template */
+				 0x00, 0x00, /* no token */
+				 0x00, 0x02, /* two intermediates */
+				 0x00, 0x03, 0x30, 0x01, 0xDD,
+				 0x00, 0x03, 0x30, 0x01, 0xEE };
+
+	CHECK(n == (ssize_t)sizeof(want), "encode_begin chain length");
+	CHECK(n > 0 && memcmp(out, want, sizeof(want)) == 0,
+	      "encode_begin chain byte layout matches the Go wire format");
+}
+
+/*
+ * A host with no chain to present must keep speaking the frame a CA that
+ * predates this field understands, so the version still follows what the
+ * request actually carries.
+ */
+static void test_encode_begin_chain_absent(void)
+{
+	const uint8_t ek[] = { 0xAA };
+	const uint8_t aik[] = { 0xCC };
+	const uint8_t token[] = { 't' };
+	uint8_t out[64];
+
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), NULL, 0, NULL, 0) > 0 &&
+		      out[5] == 0x01,
+	      "no chain and no token stays version 1");
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), token, sizeof(token), NULL,
+				  0) > 0 &&
+		      out[5] == 0x02,
+	      "a token without a chain stays version 2");
+}
+
+/*
+ * The chain is vendor data that arrived over NV, so the encoder is the last
+ * place that can refuse a request the frame cannot hold.
+ */
+static void test_encode_begin_chain_bounds(void)
+{
+	const uint8_t ek[] = { 0xAA };
+	const uint8_t aik[] = { 0xCC };
+	const uint8_t cert[] = { 0x30, 0x01, 0xDD };
+	struct enroll_cert_ref chain[LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1];
+	static uint8_t big_cert[LOTA_ENROLL_MAX_EK_CERT + 1];
+	uint8_t out[512];
+
+	for (size_t i = 0; i < LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1; i++) {
+		chain[i].der = cert;
+		chain[i].len = sizeof(cert);
+	}
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), NULL, 0, chain,
+				  LOTA_ENROLL_MAX_EK_CHAIN_CERTS + 1) ==
+		      -EMSGSIZE,
+	      "encode_begin rejects too many intermediates");
+
+	memset(big_cert, 0, sizeof(big_cert));
+	chain[0].der = big_cert;
+	chain[0].len = sizeof(big_cert);
+	CHECK(enroll_encode_begin(out, sizeof(out), ek, sizeof(ek), aik,
+				  sizeof(aik), NULL, 0, chain, 1) == -EMSGSIZE,
+	      "encode_begin rejects an oversized intermediate");
+}
+
+/*
+ * TPM stores its manufacturer intermediates as one NV blob with the certificates
+ * laid end to end and no framing of its own, so the only way to find the elements
+ * is to walk the ASN.1 SEQUENCE headers.
+ * Intel PTT keeps three of them there, and they are the certificates without which
+ * no such host can build a path to its manufacturer root.
+ */
+static void test_split_cert_chain(void)
+{
+	/* three SEQUENCEs: short form, long form, short form */
+	const uint8_t blob[] = { 0x30, 0x02, 0xAA, 0xBB, /* 4 bytes */
+				 0x30, 0x82, 0x00, 0x03,
+				 0x01, 0x02, 0x03, /* 7 bytes */
+				 0x30, 0x01, 0xFF }; /* 3 bytes */
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 0;
+
+	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0,
+	      "split accepts a concatenated certificate blob");
+	CHECK(count == 3, "split finds every certificate in the blob");
+	CHECK(count == 3 && certs[0].der == blob && certs[0].len == 4,
+	      "split sizes a short-form certificate");
+	CHECK(count == 3 && certs[1].der == blob + 4 && certs[1].len == 7,
+	      "split sizes a long-form certificate");
+	CHECK(count == 3 && certs[2].der == blob + 11 && certs[2].len == 3,
+	      "split sizes the last certificate");
+}
+
+/*
+ * NV contents are vendor data the host does not control, so the walk is lenient
+ * in both directions: whatever stops looking like a certificate ends the list,
+ * and a blob that yields nothing leaves the enrollment to proceed on the leaf
+ * alone.
+ */
+static void test_split_cert_chain_tolerates_junk(void)
+{
+	const uint8_t padded[] = { 0x30, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x00 };
+	const uint8_t junk[] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	const uint8_t truncated[] = { 0x30, 0x08, 0xAA, 0xBB };
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 99;
+
+	CHECK(enroll_split_cert_chain(padded, sizeof(padded), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 1,
+	      "trailing NV padding ends the list");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(junk, sizeof(junk), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "a blob holding no certificate yields none");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(truncated, sizeof(truncated), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "a certificate running past the blob is dropped");
+
+	count = 99;
+	CHECK(enroll_split_cert_chain(NULL, 0, certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == -EINVAL,
+	      "split rejects a NULL blob");
+}
+
+/*
+ * Both caps are frame budget: the begin request has to fit LOTA_ENROLL_MAX_FRAME
+ * beside the leaf, the AIK template and the token, so the walk stops at
+ * the caller's array and at the byte budget rather than handing the encoder
+ * a chain it would refuse.
+ */
+static void test_split_cert_chain_bounds(void)
+{
+	const uint8_t blob[] = { 0x30, 0x01, 0xAA, 0x30, 0x01,
+				 0xBB, 0x30, 0x01, 0xCC };
+	struct enroll_cert_ref certs[LOTA_ENROLL_MAX_EK_CHAIN_CERTS];
+	size_t count = 0;
+
+	CHECK(enroll_split_cert_chain(blob, sizeof(blob), certs, 2, &count) ==
+			      0 &&
+		      count == 2,
+	      "split stops at the caller's array");
+
+	/*
+	 * one certificate one byte past the per-certificate cap:
+	 * it is not a certificate this wire can carry, so the walk ends there
+	 */
+	static uint8_t oversized[LOTA_ENROLL_MAX_EK_CERT + 8];
+	size_t body = LOTA_ENROLL_MAX_EK_CERT;
+
+	memset(oversized, 0, sizeof(oversized));
+	oversized[0] = 0x30;
+	oversized[1] = 0x82;
+	oversized[2] = (uint8_t)((body >> 8) & 0xFFu);
+	oversized[3] = (uint8_t)(body & 0xFFu);
+	count = 99;
+	CHECK(enroll_split_cert_chain(oversized, sizeof(oversized), certs,
+				      LOTA_ENROLL_MAX_EK_CHAIN_CERTS,
+				      &count) == 0 &&
+		      count == 0,
+	      "split drops a certificate past the per-certificate cap");
 }
 
 static const char *write_token_file(const char *content, size_t len)
@@ -256,6 +461,12 @@ int main(void)
 	test_decode_challenge();
 	test_decode_result();
 	test_decode_rejects_malformed();
+	test_encode_begin_chain_layout();
+	test_encode_begin_chain_absent();
+	test_encode_begin_chain_bounds();
+	test_split_cert_chain();
+	test_split_cert_chain_tolerates_junk();
+	test_split_cert_chain_bounds();
 	test_token_from_file();
 
 	if (g_failures) {
