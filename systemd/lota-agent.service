@@ -71,8 +71,19 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/lota /run/lota
 ReadOnlyPaths=/etc/lota /usr/lib/lota
 
-# no access to /home, /root
-ProtectHome=yes
+#
+# No access to /home or /root.
+#
+# ProtectHome=yes would be the obvious way to say this, and it also empties
+# /run/user -- where the socket a Proton title connects to has to be created,
+# under the runtime directory logind makes at login.
+# The agent is then refused even the inotify watch that tells it the login
+# happened, with a bare EACCES. Naming the two directories directly keeps
+# the same protection and leaves /run/user where the agent can reach it;
+# a per-user runtime directory mounted after the daemon started propagates
+# into this namespace, which is what makes a login observable at all.
+#
+InaccessiblePaths=/home /root
 
 # private /tmp and /var/tmp
 PrivateTmp=yes
@@ -102,7 +113,14 @@ DeviceAllow=/dev/tpm0 rw
 # the agent relays SIGTERM or SIGKILL for a caller kill(2) would have allowed,
 # and a title runs as the player rather than as root, so signalling it crosses
 # a uid boundary and needs the capability.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG CAP_SYS_PTRACE CAP_KILL
+#
+# CAP_CHOWN is what gives the container socket its group.
+# The socket a Proton title connects to is created by the agent under the player's
+# runtime directory and bound 0660, so the lota group is the only thing that lets
+# the title open it. The chown crosses into a directory root does not own,
+# so without the capability it returns EPERM and the listener exists
+# but answers nobody.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK CAP_BPF CAP_PERFMON CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE CAP_SYSLOG CAP_SYS_PTRACE CAP_KILL CAP_CHOWN
 AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_SYS_PTRACE
 
 # prevent acquiring new privileges via execve

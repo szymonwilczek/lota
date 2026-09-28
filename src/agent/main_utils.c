@@ -17,6 +17,7 @@
 #include "agent.h"
 #include "attest.h"
 #include "config.h"
+#include "container_watch.h"
 #include "daemon.h"
 #include "dbus.h"
 #include "journal.h"
@@ -369,23 +370,36 @@ void setup_dbus(struct ipc_context *ctx)
 _Static_assert(LOTA_CONFIG_MAX_CONTAINER_LISTENERS <= IPC_MAX_EXTRA_LISTENERS,
 	       "container listener cap exceeds ipc extra-listener slots");
 
-static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
+static int container_socket_paths(uint32_t uid, char *dir, size_t dirsz,
+				  char *path, size_t pathsz)
 {
-	char dir[PATH_MAX];
-	char path[PATH_MAX];
-	int n, ret;
+	int n;
 
-	n = snprintf(dir, sizeof(dir), "/run/user/%u/%s", uid,
+	n = snprintf(dir, dirsz, "%s/%u/%s", CONTAINER_WATCH_RUNTIME_ROOT, uid,
 		     STEAM_RT_SOCKET_DIR_SUFFIX);
-	if (n < 0 || (size_t)n >= sizeof(dir))
+	if (n < 0 || (size_t)n >= dirsz)
 		return -ENAMETOOLONG;
 
-	n = snprintf(path, sizeof(path), "%s/%s", dir, STEAM_RT_SOCKET_NAME);
-	if (n < 0 || (size_t)n >= sizeof(path))
+	n = snprintf(path, pathsz, "%s/%s", dir, STEAM_RT_SOCKET_NAME);
+	if (n < 0 || (size_t)n >= pathsz)
 		return -ENAMETOOLONG;
 
 	if (strcmp(path, LOTA_IPC_SOCKET_PATH) == 0)
 		return -EINVAL;
+
+	return 0;
+}
+
+static int add_listener_for_uid(uint32_t uid, void *user)
+{
+	struct ipc_context *ctx = user;
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
+	int ret;
+
+	ret = container_socket_paths(uid, dir, sizeof(dir), path, sizeof(path));
+	if (ret < 0)
+		return ret;
 
 	ret = steam_runtime_ensure_socket_dir(dir);
 	if (ret < 0) {
@@ -402,7 +416,28 @@ static int add_listener_for_uid(struct ipc_context *ctx, uint32_t uid)
 		return ret;
 	}
 
+	lota_info("Container listener ready for uid %u at %s", uid, path);
 	return 0;
+}
+
+/*
+ * The socket file goes with the runtime directory logind removed,
+ * so this releases the slot rather than the file.
+ */
+static void drop_listener_for_uid(uint32_t uid, void *user)
+{
+	struct ipc_context *ctx = user;
+	char dir[PATH_MAX];
+	char path[PATH_MAX];
+
+	if (container_socket_paths(uid, dir, sizeof(dir), path, sizeof(path)) <
+	    0)
+		return;
+
+	if (ipc_remove_listener(ctx, path) == 0)
+		lota_info(
+			"Container listener for uid %u released, session over",
+			uid);
 }
 
 void setup_container_listener(struct ipc_context *ctx,
@@ -414,9 +449,27 @@ void setup_container_listener(struct ipc_context *ctx,
 	int ret;
 
 	if (cfg && cfg->container_listener_uid_count > 0) {
-		for (int i = 0; i < cfg->container_listener_uid_count; i++)
-			(void)add_listener_for_uid(
-				ctx, cfg->container_listener_uids[i]);
+		struct container_watch_ops ops = {
+			.bind = add_listener_for_uid,
+			.unbind = drop_listener_for_uid,
+			.user = ctx,
+		};
+
+		/*
+		 * The listener a Proton title connects to belongs to a login,
+		 * and no one has logged in yet when the daemon starts.
+		 * The watch outlives this call so the socket is laid down when
+		 * the runtime directory appears.
+		 */
+		ret = container_watch_init(&g_agent.container_watch, NULL,
+					   cfg->container_listener_uids,
+					   cfg->container_listener_uid_count,
+					   &ops);
+		if (ret < 0)
+			lota_warn(
+				"Cannot watch %s for logins (%s): a container socket "
+				"will only appear for a user already logged in",
+				CONTAINER_WATCH_RUNTIME_ROOT, strerror(-ret));
 
 		ret = steam_runtime_detect(&rt_info);
 		if (ret == 0 && (rt_info.env_flags & STEAM_ENV_STEAM_ACTIVE))

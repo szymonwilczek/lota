@@ -128,6 +128,22 @@ need either path: ``systemctl reload lota-agent`` picks up a newly added
 publisher without stopping anything. Settings the agent reads once at startup,
 such as ``container_listener_uid``, take effect at the next boot instead.
 
+The socket that setting asks for is a separate matter from the setting itself.
+``/run/user/<uid>`` belongs to a login, so the agent creates
+``/run/user/<uid>/lota/lota.sock`` when the registered user logs in and
+releases it when the last session closes; no restart is involved, and none
+should be attempted, since stopping the agent spends the boot's PCR 14
+commitment. The socket is handed to the ``lota`` group at mode 0660, so an
+account outside that group cannot open it even though it is there.
+``lota-steam-setup --verify``, run from the user's own session, reports both
+halves: whether the socket exists and whether that account can open it. When
+it cannot, the tool prints the socket's ownership and points at the agent's
+own message (``journalctl -u lota-agent | grep chown``), because a socket the
+agent could not hand to the group looks identical from the outside to one it
+did. When the socket is absent it names the two things that produce one --
+a registered UID and a boot since it was registered -- and does not suggest
+restarting the agent.
+
 Continuous attestation
 ----------------------
 
@@ -197,10 +213,10 @@ in ``--help``; the agent refuses to start on anything else, since an interval
 past the ceiling mints tokens that sit outside every relying party's freshness
 window.
 
-``ca_cert`` must point at a path the hardened unit can read. The service runs
-with ``ProtectHome=yes`` and ``ProtectSystem=strict``, so a certificate left in
-an operator home directory (the ``--ca-cert ~/tls.crt`` used for a manual
-``--enroll``) is invisible to it. Copy the verifier CA certificate under
+``ca_cert`` must point at a path the hardened unit can read. Both units run
+with ``ProtectSystem=strict`` and with ``/home`` and ``/root`` inaccessible, so
+a certificate left in an operator home directory (the ``--ca-cert ~/tls.crt``
+used for a manual ``--enroll``) is invisible to them. Copy the verifier CA certificate under
 ``/etc/lota`` (root-owned, the unit mounts it read-only) and point ``ca_cert``
 there, for example::
 
