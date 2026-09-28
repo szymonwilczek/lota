@@ -12,7 +12,8 @@
  *   - Kernel module loading (kernel_module_request, kernel_read_file,
  *     kernel_load_data)
  *   - Library loading / executable mmap (security_mmap_file)
- *   - Bind-mount overwrite on trusted library paths/parents (security_sb_mount)
+ *   - Bind-mount overwrite on trusted library paths/parents, on both mount
+ *     APIs (security_sb_mount, security_move_mount)
  *   - In-place write/truncate on trusted library inodes (security_file_open)
  *   - Direct kernel memory device access (/dev/mem, /dev/kmem, /dev/port)
  *   - Debugger attachment (security_ptrace_access_check)
@@ -864,6 +865,51 @@ int BPF_PROG(lota_sb_mount, const char *dev_name, const struct path *path,
 		return 0;
 
 	dentry = BPF_CORE_READ(path, dentry);
+	if (!dentry)
+		return 0;
+
+	inode = BPF_CORE_READ(dentry, d_inode);
+	if (!inode)
+		return 0;
+
+	if (!is_trusted_inode(inode) && !is_trusted_mountpoint_inode(inode))
+		return 0;
+
+	return -EPERM;
+}
+
+/*
+ * The other mount API.
+ * open_tree(2) clones a mount and move_mount(2) puts it somewhere, which shadows
+ * the destination exactly as MS_BIND does and takes the same privilege,
+ * so the same predicate has to hold here.
+ * There is no MS_BIND to gate on: every move_mount lands a mount over
+ * the destination.
+ */
+SEC("lsm/move_mount")
+int BPF_PROG(lota_move_mount, const struct path *from_path,
+	     const struct path *to_path, int ret)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	u32 mode;
+
+	(void)from_path;
+
+	if (ret != 0)
+		return -EPERM;
+
+	mode = get_mode();
+	if (mode != LOTA_MODE_ENFORCE)
+		return 0;
+
+	if (!get_config(LOTA_CFG_STRICT_MMAP))
+		return 0;
+
+	if (!to_path)
+		return 0;
+
+	dentry = BPF_CORE_READ(to_path, dentry);
 	if (!dentry)
 		return 0;
 
