@@ -13,6 +13,8 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +52,40 @@ static int loads_back(const char *text)
 	config_free(cfg);
 	unlink(path);
 	return rc;
+}
+
+/* how many publishers a file on disk holds, the way the agent counts them
+ * at the next start; negative when the file does not load at all */
+static int profiles_in_file(const char *path)
+{
+	struct lota_config *cfg = config_new();
+	int rc;
+
+	if (!cfg)
+		return -ENOMEM;
+	rc = config_load(cfg, path);
+	if (rc == 0)
+		rc = cfg->profile_count;
+	config_free(cfg);
+	return rc;
+}
+
+static int write_file(const char *path, const char *text)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	FILE *f;
+
+	if (fd < 0)
+		return -errno;
+	f = fdopen(fd, "w");
+	if (!f) {
+		int err = errno;
+
+		close(fd);
+		return -err;
+	}
+	fputs(text, f);
+	return fclose(f) == 0 ? 0 : -EIO;
 }
 
 #define CHECK(cond, msg)                                    \
@@ -215,6 +251,146 @@ int main(void)
 						small, sizeof(small));
 		CHECK(rc == -EOVERFLOW,
 		      "a buffer too small is refused rather than truncated");
+	}
+
+	/*
+	 * The label is text somebody else chose -- an installer's argument,
+	 * a store page's studio name -- and the header the writer builds around
+	 * it is terminated by a quote. A label carrying one closes the section
+	 * the writer meant and opens another, so the file the parser reads back
+	 * is not the file the writer described: the settings land on a forged
+	 * profile and the whole configuration stops loading.
+	 */
+	{
+		const char *base = "attest_interval = 60\n";
+		struct lota_profile forged;
+
+		forged = mkprofile("evil\"]\n[profile \"injected",
+				   "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a label carrying a quote and a newline is refused");
+
+		forged = mkprofile("say \"cheese\"", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ, "a label carrying a quote is refused");
+
+		forged = mkprofile("two\nlines", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a label carrying a control character is refused");
+
+		forged = mkprofile("", "ca.studio-a.example",
+				   "/etc/lota/studio-a.pem",
+				   "verifier.studio-a.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EINVAL, "a profile with no label is refused");
+	}
+
+	/*
+	 * The same hole in every other field the writer interpolates: a newline
+	 * in a host forges a key inside the section rather than a section,
+	 * which the parser then accepts -- a publisher pointed at another verifier,
+	 * written by a label nobody read.
+	 */
+	{
+		const char *base = "attest_interval = 60\n";
+		struct lota_profile forged;
+
+		forged = mkprofile("studio-c",
+				   "ca.studio-c.example\nverifier = "
+				   "attacker.example",
+				   "/etc/lota/studio-c.pem",
+				   "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ, "a CA host carrying a newline is refused");
+
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "/etc/lota/studio-c.pem",
+				   "v.example\nreporting = continuous");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a verifier host carrying a newline is refused");
+
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "/etc/lota/c.pem\nmode = permissive",
+				   "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a trust anchor carrying a newline is refused");
+
+		/* the parser refuses a relative ca_cert, so the writer cannot
+		 * emit one either */
+		forged = mkprofile("studio-c", "ca.studio-c.example",
+				   "studio-c.pem", "verifier.studio-c.example");
+		rc = config_profile_append_text(base, &forged, out,
+						sizeof(out));
+		CHECK(rc == -EILSEQ,
+		      "a trust anchor that is not an absolute path is refused");
+	}
+
+	/*
+	 * The text rules answer for the fields the writer interpolates
+	 * and nothing else. What is already in the file is copied through
+	 * untouched, so a file that had stopped parsing -- a hand edit,
+	 * a package that half-replaced it, an earlier version of this writer
+	 * -- is appended to and renamed into place, and the verb reports
+	 * the publisher added. The host then comes up with no configuration
+	 * at all.
+	 * So the writer reads the result back before it replaces the live file.
+	 */
+	{
+		char path[] = "/tmp/lota_add_profile_file_XXXXXX";
+		int fd = mkstemp(path);
+
+		CHECK(fd >= 0, "a temporary configuration file is created");
+		if (fd >= 0) {
+			char tmp_path[PATH_MAX];
+
+			close(fd);
+
+			/* a section the parser refuses: a profile with no ca */
+			CHECK(write_file(path,
+					 "[profile \"half-written\"]\n") == 0,
+			      "a configuration that does not parse is staged");
+			CHECK(profiles_in_file(path) < 0,
+			      "the staged configuration does not load");
+
+			rc = config_profile_append(path, &p);
+			CHECK(rc == -EBADMSG,
+			      "appending to a configuration that does not parse is refused");
+			CHECK(profiles_in_file(path) < 0,
+			      "the refusal left the file as it was");
+
+			snprintf(tmp_path, sizeof(tmp_path), "%s.new", path);
+			CHECK(access(tmp_path, F_OK) != 0,
+			      "the refused replacement is not left behind");
+
+			/* the ordinary path still writes, and what it wrote is
+			 * what the next start reads */
+			CHECK(write_file(path, "attest_interval = 60\n") == 0,
+			      "a loadable configuration is staged");
+			rc = config_profile_append(path, &p);
+			CHECK(rc == 1, "the publisher is appended to the file");
+			CHECK(profiles_in_file(path) == 1,
+			      "the file the writer left holds the publisher");
+
+			unlink(path);
+			unlink(tmp_path);
+		}
 	}
 
 	printf("\n%s\n", g_failures ? "FAILURES" : "All tests passed");

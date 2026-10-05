@@ -293,6 +293,41 @@ int config_load_from_fd(struct lota_config *cfg, int fd, const char *filepath);
 void config_dump(const struct lota_config *cfg, FILE *fp);
 
 /*
+ * config_profile_name_defect - why the parser would refuse a profile label
+ * @name:    candidate label for a [profile "name"] header
+ * @why:     receives a reason fit for an error message, naming the character
+ *           at fault where one is
+ * @why_cap: size of @why
+ *
+ * The header's rules live here rather than inside the parser so that anything
+ * writing a label can apply them before the file exists. The quote is one of
+ * them: it is not a control character, but it is what ends the header,
+ * so a label carrying one names a section that ends where the label does.
+ *
+ * Returns 0 for a label the parser reads back as written, -EINVAL for an empty
+ * one, or -EILSEQ for a label the parser would refuse.
+ */
+int config_profile_name_defect(const char *name, char *why, size_t why_cap);
+
+/*
+ * config_profile_defect - why the parser would not read a profile back
+ * @p:       the publisher a section would be written for
+ * @why:     receives a reason fit for an error message, naming the field
+ * @why_cap: size of @why
+ *
+ * Every field a section interpolates arrives from a command line,
+ * and the parser has rules for all of them: a host carrying a newline forges
+ * a key inside the section, a relative trust anchor is refused outright,
+ * and a value with an edge of whitespace is trimmed into a different value.
+ *
+ * Returns 0 for a profile the parser reads back as written,
+ * -EINVAL when a required field is missing, or -EILSEQ when a field's value
+ * would not survive the round trip.
+ */
+int config_profile_defect(const struct lota_profile *p, char *why,
+			  size_t why_cap);
+
+/*
  * config_profile_append_text - add a publisher profile to a config's text
  * @existing: current file contents (may be empty, never NULL)
  * @p:        the publisher to add
@@ -310,7 +345,9 @@ void config_dump(const struct lota_config *cfg, FILE *fp);
  * -EEXIST when the name is taken by a different publisher,
  * E2BIG at LOTA_CONFIG_MAX_PROFILES,
  * -EOVERFLOW when @out cannot hold the result,
- * -EINVAL on a profile the parser would refuse.
+ * -EINVAL when a required field is missing,
+ * -EILSEQ when a field's value would not survive the parser reading it back
+ * (see config_profile_defect()).
  */
 int config_profile_append_text(const char *existing,
 			       const struct lota_profile *p, char *out,
@@ -321,7 +358,12 @@ int config_profile_append_text(const char *existing,
  *
  * Writes through a temporary file in the same directory and renames it into place,
  * so crash mid-write leaves the old config rather than half of one.
- * Same return values.
+ *
+ * The replacement is read back with config_load() before the rename,
+ * since the text already in the file is copied through unexamined: a config that
+ * had stopped parsing before this call would otherwise be renamed into place
+ * and reported as a publisher added. Same return values, plus -EBADMSG when
+ * the result does not parse, in which case @path is left exactly as it was.
  */
 int config_profile_append(const char *path, const struct lota_profile *p);
 

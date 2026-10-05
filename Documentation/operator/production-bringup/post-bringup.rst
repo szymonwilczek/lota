@@ -301,6 +301,26 @@ rather than its label: adding the same anchor again is a no-op whichever name
 it carries, and a label already spoken for by a different anchor is refused
 with a note to pass another ``--publisher-name``.
 
+**The writer holds itself to the parser's rules.** A label is 1 to 63
+characters with no control characters and no quote -- the quote is what ends
+the section header -- and the hosts and the trust anchor may carry no control
+character, no leading or trailing space and no line longer than the parser
+reads. A value that breaks one of those is refused by name, with the character
+at fault, and nothing is written: the alternative is a command that reports
+success and leaves a file the next start cannot load. The trust anchor must be
+an absolute path for the same reason, since that is what the parser accepts.
+
+**And it reads the result back before it replaces the file.** The text already
+in ``lota.conf`` is copied through unexamined, so a file that had stopped
+parsing for some other reason -- a hand edit, a package that half-replaced it
+-- would be appended to and installed, and the host would come up with no
+publishers and no enforcement settings at all. Nothing reaches that state
+through the command line, because every invocation loads the configuration
+before it runs a verb and refuses on a file that does not parse, naming the
+line. The writer does not lean on that: it loads the replacement with the
+parser before the rename and leaves the live file untouched if the result does
+not read back.
+
 **It records no consent.** Nothing enrols with the publisher until somebody at
 the machine runs the ``--allow-publisher`` command it prints. That separation
 is deliberate: an installer must not be able to agree, on the player's behalf,

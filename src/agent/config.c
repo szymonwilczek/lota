@@ -370,6 +370,146 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 	return 1;
 }
 
+int config_profile_name_defect(const char *name, char *why, size_t why_cap)
+{
+	const unsigned char *p;
+
+	if (!why || why_cap == 0)
+		return -EINVAL;
+
+	if (!name || name[0] == '\0') {
+		snprintf(why, why_cap, "is empty");
+		return -EINVAL;
+	}
+
+	if (strlen(name) >= LOTA_CONFIG_MAX_PROFILE_NAME) {
+		snprintf(why, why_cap,
+			 "is %zu characters; the parser reads at most %d",
+			 strlen(name), LOTA_CONFIG_MAX_PROFILE_NAME - 1);
+		return -EILSEQ;
+	}
+
+	for (p = (const unsigned char *)name; *p; p++) {
+		/* the quote is not a control character, but it is what closes
+		 * the header, so a label carrying one names a section that
+		 * ends where the label does */
+		if (*p == '"') {
+			snprintf(why, why_cap,
+				 "contains a quote (0x22), which is what ends "
+				 "the section header");
+			return -EILSEQ;
+		}
+		if (iscntrl(*p)) {
+			snprintf(why, why_cap,
+				 "contains a control character (0x%02x)", *p);
+			return -EILSEQ;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Why the parser would read @value back as something other than what
+ * the writer put on a key's line, or 0 for one it reads back as written.
+ *
+ * @key is named only to size the line the value has to fit on.
+ */
+static int value_defect(const char *key, const char *value, char *why,
+			size_t why_cap)
+{
+	const unsigned char *p;
+	size_t line;
+
+	for (p = (const unsigned char *)value; *p; p++) {
+		if (iscntrl(*p)) {
+			snprintf(why, why_cap,
+				 "contains a control character (0x%02x), which "
+				 "would start a line of its own",
+				 *p);
+			return -EILSEQ;
+		}
+	}
+
+	/* the parser trims a value, so a value with an edge of whitespace
+	 * is not the value the host would read */
+	if (isspace((unsigned char)value[0]) ||
+	    isspace((unsigned char)value[strlen(value) - 1])) {
+		snprintf(why, why_cap,
+			 "begins or ends with whitespace, which the parser "
+			 "trims away");
+		return -EILSEQ;
+	}
+
+	/* an over-long line is skipped with an error,
+	 * so the key never reaches the profile at all */
+	line = strlen(key) + strlen(" = ") + strlen(value) + 1;
+	if (line >= LOTA_CONFIG_MAX_LINE) {
+		snprintf(why, why_cap,
+			 "needs a %zu-character line; the parser reads at most "
+			 "%d",
+			 line, LOTA_CONFIG_MAX_LINE - 1);
+		return -EILSEQ;
+	}
+
+	return 0;
+}
+
+int config_profile_defect(const struct lota_profile *p, char *why,
+			  size_t why_cap)
+{
+	char sub[160];
+	int ret;
+
+	if (!p || !why || why_cap == 0)
+		return -EINVAL;
+
+	ret = config_profile_name_defect(p->name, sub, sizeof(sub));
+	if (ret) {
+		snprintf(why, why_cap, "the label %s", sub);
+		return ret;
+	}
+
+	if (!p->ca[0]) {
+		snprintf(why, why_cap, "no CA host is named");
+		return -EINVAL;
+	}
+	if (!p->ca_cert[0]) {
+		snprintf(why, why_cap, "no trust anchor is named");
+		return -EINVAL;
+	}
+
+	if (value_defect("ca", p->ca, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the CA host %s", sub);
+		return -EILSEQ;
+	}
+
+	if (value_defect("ca_cert", p->ca_cert, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the trust anchor %s", sub);
+		return -EILSEQ;
+	}
+	if (!lota_path_is_abs(p->ca_cert)) {
+		snprintf(why, why_cap,
+			 "the trust anchor is not an absolute path, which the "
+			 "parser requires");
+		return -EILSEQ;
+	}
+	if (lota_path_has_dotdot_segment(p->ca_cert)) {
+		snprintf(why, why_cap,
+			 "the trust anchor traverses '..', which the parser "
+			 "refuses");
+		return -EILSEQ;
+	}
+
+	if (!p->token_only && p->verifier[0] &&
+	    value_defect("verifier", p->verifier, sub, sizeof(sub))) {
+		snprintf(why, why_cap, "the verifier host %s", sub);
+		return -EILSEQ;
+	}
+
+	return 0;
+}
+
 /*
  * Parse a [profile "name"] header and open the profile it names.
  *
@@ -425,16 +565,14 @@ static int open_profile_section(struct lota_config *cfg, char *line,
 		return -1;
 	}
 
-	if (name[0] == '\0' || strlen(name) >= LOTA_CONFIG_MAX_PROFILE_NAME) {
-		fprintf(stderr, "%s:%d: profile name must be 1-%d characters\n",
-			filepath, lineno, LOTA_CONFIG_MAX_PROFILE_NAME - 1);
-		return -1;
-	}
-	if (lota_str_has_control(name)) {
-		fprintf(stderr,
-			"%s:%d: profile name contains control characters\n",
-			filepath, lineno);
-		return -1;
+	{
+		char why[160];
+
+		if (config_profile_name_defect(name, why, sizeof(why))) {
+			fprintf(stderr, "%s:%d: profile name %s\n", filepath,
+				lineno, why);
+			return -1;
+		}
 	}
 
 	for (int i = 0; i < cfg->profile_count; i++) {
@@ -1261,9 +1399,24 @@ int config_profile_append_text(const char *existing,
 	if (!existing || !p || !out || out_cap == 0)
 		return -EINVAL;
 
-	/* parser refuses a profile without these, so refuse to write one */
-	if (!p->name[0] || !p->ca[0] || !p->ca_cert[0])
-		return -EINVAL;
+	/*
+	 * Every field below is interpolated into text the parser reads back at
+	 * the next start, and the values arrive from a command line:
+	 * a label carrying a quote closes the header being built, a host carrying
+	 * a newline forges a key.
+	 * So the writer applies the parser's own rules first and refuses
+	 * -- or a file that does not load at all.
+	 */
+	{
+		char why[192];
+		int defect = config_profile_defect(p, why, sizeof(why));
+
+		if (defect) {
+			fprintf(stderr,
+				"Refusing to write this publisher: %s\n", why);
+			return defect;
+		}
+	}
 
 	/*
 	 * A publisher is its trust anchor, not its label.
@@ -1396,6 +1549,38 @@ int config_profile_append(const char *path, const struct lota_profile *p)
 	}
 	close(fd);
 	free(updated);
+
+	/*
+	 * Parse the replacement before renaming it into place.
+	 * The field rules cover only what this writer added; the rest of
+	 * the file is copied through as is, and if that no longer parses
+	 * -- a hand edit, a package that half-replaced it -- the host would
+	 * start with no configuration.
+	 * On refusal the live file stays untouched.
+	 */
+	{
+		struct lota_config *readback = config_new();
+		int lret;
+
+		if (!readback) {
+			unlink(tmp_path);
+			return -ENOMEM;
+		}
+
+		lret = config_load(readback, tmp_path);
+		config_free(readback);
+		if (lret < 0) {
+			fprintf(stderr,
+				"Refusing to replace %s: the result does not "
+				"parse, so the host would start with no "
+				"configuration.\n"
+				"%s is unchanged; the errors above are from "
+				"reading the replacement back.\n",
+				path, path);
+			unlink(tmp_path);
+			return -EBADMSG;
+		}
+	}
 
 	/*
 	 * Temporary file took its SELinux type from this directory,
