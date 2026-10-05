@@ -1004,12 +1004,10 @@ void publish_rotation_state(uint32_t aik_ttl, const struct profile_paths *paths)
 }
 
 /*
- * The loop's attestation tallies.
+ * The loop's attestation tallies, sent to the socket owner with each sync.
  *
- * They used to live on the IPC context this process served;
- * it serves none now, so they live here and travel to the socket owner with each sync.
- * File scope for the same reason g_agent is: one loop per process, and every writer
- * below is on its single thread.
+ * File scope for the same reason g_agent is: one loop per process,
+ * and every writer below runs on its single thread.
  */
 static struct attest_peer_counters g_attest_counters;
 
@@ -1019,6 +1017,69 @@ static uint64_t monotonic_ms(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/*
+ * Is the key now at this profile's handle the key its certificate names?
+ *
+ * The handle, the auth beside it and the certificate are stored separately.
+ * If the key at the handle is replaced -- a TPM clear, or a default-path verb
+ * pointed at a handle a profile already owns -- the auth no longer opens it
+ * and the TPM refuses to sign.
+ * Each refusal spends a dictionary-attack attempt, every retry spends another,
+ * and the agent holds no lockoutAuth to clear the lockout they lead to.
+ *
+ * Reading the public area needs no authorization and spends no attempt,
+ * so the check runs before every quote.
+ */
+static int target_key_matches_cert(struct attest_target *t)
+{
+	uint8_t spki[LOTA_MAX_AIK_PUB_SIZE];
+	size_t spki_len = 0;
+	int ret;
+
+	if (!profile_aik_cert_stored(&t->paths))
+		return 0;
+
+	ret = tpm_get_aik_public(&g_agent.tpm_ctx, spki, sizeof(spki),
+				 &spki_len);
+	if (ret < 0) {
+		/*
+		 * The key could not be read at all.
+		 * Later steps report that themselves; refusing here would blame
+		 * the certificate.
+		 */
+		return 0;
+	}
+
+	ret = aik_cert_matches_key(t->paths.aik_cert, spki, spki_len);
+	if (ret == -EKEYREJECTED) {
+		if (!t->key_mismatch_announced) {
+			lota_err("The attestation key at this publisher's "
+				 "handle is not the key their certificate was "
+				 "issued over, so every quote would be refused "
+				 "by the TPM and each refusal spends a "
+				 "dictionary-attack attempt. No round is "
+				 "attempted until they issue a certificate for "
+				 "the key that is here now: lota-agent "
+				 "--reenroll --ca-cert <their anchor>. "
+				 "Publisher: %s",
+				 t->label);
+			t->key_mismatch_announced = true;
+		}
+		return ret;
+	}
+
+	/* any other error is an unreadable certificate; renewal reports it */
+	if (t->key_mismatch_announced) {
+		lota_info("The attestation key at this publisher's handle "
+			  "matches their certificate again; rounds resume. "
+			  "Publisher: %s",
+			  t->label);
+		t->key_mismatch_announced = false;
+	}
+
+	return 0;
 }
 
 /*
@@ -1055,6 +1116,11 @@ static int bind_target(struct attest_target *t)
 			 tpm_strerror(ret));
 		return ret;
 	}
+
+	ret = target_key_matches_cert(t);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
@@ -1291,10 +1357,10 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	 * who is playing.
 	 */
 	if (!enroll_target_if_needed(t)) {
-		/* Nothing to report with:
-		 * no certificate, so every verifier refuses.
-		 * Wait for the enrollment backoff instead of sending evidence
-		 * nobody can chain. */
+		/*
+		 * No certificate yet, so every verifier would refuse the evidence;
+		 * enrollment retries on its own backoff.
+		 */
 		t->attested = false;
 		t->valid_until = 0;
 		return t->interval;
@@ -1304,6 +1370,17 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 	if (ret == 0) {
 		rotate_bound_aik_if_due(aik_ttl);
 		renew_target_cert_if_due(t);
+	}
+
+	/*
+	 * A key the certificate does not name stays wrong on retry,
+	 * so no backoff: the target keeps its ordinary interval
+	 * and resumes once the profile is re-enrolled.
+	 */
+	if (ret == -EKEYREJECTED) {
+		t->attested = false;
+		t->valid_until = 0;
+		return t->interval;
 	}
 
 	if (!target_reporting_now(t))
@@ -1321,12 +1398,37 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		lota_info("Attestation successful (%s)", t->label);
 		t->consecutive_failures = 0;
 		t->backoff_sec = 0;
+		t->auth_fail_announced = false;
 		t->last_success = now;
 		t->attested = true;
 		t->valid_until = (uint64_t)(now + t->interval +
 					    ATTEST_TOKEN_VALIDITY_SLACK_SEC);
 		g_attest_counters.attest_count++;
 		g_attest_counters.last_attest_time = (uint64_t)now;
+		return t->interval;
+	}
+
+	/*
+	 * A refused quote authorization stays refused on retry, and each retry
+	 * spends a dictionary-attack attempt.
+	 * The backoff would retry sooner than the ordinary interval,
+	 * so the target keeps that interval and reports the refusal once.
+	 */
+	if (ret == -LOTA_ERR_TPM_AUTH_FAIL) {
+		if (!t->auth_fail_announced) {
+			lota_err("The TPM refused to authorize a quote for "
+				 "%s. The attestation key or its stored "
+				 "authorization is not the one this publisher "
+				 "enrolled, and every retry spends a "
+				 "dictionary-attack attempt, so no round is "
+				 "attempted until this publisher is "
+				 "re-enrolled: lota-agent --reenroll "
+				 "--ca-cert <their anchor>.",
+				 t->label);
+			t->auth_fail_announced = true;
+		}
+		t->attested = false;
+		t->valid_until = 0;
 		return t->interval;
 	}
 
