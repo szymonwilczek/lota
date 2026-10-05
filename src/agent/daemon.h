@@ -32,11 +32,29 @@
  *   umask(0)    -> clear file creation mask
  *   Close stdin/stdout/stderr, redirect to /dev/null
  *
- * Returns: 0 in the daemon process, does not return in parent
- *          (parent calls _exit(0)).
+ * The launching process does not exit at the fork. It waits on a pipe until
+ * the daemon reports how its startup ended, and exits with that status,
+ * so a caller that gets its shell back has been told something true.
+ * See daemon_notify_started().
+ *
+ * Returns: 0 in the daemon process, does not return in the launching process.
  *          Negative errno on failure.
  */
 int daemonize(void);
+
+/*
+ * Report the startup verdict to the process that launched a daemon.
+ *
+ * Called once with 0 when the daemon is serving, and once with the exit status
+ * on any path that gives up before that. The first call wins and the rest are
+ * ignored, so an exit path may call it without knowing whether startup already
+ * succeeded.
+ *
+ * A no-op when the process was not daemonised.
+ *
+ * @status: exit status the launching process should carry.
+ */
+void daemon_notify_started(int status);
 
 /*
  * Create and lock PID file.

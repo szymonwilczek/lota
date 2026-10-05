@@ -1145,6 +1145,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_token_gate \
 	$(TEST_BIN_DIR)/test_wine_hook \
 	$(TEST_BIN_DIR)/test_daemon \
+	$(TEST_BIN_DIR)/test_daemon_start_status \
 	$(TEST_BIN_DIR)/test_signal_shutdown \
 	$(TEST_BIN_DIR)/test_daemon_loop \
 	$(TEST_BIN_DIR)/test_tls_verify \
@@ -1283,6 +1284,11 @@ $(TEST_BIN_DIR)/test_wine_hook: tests/test_wine_hook.c $(SDK_DIR)/lota_gaming.c 
 $(TEST_BIN_DIR)/test_daemon: tests/test_daemon.c $(AGENT_DIR)/daemon.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+$(TEST_BIN_DIR)/test_daemon_start_status: tests/test_daemon_start_status.c \
+		$(AGENT_BIN) | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -DAGENT_BIN_PATH='"$(AGENT_BIN)"' -o $@ $<
 
 $(TEST_BIN_DIR)/test_signal_shutdown: tests/test_signal_shutdown.c $(AGENT_DIR)/daemon.c $(AGENT_DIR)/shutdown.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1620,6 +1626,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_token_gate
 	@$(BUILD_DIR)/test_wine_hook
 	@$(BUILD_DIR)/test_daemon
+	@$(BUILD_DIR)/test_daemon_start_status
 	@$(BUILD_DIR)/test_signal_shutdown
 	@$(BUILD_DIR)/test_daemon_loop
 	@$(BUILD_DIR)/test_config
@@ -1772,7 +1779,7 @@ VALGRIND_FLAGS := --error-exitcode=1 --leak-check=full \
 VALGRIND_UNIT_BINS := \
 	test_hash_verify test_dbus test_systemd test_packaging \
 	test_steam_runtime test_container_watch test_token_gate test_wine_hook \
-	test_daemon test_signal_shutdown \
+	test_daemon test_daemon_start_status test_signal_shutdown \
 	test_daemon_loop test_config test_config_alloc test_subscribe \
 	test_policy_sign \
 	test_policy_export test_aik_rotation test_initramfs_lock \

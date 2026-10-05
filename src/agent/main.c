@@ -586,6 +586,7 @@ static int run_daemon(const struct run_daemon_params *params)
 	ipc_update_status(&g_agent.ipc_ctx, agent_status_flags(&boot_state), 0);
 
 	sdnotify_ready();
+	daemon_notify_started(0);
 	sdnotify_status("Monitoring, mode=%s", mode_to_string(g_agent.mode));
 	lota_info("Monitoring binary executions (event-driven)");
 
@@ -775,26 +776,35 @@ int main(int argc, char *argv[])
 			rc = 1;
 			goto out;
 		}
+		/*
+		 * stderr is /dev/null from here, and every refusal below is
+		 * one an operator has to read
+		 */
+		journal_detached_from_terminal();
 	}
 
+	/*
+	 * every refusal from here down can be reached after --daemon
+	 * has detached stderr, so they go through the journal
+	 */
 	pid_fd = pidfile_create(opts.pid_file_path);
 	if (pid_fd == -EEXIST) {
 		char busy[512];
 
 		startup_busy_message(*cli_runtime_protect_pid_count() > 0, busy,
 				     sizeof(busy));
-		fprintf(stderr, "%s\n", busy);
+		lota_err("%s", busy);
 		rc = 1;
 		goto out;
 	}
 	if (pid_fd < 0) {
-		fprintf(stderr, "Warning: Failed to create PID file: %s\n",
-			strerror(-pid_fd));
+		lota_warn("Warning: Failed to create PID file: %s",
+			  strerror(-pid_fd));
 		pid_fd = -1; /* non-fatal */
 	}
 
 	if (!opts.policy_pubkey_path || opts.policy_pubkey_path[0] == '\0') {
-		fprintf(stderr,
+		lota_err(
 			"ERROR: no key to verify the enforcement object "
 			"against.\n"
 			"The agent package ships one at " LOTA_ENFORCEMENT_PUBKEY_PATH
@@ -802,7 +812,7 @@ int main(int argc, char *argv[])
 			"a fleet that signs enforcement itself puts its key at " LOTA_POLICY_PUBKEY_OVERRIDE
 			"\n"
 			"or names one with policy_pubkey / "
-			"--policy-pubkey PATH.\n");
+			"--policy-pubkey PATH.");
 		rc = 1;
 		goto out_pidfile;
 	}
@@ -834,5 +844,12 @@ out_pidfile:
 	pidfile_remove(opts.pid_file_path, pid_fd);
 out:
 	config_free(cfg);
+	/*
+	 * Reached with a refusal before the daemon ever served,
+	 * and with the shutdown status after it did.
+	 * The first report is the one that counts, so a daemon that started
+	 * carries its own 0 and this call changes nothing.
+	 */
+	daemon_notify_started(rc);
 	return rc;
 }
