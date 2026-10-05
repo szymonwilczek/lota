@@ -253,6 +253,21 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 
+	/*
+	 * A mis-signed enforcement object is the same kind of refusal:
+	 * it needs only files on disk, so it is caught before the extend.
+	 * bpf_loader_load() still verifies the bytes it hands the kernel.
+	 */
+	ret = bpf_loader_verify_object(bpf_path, bpf_pubkey_path);
+	if (ret < 0) {
+		lota_err("Enforcement object %s refused before the boot "
+			 "commitment was spent: %s. The host keeps the agent "
+			 "it is running and PCR 14 is untouched. Re-sign the "
+			 "object for the configured key and start again.",
+			 bpf_path, strerror(-ret));
+		return ret;
+	}
+
 	/* detect watchdog interval */
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 	if (wd_enabled)
