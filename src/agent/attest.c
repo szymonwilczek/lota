@@ -326,9 +326,17 @@ static int build_attestation_report(const struct verifier_challenge *challenge,
 		/* continue with zero hardware ID - verifier may reject */
 		memset(report->tpm.hardware_id, 0,
 		       sizeof(report->tpm.hardware_id));
+	} else if (ret == 1) {
+		/*
+		 * The identity is derived from a different key than usual,
+		 * and a verifier comparing it against what this host reported
+		 * before sees it move.
+		 * That is not a debug detail.
+		 */
+		lota_notice(
+			"Hardware ID derived from the AIK: this TPM yielded no endorsement key");
 	} else {
-		lota_dbg("Hardware ID derived from %s",
-			 ret == 1 ? "AIK (EK not available)" : "EK");
+		lota_dbg("Hardware ID derived from the EK");
 	}
 
 	/* system info: kernel path metadata + measured-boot digest */
