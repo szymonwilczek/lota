@@ -538,6 +538,27 @@ out:
 }
 
 /*
+ * How many of these publishers still keep the authorization in the clear.
+ * Read from disk after the verb has run, so the report shows what is stored.
+ */
+static unsigned aik_auth_exposed_count(const struct publisher_entry *entries,
+				       size_t count)
+{
+	unsigned exposed = 0;
+
+	for (size_t i = 0; i < count; i++) {
+		struct profile_paths paths;
+
+		if (profile_paths_from_id(LOTA_PROFILE_BASE_DIR, entries[i].id,
+					  &paths) < 0)
+			continue;
+		if (profile_aik_auth_exposed(profile_aik_auth_state(&paths)))
+			exposed++;
+	}
+	return exposed;
+}
+
+/*
  * do_seal_aik_auth - adopt at-rest sealing of the AIK userAuth on an
  * already-enrolled host, without re-enrolling. Seals the current auth to
  * the current PCR state (and, with seal_aik_auth_strict in lota.conf, drops
@@ -625,18 +646,24 @@ int do_seal_aik_auth(void)
 		return failed ? 1 : 0;
 	}
 
-	if (g_agent.tpm_ctx.seal_aik_auth_strict)
-		fprintf(stderr,
-			"Sealed the authorization of %u attestation key%s to "
-			"the platform state; plaintext sidecar removed "
-			"(strict).\n",
-			sealed, sealed == 1 ? "" : "s");
-	else
-		fprintf(stderr,
-			"Sealed the authorization of %u attestation key%s to "
-			"the platform state (plaintext sidecar kept; set "
-			"seal_aik_auth_strict to drop it).\n",
-			sealed, sealed == 1 ? "" : "s");
+	fprintf(stderr,
+		"Sealed the authorization of %u attestation key%s to the "
+		"platform state.\n",
+		sealed, sealed == 1 ? "" : "s");
+
+	/* report the plaintext copies still on disk, not the configured intent */
+	{
+		unsigned exposed = aik_auth_exposed_count(entries, count);
+
+		if (exposed)
+			fprintf(stderr,
+				"%u still keep a plaintext copy beside the "
+				"sealed one; set seal_aik_auth_strict to drop "
+				"it.\n",
+				exposed);
+		else
+			fprintf(stderr, "No plaintext copy remains on disk.\n");
+	}
 
 	if (failed) {
 		fprintf(stderr,
@@ -731,6 +758,30 @@ int do_reprovision_aik(void)
 
 	fprintf(stderr, "Rotated %u attestation key%s.\n", rotated,
 		rotated == 1 ? "" : "s");
+
+	/*
+	 * Say how the new authorizations are kept:
+	 * tpm_aik_save_auth() seals only when seal_aik_auth is set
+	 */
+	{
+		unsigned exposed = aik_auth_exposed_count(entries, count);
+
+		if (count == 0)
+			fprintf(stderr,
+				"Set seal_aik_auth in lota.conf and run "
+				"--seal-aik-auth to seal the new "
+				"authorization at rest.\n");
+		else if (exposed == 0)
+			fprintf(stderr,
+				"Every new authorization is sealed to the "
+				"platform state, with no plaintext copy.\n");
+		else
+			fprintf(stderr,
+				"%u of the new authorization%s on disk in the "
+				"clear; run --seal-aik-auth to seal %s.\n",
+				exposed, exposed == 1 ? " is" : "s are",
+				exposed == 1 ? "it" : "them");
+	}
 
 	/* name the publishers whose certificates the rotation just invalidated */
 	if (count > 0) {

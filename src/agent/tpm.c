@@ -3549,16 +3549,18 @@ static int tpm_aik_auth_path_for_ctx(struct tpm_context *ctx, char *buf,
 	else
 		dir_len = (size_t)(slash - meta_path);
 
-	if (dir_len + 1 + strlen("aik_auth.dat") + 1 > buf_len)
+	if (dir_len + 1 + strlen(LOTA_PROFILE_AIK_AUTH_FILE) + 1 > buf_len)
 		return -ENAMETOOLONG;
 
 	memcpy(buf, meta_path, dir_len);
 	buf[dir_len] = '\0';
 
 	if (dir_len > 1)
-		snprintf(buf + dir_len, buf_len - dir_len, "/aik_auth.dat");
+		snprintf(buf + dir_len, buf_len - dir_len,
+			 "/" LOTA_PROFILE_AIK_AUTH_FILE);
 	else
-		snprintf(buf + dir_len, buf_len - dir_len, "aik_auth.dat");
+		snprintf(buf + dir_len, buf_len - dir_len,
+			 LOTA_PROFILE_AIK_AUTH_FILE);
 
 	return 0;
 }
@@ -3736,15 +3738,18 @@ static int tpm_aik_auth_sealed_path_for_ctx(struct tpm_context *ctx, char *buf,
 		return -EINVAL;
 
 	dir_len = (slash == meta_path) ? 1 : (size_t)(slash - meta_path);
-	if (dir_len + 1 + strlen("aik_auth.sealed") + 1 > buf_len)
+	if (dir_len + 1 + strlen(LOTA_PROFILE_AIK_AUTH_SEALED_FILE) + 1 >
+	    buf_len)
 		return -ENAMETOOLONG;
 
 	memcpy(buf, meta_path, dir_len);
 	buf[dir_len] = '\0';
 	if (dir_len > 1)
-		snprintf(buf + dir_len, buf_len - dir_len, "/aik_auth.sealed");
+		snprintf(buf + dir_len, buf_len - dir_len,
+			 "/" LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
 	else
-		snprintf(buf + dir_len, buf_len - dir_len, "aik_auth.sealed");
+		snprintf(buf + dir_len, buf_len - dir_len,
+			 LOTA_PROFILE_AIK_AUTH_SEALED_FILE);
 	return 0;
 }
 

@@ -1008,6 +1008,21 @@ static void print_publisher(const struct publisher_entry *e,
 	else
 		printf("  certificate    none stored\n");
 
+	/*
+	 * Whether the authorization that opens this key is on disk in the clear.
+	 * It is the question at-rest sealing exists to answer: the sealing verb
+	 * reports what it attempted, this line reports what it stored.
+	 */
+	{
+		struct profile_paths paths;
+		enum profile_aik_auth_state st = PROFILE_AIK_AUTH_NONE;
+
+		if (paths_from_id(e->id, &paths) == 0)
+			st = profile_aik_auth_state(&paths);
+
+		printf("  key auth       %s\n", profile_aik_auth_state_str(st));
+	}
+
 	if (key_status == PUBLISHER_KEY_MISMATCH)
 		printf("  BROKEN         the key at that handle is not the "
 		       "key this certificate\n                 was issued "
