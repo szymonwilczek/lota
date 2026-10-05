@@ -162,23 +162,45 @@ int test_tpm(void)
 		print_hex("PCR 14 (after)", pcr_value, LOTA_HASH_SIZE);
 	}
 
-	/* AIK provisioning test */
-	printf("\n=== AIK Provisioning Test ===\n\n");
+	/* AIK test.
+	 *
+	 * A probe reports state, it does not create it: provisioning here
+	 * would persist a key that outlives the command and take one of
+	 * the TPM's persistent objects, which is the ceiling on how many
+	 * publishers this host can answer to.
+	 */
+	printf("\n=== AIK Test ===\n\n");
 
-	printf("Checking/provisioning AIK at handle 0x%08X...\n",
-	       g_agent.tpm_ctx.aik_handle);
-	ret = tpm_provision_aik(&g_agent.tpm_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "AIK provisioning failed: %s\n",
-			strerror(-ret));
-		fprintf(stderr,
-			"Note: May require owner hierarchy authorization\n");
+	if (selftest_aik_plan(tpm_handle_holds_object(
+		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
+	    SELFTEST_AIK_SKIP) {
+		printf("No attestation key at handle 0x%08X, and this "
+		       "command does not create one: a key provisioned here "
+		       "would outlive it and hold one of the TPM's "
+		       "persistent objects.\n"
+		       "Start lota-agent.service, or enroll with a publisher, "
+		       "to provision one.\n",
+		       g_agent.tpm_ctx.aik_handle);
+		ret = -ENOENT;
 	} else {
-		printf("AIK ready\n");
+		printf("Using the attestation key at handle 0x%08X...\n",
+		       g_agent.tpm_ctx.aik_handle);
+		ret = tpm_provision_aik(&g_agent.tpm_ctx);
+		if (ret < 0) {
+			fprintf(stderr, "AIK could not be loaded: %s\n",
+				strerror(-ret));
+			fprintf(stderr,
+				"Note: May require owner hierarchy authorization\n");
+		} else {
+			printf("AIK ready\n");
+		}
 	}
 
-	/* TPM Quote test */
+	/* Needs the key above, so it follows its verdict. */
 	printf("\n=== TPM Quote Test ===\n\n");
+
+	if (ret == -ENOENT)
+		printf("Skipped: there is no attestation key to quote with.\n");
 
 	if (ret == 0) {
 		struct tpm_quote_response quote_resp;

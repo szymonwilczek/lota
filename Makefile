@@ -1208,6 +1208,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_service \
+	$(TEST_BIN_DIR)/test_selftest_plan \
 	$(TEST_BIN_DIR)/test_ima_xattr \
 	$(TEST_BIN_DIR)/test_constant_time \
 	$(TEST_SDK_BIN)
@@ -1227,6 +1228,10 @@ $(TEST_BIN_DIR)/test_installer_probe: tests/test_installer_probe.c installer/pro
 $(TEST_BIN_DIR)/test_installer_service: tests/test_installer_service.c installer/probe.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+
+$(TEST_BIN_DIR)/test_selftest_plan: tests/test_selftest_plan.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 $(TEST_BIN_DIR)/test_ima_xattr: tests/test_ima_xattr.c include/lota_ima_xattr.h | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1622,6 +1627,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_initramfs_lock
 	@$(BUILD_DIR)/test_installer_probe
 	@$(BUILD_DIR)/test_installer_service
+	@$(BUILD_DIR)/test_selftest_plan
 	@$(BUILD_DIR)/test_ima_xattr
 	@$(BUILD_DIR)/test_constant_time
 	@$(BUILD_DIR)/test_hardening
