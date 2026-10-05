@@ -930,6 +930,80 @@ static void test_barrier_stage_verdicts(void)
 	PASS();
 }
 
+/*
+ * Publisher profiles are the agent's target list, and a configuration that
+ * carries them is the ordinary state of a machine that has been used:
+ * the agent enrolls with each publisher the first time a title of theirs asks.
+ */
+static void test_conf_profile_count(void)
+{
+	TEST("profile sections are counted, comments are not");
+	if (probe_conf_buf_profile_count("log_level = debug\n"
+					 "[profile \"pubA\"]\n"
+					 "ca = 10.0.0.1\n"
+					 "# [profile \"commented\"]\n"
+					 "[profile \"pubB\"]\n") != 2) {
+		FAIL("wrong count");
+		return;
+	}
+	PASS();
+
+	TEST("a configuration naming no publisher counts none");
+	if (probe_conf_buf_profile_count("log_level = debug\n") != 0 ||
+	    probe_conf_buf_profile_count("[verifier]\n") != 0 ||
+	    probe_conf_buf_profile_count(NULL) != 0) {
+		FAIL("false positive");
+		return;
+	}
+	PASS();
+}
+
+/*
+ * The self-check proves the host attests. It did that by spawning the agent
+ * with --server, which names one verifier -- a combination the agent refuses
+ * whenever profiles are configured, because the profiles name several and
+ * there is then no single answer to where the host reports.
+ *
+ * So on any machine that has met a publisher, the self-check asked for
+ * something that cannot be given and reported the refusal as the host failing
+ * to attest: "Self-check failed. Install is laid down but the host is not
+ * attesting yet", exit 1, on a host that was installed, enrolled and
+ * attesting. Re-running, which is what that message advises, repeats it.
+ */
+static void test_selfcheck_plan(void)
+{
+	TEST("a verifier and no publishers is one round against it");
+	if (probe_selfcheck_plan("verifier.example", 0) !=
+	    SELFCHECK_ONE_ROUND) {
+		FAIL("named verifier did not produce a round");
+		return;
+	}
+	PASS();
+
+	TEST("no verifier named leaves the round to the first title");
+	if (probe_selfcheck_plan(NULL, 0) != SELFCHECK_SKIP_NO_VERIFIER ||
+	    probe_selfcheck_plan("", 0) != SELFCHECK_SKIP_NO_VERIFIER) {
+		FAIL("an unnamed verifier was treated as named");
+		return;
+	}
+	PASS();
+
+	TEST("configured publishers are the target list, so no verifier is named");
+	if (probe_selfcheck_plan("verifier.example", 5) !=
+	    SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("the self-check still names one verifier");
+		return;
+	}
+	PASS();
+
+	TEST("publishers decide even when no verifier was given");
+	if (probe_selfcheck_plan(NULL, 5) != SELFCHECK_PUBLISHERS_REPORT) {
+		FAIL("a host with publishers was told a title would do it");
+		return;
+	}
+	PASS();
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -940,6 +1014,8 @@ int main(void)
 	test_cmdline_ima();
 	test_cmdline_token();
 	test_conf_key();
+	test_conf_profile_count();
+	test_selfcheck_plan();
 	test_esrt_present();
 	test_fstype_magic_mapping();
 	test_fs_verity_capability();

@@ -898,6 +898,58 @@ int probe_conf_has_key(const char *conf_path, const char *key)
 	return probe_conf_buf_has_key(buf, key);
 }
 
+int probe_conf_buf_profile_count(const char *buf)
+{
+	const char *line;
+	int count = 0;
+
+	if (!buf)
+		return 0;
+
+	for (line = buf; line && *line;) {
+		const char *p = line;
+		const char *eol = strchr(line, '\n');
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p != '#' && strncmp(p, "[profile", 8) == 0) {
+			p += 8;
+			/* the section name is quoted and follows the keyword */
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '"')
+				count++;
+		}
+		line = eol ? eol + 1 : NULL;
+	}
+	return count;
+}
+
+int probe_conf_profile_count(const char *conf_path)
+{
+	char buf[16384] = { 0 };
+	int ret = probe_read_text(conf_path, buf, sizeof(buf));
+
+	if (ret < 0)
+		return ret;
+	return probe_conf_buf_profile_count(buf);
+}
+
+enum probe_selfcheck_plan probe_selfcheck_plan(const char *verifier,
+					       int profile_count)
+{
+	/*
+	 * Publishers first: they are the agent's target list, so they decide
+	 * where this host reports whether or not a verifier was named.
+	 * A round that named one as well is the combination the agent refuses.
+	 */
+	if (profile_count > 0)
+		return SELFCHECK_PUBLISHERS_REPORT;
+	if (!verifier || !verifier[0])
+		return SELFCHECK_SKIP_NO_VERIFIER;
+	return SELFCHECK_ONE_ROUND;
+}
+
 /* 1 when an ESRT System Firmware entry (fw_type == 1) exists, else 0. */
 int probe_esrt_system_firmware_present_at(const char *base)
 {
