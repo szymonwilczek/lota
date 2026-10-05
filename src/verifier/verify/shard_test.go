@@ -42,11 +42,6 @@ func TestShardIndexNeverNegative(t *testing.T) {
 			if idx := shardIndex(key, n); idx < 0 || idx >= n {
 				t.Fatalf("shardIndex(%q,%d) = %d out of [0,%d)", key, n, idx, n)
 			}
-			var tok [32]byte
-			tok[0], tok[1], tok[2] = byte(i), byte(i>>8), byte(i>>16)
-			if idx := shardIndexBytes(tok[:], n); idx < 0 || idx >= n {
-				t.Fatalf("shardIndexBytes(%d,%d) = %d out of [0,%d)", i, n, idx, n)
-			}
 		}
 	}
 }
@@ -129,39 +124,5 @@ func TestShardedNonceRoutingAndReplay(t *testing.T) {
 	}
 	if total != keys {
 		t.Fatalf("shards recorded %d keys in total, want %d", total, keys)
-	}
-}
-
-// Token remembered through the sharded store must validate through the same
-// sharded store (and, because routing is process-independent, through second
-// independent sharded store over equivalent shard set) -- the cross-instance
-// failover property under sharding.
-func TestShardedSessionCrossInstance(t *testing.T) {
-	const n = 4
-	// model SHARED database tier:
-	// two verifier instances point at the same shard backends,
-	// as they would at the same N Postgres databases
-	shared := make([]SessionTokenStore, n)
-	for i := range n {
-		shared[i] = newMemorySessionTokenStore()
-	}
-	instanceA := NewShardedSessionTokenStore(shared)
-	instanceB := NewShardedSessionTokenStore(shared)
-
-	now := unixTimestamp(time.Now())
-	for i := range 1000 {
-		var tok [32]byte
-		tok[0] = byte(i)
-		tok[1] = byte(i >> 8)
-		tok[31] = 0xFF
-		rec := sessionTokenRecord{
-			ClientID:   fmt.Sprintf("client-%d", i),
-			ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
-		}
-		instanceA.Remember(tok, rec)
-		st := instanceB.Validate(tok, false, now)
-		if !st.Exists || st.ClientID != rec.ClientID {
-			t.Fatalf("token %d issued on A did not validate on B: %+v", i, st)
-		}
 	}
 }

@@ -9,7 +9,7 @@ Fleet CLI (lota-fleet)
 REST monitoring API. It covers the fleet lifecycle that otherwise requires
 hand-written ``curl``: device inventory, AIK revocations, hardware bans,
 operator-forced re-anchor, client removal, review of Low-Firmware-Assurance
-re-anchors, the audit and attestation logs, and session-token validation.
+re-anchors, and the audit and attestation logs.
 
 The CLI is a pure API client. It shares no code with the verifier, so any
 ``lota-fleet`` build works against any verifier that speaks the documented
@@ -35,7 +35,7 @@ environment variable (default ``http://127.0.0.1:8080``).
 
 The API has two Bearer-token tiers, matching the verifier's
 ``LOTA_READER_API_KEY`` and ``LOTA_ADMIN_API_KEY``: a reader key covers
-the read-only endpoints (stats, listings, logs, session validation), the
+the read-only endpoints (stats, listings, logs), the
 admin key additionally unlocks the mutating ones (revoke, ban, re-anchor,
 delete, review acknowledgement). Give the CLI whichever tier the task
 needs:
@@ -78,7 +78,6 @@ Command                                                API tier
 ``reanchor-review ack <client-id>``                    admin
 ``audit [-limit N]``                                   reader
 ``attests [-limit N]``                                 reader
-``session validate <token> [-consume]``                reader
 =====================================================  ========
 
 ``-reason`` on ``revoke`` must be one of the server's revocation reasons:
@@ -104,8 +103,7 @@ Global ``--json`` prints the raw API response instead of the human
 rendering, for scripting against the full field set.
 
 Exit codes: 0 on success, 1 when the operation fails **or reports a
-negative result** (a degraded ``health``, an invalid ``session validate``
-token), 2 on a usage error. ``devices list`` and ``reanchor-review list``
+negative result** (a degraded ``health``), 2 on a usage error. ``devices list`` and ``reanchor-review list``
 print bare IDs on stdout (page summaries go to stderr), so their output
 pipes cleanly into further tooling.
 
@@ -188,15 +186,14 @@ the ban's identity::
              -actor alice@ops
 
 The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
-a ``TENANT`` column, and ``devices show``, ``session validate`` and ``stats``
-report the tenant. Those listings also accept a ``-tenant`` flag that filters
+a ``TENANT`` column, and ``devices show`` and ``stats`` report the tenant. Those listings also accept a ``-tenant`` flag that filters
 the displayed rows to one tenant, in the table and the ``--json`` rendering
 alike. This filter is applied client-side, for an
 operator holding a broad key who wants to narrow the view: the verifier
 already scopes every response to the tenants the API key is allowed to see, so
 a tenant-scoped key needs no ``-tenant`` flag to stay within its bounds. A
-request that names a client, ban, or session outside the key's tenant set is
-answered as not found.
+request that names a client or ban outside the key's tenant set is answered as
+not found.
 
 ``stats`` from a tenant-scoped key reports ``tenant scoped: true`` and the
 tenant list, and narrows the client, revocation, and ban counts to those

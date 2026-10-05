@@ -27,11 +27,19 @@
  *
  * Major 2 dropped the always-empty ek_certificate field and made the trailing
  * ESRT section mandatory.
- * See Documentation/operator/version-compatibility.rst
+ * 2.1 removed the session token from the verifier's result, a credential no
+ * host could present to anybody.
+ *
+ * The components are laid out as the verifier renders them, one byte each
+ * below the major, so both halves read the same number the same way.
+ * See Documentation/operator/protocol-versions.rst
  */
 #define LOTA_VERSION_MAJOR 2
-#define LOTA_VERSION_MINOR 0
-#define LOTA_VERSION ((LOTA_VERSION_MAJOR << 16) | LOTA_VERSION_MINOR)
+#define LOTA_VERSION_MINOR 1
+#define LOTA_VERSION_PATCH 0
+#define LOTA_VERSION                                              \
+	((LOTA_VERSION_MAJOR << 16) | (LOTA_VERSION_MINOR << 8) | \
+	 LOTA_VERSION_PATCH)
 
 /* Magic number: "LOTA" in little-endian */
 #define LOTA_MAGIC 0x41544F4C

@@ -53,7 +53,6 @@ struct verifier_result {
 	uint32_t result;
 	uint32_t flags;
 	uint64_t valid_until;
-	uint8_t session_token[32];
 };
 
 /* Result codes.

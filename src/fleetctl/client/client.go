@@ -497,35 +497,3 @@ func (c *Client) Attestations(limit int) ([]Attestation, error) {
 	}
 	return resp.Attestations, nil
 }
-
-// sessionTokenRequest is the POST /api/v1/session/validate payload.
-type sessionTokenRequest struct {
-	SessionToken string `json:"session_token"`
-	Consume      bool   `json:"consume"`
-}
-
-// SessionTokenStatus is the POST /api/v1/session/validate response.
-type SessionTokenStatus struct {
-	Valid      bool   `json:"valid"`
-	Consumed   bool   `json:"consumed"`
-	ClientID   string `json:"client_id,omitempty"`
-	Tenant     string `json:"tenant,omitempty"`
-	HardwareID string `json:"hardware_id,omitempty"`
-	ResultCode uint32 `json:"result_code,omitempty"`
-	Flags      uint32 `json:"flags,omitempty"`
-	PCRMask    uint32 `json:"pcr_mask,omitempty"`
-	ValidUntil uint64 `json:"valid_until,omitempty"`
-}
-
-// ValidateSessionToken checks an issued session token (64 hex characters);
-// consume additionally marks it used so it cannot validate again.
-func (c *Client) ValidateSessionToken(token string, consume bool) (*SessionTokenStatus, error) {
-	var status SessionTokenStatus
-	err := c.do(http.MethodPost, "/api/v1/session/validate", nil,
-		sessionTokenRequest{SessionToken: token, Consume: consume},
-		&status, http.StatusOK)
-	if err != nil {
-		return nil, err
-	}
-	return &status, nil
-}

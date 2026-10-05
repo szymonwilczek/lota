@@ -5,10 +5,9 @@
 Verifier deployment topologies
 ==============================
 
-The LOTA verifier persists two kinds of state: durable identity and enforcement
-records (AIK registrations, per-client baselines, revocations, hardware bans,
-the audit and attestation logs, used nonces) and short-lived session tokens
-issued after a successful attestation. Where that state lives decides how many
+The LOTA verifier persists durable identity and enforcement records: AIK
+registrations, per-client baselines, revocations, hardware bans, the audit and
+attestation logs, and used nonces. Where that state lives decides how many
 verifier instances a deployment can run.
 
 This document describes the supported topologies and the shared-state
@@ -57,10 +56,10 @@ check.
                              --> verifier (1) --|
 
     (1) - stateless, identical config
-    (2) - shared enforcement + session-token state
+    (2) - shared enforcement state
 
 With ``--pg-dsn`` the shared database holds the baseline, used-nonce,
-revocation, ban, audit, attestation and session-token state. The consequences:
+revocation, ban, audit and attestation state. The consequences:
 
 * A baseline pinned, a client revoked, or hardware banned on one instance is
   enforced by every instance. The per-client baseline pin is committed under a
@@ -68,8 +67,6 @@ revocation, ban, audit, attestation and session-token state. The consequences:
   holds across instances exactly as it does within one SQLite process.
 * A used nonce recorded on one instance is rejected as replayed on all
   instances.
-* A session token issued by one instance validates on every instance, and a
-  single-use token (``consume=true``) is consumed exactly once across the fleet.
 
 What Postgres adds over ``--db`` is the shared state above, not certificate
 verification: every backend selects the certificate-backed AIK store the same
@@ -109,12 +106,11 @@ Shared-state requirements
 Scaling the read path
 ---------------------
 
-Session-token validation and other reads are single indexed lookups. At session
-granularity their volume is far below the attestation path, so a single
-Postgres node serves them comfortably. If a deployment ever needs more read
-throughput, route reads to Postgres read replicas; because tokens are opaque
-records in the shared store rather than self-describing blobs, this needs no
-change to the token wire format or the SDK.
+The monitoring API's listings and lookups are single indexed reads, and their
+volume is far below the attestation path, so a single Postgres node serves them
+comfortably. If a deployment ever needs more read throughput, route reads to
+Postgres read replicas; nothing on the attestation wire depends on which
+replica answered.
 
 Scaling the write path (database sharding)
 ------------------------------------------
@@ -131,8 +127,8 @@ comma-separated list), mutually exclusive with ``--pg-dsn``::
      --pg-shard-dsn "postgres://…@pg-shard-1/lota?sslmode=verify-full" \
      --pg-shard-dsn "postgres://…@pg-shard-2/lota?sslmode=verify-full"
 
-Each per-client baseline, nonce and session token is routed to one shard by
-a stable, process-independent hash of its key, so a given client's writes
+Each per-client baseline and nonce is routed to one shard by a stable,
+process-independent hash of its key, so a given client's writes
 always land on the same shard and every instance agrees on that mapping.
 Because independent databases commit in parallel, aggregate durable-write
 throughput scales with the number of shards **when each shard has
@@ -143,8 +139,7 @@ Rules for a sharded deployment:
 
 * **Give every instance the same shard list in the same order.** The shard
   index is positional; a divergent list would route the same client to
-  different databases on different instances and break replay protection and
-  cross-instance session validation. The verifier enforces this: each shard
+  different databases on different instances and break replay protection. The verifier enforces this: each shard
   database carries its own identity and the control database pins the
   fingerprint of the ordered list, so an instance whose list does not
   reproduce it refuses to start instead of serving a routing its peers
@@ -162,12 +157,12 @@ Rules for a sharded deployment:
   you would the single database.
 * **Fix the shard count before you enrol the fleet.** The index is
   ``FNV-1a(key) mod N``, so changing ``N`` re-routes nearly every key.
-  After adding or removing a shard, a client's baseline, its used-nonce
-  history and its session tokens are looked up on a database that does not
-  hold them: every client presents as a first attestation, which the default
+  After adding or removing a shard, a client's baseline and its used-nonce
+  history are looked up on a database that does not hold them: every client
+  presents as a first attestation, which the default
   ``--allow-tofu-boot-baseline=false`` refuses unless a signed policy pins
-  that client's PCR0/1/7; outstanding session tokens stop validating; and
-  replay protection covers only the new routing until the history refills.
+  that client's PCR0/1/7, and replay protection covers only the new routing
+  until the history refills.
   Treat a shard-count change as a fleet-wide re-enrolment in a maintenance
   window -- migrate the baseline rows to their new shards first, or re-enrol
   the fleet -- not as a rolling capacity step. Size the shard count for the

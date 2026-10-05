@@ -8,7 +8,6 @@
 package verify
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -415,9 +414,6 @@ func TestIntegration_FullAttestationFlow_TOFU(t *testing.T) {
 	if result.Result != types.VerifyOK {
 		t.Errorf("Expected VerifyOK, got result code %d", result.Result)
 	}
-	if bytes.Equal(result.SessionToken[:], make([]byte, len(result.SessionToken))) {
-		t.Error("session token must not be all zeros")
-	}
 
 	t.Log("✓ Full attestation flow completed successfully")
 }
@@ -448,79 +444,7 @@ func TestIntegration_SubsequentAttestation(t *testing.T) {
 	if err != nil || result2.Result != types.VerifyOK {
 		t.Fatalf("Second attestation failed: %v (result=%d)", err, result2.Result)
 	}
-	if bytes.Equal(result1.SessionToken[:], result2.SessionToken[:]) {
-		t.Fatal("session tokens for distinct attestations must differ")
-	}
 	t.Log("✓ Subsequent attestation matched baseline")
-}
-
-func TestIntegration_SessionTokenValidation(t *testing.T) {
-	t.Log("INTEGRATION TEST: Session token can be validated via verifier API")
-
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
-
-	clientID := "session-validate-client"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := fixturePCR14()
-
-	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
-	res, err := verifier.VerifyReport(clientID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-	if res.Result != types.VerifyOK {
-		t.Fatalf("unexpected result code: %d", res.Result)
-	}
-
-	st := verifier.ValidateSessionToken(res.SessionToken, false)
-	if !st.Exists {
-		t.Fatal("session token should exist")
-	}
-	if st.Consumed {
-		t.Fatal("session token should not be consumed by read-only validation")
-	}
-	if st.ResultCode != types.VerifyOK {
-		t.Fatalf("unexpected token result code: %d", st.ResultCode)
-	}
-	if st.ClientID != testPseudonym(clientID) {
-		t.Fatalf("unexpected client id binding: %s", st.ClientID)
-	}
-}
-
-func TestIntegration_SessionTokenConsume(t *testing.T) {
-	t.Log("INTEGRATION TEST: Session token can be consumed once")
-
-	aikStore := newCertStore(t)
-	verifier := createTestVerifier(t, aikStore)
-
-	clientID := "session-consume-client"
-	challenge, err := verifier.GenerateChallenge(clientID)
-	if err != nil {
-		t.Fatalf("GenerateChallenge failed: %v", err)
-	}
-
-	pcr14 := fixturePCR14()
-
-	report := createValidReport(t, clientID, challenge.Nonce, pcr14)
-	res, err := verifier.VerifyReport(clientID, report)
-	if err != nil {
-		t.Fatalf("VerifyReport failed: %v", err)
-	}
-
-	st1 := verifier.ValidateSessionToken(res.SessionToken, true)
-	if !st1.Exists || !st1.Consumed {
-		t.Fatal("consume validation should mark token as consumed")
-	}
-
-	st2 := verifier.ValidateSessionToken(res.SessionToken, false)
-	if !st2.Exists || !st2.Consumed {
-		t.Fatal("subsequent validation should report consumed token")
-	}
 }
 
 func TestIntegration_PCR14BaselineViolation(t *testing.T) {

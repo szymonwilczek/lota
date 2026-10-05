@@ -480,35 +480,6 @@ func TestAttestations(t *testing.T) {
 	}
 }
 
-func TestValidateSessionToken(t *testing.T) {
-	token := strings.Repeat("00", 32)
-	c, rec := fakeVerifier(t, http.StatusOK,
-		`{"valid":true,"consumed":true,"client_id":"host1","tenant":"acme",
-		  "hardware_id":"ab","result_code":1}`)
-
-	status, err := c.ValidateSessionToken(token, true)
-	if err != nil {
-		t.Fatalf("ValidateSessionToken: %v", err)
-	}
-	if rec.method != http.MethodPost || rec.path != "/api/v1/session/validate" {
-		t.Fatalf("request = %s %s", rec.method, rec.path)
-	}
-
-	var got struct {
-		SessionToken string `json:"session_token"`
-		Consume      bool   `json:"consume"`
-	}
-	if err := json.Unmarshal(rec.body, &got); err != nil {
-		t.Fatalf("request body: %v", err)
-	}
-	if got.SessionToken != token || !got.Consume {
-		t.Fatalf("body = %+v", got)
-	}
-	if !status.Valid || status.ClientID != "host1" || status.Tenant != "acme" {
-		t.Fatalf("status = %+v", status)
-	}
-}
-
 func TestAuthFailureSurfacesAPIError(t *testing.T) {
 	c, _ := fakeVerifier(t, http.StatusForbidden, `{"error":"invalid API key"}`)
 

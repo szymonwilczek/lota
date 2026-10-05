@@ -496,7 +496,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 }
 
-// sends the full verification result, preserving SessionToken and ValidUntil
+// sends the full verification result, preserving ValidUntil
 func (s *Server) sendResult(conn net.Conn, result *types.VerifyResult) {
 	if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
 		s.log.Warn("failed to set write deadline", "error", err)

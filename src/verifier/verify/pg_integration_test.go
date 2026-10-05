@@ -118,74 +118,6 @@ func TestPostgresBaselineRace(t *testing.T) {
 	}
 }
 
-func TestPostgresSessionTokenCrossInstance(t *testing.T) {
-	dsn := os.Getenv("LOTA_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
-	}
-	// two stores on independent pools standing in for two verifier instances
-	dbA, err := store.OpenPostgresDB(dsn)
-	if err != nil {
-		t.Fatalf("open A: %v", err)
-	}
-	defer dbA.Close()
-	if _, err := dbA.Exec("TRUNCATE session_tokens"); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	dbB, err := store.OpenPostgresDB(dsn)
-	if err != nil {
-		t.Fatalf("open B: %v", err)
-	}
-	defer dbB.Close()
-	a := NewPostgresSessionTokenStore(dbA)
-	b := NewPostgresSessionTokenStore(dbB)
-
-	var tok [32]byte
-	tok[0], tok[31] = 0x01, 0xFF
-	rec := sessionTokenRecord{
-		ClientID:   "client-1",
-		ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
-		ResultCode: 0,
-		Flags:      0x5,
-		PCRMask:    0x83,
-	}
-	rec.HardwareID[0] = 0xAB
-
-	// instance A issues the token
-	a.Remember(tok, rec)
-
-	// instance B validates a token it never issued (the HA property)
-	now := unixTimestamp(time.Now())
-	st := b.Validate(tok, false, now)
-	if !st.Exists || st.Expired || st.ClientID != "client-1" || st.HardwareID[0] != 0xAB {
-		t.Fatalf("peer validate: %+v", st)
-	}
-	if st.Consumed {
-		t.Fatal("token should not be consumed yet")
-	}
-
-	// instance B consumes; instance A then sees it consumed (global single-use)
-	st = b.Validate(tok, true, now)
-	if !st.Consumed {
-		t.Fatal("consume on B should report consumed")
-	}
-	st = a.Validate(tok, false, now)
-	if !st.Exists || !st.Consumed {
-		t.Fatalf("A should see B's consume: %+v", st)
-	}
-
-	// expired token reports Exists=false and is pruned
-	var tok2 [32]byte
-	tok2[0] = 0x02
-	expired := rec
-	expired.ValidUntil = unixTimestamp(time.Now().Add(-time.Hour))
-	a.Remember(tok2, expired)
-	st = b.Validate(tok2, false, unixTimestamp(time.Now()))
-	if st.Exists {
-		t.Fatalf("expired token should not exist: %+v", st)
-	}
-}
-
 func TestPostgresUsedNonce(t *testing.T) {
 	dsn := os.Getenv("LOTA_TEST_PG_DSN")
 	if dsn == "" {
@@ -312,63 +244,6 @@ func TestPostgresBootPCRsPinnedAfterPCR14Row(t *testing.T) {
 	}
 	if r, _ := s.CheckAndUpdateBootPCRs("boot-unpinned", boot); r != TOFUFirstUse {
 		t.Fatal("boot pin on an unpinned row should be first use")
-	}
-}
-
-// TestPostgresSessionTokenLifecycle covers the upsert and miss paths the
-// cross-instance test does not reach.
-func TestPostgresSessionTokenLifecycle(t *testing.T) {
-	dsn := os.Getenv("LOTA_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("LOTA_TEST_PG_DSN not set; skipping Postgres integration test")
-	}
-	db, err := store.OpenPostgresDB(dsn)
-	if err != nil {
-		t.Fatalf("OpenPostgresDB: %v", err)
-	}
-	defer db.Close()
-	if _, err := db.Exec("TRUNCATE session_tokens"); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	s := NewPostgresSessionTokenStore(db)
-	now := unixTimestamp(time.Now())
-
-	var miss [32]byte
-	miss[5] = 0x99
-	if st := s.Validate(miss, true, now); st.Exists {
-		t.Fatalf("unknown token should not exist: %+v", st)
-	}
-
-	var tok [32]byte
-	tok[1] = 0x42
-	rec := sessionTokenRecord{
-		ClientID:   "client-x",
-		Tenant:     "acme",
-		ValidUntil: unixTimestamp(time.Now().Add(time.Hour)),
-		Flags:      0x1,
-		PCRMask:    0x7F,
-	}
-	s.Remember(tok, rec)
-
-	// re-attestation reissues the same token id: upsert refreshes the row
-	rec.ValidUntil = unixTimestamp(time.Now().Add(2 * time.Hour))
-	rec.Flags = 0x3
-	s.Remember(tok, rec)
-
-	st := s.Validate(tok, false, now)
-	if !st.Exists || st.Flags != 0x3 || st.ValidUntil != rec.ValidUntil {
-		t.Fatalf("upsert not visible: %+v", st)
-	}
-	if st.Tenant != "acme" {
-		t.Fatalf("Tenant = %q, want acme", st.Tenant)
-	}
-
-	// consuming twice keeps reporting consumed without resurrecting state
-	if st = s.Validate(tok, true, now); !st.Consumed {
-		t.Fatalf("first consume: %+v", st)
-	}
-	if st = s.Validate(tok, true, now); !st.Exists || !st.Consumed {
-		t.Fatalf("second consume: %+v", st)
 	}
 }
 

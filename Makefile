@@ -1577,9 +1577,10 @@ $(TEST_BIN_DIR)/test_ipc_client: tests/test_ipc_client.c | $(BUILD_DIR)
 # C half of the report layout cross-check:
 # serializes fully patterned report with the production serializer
 # for report_verify.go to parse
-$(TEST_BIN_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_cross_lang_report_gen: tests/cross_lang/report_gen.c src/agent/report.c \
+		$(INC_DIR)/lota.h $(INC_DIR)/attestation.h | $(BUILD_DIR)
 	$(QUIET_CC)
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 $(TEST_BIN_DIR)/test_cross_lang_verify: tests/cross_lang/test_verify.c $(SERVER_SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)

@@ -22,7 +22,7 @@ Authentication
 Two Bearer-token tiers, configured through the verifier's environment:
 
 * **reader** (``LOTA_READER_API_KEY``) -- read-only endpoints: statistics,
-  listings, logs, metrics, session-token validation.
+  listings, logs, metrics.
 * **admin** (``LOTA_ADMIN_API_KEY``) -- mutating endpoints. The admin key
   also satisfies every reader endpoint.
 
@@ -86,7 +86,6 @@ Endpoint                                                   Tier    Purpose
 ``POST /api/v1/clients/{id}/reanchor-review-ack``          admin   acknowledge an LFA re-anchor
 ``GET /api/v1/audit``                                      reader  operator audit log
 ``GET /api/v1/attestations``                               reader  attestation decision log
-``POST /api/v1/session/validate``                          reader  validate a session token
 =========================================================  ======  ===========================================
 
 Health and statistics
@@ -369,37 +368,5 @@ The decision log is written asynchronously in batches so a busy fleet does
 not pay one database commit per report. Records become durable within
 about one second; this endpoint forces a flush first, so it always returns
 the records it has accepted, but an ungraceful verifier crash can lose up
-to the last second of *audit* entries. No attestation verdict, session
-token or replay-protection state is affected -- those writes are
-synchronous.
-
-Session tokens
-==============
-
-POST /api/v1/session/validate
------------------------------
-
-Reader. Checks a session token issued to an attested client (game or
-service back ends validating a client-presented token). Body::
-
-   {"session_token": "<64 hex characters>", "consume": false}
-
-``consume: true`` additionally marks the token used, so it cannot
-validate again. **400** when the token is not 64 hex characters.
-**200** always for a well-formed request; an unknown token is
-``{"valid": false, "consumed": false}`` with every other field
-omitted::
-
-   {
-     "valid": true,
-     "consumed": false,
-     "client_id": "host-0001",
-     "hardware_id": "ab12...",
-     "result_code": 1,
-     "flags": 7,
-     "pcr_mask": 16787,
-     "valid_until": 1782730800
-   }
-
-``valid`` is false for an expired token even though it still resolves;
-``valid_until`` is a Unix timestamp.
+to the last second of *audit* entries. No attestation verdict or
+replay-protection state is affected -- those writes are synchronous.

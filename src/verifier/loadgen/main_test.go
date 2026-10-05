@@ -59,11 +59,11 @@ func TestSetupAndRunEndToEnd(t *testing.T) {
 	// so the CLI takes the -insecure path here;
 	// TestClientTLS covers -tls-ca certificate verification
 	outPath := filepath.Join(tmp, "summary.json")
-	sessPath := filepath.Join(tmp, "sessions.jsonl")
+	attestPath := filepath.Join(tmp, "attestations.jsonl")
 	code := realMain([]string{
 		"run", "-dir", rigDir, "-server", addr, "-insecure",
 		"-mode", "storm", "-in-flight", "2", "-timeout", "10s",
-		"-progress", "0", "-out", outPath, "-session-log", sessPath,
+		"-progress", "0", "-out", outPath, "-attest-log", attestPath,
 	})
 	if code != 0 {
 		t.Fatalf("run: exit %d", code)
@@ -80,8 +80,8 @@ func TestSetupAndRunEndToEnd(t *testing.T) {
 	if sum.OK != 3 || sum.Attempts != 3 || sum.AgentsNeverOK != 0 {
 		t.Fatalf("summary: %+v", sum)
 	}
-	if fi, err := os.Stat(sessPath); err != nil || fi.Size() == 0 {
-		t.Errorf("session log missing or empty: %v", err)
+	if fi, err := os.Stat(attestPath); err != nil || fi.Size() == 0 {
+		t.Errorf("attestation log missing or empty: %v", err)
 	}
 }
 

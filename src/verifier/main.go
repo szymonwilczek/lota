@@ -375,22 +375,18 @@ func main() {
 		if len(dbs) == 1 {
 			verifierCfg.BaselineStore = verify.NewPostgresBaselineStore(db)
 			verifierCfg.UsedNonceBackend = verify.NewPostgresUsedNonceBackend(db)
-			verifierCfg.SessionTokenStore = verify.NewPostgresSessionTokenStore(db)
 		} else {
 			baselines := make([]verify.BaselineStorer, len(dbs))
 			nonces := make([]verify.UsedNonceBackend, len(dbs))
-			sessions := make([]verify.SessionTokenStore, len(dbs))
 			for i, sdb := range dbs {
 				baselines[i] = verify.NewPostgresBaselineStore(sdb)
 				nonces[i] = verify.NewPostgresUsedNonceBackend(sdb)
-				sessions[i] = verify.NewPostgresSessionTokenStore(sdb)
 			}
 			verifierCfg.BaselineStore = verify.NewShardedBaselineStore(baselines)
 			verifierCfg.UsedNonceBackend = verify.NewShardedUsedNonceBackend(nonces)
-			verifierCfg.SessionTokenStore = verify.NewShardedSessionTokenStore(sessions)
 			logger.Info("Postgres sharded storage enabled",
 				"shards", len(dbs),
-				"note", "per-client baseline/nonce/session partitioned; enforcement and audit on shard 0")
+				"note", "per-client baseline/nonce partitioned; enforcement and audit on shard 0")
 		}
 
 		auditLog = store.NewPostgresAuditLog(db)
