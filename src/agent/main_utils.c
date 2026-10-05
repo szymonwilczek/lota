@@ -119,7 +119,13 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("  --export-policy   Export complete YAML policy from live "
 	       "system\n");
 	printf("                    (verifier-ready, pipe to file)\n");
-	printf("  --attest          Perform remote attestation and exit\n");
+	printf("  --attest          Attest to the configured verifier.\n");
+	printf("                    With publisher profiles in the config this\n");
+	printf("                    reports to every one of them on their own\n");
+	printf("                    cadence and keeps running, because a single\n");
+	printf("                    round against one verifier would leave the\n");
+	printf("                    others unattested. With no profiles it is\n");
+	printf("                    one round and exit\n");
 	printf("  --enroll          Enroll the AIK with the attestation CA via\n");
 	printf("                    credential activation and store the issued\n");
 	printf("                    certificate, then exit\n");

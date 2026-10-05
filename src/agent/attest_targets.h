@@ -66,6 +66,14 @@ struct attest_target {
 	bool session_gated;
 	int sessions;
 
+	/*
+	 * Whether this target has already said it is waiting for a title of
+	 * this publisher's to start.
+	 * Said once: a loop that repeats it every round is the same silence
+	 * with more lines.
+	 */
+	bool wait_announced;
+
 	struct profile_paths paths;
 	bool has_profile;
 	/* why the anchor produced no profile, 0 when it did or none was set */
@@ -118,6 +126,7 @@ static inline bool attest_target_reports(const struct attest_target *t)
 {
 	if (!t || t->token_only)
 		return false;
+
 	return !t->session_gated || t->sessions > 0;
 }
 
@@ -146,6 +155,22 @@ int attest_targets_reload(const char *config_path, const char *server, int port,
 			  const char *ca_cert, int interval_sec,
 			  struct attest_target *targets, size_t max,
 			  size_t *count);
+
+/*
+ * attest_target_should_announce_wait - is this the moment to say that this
+ * publisher is waiting for a title of theirs to start?
+ *
+ * A session-gated target reports nothing until a title runs, and a caller
+ * that never says so looks stopped. The end of a session is already
+ * announced; this is the beginning of waiting for the first one, and it is
+ * true once per target.
+ *
+ * A publisher who runs no verifier is not waiting to report to one.
+ *
+ * Not pure: it records having answered, so the caller is not asked to keep
+ * that state itself at every site that could say it.
+ */
+bool attest_target_should_announce_wait(struct attest_target *t);
 
 /*
  * Build the target list.

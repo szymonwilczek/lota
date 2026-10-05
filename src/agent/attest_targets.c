@@ -16,6 +16,17 @@
 
 #include "attest_targets.h"
 
+bool attest_target_should_announce_wait(struct attest_target *t)
+{
+	if (!t || !t->session_gated || t->token_only)
+		return false;
+	if (t->sessions > 0 || t->wait_announced)
+		return false;
+
+	t->wait_announced = true;
+	return true;
+}
+
 /*
  * Same publisher as before the reload.
  *
