@@ -3770,6 +3770,16 @@ static int tpm_aik_save_auth_sealed(struct tpm_context *ctx,
 	if (ret < 0)
 		return ret;
 
+	/*
+	 * The platform mask, deliberately, and never the agent-bound one.
+	 * The threat this seal answers is a powered-off disk in someone else's
+	 * hands, and PCRs 0-7 already answer it: they cannot be reproduced on
+	 * other hardware or under other firmware.
+	 * Adding the boot commitment would bind the AIK authorization to the
+	 * agent binary, so a routine agent upgrade would cost every host its
+	 * authorization -- and where seal_aik_auth_strict has dropped the
+	 * plaintext, a re-enrollment with every publisher.
+	 */
 	ret = tpm_seal_secret(ctx, auth, TPM_AIK_AUTH_SIZE,
 			      LOTA_SEAL_DEFAULT_PCR_MASK, blob, sizeof(blob),
 			      &blob_len);
