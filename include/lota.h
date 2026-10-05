@@ -101,6 +101,57 @@ enum lota_mode {
 #define LOTA_CFG_MAX_ENTRIES 9
 
 /*
+ * The purpose the kernel gives when it reads a file or a buffer on its own
+ * behalf: enum kernel_read_file_id and enum kernel_load_data_id.
+ * The two enums are generated from one list in include/linux/kernel_read_file.h
+ * and share their numbering, so one set of values answers for both hooks.
+ *
+ * Mirrored, so that what the gate asks about a purpose can be stated and tested
+ * here instead of only in the hook, and so that it does not depend on which
+ * kernel generated that header.
+ */
+#define LOTA_KREAD_UNKNOWN 0
+#define LOTA_KREAD_FIRMWARE 1
+#define LOTA_KREAD_MODULE 2
+#define LOTA_KREAD_KEXEC_IMAGE 3
+#define LOTA_KREAD_KEXEC_INITRAMFS 4
+#define LOTA_KREAD_POLICY 5
+#define LOTA_KREAD_X509_CERTIFICATE 6
+#define LOTA_KREAD_MODULE_COMPRESSED 7
+#define LOTA_KREAD_MAX_KNOWN LOTA_KREAD_MODULE_COMPRESSED
+
+/*
+ * Whether a purpose names a kernel module
+ *
+ * A module reaches the kernel in one of two forms and the kernel reports which:
+ * the image itself, from insmod of a plain .ko, or the compressed file handed
+ * to finit_module(MODULE_INIT_COMPRESSED_FILE) for the kernel to expand.
+ * The second is what modprobe produces on every distribution that compresses its
+ * modules, so on a stock host every module load carries the compressed purpose
+ * and none carries the plain one.
+ */
+static inline int lota_kread_is_module(unsigned int id)
+{
+	return id == LOTA_KREAD_MODULE || id == LOTA_KREAD_MODULE_COMPRESSED;
+}
+
+/*
+ * Whether this object has heard of the purpose at all.
+ *
+ * A purpose above the list is one a later kernel added, and while strict module
+ * loading is armed the gate has to treat it as a load it cannot classify.
+ * The kernel can ask about a module in a form this object has no rule for,
+ * and the absence of a rule must not read as consent.
+ *
+ * The refusal is bounded by the configuration key, so a host that did not ask
+ * for strict module loading keeps whatever the kernel does today.
+ */
+static inline int lota_kread_is_known(unsigned int id)
+{
+	return id <= LOTA_KREAD_MAX_KNOWN;
+}
+
+/*
  * PTRACE_MODE_ATTACH from include/linux/ptrace.h.
  *
  * Mirrored: the enforcement object builds against vmlinux.h, which carries types

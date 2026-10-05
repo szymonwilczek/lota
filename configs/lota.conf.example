@@ -50,6 +50,14 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # refuse to start. A fresh install has no fs-verity allowlist by design,
 # so both flags default to off; the operator opts in once the
 # allow_verity list is provisioned.
+#
+# strict_modules covers a module in either of the forms the kernel accepts:
+# the image itself, and the compressed file modprobe hands the kernel on
+# a distribution that ships .ko.xz or .ko.zst.
+# On such a host every module load arrives in the compressed form, so the allowlist
+# has to name the compressed files -- fs-verity is enabled on the .ko.xz, not on
+# the module it expands to.
+# A host that arms the flag without them loads no further modules.
 # strict_mmap = true
 # strict_exec = true
 # block_ptrace = true

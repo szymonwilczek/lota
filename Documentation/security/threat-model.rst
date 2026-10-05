@@ -313,8 +313,15 @@ Active threats
        | Ending the agent is not this path: ``--shutdown`` poisons PCR 14, and
          resuming is a reboot.
    * - Kernel module or memory-only load
-     - Kernel lockdown, module signature enforcement, and BPF LSM gates reject
-       unsafe load paths.
+     - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
+         unsafe load paths.
+       | With ``strict_modules``, a module load has to name a file in the
+         fs-verity allowlist, in either form the kernel accepts: the image
+         itself, and the compressed file ``modprobe`` hands the kernel on a
+         distribution that ships ``.ko.xz`` or ``.ko.zst``. The allowlist
+         therefore has to name the compressed files, since that is what such a
+         host presents. A purpose the object does not recognise -- what a later
+         kernel adds -- is refused.
      - Kernel vulnerability or disabled production gate is outside LOTA's
        software boundary.
    * - DMA attack

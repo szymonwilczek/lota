@@ -1088,48 +1088,57 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 	struct lota_exec_event *event = NULL;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 	uint32_t key = 0;
 	uint32_t mode = get_mode();
 
 	lota_bpf_debug("LOTA: kernel_read_file id=%d mode=%d", id, mode);
 
 	/*
-	 * Filter relevant IDs.
-	 * - MODULE (2)
-	 * - FIRMWARE (1)
-	 * - KEXEC_IMAGE (3)
+	 * A purpose this object has no rule for is refused while strict module
+	 * loading is armed, and ignored otherwise.
+	 * Everything else is filtered out here.
 	 */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
 
-	/* check if LOTA should ignore this read id early */
-	if (id != READING_MODULE && id != READING_FIRMWARE &&
-	    id != READING_KEXEC_IMAGE && id != READING_KEXEC_INITRAMFS &&
-	    id != READING_POLICY) {
+	if (!strict_unknown && !lota_kread_is_module(id) &&
+	    id != LOTA_KREAD_FIRMWARE && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY) {
 		return 0;
 	}
 
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (id == READING_KEXEC_IMAGE || id == READING_KEXEC_INITRAMFS)
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel file read: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
 
 		if (in_non_init_userns())
 			blocked = 1;
 
 		/* always allow policy files */
-		if (id == READING_POLICY)
+		if (id == LOTA_KREAD_POLICY)
 			return 0;
 
 		/* kernel integrity config */
 		struct integrity_data *integrity;
 		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
 
-		if (id == READING_MODULE || id == READING_FIRMWARE) {
+		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
 				blocked = 1;
 		}
 
 		/* firmware is always strict in ENFORCE: require fs-verity
 		 * allowlist */
-		if (id == READING_FIRMWARE) {
+		if (id == LOTA_KREAD_FIRMWARE) {
 			if (!is_verity_allowed(file)) {
 				lota_bpf_debug("LOTA: BLOCKING firmware load: "
 					       "no allowed fs-verity digest");
@@ -1137,7 +1146,7 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 			}
 		}
 
-		if (id == READING_MODULE &&
+		if (lota_kread_is_module(id) &&
 		    get_config(LOTA_CFG_STRICT_MODULES)) {
 			if (!is_verity_allowed(file)) {
 				lota_bpf_debug("LOTA: BLOCKING module load: no "
@@ -1176,13 +1185,13 @@ int BPF_PROG(lota_kernel_read_file, struct file *file,
 		}
 
 		if (ret_path < 0) {
-			if (id == READING_MODULE)
+			if (lota_kread_is_module(id))
 				__builtin_memcpy(event->filename,
 						 "kernel_module", 13);
-			else if (id == READING_FIRMWARE)
+			else if (id == LOTA_KREAD_FIRMWARE)
 				__builtin_memcpy(event->filename, "firmware",
 						 8);
-			else if (id == READING_KEXEC_IMAGE)
+			else if (id == LOTA_KREAD_KEXEC_IMAGE)
 				__builtin_memcpy(event->filename, "kexec_image",
 						 11);
 			else
@@ -1223,18 +1232,33 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 	u32 mode;
 	int blocked = 0;
 	int emit_event = 0;
+	int strict_unknown;
 
 	lota_bpf_debug("LOTA: kernel_load_data id=%d", id);
 
-	if (id != LOADING_FIRMWARE && id != LOADING_MODULE &&
-	    id != LOADING_KEXEC_IMAGE && id != LOADING_KEXEC_INITRAMFS &&
-	    id != LOADING_POLICY && id != LOADING_X509_CERTIFICATE)
-		return 0;
-
 	mode = get_mode();
 
+	/* the same rule as kernel_read_file: an unrecognised purpose is refused
+	 * while strict module loading is armed */
+	strict_unknown = mode == LOTA_MODE_ENFORCE &&
+			 !lota_kread_is_known(id) &&
+			 get_config(LOTA_CFG_STRICT_MODULES);
+
+	if (!strict_unknown && id != LOTA_KREAD_FIRMWARE &&
+	    !lota_kread_is_module(id) && id != LOTA_KREAD_KEXEC_IMAGE &&
+	    id != LOTA_KREAD_KEXEC_INITRAMFS && id != LOTA_KREAD_POLICY &&
+	    id != LOTA_KREAD_X509_CERTIFICATE)
+		return 0;
+
 	if (mode == LOTA_MODE_ENFORCE) {
-		if (id == LOADING_KEXEC_IMAGE || id == LOADING_KEXEC_INITRAMFS)
+		if (strict_unknown) {
+			lota_bpf_debug("LOTA: BLOCKING kernel data load: "
+				       "unrecognised purpose");
+			blocked = 1;
+		}
+
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS)
 			blocked = 1;
 
 		if (in_non_init_userns())
@@ -1244,26 +1268,27 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 		struct integrity_data *integrity;
 
 		integrity = bpf_map_lookup_elem(&integrity_cfg, &key);
-		if (id == LOADING_MODULE || id == LOADING_FIRMWARE) {
+		if (lota_kread_is_module(id) || id == LOTA_KREAD_FIRMWARE) {
 			if (!integrity_baseline_ok(integrity))
 				blocked = 1;
 		}
 
 		/* memory-only firmware loads cannot be fs-verity validated ->
 		 * deny */
-		if (id == LOADING_FIRMWARE)
+		if (id == LOTA_KREAD_FIRMWARE)
 			blocked = 1;
 
 		/* memory-only module loads bypass file fs-verity checks -> deny
 		 * in strict
 		 */
-		if (id == LOADING_MODULE && get_config(LOTA_CFG_STRICT_MODULES))
+		if (lota_kread_is_module(id) &&
+		    get_config(LOTA_CFG_STRICT_MODULES))
 			blocked = 1;
 
 		/* align with kernel_read_file: strict-modules must not block
 		 * policy load */
-		if (id == LOADING_KEXEC_IMAGE ||
-		    id == LOADING_KEXEC_INITRAMFS) {
+		if (id == LOTA_KREAD_KEXEC_IMAGE ||
+		    id == LOTA_KREAD_KEXEC_INITRAMFS) {
 			if (get_config(LOTA_CFG_STRICT_MODULES))
 				blocked = 1;
 		}
@@ -1284,15 +1309,15 @@ int BPF_PROG(lota_kernel_load_data, enum kernel_load_data_id id)
 
 		bpf_get_current_comm(event->comm, sizeof(event->comm));
 
-		if (id == LOADING_MODULE)
+		if (lota_kread_is_module(id))
 			__builtin_memcpy(event->filename, "kernel_module_mem",
 					 17);
-		else if (id == LOADING_FIRMWARE)
+		else if (id == LOTA_KREAD_FIRMWARE)
 			__builtin_memcpy(event->filename, "firmware_mem", 12);
-		else if (id == LOADING_KEXEC_IMAGE)
+		else if (id == LOTA_KREAD_KEXEC_IMAGE)
 			__builtin_memcpy(event->filename, "kexec_image_mem",
 					 16);
-		else if (id == LOADING_POLICY)
+		else if (id == LOTA_KREAD_POLICY)
 			__builtin_memcpy(event->filename, "policy_mem", 10);
 		else
 			__builtin_memcpy(event->filename, "kernel_data_mem",
