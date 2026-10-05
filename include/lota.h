@@ -137,6 +137,72 @@ _Static_assert(sizeof(((struct lota_verity_digest_key *)0)->digest) ==
 	       "fs-verity map key digest must support 64-byte SHA-512");
 
 /*
+ * What bpf_get_fsverity_digest() writes into the caller's buffer.
+ *
+ * The kernel fills a struct fsverity_digest -- a two-field header,
+ * then the digest bytes -- and reports success as 0, not as a length.
+ * Both halves matter to a caller building a map key: the digest starts after
+ * the header, and its size is read out of the header.
+ *
+ * Declared here so the same parse serves the enforcement object and the tests
+ * that hold it to this layout.
+ */
+struct lota_fsverity_digest_hdr {
+	__u16 digest_algorithm;
+	__u16 digest_size;
+};
+
+#define LOTA_FSVERITY_DIGEST_HDR_SIZE 4u
+#define LOTA_FSVERITY_DIGEST_BUF_SIZE \
+	(LOTA_FSVERITY_DIGEST_HDR_SIZE + LOTA_VERITY_DIGEST_MAX_SIZE)
+
+_Static_assert(sizeof(struct lota_fsverity_digest_hdr) ==
+		       LOTA_FSVERITY_DIGEST_HDR_SIZE,
+	       "fs-verity digest header must stay four bytes");
+
+/*
+ * Build an allowlist key from that buffer.
+ *
+ * @buf must be at least LOTA_FSVERITY_DIGEST_BUF_SIZE wide and aligned for
+ * the header, which a BPF map value and a userspace object both are.
+ * Returns 0 on success, -1 when the reported size is not one policy enforces.
+ *
+ * The tail past len is zeroed so a SHA-256 key and a SHA-512 key hash as one
+ * map key, which is the invariant the struct comment above states.
+ */
+static inline int
+lota_verity_key_from_digest_buf(const void *buf,
+				struct lota_verity_digest_key *out)
+{
+	const struct lota_fsverity_digest_hdr *hdr = buf;
+	const __u8 *digest = (const __u8 *)buf + LOTA_FSVERITY_DIGEST_HDR_SIZE;
+	__u16 size;
+
+	if (!buf || !out)
+		return -1;
+
+	size = hdr->digest_size;
+	if (!LOTA_VERITY_DIGEST_LEN_SUPPORTED(size))
+		return -1;
+
+	__builtin_memset(out, 0, sizeof(*out));
+
+	/*
+	 * Constant-size copies: a variable length here is what the BPF
+	 * verifier refuses, and the two supported sizes are the whole set.
+	 */
+	if (size == LOTA_VERITY_DIGEST_SHA256_SIZE)
+		__builtin_memcpy(out->digest, digest,
+				 LOTA_VERITY_DIGEST_SHA256_SIZE);
+	else
+		__builtin_memcpy(out->digest, digest,
+				 LOTA_VERITY_DIGEST_SHA512_SIZE);
+
+	out->len = size;
+	return 0;
+}
+
+/*
  * Execution event - sent from eBPF to user-space via ring buffer.
  * Packed to ensure consistent layout across architectures.
  *
