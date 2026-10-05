@@ -152,7 +152,7 @@ int export_policy(int mode)
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
-			strerror(-ret));
+			attest_failure_reason(ret));
 		return ret;
 	}
 
@@ -160,7 +160,7 @@ int export_policy(int mode)
 	ret = self_measure(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Warning: Self-measurement failed: %s\n",
-			strerror(-ret));
+			attest_failure_reason(ret));
 		fprintf(stderr, "PCR 14 may not contain agent measurement.\n");
 	}
 
@@ -669,7 +669,7 @@ static int attest_once(const char *server, int port, const char *ca_cert,
 				fprintf(stderr,
 					"Warning: Failed to read TPM event "
 					"log: %s\n",
-					strerror(-ret));
+					attest_failure_reason(ret));
 			event_log_size = 0;
 		} else if (verbose) {
 			printf("TPM event log read (%zu bytes)\n",
@@ -748,7 +748,7 @@ cleanup:
 	 */
 	if (ret < 0 && stage != ATTEST_STAGE_COUNT)
 		lota_err("Attestation round failed at %s: %s",
-			 attest_stage_str(stage), strerror(-ret));
+			 attest_stage_str(stage), attest_failure_reason(ret));
 	OPENSSL_cleanse(&challenge, sizeof(challenge));
 	OPENSSL_cleanse(&result, sizeof(result));
 	OPENSSL_cleanse(&report, sizeof(report));

@@ -272,25 +272,6 @@ static int tss2_rc_to_errno(TSS2_RC rc)
 	}
 }
 
-const char *tpm_strerror(int err)
-{
-	int code = err < 0 ? -err : err;
-	switch (code) {
-	case 0:
-		return "success";
-	case LOTA_ERR_TPM_LOCKED:
-		return "TPM dictionary-attack lockout engaged";
-	case LOTA_ERR_TPM_AUTH_FAIL:
-		return "TPM authorization failed (increments DA lockout "
-		       "counter)";
-	case LOTA_ERR_TPM_POLICY_FAIL:
-		return "TPM policy not satisfied (host not in the sealed "
-		       "boot/PCR state)";
-	default:
-		return strerror(code);
-	}
-}
-
 static unsigned tpm_backoff_ms(unsigned attempt)
 {
 	unsigned ms = TPM_RETRY_BASE_MS << (attempt > 7 ? 7 : attempt);

@@ -13,10 +13,12 @@
  * Copyright (C) 2026 Szymon Wilczek
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../src/agent/attest.h"
+#include "../src/agent/tpm.h"
 
 static int g_failures;
 
@@ -89,12 +91,61 @@ static void test_unknown_stage_is_printable(void)
 	      "a stage past the table is still printable");
 }
 
+/*
+ * A round that failed on the TPM has to say so.
+ *
+ * tpm.h defines LOTA-private codes above the POSIX range precisely so a lockout
+ * is not reported as a number, and says in its own comment that callers should
+ * render them through tpm_strerror() instead of "Unknown error 4097".
+ * The continuous loop logs one line per failed round, so that line is the whole
+ * of what an unattended host reports.
+ */
+static void test_tpm_codes_are_named(void)
+{
+	const char *locked = attest_failure_reason(-LOTA_ERR_TPM_LOCKED);
+	const char *authfail = attest_failure_reason(-LOTA_ERR_TPM_AUTH_FAIL);
+
+	CHECK(locked && strstr(locked, "lockout"),
+	      "a dictionary-attack lockout is named, not numbered");
+	/*
+	 * Stated against the C library:
+	 * strerror() is localised, so "Unknown error 4097" is only what
+	 * an operator sees in one locale.
+	 * What must hold everywhere is that a LOTA-private code is not left
+	 * to strerror() at all.
+	 */
+	CHECK(locked && strcmp(locked, strerror(LOTA_ERR_TPM_LOCKED)) != 0,
+	      "the lockout reason is not whatever strerror makes of 4097");
+
+	/*
+	 * The one that precedes a lockout matters more:
+	 * it is the warning a responder acts on before the platform locks out
+	 * at all.
+	 */
+	CHECK(authfail && strstr(authfail, "DA lockout"),
+	      "an authorization failure names its DA-counter implication");
+}
+
+/*
+ * Ordinary errno values still render as themselves:
+ * the round fails on sockets and files far more often than on the TPM.
+ */
+static void test_posix_errors_still_render(void)
+{
+	const char *eio = attest_failure_reason(-EIO);
+
+	CHECK(eio && strcmp(eio, strerror(EIO)) == 0,
+	      "a POSIX errno renders as the C library renders it");
+}
+
 int main(void)
 {
 	printf("=== attestation stage tests ===\n");
 	test_every_stage_is_named();
 	test_stage_names_are_distinct();
 	test_unknown_stage_is_printable();
+	test_tpm_codes_are_named();
+	test_posix_errors_still_render();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

@@ -11,6 +11,7 @@
  */
 
 #include "attest.h"
+#include "tpm.h"
 
 static const char *const stage_names[ATTEST_STAGE_COUNT] = {
 	[ATTEST_STAGE_TLS_SETUP] = "TLS setup",
@@ -28,4 +29,10 @@ const char *attest_stage_str(enum attest_stage stage)
 	if (stage < 0 || stage >= ATTEST_STAGE_COUNT)
 		return "an unnamed stage";
 	return stage_names[stage] ? stage_names[stage] : "an unnamed stage";
+}
+
+/* tpm_strerror() lives in tpm_errno.c, which links without a TPM */
+const char *attest_failure_reason(int ret)
+{
+	return tpm_strerror(ret);
 }
