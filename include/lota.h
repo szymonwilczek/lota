@@ -75,6 +75,7 @@ enum lota_event_type {
 	LOTA_EVENT_SETUID, /* Privilege escalation (setuid) */
 	LOTA_EVENT_ANON_EXEC, /* Anonymous executable mmap (JIT, shellcode) */
 	LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
+	LOTA_EVENT_KILL, /* signal delivery to protected task observed */
 };
 
 /*
@@ -236,6 +237,56 @@ static inline int lota_ptrace_denied(unsigned int ptrace_mode,
 }
 
 /*
+ * SIGHUP from the signal numbers every Linux architecture LOTA builds for shares.
+ *
+ * Mirrored for the same reason as the ptrace flag above:
+ * the enforcement object builds against vmlinux.h, which carries types
+ * and not the uapi signal numbers.
+ */
+#define LOTA_SIG_HUP 1
+
+/*
+ * The signal-delivery verdict, stated here so the enforcement object
+ * and the tests answer it the same way.
+ * Returns 1 to refuse the signal, 0 to deliver it.
+ *
+ * The caller has already settled who the sender is: a task signalling itself,
+ * the agent, a task holding CAP_SYS_ADMIN over BPF, and a kernel-generated
+ * signal all reach delivery without asking this.
+ *
+ * Three rules, in the order they are asked:
+ *
+ *   - only enforce refuses anything; monitor and maintenance deliver every
+ *     signal, so an operator evaluating LOTA can stop the agent without
+ *     spending the boot commitment;
+ *   - a target nobody protects is nobody's business here;
+ *   - a probe (sig 0) and the agent's own reload signal are delivered,
+ *     since neither can end the target.
+ *
+ * Everything else reaching a protected target or the agent itself is refused,
+ * so in enforce a local root cannot kill the agent and swap a tampered binary
+ * in before the next attestation.
+ */
+static inline int lota_signal_denied(int sig, unsigned int lota_mode,
+				     int target_is_agent,
+				     int target_is_protected)
+{
+	if (lota_mode != LOTA_MODE_ENFORCE)
+		return 0;
+
+	if (!target_is_agent && !target_is_protected)
+		return 0;
+
+	if (sig == 0)
+		return 0;
+
+	if (target_is_agent && sig == LOTA_SIG_HUP)
+		return 0;
+
+	return 1;
+}
+
+/*
  * fs-verity digest sizes LOTA policy enforcement accepts.
  *
  * SHA-256 is what fsverity-utils, the RPM fs-verity plugin and composefs produce
@@ -346,7 +397,7 @@ lota_verity_key_from_digest_buf(const void *buf,
  *   MODULE_LOAD:    pid, comm, filename
  *   MMAP_EXEC:      pid, uid, comm, filename, target_pid (=0)
  *   PTRACE:         pid, uid, comm, target_pid
- *   KILL_BLOCKED:   pid, uid, comm, target_pid
+ *   KILL:           pid, uid, comm, target_pid
  *   SETUID:         pid, uid, comm, target_uid (new uid)
  *   *_BLOCKED:      same as base type
  */

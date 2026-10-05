@@ -119,6 +119,22 @@ prevents a local-root attacker from killing the agent out of band, dropping the
 BPF coverage, and swapping a tampered binary into place before the next
 attestation.
 
+**This applies in enforce mode only.** The hook reads the enforcement mode the
+way every other gate does: in ``monitor`` and ``maintenance`` the signal is
+reported and delivered, so an agent an operator is evaluating stops with
+``kill``, ``timeout`` or whatever supervisor started it. In ``enforce`` the
+refusal stands and the way to stop the agent is ``lota-agent --shutdown``.
+Either way the signal is logged with the sender's pid, uid and command, so a
+supervisor that cannot stop the agent is diagnosable from the journal.
+
+What the boot commitment costs does not change with the mode, because it is a
+property of how the agent stopped. A delivered ``SIGTERM`` runs the same clean
+shutdown as ``--shutdown``: PCR 14 is poisoned, and the next agent start in that
+boot says the host is paused. A ``SIGKILL`` is a dirty stop, leaves PCR 14
+holding the boot commitment, and a new agent starts in the same boot -- which is
+what makes an evaluation loop practical, and why the dirty-shutdown case is
+covered by fs-verity on the agent binary instead.
+
 The trade-off is that ``systemctl restart lota-agent`` does **not** bring the
 host back the way it does for other units. Stopping works: ``ExecStop`` is
 ``/usr/bin/lota-agent --shutdown``, which sends a privileged IPC command that

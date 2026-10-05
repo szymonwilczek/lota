@@ -222,6 +222,17 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    A CLI --mode that weakens the configured\n");
 	printf("                    'enforce' mode requires:\n");
 	printf("                      --insecure-allow-mode-downgrade\n");
+	printf("                    An enforce agent refuses every signal that\n");
+	printf("                    could end it, including from root, so\n");
+	printf("                    --shutdown is the way to stop one -- and it\n");
+	printf("                    spends the PCR 14 boot commitment, which\n");
+	printf("                    means a reboot before the host attests\n");
+	printf("                    again. In monitor and maintenance the agent\n");
+	printf("                    reports the signal and takes it -- but a\n");
+	printf("                    delivered SIGTERM is the same clean stop as\n");
+	printf("                    --shutdown and spends PCR 14 too, while\n");
+	printf("                    SIGKILL leaves it and another agent may\n");
+	printf("                    start in the same boot.\n");
 	printf("  --insecure-allow-mode-downgrade\n");
 	printf("                    Acknowledge that --mode weakens cfg.mode\n"
 	       "                    'enforce' to monitor/maintenance.\n");

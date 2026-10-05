@@ -50,14 +50,6 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM 1
 #endif
 
-/* signal numbers */
-#ifndef SIGTERM
-#define SIGTERM 15
-#endif
-#ifndef SIGKILL
-#define SIGKILL 9
-#endif
-
 #ifndef FMODE_WRITE
 #define FMODE_WRITE ((fmode_t)(1U << 1))
 #endif
@@ -65,13 +57,6 @@ char LICENSE[] SEC("license") = "GPL";
 #ifndef BINPRM_FLAGS_PATH_INACCESSIBLE
 #define BINPRM_FLAGS_PATH_INACCESSIBLE (1U << 2)
 #endif
-#ifndef SIGSTOP
-#define SIGSTOP 19
-#endif
-#ifndef SIGHUP
-#define SIGHUP 1
-#endif
-
 /* siginfo.si_code value for kernel-generated signals */
 #ifndef SI_KERNEL
 #define SI_KERNEL 0x80
@@ -1763,7 +1748,9 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	u32 lota_mode;
 	int target_is_agent;
 	int target_is_protected = 0;
-	struct lota_exec_event *event;
+	int blocked;
+	int emit_event;
+	struct lota_exec_event *event = NULL;
 
 	(void)cred;
 
@@ -1772,7 +1759,7 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 
 	lota_mode = get_mode();
 	target_is_agent = is_lota_agent_task(p);
-	if (!target_is_agent && lota_mode != LOTA_MODE_MAINTENANCE)
+	if (!target_is_agent)
 		target_is_protected = is_protected_task(p);
 
 	if (!target_is_agent && !target_is_protected)
@@ -1792,19 +1779,6 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 	if (is_lota_agent_task(current) || is_bpf_admin_task())
 		return 0;
 
-	/*
-	 * Allow only safe signals from foreign tasks:
-	 * - sig=0: existence/permission probe
-	 * - SIGHUP: configuration reload trigger (agent only)
-	 *
-	 * All other signals are blocked for protected targets to prevent forced
-	 * termination or crash-signaling from local privileged attackers.
-	 */
-	if (sig == 0)
-		return 0;
-	if (target_is_agent && sig == SIGHUP)
-		return 0;
-
 	/* allow kernel-generated signals */
 	if (!info)
 		return 0;
@@ -1814,12 +1788,30 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 			return 0;
 	}
 
-	/* audit trail for blocked kill attempts */
-	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+	/*
+	 * Which signals a protected target takes from a foreign task is stated
+	 * in include/lota.h, so this hook and the tests answer it with one
+	 * function: only enforce refuses, a probe and the agent's own reload
+	 * signal are delivered, and everything that could end the target is
+	 * refused for the agent and the protected set.
+	 */
+	blocked = lota_signal_denied(sig, lota_mode, target_is_agent,
+				     target_is_protected);
+
+	/*
+	 * The signal is reported whether or not it was refused.
+	 * Outside enforce that report is the whole of the hook's job,
+	 * and a refusal that names the sender is what makes a supervisor
+	 * that cannot stop the agent diagnosable.
+	 */
+	emit_event = should_emit_event(lota_mode, blocked);
+	if (emit_event)
+		event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (event) {
 		__builtin_memset(event, 0, sizeof(*event));
 		event->timestamp_ns = bpf_ktime_get_ns();
-		event->event_type = LOTA_EVENT_KILL_BLOCKED;
+		event->event_type = blocked ? LOTA_EVENT_KILL_BLOCKED :
+					      LOTA_EVENT_KILL;
 		event->tgid = sender_tgid;
 		event->pid = (u32)(bpf_get_current_pid_tgid() & 0xFFFFFFFF);
 		event->uid = (u32)(bpf_get_current_uid_gid() & 0xFFFFFFFF);
@@ -1830,11 +1822,14 @@ int BPF_PROG(lota_task_kill, struct task_struct *p, struct kernel_siginfo *info,
 
 		bpf_ringbuf_submit(event, 0);
 		inc_stat(STAT_EVENTS_SENT);
-	} else {
+	} else if (emit_event) {
 		inc_stat(STAT_RINGBUF_DROPS);
 	}
 
-	return -EPERM;
+	if (blocked)
+		return -EPERM;
+
+	return 0;
 }
 
 /* ======================================================================
