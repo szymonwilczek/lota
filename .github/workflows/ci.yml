@@ -337,6 +337,7 @@ jobs:
             scripts/lota-dev-bringup.sh \
             scripts/check-go-coverage.sh \
             scripts/check-license-boundary.sh \
+            scripts/check-doc-diagnostics.sh \
             scripts/check-abi.sh \
             scripts/check-package-manifests.sh \
             examples/demo/setup.sh \
@@ -374,6 +375,18 @@ jobs:
 
       - name: Check the license boundary
         run: make check-license-boundary
+
+  doc-diagnostics:
+    name: doc-diagnostics
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the documentation quotes messages the tree prints
+        run: make check-doc-diagnostics
 
   yamllint:
     name: yamllint
