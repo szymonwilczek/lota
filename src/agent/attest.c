@@ -869,7 +869,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 		if (ret < 0) {
 			fprintf(stderr,
 				"Failed to bind the publisher profile: %s\n",
-				strerror(-ret));
+				tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			net_cleanup();
 			return 1;
@@ -1097,7 +1097,7 @@ static int bind_target(struct attest_target *t)
 	ret = tpm_bind_profile(&g_agent.tpm_ctx, &t->paths);
 	if (ret < 0) {
 		lota_err("Cannot bind the publisher profile for %s: %s",
-			 t->label, strerror(-ret));
+			 t->label, tpm_strerror(ret));
 		return ret;
 	}
 
@@ -1667,7 +1667,7 @@ static int continuous_attest_run(const struct lota_config *cfg,
 		ret = tpm_bind_profile(&g_agent.tpm_ctx, &targets[0].paths);
 		if (ret < 0) {
 			lota_err("Failed to bind the publisher profile: %s",
-				 strerror(-ret));
+				 tpm_strerror(ret));
 			tpm_cleanup(&g_agent.tpm_ctx);
 			net_cleanup();
 			return 1;

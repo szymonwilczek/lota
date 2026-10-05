@@ -163,7 +163,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		fprintf(stderr,
 			"EK certificate unavailable; the CA cannot anchor "
 			"this TPM: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 
@@ -188,7 +188,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 	ret = tpm_get_aik_tpmt_public(tpm, aik_pub, sizeof(aik_pub), &aik_len);
 	if (ret < 0) {
 		fprintf(stderr, "AIK public area unavailable: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 
@@ -267,7 +267,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 				      sizeof(secret), &secret_len);
 	if (ret < 0) {
 		fprintf(stderr, "Credential activation failed: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 
@@ -278,7 +278,7 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		ret = (int)blen;
 		fprintf(stderr,
 			"Failed to encode the credential response: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		goto out;
 	}
 	ret = send_frame(&net, body, (size_t)blen);
@@ -504,7 +504,7 @@ static int run_enrollment(const struct profile_paths *paths, const char *server,
 				"No TPM persistent handle left for another "
 				"publisher: %s\n" :
 				"Failed to bind the publisher profile: %s\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 		tpm_cleanup(&g_agent.tpm_ctx);
 		net_cleanup();
 		return ret;

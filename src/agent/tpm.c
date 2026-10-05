@@ -2490,7 +2490,7 @@ static void save_commitment_snapshot(struct tpm_context *ctx,
 		fprintf(stderr,
 			"PCR14 boot-commitment: clock-state save failed (%s); "
 			"the next run will lose tamper attribution\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 }
 
 enum tpm_pcr14_state tpm_classify_pcr14(const struct tpm_pcr14_observation *obs)
@@ -2698,7 +2698,7 @@ int tpm_extend_boot_commitment(struct tpm_context *ctx,
 		fprintf(stderr,
 			"PCR14 boot-commitment: clock-state load failed (%s); "
 			"continuing without attribution\n",
-			strerror(-ret));
+			tpm_strerror(ret));
 
 	struct tpm_pcr14_observation obs = {
 		.current = current_pcr14,

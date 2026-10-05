@@ -1133,7 +1133,7 @@ static void test_lockout_flag_lifecycle(void)
  */
 static void test_tpm_strerror_maps_lota_private(void)
 {
-	TEST("tpm_strerror covers LOTA_ERR_TPM_LOCKED + POSIX fallback");
+	TEST("tpm_strerror names every LOTA code, POSIX falls through");
 
 	const char *neg = tpm_strerror(-LOTA_ERR_TPM_LOCKED);
 	const char *pos = tpm_strerror(LOTA_ERR_TPM_LOCKED);
@@ -1150,6 +1150,22 @@ static void test_tpm_strerror_maps_lota_private(void)
 	if (!auth || strstr(auth, "DA") == NULL) {
 		FAIL("AUTH_FAIL description must call out the DA-counter "
 		     "implication");
+		return;
+	}
+
+	/*
+	 * The code an operator meets when a sealed secret will not open:
+	 * the host is not in the state the blob was sealed against.
+	 * It says which state, because "policy not satisfied" alone sends
+	 * a reader to the TPM specification.
+	 */
+	const char *policy = tpm_strerror(-LOTA_ERR_TPM_POLICY_FAIL);
+	if (!policy || strstr(policy, "PCR") == NULL) {
+		FAIL("POLICY_FAIL description must name the boot/PCR state");
+		return;
+	}
+	if (strcmp(policy, strerror(LOTA_ERR_TPM_POLICY_FAIL)) == 0) {
+		FAIL("POLICY_FAIL is left to strerror");
 		return;
 	}
 
