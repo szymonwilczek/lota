@@ -41,6 +41,10 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 #   strict_mmap, block_ptrace, block_anon_exec   -- on by default.
 #   strict_exec, strict_modules                  -- off by default.
 #
+# block_ptrace refuses a ptrace attach on any task.
+# Reading another process's /proc is not an attach and is left to the kernel;
+# a process that opted into protection refuses both.
+#
 # strict_exec and strict_modules require at least one allow_verity entry
 # below. Enabling either without populating allow_verity makes the agent
 # refuse to start. A fresh install has no fs-verity allowlist by design,
