@@ -1707,7 +1707,7 @@ func TestForceReanchor_ClearsBaselineAndAudits(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/clients/"+clientID+"/reanchor",
-		strings.NewReader(`{"actor":"ops@example","note":"planned firmware update"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"planned firmware update","note":"board swap"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1752,7 +1752,7 @@ func TestForceReanchor_UnknownClient(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/v1/clients/no-such-client/reanchor",
-		strings.NewReader(`{"actor":"ops@example"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"admin"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1768,7 +1768,7 @@ func TestForceReanchor_RequiresAdminKey(t *testing.T) {
 	post := func(token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost,
 			"/api/v1/clients/some-client/reanchor",
-			strings.NewReader(`{"actor":"ops@example"}`))
+			strings.NewReader(`{"actor":"ops@example","reason":"admin"}`))
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -1796,7 +1796,7 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	clientID := attestTestClient(t, v, "delete-client")
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
-		strings.NewReader(`{"actor":"ops@example","note":"decommissioned"}`))
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned","note":"returned to vendor"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1815,7 +1815,8 @@ func TestDeleteClient_RemovesTrustState(t *testing.T) {
 	}
 
 	// second delete: no trust state left
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
@@ -1839,7 +1840,8 @@ func TestDeleteClient_RevocationSurvives(t *testing.T) {
 		t.Fatalf("Revoke failed: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/clients/"+clientID,
+		strings.NewReader(`{"actor":"ops@example","reason":"decommissioned"}`))
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)

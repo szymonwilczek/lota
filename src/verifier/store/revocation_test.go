@@ -58,7 +58,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	})
 
 	t.Run(label+"/Unrevoke", func(t *testing.T) {
-		err := s.Unrevoke("client-1")
+		err := s.Unrevoke("client-1", "appeal upheld", "test-operator", "")
 		if err != nil {
 			t.Fatalf("Unrevoke failed: %v", err)
 		}
@@ -70,7 +70,7 @@ func testRevocationStore(t *testing.T, s RevocationStore, label string) {
 	})
 
 	t.Run(label+"/UnrevokeNotRevoked", func(t *testing.T) {
-		err := s.Unrevoke("never-revoked")
+		err := s.Unrevoke("never-revoked", "appeal upheld", "test-operator", "")
 		if err != ErrNotRevoked {
 			t.Fatalf("Expected ErrNotRevoked, got %v", err)
 		}
@@ -206,7 +206,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	})
 
 	t.Run(label+"/UnbanHardware", func(t *testing.T) {
-		err := s.UnbanHardware("default", hwid1)
+		err := s.UnbanHardware("default", hwid1, "appeal upheld", "test-operator", "")
 		if err != nil {
 			t.Fatalf("UnbanHardware failed: %v", err)
 		}
@@ -218,7 +218,7 @@ func testBanStore(t *testing.T, s BanStore, label string) {
 	})
 
 	t.Run(label+"/UnbanNotBanned", func(t *testing.T) {
-		err := s.UnbanHardware("default", [32]byte{0xDE, 0xAD})
+		err := s.UnbanHardware("default", [32]byte{0xDE, 0xAD}, "appeal upheld", "test-operator", "")
 		if err != ErrNotBanned {
 			t.Fatalf("Expected ErrNotBanned, got %v", err)
 		}
@@ -640,7 +640,7 @@ func testRevocationTenant(t *testing.T, s RevocationStore, label string) {
 			t.Error("ListRevocations lost the tenant")
 		}
 
-		if err := s.Unrevoke("tenant-rev-client"); err != nil {
+		if err := s.Unrevoke("tenant-rev-client", "appeal upheld", "test-operator", ""); err != nil {
 			t.Fatalf("cleanup unrevoke: %v", err)
 		}
 	})
@@ -679,7 +679,7 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 	})
 
 	t.Run(label+"/UnbanLeavesOtherTenants", func(t *testing.T) {
-		if err := s.UnbanHardware("game-a", hwid); err != nil {
+		if err := s.UnbanHardware("game-a", hwid, "appeal upheld", "test-operator", ""); err != nil {
 			t.Fatalf("UnbanHardware: %v", err)
 		}
 		if _, banned := s.IsBanned("game-a", hwid); banned {
@@ -688,7 +688,7 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 		if _, banned := s.IsBanned("game-b", hwid); !banned {
 			t.Fatal("unban in game-a erased the game-b ban")
 		}
-		if err := s.UnbanHardware("game-b", hwid); err != nil {
+		if err := s.UnbanHardware("game-b", hwid, "appeal upheld", "test-operator", ""); err != nil {
 			t.Fatalf("cleanup unban: %v", err)
 		}
 	})
@@ -708,7 +708,7 @@ func testBanStorePerTenant(t *testing.T, s BanStore, label string) {
 		}
 		defer func() {
 			for _, tenant := range tenants {
-				if err := s.UnbanHardware(tenant, pageHW); err != nil {
+				if err := s.UnbanHardware(tenant, pageHW, "appeal upheld", "test-operator", ""); err != nil {
 					t.Errorf("cleanup unban(%s): %v", tenant, err)
 				}
 			}
@@ -775,7 +775,7 @@ func TestAuditLogTenant(t *testing.T) {
 	if err := rev.Revoke("game-x", "audit-tenant-client", RevocationAdmin, "admin", ""); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if err := rev.Unrevoke("audit-tenant-client"); err != nil {
+	if err := rev.Unrevoke("audit-tenant-client", "appeal upheld", "test-operator", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
 	entries := audit.Query(2)

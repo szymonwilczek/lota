@@ -59,32 +59,46 @@ Commands
 
    lota-fleet [global flags] <command> [command flags] [args]
 
-===================================================  =====================
-Command                                              API tier
-===================================================  =====================
-``health``                                           none
-``stats``                                            reader
-``devices list [-limit N] [-offset N]``              reader
-``devices show <client-id>``                         reader
-``revoke <client-id> -reason R -actor A [-note S]``  admin
-``unrevoke <client-id>``                             admin
-``revocations``                                      reader
-``ban <hardware-id> -reason R -actor A [-note S]``   admin
-``unban <hardware-id>``                              admin
-``bans [-limit N] [-next-id CURSOR]``                reader
-``reanchor <client-id> -actor A [-note S]``          admin
-``delete <client-id> [-actor A] [-note S]``          admin
-``reanchor-review list``                             reader
-``reanchor-review ack <client-id>``                  admin
-``audit [-limit N]``                                 reader
-``attests [-limit N]``                               reader
-``session validate <token> [-consume]``              reader
-===================================================  =====================
+=====================================================  ========
+Command                                                API tier
+=====================================================  ========
+``health``                                             none
+``stats``                                              reader
+``devices list [-limit N] [-offset N]``                reader
+``devices show <client-id>``                           reader
+``revoke <client-id> -reason R -actor A [-note S]``    admin
+``unrevoke <client-id> -reason R -actor A [-note S]``  admin
+``revocations``                                        reader
+``ban <hardware-id> -reason R -actor A [-note S]``     admin
+``unban <hardware-id> -reason R -actor A [-note S]``   admin
+``bans [-limit N] [-next-id CURSOR]``                  reader
+``reanchor <client-id> -reason R -actor A [-note S]``  admin
+``delete <client-id> -reason R -actor A [-note S]``    admin
+``reanchor-review list``                               reader
+``reanchor-review ack <client-id>``                    admin
+``audit [-limit N]``                                   reader
+``attests [-limit N]``                                 reader
+``session validate <token> [-consume]``                reader
+=====================================================  ========
 
-``-reason`` must be one of the server's revocation reasons: ``cheating``,
-``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is the
-administrator identity recorded in the audit log and is required for every
-mutating action except ``delete``, where it is optional audit metadata.
+``-reason`` on ``revoke`` must be one of the server's revocation reasons:
+``cheating``, ``compromised``, ``hardware_change`` or ``admin``. ``-actor`` is
+the administrator identity recorded in the audit log.
+
+**Every command that changes a client's trust state requires ``-actor`` and
+``-reason``**, and the audit row carries both. There is one rule rather than
+one per verb.
+
+Lifting a restriction is attributed on the same terms as imposing one:
+restoring a machine that was banned for cheating is the act a fleet most wants
+signed -- banning one is the reversible, conservative direction -- so a trail
+that names who imposed a restriction must also name who lifted it. And
+``delete``, which removes a client's trust state entirely, is the last action
+to leave unattributed.
+
+Only ``revoke`` takes a fixed vocabulary. Everywhere else ``-reason`` is free
+text, because "why was this machine let back in" and "why was this one
+removed" have no enumerable answer.
 
 Global ``--json`` prints the raw API response instead of the human
 rendering, for scripting against the full field set.
@@ -143,12 +157,14 @@ stays on the verifier -- the host is told the state, not the case for it.
 Re-baseline a host after a planned firmware update::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       reanchor host-0142 -actor alice@ops -note "BIOS 2.4 rollout"
+       reanchor host-0142 -reason "BIOS 2.4 rollout" -actor alice@ops \
+             -note "fleet-wide firmware update"
 
 Decommission a host::
 
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       delete host-0142 -actor alice@ops -note "decommissioned"
+       delete host-0142 -reason decommissioned -actor alice@ops \
+             -note "returned to vendor"
 
 Check the fleet from a script::
 
@@ -168,7 +184,8 @@ the ban's identity::
    lota-fleet --key-file /etc/lota/fleet-admin.key \
        ban <hardware-id> -tenant acme -reason cheating -actor alice@ops
    lota-fleet --key-file /etc/lota/fleet-admin.key \
-       unban <hardware-id> -tenant acme
+       unban <hardware-id> -tenant acme -reason "appeal upheld" \
+             -actor alice@ops
 
 The listing commands (``revocations``, ``bans``, ``audit``, ``attests``) print
 a ``TENANT`` column, and ``devices show``, ``session validate`` and ``stats``

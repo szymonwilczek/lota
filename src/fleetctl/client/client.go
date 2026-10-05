@@ -312,9 +312,10 @@ func (c *Client) Revoke(clientID, reason, actor, note string) error {
 }
 
 // Unrevoke lifts a client's revocation.
-func (c *Client) Unrevoke(clientID string) error {
+func (c *Client) Unrevoke(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID)+"/revoke",
-		nil, nil, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // Revocation is one entry of the GET /api/v1/revocations listing.
@@ -350,13 +351,14 @@ func (c *Client) Ban(hardwareID, tenant, reason, actor, note string) error {
 // Unban lifts a hardware ban within a tenant.
 // Empty tenant defaults to the server's default tenant;
 // Tenant selects which (tenant, hardware) ban row is lifted.
-func (c *Client) Unban(hardwareID, tenant string) error {
+func (c *Client) Unban(hardwareID, tenant, reason, actor, note string) error {
 	q := url.Values{}
 	if tenant != "" {
 		q.Set("tenant", tenant)
 	}
 	return c.do(http.MethodDelete, "/api/v1/bans/"+url.PathEscape(hardwareID),
-		q, nil, nil, http.StatusOK)
+		q, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // Ban is one entry of the GET /api/v1/bans listing.
@@ -400,21 +402,19 @@ func (c *Client) ListBans(limit int, nextID string) (*BanPage, error) {
 
 // Reanchor drops a client's stored baselines so its next attestation
 // re-establishes trust (the operator-forced re-baseline).
-func (c *Client) Reanchor(clientID, actor, note string) error {
+func (c *Client) Reanchor(clientID, reason, actor, note string) error {
 	return c.do(http.MethodPost, "/api/v1/clients/"+url.PathEscape(clientID)+"/reanchor",
-		nil, actionRequest{Actor: actor, Note: note}, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // DeleteClient removes a client's registration and baselines, forcing fresh enrollment.
 // Revocations and hardware bans survive.
 // Actor and note are optional audit metadata.
-func (c *Client) DeleteClient(clientID, actor, note string) error {
-	var body any
-	if actor != "" || note != "" {
-		body = actionRequest{Actor: actor, Note: note}
-	}
+func (c *Client) DeleteClient(clientID, reason, actor, note string) error {
 	return c.do(http.MethodDelete, "/api/v1/clients/"+url.PathEscape(clientID),
-		nil, body, nil, http.StatusOK)
+		nil, actionRequest{Reason: reason, Actor: actor, Note: note}, nil,
+		http.StatusOK)
 }
 
 // ReanchorReviewList fetches the clients that re-anchored on the

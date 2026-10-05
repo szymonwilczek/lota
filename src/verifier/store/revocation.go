@@ -83,7 +83,11 @@ type RevocationStore interface {
 
 	// unrevoke removes the revocation for a client
 	// returns ErrNotRevoked if the client is not currently revoked
-	Unrevoke(clientID string) error
+	//
+	// reason and actor are recorded in the audit trail on the same terms as
+	// Revoke's: restoring a client's access is the act a fleet most wants
+	// signed, so the row that lifts a revocation names who did it and why.
+	Unrevoke(clientID, reason, actor, note string) error
 
 	// returns all active revocations
 	ListRevocations() []RevocationEntry
@@ -146,7 +150,7 @@ func (s *MemoryRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bo
 	return entry, true
 }
 
-func (s *MemoryRevocationStore) Unrevoke(clientID string) error {
+func (s *MemoryRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -158,7 +162,7 @@ func (s *MemoryRevocationStore) Unrevoke(clientID string) error {
 	delete(s.revocations, clientID)
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(entry.Tenant, "unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(entry.Tenant, "unrevoke", clientID, reason, actor, note); err != nil {
 			return err
 		}
 	}

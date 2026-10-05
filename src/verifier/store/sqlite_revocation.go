@@ -81,7 +81,7 @@ func (s *SQLiteRevocationStore) IsRevoked(clientID string) (*RevocationEntry, bo
 	return &entry, true
 }
 
-func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
+func (s *SQLiteRevocationStore) Unrevoke(clientID, reason, actor, note string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -108,7 +108,7 @@ func (s *SQLiteRevocationStore) Unrevoke(clientID string) error {
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unrevoke", clientID, "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unrevoke", clientID, reason, actor, note); err != nil {
 			return err
 		}
 	}
@@ -201,7 +201,7 @@ func (s *SQLiteBanStore) IsBanned(tenant string, hardwareID [32]byte) (*BanEntry
 	return &entry, true
 }
 
-func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error {
+func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte, reason, actor, note string) error {
 	result, err := s.db.Exec("DELETE FROM hardware_bans WHERE tenant = ? AND hardware_id = ?",
 		tenant, hardwareID[:])
 	if err != nil {
@@ -217,7 +217,7 @@ func (s *SQLiteBanStore) UnbanHardware(tenant string, hardwareID [32]byte) error
 	}
 
 	if s.auditLog != nil {
-		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), "", "", ""); err != nil {
+		if err := s.auditLog.Log(tenant, "unban", FormatHardwareID(hardwareID), reason, actor, note); err != nil {
 			return err
 		}
 	}

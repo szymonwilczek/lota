@@ -215,10 +215,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if lr := rev.ListRevocations(); len(lr) != 1 || lr[0].ClientID != "c1" {
 		t.Fatalf("ListRevocations = %+v", lr)
 	}
-	if err := rev.Unrevoke("c1"); err != nil {
+	if err := rev.Unrevoke("c1", "appeal upheld", "test-operator", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
-	if err := rev.Unrevoke("c1"); err != ErrNotRevoked {
+	if err := rev.Unrevoke("c1", "appeal upheld", "test-operator", ""); err != ErrNotRevoked {
 		t.Fatalf("double Unrevoke: got %v want ErrNotRevoked", err)
 	}
 
@@ -246,10 +246,10 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if lb := ban.ListBansPage(1, 0); len(lb) != 1 {
 		t.Fatalf("ListBansPage = %+v", lb)
 	}
-	if err := ban.UnbanHardware("default", hw); err != nil {
+	if err := ban.UnbanHardware("default", hw, "appeal upheld", "test-operator", ""); err != nil {
 		t.Fatalf("UnbanHardware: %v", err)
 	}
-	if err := ban.UnbanHardware("default", hw); err != ErrNotBanned {
+	if err := ban.UnbanHardware("default", hw, "appeal upheld", "test-operator", ""); err != ErrNotBanned {
 		t.Fatalf("double unban: got %v want ErrNotBanned", err)
 	}
 
@@ -266,7 +266,7 @@ func TestPostgresRevocationBanAudit(t *testing.T) {
 	if err := rev.Revoke("game-x", "audit-tenant-c", RevocationAdmin, "op", ""); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if err := rev.Unrevoke("audit-tenant-c"); err != nil {
+	if err := rev.Unrevoke("audit-tenant-c", "appeal upheld", "test-operator", ""); err != nil {
 		t.Fatalf("Unrevoke: %v", err)
 	}
 	for _, e := range audit.Query(2) {

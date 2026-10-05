@@ -188,7 +188,7 @@ func dispatch(ctx *cmdContext, stderr io.Writer, cmd string, args []string) (int
 	case "revoke":
 		err = cmdRevoke(ctx, stderr, args)
 	case "unrevoke":
-		err = cmdUnrevoke(ctx, args)
+		err = cmdUnrevoke(ctx, stderr, args)
 	case "revocations":
 		err = cmdRevocations(ctx, stderr, args)
 	case "ban":
@@ -400,14 +400,15 @@ func cmdRevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
 	return nil
 }
 
-func cmdUnrevoke(ctx *cmdContext, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("%w: unrevoke needs exactly one client ID", errUsage)
-	}
-	if err := ctx.api.Unrevoke(args[0]); err != nil {
+func cmdUnrevoke(ctx *cmdContext, stderr io.Writer, args []string) error {
+	id, reason, actor, note, err := parseActionArgs("unrevoke", stderr, args, true, true)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(ctx.stdout, "unrevoked %s\n", args[0])
+	if err := ctx.api.Unrevoke(id, reason, actor, note); err != nil {
+		return err
+	}
+	fmt.Fprintf(ctx.stdout, "unrevoked %s (%s)\n", id, reason)
 	return nil
 }
 
@@ -491,6 +492,9 @@ func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
 	fs := flag.NewFlagSet("unban", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	tenant := fs.String("tenant", "", "tenant the ban lives in (default tenant when omitted)")
+	reason := fs.String("reason", "", "why the ban is being lifted")
+	actor := fs.String("actor", "", "administrator identifier for the audit log")
+	note := fs.String("note", "", "free-form justification")
 
 	if len(args) == 0 {
 		return fmt.Errorf("%w: unban needs a hardware ID argument", errUsage)
@@ -501,11 +505,17 @@ func cmdUnban(ctx *cmdContext, stderr io.Writer, args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("%w: unban takes one hardware ID argument", errUsage)
 	}
+	if *reason == "" {
+		return fmt.Errorf("%w: unban requires -reason", errUsage)
+	}
+	if *actor == "" {
+		return fmt.Errorf("%w: unban requires -actor", errUsage)
+	}
 
-	if err := ctx.api.Unban(args[0], *tenant); err != nil {
+	if err := ctx.api.Unban(args[0], *tenant, *reason, *actor, *note); err != nil {
 		return err
 	}
-	fmt.Fprintf(ctx.stdout, "unbanned %s in %s\n", args[0], tenantLabel(*tenant))
+	fmt.Fprintf(ctx.stdout, "unbanned %s in %s (%s)\n", args[0], tenantLabel(*tenant), *reason)
 	return nil
 }
 
@@ -556,11 +566,11 @@ func cmdBans(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("reanchor", stderr, args, false, true)
+	id, reason, actor, note, err := parseActionArgs("reanchor", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.Reanchor(id, actor, note); err != nil {
+	if err := ctx.api.Reanchor(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "reanchored %s: baselines cleared, next attestation re-establishes trust\n", id)
@@ -568,11 +578,11 @@ func cmdReanchor(ctx *cmdContext, stderr io.Writer, args []string) error {
 }
 
 func cmdDelete(ctx *cmdContext, stderr io.Writer, args []string) error {
-	id, _, actor, note, err := parseActionArgs("delete", stderr, args, false, false)
+	id, reason, actor, note, err := parseActionArgs("delete", stderr, args, true, true)
 	if err != nil {
 		return err
 	}
-	if err := ctx.api.DeleteClient(id, actor, note); err != nil {
+	if err := ctx.api.DeleteClient(id, reason, actor, note); err != nil {
 		return err
 	}
 	fmt.Fprintf(ctx.stdout, "deleted %s: trust state removed, revocations and bans kept\n", id)
