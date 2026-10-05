@@ -73,6 +73,24 @@ static int read_kernel_measurement_digest(struct tpm_context *ctx,
 					 out_hash, selected_pcr);
 }
 
+void attest_warn_cert_orphaned(const struct profile_paths *paths,
+			       const char *label)
+{
+	if (!tpm_aik_provisioning_orphans_cert(
+		    tpm_aik_key_present(&g_agent.tpm_ctx),
+		    paths ? profile_aik_cert_stored(paths) : false))
+		return;
+
+	/* label goes last: on some targets it is a sentence of its own */
+	lota_err("This TPM no longer holds the attestation key that was "
+		 "enrolled, and a new one takes its place. The certificate "
+		 "stored for this publisher names the key that is gone, so "
+		 "every round will be refused until they issue one for the key "
+		 "that is here now: lota-agent --reenroll --ca-cert <their "
+		 "anchor>. A TPM clear does this. Publisher: %s",
+		 label ? label : "unnamed");
+}
+
 static uint32_t rand_u32_best_effort(void)
 {
 	uint32_t v = 0;
@@ -859,6 +877,7 @@ int do_attest(const char *server, int port, const char *ca_cert,
 	}
 
 	printf("Checking AIK...\n");
+	attest_warn_cert_orphaned(paths, paths ? paths->id : NULL);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
@@ -1020,6 +1039,8 @@ static int bind_target(struct attest_target *t)
 			 t->label, strerror(-ret));
 		return ret;
 	}
+
+	attest_warn_cert_orphaned(&t->paths, t->label);
 
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
@@ -1540,6 +1561,8 @@ static int continuous_attest_run(const struct lota_config *cfg,
 	}
 
 	lota_info("Checking AIK");
+	if (targets[0].has_profile)
+		attest_warn_cert_orphaned(&targets[0].paths, targets[0].label);
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		lota_err("Failed to provision AIK: %s", tpm_strerror(ret));

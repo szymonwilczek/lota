@@ -1184,6 +1184,18 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 	return tpm_aik_key_is_shared(ctx);
 }
 
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored)
+{
+	/*
+	 * key_present is negative when the TPM could not answer,
+	 * and a chip that will not say is not a chip that lost a key.
+	 */
+	if (key_present != 0)
+		return false;
+
+	return cert_stored;
+}
+
 void tpm_aik_allow_shared_key_replace(struct tpm_context *ctx, bool allow)
 {
 	if (ctx)

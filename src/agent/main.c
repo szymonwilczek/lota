@@ -460,6 +460,9 @@ static int run_daemon(const struct run_daemon_params *params)
 			goto cleanup_tpm;
 		}
 
+		attest_warn_cert_orphaned(profile,
+					  profile ? profile->id : NULL);
+
 		lota_info("Provisioning AIK");
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
 		if (ret < 0) {

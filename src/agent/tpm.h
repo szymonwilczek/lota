@@ -608,6 +608,24 @@ bool tpm_aik_replacing_shared_key(const struct tpm_context *ctx,
 				  int key_present);
 
 /*
+ * tpm_aik_provisioning_orphans_cert - will provisioning leave this
+ * publisher's certificate naming a key the TPM no longer holds?
+ *
+ * @key_present: what tpm_aik_key_present() answered
+ * @cert_stored: whether an enrollment certificate is on disk for this profile
+ *
+ * TPM2_Clear removes the keys but not the profile directory, so the handle,
+ * the consent and the certificate all survive it. Provisioning would mint
+ * a new key at the recorded handle, and every verifier refuses a key
+ * the certificate does not name.
+ *
+ * Returns true only when the key is absent and a certificate is stored.
+ * A first enrollment has no certificate; a TPM that could not answer
+ * (negative @key_present) is not taken as absent.
+ */
+bool tpm_aik_provisioning_orphans_cert(int key_present, bool cert_stored);
+
+/*
  * tpm_aik_allow_shared_key_replace - let provisioning replace such a key
  * @ctx:   initialized context
  * @allow: true on the enrollment path, false everywhere else

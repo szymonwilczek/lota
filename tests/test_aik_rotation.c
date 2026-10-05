@@ -243,6 +243,43 @@ static void test_recorded_shared_key_still_reads_shared(void)
 }
 
 /*
+ * A cleared TPM keeps none of the keys and the profile directory keeps all of
+ * the files, so the handle, the consent and the certificate outlive the key
+ * the certificate names.
+ * Provisioning then mints a replacement at the recorded handle, the certificate
+ * binds a key the TPM no longer holds, and every round is refused until
+ * the publisher re-enrolls.
+ *
+ * After a TPM2_Clear through the firmware's PPI, all four publishers came back
+ * with certificates whose SPKI did not match the key at their handle,
+ * four out of four, while the agent logged "AIK ready, signed tokens enabled".
+ *
+ * A first enrollment has no key and no certificate, and must not be confused
+ * with this.
+ */
+static void test_provisioning_names_an_orphaned_cert(void)
+{
+	TEST("a replacement key that orphans a stored certificate is named");
+
+	if (tpm_aik_provisioning_orphans_cert(0, true) != true) {
+		FAIL("an absent key under a stored certificate was not named");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(0, false) != false) {
+		FAIL("a first enrollment was called an orphaned certificate");
+		return;
+	}
+
+	if (tpm_aik_provisioning_orphans_cert(1, true) != false) {
+		FAIL("a key that is there was called missing");
+		return;
+	}
+
+	PASS();
+}
+
+/*
  * A record is not a key.
  * An upgraded host carries a record saying shared in every profile an older
  * build ever read, including profiles that never enrolled, so the question
@@ -1689,6 +1726,7 @@ int main(void)
 	test_absent_metadata_claims_nothing();
 	test_recorded_shared_key_still_reads_shared();
 	test_shared_replacement_needs_a_key();
+	test_provisioning_names_an_orphaned_cert();
 	test_metadata_default_creation();
 	test_new_key_metadata_persisted();
 	test_metadata_bad_magic();
