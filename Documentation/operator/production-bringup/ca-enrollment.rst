@@ -399,6 +399,13 @@ absent from the manifest; the manifest then doubles as an EK allowlist. A
 strict rejection happens before the credential challenge is wrapped, so a
 barred device never consumes an enrollment session.
 
+A barred device is told its endorsement key was rejected, as is a key that
+does not chain to a pinned root, one its manufacturer's CRL revokes and one
+whose modulus carries the ROCA fingerprint. Each is a verdict on the key that
+a retry does not change; the CA log names which one applied. An internal-error
+status means the CA could not serve the request and a later attempt may
+succeed, as with an unverifiable or expired CRL feed.
+
 The device pseudonym in the certificate ``CommonName`` mixes in a named
 tenant, so one TPM enrolling into two tenants yields two distinct device IDs
 and never collides in the verifier's per-tenant state. A device that moves to
