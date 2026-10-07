@@ -148,6 +148,16 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 			 struct enroll_result *out);
 
 /*
+ * lota_enroll_status_text - the operator-facing sentence for a reply status
+ * @status: the status a CA sent on the challenge or the completion reply
+ *
+ * Returns a sentence naming what was refused and what to do,
+ * or NULL for a status this build does not know -- a CA newer than this agent.
+ * The caller prints the number in that case, and says that is what it is.
+ */
+const char *lota_enroll_status_text(unsigned int status);
+
+/*
  * Run one enrollment against the CA at server:port and write the issued
  * AIK certificate to out_cert_path.
  * token is the optional per-tenant enrollment token presented with the begin

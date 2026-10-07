@@ -412,3 +412,63 @@ int enroll_decode_result(const uint8_t *body, size_t len,
 	out->device_id[dev_len] = '\0';
 	return 0;
 }
+
+/*
+ * The sentence an operator is shown for a refusal the CA sent.
+ *
+ * Enrollment is the first thing a machine does, so a refusal here arrives
+ * with no other context: the message has to name what was refused and what
+ * to do about it.
+ * Returns NULL for a status this build has no sentence for.
+ */
+const char *lota_enroll_status_text(unsigned int status)
+{
+	/*
+	 * No default arm: a status added to the enumeration without a sentence
+	 * fails the build. A value outside it -- a CA newer than this agent
+	 * -- falls past the switch to the NULL below.
+	 */
+	switch ((enum lota_enroll_status)status) {
+	case LOTA_ENROLL_STATUS_OK:
+		/* not a refusal; the caller never asks about it */
+		return NULL;
+	case LOTA_ENROLL_STATUS_BAD_REQUEST:
+		return "the CA could not read this request. The agent and the "
+		       "CA disagree about the enrollment protocol, which is a "
+		       "version mismatch";
+	case LOTA_ENROLL_STATUS_EK_REJECTED:
+		return "this machine's endorsement key is not accepted by that "
+		       "CA. Either its certificate does not chain to a root the "
+		       "CA pins, it is revoked or too weak, or the CA runs a "
+		       "strict tenant manifest this machine is not listed in. "
+		       "The CA's own log says which -- retrying will not change "
+		       "it";
+	case LOTA_ENROLL_STATUS_AIK_REJECTED:
+		return "the CA refused this machine's attestation key. Its "
+		       "template is not one the CA accepts; re-provision it "
+		       "with 'lota-agent --reprovision-aik' and enroll again";
+	case LOTA_ENROLL_STATUS_ACTIVATION_FAIL:
+		return "the secret this machine returned does not match the "
+		       "one the CA wrapped to its endorsement key. The TPM "
+		       "activated a credential meant for another machine, or "
+		       "the attestation key changed between the two halves of "
+		       "the ceremony";
+	case LOTA_ENROLL_STATUS_UNKNOWN_SESSION:
+		return "the CA no longer holds the challenge this machine is "
+		       "answering. It expired, it was already used, or the CA "
+		       "restarted mid-ceremony; enroll again";
+	case LOTA_ENROLL_STATUS_INTERNAL_ERROR:
+		return "the CA could not serve the request. This is a fault at "
+		       "the CA, so it is worth retrying and worth reporting to "
+		       "whoever runs it";
+	case LOTA_ENROLL_STATUS_RATE_LIMITED:
+		return "the CA is holding as many enrollments at once as it "
+		       "will. Nothing is wrong with this machine -- wait and "
+		       "enroll again";
+	case LOTA_ENROLL_STATUS_TOKEN_REJECTED:
+		return "the enrollment token was not accepted. Check the token "
+		       "file against the CA's configured token set";
+	}
+
+	return NULL;
+}

@@ -153,6 +153,18 @@ correlate the host through a shared identity. The endpoint is deliberately not
 the identity -- an address is mutable and two publishers can share a hostname,
 while reissuing the CA certificate over the same key keeps the profile.
 
+A CA that refuses the enrollment says why in the agent's own output.
+Each refusal prints the status the CA sent and the sentence
+that goes with it -- an endorsement key that is not accepted here, an
+attestation key template that is not, a challenge the CA no longer holds, a
+CA that is at its concurrency limit, a token that was not recognised -- along
+with whether the answer is worth retrying. Two of them are worth separating:
+an internal error is a fault at the CA and a later attempt may succeed, while
+a rejected endorsement key is a decision about this machine that will be made
+the same way every time. A status the agent has no name for is printed as a
+number and said to be one, which is what an older agent meeting a newer CA
+looks like.
+
 The agent says so when it can tell. Both ``--enroll`` and ``--add-publisher``
 warn when the file named is not a CA certificate, naming what a re-key of it
 would cost; an anchor produces no such line. It is a warning rather than a

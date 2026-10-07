@@ -245,18 +245,23 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 	if (ch.status != LOTA_ENROLL_STATUS_OK) {
-		if (ch.status == LOTA_ENROLL_STATUS_TOKEN_REJECTED)
-			fprintf(stderr,
-				"CA rejected the enrollment token (status "
-				"%u). Check the token file against the "
-				"CA's configured token set%s.\n",
-				ch.status,
-				token ? "" :
-					"; this CA requires --enroll-token-file");
-		else
+		const char *why = lota_enroll_status_text(ch.status);
+
+		if (why)
 			fprintf(stderr,
 				"CA refused enrollment at challenge (status "
-				"%u)\n",
+				"%u): %s%s.\n",
+				ch.status, why,
+				(ch.status ==
+					 LOTA_ENROLL_STATUS_TOKEN_REJECTED &&
+				 !token) ?
+					"; this CA requires --enroll-token-file" :
+					"");
+		else
+			fprintf(stderr,
+				"CA refused enrollment at challenge with "
+				"status %u, which this agent has no name for; "
+				"the CA is newer than this build.\n",
 				ch.status);
 		ret = -EACCES;
 		goto out;
@@ -305,9 +310,19 @@ int enroll_to_ca(struct tpm_context *tpm, const char *server, int port,
 		goto out;
 	}
 	if (res.status != LOTA_ENROLL_STATUS_OK) {
-		fprintf(stderr,
-			"CA refused enrollment at completion (status %u)\n",
-			res.status);
+		const char *why = lota_enroll_status_text(res.status);
+
+		if (why)
+			fprintf(stderr,
+				"CA refused enrollment at completion (status "
+				"%u): %s.\n",
+				res.status, why);
+		else
+			fprintf(stderr,
+				"CA refused enrollment at completion with "
+				"status %u, which this agent has no name for; "
+				"the CA is newer than this build.\n",
+				res.status);
 		ret = -EACCES;
 		goto out;
 	}
