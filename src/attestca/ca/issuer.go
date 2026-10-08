@@ -97,20 +97,27 @@ type Issuer struct {
 	ekRoots *x509.CertPool
 	certTTL time.Duration
 
-	// ekIntermediates holds the non-self-signed certificates from the
-	// operator bundle.
-	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert),
-	// so chain material for a leaf -> intermediate -> root manufacturer PKI
-	// has to come from the bundle.
-	// Every cert still stays an anchor in ekRoots.
-	// Intermediates are additionally offered here so cert.Verify can build
-	// through them.
+	// ekIntermediates holds the path material the operator pinned.
+	// Enroll wire carries a single EK leaf (a TPM NV index holds one cert)
+	// plus whatever the chip stores, so the rest of a
+	// leaf -> intermediate -> root manufacturer PKI has to come from the
+	// bundle.
+	// Nothing here is an anchor: a certificate in this pool can only
+	// complete a route that still terminates in ekRoots.
 	ekIntermediates *x509.CertPool
+
+	// ekPathCerts mirrors ekIntermediates and ekRoots
+	// as a map keyed by raw Subject.
+	// A CertPool cannot be walked, and naming the link a failed chain
+	// needed next means following the path by hand.
+	ekPathCerts map[string]*x509.Certificate
 
 	// ekRootCerts mirrors ekRoots as a slice:
 	// CRL engine verifies each manufacturer CRL signature against the
 	// certificate whose Subject matches the CRL Issuer, which a CertPool
 	// cannot answer.
+	// Pinned intermediates are in it too: manufacturers that issue EK
+	// certificates through an intermediate sign the covering CRL with it.
 	ekRootCerts []*x509.Certificate
 
 	// ekCRLPaths holds the operator-configured manufacturer CRL file
@@ -142,13 +149,24 @@ type IssuerConfig struct {
 	CASigner crypto.Signer
 
 	// EKRootPEMs are the PEM-encoded TPM manufacturer root certificates.
+	// They are trust anchors: a chain terminates here or it is refused.
 	EKRootPEMs [][]byte
+
+	// EKIntermediatePEMs are PEM-encoded manufacturer CA certificates
+	// the operator pins as path material.
+	// A firmware TPM sends the certificates it keeps on the chip with its
+	// enrollment request; the ones above those are published only by the vendor,
+	// so the operator supplies them here.
+	// They complete a route to an anchor and never become one, so pinning
+	// an intermediate does not quietly narrow the trusted set to one
+	// manufacturer branch.
+	EKIntermediatePEMs [][]byte
 
 	// EKCRLPaths are files holding TPM manufacturer CRLs (PEM or DER;
 	// a file may bundle several PEM blocks).
-	// Each CRL must be signed by a certificate in EKRootPEMs - for a
-	// manufacturer whose CRL is issued by an intermediate CA, that
-	// intermediate must be part of the bundle.
+	// Each CRL must be signed by a certificate in EKRootPEMs
+	// or EKIntermediatePEMs - a manufacturer whose CRL is issued by
+	// an intermediate CA needs that intermediate pinned for the feed to load.
 	// Enrollment rejects an EK certificate listed in a matching CRL;
 	// Issuer whose every CRL is stale fails closed.
 	// Empty means no revocation feed (issuers without a configured CRL
@@ -194,6 +212,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	}
 	ekRoots := x509.NewCertPool()
 	ekIntermediates := x509.NewCertPool()
+	ekPathCerts := map[string]*x509.Certificate{}
 	var ekRootCerts []*x509.Certificate
 	for i, rootPEM := range cfg.EKRootPEMs {
 		root, err := parseCertPEM(rootPEM)
@@ -202,12 +221,23 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		}
 		ekRoots.AddCert(root)
 		ekRootCerts = append(ekRootCerts, root)
-		// non-self-signed bundle entry is a manufacturer intermediate:
-		// also offer it as chain material so a leaf issued under it can
-		// build up to a bundled root
+		ekPathCerts[string(root.RawSubject)] = root
+		// an anchor that is not self-signed only anchors anything if
+		// a chain can also be built through it
 		if !bytes.Equal(root.RawSubject, root.RawIssuer) {
 			ekIntermediates.AddCert(root)
 		}
+	}
+	for i, interPEM := range cfg.EKIntermediatePEMs {
+		inter, err := parseCertPEM(interPEM)
+		if err != nil {
+			return nil, fmt.Errorf("EK intermediate %d: %w", i, err)
+		}
+		ekIntermediates.AddCert(inter)
+		ekPathCerts[string(inter.RawSubject)] = inter
+		// path material, never an anchor -- but the CRL engine still has
+		// to find it by Subject to verify a CRL it signed
+		ekRootCerts = append(ekRootCerts, inter)
 	}
 
 	ttl := cfg.AIKCertTTL
@@ -220,6 +250,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		caKey:           caKey,
 		ekRoots:         ekRoots,
 		ekIntermediates: ekIntermediates,
+		ekPathCerts:     ekPathCerts,
 		certTTL:         ttl,
 		ekRootCerts:     ekRootCerts,
 		ekCRLPaths:      append([]string(nil), cfg.EKCRLPaths...),
@@ -252,6 +283,11 @@ func (is *Issuer) ReloadEKCRLs() error {
 // Startup logging only.
 func (is *Issuer) EKCRLCount() int { return is.ekCRLs.Load().Size() }
 
+// maxEKPathHops bounds the diagnostic walk.
+// Real manufacturer PKIs are six levels deep at the most; the bound is there
+// because the supplied chain is unauthenticated and could describe a cycle.
+const maxEKPathHops = 16
+
 // pathMaterial returns the intermediate pool one verification runs against:
 // the operator's bundled intermediates plus whatever the device supplied.
 //
@@ -273,6 +309,48 @@ func (is *Issuer) pathMaterial(chainDER [][]byte) *x509.CertPool {
 		pool.AddCert(cert)
 	}
 	return pool
+}
+
+// missingLink walks the path upwards from the leaf through everything the CA
+// pinned and the device supplied, and returns the Subject the walk needed next
+// and could not find.
+// It answers "" when the walk reaches a self-signed certificate, because then
+// the path is complete and the refusal came from something else -- an untrusted
+// anchor, an expiry, a bad signature.
+//
+// Diagnostics only: it decides nothing, and it runs only after a verification
+// has already failed.
+// Naming the link is what separates "your endorsement key is not accepted" from
+// "this bundle is missing a certificate".
+func (is *Issuer) missingLink(leaf *x509.Certificate, chainDER [][]byte) string {
+	bySubject := make(map[string]*x509.Certificate, len(is.ekPathCerts)+len(chainDER))
+	for k, v := range is.ekPathCerts {
+		bySubject[k] = v
+	}
+	for _, der := range chainDER {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			continue
+		}
+
+		// a certificate the device supplied never displaces a pinned one
+		if _, pinned := bySubject[string(c.RawSubject)]; !pinned {
+			bySubject[string(c.RawSubject)] = c
+		}
+	}
+
+	cur := leaf
+	for hop := 0; hop < maxEKPathHops; hop++ {
+		if bytes.Equal(cur.RawSubject, cur.RawIssuer) {
+			return ""
+		}
+		next, ok := bySubject[string(cur.RawIssuer)]
+		if !ok {
+			return cur.Issuer.String()
+		}
+		cur = next
+	}
+	return ""
 }
 
 // VerifyEKCertificate confirms an EK certificate chains to a trusted
@@ -320,6 +398,10 @@ func (is *Issuer) VerifyEKCertificate(der []byte, chainDER [][]byte, now time.Ti
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
+		if missing := is.missingLink(cert, chainDER); missing != "" {
+			return nil, fmt.Errorf("%w: %v: nothing pinned or supplied issues %q, "+
+				"so the path stops there", ErrEKChain, err, missing)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrEKChain, err)
 	}
 

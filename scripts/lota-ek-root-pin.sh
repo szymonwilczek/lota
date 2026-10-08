@@ -2,16 +2,25 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Szymon Wilczek
 #
-# Turn a live EK certificate into a candidate sources line for the EK root
+# Turn a live EK certificate into candidate sources lines for the EK root
 # bundle. Given an Endorsement Key certificate, the tool walks the
 # Authority Information Access "CA Issuers" chain up to the self-signed
-# root, then prints the root PEM and a ready-to-paste sources line carrying
-# the SHA-256 over the root DER.
+# root and prints a ready-to-paste sources line for every certificate the
+# operator has to pin.
 #
-# The pin it prints is NOT trusted: it is computed over what the network
-# handed back. Confirm it out of band against the vendor's published value
+# That is the root and every certificate the walk had to fetch. A device
+# supplies the certificates its TPM carries with its enrollment request, so
+# those need no line; everything the walk reached over the network is
+# published nowhere else, and a bundle without it leaves a hole in the path
+# that surfaces as a refused endorsement key. Each line is classed: "root"
+# is a trust anchor, "intermediate" is path material the CA builds through
+# but never anchors a chain at.
+#
+# The pins it prints are NOT trusted: they are computed over what the network
+# handed back. Confirm each out of band against the vendor's published value
 # before adding the line to a sources file. The tool exists to find the
-# right root for a platform and format the line, not to vouch for it.
+# right certificates for a platform and format the lines, not to vouch for
+# them.
 #
 # A firmware TPM needs one step before the walk can start. An Intel PTT EK
 # certificate carries no Authority Information Access extension at all,
@@ -28,7 +37,8 @@
 #                    read from NV 0x01c00100 on Intel PTT:
 #                        sudo tpm2_nvread 0x01c00100 -o nvchain.bin
 #   <ek-cert>        EK certificate in DER or PEM, or - to read from stdin.
-#   output-dir       optional; the root PEM is written here (default: stdout).
+#   output-dir       optional; every certificate that gets a line is written
+#                    here as PEM (default: the lines alone, on stdout).
 #
 # See configs/ek-roots/README.rst for how EK certificates are read from a TPM.
 
@@ -204,8 +214,11 @@ if [ -n "$NV_CHAIN" ]; then
 fi
 
 # walk to the self-signed root: through what the device carries first,
-# then online from the highest certificate it had
-url=""
+# then online from the highest certificate it had.
+# Every certificate the walk has to fetch is kept: the device does not carry it,
+# so the operator has to pin it or the CA cannot build the path.
+fetched_pem=()
+fetched_url=()
 depth=0
 while ! is_self_signed "$WORK/cur.pem"; do
     depth=$((depth + 1))
@@ -232,31 +245,62 @@ while ! is_self_signed "$WORK/cur.pem"; do
 	die "failed to fetch issuer from $url"
     to_pem "$WORK/next.raw" "$WORK/cur.pem" ||
 	die "issuer fetched from $url is not a certificate"
+
+    cp "$WORK/cur.pem" "$WORK/fetched.$depth.pem"
+    fetched_pem+=("$WORK/fetched.$depth.pem")
+    fetched_url+=("$url")
 done
 
+# der_sha256 prints the lowercase hex SHA-256 over a PEM certificate's DER
+der_sha256() {
+    openssl x509 -in "$1" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+# emit_line prints one sources line for a certificate the operator has to pin:
+# its pin, the file the bundle keeps it under, whether it is a trust anchor
+# or path material, and where this run got it from.
+emit_line() {
+    local cert="$1" class="$2" url="$3" pin label slug filename
+
+    pin="$(der_sha256 "$cert")"
+    [ -n "$pin" ] || die "failed to fingerprint a certificate on the path"
+
+    label="$(openssl x509 -in "$cert" -noout -subject -nameopt sep_comma_plus,utf8 2>/dev/null | sed 's/^subject=//')"
+    # slugify the label into a bare filename
+    slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
+    [ -n "$slug" ] || slug="ek-$class"
+    filename="${slug}.pem"
+    [ "${#filename}" -le 96 ] || filename="${slug:0:90}.pem"
+
+    if [ -n "$OUTDIR" ]; then
+	mkdir -p "$OUTDIR"
+	install -m 0644 "$cert" "$OUTDIR/$filename"
+	echo "wrote $class certificate to $OUTDIR/$filename" >&2
+    fi
+
+    echo "# $class: $label" >&2
+    echo "$pin  $filename  $class  ${url:-REPLACE_WITH_VENDOR_PUBLISHED_URL}  $label"
+}
+
 # at this point cur.pem is the self-signed root
-pin="$(openssl x509 -in "$WORK/cur.pem" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)"
-[ -n "$pin" ] || die "failed to fingerprint the root certificate"
+root_pin="$(der_sha256 "$WORK/cur.pem")"
+[ -n "$root_pin" ] || die "failed to fingerprint the root certificate"
 
-label="$(openssl x509 -in "$WORK/cur.pem" -noout -subject -nameopt sep_comma_plus,utf8 2>/dev/null | sed 's/^subject=//')"
-# slugify the label into a bare filename
-slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')"
-[ -n "$slug" ] || slug="ek-root"
-filename="${slug}.pem"
-[ "${#filename}" -le 96 ] || filename="${slug:0:90}.pem"
+# the root is fetched material too whenever the walk went online for it;
+# a root the device carried has no URL to record
+root_url=""
+for i in "${!fetched_pem[@]}"; do
+    [ "$(der_sha256 "${fetched_pem[$i]}")" = "$root_pin" ] || continue
+    root_url="${fetched_url[$i]}"
+done
 
-src_url="${url:-REPLACE_WITH_VENDOR_PUBLISHED_URL}"
-
-# stdout carries only the sources line so it can be appended to a sources
-# file; everything else is diagnostics on stderr. The root PEM is written
-# only when an output dir is given -- the normal flow re-fetches it from the
-# URL when lota-ek-roots-update.sh materializes the bundle
-if [ -n "$OUTDIR" ]; then
-    mkdir -p "$OUTDIR"
-    install -m 0644 "$WORK/cur.pem" "$OUTDIR/$filename"
-    echo "wrote root certificate to $OUTDIR/$filename" >&2
-fi
-
-echo "# self-signed root: $label" >&2
-echo "# candidate sources line -- verify the pin out of band before trusting it:" >&2
-echo "$pin  $filename  $src_url  $label"
+# stdout carries only the sources lines so it can be appended to a sources
+# file; everything else is diagnostics on stderr.
+# The certificates are written out only when an output dir is given -- the normal
+# flow re-fetches each of them when lota-ek-roots-update.sh materializes the bundle
+echo "# candidate sources lines -- verify each pin out of band before trusting it:" >&2
+emit_line "$WORK/cur.pem" root "$root_url"
+for i in "${!fetched_pem[@]}"; do
+    [ "$(der_sha256 "${fetched_pem[$i]}")" = "$root_pin" ] && continue
+    emit_line "${fetched_pem[$i]}" intermediate "${fetched_url[$i]}"
+done

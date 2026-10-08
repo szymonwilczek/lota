@@ -5,6 +5,7 @@ package ca
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,18 +38,29 @@ func newFirmwarePKI(tb testing.TB) firmwarePKI {
 	}
 }
 
-func (p firmwarePKI) issuer(tb testing.TB, pinned ...certAndKey) *Issuer {
+// issuer builds a CA that anchors chains at anchors and is allowed to build
+// through path -- the two halves the bundle manifest keeps apart.
+func (p firmwarePKI) issuer(tb testing.TB, anchors, path []certAndKey) *Issuer {
 	tb.Helper()
 	caCertPEM, caKeyPEM := makeLOTACAPEM(tb)
-	pems := make([][]byte, 0, len(pinned))
-	for _, c := range pinned {
-		pems = append(pems, pemBlock("CERTIFICATE", c.der))
-	}
-	is, err := NewIssuer(IssuerConfig{CACertPEM: caCertPEM, CAKeyPEM: caKeyPEM, EKRootPEMs: pems})
+	is, err := NewIssuer(IssuerConfig{
+		CACertPEM:          caCertPEM,
+		CAKeyPEM:           caKeyPEM,
+		EKRootPEMs:         pemsOf(anchors),
+		EKIntermediatePEMs: pemsOf(path),
+	})
 	if err != nil {
 		tb.Fatalf("NewIssuer: %v", err)
 	}
 	return is
+}
+
+func pemsOf(certs []certAndKey) [][]byte {
+	out := make([][]byte, 0, len(certs))
+	for _, c := range certs {
+		out = append(out, pemBlock("CERTIFICATE", c.der))
+	}
+	return out
 }
 
 func (p firmwarePKI) onChipDER() [][]byte {
@@ -66,7 +78,7 @@ func (p firmwarePKI) onChipDER() [][]byte {
 // refuses a genuine TPM.
 func TestVerifyEKCertificateNeedsDeviceSuppliedIntermediates(t *testing.T) {
 	pki := newFirmwarePKI(t)
-	is := pki.issuer(t, append([]certAndKey{pki.root}, pki.published...)...)
+	is := pki.issuer(t, []certAndKey{pki.root}, pki.published)
 
 	if _, err := is.VerifyEKCertificate(pki.ekDER, nil, time.Now()); !errors.Is(err, ErrEKChain) {
 		t.Fatalf("leaf without the on-chip intermediates: want ErrEKChain, got %v", err)
@@ -81,7 +93,7 @@ func TestVerifyEKCertificateNeedsDeviceSuppliedIntermediates(t *testing.T) {
 // flight. A device that supplies its half is still refused without them.
 func TestVerifyEKCertificateNeedsPinnedIntermediates(t *testing.T) {
 	pki := newFirmwarePKI(t)
-	is := pki.issuer(t, pki.root)
+	is := pki.issuer(t, []certAndKey{pki.root}, nil)
 
 	if _, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now()); !errors.Is(err, ErrEKChain) {
 		t.Fatalf("root alone: want ErrEKChain, got %v", err)
@@ -94,7 +106,7 @@ func TestVerifyEKCertificateNeedsPinnedIntermediates(t *testing.T) {
 // manufacturer and the pinned bundle would decide nothing.
 func TestSuppliedChainCannotWidenTheTrustSet(t *testing.T) {
 	pki := newFirmwarePKI(t)
-	is := pki.issuer(t, append([]certAndKey{pki.root}, pki.published...)...)
+	is := pki.issuer(t, []certAndKey{pki.root}, pki.published)
 
 	rogueRoot := makeRoot(t, "rogue-vendor-root")
 	rogueIssuing := makeIntermediate(t, rogueRoot, "rogue-issuing")
@@ -116,7 +128,7 @@ func TestSuppliedChainCannotWidenTheTrustSet(t *testing.T) {
 // are dropped.
 func TestSuppliedChainIgnoresUnusableElements(t *testing.T) {
 	pki := newFirmwarePKI(t)
-	is := pki.issuer(t, append([]certAndKey{pki.root}, pki.published...)...)
+	is := pki.issuer(t, []certAndKey{pki.root}, pki.published)
 
 	supplied := append([][]byte{{0x30, 0x01, 0xFF}, {}}, pki.onChipDER()...)
 	if _, err := is.VerifyEKCertificate(pki.ekDER, supplied, time.Now()); err != nil {
@@ -140,5 +152,87 @@ func TestVerifyEKCertificateWithoutChainStillWorks(t *testing.T) {
 	ekDER, _ := makeEKCert(t, root, nil)
 	if _, err := is.VerifyEKCertificate(ekDER, nil, time.Now()); err != nil {
 		t.Fatalf("leaf under a pinned root: %v", err)
+	}
+}
+
+// Pinning an intermediate is how the operator supplies the half of the path
+// the device cannot: it completes a route to a pinned root and does nothing
+// else.
+// It must not become an anchor of its own, or the operator has quietly narrowed
+// the trusted set to one manufacturer branch -- and a leaf under a branch whose
+// root is not pinned would enrol.
+func TestPinnedIntermediateIsNotAnAnchor(t *testing.T) {
+	pki := newFirmwarePKI(t)
+
+	// the published intermediates are pinned as path material,
+	// but the vendor root they hang from is not an anchor here
+	is := pki.issuer(t, []certAndKey{makeRoot(t, "unrelated-vendor-root")}, pki.published)
+
+	if _, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now()); !errors.Is(err, ErrEKChain) {
+		t.Fatalf("path material without its root: want ErrEKChain, got %v", err)
+	}
+
+	// a leaf issued directly by the pinned intermediate is refused
+	// for the same reason: the intermediate anchors nothing
+	direct, _ := makeEKCert(t, pki.published[0], nil)
+	if _, err := is.VerifyEKCertificate(direct, nil, time.Now()); !errors.Is(err, ErrEKChain) {
+		t.Fatalf("leaf under path material: want ErrEKChain, got %v", err)
+	}
+
+	// with the vendor root anchored, the same path material completes
+	// the route the device could not
+	is = pki.issuer(t, []certAndKey{pki.root}, pki.published)
+	if _, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now()); err != nil {
+		t.Fatalf("pinned path material plus the anchor: %v", err)
+	}
+}
+
+// The refusal an operator gets has to point at the gap.
+// "certificate signed by unknown authority" over a six-level firmware chain
+// says the endorsement key was not accepted, which reads as a verdict on
+// the machine; the real cause is a bundle missing one link, and only the CA
+// knows which.
+func TestEKChainRefusalNamesTheMissingLink(t *testing.T) {
+	pki := newFirmwarePKI(t)
+	is := pki.issuer(t, []certAndKey{pki.root}, nil)
+
+	// the device supplies its on-chip certificates;
+	// the walk climbs them and stops needing the first one only the vendor
+	// publishes
+	_, err := is.VerifyEKCertificate(pki.ekDER, pki.onChipDER(), time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "vendor-ondie-issuing") {
+		t.Fatalf("refusal does not name the link the path needs next: %v", err)
+	}
+
+	// with nothing supplied the gap is at the leaf's own issuer,
+	// and the message has to move with it
+	_, err = is.VerifyEKCertificate(pki.ekDER, nil, time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "vendor-ptt-svn") {
+		t.Fatalf("refusal does not name the leaf's missing issuer: %v", err)
+	}
+}
+
+// A chain the device tries to anchor itself is refused, and the refusal must
+// not name the rogue root as if pinning it were the remedy.
+func TestEKChainRefusalDoesNotSuggestTheDeviceRoot(t *testing.T) {
+	pki := newFirmwarePKI(t)
+	is := pki.issuer(t, []certAndKey{pki.root}, pki.published)
+
+	rogueRoot := makeRoot(t, "rogue-vendor-root")
+	rogueIssuing := makeIntermediate(t, rogueRoot, "rogue-issuing")
+	rogueEK, _ := makeEKCert(t, rogueIssuing, nil)
+
+	_, err := is.VerifyEKCertificate(rogueEK, [][]byte{rogueIssuing.der, rogueRoot.der}, time.Now())
+	if !errors.Is(err, ErrEKChain) {
+		t.Fatalf("want ErrEKChain, got %v", err)
+	}
+	if strings.Contains(err.Error(), "rogue-vendor-root") {
+		t.Fatalf("refusal points the operator at the device's own root: %v", err)
 	}
 }
