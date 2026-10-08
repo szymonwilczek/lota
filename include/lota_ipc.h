@@ -321,9 +321,10 @@ struct lota_ipc_token {
 /*
  * Title opened or closed session with publisher, or selected one this host has
  * never enrolled with.
- * Only the attestation loop subscribes: it acts on the change, and waiting out
- * its sleep would make title that has just launched wait an interval for its
- * first report.
+ * Reserved to the attestation loop, which is subscribed to it by the act of
+ * syncing: it acts on the change, and waiting out its sleep would make title
+ * that has just launched wait an interval for its first report.
+ * SUBSCRIBE drops this bit for every other connection.
  */
 #define LOTA_IPC_EVENT_PROFILE (1U << 3)
 #define LOTA_IPC_EVENT_ALL 0xFFFFFFFFU
@@ -335,8 +336,9 @@ struct lota_ipc_token {
  * event_mask selects which events trigger notifications.
  * Sending event_mask = 0 cancels the subscription.
  *
- * Access control: agent may require the peer UID to match the local account
- * running the agent process.
+ * Access control: open to every client the socket lets connect, which is the same
+ * reach GET_STATUS has. Bits the caller may not have are dropped from the mask;
+ * only a mask left empty by that is answered LOTA_IPC_ERR_BAD_REQUEST.
  *
  * Server responds with LOTA_IPC_OK on success.
  */

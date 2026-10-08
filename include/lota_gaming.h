@@ -474,6 +474,13 @@ typedef void (*lota_status_callback_fn)(const struct lota_status *status,
  * a subscribed event occurs.  Call lota_poll_events() to receive
  * them, or they are dispatched transparently during other SDK calls.
  *
+ * event_mask is narrowed to the events the agent publishes to titles,
+ * which are the three LOTA_EVENT_* above; LOTA_EVENT_ALL therefore
+ * subscribes to all three and never fails for naming more.
+ *
+ * A subscription lasts as long as the connection.  It does not survive
+ * a reconnect, so resubscribe after LOTA_ERR_NOT_CONNECTED.
+ *
  * Returns LOTA_OK on success.
  */
 int lota_subscribe(struct lota_client *client, uint32_t event_mask,

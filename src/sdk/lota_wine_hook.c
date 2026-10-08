@@ -705,12 +705,10 @@ static void hook_status_cb(const struct lota_status *status, uint32_t events,
 }
 
 /*
- * Refresh thread. Prefers the event-driven path (lota_subscribe +
- * lota_poll_events) and falls back to a fixed-cadence
- * refresh_once() poll when SUBSCRIBE is denied. The agent restricts
- * SUBSCRIBE to its own PID by design (see ipc.c:ipc_client_is_agent_self),
- * so EACCES is the steady-state outcome for any external client and
- * must not produce a warning per process.
+ * Refresh thread.
+ * Waits for STATUS events (lota_subscribe + lota_poll_events).
+ * If the agent refuses the subscription, which it should not, logs it once
+ * and polls with refresh_once() every refresh_sec so the hook keeps working.
  */
 static void *refresh_thread_fn(void *arg)
 {
@@ -740,16 +738,10 @@ static void *refresh_thread_fn(void *arg)
 			ret = lota_subscribe(g_hook.client, LOTA_EVENT_STATUS,
 					     hook_status_cb, NULL);
 			subscribed = (ret == LOTA_OK);
-			if (!subscribed) {
-				if (ret == LOTA_ERR_ACCESS_DENIED)
-					LOG_DBG("subscribe denied (agent-only "
-						"by design), polling every %ds",
-						g_hook.refresh_sec);
-				else
-					LOG_WRN("subscribe failed: %s, "
-						"falling back to polling",
-						lota_strerror(ret));
-			}
+			if (!subscribed)
+				LOG_WRN("subscribe failed: %s, falling back "
+					"to polling every %ds",
+					lota_strerror(ret), g_hook.refresh_sec);
 		}
 
 		if (subscribed) {
