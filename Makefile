@@ -207,6 +207,7 @@ AGENT_SRCS := $(AGENT_DIR)/main.c \
               $(AGENT_DIR)/kernel_measure.c \
               $(AGENT_DIR)/bpf_loader.c \
               $(AGENT_DIR)/net.c \
+              $(AGENT_DIR)/pin.c \
               $(AGENT_DIR)/ipc.c \
               $(AGENT_DIR)/runtime_image_measure.c \
               $(AGENT_DIR)/report.c \
@@ -1300,27 +1301,27 @@ $(TEST_BIN_DIR)/test_daemon_loop: tests/test_daemon_loop.c $(AGENT_DIR)/daemon_l
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_tls_verify: tests/test_tls_verify.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_verify_result_str: tests/test_verify_result_str.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_verify_result_str: tests/test_verify_result_str.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_connect_hint: tests/test_connect_hint.c $(AGENT_DIR)/net.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lssl -lcrypto -lsystemd
 
-$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config: tests/test_config.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_config_alloc: tests/test_config_alloc.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config_alloc: tests/test_config_alloc.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -pthread -o $@ $^
 
-$(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_config_add_profile: tests/test_config_add_profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -1372,11 +1373,11 @@ $(TEST_BIN_DIR)/test_profile_id: tests/test_profile_id.c $(AGENT_DIR)/profile.c 
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_targets: tests/test_attest_targets.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_reload: tests/test_attest_reload.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
@@ -1384,7 +1385,7 @@ $(TEST_BIN_DIR)/test_attest_stage: tests/test_attest_stage.c $(AGENT_DIR)/attest
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_attest_aggregate: tests/test_attest_aggregate.c $(AGENT_DIR)/attest_targets.c $(AGENT_DIR)/profile.c $(AGENT_DIR)/config.c $(AGENT_DIR)/io_utils.c $(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
@@ -1577,7 +1578,7 @@ $(TEST_BIN_DIR)/test_reload_enforcement_state: \
 		tests/test_reload_enforcement_state.c $(AGENT_DIR)/reload.c \
 		$(AGENT_DIR)/config.c $(AGENT_DIR)/journal.c \
 		$(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/io_utils.c \
-		| $(BUILD_DIR)
+		$(AGENT_DIR)/pin.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
 

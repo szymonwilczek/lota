@@ -19,6 +19,7 @@
 
 #include "../../include/lota_enroll.h"
 #include "net.h"
+#include "pin.h"
 #include "profile.h"
 
 struct tpm_context;
@@ -51,7 +52,7 @@ struct enroll_state {
 	int32_t ca_port;
 	int32_t no_verify_tls;
 	int32_t has_pin;
-	uint8_t pin_sha256[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256[LOTA_PIN_SHA256_LEN];
 	char ca_server[256];
 	char ca_cert[PATH_MAX];
 	uint8_t _reserved[64];

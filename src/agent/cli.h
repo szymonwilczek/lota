@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "net.h"
+#include "pin.h"
 
 #define LOTA_CLI_DEFAULT_BPF_PATH "/usr/lib/lota/lota_lsm.bpf.o"
 #define LOTA_CLI_DEFAULT_AIK_TTL 0 /* 0 -> use TPM_AIK_DEFAULT_TTL_SEC */
@@ -112,7 +113,7 @@ struct cli_options {
 	int insecure_allow_mode_downgrade;
 	int insecure_allow_mutable_rootfs;
 	const char *pin_sha256_hex;
-	uint8_t pin_sha256_bin[NET_PIN_SHA256_LEN];
+	uint8_t pin_sha256_bin[LOTA_PIN_SHA256_LEN];
 	int has_pin;
 
 	/* mode tracking */

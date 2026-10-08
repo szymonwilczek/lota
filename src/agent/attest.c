@@ -1387,10 +1387,19 @@ static int attest_target_round(struct attest_target *t, int skip_verify,
 		return t->interval;
 
 	if (ret == 0) {
+		/*
+		 * The publisher's own pin answers for the publisher's own verifier.
+		 * @pin_sha256 is the single-verifier deployment's and is only
+		 * ever set when there are no profiles at all -- the configuration
+		 * and the command line both refuse it beside them -- so this is
+		 * a choice between two pins that never coexist.
+		 */
+		const uint8_t *pin = t->has_pin ? t->pin_sha256 : pin_sha256;
+
 		lota_dbg("Attestation round starting for %s", t->label);
 		ret = attest_once(t->server, t->port,
 				  t->ca_cert[0] ? t->ca_cert : NULL,
-				  skip_verify, pin_sha256,
+				  skip_verify, pin,
 				  t->has_profile ? &t->paths : NULL, 0);
 	}
 

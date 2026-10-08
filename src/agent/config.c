@@ -23,6 +23,7 @@
 #include "lota.h"
 #include "parse_utils.h"
 #include "path_validate.h"
+#include "pin.h"
 #include "tpm.h"
 
 /*
@@ -339,6 +340,23 @@ static int apply_profile_key(struct lota_profile *p, const char *key,
 		p->verifier_port = (int)v;
 		return 0;
 	}
+	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		/*
+		 * Parsed here only to reject it: a pin the connection cannot
+		 * read would start the profile unpinned
+		 */
+		if (lota_pin_sha256_parse(value, bin) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid pin_sha256 '%s' (expected 64 "
+				"hex characters; colons and spaces allowed)\n",
+				filepath, lineno, value);
+			return -1;
+		}
+		set_str(p->pin_sha256, sizeof(p->pin_sha256), value);
+		return 0;
+	}
 	if (strcmp(key, "reporting") == 0) {
 		if (strcmp(value, "session") == 0) {
 			p->session_gated = true;
@@ -501,6 +519,22 @@ int config_profile_defect(const struct lota_profile *p, char *why,
 		return -EILSEQ;
 	}
 
+	if (p->pin_sha256[0]) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		if (value_defect("pin_sha256", p->pin_sha256, sub,
+				 sizeof(sub))) {
+			snprintf(why, why_cap, "the certificate pin %s", sub);
+			return -EILSEQ;
+		}
+		if (lota_pin_sha256_parse(p->pin_sha256, bin) != 0) {
+			snprintf(why, why_cap,
+				 "the certificate pin is not 64 hex "
+				 "characters, which the parser requires");
+			return -EILSEQ;
+		}
+	}
+
 	if (!p->token_only && p->verifier[0] &&
 	    value_defect("verifier", p->verifier, sub, sizeof(sub))) {
 		snprintf(why, why_cap, "the verifier host %s", sub);
@@ -610,6 +644,21 @@ static int validate_profiles(const struct lota_config *cfg,
 {
 	int errors = 0;
 
+	/*
+	 * A pin matches one certificate and each publisher runs its own verifier:
+	 * a host-level pin would fail every other profile at TLS time, where
+	 * it looks like a network fault. Refuse it here.
+	 */
+	if (cfg->profile_count > 0 && cfg->pin_sha256[0]) {
+		fprintf(stderr,
+			"%s: pin_sha256 outside a profile pins one verifier's "
+			"certificate, but %d publisher profile(s) are "
+			"configured.\nMove it into the profile whose verifier "
+			"presents that certificate.\n",
+			filepath, cfg->profile_count);
+		errors++;
+	}
+
 	for (int i = 0; i < cfg->profile_count; i++) {
 		const struct lota_profile *p = &cfg->profiles[i];
 		const char *missing = NULL;
@@ -689,6 +738,15 @@ static int apply_key(struct lota_config *cfg, const char *key,
 		return -1;
 	}
 	if (strcmp(key, "pin_sha256") == 0 || strcmp(key, "pin-sha256") == 0) {
+		uint8_t bin[LOTA_PIN_SHA256_LEN];
+
+		if (lota_pin_sha256_parse(value, bin) != 0) {
+			fprintf(stderr,
+				"%s:%d: invalid pin_sha256 '%s' (expected 64 "
+				"hex characters; colons and spaces allowed)\n",
+				filepath, lineno, value);
+			return -1;
+		}
 		set_str(cfg->pin_sha256, sizeof(cfg->pin_sha256), value);
 		return 0;
 	}
@@ -1269,6 +1327,8 @@ void config_dump(const struct lota_config *cfg, FILE *fp)
 			fprintf(fp, "verifier = %s\n", p->verifier);
 			fprintf(fp, "verifier_port = %d\n", p->verifier_port);
 		}
+		if (p->pin_sha256[0])
+			fprintf(fp, "pin_sha256 = %s\n", p->pin_sha256);
 		fprintf(fp, "reporting = %s\n",
 			p->session_gated ? "session" : "continuous");
 		if (p->attest_interval)
@@ -1374,6 +1434,15 @@ static int profile_section_render(const struct lota_profile *p, char *buf,
 			     p->session_gated ? "session" : "continuous");
 	if (n < 0 || (size_t)n >= cap)
 		return -EOVERFLOW;
+
+	if (p->pin_sha256[0]) {
+		int m = snprintf(buf + n, cap - (size_t)n, "pin_sha256 = %s\n",
+				 p->pin_sha256);
+
+		if (m < 0 || (size_t)(n + m) >= cap)
+			return -EOVERFLOW;
+		n += m;
+	}
 
 	if (p->attest_interval > 0) {
 		int m = snprintf(buf + n, cap - (size_t)n, "interval = %d\n",
