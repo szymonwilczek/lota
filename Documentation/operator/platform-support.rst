@@ -211,6 +211,15 @@ count and the two verbs that free a slot -- ``--list-publishers`` and
 ``--forget-publisher`` -- rather than an I/O error, because the machine is full,
 not broken and the space is reclaimable.
 
+The diagnostic verbs take from the same pool, so they say what they cost
+before they cost it. ``--test-tpm`` reports state and never creates a key: it
+says when the handle is empty and tells the operator which command provisions
+one. ``--test-signed`` cannot decline, since signing is what it is for, so it
+names the key it is about to use, and when there is none at the handle it says
+that it is creating one that stays after the server exits. Both claim their
+socket before touching the TPM, so a run refused by a daemon that already
+holds it spends nothing at all.
+
 A measured example: an Intel PTT firmware TPM holds 21 persistent objects in total,
 of which five are resident on an installed host before any publisher enrolls.
 16 publisher keys fit, which is above the eight this build hands out, so on that

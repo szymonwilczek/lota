@@ -17,6 +17,7 @@
 #include "ipc.h"
 #include "main_utils.h"
 #include "sdnotify.h"
+#include "selftest.h"
 #include "tpm.h"
 #include "config.h"
 
@@ -85,33 +86,53 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	uint64_t valid_until;
 	printf("=== IPC Test Server (Signed Tokens) ===\n\n");
 
+	/* socket first, because it is the only thing here that can refuse */
+	printf("Starting IPC server...\n");
+	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
+	if (ret < 0) {
+		fprintf(stderr, "Failed to initialize IPC: %s\n",
+			strerror(-ret));
+		return 1;
+	}
+
 	printf("Initializing TPM...\n");
 	ret = tpm_init(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to initialize TPM: %s\n",
 			tpm_strerror(ret));
+		ipc_cleanup(&g_agent.ipc_ctx);
 		return 1;
 	}
 	printf("TPM initialized\n");
+
+	/*
+	 * Unlike --test-tpm, this verb must sign, so it cannot skip provisioning.
+	 * A new AIK is persistent: it outlives the server and takes one of the
+	 * slots that cap how many publishers the host can answer to, so say so
+	 * before creating it. An AIK already at the handle is reused for free.
+	 */
+	if (selftest_aik_plan(tpm_handle_holds_object(
+		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
+	    SELFTEST_AIK_SKIP)
+		printf("No attestation key at handle 0x%08X: this server signs "
+		       "tokens, so it creates one, and that key stays after "
+		       "the server exits.\n",
+		       g_agent.tpm_ctx.aik_handle);
+	else
+		printf("Using the attestation key already at handle 0x%08X.\n",
+		       g_agent.tpm_ctx.aik_handle);
 
 	printf("Provisioning AIK...\n");
 	ret = tpm_provision_aik(&g_agent.tpm_ctx);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to provision AIK: %s\n",
 			tpm_strerror(ret));
+		ipc_cleanup(&g_agent.ipc_ctx);
 		tpm_cleanup(&g_agent.tpm_ctx);
 		return 1;
 	}
 	printf("AIK ready\n\n");
 
-	printf("Starting IPC server...\n");
-	ret = ipc_init_or_activate(&g_agent.ipc_ctx);
-	if (ret < 0) {
-		fprintf(stderr, "Failed to initialize IPC: %s\n",
-			strerror(-ret));
-		tpm_cleanup(&g_agent.tpm_ctx);
-		return 1;
-	}
 	setup_container_listener(&g_agent.ipc_ctx, cfg);
 	setup_dbus(&g_agent.ipc_ctx);
 
