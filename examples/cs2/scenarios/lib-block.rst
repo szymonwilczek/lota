@@ -19,9 +19,9 @@ when the trust set is empty, while still catching every dlopen / LD_PRELOAD /
 mprotect(PROT_EXEC) attempt inside the game process.
 
 Unlike the ``agent-down.rst`` scenario this one needs the **full agent**, not
-``--test-ipc``. ``--test-ipc`` is the IPC bridge for the attestation token; the
-LSM gates run only when the agent loads its BPF object and attaches the LSM
-programs at startup.
+``--test-ipc``. ``--test-ipc`` is the IPC bridge without a TPM, so it answers
+status and refuses ``GET_TOKEN``; the LSM gates run only when the agent loads
+its BPF object and attaches the LSM programs at startup.
 
 Prerequisites
 -------------

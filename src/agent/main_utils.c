@@ -104,7 +104,11 @@ void print_usage(const char *prog, const char *default_bpf_path,
 	printf("                    blobs stay valid)\n");
 	printf("  --test-ipc        Run IPC server with simulated attested "
 	       "state\n");
-	printf("                    (unsigned tokens, for protocol testing)\n");
+	printf("                    (no TPM: status, D-Bus and profile "
+	       "binding only,\n");
+	printf("                    GET_TOKEN is refused -- use --test-signed "
+	       "for\n");
+	printf("                    tokens)\n");
 	printf("  --test-signed     Run IPC server with TPM-signed tokens\n");
 	printf("                    (requires TPM, for token verification "
 	       "testing)\n");

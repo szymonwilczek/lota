@@ -81,6 +81,15 @@ enum lota_error {
 	 * to decide.
 	 */
 	LOTA_ERR_UNMEASURABLE_SELF = -14,
+	/*
+	 * The agent on this machine holds no TPM, so it cannot sign a token
+	 * and will not issue an unsigned one. Nothing the caller does changes
+	 * that: retrying, waiting or asking again for a different publisher
+	 * all end here.
+	 * It is not LOTA_ERR_AGENT_ERROR and not a TPM that failed
+	 * -- there is no TPM.
+	 */
+	LOTA_ERR_NO_TPM = -15,
 };
 
 /*

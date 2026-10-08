@@ -288,6 +288,12 @@ executable** has to be one of the objects measured -- that binary is the one
 a publisher ships and can make measurable. The refusal names that case,
 ``LOTA_ERR_UNMEASURABLE_SELF``.
 
+A machine whose agent holds no TPM is refused for a different reason and says
+so: ``LOTA_ERR_NO_TPM``. Signing is the whole of a token, so there is nothing
+to hand back and an unsigned one is never issued. It is not a TPM that failed
+and not a generic agent error, and it is the one refusal no retry improves --
+the answer is the same until the title runs against an agent that has a TPM.
+
 The refusal stops there. A *different* protected process that cannot be
 measured never refuses this caller: any program on the machine may ask to be
 protected, so folding somebody else's packaging into this answer would let one
