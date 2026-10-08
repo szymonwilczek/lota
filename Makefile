@@ -1166,6 +1166,7 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_ipc_notify \
 	$(TEST_BIN_DIR)/test_ipc_reload_binding \
 	$(TEST_BIN_DIR)/test_ipc_token_no_tpm \
+	$(TEST_BIN_DIR)/test_ipc_extra_listener \
 	$(TEST_BIN_DIR)/test_test_servers_order \
 	$(TEST_BIN_DIR)/test_reload_enforcement_state \
 	$(TEST_BIN_DIR)/test_credential_activation \
@@ -1589,6 +1590,12 @@ $(TEST_BIN_DIR)/test_ipc_token_no_tpm: tests/test_ipc_token_no_tpm.c \
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
 
+$(TEST_BIN_DIR)/test_ipc_extra_listener: tests/test_ipc_extra_listener.c \
+		$(AGENT_DIR)/ipc.c $(AGENT_DIR)/journal.c \
+		$(AGENT_DIR)/profile.c $(AGENT_DIR)/token_gate.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lsystemd
+
 $(TEST_BIN_DIR)/test_test_servers_order: tests/test_test_servers_order.c \
 		$(AGENT_DIR)/test_servers.c $(AGENT_DIR)/journal.c | $(BUILD_DIR)
 	$(QUIET_CC)
@@ -1683,6 +1690,7 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_ipc_notify
 	@$(BUILD_DIR)/test_ipc_reload_binding
 	@$(BUILD_DIR)/test_ipc_token_no_tpm
+	@$(BUILD_DIR)/test_ipc_extra_listener
 	@$(BUILD_DIR)/test_test_servers_order
 	@$(BUILD_DIR)/test_reload_enforcement_state
 	@$(BUILD_DIR)/test_credential_activation

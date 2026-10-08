@@ -3290,6 +3290,18 @@ int ipc_add_listener(struct ipc_context *ctx, const char *socket_path)
 	if (slot < 0)
 		return -ENOSPC;
 
+	/*
+	 * Same check as the primary socket: a path another agent still serves
+	 * is not ours to take.
+	 * One nothing answers on is a leftover from an unclean stop and is safe
+	 * to unlink.
+	 */
+	if (socket_has_live_listener(socket_path)) {
+		lota_err("%s already has a listener; refusing to take it over",
+			 socket_path);
+		return -EADDRINUSE;
+	}
+
 	unlink(socket_path);
 
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);

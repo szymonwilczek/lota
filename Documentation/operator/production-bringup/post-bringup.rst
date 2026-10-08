@@ -193,6 +193,14 @@ did. When the socket is absent it names the two things that produce one --
 a registered UID and a boot since it was registered -- and does not suggest
 restarting the agent.
 
+A diagnostic server started beside the daemon leaves that socket alone.
+``--test-ipc`` and ``--test-signed`` read the same ``container_listener_uid``
+setting and would bind the same path, so each probes it first and refuses one
+another agent is still answering on, naming the uid that keeps its listener.
+The refusal is what keeps the path usable: the socket is laid down by a login
+event, so a name taken and then removed under a user who never logged out is
+not rebuilt until that session ends or the host reboots.
+
 Continuous attestation
 ----------------------
 
