@@ -41,11 +41,20 @@ extern "C" {
 /*
  * Directory where the hook writes status / token files.
  * Default resolution order:
- *   1. $LOTA_HOOK_TOKEN_DIR  (explicit)
- *   2. $XDG_RUNTIME_DIR/lota (standard)
- *   3. /tmp/lota-<uid>       (fallback)
+ *   1. $LOTA_HOOK_TOKEN_DIR       (explicit)
+ *   2. $XDG_RUNTIME_DIR/lota-hook (standard)
+ *   3. /tmp/lota-<uid>            (no runtime directory)
+ *
+ * Each candidate must be a directory the calling user owns, at mode 0700;
+ * one that is not is reported and the next is used. The files here carry a signed
+ * attestation token, so the directory is the player's own and never
+ * the agent's: $XDG_RUNTIME_DIR/lota belongs to the daemon, which creates it
+ * root:lota 0750 for the container socket.
  */
 #define LOTA_HOOK_ENV_TOKEN_DIR "LOTA_HOOK_TOKEN_DIR"
+
+/* Directory name appended to $XDG_RUNTIME_DIR for the default above */
+#define LOTA_HOOK_TOKEN_DIR_NAME "lota-hook"
 
 /* token refresh interval in seconds (default: 60). */
 #define LOTA_HOOK_ENV_REFRESH_SEC "LOTA_HOOK_REFRESH_SEC"

@@ -154,7 +154,10 @@ struct lota_ac_config {
 
 	/*
 	 * For file mode: directory containing lota-status and lota-token.bin.
-	 * NULL -> auto-detect ($LOTA_HOOK_TOKEN_DIR / $XDG_RUNTIME_DIR/lota).
+	 * NULL -> auto-detect, in the order the hook resolves:
+	 * $LOTA_HOOK_TOKEN_DIR, then $XDG_RUNTIME_DIR/lota-hook, then
+	 * /tmp/lota-<uid>. Never $XDG_RUNTIME_DIR/lota, which belongs to
+	 * the agent.
 	 */
 	const char *token_dir;
 

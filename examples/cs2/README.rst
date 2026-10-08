@@ -251,7 +251,7 @@ wiring is reachable from the command line:
 
    LOTA_HOOK_LOG_LEVEL=info \
    LOTA_HOOK_SOCKET=/run/user/"$(id -u)"/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/"$(id -u)"/lota \
+   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/"$(id -u)"/lota:/run/user/"$(id -u)"/lota-hook \
    lota-proton-hook steam-runtime-launch-client -- steam://rungameid/730
 
 What the hook produces at runtime
@@ -259,7 +259,12 @@ What the hook produces at runtime
 
 Constructor-side (in the Wine/Proton process), the hook connects to the LOTA
 agent, asks for a freshly attested gaming token, and atomically writes three
-files under ``$XDG_RUNTIME_DIR/lota/``:
+files under ``$XDG_RUNTIME_DIR/lota-hook/``. That directory is the player's
+own: ``$XDG_RUNTIME_DIR/lota`` belongs to the agent, which creates it
+``root:lota`` for the container socket, and the hook refuses to write a signed
+token into a directory somebody else owns.
+
+The files are:
 
 ===================== ====== ================================
 File                  Format Owner
@@ -280,8 +285,8 @@ Verify after launching CS2 (run from the operator account, not root, so
 
 .. code:: sh
 
-   ls -l   "$XDG_RUNTIME_DIR/lota/"
-   cat     "$XDG_RUNTIME_DIR/lota/lota-status"
+   ls -l   "$XDG_RUNTIME_DIR/lota-hook/"
+   cat     "$XDG_RUNTIME_DIR/lota-hook/lota-status"
 
 A healthy run prints ``LOTA_ATTESTED=1``, ``LOTA_OFFLINE=0``, a non-zero
 ``LOTA_VALID_UNTIL`` timestamp, and ``LOTA_PID`` matching the game process. The
@@ -293,7 +298,7 @@ by the wire header, the TPM Quote bytes, and the AIK signature.
 
 .. code:: sh
 
-   xxd "$XDG_RUNTIME_DIR/lota/lota-token.bin" | head -3
+   xxd "$XDG_RUNTIME_DIR/lota-hook/lota-token.bin" | head -3
    # 00000000: 4c4f 544b ...    LOTK...
 
 ``--test-ipc`` (the no-TPM IPC bridge) writes only the status file because
@@ -348,7 +353,7 @@ Set them on Steam's launch line, e.g.:
 ::
 
    LOTA_HOOK_LOG_LEVEL=debug LOTA_HOOK_SOCKET=/run/user/1000/lota/lota.sock \
-   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota \
+   PRESSURE_VESSEL_FILESYSTEMS_RW=/run/user/1000/lota:/run/user/1000/lota-hook \
    lota-proton-hook %command%
 
 Logs are written to the game's stderr, which Steam captures under
@@ -385,7 +390,8 @@ exercise the integration end-to- end and demonstrate the contracts the hook
 claims:
 
 - ```scenarios/verify-attested.sh`` <scenarios/verify-attested.sh>`__ watches
-  ``$XDG_RUNTIME_DIR/lota/lota-status`` and prints ``TRUSTED`` / ``UNTRUSTED``
+  ``$XDG_RUNTIME_DIR/lota-hook/lota-status`` and prints ``TRUSTED`` /
+  ``UNTRUSTED``
   / ``OFFLINE`` transitions in real time.
 - ```scenarios/agent-down.rst`` <scenarios/agent-down.rst>`__ drives agent
   disconnect and recovery against a live CS2 session, showing the hook degrades
@@ -442,10 +448,11 @@ attempt and match against this table:
 |                                              | in-tree fixture policy digest is applied automatically on the   |
 |                                              | test paths.                                                     |
 +----------------------------------------------+-----------------------------------------------------------------+
-| No files appear under                        | The token directory was created by the agent (root-owned)       |
-| ``$XDG_RUNTIME_DIR/lota`` (only              | before the hook tried to write. Remove the directory and let    |
-| ``lota.sock``)                               | the hook recreate it as the operator user, or ``chown`` it to   |
-|                                              | ``$USER:lota``.                                                 |
+| No files appear under                        | Check the hook's stderr: a candidate directory it cannot own is |
+| ``$XDG_RUNTIME_DIR/lota-hook``               | named, and the hook falls back to ``/tmp/lota-<uid>``, so look  |
+|                                              | there before assuming it did nothing. Never expect artifacts in |
+|                                              | ``$XDG_RUNTIME_DIR/lota``: that directory is the agent's and    |
+|                                              | holds only ``lota.sock``.                                       |
 +----------------------------------------------+-----------------------------------------------------------------+
 | Game window never appears, Steam shows       | Older hook revisions (before the ``should_activate()`` filter)  |
 | "Running"                                    | ran the constructor inside every launcher utility and stalled   |
