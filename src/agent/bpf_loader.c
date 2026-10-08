@@ -36,6 +36,13 @@
 
 #ifndef EAUTH
 #define EAUTH 80
+
+/* Where the kernel publishes the boot parameters and the loaded IMA policy */
+#define IMA_CMDLINE_PATH "/proc/cmdline"
+#define IMA_POLICY_PATH "/sys/kernel/security/ima/policy"
+
+/* The rule set this package ships, named in the refusal that needs it */
+#define LOTA_IMA_POLICY_ASSET "/usr/share/lota/ima/lota-ima-policy"
 #endif
 
 /* Stats map indices - must match BPF program */
@@ -343,25 +350,84 @@ int bpf_loader_kernel_lockdown_restrictive(void)
 }
 
 /*
- * /sys/kernel/security/ima/policy is write-only on stock kernels
- * built without CONFIG_IMA_READ_POLICY (Fedora 44's default), so a
- * runtime read of the policy file is not a portable signal that
- * appraisal is enforcing. The authoritative knob is the kernel
- * boot parameter ima_appraise= on /proc/cmdline: only "enforce"
- * (block on integrity failure) and "fix" (write missing xattrs,
- * still blocks on signature failure) constitute the kernel-floor
- * the agent demands. "log" and the default "off" measure or do
- * nothing and therefore leave the integrity gate unenforced.
+ * Does the loaded IMA policy appraise an executable?
+ *
+ * Appraisal applies only to the func= rules the policy contains, so the mode
+ * on the cmdline is half the answer: a policy of measure rules under
+ * ima_appraise=enforce blocks on nothing. A rule that names no func= applies
+ * to every hook, exec included; dont_appraise is an exclusion list and is not
+ * appraisal however it reads to a substring match.
+ *
+ * Returns 0 when an executable is appraised, -ENOENT when the policy is readable
+ * and appraises none, and -EACCES when it could not be read at all,
+ * with @read_err carrying why: a kernel built without CONFIG_IMA_READ_POLICY
+ * and a caller without the privilege to read the file are both scopes nobody
+ * can see rather than scopes that are empty, and the two are told apart by
+ * errno rather than guessed at.
  */
-static int kernel_ima_appraise_enforcing(void)
+static int ima_policy_appraises_exec(const char *policy_path, int *read_err)
+{
+	char line[512];
+	FILE *fp;
+	int found = 0;
+
+	*read_err = 0;
+
+	fp = fopen(policy_path, "re");
+	if (!fp) {
+		*read_err = -errno;
+		return -EACCES;
+	}
+
+	while (fgets(line, sizeof(line), fp)) {
+		char *save = NULL;
+		char *tok = strtok_r(line, " \t\n", &save);
+		bool covers_exec = true;
+
+		if (!tok || strcmp(tok, "appraise") != 0)
+			continue;
+
+		while ((tok = strtok_r(NULL, " \t\n", &save))) {
+			if (strncmp(tok, "func=", 5) != 0)
+				continue;
+			covers_exec = strcmp(tok + 5, "BPRM_CHECK") == 0;
+			break;
+		}
+
+		if (covers_exec) {
+			found = 1;
+			break;
+		}
+	}
+
+	fclose(fp);
+	return found ? 0 : -ENOENT;
+}
+
+/*
+ * The appraisal mode the kernel was booted in, read from ima_appraise=
+ * on the cmdline: only "enforce" (block on integrity failure) and "fix"
+ * (write missing xattrs, still blocks on signature failure) constitute
+ * the kernel-floor the agent demands. "log" and the default "off" measure
+ * or do nothing and therefore leave the integrity gate unenforced.
+ *
+ * Both files the question has behind it are parameters, so the answer can be
+ * checked against something other than the machine the check runs on: the mode
+ * lives on the kernel cmdline, and the scope -- which func= rules the loaded
+ * policy actually appraises -- lives in the policy file.
+ * Neither half is the answer on its own.
+ */
+int bpf_loader_ima_appraisal_active(const char *cmdline_path,
+				    const char *policy_path)
 {
 	char buf[4096];
 	size_t len = 0;
 	char *tok;
 	char *save = NULL;
+	int read_err = 0;
 	int ret;
 
-	ret = read_text_file("/proc/cmdline", buf, sizeof(buf), &len);
+	ret = read_text_file(cmdline_path, buf, sizeof(buf), &len);
 	if (ret < 0)
 		return ret;
 	if (len == 0)
@@ -376,9 +442,25 @@ static int kernel_ima_appraise_enforcing(void)
 		if (strncmp(tok, "ima_appraise=", 13) != 0)
 			continue;
 		val = tok + 13;
-		if (strcmp(val, "enforce") == 0 || strcmp(val, "fix") == 0)
+		if (strcmp(val, "enforce") != 0 && strcmp(val, "fix") != 0)
+			return -EPERM;
+
+		ret = ima_policy_appraises_exec(policy_path, &read_err);
+		if (ret == -EACCES) {
+			/*
+			 * Nothing published what the kernel loaded, so the mode
+			 * is all there is.
+			 * Said out loud, because "enforcing" here means the mode
+			 * alone and an operator reading the startup log is entitled
+			 * to know which of the two was checked.
+			 */
+			lota_warn("IMA appraisal mode is %s but %s could not "
+				  "be read (%s): whether any executable is "
+				  "appraised is unverified",
+				  val, policy_path, strerror(-read_err));
 			return 0;
-		return -EPERM;
+		}
+		return ret;
 	}
 	return -EPERM;
 }
@@ -629,7 +711,17 @@ int bpf_loader_verify_kernel_runtime_hardening(bool allow_mutable_rootfs)
 		return ret;
 	}
 
-	ret = kernel_ima_appraise_enforcing();
+	ret = bpf_loader_ima_appraisal_active(IMA_CMDLINE_PATH,
+					      IMA_POLICY_PATH);
+	if (ret == -ENOENT) {
+		lota_err("IMA appraisal is in a blocking mode but %s carries "
+			 "no appraise rule for func=BPRM_CHECK, so no "
+			 "executable on this host is appraised; the rules are "
+			 "in %s and the routes that supply the signatures they "
+			 "verify are in the production bringup guide",
+			 IMA_POLICY_PATH, LOTA_IMA_POLICY_ASSET);
+		return ret;
+	}
 	if (ret < 0) {
 		lota_err("IMA appraisal is not in an enforcing mode "
 			 "(ima_appraise=enforce or fix required on the kernel "
