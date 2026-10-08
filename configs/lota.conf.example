@@ -129,6 +129,10 @@ aik_ttl = 0
 
 # Optional absolute path to currently booted kernel image.
 # Use this on distros that do not expose /boot/vmlinuz-<release>.
+# It tells the agent where to find the image -- `--test-tpm` hashes it.
+# It does not select what `--export-policy` exports: the measured-boot digest
+# in an exported policy is the value of a PCR as this host booted,
+# so the document names that register and the running kernel.
 # kernel_path = /efi/EFI/Linux/linux.efi
 
 # ---- Daemon --------------------------------------------------------------

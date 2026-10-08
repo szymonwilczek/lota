@@ -674,6 +674,16 @@ int tpm_hash_file(const char *path, uint8_t *hash);
 int tpm_set_kernel_path(struct tpm_context *ctx, const char *path);
 
 /*
+ * tpm_kernel_path_is_overridden - has a configuration named the kernel image?
+ *
+ * The override tells the agent where to find the running kernel on a distribution
+ * that ships no /proc/self/exe-style path for it.
+ * It selects nothing about a measured-boot PCR, so a caller that reports on one
+ * asks this in order to say so.
+ */
+bool tpm_kernel_path_is_overridden(const struct tpm_context *ctx);
+
+/*
  * tpm_get_current_kernel_path - Find current running kernel image
  * @ctx: TPM context containing optional kernel path override
  * @buf: Output buffer for path

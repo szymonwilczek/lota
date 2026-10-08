@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <openssl/types.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <tss2/tss2_tpm2_types.h>
 
 #include "../../include/attestation.h"
@@ -196,13 +197,33 @@ int export_policy(int mode)
 		}
 	}
 
-	/* Boot-chain measurement digest (kernel-relevant PCR selection) */
-	ret = tpm_get_current_kernel_path(&g_agent.tpm_ctx, snap.kernel_path,
-					  sizeof(snap.kernel_path));
-	if (ret < 0) {
+	/*
+	 * Boot-chain measurement digest (kernel-relevant PCR selection).
+	 *
+	 * No file is read for it, so the exported document is given the register
+	 * it came from and the kernel this host is running.
+	 * A configured kernel_path tells the agent where to find the kernel image
+	 * on a distribution that does not ship /boot/vmlinuz-<release>;
+	 * it selects nothing about this digest.
+	 */
+	{
+		struct utsname uts;
+
+		if (uname(&uts) == 0)
+			snprintf(snap.kernel_release,
+				 sizeof(snap.kernel_release), "%s",
+				 uts.release);
+		else
+			fprintf(stderr,
+				"Warning: Failed to read the running kernel release: %s\n",
+				strerror(errno));
+	}
+
+	if (tpm_kernel_path_is_overridden(&g_agent.tpm_ctx)) {
 		fprintf(stderr,
-			"Warning: Failed to find kernel path metadata: %s\n",
-			tpm_strerror(ret));
+			"Note: kernel_path does not affect this policy. The "
+			"measured-boot digest below is the value of a PCR as "
+			"this host booted, not a hash of any file.\n");
 	}
 
 	{
@@ -211,6 +232,7 @@ int export_policy(int mode)
 			&g_agent.tpm_ctx, snap.kernel_hash, &selected_pcr);
 		if (ret == 0) {
 			snap.kernel_hash_valid = true;
+			snap.kernel_hash_pcr = selected_pcr;
 			fprintf(stderr,
 				"Kernel measurement digest source: PCR %d "
 				"(measured boot)\n",
