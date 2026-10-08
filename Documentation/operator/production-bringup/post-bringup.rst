@@ -58,6 +58,13 @@ The most common failures, with the gate that produced them:
   message names the path. Nothing has been spent: PCR 14 still holds the
   initramfs lock value, so correcting the policy and starting the unit again
   brings the host up in the same boot, with no reboot needed.
+* ``No process is running under PID <n>, so there is nothing to protect``. A
+  ``--protect-pid`` or ``protect_pid =`` entry names a process that is not up.
+  The protected set is seeded at startup from processes that already exist, so
+  a pid recorded before a restart is stale by the time the agent reads it. This
+  refusal also arrives before the boot commitment, so the host keeps its
+  attestation; a process that starts after the agent registers itself through
+  the SDK, with ``lota_protect_self()``, and needs no entry here at all.
 * ``Refusing GET_TOKEN for pid=<pid>: no TPM on this agent``. The agent holds
   no TPM context, so it has nothing to sign a token with, and it never issues
   an unsigned one -- a token nobody signed is not evidence. The SDK is

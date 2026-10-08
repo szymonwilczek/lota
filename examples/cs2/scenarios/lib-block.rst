@@ -81,7 +81,10 @@ Two paths feed the protected_pids map:
   the agent CLI.
 - **Manual register.** For out-of-game reproductions, or for a binary that does
   not link the hook, pass ``--protect-pid <pid>`` to the agent at startup. The
-  PID must already exist when the agent attaches its BPF programs.
+  PID must already be running when the agent starts: the agent reads it before
+  it commits to the boot and refuses to start when nothing holds it, naming the
+  pid. Nothing is spent by that refusal, so starting again with a live pid
+  needs no reboot.
 
 Terminal 2: follow the kernel-side block events
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
