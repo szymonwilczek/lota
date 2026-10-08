@@ -987,11 +987,19 @@ static int resolve_token_dir(const struct lota_ac_config *cfg, char *out,
 	return 0;
 }
 
+/*
+ * TRUSTED means attested, whatever else the caller asked for.
+ *
+ * required_flags is added to LOTA_FLAG_ATTESTED, never used in its place.
+ * A non-zero word proves nothing: TPM_OK is set as soon as the agent holds
+ * a TPM, so a host that has completed no round with any verifier still
+ * reports a non-zero word, with ATTESTED clear.
+ */
 static int is_trusted(uint32_t flags, uint32_t required)
 {
-	if (required)
-		return (flags & required) == required;
-	return flags != 0;
+	uint32_t need = required | LOTA_FLAG_ATTESTED;
+
+	return (flags & need) == need;
 }
 
 const char *lota_ac_strerror(int err)
@@ -1223,15 +1231,13 @@ int lota_ac_get_info(const struct lota_ac_session *session,
 		return -EINVAL;
 
 	info->provider = session->provider;
-	info->state = (session->state == LOTA_AC_STATE_ERROR) ?
-			      LOTA_AC_STATE_ERROR :
-			      LOTA_AC_STATE_RUNNING;
+	info->state = session->state;
 	memcpy(info->session_id, session->session_id, LOTA_AC_SESSION_ID_SIZE);
 	info->session_start = session->session_start;
 	info->last_heartbeat = session->last_heartbeat;
 	info->heartbeat_seq = session->heartbeat_seq;
 	info->lota_flags = session->lota_flags;
-	info->trusted = 0;
+	info->trusted = session->state == LOTA_AC_STATE_TRUSTED;
 
 	return 0;
 }

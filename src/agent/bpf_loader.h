@@ -267,6 +267,17 @@ int bpf_loader_kernel_module_sig_enforced(void);
 int bpf_loader_kernel_lockdown_restrictive(void);
 
 /*
+ * bpf_loader_ima_appraisal_active - Is IMA appraising an executable here?
+ * @cmdline_path: kernel cmdline carrying ima_appraise= (the mode)
+ * @policy_path: loaded IMA policy carrying the func= rules (the scope)
+ *
+ * Returns: 0 when appraisal blocks on an integrity failure, negative errno
+ * otherwise.
+ */
+int bpf_loader_ima_appraisal_active(const char *cmdline_path,
+				    const char *policy_path);
+
+/*
  * bpf_loader_secure_boot_enabled - Check UEFI Secure Boot state
  *
  * Returns: 0 when the kernel exposes SecureBoot=1 through efivarfs, negative
@@ -279,7 +290,8 @@ int bpf_loader_secure_boot_enabled(void);
  *
  * Ensures runtime prerequisites expected by LOTA self-protection are active:
  *   - Linux lockdown mode is restrictive (integrity or confidentiality)
- *   - IMA policy is present and contains appraisal rules
+ *   - kernel module signatures are enforced
+ *   - IMA appraisal blocks on failure and its policy reaches executables
  *
  * Returns: 0 on success, negative errno on failure
  */

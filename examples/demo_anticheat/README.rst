@@ -278,7 +278,12 @@ full coverage is the publisher's policy call:
 The two are different statements. ``--require-full-image`` on the producer
 sets ``required_flags``, so the *client's* own session state reads
 ``UNTRUSTED`` -- useful for a launcher that wants to say so before a round
-starts. The verdict a backend acts on is the server's, so a publisher that
+starts. That field only adds to the bar: ``LOTA_AC_STATE_TRUSTED`` means the
+host is attested, so a session that names no extra flag still needs
+``LOTA_FLAG_ATTESTED`` and a host with a live agent and no verdict from anybody
+reads ``UNTRUSTED``. ``lota_ac_get_info()`` reports the same state and a
+``trusted`` field derived from it; both are local telemetry, and neither is the
+verdict a backend acts on. The verdict a backend acts on is the server's, so a publisher that
 means it sets the flag on the server: the token carries the coverage bit, the
 signature covers it, and the reason names the missing flag.
 

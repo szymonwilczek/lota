@@ -581,7 +581,7 @@ static void test_get_info_null_info(void)
 
 static void test_get_info_fields(void)
 {
-	TEST("get_info returns local telemetry only");
+	TEST("get_info returns the session's own telemetry");
 	write_mock_snapshot(test_dir, 0x07);
 
 	struct lota_ac_config cfg = {
@@ -607,7 +607,8 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(provider) ");
 	}
-	if (info.state != LOTA_AC_STATE_RUNNING) {
+	/* 0x07 carries ATTESTED, so the session is trusted and says so */
+	if (info.state != LOTA_AC_STATE_TRUSTED) {
 		ok = 0;
 		printf("(state) ");
 	}
@@ -619,7 +620,7 @@ static void test_get_info_fields(void)
 		ok = 0;
 		printf("(flags) ");
 	}
-	if (info.trusted != 0) {
+	if (info.trusted != 1) {
 		ok = 0;
 		printf("(trusted) ");
 	}
@@ -1946,6 +1947,130 @@ static void test_session_id_unique(void)
 		FAIL("same session_id");
 }
 
+/*
+ * TRUSTED is documented as "attested", so a host that has never completed a round
+ * must not reach it -- least of all under the permissive configuration a first
+ * integration reaches for.
+ * A status word is non-zero as soon as the agent has a TPM handle, which is not
+ * a verdict from anybody.
+ */
+static void test_unattested_host_is_not_trusted(void)
+{
+	char dir[512];
+
+	TEST("no ATTESTED flag -> UNTRUSTED even with no requirement");
+	snprintf(dir, sizeof(dir), "%s/unattested", test_dir);
+	mkdir(dir, 0700);
+
+	/* TPM_OK | IOMMU_OK: the agent is up, nobody has attested it */
+	write_mock_snapshot(dir, LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "unattested",
+		.token_dir = dir,
+		.required_flags = 0,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) == LOTA_AC_STATE_TRUSTED)
+		FAIL("a host that never attested is called trusted");
+	else if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("expected UNTRUSTED");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/* required_flags raises the bar; it cannot lower it below attestation */
+static void test_required_flags_cannot_drop_attested(void)
+{
+	char dir[512];
+
+	TEST("required_flags without ATTESTED still needs ATTESTED");
+	snprintf(dir, sizeof(dir), "%s/req_no_att", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "req-no-att",
+		.token_dir = dir,
+		.required_flags = LOTA_FLAG_TPM_OK,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("a requirement that omits ATTESTED trusted the host");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
+/*
+ * The two roads out of one session have to answer the same thing.
+ * Both are local telemetry and neither is authoritative -- that is what
+ * the header says about the info road -- so disagreeing buys nothing
+ * and costs an integrator the bug.
+ */
+static void test_info_agrees_with_state(void)
+{
+	struct lota_ac_info info;
+	char dir[512];
+
+	TEST("get_info reports the state get_state reports");
+	snprintf(dir, sizeof(dir), "%s/info_agree", test_dir);
+	mkdir(dir, 0700);
+
+	write_mock_snapshot(dir, LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK);
+
+	struct lota_ac_config cfg = {
+		.struct_size = sizeof(cfg),
+		.provider = LOTA_AC_PROVIDER_EAC,
+		.game_id = "info-agree",
+		.token_dir = dir,
+	};
+	struct lota_ac_session *s = lota_ac_init(&cfg);
+	if (!s) {
+		FAIL("init failed");
+		return;
+	}
+
+	if (lota_ac_get_state(s) != LOTA_AC_STATE_TRUSTED) {
+		FAIL("preconditions: expected TRUSTED");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	if (lota_ac_get_info(s, &info) != 0) {
+		FAIL("get_info failed");
+		lota_ac_shutdown(s);
+		return;
+	}
+
+	if (info.state != LOTA_AC_STATE_TRUSTED)
+		FAIL("info.state disagrees with get_state");
+	else if (!info.trusted)
+		FAIL("info.trusted is clear on a trusted session");
+	else
+		PASS();
+
+	lota_ac_shutdown(s);
+}
+
 int main(void)
 {
 	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
@@ -2023,6 +2148,9 @@ int main(void)
 	test_state_str();
 	test_provider_str();
 	test_tick_null();
+	test_unattested_host_is_not_trusted();
+	test_required_flags_cannot_drop_attested();
+	test_info_agrees_with_state();
 	test_session_id_unique();
 
 	cleanup_test_dir();
