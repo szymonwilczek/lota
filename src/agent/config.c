@@ -276,6 +276,27 @@ static int check_attest_interval(long v, const char *key, const char *filepath,
 	return -1;
 }
 
+/* The default a host falls back to has to be one an operator could have set. */
+_Static_assert(TPM_AIK_DEFAULT_TTL_SEC >= MIN_AIK_TTL,
+	       "the default AIK TTL must not sit below the floor");
+
+/* One sentence, so the two roads cannot drift into two answers. */
+#define AIK_TTL_LIFTED_MSG "Warning: AIK TTL %u too low, using %ds (1 hour)\n"
+
+uint32_t config_clamp_aik_ttl(uint32_t ttl, const char *filepath, int lineno)
+{
+	if (ttl == 0 || ttl >= MIN_AIK_TTL)
+		return ttl;
+
+	if (filepath)
+		fprintf(stderr, "%s:%d: " AIK_TTL_LIFTED_MSG, filepath, lineno,
+			ttl, MIN_AIK_TTL);
+	else
+		fprintf(stderr, AIK_TTL_LIFTED_MSG, ttl, MIN_AIK_TTL);
+
+	return MIN_AIK_TTL;
+}
+
 /*
  * Apply a single key = value pair to the profile a [profile "name"] header
  * opened.
@@ -916,7 +937,8 @@ static int apply_key(struct lota_config *cfg, const char *key,
 				filepath, lineno, value);
 			return -1;
 		}
-		cfg->aik_ttl = (uint32_t)v;
+		cfg->aik_ttl =
+			config_clamp_aik_ttl((uint32_t)v, filepath, lineno);
 		return 0;
 	}
 	if (strcmp(key, "aik_handle") == 0 || strcmp(key, "aik-handle") == 0) {

@@ -1003,6 +1003,104 @@ static void test_config_load_attest_interval_bounds(void)
 	PASS();
 }
 
+static void test_config_load_aik_ttl_floor(void)
+{
+	struct lota_config cfg;
+	char path[PATH_MAX];
+	char content[64];
+	int ret;
+
+	TEST("config_load lifts aik_ttl below the floor");
+	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL - 1);
+	write_config("ttl_low.conf", content);
+	config_path("ttl_low.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected 0, got %d", ret);
+		FAIL(msg);
+		return;
+	}
+	if (cfg.aik_ttl != MIN_AIK_TTL) {
+		char msg[64];
+		snprintf(msg, sizeof(msg), "expected %d, got %u", MIN_AIK_TTL,
+			 cfg.aik_ttl);
+		FAIL(msg);
+		return;
+	}
+	PASS();
+
+	TEST("config_load keeps aik_ttl at the floor");
+	snprintf(content, sizeof(content), "aik_ttl = %d\n", MIN_AIK_TTL);
+	write_config("ttl_floor.conf", content);
+	config_path("ttl_floor.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0 || cfg.aik_ttl != MIN_AIK_TTL) {
+		FAIL("floor value not applied");
+		return;
+	}
+	PASS();
+
+	/* 0 selects the built-in default and is not a rotation cadence,
+	 * so the floor must leave it alone */
+	TEST("config_load keeps aik_ttl = 0 (the default)");
+	write_config("ttl_zero.conf", "aik_ttl = 0\n");
+	config_path("ttl_zero.conf", path, sizeof(path));
+	config_init(&cfg);
+	ret = config_load(&cfg, path);
+	if (ret != 0 || cfg.aik_ttl != 0) {
+		FAIL("zero was clamped");
+		return;
+	}
+	PASS();
+
+	/* The dump is what --add-publisher rewrites lota.conf from,
+	 * so a clamped value has to survive the round trip as the clamped one */
+	TEST("config_dump writes the lifted aik_ttl back");
+	{
+		struct lota_config reloaded;
+		char dump_path[PATH_MAX];
+		FILE *f;
+		int fd;
+
+		snprintf(content, sizeof(content), "aik_ttl = %d\n",
+			 MIN_AIK_TTL - 1);
+		write_config("ttl_dump_src.conf", content);
+		config_path("ttl_dump_src.conf", path, sizeof(path));
+		config_init(&cfg);
+		if (config_load(&cfg, path) != 0) {
+			FAIL("load source");
+			return;
+		}
+
+		snprintf(dump_path, sizeof(dump_path), "%s/ttl_dumped.conf",
+			 tmpdir);
+		fd = open(dump_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		f = fd >= 0 ? fdopen(fd, "w") : NULL;
+		if (fd >= 0 && !f)
+			close(fd);
+		if (!f) {
+			FAIL("fopen dump");
+			return;
+		}
+		config_dump(&cfg, f);
+		fclose(f);
+
+		config_init(&reloaded);
+		if (config_load(&reloaded, dump_path) != 0) {
+			FAIL("reload dump");
+			return;
+		}
+		if (reloaded.aik_ttl != MIN_AIK_TTL) {
+			FAIL("dump did not carry the lifted value");
+			return;
+		}
+	}
+	PASS();
+}
+
 static void test_config_load_profiles(void)
 {
 	struct lota_config cfg;
@@ -2024,6 +2122,7 @@ int main(void)
 		test_config_load_empty_value,
 		test_config_load_port_bounds,
 		test_config_load_attest_interval_bounds,
+		test_config_load_aik_ttl_floor,
 		test_config_load_profiles,
 		test_config_profile_reporting,
 		test_config_load_profile_incomplete,

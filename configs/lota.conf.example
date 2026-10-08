@@ -93,7 +93,9 @@ bpf_path = /usr/lib/lota/lota_lsm.bpf.o
 # profile under /var/lib/lota/profiles/
 attest_interval = 300
 
-# AIK key lifetime in seconds before rotation (0 = default 30 days)
+# AIK key lifetime in seconds before rotation (0 = default 30 days).
+# The floor is 3600: below it a host rotates its attestation key faster than
+# an enrolment completes. The same floor applies to --aik-ttl.
 aik_ttl = 0
 
 # ---- Sealed AIK auth (at-rest hardening) ---------------------------------

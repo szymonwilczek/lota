@@ -21,6 +21,16 @@
 #define MAX_BACKOFF_SECONDS 300 /* Max retry delay */
 
 /*
+ * Operator-facing floor on the AIK rotation TTL.
+ *
+ * Below it a host rotates its attestation key faster than an enrolment completes:
+ * every rotation invalidates the certificate that names the old key, so the host
+ * churns TPM key creation and CA round trips.
+ * Shared so the command line and the configuration file enforce the same floor.
+ */
+#define MIN_AIK_TTL 3600 /* seconds */
+
+/*
  * Slack added to the interval when the attestation loop sets token's valid_until,
  * so token outlives the round that minted it.
  */
