@@ -22,7 +22,13 @@
 #   sudo sed -i "s/=1000/=${uid}/g" \
 #       /etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf
 #   sudo systemctl daemon-reload
-#   sudo systemctl restart lota-agent.socket
+#
+# The listener is built when the agent starts, so the drop-in takes
+# effect at the next boot. Do not restart the units to shorten that:
+# lota-agent.socket Triggers= the service and the service Requires=
+# the socket, so restarting either runs ExecStop=lota-agent
+# --shutdown, which spends the boot's PCR 14 commitment and stops
+# the host attesting until it reboots.
 #
 # `lota-steam-setup --install-systemd-dropin` automates the same
 # substitution + install pair for the calling user.
@@ -32,8 +38,9 @@
 # `container_listener_uid` config knob in /etc/lota/lota.conf
 # instead. Each entry yields a /run/user/<uid>/lota/lota.sock
 # listener at startup, capped at LOTA_CONFIG_MAX_CONTAINER_LISTENERS.
-# `lota-steam-setup --register-uid` automates the conf-file edit and
-# the lota-agent.service restart for the caller's $SUDO_UID.
+# `lota-steam-setup --register-uid` automates the conf-file edit for
+# the caller's $SUDO_UID; it restarts nothing either, for the same
+# reason.
 
 [Service]
 Environment=XDG_RUNTIME_DIR=/run/user/1000

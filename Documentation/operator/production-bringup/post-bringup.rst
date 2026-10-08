@@ -193,6 +193,18 @@ did. When the socket is absent it names the two things that produce one --
 a registered UID and a boot since it was registered -- and does not suggest
 restarting the agent.
 
+Single-operator hosts can reach the same listener by the other road:
+``lota-steam-setup --install-systemd-dropin`` writes
+``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``, which pins
+``XDG_RUNTIME_DIR`` for the service so the agent builds the listener under
+that user's runtime directory. It is read at startup like the configuration
+key, so it lands at the next boot, and the verb restarts nothing to shorten
+that: ``lota-agent.socket`` triggers the service and the service requires the
+socket, so restarting either one runs the graceful shutdown and spends the
+boot's PCR 14 commitment -- the host then attests again only after a reboot,
+which is the wait the restart was meant to avoid. Reboot, then run
+``lota-steam-setup --verify`` from the operator's session.
+
 A diagnostic server started beside the daemon leaves that socket alone.
 ``--test-ipc`` and ``--test-signed`` read the same ``container_listener_uid``
 setting and would bind the same path, so each probes it first and refuses one
