@@ -60,7 +60,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build all
@@ -147,7 +148,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build SDK libraries
@@ -286,7 +288,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Run C micro-benchmarks (smoke)
@@ -447,7 +450,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Run clang static analyzer
@@ -663,7 +667,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under ASan + UBSan
@@ -711,7 +716,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under ThreadSanitizer
@@ -759,7 +765,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build all
@@ -849,7 +856,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build and run unit tests under clang ASan + UBSan
@@ -894,7 +902,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build CI-safe userspace artifacts under ASan + UBSan
@@ -943,7 +952,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Memcheck CLI smoke paths

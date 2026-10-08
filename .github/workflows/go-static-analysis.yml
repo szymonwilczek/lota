@@ -30,7 +30,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Verify go.mod is tidy
@@ -131,7 +132,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/attestca/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/attestca/go.sum
 
       - name: Initialise a SoftHSM token
@@ -182,7 +184,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       - name: Coverage ratchet
@@ -210,7 +213,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: |
             src/verifier/go.sum
             src/attestca/go.sum
@@ -270,7 +274,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: src/verifier/go.sum
 
       # exercises the Postgres store backend against a real server: schema

@@ -157,7 +157,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: false
 
       - name: Install ko

@@ -60,7 +60,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           # a release builds the shipped artifacts; disable the module cache so
           # a poisoned cache entry cannot influence the signed output
           cache: false
@@ -158,7 +159,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: src/verifier/go.mod
+          go-version: '1.26.x'
+          check-latest: true
           cache: false
 
       - name: Install ko
