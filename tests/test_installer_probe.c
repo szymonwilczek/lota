@@ -1004,6 +1004,79 @@ static void test_selfcheck_plan(void)
 	PASS();
 }
 
+/*
+ * A path the operator typed, checked before anything runs.
+ *
+ * The three cases the option table produces: an option nobody used, one whose
+ * file is there, and one whose file is not. Only the last is a mistake,
+ * and the refusal has to carry both the flag and the path, since an operator
+ * with four file-taking options and one message needs to know which of them
+ * it is about.
+ */
+static void test_named_files(void)
+{
+	char note[STAGE_NOTE_CAP];
+	char tmp[] = "/tmp/lota_named_XXXXXX";
+	int fd;
+
+	TEST("an option the operator did not use is not checked");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", NULL },
+			{ "--policy-pubkey", NULL },
+		};
+
+		note[0] = '\0';
+		if (probe_named_files(files, 2, note, sizeof(note)) != 0)
+			FAIL("a NULL path was treated as a missing file");
+		else
+			PASS();
+	}
+
+	fd = mkstemp(tmp);
+	if (fd >= 0)
+		close(fd);
+
+	TEST("a file that is there is accepted");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", tmp },
+		};
+
+		if (fd < 0) {
+			FAIL("cannot create a temporary file");
+		} else if (probe_named_files(files, 1, note, sizeof(note)) !=
+			   0) {
+			FAIL("a readable file was refused");
+		} else {
+			PASS();
+		}
+	}
+
+	TEST("a file that is not there is refused by flag and path");
+	{
+		const struct probe_named_file files[] = {
+			{ "--ca-cert", tmp },
+			{ "--policy-pubkey", "/nonexistent/lota-key.pub" },
+		};
+		int rc;
+
+		note[0] = '\0';
+		rc = probe_named_files(files, 2, note, sizeof(note));
+		if (rc != -ENOENT)
+			FAIL("a missing file did not report ENOENT");
+		else if (!strstr(note, "--policy-pubkey"))
+			FAIL("the refusal does not name the flag");
+		else if (!strstr(note, "/nonexistent/lota-key.pub"))
+			FAIL("the refusal does not name the path");
+		else
+			PASS();
+	}
+
+	if (fd >= 0)
+		unlink(tmp);
+}
+
 int main(void)
 {
 	printf("installer probe helpers:\n");
@@ -1027,6 +1100,7 @@ int main(void)
 	test_manifest_line();
 	test_installed_kernels();
 	test_barrier_stage_verdicts();
+	test_named_files();
 
 	printf("%d/%d tests passed\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;

@@ -694,8 +694,13 @@ static enum stage_state st_selinux_probe(struct install_ctx *ctx, char *note,
 
 	if (dev == 0 && agent_label_ok() && lota_state_label_ok()) {
 		snprintf(note, cap,
-			 "TPM device, agent binary and state directory "
-			 "carry the LOTA SELinux labels.");
+			 "TPM device, agent binary and state directory carry "
+			 "the LOTA SELinux labels.%s",
+			 ctx->opts.selinux_module_named ?
+				 " The policy was already in place, so the "
+				 "module named by --selinux-module was not "
+				 "loaded." :
+				 "");
 		return STAGE_DONE;
 	}
 	if (dev == -ENOENT) {
