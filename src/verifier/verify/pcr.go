@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -506,7 +507,16 @@ func agentHashAllowed(reported [types.HashSize]byte, allowedHashes []string) boo
 
 func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, policy *PCRPolicy, facts *BootFacts) error {
 	// check pcr values
-	for pcrIdx, expectedHex := range policy.PCRs {
+	//
+	// collect every mismatch in index order: a boot chain moves several
+	// registers at once, and map iteration is random, so the failure must name
+	// all of them and read the same on every round
+	var stale []string
+	for _, pcrIdx := range slices.Sorted(maps.Keys(policy.PCRs)) {
+		expectedHex := policy.PCRs[pcrIdx]
+
+		// policy faults, not host state: stop here, since nothing
+		// the reports can answer them
 		if pcrIdx < 0 || pcrIdx >= types.PCRCount {
 			return fmt.Errorf("invalid PCR index in policy '%s': %d", policy.Name, pcrIdx)
 		}
@@ -523,9 +533,12 @@ func (v *PCRVerifier) verifyAgainstPolicy(report *types.AttestationReport, polic
 
 		actual := report.TPM.PCRValues[pcrIdx][:]
 		if !bytes.Equal(actual, expected) {
-			return fmt.Errorf("PCR %d mismatch: got %s, expected %s",
-				pcrIdx, hex.EncodeToString(actual), expectedHex)
+			stale = append(stale, fmt.Sprintf("PCR %d mismatch: got %s, expected %s",
+				pcrIdx, hex.EncodeToString(actual), expectedHex))
 		}
+	}
+	if len(stale) > 0 {
+		return errors.New(strings.Join(stale, "; "))
 	}
 
 	// check kernel hash
