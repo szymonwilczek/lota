@@ -20,8 +20,8 @@
 
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
-#include "lota_server.h"
 #include "lota_snapshot.h"
+#include "lota_token.h"
 
 static int tests_run;
 static int tests_passed;
@@ -1034,8 +1034,8 @@ static void test_verify_roundtrip(void)
 	ret = lota_ac_verify_heartbeat(buf, written, NULL, 0,
 				       expected_game_hash, expected_rm,
 				       &verified);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1068,8 +1068,8 @@ static void test_verify_battleye_roundtrip(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(
 		buf, written, NULL, 0, expected_game_hash, expected_rm, &info);
-	if (ret != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+	if (ret != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 	PASS();
@@ -1077,7 +1077,7 @@ static void test_verify_battleye_roundtrip(void)
 
 static void test_verify_rejects_game_hash_mismatch(void)
 {
-	TEST("verify: wrong expected game hash -> BAD_TOKEN");
+	TEST("verify: wrong expected game hash -> MALFORMED");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t wrong_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	size_t written = 0;
@@ -1093,8 +1093,8 @@ static void test_verify_rejects_game_hash_mismatch(void)
 	struct lota_ac_info info;
 	int ret = lota_ac_verify_heartbeat(buf, written, NULL, 0, wrong_hash,
 					   any_rm, &info);
-	if (ret != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+	if (ret != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 
@@ -1133,15 +1133,15 @@ static void test_verify_null_info(void)
 
 static void test_verify_truncated(void)
 {
-	TEST("verify: truncated data -> BAD_TOKEN");
+	TEST("verify: truncated data -> MALFORMED");
 	uint8_t data[32] = { 0 };
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE] = { 0 };
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1149,7 +1149,7 @@ static void test_verify_truncated(void)
 
 static void test_verify_bad_magic(void)
 {
-	TEST("verify: bad magic -> BAD_TOKEN");
+	TEST("verify: bad magic -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1166,8 +1166,8 @@ static void test_verify_bad_magic(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1175,7 +1175,7 @@ static void test_verify_bad_magic(void)
 
 static void test_verify_bad_version(void)
 {
-	TEST("verify: bad version -> BAD_VERSION");
+	TEST("verify: bad version -> VERSION");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1201,7 +1201,7 @@ static void test_verify_bad_version(void)
 
 static void test_verify_bad_provider(void)
 {
-	TEST("verify: bad provider -> BAD_TOKEN");
+	TEST("verify: bad provider -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1218,8 +1218,8 @@ static void test_verify_bad_provider(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1227,7 +1227,7 @@ static void test_verify_bad_provider(void)
 
 static void test_verify_size_mismatch(void)
 {
-	TEST("verify: total_size > actual len -> BAD_TOKEN");
+	TEST("verify: total_size > actual len -> MALFORMED");
 	uint8_t data[LOTA_AC_HEADER_SIZE + 96];
 	memset(data, 0, sizeof(data));
 
@@ -1244,8 +1244,8 @@ static void test_verify_size_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(data, sizeof(data), NULL, 0,
 				     expected_game_hash, any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_MALFORMED) {
+		FAIL("expected LOTA_AC_ERR_MALFORMED");
 		return;
 	}
 	PASS();
@@ -1281,8 +1281,8 @@ static void test_verify_header_flags_tamper_rejected(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_INVALID_ARG) {
-		FAIL("expected LOTA_SERVER_ERR_INVALID_ARG");
+				     &info) != LOTA_AC_ERR_INVALID_ARG) {
+		FAIL("expected LOTA_AC_ERR_INVALID_ARG");
 		return;
 	}
 
@@ -1291,7 +1291,7 @@ static void test_verify_header_flags_tamper_rejected(void)
 
 static void test_verify_rejects_unknown_domain_version(void)
 {
-	TEST("verify: unknown domain_version -> BAD_VERSION");
+	TEST("verify: unknown domain_version -> VERSION");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	size_t written = 0;
@@ -1314,9 +1314,8 @@ static void test_verify_rejects_unknown_domain_version(void)
 	uint8_t any_rm[LOTA_AC_RUNTIME_MEASURE_SIZE] = { 0 };
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
-				     any_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_VERSION) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_VERSION");
+				     any_rm, &info) != LOTA_AC_ERR_VERSION) {
+		FAIL("expected LOTA_AC_ERR_VERSION");
 		return;
 	}
 	PASS();
@@ -1324,7 +1323,7 @@ static void test_verify_rejects_unknown_domain_version(void)
 
 static void test_verify_rejects_runtime_measure_mismatch(void)
 {
-	TEST("verify: wrong expected runtime measure -> BAD_TOKEN");
+	TEST("verify: wrong expected runtime measure -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t wrong_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1351,8 +1350,8 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     wrong_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
@@ -1360,7 +1359,7 @@ static void test_verify_rejects_runtime_measure_mismatch(void)
 
 static void test_verify_rejects_runtime_field_tamper(void)
 {
-	TEST("verify: tampered runtime_measure field -> BAD_TOKEN");
+	TEST("verify: tampered runtime_measure field -> RUNTIME_IMAGE");
 	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
 	uint8_t expected_game_hash[LOTA_AC_GAME_HASH_SIZE];
 	uint8_t expected_rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
@@ -1388,8 +1387,8 @@ static void test_verify_rejects_runtime_field_tamper(void)
 	struct lota_ac_info info;
 	if (lota_ac_verify_heartbeat(buf, written, NULL, 0, expected_game_hash,
 				     expected_rm,
-				     &info) != LOTA_SERVER_ERR_BAD_TOKEN) {
-		FAIL("expected LOTA_SERVER_ERR_BAD_TOKEN");
+				     &info) != LOTA_AC_ERR_RUNTIME_IMAGE) {
+		FAIL("expected LOTA_AC_ERR_RUNTIME_IMAGE");
 		return;
 	}
 	PASS();
@@ -2071,6 +2070,115 @@ static void test_info_agrees_with_state(void)
 	lota_ac_shutdown(s);
 }
 
+/* Every code this library defines, for the checks that must cover all of them */
+static const int ac_error_codes[] = {
+	LOTA_AC_ERR_INVALID_ARG,     LOTA_AC_ERR_MALFORMED,
+	LOTA_AC_ERR_VERSION,	     LOTA_AC_ERR_SIG_FAIL,
+	LOTA_AC_ERR_NONCE_FAIL,	     LOTA_AC_ERR_EXPIRED,
+	LOTA_AC_ERR_CRYPTO,	     LOTA_AC_ERR_CONFIG_SIZE,
+	LOTA_AC_ERR_GAME_ID,	     LOTA_AC_ERR_PROVIDER,
+	LOTA_AC_ERR_NO_MEMORY,	     LOTA_AC_ERR_INTERNAL,
+	LOTA_AC_ERR_NO_AGENT,	     LOTA_AC_ERR_CONSENT_REQUIRED,
+	LOTA_AC_ERR_UNKNOWN_PROFILE, LOTA_AC_ERR_ACCESS_DENIED,
+	LOTA_AC_ERR_TOKEN_DIR,	     LOTA_AC_ERR_NOT_ATTESTED,
+	LOTA_AC_ERR_RATE_LIMITED,    LOTA_AC_ERR_STATUS,
+	LOTA_AC_ERR_TOKEN,	     LOTA_AC_ERR_MEASURE,
+	LOTA_AC_ERR_SERIALIZE,
+};
+
+/* The errno values the measure helpers are documented to return */
+static const int helper_errnos[] = {
+	EPERM, ENOENT, EIO, E2BIG, ENOEXEC, ENOMEM, EINVAL,
+};
+
+static int renders_as_a_verdict(int err)
+{
+	const char *s = lota_ac_strerror(err);
+	size_t i;
+
+	for (i = 0; i < sizeof(ac_error_codes) / sizeof(ac_error_codes[0]);
+	     i++) {
+		if (strcmp(s, lota_ac_strerror(ac_error_codes[i])) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Two numbering spaces must not share a range.
+ * The measure helpers return negative errno by their documented contract,
+ * so an integrator printing this library's own message for one of them was
+ * told about heartbeat nonces and signature failures that never happened.
+ */
+static void test_errno_is_not_rendered_as_a_verdict(void)
+{
+	size_t i;
+
+	TEST("strerror: an errno does not render as a verdict");
+
+	for (i = 0; i < sizeof(helper_errnos) / sizeof(helper_errnos[0]); i++) {
+		if (renders_as_a_verdict(-helper_errnos[i])) {
+			printf("(errno %d) ", helper_errnos[i]);
+			FAIL("an errno renders as one of this library's codes");
+			return;
+		}
+	}
+
+	PASS();
+}
+
+/* The guard: no code may occupy a number an errno could occupy */
+static void test_error_codes_sit_outside_the_errno_range(void)
+{
+	size_t i;
+
+	TEST("codes: none of them can collide with an errno");
+
+	for (i = 0; i < sizeof(ac_error_codes) / sizeof(ac_error_codes[0]);
+	     i++) {
+		if (ac_error_codes[i] > -256) {
+			printf("(%d) ", ac_error_codes[i]);
+			FAIL("a code sits where an errno sits");
+			return;
+		}
+	}
+
+	PASS();
+}
+
+/*
+ * The trigger, as an integrator meets it: a file that is not an ELF object
+ * fails the precompute helper, and the natural next line is to print this
+ * library's message for what came back.
+ */
+static void test_measure_failure_does_not_render_as_a_verdict(void)
+{
+	uint8_t out[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	char path[512];
+	const char *vec[1];
+	int rc;
+
+	TEST("a failed measurement does not render as a verdict");
+
+	snprintf(path, sizeof(path), "%s/not-an-elf", test_dir);
+	write_test_file(test_dir, "not-an-elf", "no", 2);
+
+	vec[0] = path;
+	rc = lota_ac_compute_expected_runtime_measure_set(vec, 1, out);
+	if (rc == 0) {
+		FAIL("preconditions: a non-ELF file was measured");
+		return;
+	}
+
+	if (renders_as_a_verdict(rc)) {
+		printf("(%s) ", lota_ac_strerror(rc));
+		FAIL("the failure is reported as a heartbeat verdict");
+		return;
+	}
+
+	PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
@@ -2148,6 +2256,9 @@ int main(void)
 	test_state_str();
 	test_provider_str();
 	test_tick_null();
+	test_errno_is_not_rendered_as_a_verdict();
+	test_error_codes_sit_outside_the_errno_range();
+	test_measure_failure_does_not_render_as_a_verdict();
 	test_unattested_host_is_not_trusted();
 	test_required_flags_cannot_drop_attested();
 	test_info_agrees_with_state();
