@@ -21,7 +21,9 @@
 #include "lota_anticheat.h"
 #include "lota_gaming.h"
 #include "lota_snapshot.h"
+#include "lota_server.h"
 #include "lota_token.h"
+#include "token_forge.h"
 
 static int tests_run;
 static int tests_passed;
@@ -2179,6 +2181,160 @@ static void test_measure_failure_does_not_render_as_a_verdict(void)
 	PASS();
 }
 
+/*
+ * A heartbeat that survives verification: the same packet the bound builder makes,
+ * but carrying a token signed by @key over the nonce this packet binds.
+ * Nothing short of this reaches the verdict lota_ac_verify_heartbeat() renders,
+ * because everything before it refuses first.
+ */
+static int
+build_signed_heartbeat_packet(EVP_PKEY *key, uint8_t *out, size_t out_cap,
+			      size_t *out_len, uint8_t provider,
+			      const char *game_id, uint32_t flags,
+			      uint8_t out_game_hash[LOTA_AC_GAME_HASH_SIZE],
+			      uint8_t out_rm[LOTA_AC_RUNTIME_MEASURE_SIZE])
+{
+	uint8_t session_id[LOTA_AC_SESSION_ID_SIZE];
+	uint8_t nonce[32];
+	uint8_t token[2048];
+	uint64_t timestamp = (uint64_t)time(NULL);
+	size_t token_len = 0;
+	size_t total;
+
+	for (int i = 0; i < (int)sizeof(session_id); i++)
+		session_id[i] = (uint8_t)(0xA0 + i);
+
+	if (compute_game_id_hash_test(game_id, out_game_hash) != 0)
+		return -EIO;
+	if (lota_ac_compute_runtime_measure(out_rm) != 0)
+		return -EIO;
+	if (compute_hb_nonce_test(nonce, session_id, provider, 0, flags,
+				  timestamp, out_game_hash, out_rm,
+				  LOTA_AC_DOMAIN_VERSION_CURRENT) != 0)
+		return -EIO;
+
+	if (forge_token_sha256(key, timestamp + LOTA_SERVER_MAX_TOKEN_AGE_SEC,
+			       flags, nonce, token, sizeof(token),
+			       &token_len) != LOTA_OK)
+		return -EIO;
+
+	total = LOTA_AC_HEADER_SIZE + token_len;
+	if (total > out_cap)
+		return -ENOSPC;
+
+	write_le32(out + 0, LOTA_AC_MAGIC);
+	out[4] = LOTA_AC_VERSION;
+	out[5] = provider;
+	write_le16(out + 6, (uint16_t)total);
+	memcpy(out + 8, session_id, sizeof(session_id));
+	write_le32(out + 24, 0);
+	write_le32(out + 28, flags);
+	for (int i = 0; i < 8; i++)
+		out[32 + i] = (uint8_t)((timestamp >> (8 * i)) & 0xFF);
+	memcpy(out + 40, out_game_hash, LOTA_AC_GAME_HASH_SIZE);
+	write_le16(out + 72, (uint16_t)token_len);
+	write_le32(out + 74, LOTA_AC_DOMAIN_VERSION_CURRENT);
+	memcpy(out + 78, out_rm, LOTA_AC_RUNTIME_MEASURE_SIZE);
+	memcpy(out + LOTA_AC_HEADER_SIZE, token, token_len);
+
+	*out_len = total;
+	return 0;
+}
+
+/*
+ * The verdict a backend acts on, over a packet with nothing wrong with it.
+ *
+ * @flags is the status word the token carries. TRUSTED is documented as attested,
+ * so a word without LOTA_FLAG_ATTESTED must not reach it however genuine
+ * the packet around it is.
+ */
+static int verified_state(uint32_t flags, enum lota_ac_state *state,
+			  int *trusted)
+{
+	uint8_t buf[LOTA_AC_MAX_HEARTBEAT];
+	uint8_t game_hash[LOTA_AC_GAME_HASH_SIZE];
+	uint8_t rm[LOTA_AC_RUNTIME_MEASURE_SIZE];
+	struct lota_ac_info info;
+	EVP_PKEY *key = forge_rsa_key();
+	uint8_t *aik_der = NULL;
+	size_t aik_len = 0;
+	size_t written = 0;
+	int ret;
+
+	if (!key)
+		return -EIO;
+
+	aik_der = forge_pubkey_der(key, &aik_len);
+	if (!aik_der) {
+		EVP_PKEY_free(key);
+		return -EIO;
+	}
+
+	ret = build_signed_heartbeat_packet(key, buf, sizeof(buf), &written,
+					    LOTA_AC_PROVIDER_EAC,
+					    "verified-trust", flags, game_hash,
+					    rm);
+	if (ret == 0) {
+		ret = lota_ac_verify_heartbeat(buf, written, aik_der, aik_len,
+					       game_hash, rm, &info);
+		if (ret == LOTA_AC_ERR_OK) {
+			*state = info.state;
+			*trusted = info.trusted;
+		}
+	}
+
+	free(aik_der);
+	EVP_PKEY_free(key);
+	return ret;
+}
+
+static void test_verified_unattested_host_is_not_trusted(void)
+{
+	enum lota_ac_state state = LOTA_AC_STATE_IDLE;
+	int trusted = -1;
+	int ret;
+
+	TEST("verify: a genuine packet from an unattested host is untrusted");
+
+	/* TPM_OK | IOMMU_OK: the agent is up, nobody has attested it */
+	ret = verified_state(LOTA_FLAG_TPM_OK | LOTA_FLAG_IOMMU_OK, &state,
+			     &trusted);
+	if (ret != LOTA_AC_ERR_OK) {
+		printf("(rc=%d) ", ret);
+		FAIL("preconditions: the packet did not verify");
+		return;
+	}
+
+	if (trusted || state == LOTA_AC_STATE_TRUSTED)
+		FAIL("a host that never attested verified as trusted");
+	else if (state != LOTA_AC_STATE_UNTRUSTED)
+		FAIL("expected UNTRUSTED");
+	else
+		PASS();
+}
+
+static void test_verified_attested_host_is_trusted(void)
+{
+	enum lota_ac_state state = LOTA_AC_STATE_IDLE;
+	int trusted = -1;
+	int ret;
+
+	TEST("verify: a genuine packet from an attested host is trusted");
+
+	ret = verified_state(LOTA_FLAG_ATTESTED | LOTA_FLAG_TPM_OK, &state,
+			     &trusted);
+	if (ret != LOTA_AC_ERR_OK) {
+		printf("(rc=%d) ", ret);
+		FAIL("preconditions: the packet did not verify");
+		return;
+	}
+
+	if (!trusted || state != LOTA_AC_STATE_TRUSTED)
+		FAIL("an attested host did not verify as trusted");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA Anti-Cheat Compatibility Tests ===\n\n");
@@ -2256,6 +2412,8 @@ int main(void)
 	test_state_str();
 	test_provider_str();
 	test_tick_null();
+	test_verified_unattested_host_is_not_trusted();
+	test_verified_attested_host_is_trusted();
 	test_errno_is_not_rendered_as_a_verdict();
 	test_error_codes_sit_outside_the_errno_range();
 	test_measure_failure_does_not_render_as_a_verdict();

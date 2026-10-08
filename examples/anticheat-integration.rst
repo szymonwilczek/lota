@@ -74,7 +74,10 @@ The shape of the integration
    against the AIK it has on record for that client.
 4. **Your backend decides.** LOTA reports what the host is; the gameplay
    consequence -- kick, queue separation, flag for review -- is yours and
-   is deliberately not in this repository.
+   is deliberately not in this repository. A packet that verifies is called
+   trusted only if the signed status word says the host is attested; a backend
+   that wants more than attestation reads ``info.lota_flags``, which carries
+   that same word, and judges it.
 
 Build against the package, not the tree
 =======================================
