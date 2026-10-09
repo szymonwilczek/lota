@@ -271,7 +271,7 @@ func newMonitoringHTTPServer(addr string, handler http.Handler) *http.Server {
 // starts the HTTP monitoring API server
 func (s *Server) startHTTP() error {
 	mux := http.NewServeMux()
-	NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey, s.readerAPIKey)
+	api := NewAPIHandler(mux, s.verifier, s, s.auditLog, s.log, s.metrics, s.attestationLog, s.adminAPIKey, s.readerAPIKey)
 
 	s.httpServer = newMonitoringHTTPServer(s.httpAddr, mux)
 
@@ -305,26 +305,7 @@ func (s *Server) startHTTP() error {
 		"admin_auth", s.adminAPIKey != "",
 		"reader_auth", s.readerAPIKey != "",
 		"scoped_keys", s.apiKeys.Load().Len(),
-		"endpoints", []string{
-			"GET /health",
-			"GET /api/v1/stats",
-			"GET /api/v1/clients",
-			"GET /api/v1/clients/{id}",
-			"POST /api/v1/clients/{id}/revoke",
-			"DELETE /api/v1/clients/{id}/revoke",
-			"DELETE /api/v1/clients/{id}",
-			"POST /api/v1/clients/{id}/reanchor",
-			"GET /api/v1/reanchor/review",
-			"POST /api/v1/clients/{id}/reanchor-review-ack",
-			"GET /api/v1/revocations",
-			"POST /api/v1/bans",
-			"DELETE /api/v1/bans/{id}",
-			"GET /api/v1/bans",
-			"GET /api/v1/audit",
-			"GET /api/v1/attestations",
-			"POST /api/v1/session/validate",
-			"GET /metrics",
-		})
+		"endpoints", api.AdvertisedRoutes())
 
 	go func() {
 		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {

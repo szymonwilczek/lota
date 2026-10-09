@@ -55,6 +55,8 @@ type APIHandler struct {
 	readerAPIKey   string // if non-empty, required for sensitive read-only endpoints
 	adminKeyHash   [32]byte
 	readerKeyHash  [32]byte
+	routes         []string // patterns handed to the mux, in order
+	endpoints      []string // what those patterns serve, as an operator calls it
 }
 
 // creates a new API handler and registers routes on the given mux
@@ -95,44 +97,79 @@ func NewAPIHandler(mux *http.ServeMux, verifier *verify.Verifier, srv *Server, a
 	}
 
 	// public monitoring endpoints (no auth required)
-	mux.HandleFunc("GET /health", h.handleHealth)
+	h.handle(mux, "GET /health", h.handleHealth)
 
 	// operational intelligence endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/stats", h.requireReader(h.handleStats))
-	mux.HandleFunc("GET /metrics", h.requireReader(h.handleMetrics))
+	h.handle(mux, "GET /api/v1/stats", h.requireReader(h.handleStats))
+	h.handle(mux, "GET /metrics", h.requireReader(h.handleMetrics))
 
 	// sensitive read-only endpoints (reader or admin auth required)
-	mux.HandleFunc("GET /api/v1/clients", h.requireReader(h.handleListClients))
-	mux.HandleFunc("GET /api/v1/clients/", h.requireReader(h.handleClientInfo))
-	mux.HandleFunc("GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
-	mux.HandleFunc("GET /api/v1/bans", h.requireReader(h.handleListBans))
-	mux.HandleFunc("GET /api/v1/audit", h.requireReader(h.handleAuditLog))
-	mux.HandleFunc("GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
+	h.handle(mux, "GET /api/v1/clients", h.requireReader(h.handleListClients))
+	h.handle(mux, "GET /api/v1/clients/", h.requireReader(h.handleClientInfo),
+		"GET /api/v1/clients/{id}")
+	h.handle(mux, "GET /api/v1/revocations", h.requireReader(h.handleListRevocations))
+	h.handle(mux, "GET /api/v1/bans", h.requireReader(h.handleListBans))
+	h.handle(mux, "GET /api/v1/audit", h.requireReader(h.handleAuditLog))
+	h.handle(mux, "GET /api/v1/attestations", h.requireReader(h.handleAttestationLog))
 
 	// revocation management (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/", h.requireAdmin(h.handleClientAction))
-	mux.HandleFunc("DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction))
+	h.handle(mux, "POST /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"POST /api/v1/clients/{id}/revoke")
+	h.handle(mux, "DELETE /api/v1/clients/", h.requireAdmin(h.handleClientAction),
+		"DELETE /api/v1/clients/{id}/revoke", "DELETE /api/v1/clients/{id}")
 
 	// post-fact review of Low-Firmware-Assurance re-anchors.
 	// LFA re-anchors apply automatically; these endpoints let an operator see
 	// which clients took that path and acknowledge having reviewed them.
 	// Acknowledge route is more specific than the POST /clients/ pattern
 	// above, so Go's mux routes it here.
-	mux.HandleFunc("GET /api/v1/reanchor/review",
+	h.handle(mux, "GET /api/v1/reanchor/review",
 		h.requireReader(h.handleReanchorReviewList))
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor-review-ack",
-		h.requireAdmin(h.handleReanchorReviewAck))
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor-review-ack",
+		h.requireAdmin(h.handleReanchorReviewAck),
+		"POST /api/v1/clients/{id}/reanchor-review-ack")
 
 	// operator-forced re-baseline;
 	// deliberate counterpart of the self-service re-anchor above (admin auth required)
-	mux.HandleFunc("POST /api/v1/clients/{clientID}/reanchor",
-		h.requireAdmin(h.handleForceReanchor))
+	h.handle(mux, "POST /api/v1/clients/{clientID}/reanchor",
+		h.requireAdmin(h.handleForceReanchor),
+		"POST /api/v1/clients/{id}/reanchor")
 
 	// hardware ban management (admin auth required)
-	mux.HandleFunc("POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
-	mux.HandleFunc("DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware))
+	h.handle(mux, "POST /api/v1/bans", h.requireAdmin(h.handleBanHardware))
+	h.handle(mux, "DELETE /api/v1/bans/", h.requireAdmin(h.handleUnbanHardware),
+		"DELETE /api/v1/bans/{id}")
 
 	return h
+}
+
+// handle registers a route and records both the pattern the mux matches on
+// and the endpoints an operator can call. They differ where one pattern
+// dispatches several actions by path: the pattern is what routing needs,
+// the endpoints are what an inventory has to name.
+// Given no endpoints, a route advertises itself.
+func (h *APIHandler) handle(mux *http.ServeMux, pattern string,
+	handler http.HandlerFunc, endpoints ...string,
+) {
+	h.routes = append(h.routes, pattern)
+	if len(endpoints) == 0 {
+		endpoints = []string{pattern}
+	}
+	h.endpoints = append(h.endpoints, endpoints...)
+	mux.HandleFunc(pattern, handler)
+}
+
+// RegisteredRoutes is every pattern handed to the mux, in registration order.
+// Its counterpart is AdvertisedRoutes(), which is what an operator is told.
+func (h *APIHandler) RegisteredRoutes() []string {
+	return h.routes
+}
+
+// AdvertisedRoutes is what the instance tells an operator it exposes.
+// It is what the routes above registered, so the banner cannot name an endpoint
+// nothing serves or omit one that is served.
+func (h *APIHandler) AdvertisedRoutes() []string {
+	return h.endpoints
 }
 
 // principalCtxKey carries the authenticated Principal through the
