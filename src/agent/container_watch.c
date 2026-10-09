@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
@@ -140,6 +141,77 @@ static int watch_start(struct container_watch *w)
 
 	w->fd = fd;
 	w->wd = wd;
+	return 0;
+}
+
+int container_watch_uid_of_runtime_dir(const char *runtime_dir, uint32_t *uid)
+{
+	const char *tail;
+	char *end;
+	unsigned long value;
+	size_t root_len = strlen(CONTAINER_WATCH_RUNTIME_ROOT);
+
+	if (!runtime_dir || !uid)
+		return -EINVAL;
+
+	if (strncmp(runtime_dir, CONTAINER_WATCH_RUNTIME_ROOT, root_len) != 0 ||
+	    runtime_dir[root_len] != '/')
+		return -ENOENT;
+
+	tail = runtime_dir + root_len + 1;
+	if (*tail == '\0')
+		return -ENOENT;
+
+	errno = 0;
+	value = strtoul(tail, &end, 10);
+
+	/* trailing slash is the only thing allowed after the number */
+	if (errno != 0 || end == tail || value > UINT32_MAX)
+		return -EINVAL;
+	if (*end == '/')
+		end++;
+	if (*end != '\0')
+		return -EINVAL;
+
+	*uid = (uint32_t)value;
+	return 0;
+}
+
+int container_watch_plan(const uint32_t *cfg_uids, int cfg_uid_count,
+			 const char *runtime_dir, uint32_t *out, int max_out)
+{
+	if (!out || max_out <= 0)
+		return -EINVAL;
+
+	if (cfg_uid_count < 0)
+		return -EINVAL;
+
+	if (cfg_uid_count > 0) {
+		if (!cfg_uids)
+			return -EINVAL;
+		if (cfg_uid_count > max_out)
+			return -E2BIG;
+
+		for (int i = 0; i < cfg_uid_count; i++)
+			out[i] = cfg_uids[i];
+		return cfg_uid_count;
+	}
+
+	/*
+	 * Single-operator host names no UID.
+	 * Its listener still belongs to a login that does not exist when
+	 * the daemon starts, so it is watched like any other.
+	 */
+	if (runtime_dir) {
+		uint32_t uid;
+
+		if (container_watch_uid_of_runtime_dir(runtime_dir, &uid) ==
+		    0) {
+			out[0] = uid;
+			return 1;
+		}
+	}
+
 	return 0;
 }
 

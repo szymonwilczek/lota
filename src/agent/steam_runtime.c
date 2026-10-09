@@ -259,6 +259,25 @@ const char *steam_runtime_type_str(enum steam_runtime_type type)
 	return "invalid";
 }
 
+int steam_runtime_runtime_dir(char *buf, size_t bufsz)
+{
+	const char *xdg;
+	int n;
+
+	if (!buf || bufsz == 0)
+		return -EINVAL;
+
+	xdg = get_env_safe("XDG_RUNTIME_DIR", PATH_MAX);
+	if (!xdg)
+		return -ENOENT;
+
+	n = snprintf(buf, bufsz, "%s", xdg);
+	if (n < 0 || (size_t)n >= bufsz)
+		return -ENAMETOOLONG;
+
+	return 0;
+}
+
 int steam_runtime_container_socket_dir(char *buf, size_t bufsz)
 {
 	const char *xdg;

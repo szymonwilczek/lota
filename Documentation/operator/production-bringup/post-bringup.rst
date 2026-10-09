@@ -211,7 +211,10 @@ Single-operator hosts can reach the same listener by the other road:
 ``lota-steam-setup --install-systemd-dropin`` writes
 ``/etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf``, which pins
 ``XDG_RUNTIME_DIR`` for the service so the agent builds the listener under
-that user's runtime directory. It is read at startup like the configuration
+that user's runtime directory. That directory names the login it belongs to,
+so the listener follows it the same way the configuration key's does: the
+agent starts before anyone has logged in, and the socket is laid down when
+logind creates the directory. It is read at startup like the configuration
 key, so it lands at the next boot, and the verb restarts nothing to shorten
 that: ``lota-agent.socket`` triggers the service and the service requires the
 socket, so restarting either one runs the graceful shutdown and spends the

@@ -323,6 +323,92 @@ static void test_retries_failed_bind(void)
 	logout(PLAYER_UID);
 }
 
+/*
+ * The single-operator host names no UID and is pointed at the agent's own
+ * runtime directory by the shipped drop-in. That directory belongs to one
+ * login, so it names the UID whose login the listener has to follow
+ * -- the daemon starts at multi-user.target, before anyone has logged in,
+ * and logind creates the directory at login.
+ */
+static void test_a_runtime_dir_names_the_login_to_watch(void)
+{
+	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	int n;
+
+	TEST("the agent's runtime directory names the login to watch");
+
+	n = container_watch_plan(NULL, 0, "/run/user/1000", uids,
+				 LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+	if (n < 0)
+		FAIL("the runtime directory produced no plan");
+	else if (n != 1)
+		FAIL("the runtime directory named no single login");
+	else if (uids[0] != 1000)
+		FAIL("the wrong login was planned for");
+	else
+		PASS();
+}
+
+/* A configuration that names UIDs answers for itself, runtime dir or not. */
+static void test_configured_uids_win_over_the_runtime_dir(void)
+{
+	const uint32_t cfg_uids[] = { 1001, 1002 };
+	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	int n;
+
+	TEST("configured UIDs are the plan, runtime directory or not");
+
+	n = container_watch_plan(cfg_uids, 2, "/run/user/1000", uids,
+				 LOTA_CONFIG_MAX_CONTAINER_LISTENERS);
+	if (n != 2)
+		FAIL("the configured UIDs were not the plan");
+	else if (uids[0] != 1001 || uids[1] != 1002)
+		FAIL("the plan is not the configured UIDs");
+	else
+		PASS();
+}
+
+/*
+ * A runtime directory that is not one of logind's cannot name a login,
+ * so there is nothing to watch for and the caller has to hear about it.
+ */
+static void test_a_foreign_runtime_dir_names_no_login(void)
+{
+	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+	uint32_t uid = 4242;
+
+	TEST("a runtime directory outside /run/user names no login");
+
+	if (container_watch_plan(NULL, 0, "/tmp/some-runtime", uids,
+				 LOTA_CONFIG_MAX_CONTAINER_LISTENERS) != 0)
+		FAIL("a directory that names no login produced a plan");
+	else if (container_watch_uid_of_runtime_dir("/tmp/some-runtime",
+						    &uid) >= 0)
+		FAIL("a directory outside the runtime root named a login");
+	else if (container_watch_uid_of_runtime_dir("/run/user/notanumber",
+						    &uid) >= 0)
+		FAIL("a runtime directory with no UID in it named a login");
+	else if (container_watch_uid_of_runtime_dir("/run/user/1000/", &uid) <
+			 0 ||
+		 uid != 1000)
+		FAIL("a trailing slash lost the login");
+	else
+		PASS();
+}
+
+/* Nothing to go on at all is a plan of nothing, not a guess. */
+static void test_no_configuration_and_no_runtime_dir_plans_nothing(void)
+{
+	uint32_t uids[LOTA_CONFIG_MAX_CONTAINER_LISTENERS];
+
+	TEST("no configuration and no runtime directory plans nothing");
+	if (container_watch_plan(NULL, 0, NULL, uids,
+				 LOTA_CONFIG_MAX_CONTAINER_LISTENERS) != 0)
+		FAIL("something was planned out of nothing");
+	else
+		PASS();
+}
+
 int main(void)
 {
 	printf("=== LOTA container listener tracking tests ===\n\n");
@@ -334,6 +420,10 @@ int main(void)
 	test_rebinds_second_login();
 	test_ignores_unconfigured_uid();
 	test_retries_failed_bind();
+	test_a_runtime_dir_names_the_login_to_watch();
+	test_configured_uids_win_over_the_runtime_dir();
+	test_a_foreign_runtime_dir_names_no_login();
+	test_no_configuration_and_no_runtime_dir_plans_nothing();
 
 	cleanup_root();
 

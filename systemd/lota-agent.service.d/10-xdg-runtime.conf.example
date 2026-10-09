@@ -23,8 +23,11 @@
 #       /etc/systemd/system/lota-agent.service.d/10-xdg-runtime.conf
 #   sudo systemctl daemon-reload
 #
-# The listener is built when the agent starts, so the drop-in takes
-# effect at the next boot. Do not restart the units to shorten that:
+# The drop-in is read when the agent starts, so it takes effect at
+# the next boot. The listener itself follows the login: the path names
+# a uid under /run/user, and the socket is laid down when logind creates
+# that directory, which is after the agent starts.
+# Do not restart the units to shorten the wait for the drop-in:
 # lota-agent.socket Triggers= the service and the service Requires=
 # the socket, so restarting either runs ExecStop=lota-agent
 # --shutdown, which spends the boot's PCR 14 commitment and stops

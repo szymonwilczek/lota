@@ -51,6 +51,33 @@ struct container_watch {
 };
 
 /*
+ * container_watch_plan - which logins get a watched container listener
+ * @cfg_uids: UIDs the configuration names, or NULL
+ * @cfg_uid_count: how many of them
+ * @runtime_dir: the agent's own XDG_RUNTIME_DIR, or NULL when unset
+ * @out: filled with the UIDs to watch
+ * @max_out: capacity of @out
+ *
+ * A configuration that names UIDs answers the question by itself.
+ * The single-operator host names none and is pointed at the agent's own runtime
+ * directory instead, which belongs to one login and so stands for one UID.
+ *
+ * Returns the number of UIDs written to @out, or a negative errno.
+ */
+int container_watch_plan(const uint32_t *cfg_uids, int cfg_uid_count,
+			 const char *runtime_dir, uint32_t *out, int max_out);
+
+/*
+ * container_watch_uid_of_runtime_dir - whose login is this directory
+ * @runtime_dir: a path such as /run/user/1000
+ * @uid: filled with the UID the directory belongs to
+ *
+ * Returns 0, or a negative errno when the path is not a per-user runtime
+ * directory under CONTAINER_WATCH_RUNTIME_ROOT.
+ */
+int container_watch_uid_of_runtime_dir(const char *runtime_dir, uint32_t *uid);
+
+/*
  * container_watch_init - watch @root for logins and bind what is there
  * @root: parent of the per-user runtime directories, or NULL for
  *        CONTAINER_WATCH_RUNTIME_ROOT.
