@@ -180,7 +180,8 @@ AGTEST_SRCS = tests/test_main.c \
             tests/test_tpm_aik.c \
             tests/test_server_sdk.c \
             tests/test_anticheat_compat.c \
-            tests/test_loader_symbols.c \
+            tests/test_loader_attach.c \
+            tests/test_integrity_baseline.c \
               $(AGENT_DIR)/report.c \
               $(AGENT_DIR)/hash_verify.c \
               $(AGENT_DIR)/daemon.c \
@@ -1220,10 +1221,11 @@ TEST_BINS := \
 	$(TEST_BIN_DIR)/test_seal_tpm \
 	$(TEST_BIN_DIR)/test_seal_aik \
 	$(TEST_BIN_DIR)/test_ipc_dos \
-	$(TEST_BIN_DIR)/test_loader_symbols \
+	$(TEST_BIN_DIR)/test_loader_attach \
 	$(TEST_BIN_DIR)/test_bpf_loader_load_source \
 	$(TEST_BIN_DIR)/test_bpf_object_preflight \
 	$(TEST_BIN_DIR)/test_ima_policy_scope \
+	$(TEST_BIN_DIR)/test_integrity_baseline \
 	$(TEST_BIN_DIR)/test_protect_pid_validation \
 	$(TEST_BIN_DIR)/test_installer_probe \
 	$(TEST_BIN_DIR)/test_installer_named_paths \
@@ -1630,7 +1632,7 @@ $(TEST_BIN_DIR)/test_ipc_dos: tests/test_ipc_dos.c $(SDK_LIB) | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $< -L$(BUILD_DIR) -llotagaming -Wl,-rpath,$(abspath $(BUILD_DIR))
 
-$(TEST_BIN_DIR)/test_loader_symbols: tests/test_loader_symbols.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+$(TEST_BIN_DIR)/test_loader_attach: tests/test_loader_attach.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
@@ -1657,6 +1659,10 @@ $(TEST_BIN_DIR)/test_bpf_object_preflight: tests/test_bpf_object_preflight.c $(A
 		-Wl,--wrap=policy_verify_buffer
 
 $(TEST_BIN_DIR)/test_ima_policy_scope: tests/test_ima_policy_scope.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
+	$(QUIET_CC)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
+
+$(TEST_BIN_DIR)/test_integrity_baseline: tests/test_integrity_baseline.c $(AGENT_DIR)/bpf_loader.c $(AGENT_DIR)/journal.c $(AGENT_DIR)/policy_sign.c $(AGENT_DIR)/sb_dev.c | $(BUILD_DIR)
 	$(QUIET_CC)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lbpf -lsystemd -lcrypto
 
@@ -1750,10 +1756,11 @@ test-unit: all $(TEST_BINS)
 	@$(BUILD_DIR)/test_seal_envelope
 	@$(BUILD_DIR)/test_seal_tpm
 	@$(BUILD_DIR)/test_seal_aik
-	@$(BUILD_DIR)/test_loader_symbols
+	@$(BUILD_DIR)/test_loader_attach
 	@$(BUILD_DIR)/test_bpf_loader_load_source
 	@$(BUILD_DIR)/test_bpf_object_preflight
 	@$(BUILD_DIR)/test_ima_policy_scope
+	@$(BUILD_DIR)/test_integrity_baseline
 	@echo ""
 	@echo "=== Running integration tests (best effort) ==="
 	@if [ -x $(AGENT_BIN) ] && command -v openssl >/dev/null 2>&1; then \
@@ -1856,11 +1863,11 @@ VALGRIND_UNIT_BINS := \
 	test_policy_export test_aik_rotation test_initramfs_lock \
 	test_installer_probe test_devt test_sb_dev test_kernel_measure test_event_budget \
 	test_ptrace_policy test_signal_policy test_module_purpose \
-	test_server_sdk test_anticheat test_loader_symbols test_enroll_state \
+	test_server_sdk test_anticheat test_loader_attach test_enroll_state \
 	test_profile_id test_attest_targets test_attest_reload test_attest_aggregate \
 	test_status_flags test_terminate_policy \
 	test_publisher_profile test_verify_result_str test_connect_hint \
-	test_xattr_carry test_ima_policy_scope
+	test_xattr_carry test_ima_policy_scope test_integrity_baseline
 
 valgrind-unit: $(TEST_BINS)
 	@echo "=== Running unit tests under valgrind memcheck ==="

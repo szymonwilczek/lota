@@ -111,11 +111,13 @@ static void collect_kernel_security_features(bool *module_sig, bool *secureboot,
 					     bool *lockdown)
 {
 	if (module_sig)
-		*module_sig = bpf_loader_kernel_module_sig_enforced() == 0;
+		*module_sig = bpf_loader_kernel_module_sig_enforced(
+				      LOTA_MODULE_SIG_ENFORCE_PATH) == 0;
 	if (secureboot)
 		*secureboot = bpf_loader_secure_boot_enabled() == 0;
 	if (lockdown)
-		*lockdown = bpf_loader_kernel_lockdown_restrictive() == 0;
+		*lockdown = bpf_loader_kernel_lockdown_restrictive(
+				    LOTA_KERNEL_LOCKDOWN_PATH) == 0;
 }
 
 /*

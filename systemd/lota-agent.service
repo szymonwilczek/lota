@@ -163,9 +163,12 @@ ProtectKernelLogs=no
 ProtectControlGroups=yes
 
 # hide other PIDs in /proc; ProcSubset=pid is intentionally not set
-# because the BPF loader reads /proc/kallsyms to pin sig_enforce and
-# lockdown addresses into the integrity_cfg map, and the IOMMU gate
-# reads /proc/cmdline to confirm intel_iommu=on / iommu=pt.
+# because the IOMMU gate reads /proc/cmdline to confirm
+# intel_iommu=on / iommu=pt and the IMA gate reads it for ima_appraise=.
+# Nothing here reads /proc/kallsyms: ProtectKernelTunables=yes above
+# bind-mounts an empty file over it, so a symbol table is a road this
+# daemon does not have. The kernel integrity baseline the module
+# and firmware branches stand on is read out of sysfs by the hardening gate.
 ProtectProc=invisible
 
 # protect the system clock

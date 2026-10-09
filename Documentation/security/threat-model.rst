@@ -335,6 +335,12 @@ Active threats
    * - Kernel module or memory-only load
      - | Kernel lockdown, module signature enforcement, and BPF LSM gates reject
          unsafe load paths.
+       | In enforce mode a module or firmware load also stands on the kernel
+         integrity baseline: module signatures enforced and lockdown at
+         integrity or above. The startup hardening gate reads both out of
+         sysfs and refuses to start the agent without them, and neither can
+         fall while the kernel runs, so a running agent has already
+         established the baseline and the hook reads its verdict.
        | With ``strict_modules``, a module load has to name a file in the
          fs-verity allowlist, in either form the kernel accepts: the image
          itself, and the compressed file ``modprobe`` hands the kernel on a

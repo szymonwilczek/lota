@@ -303,43 +303,30 @@ static __always_inline u32 get_mode(void)
 }
 
 /*
- * Verify kernel integrity baseline directly from kernel memory.
+ * Verify the kernel integrity baseline the agent's startup gate established.
+ *
+ * The gate reads both properties out of sysfs and refuses to start without them,
+ * and neither can fall while the kernel runs, so the verdict in the map is the
+ * same answer a read of kernel memory would give -- from the one producer,
+ * on a road that exists whatever the daemon's mount namespace hides.
+ * A zero value is the map before the agent has written it.
+ *
  * Returns 1 if baseline is satisfied, 0 otherwise.
  */
 static __always_inline int integrity_baseline_ok(struct integrity_data *cfg)
 {
-	int sig_enforce = 0;
-	int lockdown = 0;
-
 	if (!cfg)
 		return 0;
 
-	if (!cfg->sig_enforce_addr)
-		return 0;
-
-	if (bpf_probe_read_kernel(&sig_enforce, sizeof(sig_enforce),
-				  (void *)cfg->sig_enforce_addr) < 0)
-		return 0;
-
-	if (sig_enforce != 1) {
+	if (!cfg->sig_enforce) {
 		lota_bpf_debug("LOTA: BLOCKING module load: sig_enforce=%d",
-			       sig_enforce);
+			       cfg->sig_enforce);
 		return 0;
 	}
 
-	if (!cfg->lockdown_addr) {
-		lota_bpf_debug(
-			"LOTA: BLOCKING module load: lockdown symbol unavailable");
-		return 0;
-	}
-
-	if (bpf_probe_read_kernel(&lockdown, sizeof(lockdown),
-				  (void *)cfg->lockdown_addr) < 0)
-		return 0;
-
-	if (lockdown <= 0) {
+	if (!cfg->lockdown) {
 		lota_bpf_debug("LOTA: BLOCKING module load: lockdown=%d",
-			       lockdown);
+			       cfg->lockdown);
 		return 0;
 	}
 
