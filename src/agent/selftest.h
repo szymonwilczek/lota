@@ -3,6 +3,7 @@
 #ifndef LOTA_SELFTEST_H
 #define LOTA_SELFTEST_H
 
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -32,6 +33,47 @@ static inline enum selftest_aik_plan selftest_aik_plan(int holds_object)
 {
 	return holds_object == 1 ? SELFTEST_AIK_USE_EXISTING :
 				   SELFTEST_AIK_SKIP;
+}
+
+/*
+ * What a probe learned about the things it tried.
+ *
+ * A probe runs several operations and reports each.
+ * Whether the command as a whole succeeded is a question about all of them,
+ * and a caller that gates on the exit status is asking exactly that
+ * -- so the answer is kept.
+ *
+ * A section that could not be reached is not a failure: nothing about it was
+ * learned, which is a different thing from learning that it does not work.
+ */
+struct selftest_tally {
+	int passed;
+	int failed;
+	int skipped;
+};
+
+static inline void selftest_record(struct selftest_tally *t, int ret)
+{
+	if (ret < 0)
+		t->failed++;
+	else
+		t->passed++;
+}
+
+static inline void selftest_skip(struct selftest_tally *t)
+{
+	t->skipped++;
+}
+
+/*
+ * The exit status a probe leaves behind.
+ *
+ * A script gating on the command is asking whether this host can do what
+ * the probe exercised, so the answer is built from the tally.
+ */
+static inline int selftest_verdict(const struct selftest_tally *t)
+{
+	return t->failed > 0 ? -EIO : 0;
 }
 
 /*

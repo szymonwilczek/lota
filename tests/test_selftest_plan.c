@@ -14,6 +14,7 @@
  * at the handle.
  */
 
+#include <errno.h>
 #include <stdio.h>
 
 #include "../src/agent/selftest.h"
@@ -56,12 +57,58 @@ static void test_unreadable_tpm_creates_nothing(void)
 	      "provision");
 }
 
+/*
+ * The failure the verb exists to catch.
+ * A quote the TPM refuses is the one result that matters -- it is what
+ * attestation needs and what spends a dictionary-attack attempt -- and a caller
+ * gating on the command has only the exit status to read it from.
+ */
+static void test_a_failed_section_is_not_success(void)
+{
+	struct selftest_tally t = { .passed = 8, .failed = 1, .skipped = 0 };
+
+	CHECK(selftest_verdict(&t) != 0,
+	      "a probe with a failed section does not report success");
+}
+
+/* Nothing failed is success, however much was skipped. */
+static void test_nothing_failed_is_success(void)
+{
+	struct selftest_tally all_good = { .passed = 9,
+					   .failed = 0,
+					   .skipped = 0 };
+	struct selftest_tally skipped = { .passed = 7,
+					  .failed = 0,
+					  .skipped = 2 };
+
+	CHECK(selftest_verdict(&all_good) == 0,
+	      "a probe where everything worked reports success");
+	CHECK(selftest_verdict(&skipped) == 0,
+	      "a section that could not be reached is not a failure");
+}
+
+/* The tally is what the sections write into, so it has to record both ways. */
+static void test_the_tally_counts_what_it_is_told(void)
+{
+	struct selftest_tally t = { 0 };
+
+	selftest_record(&t, 0);
+	selftest_record(&t, -EIO);
+	selftest_skip(&t);
+
+	CHECK(t.passed == 1 && t.failed == 1 && t.skipped == 1,
+	      "a pass, a failure and a skip are counted apart");
+}
+
 int main(void)
 {
 	printf("=== --test-tpm attestation-key plan ===\n");
 	test_existing_key_is_used();
 	test_free_handle_creates_nothing();
 	test_unreadable_tpm_creates_nothing();
+	test_a_failed_section_is_not_success();
+	test_nothing_failed_is_success();
+	test_the_tally_counts_what_it_is_told();
 
 	if (g_failures) {
 		fprintf(stderr, "\n%d test(s) failed\n", g_failures);

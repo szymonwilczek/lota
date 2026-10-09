@@ -40,6 +40,7 @@ void print_hex(const char *label, const uint8_t *data, size_t len)
 
 int test_tpm(void)
 {
+	struct selftest_tally tally = { 0 };
 	int ret;
 	uint8_t pcr_value[LOTA_HASH_SIZE];
 	uint8_t kernel_hash[LOTA_HASH_SIZE];
@@ -61,6 +62,7 @@ int test_tpm(void)
 
 	printf("Running TPM self-test...\n");
 	ret = tpm_self_test(&g_agent.tpm_ctx);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "TPM self-test failed: %s\n",
 			tpm_strerror(ret));
@@ -71,6 +73,7 @@ int test_tpm(void)
 
 	printf("Reading PCR 0 (SRTM)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 0, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR 0: %s\n",
 			tpm_strerror(ret));
@@ -80,6 +83,7 @@ int test_tpm(void)
 
 	printf("\nReading PCR 1 (BIOS config/IOMMU)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 1, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR 1: %s\n",
 			tpm_strerror(ret));
@@ -89,6 +93,7 @@ int test_tpm(void)
 
 	printf("\nReading PCR 10 (IMA)...\n");
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, 10, TPM2_ALG_SHA256, pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR 10: %s\n",
 			tpm_strerror(ret));
@@ -101,6 +106,7 @@ int test_tpm(void)
 	{
 		int k_err = tpm_get_current_kernel_path(
 			&g_agent.tpm_ctx, kernel_path, sizeof(kernel_path));
+		selftest_record(&tally, k_err);
 		if (k_err < 0) {
 			fprintf(stderr, "Failed to find kernel: %s\n",
 				tpm_strerror(k_err));
@@ -108,6 +114,7 @@ int test_tpm(void)
 			printf("Kernel: %s\n", kernel_path);
 			printf("Hashing kernel image...\n");
 			k_err = tpm_hash_file(kernel_path, kernel_hash);
+			selftest_record(&tally, k_err);
 			if (k_err < 0) {
 				fprintf(stderr, "Failed to hash kernel: %s\n",
 					tpm_strerror(k_err));
@@ -142,6 +149,7 @@ int test_tpm(void)
 	printf("\nReading PCR %d before extend...\n", LOTA_PCR_SELF);
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
 			   pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
 			tpm_strerror(ret));
@@ -151,6 +159,7 @@ int test_tpm(void)
 
 	printf("\nExtending self-hash into PCR %d...\n", LOTA_PCR_SELF);
 	ret = self_measure(&g_agent.tpm_ctx);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Self-measurement failed: %s\n",
 			strerror(-ret));
@@ -161,6 +170,7 @@ int test_tpm(void)
 	printf("\nReading PCR %d after extend...\n", LOTA_PCR_SELF);
 	ret = tpm_read_pcr(&g_agent.tpm_ctx, LOTA_PCR_SELF, TPM2_ALG_SHA256,
 			   pcr_value);
+	selftest_record(&tally, ret);
 	if (ret < 0) {
 		fprintf(stderr, "Failed to read PCR %d: %s\n", LOTA_PCR_SELF,
 			tpm_strerror(ret));
@@ -180,6 +190,7 @@ int test_tpm(void)
 	if (selftest_aik_plan(tpm_handle_holds_object(
 		    &g_agent.tpm_ctx, g_agent.tpm_ctx.aik_handle)) ==
 	    SELFTEST_AIK_SKIP) {
+		selftest_skip(&tally);
 		printf("No attestation key at handle 0x%08X, and this "
 		       "command does not create one: a key provisioned here "
 		       "would outlive it and hold one of the TPM's "
@@ -192,6 +203,7 @@ int test_tpm(void)
 		printf("Using the attestation key at handle 0x%08X...\n",
 		       g_agent.tpm_ctx.aik_handle);
 		ret = tpm_provision_aik(&g_agent.tpm_ctx);
+		selftest_record(&tally, ret);
 		if (ret < 0) {
 			fprintf(stderr, "AIK could not be loaded: %s\n",
 				tpm_strerror(ret));
@@ -205,8 +217,10 @@ int test_tpm(void)
 	/* Needs the key above, so it follows its verdict. */
 	printf("\n=== TPM Quote Test ===\n\n");
 
-	if (ret == -ENOENT)
+	if (ret != 0) {
 		printf("Skipped: there is no attestation key to quote with.\n");
+		selftest_skip(&tally);
+	}
 
 	if (ret == 0) {
 		struct tpm_quote_response quote_resp;
@@ -229,9 +243,13 @@ int test_tpm(void)
 		quote_pcr_mask = (1U << 0) | (1U << 1) | (1U << LOTA_PCR_SELF);
 		printf("\nRequesting quote for PCRs 0, 1, %d...\n",
 		       LOTA_PCR_SELF);
+		printf("An authorization the TPM refuses here spends one "
+		       "dictionary-attack attempt, which the chip forgives on "
+		       "its own schedule.\n");
 
 		ret = tpm_quote(&g_agent.tpm_ctx, test_nonce, quote_pcr_mask,
 				&quote_resp);
+		selftest_record(&tally, ret);
 		if (ret < 0) {
 			fprintf(stderr, "TPM Quote failed: %s\n",
 				tpm_strerror(ret));
@@ -257,8 +275,9 @@ int test_tpm(void)
 	}
 
 	tpm_cleanup(&g_agent.tpm_ctx);
-	printf("\nTPM test complete\n");
-	return 0;
+	printf("\nTPM test complete: %d passed, %d failed, %d skipped\n",
+	       tally.passed, tally.failed, tally.skipped);
+	return selftest_verdict(&tally);
 }
 
 int test_iommu(void)

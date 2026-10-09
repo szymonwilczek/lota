@@ -220,6 +220,13 @@ that it is creating one that stays after the server exits. Both claim their
 socket before touching the TPM, so a run refused by a daemon that already
 holds it spends nothing at all.
 
+``--test-tpm`` is safe to gate a script on: it exits non-zero when any
+operation it performed failed, and ends with how many passed, failed and were
+skipped. A section it could not reach -- the quote, on a host with no
+attestation key -- is skipped, since nothing was learned about it.
+An authorization the TPM refuses spends one dictionary-attack attempt,
+which the verb says before it makes the attempt.
+
 A measured example: an Intel PTT firmware TPM holds 21 persistent objects in total,
 of which five are resident on an installed host before any publisher enrolls.
 16 publisher keys fit, which is above the eight this build hands out, so on that
