@@ -38,6 +38,21 @@ jobs:
             libssl-dev libsystemd-dev libseccomp-dev \
             libdbus-1-dev
 
+      - name: Install clang 22 from apt.llvm.org
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends \
+            wget gnupg ca-certificates lsb-release
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          codename="$(lsb_release -cs)"
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] \
+          http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-22
+          clang-22 --version
+
       - name: Install libbpf >= 1.0
         # Ubuntu 22.04 ships libbpf 0.5; 24.04 ships 1.3. The agent's
         # bpf_loader requires the libbpf 1.x API surface (kernel_log_level,
@@ -65,10 +80,10 @@ jobs:
           cache-dependency-path: src/verifier/go.sum
 
       - name: Build all
-        run: make all
+        run: make CLANG=clang-22 all
 
       - name: Run unit tests
-        run: make test-unit
+        run: make CLANG=clang-22 test-unit
 
   format:
     name: clang-format

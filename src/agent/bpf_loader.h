@@ -288,6 +288,37 @@ int bpf_loader_build_integrity_config(struct integrity_data *cfg,
 				      const char *lockdown_path);
 
 /*
+ * bpf_loader_object_integrity_layout - The integrity map an object carries
+ * @bpf_obj_path: enforcement object on disk
+ * @key_size: filled with the map's key size
+ * @value_size: filled with the map's value size
+ *
+ * The map's layout belongs to the object the kernel loads, and the struct
+ * the agent reads it into belongs to the build. The kernel copies the map's
+ * value_size on every lookup, so the two have to be compared before either
+ * direction touches the map, and this is the half that can be read from disk
+ * -- before the boot commitment is spent.
+ *
+ * Returns: 0 with both sizes filled, or a negative errno when the object
+ * cannot be opened or carries no integrity map.
+ */
+int bpf_loader_object_integrity_layout(const char *bpf_obj_path,
+				       uint32_t *key_size,
+				       uint32_t *value_size);
+
+/*
+ * bpf_loader_check_object_integrity_layout - Can this agent read that map?
+ * @bpf_obj_path: enforcement object on disk
+ *
+ * Asked before the object is loaded, and before the boot commitment is spent:
+ * what the object carries is a property of the file, and a file this build
+ * cannot read is an operator's mistake rather than a boot to spend.
+ *
+ * Returns: 0 when the object can be read, a negative errno otherwise.
+ */
+int bpf_loader_check_object_integrity_layout(const char *bpf_obj_path);
+
+/*
  * bpf_loader_integrity_config_satisfied - Would this value let a module load?
  * @cfg: value written into the integrity_cfg map
  *

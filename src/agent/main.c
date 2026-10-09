@@ -259,6 +259,21 @@ static int run_daemon(const struct run_daemon_params *params)
 		return ret;
 	}
 
+	/*
+	 * The object's integrity map is checked here, on the same side of
+	 * the extend as its signature: what the map holds is a property of
+	 * the file, and a file this build cannot read is a mistake an operator
+	 * makes, not a boot to spend.
+	 */
+	ret = bpf_loader_check_object_integrity_layout(bpf_path);
+	if (ret < 0) {
+		lota_err("Enforcement object %s refused before the boot "
+			 "commitment was spent. The host keeps the agent it is "
+			 "running and PCR 14 is untouched.",
+			 bpf_path);
+		return ret;
+	}
+
 	/* detect watchdog interval */
 	wd_enabled = sdnotify_watchdog_enabled(&wd_usec);
 	if (wd_enabled)

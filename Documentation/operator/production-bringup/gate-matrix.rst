@@ -48,6 +48,15 @@ current tree.
        replaced together on upgrade. A fleet that signs enforcement itself
        re-signs the object and puts its key at ``/etc/lota/policy.pub``, which
        the agent prefers over the packaged one.
+   * - BPF object built for this agent
+     - ``src/agent/bpf_loader.c::bpf_loader_check_object_integrity_layout()``
+     - The agent reads the object's ``integrity_cfg`` map into a struct whose
+       size is compiled in, and the kernel copies the map's own value size on
+       every access, so the two have to come from the same release. A fleet
+       that keeps its own signed object re-builds and re-signs it from the
+       release it is upgrading the agent to; the refusal names both layouts
+       and happens before PCR 14 is extended, so a mismatch costs a failed
+       start.
    * - AIK persistent handle + metadata in sync
      - ``src/agent/tpm.c::tpm_aik_load_metadata()``
      - Evict any stale persistent handle (``tpm2_evictcontrol``) before first
