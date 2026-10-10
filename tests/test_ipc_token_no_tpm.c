@@ -409,7 +409,7 @@ static int probe_protect_pid(struct ipc_context *ctx)
 
 	log_capture_begin();
 	ret = send_request(fd, LOTA_IPC_CMD_PROTECT_PID, &req, sizeof(req));
-	if (ret == 0)
+	if (ret >= 0)
 		ret = read_frame(ctx, fd, &resp, payload, sizeof(payload), 64);
 	log_capture_end(protect_log, sizeof(protect_log));
 	close(fd);
