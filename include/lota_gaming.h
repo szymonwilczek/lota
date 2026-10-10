@@ -90,6 +90,13 @@ enum lota_error {
 	 * -- there is no TPM.
 	 */
 	LOTA_ERR_NO_TPM = -15,
+	/*
+	 * The agent on the other end enforces nothing: it applied no policy
+	 * and loaded no LSM object, which is what a diagnostic server is.
+	 * A call that asks it to change runtime enforcement is refused by
+	 * design and no retry changes that.
+	 */
+	LOTA_ERR_NO_ENFORCEMENT = -16,
 };
 
 /*
