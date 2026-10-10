@@ -19,10 +19,52 @@
 #include "sdnotify.h"
 #include "selftest.h"
 #include "tpm.h"
+#include "attest_targets.h"
 #include "config.h"
+
+/*
+ * Hand the IPC layer the publishers the configuration names.
+ *
+ * A diagnostic server is started with the same file the daemon reads,
+ * and a SET_PROFILE is resolved against the list the IPC layer holds.
+ * Without this the list is empty for the life of the process, so every publisher
+ * the configuration names is answered as one this host has never heard of,
+ * and every profile-scoped answer -- the per-publisher view, TOKEN_ONLY,
+ * CONSENT_REQUIRED -- is unreachable.
+ *
+ * @targets outlives the serving loop, so the IPC layer may keep the pointer.
+ */
+static void bind_configured_profiles(const struct lota_config *cfg,
+				     struct attest_target *targets, size_t max,
+				     size_t *count, uint64_t valid_until)
+{
+	int ret;
+
+	*count = 0;
+	ret = attest_targets_build(cfg, NULL, 0, NULL, 0, targets, max, count);
+	if (ret < 0 || *count == 0) {
+		*count = 0;
+		printf("No publisher configured: SET_PROFILE has nothing to resolve against.\n");
+		return;
+	}
+
+	for (size_t i = 0; i < *count; i++) {
+		targets[i].attested = true;
+		targets[i].valid_until = valid_until;
+	}
+	printf("Publishers bound: %zu.\n", *count);
+
+	ipc_set_profiles(&g_agent.ipc_ctx, targets, *count);
+}
 
 int run_ipc_test_server(const struct lota_config *cfg)
 {
+	/*
+	 * IPC context keeps this list for as long as it serves,
+	 * so it cannot be one the frame owns -- and it is far too large for one
+	 */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count;
 	int ret;
 	uint64_t valid_until;
 	printf("=== IPC Test Server (No TPM) ===\n\n");
@@ -42,6 +84,8 @@ int run_ipc_test_server(const struct lota_config *cfg)
 	 * living implausibly long.
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
+				 &target_count, valid_until);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,
@@ -82,6 +126,9 @@ int run_ipc_test_server(const struct lota_config *cfg)
 
 int run_signed_ipc_test_server(const struct lota_config *cfg)
 {
+	/* kept for the life of the server, as in the plain one above */
+	static struct attest_target targets[LOTA_CONFIG_MAX_PROFILES];
+	size_t target_count;
 	int ret;
 	uint64_t valid_until;
 	printf("=== IPC Test Server (Signed Tokens) ===\n\n");
@@ -145,6 +192,8 @@ int run_signed_ipc_test_server(const struct lota_config *cfg)
 	 * living implausibly long
 	 */
 	valid_until = (uint64_t)(time(NULL) + LOTA_SERVER_MAX_TOKEN_AGE_SEC);
+	bind_configured_profiles(cfg, targets, LOTA_CONFIG_MAX_PROFILES,
+				 &target_count, valid_until);
 	ipc_update_status(&g_agent.ipc_ctx,
 			  LOTA_STATUS_ATTESTED | LOTA_STATUS_TPM_OK |
 				  LOTA_STATUS_IOMMU_OK | LOTA_STATUS_BPF_LOADED,

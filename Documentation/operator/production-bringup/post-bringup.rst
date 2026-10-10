@@ -70,8 +70,10 @@ The most common failures, with the gate that produced them:
   an unsigned one -- a token nobody signed is not evidence. The SDK is
   answered ``LOTA_ERR_NO_TPM``, and no retry changes it.
   ``--test-ipc`` runs in exactly this state on purpose: it serves
-  status, D-Bus and profile binding on a machine with no TPM, and a title that
-  needs a token there uses ``--test-signed`` instead.
+  status, D-Bus and profile binding on a machine with no TPM -- both servers
+  resolve ``SET_PROFILE`` against the publishers the configuration they were
+  started with names, and say how many they bound -- and a title that needs a
+  token there uses ``--test-signed`` instead.
 * ``This is not the lota-agent build PCR 14 committed to when the host
   booted``. The binary being run is not the one the register commits to, which
   is the expected answer after replacing the binary without rebooting, or when

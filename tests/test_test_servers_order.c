@@ -174,6 +174,41 @@ void dbus_cleanup(struct dbus_context *ctx)
 	(void)ctx;
 }
 
+/* What the server handed the IPC layer as its publisher list */
+static int profiles_bound = -1;
+
+void ipc_set_profiles(struct ipc_context *ctx, struct attest_target *profiles,
+		      size_t count)
+{
+	(void)ctx;
+	(void)profiles;
+	note("ipc_set_profiles");
+	profiles_bound = (int)count;
+}
+
+/*
+ * The configured publishers, as the daemon reads them. One profile is enough
+ * to tell a server that binds them from one that does not.
+ */
+int attest_targets_build(const struct lota_config *cfg, const char *server,
+			 int port, const char *ca_cert, int interval_sec,
+			 struct attest_target *out, size_t max, size_t *count)
+{
+	(void)cfg;
+	(void)server;
+	(void)port;
+	(void)ca_cert;
+	(void)interval_sec;
+
+	note("attest_targets_build");
+	if (!out || max == 0 || !count)
+		return -EINVAL;
+
+	memset(&out[0], 0, sizeof(out[0]));
+	*count = 1;
+	return 0;
+}
+
 int sdnotify_ready(void)
 {
 	return 0;
@@ -215,6 +250,7 @@ static void run_signed(int ipc_result)
 
 	memset(trace, 0, sizeof(trace));
 	trace_len = 0;
+	profiles_bound = -1;
 	ipc_init_result = ipc_result;
 	g_agent.running = 0; /* the serving loop exits at once */
 
@@ -241,6 +277,75 @@ static void run_signed(int ipc_result)
 		dup2(saved_err, STDERR_FILENO);
 		close(saved_err);
 	}
+}
+
+/*
+ * A server that parses a configuration and does not hand the publishers to the IPC
+ * layer answers SET_PROFILE with UNKNOWN_PROFILE for every publisher that
+ * configuration names. The developer bringing up a multi-publisher title without
+ * a TPM then reads their own identity as wrong when it is right.
+ */
+static void run_plain(void)
+{
+	int saved_out, saved_err, devnull;
+
+	memset(trace, 0, sizeof(trace));
+	trace_len = 0;
+	profiles_bound = -1;
+	ipc_init_result = 0;
+	g_agent.running = 0;
+
+	fflush(stdout);
+	fflush(stderr);
+	saved_out = dup(STDOUT_FILENO);
+	saved_err = dup(STDERR_FILENO);
+	devnull = open("/dev/null", O_WRONLY);
+	if (devnull >= 0) {
+		dup2(devnull, STDOUT_FILENO);
+		dup2(devnull, STDERR_FILENO);
+		close(devnull);
+	}
+
+	run_ipc_test_server(NULL);
+
+	fflush(stdout);
+	fflush(stderr);
+	if (saved_out >= 0) {
+		dup2(saved_out, STDOUT_FILENO);
+		close(saved_out);
+	}
+	if (saved_err >= 0) {
+		dup2(saved_err, STDERR_FILENO);
+		close(saved_err);
+	}
+}
+
+static void test_plain_server_binds_the_configured_profiles(void)
+{
+	TEST("--test-ipc resolves the publishers its configuration names");
+
+	run_plain();
+
+	if (step_index("ipc_set_profiles") < 0)
+		FAIL("the publishers were never handed to the IPC layer");
+	else if (profiles_bound != 1)
+		FAIL("the configured publisher was not among them");
+	else
+		PASS();
+}
+
+static void test_signed_server_binds_the_configured_profiles(void)
+{
+	TEST("--test-signed resolves the publishers its configuration names");
+
+	run_signed(0);
+
+	if (step_index("ipc_set_profiles") < 0)
+		FAIL("the publishers were never handed to the IPC layer");
+	else if (profiles_bound != 1)
+		FAIL("the configured publisher was not among them");
+	else
+		PASS();
 }
 
 /*
@@ -305,6 +410,8 @@ int main(void)
 
 	test_socket_is_claimed_before_the_tpm();
 	test_refused_socket_provisions_nothing();
+	test_plain_server_binds_the_configured_profiles();
+	test_signed_server_binds_the_configured_profiles();
 
 	printf("\n=== %d/%d passed ===\n", tests_passed, tests_run);
 	return tests_passed == tests_run ? 0 : 1;
