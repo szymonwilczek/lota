@@ -204,6 +204,11 @@ int handle_exec_event(void *ctx, void *data, size_t len)
 		has_file = 1;
 		is_blocked = true;
 		break;
+	case LOTA_EVENT_MOUNT_BLOCKED:
+		event_type_str = "MOUNT_BLOCKED";
+		has_file = 1;
+		is_blocked = true;
+		break;
 	case LOTA_EVENT_MMAP_EXEC:
 		event_type_str = "MMAP_EXEC";
 		has_file = 1;

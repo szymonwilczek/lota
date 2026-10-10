@@ -298,6 +298,9 @@ Active threats
    * - Runtime image substitution
      - | BPF LSM gates executable mmap and mprotect for protected processes
          against the fs-verity allow-list.
+       | A bind or move mount that would shadow a trusted file is refused
+         through both mount APIs, and the refusal is emitted on the event
+         stream and counted like every other blocked hook.
        | The agent re-measures file-backed executable mappings from the kernel side.
        | A digest read from an inode is cached against that inode's device,
          number, size and modification time, all read from the descriptor the

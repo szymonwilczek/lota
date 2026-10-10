@@ -19,6 +19,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <linux/bpf.h>
+
 #include <gelf.h>
 #include <libelf.h>
 
@@ -96,6 +98,42 @@ static int find_symbol(Elf *elf, const char *sym_name, GElf_Sym *out)
 	return 0;
 }
 
+/*
+ * Whether a program reserves ring-buffer space, read off the instruction stream:
+ * a bpf_ringbuf_reserve() is a call to helper 131, and a hook that never makes
+ * one cannot report anything it did.
+ */
+#define BPF_FUNC_RINGBUF_RESERVE 131
+
+static int reserves_ringbuf(Elf *elf, const char *prog_name)
+{
+	const char *insns;
+	struct bpf_insn insn;
+	Elf_Data *data;
+	GElf_Sym sym;
+	size_t count;
+
+	if (!find_symbol(elf, prog_name, &sym) ||
+	    GELF_ST_TYPE(sym.st_info) != STT_FUNC)
+		return 0;
+
+	data = elf_getdata(elf_getscn(elf, sym.st_shndx), NULL);
+	if (!data || !data->d_buf || sym.st_value + sym.st_size > data->d_size)
+		return 0;
+
+	insns = (const char *)data->d_buf + sym.st_value;
+	count = sym.st_size / sizeof(insn);
+
+	for (size_t i = 0; i < count; i++) {
+		memcpy(&insn, insns + i * sizeof(insn), sizeof(insn));
+		if (insn.code == (BPF_JMP | BPF_CALL) && insn.src_reg == 0 &&
+		    insn.imm == BPF_FUNC_RINGBUF_RESERVE)
+			return 1;
+	}
+
+	return 0;
+}
+
 static int has_section(Elf *elf, const char *section)
 {
 	return find_section(elf, section) != NULL;
@@ -148,6 +186,11 @@ int main(void)
 
 	CHECK(!has_map(elf, "trusted_lib_mnt"),
 	      "no ancestor directory of a trusted library is armed");
+
+	CHECK(reserves_ringbuf(elf, "lota_sb_mount"),
+	      "a refused mount(2) bind leaves a record");
+	CHECK(reserves_ringbuf(elf, "lota_move_mount"),
+	      "a refused move_mount leaves a record");
 
 	elf_end(elf);
 	close(fd);
