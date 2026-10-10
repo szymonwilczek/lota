@@ -125,6 +125,27 @@ static void test_bus_answers_the_daemons_word(void)
 	dbus_cleanup(ctx);
 }
 
+/*
+ * A version property exists so a client can tell which agent it is talking to.
+ * A literal that no build step touches answers for every build ever made,
+ * and because the property is const a client may cache it across an agent update
+ * and never re-read it -- so the number that would have gated an interface change
+ * has already been spent on a value that was never true.
+ */
+static void test_version_names_this_build(void)
+{
+	const char *reported = dbus_version_string();
+
+	TEST("version: the bus names the build this agent came from");
+
+	if (!reported)
+		FAIL("the bus answers no version at all");
+	else if (strcmp(reported, LOTA_BUILD_VERSION_STRING) != 0)
+		FAIL("the bus names a version this build does not have");
+	else
+		PASS();
+}
+
 static void test_init_null_ipc(void)
 {
 	TEST("init: NULL ipc -> NULL");
@@ -461,6 +482,7 @@ int main(void)
 	test_ipc_set_dbus_null();
 	test_ipc_set_dbus_attach();
 	test_dbus_constants();
+	test_version_names_this_build();
 	test_bus_answers_the_daemons_word();
 
 	/* may skip if unavailable */
