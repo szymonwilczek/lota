@@ -11,16 +11,16 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 if [[ -z ${ROOT:-} ]]; then
-	printf 'FAIL repository\n'
-	printf 'fix: run this script from inside the LOTA git repository.\n'
-	exit 2
+    printf 'FAIL repository\n'
+    printf 'fix: run this script from inside the LOTA git repository.\n'
+    exit 2
 fi
 cd "$ROOT" || exit 2
 
 FAILURES=0
 
 usage() {
-	cat <<'USAGE'
+    cat <<'USAGE'
 usage: scripts/check-patch [<base-commit> [<head-commit>]]
 
 Runs local patch checks for commits in base..head. If base is omitted, the
@@ -55,140 +55,140 @@ USAGE
 }
 
 pass() {
-	printf 'PASS %s\n' "$1"
+    printf 'PASS %s\n' "$1"
 }
 
 fail() {
-	printf 'FAIL %s\n' "$1"
-	printf 'fix: %s\n' "$2"
-	FAILURES=$((FAILURES + 1))
+    printf 'FAIL %s\n' "$1"
+    printf 'fix: %s\n' "$2"
+    FAILURES=$((FAILURES + 1))
 }
 
 note() {
-	printf 'INFO %s\n' "$1"
+    printf 'INFO %s\n' "$1"
 }
 
 skip() {
-	printf 'SKIP %s\n' "$1"
-	printf '     %s\n' "$2"
+    printf 'SKIP %s\n' "$1"
+    printf '     %s\n' "$2"
 }
 
 short_commit() {
-	git rev-parse --short=12 "$1"
+    git rev-parse --short=12 "$1"
 }
 
 commit_subject() {
-	git log -1 --format=%s "$1"
+    git log -1 --format=%s "$1"
 }
 
 write_commit_message() {
-	local commit=$1
-	local output=$2
+    local commit=$1
+    local output=$2
 
-	git cat-file commit "$commit" | sed '1,/^$/d' >"$output"
+    git cat-file commit "$commit" | sed '1,/^$/d' >"$output"
 }
 
 resolve_base() {
-	local upstream
+    local upstream
 
-	if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
-		git merge-base HEAD "$upstream"
-		return
-	fi
+    if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
+        git merge-base HEAD "$upstream"
+        return
+    fi
 
-	if git rev-parse --verify --quiet origin/lota-next >/dev/null; then
-		git merge-base HEAD origin/lota-next
-		return
-	fi
+    if git rev-parse --verify --quiet origin/lota-next >/dev/null; then
+        git merge-base HEAD origin/lota-next
+        return
+    fi
 
-	if git rev-parse --verify --quiet lota-next >/dev/null; then
-		git merge-base HEAD lota-next
-		return
-	fi
+    if git rev-parse --verify --quiet lota-next >/dev/null; then
+        git merge-base HEAD lota-next
+        return
+    fi
 
-	return 1
+    return 1
 }
 
 require_commits() {
-	local base=$1
-	local head=$2
-	local -n out=$3
+    local base=$1
+    local head=$2
+    local -n out=$3
 
-	mapfile -t out < <(git rev-list --reverse "$base..$head")
-	if ((${#out[@]} == 0)); then
-		fail "commit range" "select a base that leaves at least one local commit to check."
-		return 1
-	fi
+    mapfile -t out < <(git rev-list --reverse "$base..$head")
+    if ((${#out[@]} == 0)); then
+        fail "commit range" "select a base that leaves at least one local commit to check."
+        return 1
+    fi
 
-	pass "commit range"
-	return 0
+    pass "commit range"
+    return 0
 }
 
 collect_changed_files() {
-	local base=$1
-	local head=$2
-	local -n out=$3
+    local base=$1
+    local head=$2
+    local -n out=$3
 
-	mapfile -t out < <(
-		{
-			git diff --name-only --diff-filter=ACMRT "$base..$head"
-			git diff --name-only --diff-filter=ACMRT --cached
-			git diff --name-only --diff-filter=ACMRT
-		} | sort -u
-	)
+    mapfile -t out < <(
+        {
+            git diff --name-only --diff-filter=ACMRT "$base..$head"
+            git diff --name-only --diff-filter=ACMRT --cached
+            git diff --name-only --diff-filter=ACMRT
+        } | sort -u
+    )
 }
 
 check_ci_policy() {
-	local base=$1
-	local head=$2
-	local output_file
-	local github_output
+    local base=$1
+    local head=$2
+    local output_file
+    local github_output
 
-	output_file=$(mktemp)
-	github_output=$(mktemp)
+    output_file=$(mktemp)
+    github_output=$(mktemp)
 
-	if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
-		pass "DCO and hotpath documentation"
-	else
-		sed 's/^/  /' "$output_file"
-		fail "DCO and hotpath documentation" \
-			"run scripts/check-pr-quality.sh $base $head and fix the reported commit."
-	fi
+    if GITHUB_OUTPUT="$github_output" scripts/check-pr-quality.sh "$base" "$head" >"$output_file" 2>&1; then
+        pass "DCO and hotpath documentation"
+    else
+        sed 's/^/  /' "$output_file"
+        fail "DCO and hotpath documentation" \
+            "run scripts/check-pr-quality.sh $base $head and fix the reported commit."
+    fi
 
-	if grep -q '^ai_assisted=true$' "$github_output"; then
-		note "AI-assisted marker found; CI will add the AI-Assisted label."
-	fi
+    if grep -q '^ai_assisted=true$' "$github_output"; then
+        note "AI-assisted marker found; CI will add the AI-Assisted label."
+    fi
 
-	rm -f "$output_file" "$github_output"
+    rm -f "$output_file" "$github_output"
 }
 
 check_commit_subjects() {
-	local rc=0
-	local commit
-	local subject
-	local scoped_conventional_re='^[A-Za-z][A-Za-z0-9_-]*\([^)]*\)!?:'
+    local rc=0
+    local commit
+    local subject
+    local scoped_conventional_re='^[A-Za-z][A-Za-z0-9_-]*\([^)]*\)!?:'
 
-	for commit in "$@"; do
-		subject=$(commit_subject "$commit")
-		if [[ $subject =~ $scoped_conventional_re ]]; then
-			printf '  %s %s\n' "$(short_commit "$commit")" "$subject"
-			rc=1
-		fi
-	done
+    for commit in "$@"; do
+        subject=$(commit_subject "$commit")
+        if [[ $subject =~ $scoped_conventional_re ]]; then
+            printf '  %s %s\n' "$(short_commit "$commit")" "$subject"
+            rc=1
+        fi
+    done
 
-	if ((rc == 0)); then
-		pass "commit subject style"
-	else
-		fail "commit subject style" \
-			"replace scoped conventional subjects such as fix(...): or feat(...): with the project subject style."
-	fi
+    if ((rc == 0)); then
+        pass "commit subject style"
+    else
+        fail "commit subject style" \
+            "replace scoped conventional subjects such as fix(...): or feat(...): with the project subject style."
+    fi
 }
 
 commit_body_words() {
-	local commit=$1
+    local commit=$1
 
-	git log -1 --format=%B "$commit" |
-		awk '
+    git log -1 --format=%B "$commit" |
+        awk '
 			NR == 1 { next }
 			/^[A-Za-z0-9-]+-by:[[:space:]]/ { next }
 			/^Signed-off-by:[[:space:]]/ { next }
@@ -201,10 +201,10 @@ commit_body_words() {
 }
 
 commit_change_size() {
-	local commit=$1
+    local commit=$1
 
-	git diff-tree --no-commit-id --numstat -r "$commit" |
-		awk '
+    git diff-tree --no-commit-id --numstat -r "$commit" |
+        awk '
 			{
 				files++
 				if ($1 ~ /^[0-9]+$/)
@@ -222,75 +222,75 @@ commit_change_size() {
 # and the diff must touch VERSION alone, so a commit carrying code cannot claim
 # the exemption by renaming its subject.
 is_version_bump() {
-	local commit=$1
-	local subject
-	local files
+    local commit=$1
+    local subject
+    local files
 
-	subject=$(commit_subject "$commit")
-	[[ $subject =~ ^build:[[:space:]][0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
-		return 1
+    subject=$(commit_subject "$commit")
+    [[ $subject =~ ^build:[[:space:]][0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+        return 1
 
-	files=$(git diff-tree --no-commit-id --name-only -r "$commit")
-	[[ $files == "VERSION" ]] || return 1
+    files=$(git diff-tree --no-commit-id --name-only -r "$commit")
+    [[ $files == "VERSION" ]] || return 1
 
-	return 0
+    return 0
 }
 
 check_commit_body_contract() {
-	local rc=0
-	local commit
-	local msg_file
+    local rc=0
+    local commit
+    local msg_file
 
-	msg_file=$(mktemp)
+    msg_file=$(mktemp)
 
-	for commit in "$@"; do
-		if is_version_bump "$commit"; then
-			continue
-		fi
-		write_commit_message "$commit" "$msg_file"
-		if grep -q '^Problem:[[:space:]].' "$msg_file"; then
-			printf '  Problem: must be standalone: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		elif ! grep -q '^Problem:$' "$msg_file"; then
-			printf '  missing Problem: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		fi
-		if grep -q '^Solution:[[:space:]].' "$msg_file"; then
-			printf '  Solution: must be standalone: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		elif ! grep -q '^Solution:$' "$msg_file"; then
-			printf '  missing Solution: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		fi
-	done
+    for commit in "$@"; do
+        if is_version_bump "$commit"; then
+            continue
+        fi
+        write_commit_message "$commit" "$msg_file"
+        if grep -q '^Problem:[[:space:]].' "$msg_file"; then
+            printf '  Problem: must be standalone: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        elif ! grep -q '^Problem:$' "$msg_file"; then
+            printf '  missing Problem: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        fi
+        if grep -q '^Solution:[[:space:]].' "$msg_file"; then
+            printf '  Solution: must be standalone: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        elif ! grep -q '^Solution:$' "$msg_file"; then
+            printf '  missing Solution: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        fi
+    done
 
-	rm -f "$msg_file"
+    rm -f "$msg_file"
 
-	if ((rc == 0)); then
-		pass "commit body contract"
-	else
-		fail "commit body contract" \
-			"place Problem: and Solution: on their own lines, then put text on the following line."
-	fi
+    if ((rc == 0)); then
+        pass "commit body contract"
+    else
+        fail "commit body contract" \
+            "place Problem: and Solution: on their own lines, then put text on the following line."
+    fi
 }
 
 check_commit_body_layout() {
-	local rc=0
-	local commit
-	local msg_file
-	local output_file
+    local rc=0
+    local commit
+    local msg_file
+    local output_file
 
-	msg_file=$(mktemp)
-	output_file=$(mktemp)
+    msg_file=$(mktemp)
+    output_file=$(mktemp)
 
-	for commit in "$@"; do
-		write_commit_message "$commit" "$msg_file"
+    for commit in "$@"; do
+        write_commit_message "$commit" "$msg_file"
 
-		if ! awk '
+        if ! awk '
 			/^Signed-off-by:/ {
 				if (NR == 1 || (prev != "" && prev !~ /^Signed-off-by:/)) {
 					bad = 1
@@ -300,12 +300,12 @@ check_commit_body_layout() {
 			{ prev = $0 }
 			END { exit bad ? 1 : 0 }
 		' "$msg_file" >"$output_file"; then
-			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
-			sed 's/^/    /' "$output_file"
-			rc=1
-		fi
+            printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            sed 's/^/    /' "$output_file"
+            rc=1
+        fi
 
-		if ! awk '
+        if ! awk '
 			NR == 1 { next }
 			/^$/ { next }
 			/^[A-Za-z0-9-]+-by:[[:space:]]/ { next }
@@ -315,275 +315,275 @@ check_commit_body_layout() {
 			}
 			END { exit bad ? 1 : 0 }
 		' "$msg_file" >"$output_file"; then
-			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
-			sed 's/^/    /' "$output_file"
-			rc=1
-		fi
-	done
+            printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            sed 's/^/    /' "$output_file"
+            rc=1
+        fi
+    done
 
-	rm -f "$msg_file" "$output_file"
+    rm -f "$msg_file" "$output_file"
 
-	if ((rc == 0)); then
-		pass "commit body layout"
-	else
-		fail "commit body layout" \
-			"run scripts/format-patch over the same base..head range, then review the rewritten descriptions."
-	fi
+    if ((rc == 0)); then
+        pass "commit body layout"
+    else
+        fail "commit body layout" \
+            "run scripts/format-patch over the same base..head range, then review the rewritten descriptions."
+    fi
 }
 
 check_body_proportion() {
-	local rc=0
-	local commit
-	local words files lines min_words
+    local rc=0
+    local commit
+    local words files lines min_words
 
-	for commit in "$@"; do
-		words=$(commit_body_words "$commit")
-		read -r files lines < <(commit_change_size "$commit")
-		min_words=0
-		if ((files >= 5 || lines >= 100)); then
-			min_words=80
-		elif ((files >= 3 || lines >= 40)); then
-			min_words=40
-		fi
+    for commit in "$@"; do
+        words=$(commit_body_words "$commit")
+        read -r files lines < <(commit_change_size "$commit")
+        min_words=0
+        if ((files >= 5 || lines >= 100)); then
+            min_words=80
+        elif ((files >= 3 || lines >= 40)); then
+            min_words=40
+        fi
 
-		if ((min_words > 0 && words < min_words)); then
-			printf '  %s %s: %d files, %d changed lines, %d body words, expected at least %d\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")" \
-				"$files" "$lines" "$words" "$min_words"
-			rc=1
-		fi
-	done
+        if ((min_words > 0 && words < min_words)); then
+            printf '  %s %s: %d files, %d changed lines, %d body words, expected at least %d\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")" \
+                "$files" "$lines" "$words" "$min_words"
+            rc=1
+        fi
+    done
 
-	if ((rc == 0)); then
-		pass "commit body detail"
-	else
-		fail "commit body detail" \
-			"expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
-	fi
+    if ((rc == 0)); then
+        pass "commit body detail"
+    else
+        fail "commit body detail" \
+            "expand Problem: and Solution: with changed modules, contract impact, and reviewer-relevant risk."
+    fi
 }
 
 check_patch_whitespace() {
-	local rc=0
-	local commit
-	local output_file
+    local rc=0
+    local commit
+    local output_file
 
-	output_file=$(mktemp)
-	for commit in "$@"; do
-		if ! git show --check --format= "$commit" >"$output_file" 2>&1; then
-			printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
-			sed 's/^/    /' "$output_file"
-			rc=1
-		fi
-	done
+    output_file=$(mktemp)
+    for commit in "$@"; do
+        if ! git show --check --format= "$commit" >"$output_file" 2>&1; then
+            printf '  %s %s\n' "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            sed 's/^/    /' "$output_file"
+            rc=1
+        fi
+    done
 
-	if ! git diff --check >"$output_file" 2>&1; then
-		printf '  unstaged changes:\n'
-		sed 's/^/    /' "$output_file"
-		rc=1
-	fi
+    if ! git diff --check >"$output_file" 2>&1; then
+        printf '  unstaged changes:\n'
+        sed 's/^/    /' "$output_file"
+        rc=1
+    fi
 
-	if ! git diff --check --cached >"$output_file" 2>&1; then
-		printf '  staged changes:\n'
-		sed 's/^/    /' "$output_file"
-		rc=1
-	fi
+    if ! git diff --check --cached >"$output_file" 2>&1; then
+        printf '  staged changes:\n'
+        sed 's/^/    /' "$output_file"
+        rc=1
+    fi
 
-	rm -f "$output_file"
+    rm -f "$output_file"
 
-	if ((rc == 0)); then
-		pass "patch trailing whitespace"
-	else
-		fail "patch trailing whitespace" \
-			"remove reported trailing whitespace from files before pushing."
-	fi
+    if ((rc == 0)); then
+        pass "patch trailing whitespace"
+    else
+        fail "patch trailing whitespace" \
+            "remove reported trailing whitespace from files before pushing."
+    fi
 }
 
 check_message_whitespace() {
-	local rc=0
-	local commit
-	local msg_file
-	local trailing_blank_count
+    local rc=0
+    local commit
+    local msg_file
+    local trailing_blank_count
 
-	msg_file=$(mktemp)
-	for commit in "$@"; do
-		write_commit_message "$commit" "$msg_file"
-		if grep -nE '[[:blank:]]$' "$msg_file"; then
-			printf '  trailing whitespace in message: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		fi
+    msg_file=$(mktemp)
+    for commit in "$@"; do
+        write_commit_message "$commit" "$msg_file"
+        if grep -nE '[[:blank:]]$' "$msg_file"; then
+            printf '  trailing whitespace in message: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        fi
 
-		trailing_blank_count=$(
-			awk '
+        trailing_blank_count=$(
+            awk '
 				NF { blank = 0; next }
 				{ blank++ }
 				END { print blank + 0 }
 			' "$msg_file"
-		)
-		if ((trailing_blank_count > 0)); then
-			printf '  trailing blank line in message: %s %s\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")"
-			rc=1
-		fi
-	done
+        )
+        if ((trailing_blank_count > 0)); then
+            printf '  trailing blank line in message: %s %s\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")"
+            rc=1
+        fi
+    done
 
-	rm -f "$msg_file"
+    rm -f "$msg_file"
 
-	if ((rc == 0)); then
-		pass "commit message trailing whitespace"
-	else
-		fail "commit message trailing whitespace" \
-			"run scripts/format-patch over the same base..head range."
-	fi
+    if ((rc == 0)); then
+        pass "commit message trailing whitespace"
+    else
+        fail "commit message trailing whitespace" \
+            "run scripts/format-patch over the same base..head range."
+    fi
 }
 
 check_commit_signatures() {
-	local rc=0
-	local commit status
+    local rc=0
+    local commit status
 
-	# git log %G? reports the signature state:
-	# G good, U good but the key is untrusted, B bad, X/Y/R expired or revoked, E unverifiable, N none
-	# commit counts as signed only when the signature is good (G or U);
-	# anything else, including an unverifiable or absent signature, FAILS
-	for commit in "$@"; do
-		status=$(git log -1 --format='%G?' "$commit")
-		case "$status" in
-		G | U) ;;
-		*)
-			printf '  %s %s (signature: %s)\n' \
-				"$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
-			rc=1
-			;;
-		esac
-	done
+    # git log %G? reports the signature state:
+    # G good, U good but the key is untrusted, B bad, X/Y/R expired or revoked, E unverifiable, N none
+    # commit counts as signed only when the signature is good (G or U);
+    # anything else, including an unverifiable or absent signature, FAILS
+    for commit in "$@"; do
+        status=$(git log -1 --format='%G?' "$commit")
+        case "$status" in
+        G | U) ;;
+        *)
+            printf '  %s %s (signature: %s)\n' \
+                "$(short_commit "$commit")" "$(commit_subject "$commit")" "$status"
+            rc=1
+            ;;
+        esac
+    done
 
-	if ((rc == 0)); then
-		pass "commit signatures"
-	else
-		fail "commit signatures" \
-			"sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
-	fi
+    if ((rc == 0)); then
+        pass "commit signatures"
+    else
+        fail "commit signatures" \
+            "sign every commit (git commit -S, or set commit.gpgsign true with a configured GPG/SSH key) so GitHub marks it verified."
+    fi
 }
 
 is_text_file() {
-	local path=$1
+    local path=$1
 
-	[[ -f $path ]] || return 1
-	LC_ALL=C grep -Iq '' "$path"
+    [[ -f $path ]] || return 1
+    LC_ALL=C grep -Iq '' "$path"
 }
 
 check_file_endings() {
-	local rc=0
-	local path
-	local blank_count
-	local -a files=("$@")
+    local rc=0
+    local path
+    local blank_count
+    local -a files=("$@")
 
-	for path in "${files[@]}"; do
-		is_text_file "$path" || continue
-		blank_count=$(
-			awk '
+    for path in "${files[@]}"; do
+        is_text_file "$path" || continue
+        blank_count=$(
+            awk '
 				NF { blank = 0; next }
 				{ blank++ }
 				END { print blank + 0 }
 			' "$path"
-		)
-		if ((blank_count > 0)); then
-			printf '  %s ends with %d trailing blank line(s)\n' "$path" "$blank_count"
-			rc=1
-		fi
-	done
+        )
+        if ((blank_count > 0)); then
+            printf '  %s ends with %d trailing blank line(s)\n' "$path" "$blank_count"
+            rc=1
+        fi
+    done
 
-	if ((rc == 0)); then
-		pass "file trailing blank lines"
-	else
-		fail "file trailing blank lines" \
-			"remove blank lines after the last content line in changed text files."
-	fi
+    if ((rc == 0)); then
+        pass "file trailing blank lines"
+    else
+        fail "file trailing blank lines" \
+            "remove blank lines after the last content line in changed text files."
+    fi
 }
 
 check_clang_format() {
-	local formatter=""
-	local path
-	local output_file
-	local -a c_files=()
+    local formatter=""
+    local path
+    local output_file
+    local -a c_files=()
 
-	for path in "$@"; do
-		case "$path" in
-		*.c | *.h)
-			[[ $path == include/vmlinux.h ]] && continue
-			[[ -f $path ]] && c_files+=("$path")
-			;;
-		esac
-	done
+    for path in "$@"; do
+        case "$path" in
+        *.c | *.h)
+            [[ $path == include/vmlinux.h ]] && continue
+            [[ -f $path ]] && c_files+=("$path")
+            ;;
+        esac
+    done
 
-	if ((${#c_files[@]} == 0)); then
-		pass "clang-format"
-		return
-	fi
+    if ((${#c_files[@]} == 0)); then
+        pass "clang-format"
+        return
+    fi
 
-	if command -v clang-format-22 >/dev/null 2>&1; then
-		formatter=clang-format-22
-	elif command -v clang-format >/dev/null 2>&1; then
-		formatter=clang-format
-	fi
+    if command -v clang-format-22 >/dev/null 2>&1; then
+        formatter=clang-format-22
+    elif command -v clang-format >/dev/null 2>&1; then
+        formatter=clang-format
+    fi
 
-	if [[ -z $formatter ]]; then
-		fail "clang-format" \
-			"install clang-format or clang-format-22 and run it on changed C and header files."
-		return
-	fi
+    if [[ -z $formatter ]]; then
+        fail "clang-format" \
+            "install clang-format or clang-format-22 and run it on changed C and header files."
+        return
+    fi
 
-	output_file=$(mktemp)
-	if "$formatter" --dry-run --Werror "${c_files[@]}" >"$output_file" 2>&1; then
-		pass "clang-format"
-	else
-		sed 's/^/  /' "$output_file"
-		fail "clang-format" \
-			"run $formatter -i on the reported C and header files."
-	fi
-	rm -f "$output_file"
+    output_file=$(mktemp)
+    if "$formatter" --dry-run --Werror "${c_files[@]}" >"$output_file" 2>&1; then
+        pass "clang-format"
+    else
+        sed 's/^/  /' "$output_file"
+        fail "clang-format" \
+            "run $formatter -i on the reported C and header files."
+    fi
+    rm -f "$output_file"
 }
 
 check_gofmt() {
-	local path
-	local output
-	local -a go_files=()
+    local path
+    local output
+    local -a go_files=()
 
-	for path in "$@"; do
-		case "$path" in
-		*.go)
-			[[ -f $path ]] && go_files+=("$path")
-			;;
-		esac
-	done
+    for path in "$@"; do
+        case "$path" in
+        *.go)
+            [[ -f $path ]] && go_files+=("$path")
+            ;;
+        esac
+    done
 
-	if ((${#go_files[@]} == 0)); then
-		pass "gofmt"
-		return
-	fi
+    if ((${#go_files[@]} == 0)); then
+        pass "gofmt"
+        return
+    fi
 
-	if ! command -v gofmt >/dev/null 2>&1; then
-		fail "gofmt" "install Go and run gofmt on changed Go files."
-		return
-	fi
+    if ! command -v gofmt >/dev/null 2>&1; then
+        fail "gofmt" "install Go and run gofmt on changed Go files."
+        return
+    fi
 
-	output=$(gofmt -l "${go_files[@]}")
-	if [[ -z $output ]]; then
-		pass "gofmt"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /'
-		fail "gofmt" "run gofmt -w on the reported Go files."
-	fi
+    output=$(gofmt -l "${go_files[@]}")
+    if [[ -z $output ]]; then
+        pass "gofmt"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /'
+        fail "gofmt" "run gofmt -w on the reported Go files."
+    fi
 }
 
 check_build() {
-	if env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
-		make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
-		pass "build"
-	else
-		fail "build" \
-			"run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all and fix the compiler error."
-	fi
+    if env GOCACHE="${GOCACHE:-/tmp/lota-gocache}" \
+        make BUILD_DIR="${BUILD_DIR:-/tmp/lota-build}" all; then
+        pass "build"
+    else
+        fail "build" \
+            "run env GOCACHE=/tmp/lota-gocache make BUILD_DIR=/tmp/lota-build all and fix the compiler error."
+    fi
 }
 
 # Include hygiene:
@@ -598,108 +598,144 @@ check_build() {
 # Runs on every patch: non-static helper added anywhere the libraries link,
 # or header list edited in packaging, moves the frozen surface.
 check_abi() {
-	local output
+    local output
 
-	if ! command -v nm >/dev/null 2>&1 ||
-		! command -v readelf >/dev/null 2>&1; then
-		skip "abi" "install binutils (nm, readelf) to run the ABI gate."
-		return
-	fi
+    if ! command -v nm >/dev/null 2>&1 ||
+        ! command -v readelf >/dev/null 2>&1; then
+        skip "abi" "install binutils (nm, readelf) to run the ABI gate."
+        return
+    fi
 
-	if output="$(scripts/check-abi.sh 2>&1)"; then
-		pass "abi"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /' >&2
-		fail "abi" \
-			"a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
-	fi
+    if output="$(scripts/check-abi.sh 2>&1)"; then
+        pass "abi"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "abi" \
+            "a deliberate surface change updates packaging/abi (make abi-baseline) and Documentation/contributor/development/api-stability.rst."
+    fi
 }
 
 check_includes() {
-	local path
-	local touches_c=0
+    local path
+    local touches_c=0
 
-	for path in "$@"; do
-		case "$path" in
-		*.c | *.h)
-			touches_c=1
-			break
-			;;
-		esac
-	done
+    for path in "$@"; do
+        case "$path" in
+        *.c | *.h)
+            touches_c=1
+            break
+            ;;
+        esac
+    done
 
-	if ((touches_c == 0)); then
-		pass "include-hygiene"
-		return
-	fi
+    if ((touches_c == 0)); then
+        pass "include-hygiene"
+        return
+    fi
 
-	if ! command -v clang-include-cleaner >/dev/null 2>&1 ||
-		! command -v bear >/dev/null 2>&1; then
-		skip "include-hygiene" \
-			"install clang-include-cleaner (clang-tools-extra) and bear to run it."
-		return
-	fi
+    if ! command -v clang-include-cleaner >/dev/null 2>&1 ||
+        ! command -v bear >/dev/null 2>&1; then
+        skip "include-hygiene" \
+            "install clang-include-cleaner (clang-tools-extra) and bear to run it."
+        return
+    fi
 
-	if scripts/check-includes.sh; then
-		pass "include-hygiene"
-	else
-		fail "include-hygiene" \
-			"remove transitive includes; auto-fix with scripts/fix-includes.sh."
-	fi
+    if scripts/check-includes.sh; then
+        pass "include-hygiene"
+    else
+        fail "include-hygiene" \
+            "remove transitive includes; auto-fix with scripts/fix-includes.sh."
+    fi
+}
+
+# Second toolchain:
+# Every C translation unit must compile against a libc whose headers pull in
+# nothing extra. Spawns an el9 container, so it only runs when the patch touches
+# C and podman is there.
+check_el9_decls() {
+    local path
+    local touches_c=0
+
+    for path in "$@"; do
+        case "$path" in
+        *.c | *.h)
+            touches_c=1
+            break
+            ;;
+        esac
+    done
+
+    if ((touches_c == 0)); then
+        pass "el9-decls"
+        return
+    fi
+
+    if ! command -v podman >/dev/null 2>&1; then
+        skip "el9-decls" \
+            "install podman to compile the tree against el9 headers."
+        return
+    fi
+
+    if scripts/check-el9-decls.sh; then
+        pass "el9-decls"
+    else
+        fail "el9-decls" \
+            "include the header that declares the symbol; el9 does not pull it in."
+    fi
 }
 
 # Stack frames:
 # no function in a shipped binary may hold more than the ceiling in an automatic.
 # Only runs when the patch touches C.
 check_stack_frames() {
-	local output
+    local output
 
-	if ! patch_touches_c "$@"; then
-		pass "stack-frames"
-		return
-	fi
+    if ! patch_touches_c "$@"; then
+        pass "stack-frames"
+        return
+    fi
 
-	if output="$(scripts/check-stack-frames.sh 2>&1)"; then
-		pass "stack-frames"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /' >&2
-		fail "stack-frames" \
-			"move the object to the heap; see config_new() in src/agent/config.c."
-	fi
+    if output="$(scripts/check-stack-frames.sh 2>&1)"; then
+        pass "stack-frames"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "stack-frames" \
+            "move the object to the heap; see config_new() in src/agent/config.c."
+    fi
 }
 
 # TPM codes rendered for an operator:
 # tpm_* returns LOTA's private range above POSIX, which strerror() prints as
 # "Unknown error 4098" -- and 4098 is the one that warns of a coming lockout
 check_tpm_strerror() {
-	local output
+    local output
 
-	if ! patch_touches_c "$@"; then
-		pass "tpm-strerror"
-		return
-	fi
+    if ! patch_touches_c "$@"; then
+        pass "tpm-strerror"
+        return
+    fi
 
-	if output="$(scripts/check-tpm-strerror.sh 2>&1)"; then
-		pass "tpm-strerror"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /' >&2
-		fail "tpm-strerror" \
-			"render the code with tpm_strerror(), which falls through to strerror() for ordinary errnos."
-	fi
+    if output="$(scripts/check-tpm-strerror.sh 2>&1)"; then
+        pass "tpm-strerror"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "tpm-strerror" \
+            "render the code with tpm_strerror(), which falls through to strerror() for ordinary errnos."
+    fi
 }
 
 # License boundary:
 # MIT files must not depend on GPL-2.0-only ones,
 # and every source file must name its license
 check_license_boundary() {
-	local output
-	if output="$(scripts/check-license-boundary.sh 2>&1)"; then
-		pass "license-boundary"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /' >&2
-		fail "license-boundary" \
-			"an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
-	fi
+    local output
+    if output="$(scripts/check-license-boundary.sh 2>&1)"; then
+        pass "license-boundary"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "license-boundary" \
+            "an MIT file must not depend on a GPL-2.0-only one; see Documentation/contributor/development/license-boundary.rst."
+    fi
 }
 
 # Doc-quoted diagnostics:
@@ -707,27 +743,27 @@ check_license_boundary() {
 # Runs unconditionally: a patch that only reworded a message breaks
 # a quote in a file it never touched.
 check_doc_diagnostics() {
-	local output
-	if output="$(scripts/check-doc-diagnostics.sh 2>&1)"; then
-		pass "doc-diagnostics"
-	else
-		printf '%s\n' "$output" | sed 's/^/  /' >&2
-		fail "doc-diagnostics" \
-			"the documentation quotes a message the program cannot print; quote it verbatim or exempt the literal."
-	fi
+    local output
+    if output="$(scripts/check-doc-diagnostics.sh 2>&1)"; then
+        pass "doc-diagnostics"
+    else
+        printf '%s\n' "$output" | sed 's/^/  /' >&2
+        fail "doc-diagnostics" \
+            "the documentation quotes a message the program cannot print; quote it verbatim or exempt the literal."
+    fi
 }
 
 # true when the patch touches any C source or header
 patch_touches_c() {
-	local path
-	for path in "$@"; do
-		case "$path" in
-		*.c | *.h)
-			return 0
-			;;
-		esac
-	done
-	return 1
+    local path
+    for path in "$@"; do
+        case "$path" in
+        *.c | *.h)
+            return 0
+            ;;
+        esac
+    done
+    return 1
 }
 
 # sparse is blocking:
@@ -736,96 +772,96 @@ patch_touches_c() {
 # Both checkers run the make target so the flag set stays in one place, only
 # when the patch touches C and the tool is installed.
 check_sparse() {
-	local out
+    local out
 
-	if ! patch_touches_c "$@"; then
-		pass "sparse"
-		return
-	fi
-	if ! command -v sparse >/dev/null 2>&1; then
-		skip "sparse" "install 'sparse' to run the semantic check."
-		return
-	fi
+    if ! patch_touches_c "$@"; then
+        pass "sparse"
+        return
+    fi
+    if ! command -v sparse >/dev/null 2>&1; then
+        skip "sparse" "install 'sparse' to run the semantic check."
+        return
+    fi
 
-	if ! out=$(make sparse 2>&1); then
-		printf '%s\n' "$out" >&2
-		fail "sparse" "semantic findings above; fix them or the gate stays red."
-		return
-	fi
-	pass "sparse"
+    if ! out=$(make sparse 2>&1); then
+        printf '%s\n' "$out" >&2
+        fail "sparse" "semantic findings above; fix them or the gate stays red."
+        return
+    fi
+    pass "sparse"
 }
 
 # smatch is blocking when it is present:
 # it has no distribution package, so a contributor without it skips, but CI
 # builds a pinned revision and always runs it. When it runs, it decides.
 check_smatch() {
-	local out
+    local out
 
-	if ! patch_touches_c "$@"; then
-		pass "smatch"
-		return
-	fi
-	if ! command -v smatch >/dev/null 2>&1; then
-		skip "smatch" \
-			"build smatch from https://repo.or.cz/smatch.git and add it to PATH; CI runs it regardless."
-		return
-	fi
+    if ! patch_touches_c "$@"; then
+        pass "smatch"
+        return
+    fi
+    if ! command -v smatch >/dev/null 2>&1; then
+        skip "smatch" \
+            "build smatch from https://repo.or.cz/smatch.git and add it to PATH; CI runs it regardless."
+        return
+    fi
 
-	if ! out=$(make smatch 2>&1); then
-		printf '%s\n' "$out" >&2
-		fail "smatch" "flow-analysis findings above; fix them or the gate stays red."
-		return
-	fi
-	pass "smatch"
+    if ! out=$(make smatch 2>&1); then
+        printf '%s\n' "$out" >&2
+        fail "smatch" "flow-analysis findings above; fix them or the gate stays red."
+        return
+    fi
+    pass "smatch"
 }
 
 # Coccinelle is blocking:
 # rules are tuned clean, so a match is a finding
 check_coccinelle() {
-	local out
+    local out
 
-	if ! patch_touches_c "$@"; then
-		pass "coccicheck"
-		return
-	fi
-	if ! command -v spatch >/dev/null 2>&1; then
-		skip "coccicheck" "install 'coccinelle' to run the semantic-patch rules."
-		return
-	fi
+    if ! patch_touches_c "$@"; then
+        pass "coccicheck"
+        return
+    fi
+    if ! command -v spatch >/dev/null 2>&1; then
+        skip "coccicheck" "install 'coccinelle' to run the semantic-patch rules."
+        return
+    fi
 
-	if out=$(make coccicheck 2>&1); then
-		pass "coccicheck"
-	else
-		printf '%s\n' "$out" | grep -v '^make'
-		fail "coccicheck" \
-			"a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
-	fi
+    if out=$(make coccicheck 2>&1); then
+        pass "coccicheck"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "coccicheck" \
+            "a Coccinelle rule matched; fix the finding or refine the rule under scripts/coccinelle/."
+    fi
 }
 
 # fuzz/bpf_oracle mirrors harnesses copy decision logic out of src/bpf/lota_lsm.bpf.c;
 # make check-bpf-mirror fails when that source drifts from the pinned lock.
 # Only run when the BPF source or the sandbox changed.
 check_bpf_mirror() {
-	local path touched=1 out
-	for path in "$@"; do
-		case "$path" in
-		src/bpf/lota_lsm.bpf.c | fuzz/bpf_oracle/*)
-			touched=0
-			;;
-		esac
-	done
-	if ((touched != 0)); then
-		pass "bpf-mirror"
-		return
-	fi
+    local path touched=1 out
+    for path in "$@"; do
+        case "$path" in
+        src/bpf/lota_lsm.bpf.c | fuzz/bpf_oracle/*)
+            touched=0
+            ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "bpf-mirror"
+        return
+    fi
 
-	if out=$(make check-bpf-mirror 2>&1); then
-		pass "bpf-mirror"
-	else
-		printf '%s\n' "$out" | grep -v '^make'
-		fail "bpf-mirror" \
-			"src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
-	fi
+    if out=$(make check-bpf-mirror 2>&1); then
+        pass "bpf-mirror"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "bpf-mirror" \
+            "src/bpf/lota_lsm.bpf.c drifted from fuzz/bpf_oracle/mirror.lock; re-verify the mirror, then run make update-bpf-mirror."
+    fi
 }
 
 # Package-manifest parity:
@@ -833,99 +869,100 @@ check_bpf_mirror() {
 # since a host gets whichever one built its package.
 # Only runs when the patch touches manifest, the make install rule or the check itself
 check_package_manifests() {
-	local path touched=1 out
-	for path in "$@"; do
-		case "$path" in
-		packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
-			scripts/check-package-manifests.sh)
-			touched=0
-			;;
-		esac
-	done
-	if ((touched != 0)); then
-		pass "package-manifests"
-		return
-	fi
+    local path touched=1 out
+    for path in "$@"; do
+        case "$path" in
+        packaging/nfpm/*.yaml | packaging/rpm/lota.spec | Makefile | \
+            scripts/check-package-manifests.sh)
+            touched=0
+            ;;
+        esac
+    done
+    if ((touched != 0)); then
+        pass "package-manifests"
+        return
+    fi
 
-	if out=$(make check-package-manifests 2>&1); then
-		pass "package-manifests"
-	else
-		printf '%s\n' "$out" | grep -v '^make'
-		fail "package-manifests" \
-			"the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
-	fi
+    if out=$(make check-package-manifests 2>&1); then
+        pass "package-manifests"
+    else
+        printf '%s\n' "$out" | grep -v '^make'
+        fail "package-manifests" \
+            "the nfpm configs and packaging/rpm/lota.spec ship different files; list the path in both."
+    fi
 }
 
 main() {
-	local base=""
-	local head="HEAD"
-	local -a commits changed_files
+    local base=""
+    local head="HEAD"
+    local -a commits changed_files
 
-	if (($# > 0)) && [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
-		usage
-		return 0
-	fi
-	if (($# > 2)); then
-		usage
-		return 2
-	fi
+    if (($# > 0)) && [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+        usage
+        return 0
+    fi
+    if (($# > 2)); then
+        usage
+        return 2
+    fi
 
-	if (($# >= 1)); then
-		base=$1
-	else
-		if ! base=$(resolve_base); then
-			fail "base selection" \
-				"pass the base commit explicitly, for example scripts/check-patch origin/lota-next HEAD."
-			return 1
-		fi
-	fi
-	if (($# >= 2)); then
-		head=$2
-	fi
+    if (($# >= 1)); then
+        base=$1
+    else
+        if ! base=$(resolve_base); then
+            fail "base selection" \
+                "pass the base commit explicitly, for example scripts/check-patch origin/lota-next HEAD."
+            return 1
+        fi
+    fi
+    if (($# >= 2)); then
+        head=$2
+    fi
 
-	if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-		fail "base commit" "pass an existing commit as the base revision."
-		return 1
-	fi
-	if ! git cat-file -e "$head^{commit}" 2>/dev/null; then
-		fail "head commit" "pass an existing commit as the head revision."
-		return 1
-	fi
+    if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+        fail "base commit" "pass an existing commit as the base revision."
+        return 1
+    fi
+    if ! git cat-file -e "$head^{commit}" 2>/dev/null; then
+        fail "head commit" "pass an existing commit as the head revision."
+        return 1
+    fi
 
-	note "checking $(git rev-parse --short=12 "$base")..$(git rev-parse --short=12 "$head")"
-	require_commits "$base" "$head" commits || return 1
-	collect_changed_files "$base" "$head" changed_files
+    note "checking $(git rev-parse --short=12 "$base")..$(git rev-parse --short=12 "$head")"
+    require_commits "$base" "$head" commits || return 1
+    collect_changed_files "$base" "$head" changed_files
 
-	check_ci_policy "$base" "$head"
-	check_commit_signatures "${commits[@]}"
-	check_commit_subjects "${commits[@]}"
-	check_commit_body_contract "${commits[@]}"
-	check_commit_body_layout "${commits[@]}"
-	check_body_proportion "${commits[@]}"
-	check_patch_whitespace "${commits[@]}"
-	check_message_whitespace "${commits[@]}"
-	check_file_endings "${changed_files[@]}"
-	check_clang_format "${changed_files[@]}"
-	check_gofmt "${changed_files[@]}"
-	check_build
-	check_includes "${changed_files[@]}"
-	check_license_boundary
-	check_doc_diagnostics
-	check_stack_frames "${changed_files[@]}"
-	check_tpm_strerror "${changed_files[@]}"
-	check_abi
-	check_sparse "${changed_files[@]}"
-	check_smatch "${changed_files[@]}"
-	check_coccinelle "${changed_files[@]}"
-	check_bpf_mirror "${changed_files[@]}"
-	check_package_manifests "${changed_files[@]}"
+    check_ci_policy "$base" "$head"
+    check_commit_signatures "${commits[@]}"
+    check_commit_subjects "${commits[@]}"
+    check_commit_body_contract "${commits[@]}"
+    check_commit_body_layout "${commits[@]}"
+    check_body_proportion "${commits[@]}"
+    check_patch_whitespace "${commits[@]}"
+    check_message_whitespace "${commits[@]}"
+    check_file_endings "${changed_files[@]}"
+    check_clang_format "${changed_files[@]}"
+    check_gofmt "${changed_files[@]}"
+    check_build
+    check_includes "${changed_files[@]}"
+    check_el9_decls "${changed_files[@]}"
+    check_license_boundary
+    check_doc_diagnostics
+    check_stack_frames "${changed_files[@]}"
+    check_tpm_strerror "${changed_files[@]}"
+    check_abi
+    check_sparse "${changed_files[@]}"
+    check_smatch "${changed_files[@]}"
+    check_coccinelle "${changed_files[@]}"
+    check_bpf_mirror "${changed_files[@]}"
+    check_package_manifests "${changed_files[@]}"
 
-	if ((FAILURES != 0)); then
-		printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"
-		return 1
-	fi
+    if ((FAILURES != 0)); then
+        printf 'FAIL patch quality checks completed with %d failure(s).\n' "$FAILURES"
+        return 1
+    fi
 
-	printf 'PASS patch quality checks completed.\n'
+    printf 'PASS patch quality checks completed.\n'
 }
 
 main "$@"
