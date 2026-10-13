@@ -459,6 +459,7 @@ struct bpf_extended_stats {
 	uint64_t ptrace_blocked;
 	uint64_t setuid_events;
 	uint64_t bpf_syscall_blocked;
+	uint64_t mounts_blocked;
 };
 
 /*

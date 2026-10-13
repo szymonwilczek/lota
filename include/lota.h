@@ -76,6 +76,7 @@ enum lota_event_type {
 	LOTA_EVENT_ANON_EXEC, /* Anonymous executable mmap (JIT, shellcode) */
 	LOTA_EVENT_ANON_EXEC_BLOCKED, /* Anonymous executable mmap blocked */
 	LOTA_EVENT_KILL, /* signal delivery to protected task observed */
+	LOTA_EVENT_MOUNT_BLOCKED, /* mount that would shadow a trusted file */
 };
 
 /*
