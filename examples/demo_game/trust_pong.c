@@ -19,6 +19,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <getopt.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -361,15 +362,27 @@ static int parse_cli(int argc, char **argv, struct cli_opts *opts)
 	opts->game_id = DEFAULT_GAME_ID;
 	opts->socket_path = DEFAULT_AGENT_SOCKET;
 
-	for (int i = 1; i < argc; i++) {
-		const char *a = argv[i];
-		if (!strcmp(a, "--server") && i + 1 < argc) {
-			opts->server_base = argv[++i];
-		} else if (!strcmp(a, "--game-id") && i + 1 < argc) {
-			opts->game_id = argv[++i];
-		} else if (!strcmp(a, "--socket") && i + 1 < argc) {
-			opts->socket_path = argv[++i];
-		} else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+	static const struct option longopts[] = {
+		{ "server", required_argument, NULL, 's' },
+		{ "game-id", required_argument, NULL, 'g' },
+		{ "socket", required_argument, NULL, 'S' },
+		{ "help", no_argument, NULL, 'h' },
+		{ NULL, 0, NULL, 0 },
+	};
+	int opt;
+
+	while ((opt = getopt_long(argc, argv, "h", longopts, NULL)) != -1) {
+		switch (opt) {
+		case 's':
+			opts->server_base = optarg;
+			break;
+		case 'g':
+			opts->game_id = optarg;
+			break;
+		case 'S':
+			opts->socket_path = optarg;
+			break;
+		case 'h':
 			fprintf(stderr,
 				"Usage: %s [--server BASE_URL] [--game-id ID] "
 				"[--socket PATH]\n"
@@ -377,10 +390,13 @@ static int parse_cli(int argc, char **argv, struct cli_opts *opts)
 				"address, without the /endpoint suffix)\n",
 				argv[0], opts->server_base);
 			return 1;
-		} else {
-			fprintf(stderr, "trust_pong: unknown arg %s\n", a);
+		default:
 			return -EINVAL;
 		}
+	}
+	if (optind < argc) {
+		fprintf(stderr, "trust_pong: unknown arg %s\n", argv[optind]);
+		return -EINVAL;
 	}
 	return 0;
 }
