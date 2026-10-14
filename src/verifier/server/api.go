@@ -256,8 +256,9 @@ func (h *APIHandler) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.adminConfigured() {
 			h.log.Warn("admin endpoint called but no API key configured",
-				"method", r.Method, "path", r.URL.Path,
-				"remote_addr", r.RemoteAddr)
+				"method", logging.SanitizeField(r.Method),
+				"path", logging.SanitizeField(r.URL.Path),
+				"remote_addr", logging.SanitizeField(r.RemoteAddr))
 			writeJSONStatus(w, http.StatusForbidden, errorResponse{Error: "admin API key not configured"})
 			return
 		}
@@ -819,7 +820,8 @@ func (h *APIHandler) handleRevokeClient(w http.ResponseWriter, r *http.Request, 
 			writeJSONStatus(w, http.StatusConflict, errorResponse{Error: "client is already revoked"})
 			return
 		}
-		h.log.Error("revocation failed", "client_id", clientID, "error", err)
+		h.log.Error("revocation failed",
+			"client_id", logging.SanitizeField(clientID), "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
@@ -880,7 +882,8 @@ func (h *APIHandler) handleUnrevokeClient(w http.ResponseWriter, r *http.Request
 			writeJSONStatus(w, http.StatusNotFound, errorResponse{Error: "client is not revoked"})
 			return
 		}
-		h.log.Error("unrevoke failed", "client_id", clientID, "error", err)
+		h.log.Error("unrevoke failed",
+			"client_id", logging.SanitizeField(clientID), "error", err)
 		writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 		return
 	}
